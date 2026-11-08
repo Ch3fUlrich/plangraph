@@ -60,3 +60,24 @@ fn guard_diagnostic_ignores_stale_record_values() {
     assert!(original["reason"].is_null());
     assert!(original["exit_code"].is_null());
 }
+
+#[test]
+fn missing_backlink_target_is_rejected_on_every_platform() {
+    // Windows counterpart of the cfg(unix) `missing/..` case: a backlink
+    // naming a .git that does not exist is refused, not resolved lexically.
+    let (temp, _, _, record) = fixture(true);
+    let cwd = temp.path().join("checkout");
+    fs::write(
+        temp.path().join("common/.git/worktrees/leaf/gitdir"),
+        temp.path().join("elsewhere/.git").to_str().unwrap(),
+    )
+    .unwrap();
+    assert!(capture(&cwd, record.path().parent().unwrap()).is_err());
+    let lexical = cwd.join("missing").join("..").join("other").join(".git");
+    fs::write(
+        temp.path().join("common/.git/worktrees/leaf/gitdir"),
+        lexical.to_str().unwrap(),
+    )
+    .unwrap();
+    assert!(capture(&cwd, record.path().parent().unwrap()).is_err());
+}
