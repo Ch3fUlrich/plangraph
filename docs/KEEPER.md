@@ -1,9 +1,7 @@
 # Keeper contract (M2a) — store, state machine, evidence, API, CLI, MCP
 
 Store snapshot filters (S1): `open=1` / `closed=1`, UTC `since`, item `fields` (always `key`), and `blocks`; nonblank filters add selection/returned counts in `filter`. Activity uses only `since`; aliases and progress stay full; decision text follows selected evidence before field projection. No filters preserves legacy bytes; HTTP wiring is S2. Signed snapshots, serve and pull stay full.
-Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12 **stdlib only** (sqlite3, http.server, hashlib,
-secrets, json, graphlib, subprocess, urllib); PyYAML only in the importer. Package `src/plangraph/keeper/`. Every file ≤ 400 lines,
-tests first (pytest), no network in tests (fakes), no secrets in code/logs/tests. M2a = per-principal tokens; M2b (later) adds run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not build them.
+Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12 **stdlib only** (sqlite3, http.server, hashlib, secrets, json, graphlib, subprocess, urllib); PyYAML only in the importer. Package `src/plangraph/keeper/`. Every file ≤ 400 lines, tests first (pytest), no network in tests (fakes), no secrets in code/logs/tests. M2a = per-principal tokens; M2b (later) adds run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not build them.
 
 ## Modules
 | file | content |
@@ -21,6 +19,8 @@ tests first (pytest), no network in tests (fakes), no secrets in code/logs/tests
 | `api.py` | HTTP JSON server around `Store` |
 | `cli.py` (`python -m plangraph.keeper.cli` / entry `pg`) | thin client of the API; also `admin` subcommands run locally on the keeper host; `oversight-check` and `oversight-audit --out-dir DIR --cursor FILE --router-log FILE` live in `cli_oversight.py` |
 | `mcp.py` | stdio MCP server (hand-written JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`; no SDK), same verbs, calls the API |
+
+Critical-path stall alerts notify owners and routing without mutating keeper state; see [configuration and delivery semantics](keeper/crit-path-stall.md).
 
 ## Tables (all in one SQLite file)
 `principals(name PK, role, projects json, family, token_sha256, active)` ·
@@ -176,7 +176,7 @@ Allowed edges only: open→claimed, claimed→open, claimed→in_review, in_revi
 Reads (any authenticated principal): `ready(project=None, n=10)` (text `views.brief`), `show(key)` (compact: fields, deps with states, unblocks,
 evidence, lease; ≤ ~300 tokens), `blocked(project)`, `waves()`, `critical_path(project)`, `percent(project)`, `alerts(project)` (lease expiring < 15 min,
 overdue reviews, audit_findings, stall = no ready + nothing in flight + goal unreached, refusals ≥2 on a key), `digest()` (router: per-project counts, stalled, last
-10 DONE with evidence kinds), `snapshot()` (SPEC snapshot JSON; `head` = last event hash), `whoami()`.
+10 DONE with evidence kinds), `snapshot()` (SPEC snapshot JSON; `head` = last event hash; persisted fleet: see docs/fleet-snapshot.md), `whoami()`.
 
 ## Evidence verifiers (`evidence.py`)
 `Result(ok: bool, detail: str, ref: dict)`; registry `VERIFIERS: dict[str, Verifier]`; `Verifier.verify(item, ref, ctx) -> Result`; ctx holds
@@ -268,7 +268,7 @@ it a weaker proof, so it is attachable **only by the router through
 `add_evidence_router`**; a claimant or delegate naming kind `commit` is refused `forbidden`
 and stores nothing.  Unknown project (no `repos` entry), missing repo and any git error all
 fail closed as unverified.
-
+Origin-main `decision_ref` closes need no batch file; see [decision-close proof, usage and refusals](keeper/keeper-decision-close.md).
 ## API (stdlib `http.server`, threaded; one Store with a lock; bind 127.0.0.1 by default, `--host`)
 `POST /v1/<verb>` JSON body → JSON; `GET /v1/{ready,show,blocked,waves,critical_path,percent,alerts,digest,snapshot,whoami,health}` plus
 `GET /v1/audit-meta?project=&stale_days=` (router/L1 only, and `GET /v1/changelog?since=`);
