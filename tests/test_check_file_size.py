@@ -49,6 +49,23 @@ class RepoFixture(unittest.TestCase):
         return subprocess.run(["git"] + list(args), cwd=str(self.repo),
                               capture_output=True, text=True)
 
+    def test_head_batches_binary_and_non_utf8_blobs(self):
+        import importlib.util
+        from unittest.mock import patch
+        spec = importlib.util.spec_from_file_location("file_size", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        (self.repo / "binary.bin").write_bytes(b"\xff\0\n")
+        (self.repo / "text.txt").write_bytes(b"\xff\nlast")
+        self.git("add", ".")
+        self.assertEqual(self.git("commit", "-qm", "fixture").returncode, 0)
+        original = subprocess.run
+        with patch.object(module.subprocess, "run", wraps=original) as run:
+            self.assertEqual(module.measure(self.repo, set(), "HEAD"),
+                             ({"text.txt": 2}, 1))
+        self.assertEqual(len(run.call_args_list), 2)
+        self.assertIn("--batch", run.call_args_list[-1].args[0])
+
     def write(self, rel, text):
         path = self.repo / rel
         path.parent.mkdir(parents=True, exist_ok=True)

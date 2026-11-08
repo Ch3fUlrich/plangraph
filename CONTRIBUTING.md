@@ -1,5 +1,20 @@
 # Contributing
 
+Run `python3 tools/preflight.py --base origin/main --head HEAD` before pushing:
+it blocks on scrub, CI policy (including commit trailers), changed-crate Rust checks,
+and affected tests, in that order. Each family ends with a timed PASS/FAIL/SKIP/INFRA
+summary; failed checks with HTTP 5xx output in any family (including policy) are
+inferred as INFRA and retried once; persistent INFRA exits 3, other failures exit 1.
+Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
+affected pytest has 900 seconds. The hook has no additional overall preflight bound.
+Use `--keep-going` to collect all failures or `--fast`
+to skip affected tests. The existing pre-push hook runs preflight too; set
+`PREFLIGHT_FAST=1` for its fast mode or `PREFLIGHT_SKIP=1` to bypass only that hook
+invocation (not the existing scrub/ref/file-size gates or direct CLI runs). Private
+scrub words come from `PLANGRAPH_SCRUB_WORDS` or `~/.config/plangraph/scrub-words.txt`;
+when neither is present, public rules still run but scrub reports SKIP with a reason.
+`PREFLIGHT_TOOLS_DIR` overrides tool paths for tests.
+
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
 ## Setup and tests

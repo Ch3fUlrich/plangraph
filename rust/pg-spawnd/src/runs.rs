@@ -318,12 +318,13 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         record.set("attempts_error", json!("unknown or invalid attempt id"));
         return;
     };
-    let dry = status == Status::DryRun;
-    let unwitnessed = json!("unwitnessed");
+    let (dry, unwitnessed) = (status == Status::DryRun, json!("unwitnessed"));
     let completion = json!({"leg":leg,"status":status.as_str(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },
         "served_family":if dry { &leg["family"] } else { &unwitnessed },
-        "served_witness_reason":"no authenticated harness telemetry; skipped or unobserved leg",
+        "served_witness_reason":if leg["model"].as_str().is_some_and(|m| m.split('/').next() == Some("omniroute")) {
+            "pg-spawnd gateway call-log witness integration unavailable"
+        } else { "no authenticated harness telemetry; skipped or unobserved leg" },
         "request_side_model":null,"witness_kind":null,
         "skip_reason":if status == Status::Completed || dry { None } else { record.get("reason") },
         "provider_response":null,"stdout_tail":record.get("stdout_tail"),"stderr_tail":record.get("stderr_tail")});
@@ -382,7 +383,6 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         }
     }
 }
-
 #[cfg(all(test, unix))]
 #[path = "runs_record_tests.rs"]
 mod record_tests;
