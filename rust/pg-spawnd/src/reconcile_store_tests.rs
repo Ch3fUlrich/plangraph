@@ -275,8 +275,8 @@ mod cgroup_tests;
 
 #[cfg(target_os = "linux")]
 #[test]
-fn terminal_or_absent_row_uses_current_record() {
-    for status in ["running", "completed", "absent", "missing", "invalid"] {
+fn terminal_or_missing_unverified_row_holds_grace_and_probes_confinement() {
+    for status in ["completed", "absent", "missing", "invalid"] {
         for settled in [false, true] {
             let dir = StateDir::new();
             let (_root, scope) = cgroup_tests::ScopeRoot::new(&dir.0);
@@ -287,7 +287,8 @@ fn terminal_or_absent_row_uses_current_record() {
                 "group":scope.to_str().unwrap(), "pgid":null}),
             );
             record.save().unwrap();
-            let row = inventory(&dir.0).unwrap().remove(0);
+            let mut row = inventory(&dir.0).unwrap().remove(0);
+            row.deadline_ms = Some(u64::MAX - unknown::UNKNOWN_IDENTITY_GRACE_MS);
             if status == "missing" {
                 // judge V8: no record.json at settle time takes the absent-record path.
                 std::fs::remove_file(record.path()).unwrap();
@@ -309,8 +310,15 @@ fn terminal_or_absent_row_uses_current_record() {
             )
             .unwrap();
             std::fs::write(scope.join("cgroup.procs"), "").unwrap();
+            assert_eq!(
+                matches!(gone(&row.run_id, row.identity.as_ref()), Ok(true)),
+                settled
+            );
             let result = orphan_with(&dir.0, &row, &mut None);
-            if status != "invalid" && status != "absent" {
+            assert!(matches!(result, Err(ReconcileError::Unknown)), "{status}");
+            row.deadline_ms = Some(1);
+            let result = orphan_with(&dir.0, &row, &mut None);
+            if status != "invalid" {
                 assert!(
                     matches!(result, Ok(true)),
                     "{status} settled={settled}: {result:?}"
@@ -321,6 +329,10 @@ fn terminal_or_absent_row_uses_current_record() {
         }
     }
 }
+
+#[cfg(target_os = "linux")]
+#[path = "reconcile_store_absent_tests.rs"]
+mod absent_tests;
 
 fn leg_fixtures() -> Value {
     serde_json::from_str(include_str!("../tests/fixtures/reconcile_legs.json")).unwrap()

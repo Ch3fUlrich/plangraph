@@ -200,6 +200,52 @@ pub(super) fn reclaim(root: &Path, run: &str) -> Result<(), ReconcileError> {
     .map_err(|_| ReconcileError::Io)
 }
 
+// Inventory absence is not evidence that the saved confinement has disappeared.
+pub(super) fn settle_absent(root: &Path, row: &Entry) -> Result<bool, ReconcileError> {
+    use pg_worker_core::run::record::{RunRecord, Status};
+    let probe = gone(&row.run_id, row.identity.as_ref());
+    if !needs_grace(row) {
+        return probe;
+    }
+    let dir = root.join("runs").join(&row.run_id);
+    let path = dir.join("record.json");
+    let exists = path.try_exists().map_err(|_| ReconcileError::Unknown)?;
+    let record = if exists { Some(read(&path)?) } else { None };
+    let started = record.as_ref().and_then(|r| {
+        r.get("attempts")
+            .and_then(Value::as_array)
+            .and_then(|a| a.get(row.attempt as usize - 1))
+            .and_then(|a| a.get("started"))
+            .or_else(|| r.get("started"))
+            .filter(|v| !v.is_null())
+    });
+    let base = match (row.deadline_ms, started) {
+        (Some(deadline), _) => deadline,
+        (_, Some(started)) => seconds(started)?,
+        _ => std::fs::metadata(if exists { &path } else { &dir })
+            .and_then(|m| m.modified())
+            .map_err(|_| ReconcileError::Io)?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| ReconcileError::Invalid)?
+            .as_millis() as u64,
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| ReconcileError::Invalid)?
+        .as_millis() as u64;
+    if now < base.saturating_add(UNKNOWN_IDENTITY_GRACE_MS) {
+        return Err(ReconcileError::Unknown);
+    }
+    if !exists {
+        return Ok(true);
+    }
+    let record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;
+    if record.status() != Some(Status::Running) {
+        return helpers::terminal(record.status());
+    }
+    settle_unknown(root, row)
+}
+
 // Caller holds state and record locks. Restarts never advance the time bound.
 pub(super) fn settle_unknown(root: &Path, row: &Entry) -> Result<bool, ReconcileError> {
     use pg_worker_core::run::record::RunRecord;

@@ -43,4 +43,10 @@ The real 216-row live/Z/Z-member/gone table retains only eight matching live
 leaders and settles 208 expired rows; fresh zombie rows test both member cases.
 The portable 216-row table marks 208 rows grace-eligible and eight verified.
 A direct current=None regression tests unexpired and expired missing-identity
-grace; absent inventory no longer probes a stale identity before settlement.
+grace. Round 9 corrects absent-inventory settlement: saved confinement is always
+probed, and a verified live leader/group cannot settle until gone. Missing records
+and terminal records with unverifiable identities retain the ten-second hold,
+even for an empty confinement. Missing records use the saved deadline or run
+directory mtime when no record anchor remains. The accepted post-grace legacy
+capacity-release risk remains unchanged. Fresh/expired Z-member and immediate
+memberless-Z settlement remain covered by every_running_identity_is_bounded_or_verified.

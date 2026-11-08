@@ -236,19 +236,8 @@ pub(crate) fn orphan_with(
     {
         return Err(ReconcileError::Unknown);
     }
-    if current.is_none() && unknown::needs_grace(row) {
-        if !dir
-            .join("record.json")
-            .try_exists()
-            .map_err(|_| ReconcileError::Unknown)?
-        {
-            return Ok(true);
-        }
-        let record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;
-        if record.status() != Some(Status::Running) {
-            return helpers::terminal(record.status());
-        }
-        return unknown::settle_unknown(root, row);
+    if current.is_none() {
+        return unknown::settle_absent(root, row);
     }
     if current.is_some() && unknown::unverified_not_gone(row) {
         return unknown::settle_unknown(root, row);
@@ -256,28 +245,13 @@ pub(crate) fn orphan_with(
     #[cfg(windows)]
     let result = crate::reconcile::job::settle_probe(row, authority);
     #[cfg(not(windows))]
-    let result = if current.is_none() {
-        Ok(true)
-    } else {
-        gone(&row.run_id, row.identity.as_ref())
-    };
+    let result = gone(&row.run_id, row.identity.as_ref());
     if !result? {
         return Ok(false);
-    }
-    if current.is_none()
-        && !dir
-            .join("record.json")
-            .try_exists()
-            .map_err(|_| ReconcileError::Unknown)?
-    {
-        return Ok(true);
     }
     let mut record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;
     if record.status() != Some(Status::Running) {
         return helpers::terminal(record.status());
-    }
-    if current.is_none() {
-        return Ok(true);
     }
     if record
         .get("attempts")
