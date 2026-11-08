@@ -293,8 +293,7 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
     }
 }
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
-    let diagnostic = json!({"reason":leg.get("reason").or_else(|| record.get("reason")),
-        "exit_code":leg.get("exit_code").or_else(|| record.get("exit_code"))});
+    let diagnostic = json!({"reason":leg.get("reason"), "exit_code":leg.get("exit_code")});
     let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
     let dry = status == Status::DryRun;
     let unwitnessed = json!("unwitnessed");
