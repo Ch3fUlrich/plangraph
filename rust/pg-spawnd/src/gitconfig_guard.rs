@@ -17,8 +17,12 @@ struct Snapshot {
 }
 
 pub(crate) fn writer_role(role: &serde_json::Value) -> bool {
-    serde_json::from_value::<pg_worker_core::hosts::Role>(role.clone()).ok()
-        == Some(pg_worker_core::hosts::Role::Implement)
+    use pg_worker_core::hosts::Role;
+    // Only known read-only roles may opt out; new or malformed roles fail closed.
+    !matches!(
+        serde_json::from_value::<Role>(role.clone()),
+        Ok(Role::Review | Role::Research)
+    )
 }
 
 pub(crate) fn guard_diagnostic(
