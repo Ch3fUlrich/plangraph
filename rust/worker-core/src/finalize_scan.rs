@@ -1,4 +1,4 @@
-//! Reachable-history batch scanner; commits use one object buffer, blobs a fixed window.
+//! Reachable-history batch scanner with lossless, conservative blob carries.
 use super::Refusal;
 use std::{
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
@@ -6,10 +6,7 @@ use std::{
     process::Stdio,
 };
 const CHUNK: usize = 65536;
-const OVERLAP: usize = 16384;
 const MAX_COMMIT_BYTES: usize = 1024 * 1024;
-// Cross-edge secret matches longer than OVERLAP are out of scope: real credentials
-// are far shorter. Patterns remain unchanged, but streaming coverage is capped.
 
 pub(super) fn reachable(root: &Path, input: &[u8]) -> Result<(), Refusal> {
     let run = || -> std::io::Result<_> {
@@ -96,22 +93,66 @@ fn batch(reader: &mut impl BufRead, input: &[u8]) -> Result<(), Refusal> {
 }
 
 fn scan_chunks(reader: &mut impl Read, mut size: usize, blob: bool) -> Result<(), Refusal> {
-    let mut buffer = [0; CHUNK + OVERLAP];
-    let mut kept = 0;
+    let mut buffer = [0; CHUNK];
+    let mut scanner = BlobScanner::default();
+    let mut position = 0;
     while size > 0 {
         let count = size.min(CHUNK);
         reader
-            .read_exact(&mut buffer[kept..kept + count])
+            .read_exact(&mut buffer[..count])
             .map_err(|_| Refusal::BadBundle)?;
-        let end = kept + count;
-        if blob && crate::writer_secret::scan_bytes(&buffer[..end]) {
+        if blob && scanner.push(&buffer[..count], position) {
             return Err(Refusal::SecretInHistory);
         }
-        kept = end.min(OVERLAP);
-        buffer.copy_within(end - kept..end, 0);
+        position += count;
         size -= count;
     }
     Ok(())
+}
+
+/// Keep every possible start, not a fixed number of bytes. All policy matches
+/// start with an ASCII word character or a PEM dash. Before the first such
+/// character, only one character of boundary context is necessary. Once a
+/// candidate exists we deliberately retain it through EOF: the shared policy
+/// includes unbounded names, whitespace, quoted values and PEM headers.
+/// This conservative strategy avoids duplicating the policy regexes here.
+#[derive(Default)]
+struct BlobScanner {
+    text: [String; 5],
+    started: [bool; 5],
+    previous: Option<u8>,
+}
+
+impl BlobScanner {
+    fn character(&mut self, lane: usize, c: u8) {
+        if c.is_ascii_alphanumeric() || c == b'_' || c == b'-' {
+            self.started[lane] = true;
+        }
+        if !self.started[lane] {
+            self.text[lane].clear();
+        }
+        self.text[lane].push(char::from(c));
+    }
+
+    fn push(&mut self, bytes: &[u8], position: usize) -> bool {
+        for (i, &byte) in bytes.iter().enumerate() {
+            self.character(0, if byte < 128 { byte } else { b' ' });
+            if let Some(previous) = self.previous {
+                let alignment = (position + i - 1) % 2;
+                for (endian, pair) in [[previous, byte], [byte, previous]].into_iter().enumerate() {
+                    let value = u16::from_le_bytes(pair);
+                    self.character(
+                        1 + alignment * 2 + endian,
+                        if value < 128 { value as u8 } else { b' ' },
+                    );
+                }
+            }
+            self.previous = Some(byte);
+        }
+        self.text
+            .iter()
+            .any(|text| crate::redact::redact(text) != *text)
+    }
 }
 #[cfg(test)]
 #[path = "finalize_scan_tests.rs"]
