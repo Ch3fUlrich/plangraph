@@ -122,6 +122,7 @@ fn remote_allowlist_rejects_helpers_and_other_transports() {
     }
 }
 #[test]
+#[cfg(unix)]
 fn inherited_git_overrides_are_removed() {
     let env = [
         ("GIT_CONFIG_COUNT", "1"),
@@ -228,6 +229,7 @@ fn inherited_git_overrides_are_removed() {
     assert!(f.dir.path().join(".git/index").exists());
 }
 #[test]
+#[cfg(unix)]
 fn replay_input_drift_is_invalid() {
     let f = Fixture::new();
     f.run(&FakePr(Cell::new(0)));
@@ -269,6 +271,7 @@ fn fixture_has_explicit_isolated_ident() {
     assert_eq!(out.stdout, b"Fixture <fixture@example.invalid>\n");
 }
 #[test]
+#[cfg(unix)]
 fn expected_absent_and_already_published() {
     let f = Fixture::new();
     assert_eq!(
@@ -281,6 +284,7 @@ fn expected_absent_and_already_published() {
     );
 }
 #[test]
+#[cfg(unix)]
 fn expected_old_match() {
     let f = Fixture::new();
     publish(&f.old, "lane", None, &f.remote()).unwrap();
@@ -290,6 +294,7 @@ fn expected_old_match() {
     );
 }
 #[test]
+#[cfg(unix)]
 fn moved_lane_conflict_is_terminal() {
     let f = Fixture::new();
     publish(&f.old, "lane", None, &f.remote()).unwrap();
@@ -304,6 +309,7 @@ fn moved_lane_conflict_is_terminal() {
     assert_eq!(f.log().load("run").unwrap().len(), 1);
 }
 #[test]
+#[cfg(unix)]
 fn recovery_after_cas_and_done_skips_calls() {
     let f = Fixture::new();
     publish(&f.head, "lane", None, &f.remote()).unwrap();
