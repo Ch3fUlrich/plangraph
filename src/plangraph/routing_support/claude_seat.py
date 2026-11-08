@@ -5,7 +5,7 @@ Only the review role leaves plan mode. Its Bash is pytest on named paths: option
 Repo settings stay unread: the diff under review must not widen its own seat.
 """
 
-from pathlib import Path
+from importlib.resources import files
 
 REVIEW_TOOLS = "Read,Grep,Glob,Bash(python3 -m pytest -q *)"
 REVIEW_DENIED = ("Write,Edit,Bash(python3 -m pytest -q -*),Bash(python3 -m pytest -q * -*),"
@@ -18,7 +18,7 @@ def claude_access_args(role: str, tool_mode: str = "tools") -> list[str]:
         return ["--permission-mode", "plan"]
     return ["--permission-mode", "default", "--setting-sources", "user",
             "--allowedTools", REVIEW_TOOLS, "--disallowedTools", REVIEW_DENIED,
-            "--tools", "" if tool_mode in ("inline-only", "prompt-only") else "Read,Grep,Glob,Bash",
+            "--tools", "" if tool_mode == "prompt-only" else "Read,Grep,Glob,Bash",
             "--strict-mcp-config", "--mcp-config",
-            str(Path(__file__).resolve().parents[1] / "config" / "empty-mcp.json"),
+            str(files("plangraph").joinpath("config/empty-mcp.json")),
             "--disable-slash-commands"]

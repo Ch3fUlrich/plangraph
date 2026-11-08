@@ -14,8 +14,11 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
+
 from plangraph.routing_support.claude_seat import claude_access_args
+from plangraph.routing_support.review_mode import leg_tool_mode, prompt_only_command
 
 #: Environment variable naming the model gateway base URL (see ``gateway_url``).
 GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
@@ -292,15 +295,15 @@ def build_opencode_command(
     serve_port: int | None = None,
     headers: Mapping[str, str] | None = None,
     extra_flags: Sequence[str] = (),
+    tool_mode: str = "tools",
 ) -> list[str]:
     """Build opencode command for execution via OmniRoute ACP/Gateway."""
-    # --standalone: the shared background service ignores the child's config overlay
     cmd = ["opencode", "run", "--standalone", "--model", model_or_combo]
     if serve_port is not None:
         cmd.extend(["--port", str(serve_port)])
     if extra_flags:
         cmd.extend(extra_flags)
-    return cmd
+    return prompt_only_command(cmd) if tool_mode == "prompt-only" else cmd
 
 
 def detect_client_for_model(model_id: str) -> str:
@@ -351,7 +354,7 @@ def build_standalone_fallback_command(
     cmd = ["opencode", "run", "--standalone"]
     if model:
         cmd.extend(["--model", model])
-    return cmd
+    return prompt_only_command(cmd) if role == "review" and tool_mode == "prompt-only" else cmd
 
 
 def build_command(
@@ -367,13 +370,10 @@ def build_command(
     extra_flags: Sequence[str] = (),
     tool_mode: str | None = None,
 ) -> list[str]:
-    """Build argv; explicit harness wins, absent tool mode uses harness/model leg or tools."""
+    """Explicit harness is authoritative; else gateway-first. Unknown pairs use tools."""
     from plangraph.mimo_policy import check_mimo_path
-    from plangraph.planner.legs import DEFAULT_LEGS
     if tool_mode is None:
-        tool_mode = next((leg.tool_mode for leg in DEFAULT_LEGS
-                          if leg.harness == (client or detect_client_for_model(model_or_combo))
-                          and leg.model == model_or_combo), "tools")
+        tool_mode = leg_tool_mode(client, model_or_combo)
     check_mimo_path(model_or_combo)
     if client is not None:
         if client not in (*CLIENTS, "qodercli"):
@@ -387,9 +387,9 @@ def build_command(
             serve_port=serve_port,
             headers=headers,
             extra_flags=extra_flags,
+            tool_mode=tool_mode if role == "review" else "tools",
         )
 
-    # 2. Offline emergency fallback
     resolved_client = client or detect_client_for_model(model_or_combo)
     return build_standalone_fallback_command(
         client_name=resolved_client,
