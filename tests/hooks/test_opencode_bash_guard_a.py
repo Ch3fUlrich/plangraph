@@ -13,8 +13,8 @@ under Node.js, verifying:
 
 This file holds TestOpenCodeBashGuard (plugin basics, the orchestrator role
 and D-665); the L2 read-only role continues in test_opencode_bash_guard_b.py
-and test_opencode_bash_guard_c.py. The Node harness and the plugin/hook path
-resolution live in _helpers.py. Run directly:
+and test_opencode_bash_guard_c.py (interim slices S11 and S12). The Node
+harness and the plugin/hook path resolution live in _helpers.py. Run directly:
 
     python3 tests/hooks/test_opencode_bash_guard_a.py
 """
@@ -67,8 +67,9 @@ class TestOpenCodeBashGuard(unittest.TestCase):
             tree = Path(tmp)
             (tree / "tools" / "hooks").mkdir(parents=True)
             (tree / "configuration" / "opencode" / "plugins" / "bash-guard").mkdir(parents=True)
-            (tree / "tools" / "hooks" / "bash_guard.py").write_text(
-                (ROOT / "tools" / "hooks" / "bash_guard.py").read_text(encoding="utf-8"), encoding="utf-8")
+            for src in (ROOT / "tools" / "hooks").glob("*.py"):  # the guard imports its sibling modules
+                (tree / "tools" / "hooks" / src.name).write_text(
+                    src.read_text(encoding="utf-8"), encoding="utf-8")
             plugin = tree / "configuration" / "opencode" / "plugins" / "bash-guard" / "index.mjs"
             plugin.write_text(PLUGIN_PATH.read_text(encoding="utf-8"), encoding="utf-8")
             cmd = "cat <<EOF\n`netplan apply`\nEOF"
