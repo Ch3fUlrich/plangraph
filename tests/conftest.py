@@ -26,8 +26,8 @@ if str(_SRC) not in sys.path:
 _TOOLS = Path(__file__).resolve().parents[1] / "tools"
 
 
-@pytest.fixture(autouse=True)
-def bounded_shutdown_cleanup(request, monkeypatch):
+@pytest.fixture
+def bounded_shutdown_cleanup(monkeypatch):
     """Finish cleanup before a mocked exit can close the database."""
     from plangraph.keeper import daemon
     real_run = daemon.run
@@ -39,8 +39,7 @@ def bounded_shutdown_cleanup(request, monkeypatch):
             # Real _exit never returns. In this in-process test the blocked
             # close has a two-second backstop; finish it before conn.close().
             cleaners = [t for t in threading.enumerate()
-                        if getattr(getattr(t, "_target", None), "__qualname__", "")
-                        == "run.<locals>._cleanup"]
+                        if t.name == "keeper-shutdown"]
             for thread in cleaners:
                 thread.join(timeout=5)
                 assert not thread.is_alive(), "keeper shutdown did not finish"
@@ -62,8 +61,12 @@ def no_leaked_keeper_threads():
 
     def track(thread, *args, **kwargs):
         target = getattr(thread, "_target", None)
+        from functools import partial
+        while isinstance(target, partial):
+            target = target.func
         module = getattr(target, "__module__", "")
-        if module.startswith("plangraph.keeper.") or thread.name.startswith("keeper-"):
+        if (module == "plangraph.keeper" or module.startswith("plangraph.keeper.")
+                or thread.name.startswith("keeper-")):
             workers.append(thread)
         return start(thread, *args, **kwargs)
 
@@ -73,6 +76,7 @@ def no_leaked_keeper_threads():
     leaked = [thread for thread in workers if thread.is_alive()]
     for thread in leaked:
         thread.join(timeout=5)
+    leaked = [thread for thread in leaked if thread.is_alive()]
     assert not leaked, "Leaked keeper threads: " + ", ".join(
         f"{thread.name} (daemon={thread.daemon})" for thread in leaked)
 

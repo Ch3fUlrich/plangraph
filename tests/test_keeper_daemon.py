@@ -82,15 +82,14 @@ def test_daemon_refuses_when_lock_is_held(tmp_path):
 
 
 @pytest.mark.parametrize("node_name", ["test_s2_shutdown_bounded", "renamed_shutdown"])
-def test_mock_exit_waits_before_recorder(monkeypatch, node_name):
-    import conftest
-    from types import SimpleNamespace
+def test_mock_exit_waits_before_recorder(monkeypatch, node_name, request):
+    conftest = _root_conftest(request)
     from plangraph.keeper import daemon
 
     class Cleaner:
         name = "keeper-shutdown"
         alive = True
-        _target = SimpleNamespace(__qualname__="run.<locals>._cleanup")
+        _target = lambda: None
 
         def join(self, timeout):
             self.alive = False
@@ -103,8 +102,7 @@ def test_mock_exit_waits_before_recorder(monkeypatch, node_name):
     monkeypatch.setattr(conftest.threading, "enumerate", lambda: [cleaner])
     monkeypatch.setattr(os, "_exit", lambda code: calls.append((code, cleaner.alive)))
     monkeypatch.setattr(daemon, "run", lambda: os._exit(75))
-    fixture = conftest.bounded_shutdown_cleanup.__wrapped__(
-        SimpleNamespace(node=SimpleNamespace(name=node_name)), monkeypatch)
+    fixture = conftest.bounded_shutdown_cleanup.__wrapped__(monkeypatch)
     next(fixture)
     daemon.run()
     with pytest.raises(StopIteration):
@@ -112,21 +110,74 @@ def test_mock_exit_waits_before_recorder(monkeypatch, node_name):
     assert calls == [(75, False)]
 
 
-def test_leak_guard_tracks_unnamed_worker_and_joins():
-    import conftest
+def _root_conftest(request):
+    from types import SimpleNamespace
+    fixture = request._fixturemanager.getfixturedefs("no_leaked_keeper_threads", request.node)[0]
+    return SimpleNamespace(**fixture.func.__globals__)
+
+
+@pytest.mark.parametrize("shape", ["module", "partial", "lambda", "bound"])
+@pytest.mark.parametrize("survives", [False, True])
+def test_leak_guard_tracks_unnamed_worker_and_joins(monkeypatch, shape, survives, request):
+    conftest = _root_conftest(request)
+    import threading
+    import functools
+
+    def target():
+        pass
+    target.__module__ = "plangraph.keeper"
+    if shape == "partial":
+        target = functools.partial(target)
+    elif shape == "lambda":
+        target = eval("lambda: None", {"__name__": "plangraph.keeper"})
+    elif shape == "bound":
+        target = type("Worker", (), {"run": target})().run
+    class Worker:
+        name = "worker"
+        daemon = True
+        def __init__(self, target):
+            self._target, self.alive, self.joins = target, True, 0
+        def is_alive(self):
+            return self.alive
+        def join(self, timeout):
+            self.joins += 1
+            self.alive = survives
+    monkeypatch.setattr(threading.Thread, "start", lambda self: None)
+    guard = conftest.no_leaked_keeper_threads.__wrapped__()
+    next(guard)
+    worker, unrelated = Worker(target), Worker(lambda: None)
+    try:
+        threading.Thread.start(worker)
+        threading.Thread.start(unrelated)
+        if survives:
+            with pytest.raises(AssertionError, match="Leaked keeper threads"):
+                next(guard)
+        else:
+            with pytest.raises(StopIteration):
+                next(guard)
+        assert worker.joins == 1
+        assert unrelated.joins == 0
+    finally:
+        guard.close()
+
+
+def test_shutdown_wrapper_is_opt_in(request):
+    assert "bounded_shutdown_cleanup" not in request.fixturenames
+
+
+def test_leak_guard_joins_real_worker(request):
     import threading
     from plangraph.keeper import daemon
-
     stop = threading.Event()
-    guard = conftest.no_leaked_keeper_threads.__wrapped__()
+    guard = _root_conftest(request).no_leaked_keeper_threads.__wrapped__()
     next(guard)
     worker = threading.Thread(target=daemon._backup_prune_loop,
                               args=({"interval_s": 1}, stop, lambda message: None), name="worker")
+    worker.start()
+    timer = threading.Timer(0.05, stop.set)
+    timer.start()
     try:
-        worker.start()
-        timer = threading.Timer(0.05, stop.set)
-        timer.start()
-        with pytest.raises(AssertionError, match="Leaked keeper threads"):
+        with pytest.raises(StopIteration):
             next(guard)
         assert not worker.is_alive()
     finally:
@@ -134,3 +185,20 @@ def test_leak_guard_tracks_unnamed_worker_and_joins():
         worker.join(timeout=5)
         timer.join(timeout=5)
         guard.close()
+
+
+def test_refused_start_stops_server_workers(tmp_path, monkeypatch):
+    import threading
+    from plangraph.keeper import daemon, anchor, config
+    _, cfg_path = make_db_and_config(tmp_path, 0)
+    monkeypatch.setattr(anchor, "enabled", lambda cfg: True)
+    def refuse(*args):
+        raise RuntimeError("startup refused")
+    monkeypatch.setattr(anchor, "check_start", refuse)
+    before = set(threading.enumerate())
+    with pytest.raises(RuntimeError, match="startup refused"):
+        daemon.run(config.load_config(cfg_path))
+    workers = [t for t in threading.enumerate() if t not in before]
+    for worker in workers:
+        worker.join(timeout=1)
+    assert not [t.name for t in workers if t.is_alive()]
