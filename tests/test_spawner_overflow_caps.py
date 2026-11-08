@@ -18,15 +18,17 @@ def registry(tmp_path, monkeypatch):
 
 def write_registry(path, caps):
     path.write_text(json.dumps({'self': 'local', 'hosts': [
-        {'id': name, 'aliases': [name + '-alias'], 'caps': caps}
+        {'id': name, 'aliases': [name + '-alias'], 'caps': caps,
+         'warmup': {'ramp_mb': {'implement': 2048, 'review': 4096}}}
         for name in ('local', 'remote')]}))
 
 
 def test_present_caps(registry):
     write_registry(registry, {'max_runs': 10, 'mem_floor_mb': 4096})
     data = o.registry_caps()
-    assert o.local_limits(data) == (10, 4096)
-    assert o.host_caps(data, 'REMOTE-ALIAS') == (10, 4096)
+    assert o.local_limits(data) == (2048, 4096)
+    assert o.host_caps(data, 'REMOTE-ALIAS') == (2048, 4096)
+    assert o.host_caps(data, 'remote', 'unknown') == (4096, 4096)
 
 
 @pytest.mark.parametrize('text', [None, 'not json', '{}', '{"hosts": null}', '[]'])
@@ -34,27 +36,24 @@ def test_missing_or_bad_registry(registry, caplog, text):
     if text is not None:
         registry.write_text(text)
     data = o.registry_caps()
-    assert o.local_limits(data) == (4, 3000)
+    assert o.local_limits(data) == (2048, 3000)
     assert o.host_caps(data, 'remote') is None
     assert 'defaults' in caplog.text
 
 
 @pytest.mark.parametrize('caps', [None, {}, {'max_runs': 10},
-    {'max_runs': '10', 'mem_floor_mb': 4096},
-    {'max_runs': True, 'mem_floor_mb': 4096},
     {'max_runs': 10, 'mem_floor_mb': '4096'},
     {'max_runs': 10, 'mem_floor_mb': False},
-    {'max_runs': 0, 'mem_floor_mb': 4096},
     {'max_runs': 10, 'mem_floor_mb': -1}])
 def test_missing_or_bad_caps(registry, caplog, caps):
     write_registry(registry, caps)
     data = o.registry_caps()
-    assert o.local_limits(data) == (4, 3000)
+    assert o.local_limits(data) == (2048, 3000)
     assert o.host_caps(data, 'remote') is None
     assert 'missing or malformed registry caps' in caplog.text
 
 
-@pytest.mark.parametrize('live,memory,chosen', [(9, 4096, 'remote'), (10, 9000, None),
+@pytest.mark.parametrize('live,memory,chosen', [(50, 6144, 'remote'), (10, 6143, None),
                                               (0, 4095, None)])
 def test_registry_admission(registry, live, memory, chosen):
     write_registry(registry, {'max_runs': 10, 'mem_floor_mb': 4096})
@@ -65,7 +64,40 @@ def test_registry_admission(registry, live, memory, chosen):
         checked_at=datetime.now(timezone.utc).isoformat())))
     config = {'hosts': {'remote': {'ssh': 'placeholder', 'run_cap': 99, 'floor_mb': 0}}}
     records = o.ready_records(config)
-    assert records['remote']['run_cap'] == 10
-    assert o.decide(10, 9000, *o.local_limits(o.registry_caps()), records, True).host == chosen
+    assert records['remote']['role_mb'] == 2048
+    assert o.decide(50, 4000, *o.local_limits(o.registry_caps()), records, True).host == chosen
     registry.unlink()
-    assert o.decide(4, 9000, 4, 3000, o.ready_records(config), True).host is None
+    assert o.decide(50, 4000, 2048, 3000, o.ready_records(config), True).host is None
+
+
+def test_headroom_ranking():
+    def row(free, floor, live):
+        return dict(ssh='fake', ok=True, fresh=True, live_runs=live,
+                    mem_available_mb=free, floor_mb=floor, role_mb=2048)
+    rows = {'ash': row(10000, 7000, 0), 'birch': row(9000, 3000, 50)}
+    assert o.decide(50, 4000, 2048, 3000, rows, True).host == 'birch'
+
+
+@pytest.mark.parametrize('ramp', [None, {}, {'implement': 0}, {'review': '2048'}])
+def test_bad_ramp(registry, ramp):
+    registry.write_text(json.dumps({'self': 'local', 'hosts': [
+        {'id': 'local', 'caps': {'mem_floor_mb': 3000}, 'warmup': {'ramp_mb': ramp}}]}))
+    assert o.local_limits(o.registry_caps()) == (2048, 3000)
+    assert o.host_caps(o.registry_caps(), 'local') is None
+
+
+def test_cli_shared_ram_refusal(registry, monkeypatch, capsys, tmp_path):
+    write_registry(registry, {'max_runs': 10, 'max_writers': 1, 'mem_floor_mb': 3000})
+    original = o.Path.read_text
+    monkeypatch.setattr(o.Path, 'read_text', lambda p, *a, **kw:
+        'MemAvailable: 5168128 kB\n' if str(p) == '/proc/meminfo' else original(p, *a, **kw))
+    service = o.cli.SpawnService(state=tmp_path / 'state')
+    monkeypatch.setattr(service, 'route', lambda *args, **kwargs: None)
+    monkeypatch.setattr(service, 'ps', lambda: {'runs': [{'status': 'running'}] * 50})
+    monkeypatch.setattr(o.cli, 'SpawnService', lambda **kw: service)
+    reason = o.admit_local('implement')
+    assert reason == 'memory: free 5047 MB, floor 3000 MB, role 2048 MB'
+    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(tmp_path / 'absent.json'))
+    assert o.cli.main(['--state', str(tmp_path / 'state'), 'spawn', '--card', '{"task":"test"}', 'prompt']) == 5
+    result = json.loads(capsys.readouterr().out)
+    assert reason in result['reason'] and result['status'] == 'queued'

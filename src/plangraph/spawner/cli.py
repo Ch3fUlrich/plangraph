@@ -1,6 +1,5 @@
 """Card-only per-host agent CLI: python -m plangraph.spawner.cli."""
 from __future__ import annotations
-
 import argparse
 import asyncio
 import json
@@ -10,9 +9,7 @@ import os
 import subprocess
 import time
 import uuid
-
 _start_supervisor = subprocess.Popen
-
 from .runner import spawn_service as SpawnService, redact
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
 
@@ -191,6 +188,8 @@ def main(argv=None):
             from .prompt_input import resolve_prompt
             try:
                 prompt = resolve_prompt(args.prompt, args.prompt_file)
+                from .prompt_guard import admit_prompt
+                if args.role == 'implement': admit_prompt(prompt, SpawnRefused)
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise
@@ -199,18 +198,22 @@ def main(argv=None):
                 review_scope=args.review_scope,
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
                 no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
-            # Validate before detaching so refusals are reported synchronously.
             from plangraph.settings import admit_review_scope
             try:
                 admit_review_scope(args.card, args.role, args.review_scope)
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise
+            # Explicit model/leg overrides intentionally bypass routing, not admission.
             if not args.model and not args.leg:
-                if not args.card:
-                    raise ValueError('spawn by card; card required')
                 # service.route saves the refusal record itself (one record per route error).
                 service.route(args.card, args.role, args.writer_family, args.review_of, **options)
+            if not args.dry_run:
+                from .seat_spawn import admit
+                admitted = admit(service, payload, card=args.card)
+                if admitted is not None:
+                    print(json.dumps(admitted, indent=2))
+                    return admitted.get('exit_code', 0)
             if args.dry_run:
                 result = asyncio.run(service.spawn(**payload, wait_seconds=None))
             else:
