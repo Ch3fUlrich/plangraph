@@ -1,10 +1,9 @@
 """Offline guard for retrying workflow curl downloads (7f96931 already complies)."""
-from pathlib import Path
 import shlex
+from pathlib import Path
 
 import pytest
 import yaml
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -77,8 +76,10 @@ def assert_retries(text, source):
 def test_repository_workflow_downloads():
     paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
     paths += sorted((ROOT / ".github/workflows").glob("*.yaml"))
-    total = sum(assert_retries(p.read_text(), p.relative_to(ROOT)) for p in paths)
-    assert total == 2  # Temporal downloads live in the shared composite action.
+    # Release downloads have their own bounded retry/fallback policy below.
+    total = sum(assert_retries(p.read_text(), p.relative_to(ROOT)) for p in paths
+                if p.name != "tests.yml")
+    assert total == 0
 
 
 def test_temporal_workflow_cache_and_retry_window():
@@ -91,9 +92,9 @@ def test_temporal_workflow_cache_and_retry_window():
     ]
     assert sorted(sites) == ["pytest", "pytest-postgres", "rust-worker"]
     # No inline Temporal download can bypass the shared cache condition.
-    assert "temporalio/cli/releases/download" not in (
+    assert not any(form in (
         ROOT / ".github/workflows/tests.yml"
-    ).read_text()
+    ).read_text() for form in ("temporalio/cli/releases/download", "temporal.download/"))
     action = yaml.safe_load((ROOT / ".github/actions/setup-temporal/action.yml").read_text())
     cache, download, export = action["runs"]["steps"]
     assert cache["uses"] == "actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809"
@@ -133,19 +134,81 @@ def test_temporal_workflow_cache_and_retry_window():
     assert 'TEMPORAL_CLI=$HOME/.cache/temporal-cli/1.9.1/temporal' in export["run"]
 
 
+TEMPORAL_SHA = "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5"
+DOWNLOAD_FORMS = (
+    "/releases/download/", "temporal.download/", "go install",
+)
+
+
+def assert_verified_downloads(document):
+    """Inspect every workflow/action step, including CDN-only or Go-only additions."""
+    found = 0
+    if isinstance(document, dict):
+        steps = document.get("steps", [])
+        for index, step in enumerate(steps):
+            script = step.get("run", "")
+            if not any(form in script for form in DOWNLOAD_FORMS):
+                continue
+            found += 1
+            caches = [s for s in steps[:index] if s.get("uses", "").startswith("actions/cache@")
+                      and s.get("id")
+                      and step.get("if") == f"steps.{s['id']}.outputs.cache-hit != 'true'"]
+            assert len(caches) == 1, "download must be cache-gated"
+            cache = caches[0]
+            assert cache["uses"] == "actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809"
+            assert "${{ runner.os }}" in cache["with"]["key"]
+            if "temporal" in script:
+                assert "temporal-cli-" in cache["with"]["key"]
+                assert "1.9.1" in cache["with"]["key"]
+                check = f'echo "{TEMPORAL_SHA}  $dir/temporal.tar.gz" | sha256sum -c -'
+                assert check in script, "pinned SHA-256 check required"
+                assert script.index(check) < script.index("tar -xzf")
+                assert script.index(check) > script.index("https://temporal.download/")
+                assert "temporalio/cli/releases/download/" in script
+                assert "||" in script
+            else:
+                assert "gitleaks-" in cache["with"]["key"]
+                assert "8.30.1" in cache["with"]["key"]
+                assert "sha256sum -c checks.sha256" in script
+                assert "grep -E" in script and '> "$dir/checks.sha256"' in script
+                assert script.index("sha256sum -c checks.sha256") < script.index("tar -xzf")
+                assert "go install github.com/zricethezav/gitleaks/v8@v8.30.1" in script
+                for setting in ("GOPROXY=https://proxy.golang.org", "GOSUMDB=sum.golang.org",
+                                "GOPRIVATE= GONOSUMDB= GONOPROXY="):
+                    assert setting in script, "Go checksum database must be enforced"
+                assert "else" in script
+            assert "install -m 0755" in script
+        for value in document.values():
+            found += assert_verified_downloads(value)
+    elif isinstance(document, list):
+        for value in document:
+            found += assert_verified_downloads(value)
+    return found
+
+
 def test_every_temporal_download_step_has_fallback_and_verification():
     paths = list((ROOT / ".github/workflows").glob("*.y*ml"))
     paths += list((ROOT / ".github/actions").rglob("action.y*ml"))
-    found = 0
-    for path in paths:
-        for script, _ in run_blocks(yaml.compose(path.read_text())):
-            if "temporalio/cli/releases/download" not in script:
-                continue
-            found += 1
-            assert "||" in script, path
-            assert "https://temporal.download/cli/archive/v1.9.1?platform=linux&arch=amd64" in script, path
-            assert "sha256sum -c -" in script or 'tar -tzf "$dir/temporal.tar.gz"' in script, path
-    assert found == 1
+    assert sum(assert_verified_downloads(yaml.safe_load(path.read_text()))
+               for path in paths) == 2
+
+
+@pytest.mark.parametrize("source", [
+    "https://github.com/temporalio/cli/releases/download/v1.9.1/archive",
+    "https://temporal.download/cli/archive/v1.9.1?platform=linux&arch=amd64",
+    "go install github.com/zricethezav/gitleaks/v8@v8.30.1",
+    "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/archive",
+])
+def test_unguarded_download_forms_are_rejected(source):
+    with pytest.raises(AssertionError, match="cache-gated"):
+        assert_verified_downloads(yaml.safe_load(workflow(source)))
+
+
+def test_tar_listing_cannot_replace_temporal_checksum():
+    text = (ROOT / ".github/actions/setup-temporal/action.yml").read_text()
+    text = text.replace("sha256sum -c -", 'tar -tzf "$dir/temporal.tar.gz"')
+    with pytest.raises(AssertionError, match="pinned SHA-256"):
+        assert_verified_downloads(yaml.safe_load(text))
 
 
 def workflow(command):

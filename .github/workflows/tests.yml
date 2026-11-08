@@ -119,21 +119,39 @@ jobs:
           git config --global user.name "plangraph-ci"
           git config --global user.email "ci@example.invalid"
           git config --global init.defaultBranch main
-      # D-2557: pinned gitleaks; verify checksums; digest never hard-coded, never curl | sh.
+      - name: Restore verified gitleaks binary
+        id: gitleaks-cache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ~/.local/bin/gitleaks
+          key: gitleaks-${{ runner.os }}-${{ runner.arch }}-8.30.1
+      # D-2557: release checksums or Go sumdb; no hard-coded digest or curl | sh.
       - name: Install gitleaks 8.30.1
+        if: steps.gitleaks-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           dir=$(mktemp -d)
-          curl -fsSL -o "$dir/gitleaks_8.30.1_linux_x64.tar.gz" --retry 5 --retry-all-errors https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
-          curl -fsSL -o "$dir/gitleaks_8.30.1_checksums.txt" --retry 5 --retry-all-errors https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt
-          # Only the asset's own line is checked: grep exits 1 when it is absent,
-          # so a missing line fails the step just like a checksum mismatch does.
-          grep -E "^[0-9a-f]{64}  gitleaks_8\.30\.1_linux_x64\.tar\.gz$" "$dir/gitleaks_8.30.1_checksums.txt" > "$dir/checks.sha256"
-          (cd "$dir" && sha256sum -c checks.sha256)
-          tar -xzf "$dir/gitleaks_8.30.1_linux_x64.tar.gz" -C "$dir" gitleaks
+          trap 'rm -rf "$dir"' EXIT
+          if curl -fsSL -o "$dir/gitleaks_8.30.1_linux_x64.tar.gz" --retry 3 --retry-delay 5 \
+              --retry-max-time 40 --retry-all-errors --connect-timeout 10 --max-time 20 \
+              https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz && \
+            curl -fsSL -o "$dir/gitleaks_8.30.1_checksums.txt" --retry 3 --retry-delay 5 \
+              --retry-max-time 40 --retry-all-errors --connect-timeout 10 --max-time 20 \
+              https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt; then
+            # Missing checksum lines and mismatches fail closed, not into fallback.
+            grep -E "^[0-9a-f]{64}  gitleaks_8\.30\.1_linux_x64\.tar\.gz$" "$dir/gitleaks_8.30.1_checksums.txt" > "$dir/checks.sha256"
+            (cd "$dir" && sha256sum -c checks.sha256)
+            tar -xzf "$dir/gitleaks_8.30.1_linux_x64.tar.gz" -C "$dir" gitleaks
+            "$dir/gitleaks" version | grep -Fx 8.30.1
+          else
+            # Force proxy + public checksum database even if runner defaults differ.
+            GOBIN="$dir" GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
+              GOPRIVATE= GONOSUMDB= GONOPROXY= \
+              go install github.com/zricethezav/gitleaks/v8@v8.30.1
+            go version -m "$dir/gitleaks" | grep -F 'github.com/zricethezav/gitleaks/v8'
+          fi
           mkdir -p ~/.local/bin
           install -m 0755 "$dir/gitleaks" ~/.local/bin/gitleaks
-          ~/.local/bin/gitleaks version | grep -Fx 8.30.1
       - name: Workflow archive policy
         if: github.event_name == 'pull_request'
         env:
