@@ -1,4 +1,5 @@
 """Pinned canary-first rollout with injectable transport and health commands."""
+import base64
 import inspect
 import json
 import os
@@ -126,7 +127,9 @@ def transport(host, config):
     if host['transport'] == 'local':
         return worker(config)
     code = inspect.getsource(worker) + '\nimport json; print(json.dumps(worker(json.loads(' + repr(json.dumps(config)) + '))))'
-    command = [config['repo'].get('python') or 'python3', '-c', code]
+    encoded = base64.b64encode(code.encode()).decode('ascii')
+    command = [config['repo'].get('python') or 'python3', '-c',
+               f"import base64;exec(base64.b64decode('{encoded}'))"]
     remote = subprocess.list2cmdline(command) if host['os'] == 'windows' else shlex.join(command)
     return json.loads(subprocess.check_output(
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '--', host['id'], remote],
@@ -157,27 +160,37 @@ def _advance(registry, sha, hosts, go, dry_run, record, log, run):
             continue
         host = selected[name]
         repo = host.get('repos', {}).get('plangraph')
-        if not repo:
-            problems.append(f'{name}: missing repos.plangraph')
+        if not repo or not repo.get('live_dir'):
+            problems.append(f'ps-only host {name}: no live dir')
+            continue
+        if host.get('transport') not in ('local', 'ssh'):
+            problems.append(f'{name}: invalid transport {host.get("transport")!r}')
+            continue
+        if not repo.get('worktrees_root'):
+            problems.append(f'{name}: missing worktrees_root')
             continue
         if not isinstance(repo.get('health_checks'), dict):
             problems.append(f'{name}: missing health_checks')
             continue
         path = PureWindowsPath if host['os'] == 'windows' else PurePosixPath
         live, cleanup = path(repo['live_dir']), path(repo['worktrees_root'])
-        if host['os'] != 'windows':
+        if host['transport'] == 'local' and host['os'] != 'windows':
             live = Path(live).parent.resolve() / live.name
             cleanup = Path(cleanup).resolve()
-        if (host['transport'] not in ('local', 'ssh') or live.name != 'current'
+        if (live.name != 'current'
                 or not path(repo['worktrees_root']).is_absolute()
-                or not path(repo['live_dir']).is_absolute() or '..' in live.parts
+                 or not path(repo['live_dir']).is_absolute() or '..' in live.parts
+                 or '..' in cleanup.parts
                 or live.parent.is_relative_to(cleanup) or cleanup.is_relative_to(live.parent)):
-            raise ValueError('live root must be outside worktree cleanup')
+            problems.append(f'{name}: live root must be outside worktree cleanup')
+            continue
         for key in ('doctor', 'whoami', 'spawn'):
             command = repo['health_checks'].get(key)
             if not isinstance(command, list) or not command or not all(
                     isinstance(arg, str) and arg for arg in command):
-                raise ValueError('health commands must be argv arrays')
+                problems.append(f'{name}: health commands must be argv arrays ({key})')
+        if any(problem.startswith(f'{name}:') for problem in problems):
+            continue
         if '--dry-run' not in repo['health_checks']['spawn']:
             problems.append(f'{name}: spawn health command requires --dry-run')
             continue

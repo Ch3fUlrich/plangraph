@@ -151,6 +151,7 @@ def test_fleet_sync_advance_cleanup_refusal(fleet, kind):
     if kind == 'relative':
         repo['worktrees_root'] = 'trees'
     else:
+        fleet[0]['hosts'][0]['transport'] = 'local'
         alias = fleet[1].parent / 'alias'
         alias.symlink_to(Path(repo['live_dir']).parent, target_is_directory=True)
         repo['worktrees_root'] = str(alias)
@@ -180,3 +181,66 @@ def test_fleet_sync_advance_cli_requires_go():
     with pytest.raises(SystemExit) as error:
         main(['advance', '--sha', 'a' * 40, '--hosts', 'host-a'])
     assert error.value.code == 2
+
+
+@pytest.mark.parametrize('missing', ['plangraph', 'live_dir'])
+def test_fleet_sync_ps_only_preflight(fleet, missing):
+    host = fleet[0]['hosts'][1]
+    if missing == 'plangraph':
+        del host['repos']['plangraph']
+    else:
+        del host['repos']['plangraph']['live_dir']
+    with pytest.raises(ValueError, match='^ps-only host host-b: no live dir$'):
+        invoke(fleet, run=lambda *a: pytest.fail('host contacted'))
+
+
+def test_fleet_sync_preflight_aggregates(fleet):
+    fleet[0]['hosts'][0]['transport'] = 'invalid'
+    del fleet[0]['hosts'][1]['repos']['plangraph']['live_dir']
+    with pytest.raises(ValueError) as error:
+        invoke(fleet, run=lambda *a: pytest.fail('host contacted'))
+    assert str(error.value).splitlines() == [
+        "host-a: invalid transport 'invalid'", 'ps-only host host-b: no live dir']
+
+
+def test_fleet_sync_ssh_paths_are_remote(fleet, monkeypatch):
+    from plangraph.fleet_sync import advance as module
+    repo = fleet[0]['hosts'][0]['repos']['plangraph']
+    alias = fleet[1].parent / 'controller-alias'
+    alias.symlink_to(Path(repo['live_dir']).parent, target_is_directory=True)
+    repo['worktrees_root'] = str(alias)
+    original = module.Path.resolve
+
+    def resolve(path, *args, **kwargs):
+        assert str(path) not in (repo['worktrees_root'], str(Path(repo['live_dir']).parent))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(module.Path, 'resolve', resolve)
+    seen = []
+    assert invoke(fleet, run=lambda host, config: seen.append(config) or
+                  {'ok': True, 'events': []}) == 0
+    assert seen[0]['repo'] == repo
+
+
+def test_fleet_sync_windows_transport_exact_argv(fleet, monkeypatch):
+    import base64
+    import inspect
+    import subprocess
+
+    from plangraph.fleet_sync import advance as module
+    host = fleet[0]['hosts'][0]
+    host['os'] = 'windows'
+    config = {'repo': host['repos']['plangraph'], 'sha': 'a' * 40, 'windows': True}
+    code = inspect.getsource(worker) + '\nimport json; print(json.dumps(worker(json.loads(' + repr(json.dumps(config)) + '))))'
+    encoded = base64.b64encode(code.encode()).decode('ascii')
+    remote = subprocess.list2cmdline([
+        'python3', '-c', f"import base64;exec(base64.b64decode('{encoded}'))"])
+
+    def check_output(argv, **kwargs):
+        assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
+                        '--', 'host-a', remote]
+        assert '\n' not in argv[-1] and '\r' not in argv[-1]
+        return '{"ok": true, "events": []}'
+
+    monkeypatch.setattr(module.subprocess, 'check_output', check_output)
+    assert module.transport(host, config)['ok']
