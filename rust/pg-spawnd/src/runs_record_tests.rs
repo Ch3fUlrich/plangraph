@@ -133,6 +133,21 @@ fn finish_rejects_non_object_entries_without_appending() {
 }
 
 #[test]
+fn gateway_attempt_reports_missing_call_log_integration() {
+    let dir = std::env::temp_dir().join(new_run_id());
+    let leg = json!({"model":"omniroute/agy/gemini-3.8-flash-high","family":"gemini"});
+    let mut record = create(&dir, "run-gateway", "fixture",
+        json!({"attempts":[{}]}), Status::Running)
+        .unwrap_or_else(|_| panic!("fixture record creation failed"));
+    finish(&mut record, Status::Failed, &leg, 1);
+    let value = record.to_value();
+    assert_eq!(value["attempts"][0]["served_model"], "unwitnessed");
+    assert_eq!(value["attempts"][0]["served_witness_reason"],
+        "pg-spawnd gateway call-log witness integration unavailable");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn orphan_settle_selects_non_last_non_first_attempt() {
     let dir = std::env::temp_dir().join(new_run_id());
     let first = json!({"status":"failed","exit_code":3});

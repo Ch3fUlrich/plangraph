@@ -1,11 +1,31 @@
 import json
 import re
+import pytest
 from pathlib import Path
 
 from plangraph.spawner.mimo_policy import check_mimo_path
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "opencode.jsonc"
+
+
+@pytest.mark.parametrize("settings", [{}, {"headerTimeout": False, "chunkTimeout": 900000},
+                                      {"headerTimeout": 1000, "chunkTimeout": 2000}])
+def test_gateway_gemini_seat_bounds_silent_requests(settings):
+    from plangraph.routing_support.opencode_render import render_gateway_providers
+    env = {"OMNIROUTE_BASE_URL": "http://gateway.invalid",
+           "OPENCODE_CONFIG_CONTENT": json.dumps({"providers": {
+               "omniroute": {"settings": settings, "models": {"agy/gemini-3.8-flash-high": {}}},
+               "other": {"settings": {"headerTimeout": False}}}})}
+    assert render_gateway_providers(env, "omniroute/agy/gemini-3.8-flash-high") is None
+    providers = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]
+    rendered = providers["omniroute"]["settings"]
+    for key in ("headerTimeout", "chunkTimeout"):
+        assert type(rendered[key]) is int
+        assert 0 < rendered[key] <= 60000
+        if type(settings.get(key)) is int and settings[key] > 0:
+            assert rendered[key] <= settings[key]
+    assert providers["other"]["settings"]["headerTimeout"] is False
 
 
 def strip_jsonc_comments(text: str) -> str:
