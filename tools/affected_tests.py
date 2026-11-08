@@ -156,17 +156,19 @@ def select_tests(root, changed, within=None):
 
 
 def changed_files(root, base, head=None):
-    merge = subprocess.check_output(["git", "merge-base", base, head or "HEAD"], cwd=root, text=True).strip()
-    tracked = subprocess.check_output(["git", "diff", "--name-only", "-z", "--no-renames", merge,
-                                       *([head] if head else [])], cwd=root)
-    untracked = subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=root)
+    head = head or None
+    merge = subprocess.check_output(["git", "merge-base", base, "HEAD" if head is None else head], cwd=root, text=True).strip()
+    revisions = [merge, head] if head is not None else [merge]
+    tracked = subprocess.check_output(["git", "diff", "--name-only", "-z", "--no-renames", *revisions], cwd=root)
+    untracked = (b"" if head is not None else subprocess.check_output(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=root))
     return sorted(set(p.decode() for p in (tracked + untracked).split(b"\0") if p))
 
 
 def main(root=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
-    parser.add_argument("--head", help="explicit revision; otherwise include checkout changes")
+    parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
     parser.add_argument("-n", "--workers", default="auto")

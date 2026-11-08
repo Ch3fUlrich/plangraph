@@ -31,6 +31,8 @@ python -m pytest -q -n auto tests            # main merge + nightly full suite
 The affected selector falls back to the full suite for unmapped Python source,
 shared fixtures and suite configuration; documentation/status/build artifacts do
 not trigger a full run. Do not bypass a conservative fallback on PRs.
+Pass `--head <revision>` for a committed-only comparison, excluding staged,
+worktree and untracked changes; omit it to include checkout changes.
 Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
 the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
