@@ -250,7 +250,7 @@ def audit_once(out_dir, router_log, cursor, known_keys, *, emit=None):
         if number <= after:
             continue
         cells = line.strip().strip("|").split("|")
-        decision = cells[2] if len(cells) >= 3 else line
+        decision = cells[2] if len(cells) >= 3 else ""
         if re.search(r"(?<![\w-])GO(?![\w-])", decision) and not re.search(
                 r"\bGO-HEAD\s*[:=]?\s*`?[0-9a-fA-F]{40}(?![0-9a-fA-F])", decision):
             findings.append(f"{row_id}: GO without 40-hex GO-HEAD")

@@ -14,7 +14,7 @@ def inputs(tmp_path):
     text, sha = digest([])
     audit.write_digest(tmp_path, text, sha)
     log = tmp_path / "decisions.md"
-    log.write_text("| D-1 | HOLD |\n")
+    log.write_text("| D-1 | project | HOLD |\n")
     return tmp_path, log, tmp_path / "cursor.json", sha
 
 
@@ -24,7 +24,7 @@ def run(inputs, keys=(), emit=None):
 
 
 def test_cap_and_dropped_count(inputs, capsys):
-    inputs[1].write_text("".join(f"| D-{i} | GO |\n" for i in range(1, 14)))
+    inputs[1].write_text("".join(f"| D-{i} | project | GO |\n" for i in range(1, 14)))
     run(inputs)
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 10
@@ -56,12 +56,12 @@ def test_go_and_unknown_closes(inputs, capsys):
 
 def test_go_requires_standalone_token(inputs, capsys):
     inputs[1].write_text(
-        "| D-1 | NO-GO |\n"
-        "| D-2 | GO-HEAD: missing |\n"
-        "| D-3 | GO |\n"
+        "| D-1 | project | NO-GO |\n"
+        "| D-2 | project | GO-HEAD: missing |\n"
+        "| D-3 | project | GO |\n"
         "| D-4 | fixture | GO GO-HEAD: abc123 |\n"
         f"| D-5 | fixture | GO GO-HEAD: {'a' * 40} |\n"
-        "| D-6 | XGO GO_X GO-away |\n")
+        "| D-6 | project | XGO GO_X GO-away |\n")
     run(inputs)
     lines = capsys.readouterr().out.splitlines()
     assert lines[1:] == [
@@ -101,10 +101,18 @@ def test_project_cell_directives_are_ignored(inputs, capsys):
     assert "quiet" in capsys.readouterr().out
 
 
+def test_rows_without_decision_cell_are_ignored(inputs, capsys):
+    inputs[1].write_text("| D-12 | GO migration |\n| D-3 | Closes: x:y |\n")
+    run(inputs)
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 1 and "quiet" in lines[0]
+    assert json.loads(inputs[2].read_text())["last_row"] == 12
+
+
 def test_cursor_only_advances_after_all_prints(inputs):
     run(inputs, emit=lambda _: None)
     before = inputs[2].read_bytes()
-    inputs[1].write_text("| D-2 | GO |\n")
+    inputs[1].write_text("| D-2 | project | GO |\n")
     seen = []
 
     def fail(line):
