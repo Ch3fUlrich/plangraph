@@ -146,3 +146,36 @@ fn pid_zero_with_recorded_live_pgid_is_not_settled() {
         Some(Status::Running)
     );
 }
+
+#[test]
+fn orphan_gone_current_none_uses_grace_without_probing_stale_identity() {
+    let dir = StateDir::new();
+    let mut record = dir.record();
+    let row = Entry {
+        run_id: "run-test".into(),
+        role: "implement".into(),
+        attempt: 1,
+        identity: None,
+        deadline_ms: Some(u64::MAX - 10_000),
+    };
+    record.set(
+        "attempts",
+        json!([{"status":"exited","started":1,
+        "leg":{"leg_key":"leg","route_key":"route"}}]),
+    );
+    record.save().unwrap();
+    assert!(inventory(&dir.0).unwrap().is_empty());
+    assert!(matches!(
+        orphan_gone(&dir.0, &row),
+        Err(ReconcileError::Unknown)
+    ));
+    let row = Entry {
+        deadline_ms: Some(1),
+        ..row
+    };
+    assert!(orphan_gone(&dir.0, &row).unwrap());
+    assert_eq!(
+        RunRecord::read(&dir.0, "run-test").unwrap().status(),
+        Some(Status::Orphaned)
+    );
+}

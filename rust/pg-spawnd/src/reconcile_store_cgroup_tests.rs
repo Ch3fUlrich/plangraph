@@ -326,7 +326,7 @@ fn reconcile_exited_leader_live_member_is_not_gone() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn reconcile_zombie_leader_is_not_gone() {
+fn reconcile_memberless_zombie_leader_is_gone() {
     let child = GroupChild::new();
     let identity: Proc = serde_json::from_value(child.identity()).unwrap();
     // SAFETY: terminate only our child, leaving it unreaped for the probe.
@@ -340,7 +340,7 @@ fn reconcile_zombie_leader_is_not_gone() {
         assert!(std::time::Instant::now() < deadline);
         std::thread::yield_now();
     }
-    assert!(!gone("run-test", Some(&identity)).unwrap());
+    assert!(gone("run-test", Some(&identity)).unwrap());
 }
 
 #[test]

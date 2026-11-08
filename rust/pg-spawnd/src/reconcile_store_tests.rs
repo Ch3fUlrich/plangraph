@@ -275,7 +275,7 @@ mod cgroup_tests;
 
 #[cfg(target_os = "linux")]
 #[test]
-fn terminal_or_absent_row_requires_settled_probe() {
+fn terminal_or_absent_row_uses_current_record() {
     for status in ["running", "completed", "absent", "missing", "invalid"] {
         for settled in [false, true] {
             let dir = StateDir::new();
@@ -310,8 +310,11 @@ fn terminal_or_absent_row_requires_settled_probe() {
             .unwrap();
             std::fs::write(scope.join("cgroup.procs"), "").unwrap();
             let result = orphan_with(&dir.0, &row, &mut None);
-            if (settled || status == "running") && status != "invalid" {
-                assert!(result.unwrap(), "{status}");
+            if status != "invalid" && status != "absent" {
+                assert!(
+                    matches!(result, Ok(true)),
+                    "{status} settled={settled}: {result:?}"
+                );
             } else {
                 assert!(matches!(result, Err(ReconcileError::Unknown)), "{status}");
             }

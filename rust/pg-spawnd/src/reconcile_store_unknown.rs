@@ -1,9 +1,42 @@
 //! Time-bounded legacy recovery when no attempt identity can be verified.
 use super::*;
 
+pub(crate) fn read(path: &Path) -> Result<Value, ReconcileError> {
+    use std::io::Read;
+    check(path, false)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(|_| ReconcileError::Io)?;
+    let meta = file.metadata().map_err(|_| ReconcileError::Io)?;
+    const CAP: u64 = 8 * 1024 * 1024;
+    if !meta.is_file() || meta.len() > CAP {
+        return Err(ReconcileError::Invalid);
+    }
+    let mut bytes = Vec::new();
+    file.take(CAP + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ReconcileError::Io)?;
+    if bytes.len() as u64 > CAP {
+        return Err(ReconcileError::Invalid);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| ReconcileError::Invalid)
+}
+
+// Maximum hold for unknown identities AND Z/X leaders, anchored to the persisted
+// deadline, attempt started time, or record mtime; restarting never resets it.
 pub(super) const UNKNOWN_IDENTITY_GRACE_MS: u64 = 10_000;
 
 pub(super) fn unverified_not_gone(row: &Entry) -> bool {
+    if let Some(identity) = &row.identity {
+        if zombie(identity) {
+            return !matches!(live_members(identity), Ok(false));
+        }
+    }
     needs_grace(row) && !matches!(gone(&row.run_id, row.identity.as_ref()), Ok(true))
 }
 
@@ -33,7 +66,9 @@ fn leader_start(leader: u32) -> Option<u64> {
             .and_then(|stat| {
                 let (_, rest) = stat.rsplit_once(')')?;
                 let fields: Vec<_> = rest.split_whitespace().collect();
-                // Z/X leaders can still have live process-group members.
+                if matches!(fields.first(), Some(&"Z" | &"X")) {
+                    return None;
+                }
                 fields.get(19)?.parse::<u64>().ok()
             })
     }
@@ -49,6 +84,75 @@ fn leader_start(leader: u32) -> Option<u64> {
 #[cfg(test)]
 #[path = "reconcile_store_grace_tests.rs"]
 mod tests;
+
+pub(super) fn zombie(identity: &Proc) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let pid = if identity.pid == 0 {
+            identity.pgid.unwrap_or(0)
+        } else {
+            identity.pid
+        };
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .is_some_and(|s| {
+                s.rsplit_once(')').is_some_and(|(_, rest)| {
+                    matches!(rest.split_whitespace().next(), Some("Z" | "X"))
+                })
+            })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = identity;
+        false
+    }
+}
+
+pub(super) fn live_members(identity: &Proc) -> Result<bool, ReconcileError> {
+    let pgid = identity.pgid.ok_or(ReconcileError::Unknown)?;
+    #[cfg(target_os = "linux")]
+    {
+        for entry in std::fs::read_dir("/proc").map_err(|_| ReconcileError::Unknown)? {
+            let entry = entry.map_err(|_| ReconcileError::Unknown)?;
+            if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
+                continue;
+            }
+            let stat = match std::fs::read_to_string(entry.path().join("stat")) {
+                Ok(stat) => stat,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return Err(ReconcileError::Unknown),
+            };
+            let (_, rest) = stat.rsplit_once(')').ok_or(ReconcileError::Unknown)?;
+            let fields: Vec<_> = rest.split_whitespace().collect();
+            if fields.get(2).and_then(|s| s.parse::<u32>().ok()) == Some(pgid)
+                && !matches!(fields.first(), Some(&"Z" | &"X"))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Platform gap: kill(0) cannot distinguish zombies from live members.
+        // The persisted grace still bounds the hold on these platforms.
+        #[cfg(unix)]
+        {
+            if unsafe { libc::kill(-(pgid as i32), 0) } == 0 {
+                return Ok(true);
+            }
+            return match std::io::Error::last_os_error().raw_os_error() {
+                Some(libc::ESRCH) => Ok(false),
+                _ => Err(ReconcileError::Unknown),
+            };
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = pgid;
+            Err(ReconcileError::Unknown)
+        }
+    }
+}
 
 #[cfg(target_os = "linux")]
 pub(super) fn pgid_gone(identity: &Proc) -> Result<bool, ReconcileError> {

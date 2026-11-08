@@ -23,8 +23,17 @@ impl Drop for Leader {
 #[test]
 fn every_running_identity_is_bounded_or_verified() {
     use pg_worker_core::slots;
-    for state in ["live", "Z", "gone"] {
+    for state in ["live", "Z", "Z-member", "gone"] {
         let mut leader = Leader::new();
+        let _member = (state == "Z-member").then(|| {
+            Leader(
+                std::process::Command::new("sleep")
+                    .arg("60")
+                    .process_group(leader.0.id() as i32)
+                    .spawn()
+                    .unwrap(),
+            )
+        });
         let stat = std::fs::read_to_string(format!("/proc/{}/stat", leader.0.id())).unwrap();
         let start: u64 = stat
             .rsplit_once(')')
@@ -93,10 +102,40 @@ fn every_running_identity_is_bounded_or_verified() {
                         .unwrap();
                         // Bound: first reconciliation at/after started + 10 seconds.
                         // started=1 exercises the expired bound without wall-clock sleeps.
-                        let verified = state != "gone"
+                        let verified = state == "live"
                             && recorded == Some(start)
                             && (pid == leader.0.id() || (pid == 0 && pgid == Some(leader.0.id())));
                         let row = inventory(&dir.0).unwrap().remove(0);
+                        if state.starts_with('Z')
+                            && recorded == Some(start)
+                            && pid == leader.0.id()
+                            && pgid == Some(leader.0.id())
+                            && !grouped
+                        {
+                            let fresh = Entry {
+                                deadline_ms: Some(u64::MAX - 10_000),
+                                ..Entry {
+                                    run_id: row.run_id.clone(),
+                                    role: row.role.clone(),
+                                    attempt: row.attempt,
+                                    identity: Some(Proc {
+                                        pid,
+                                        pgid,
+                                        start_time: recorded,
+                                        group: None,
+                                    }),
+                                    deadline_ms: None,
+                                }
+                            };
+                            let result = orphan_gone(&dir.0, &fresh);
+                            if state == "Z-member" {
+                                assert!(matches!(result, Err(ReconcileError::Unknown)));
+                            } else {
+                                assert!(result.unwrap());
+                                counts[0] += 1;
+                                continue;
+                            }
+                        }
                         for _ in 0..if verified { 2 } else { 1 } {
                             let result = orphan_gone(&dir.0, &row);
                             if verified {
@@ -133,7 +172,7 @@ fn every_running_identity_is_bounded_or_verified() {
                 }
             }
         }
-        assert_eq!(counts, if state == "gone" { [54, 0] } else { [46, 8] });
+        assert_eq!(counts, if state == "live" { [46, 8] } else { [54, 0] });
     }
 }
 

@@ -34,4 +34,13 @@ their process-group members may remain alive. Without a start time the existing
 bounded unidentified-child risk applies. A direct orphan_gone regression proves
 that a running row with no identity receives both the unexpired and expired
 grace decisions; the optional current-row lookup is not the predicate argument.
-Terminal/absent rows deliberately retain their required confinement probe.
+Round 8 supersedes the indefinite Z/X hold above: Linux scans /proc/*/stat
+for non-Z/X members of the recorded pgid. A memberless zombie settles immediately;
+a zombie with live members is held only until UNKNOWN_IDENTITY_GRACE_MS (10s)
+after the persisted deadline/started/mtime base. Non-Linux Unix uses kill(-pgid, 0)
+with the platform gap that it cannot distinguish zombies; grace still bounds it.
+The real 216-row live/Z/Z-member/gone table retains only eight matching live
+leaders and settles 208 expired rows; fresh zombie rows test both member cases.
+The portable 216-row table marks 208 rows grace-eligible and eight verified.
+A direct current=None regression tests unexpired and expired missing-identity
+grace; absent inventory no longer probes a stale identity before settlement.

@@ -3,7 +3,7 @@ use crate::reconcile::ReconcileError;
 use pg_worker_core::run::record::valid_run_id;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{io::Read, path::Path};
+use std::path::Path;
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Proc {
@@ -25,30 +25,7 @@ mod helpers;
 pub(crate) mod state_lock;
 pub(crate) use helpers::lock;
 use helpers::{check, seconds};
-pub(crate) fn read(path: &Path) -> Result<Value, ReconcileError> {
-    check(path, false)?;
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let file = options.open(path).map_err(|_| ReconcileError::Io)?;
-    let meta = file.metadata().map_err(|_| ReconcileError::Io)?;
-    const CAP: u64 = 8 * 1024 * 1024;
-    if !meta.is_file() || meta.len() > CAP {
-        return Err(ReconcileError::Invalid);
-    }
-    let mut bytes = Vec::new();
-    file.take(CAP + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| ReconcileError::Io)?;
-    if bytes.len() as u64 > CAP {
-        return Err(ReconcileError::Invalid);
-    }
-    serde_json::from_slice(&bytes).map_err(|_| ReconcileError::Invalid)
-}
+pub(crate) use unknown::read;
 pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
     match std::fs::symlink_metadata(root) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -158,6 +135,9 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
     let Some(identity) = identity else {
         return Err(ReconcileError::Unknown);
     };
+    if unknown::zombie(identity) {
+        return unknown::live_members(identity).map(|alive| !alive);
+    }
     #[cfg(target_os = "linux")]
     {
         if let Some(group) = &identity.group {
@@ -256,14 +236,31 @@ pub(crate) fn orphan_with(
     {
         return Err(ReconcileError::Unknown);
     }
-    // Gate on running inventory membership, not identity presence; pass the row.
+    if current.is_none() && unknown::needs_grace(row) {
+        if !dir
+            .join("record.json")
+            .try_exists()
+            .map_err(|_| ReconcileError::Unknown)?
+        {
+            return Ok(true);
+        }
+        let record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;
+        if record.status() != Some(Status::Running) {
+            return helpers::terminal(record.status());
+        }
+        return unknown::settle_unknown(root, row);
+    }
     if current.is_some() && unknown::unverified_not_gone(row) {
         return unknown::settle_unknown(root, row);
     }
     #[cfg(windows)]
     let result = crate::reconcile::job::settle_probe(row, authority);
     #[cfg(not(windows))]
-    let result = gone(&row.run_id, row.identity.as_ref());
+    let result = if current.is_none() {
+        Ok(true)
+    } else {
+        gone(&row.run_id, row.identity.as_ref())
+    };
     if !result? {
         return Ok(false);
     }

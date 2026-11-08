@@ -22,11 +22,11 @@ fn portable_identity_leader_state_table() {
                                 group: grouped.then(|| "scope".into()),
                             }),
                         };
-                        let matching = state != "gone"
+                        let matching = state == "live"
                             && start_time == Some(100)
                             && (pid == 10 || (pid == 0 && pgid == Some(10)));
                         let grace = needs_grace_with(&row, |id| {
-                            (state != "gone" && id == 10).then_some(100)
+                            (state == "live" && id == 10).then_some(100)
                         });
                         assert_eq!(grace, !matching);
                         counts[usize::from(!grace)] += 1;
@@ -37,5 +37,5 @@ fn portable_identity_leader_state_table() {
             }
         }
     }
-    assert_eq!(counts, [192, 24]);
+    assert_eq!(counts, [208, 8]);
 }
