@@ -63,21 +63,24 @@ fn guard_diagnostic_ignores_stale_record_values() {
 
 #[test]
 fn missing_backlink_target_is_rejected_on_every_platform() {
-    // Windows counterpart of the cfg(unix) `missing/..` case: a backlink
-    // naming a .git that does not exist is refused, not resolved lexically.
+    // capture() canonicalizes the backlink, so a .git that does not exist is
+    // NotFound on every platform. Only `missing/../.git` differs: Windows
+    // resolves `..` lexically to the real .git, Unix needs `missing` to exist.
     let (temp, _, _, record) = fixture(true);
     let cwd = temp.path().join("checkout");
-    fs::write(
-        temp.path().join("common/.git/worktrees/leaf/gitdir"),
-        temp.path().join("elsewhere/.git").to_str().unwrap(),
-    )
-    .unwrap();
-    assert!(capture(&cwd, record.path().parent().unwrap()).is_err());
-    let lexical = cwd.join("missing").join("..").join("other").join(".git");
-    fs::write(
-        temp.path().join("common/.git/worktrees/leaf/gitdir"),
-        lexical.to_str().unwrap(),
-    )
-    .unwrap();
-    assert!(capture(&cwd, record.path().parent().unwrap()).is_err());
+    let pointer = temp.path().join("common/.git/worktrees/leaf/gitdir");
+    let run = record.path().parent().unwrap();
+    let missing = cwd.join("missing").join("..");
+    for target in [
+        temp.path().join("elsewhere/.git"),
+        missing.join("other").join(".git"),
+    ] {
+        fs::write(&pointer, target.to_str().unwrap()).unwrap();
+        let err = capture(&cwd, run).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+    fs::write(&pointer, missing.join(".git").to_str().unwrap()).unwrap();
+    assert_eq!(capture(&cwd, run).is_ok(), cfg!(windows));
+    fs::write(&pointer, cwd.join(".git").to_str().unwrap()).unwrap();
+    assert!(capture(&cwd, run).unwrap());
 }
