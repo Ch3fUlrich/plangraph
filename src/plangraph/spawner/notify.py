@@ -123,11 +123,31 @@ class KeeperSink:
 
 def deliver_verdict(directory, record, keeper):
     """Never let optional verdict delivery interrupt completion persistence."""
+    if record.get('role') != 'review' or (Path(directory) / 'verdict.delivered').exists():
+        return
     try:
         _deliver_verdict(directory, record, keeper)
-    except Exception:
-        # Import, lock, and journal failures leave the outbox pending for replay.
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning('verdict delivery deferred: %s', type(exc).__name__)
+        try:
+            _verdict_outcome(Path(directory), 'retry', type(exc).__name__)
+        except Exception:
+            logging.getLogger(__name__).warning('verdict refusal journal unavailable')
+
+
+def _verdict_outcome(directory, status, reason):
+    journal = directory / 'verdict.json'
+    previous = json.loads(journal.read_text()) if journal.exists() else {}
+    if previous.get('status') in ('skipped', 'delivered'):
+        atomic_write_private(directory / 'verdict.delivered', 'terminal\n')
         return
+    attempts = previous.get('attempts', 0) + 1
+    if status == 'retry' and attempts >= 3:
+        status, reason = 'skipped', 'retry limit reached: ' + reason
+    atomic_write_private(journal, json.dumps(dict(status=status, reason=reason, attempts=attempts)) + '\n')
+    if status in ('skipped', 'delivered'):
+        atomic_write_private(directory / 'verdict.delivered', status + '\n')
 
 
 def _deliver_verdict(directory, record, keeper):
@@ -149,9 +169,7 @@ def _deliver_verdict(directory, record, keeper):
         if marker.exists():
             return
         def outcome(status, reason):
-            atomic_write_private(journal, json.dumps({'status': status, 'reason': reason}) + '\n')
-            if status in ('skipped', 'delivered'):
-                atomic_write_private(marker, status + '\n')
+            _verdict_outcome(directory, status, reason)
         try:
             if journal.exists() and json.loads(journal.read_text()).get('status') in ('skipped', 'delivered'):
                 atomic_write_private(marker, 'terminal\n')

@@ -973,7 +973,7 @@ def spawn_service(*args, **kwargs):
                 markers = [r + '.delivered' for r in recipients]
                 if os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD'):
                     markers += [r + '.hook.delivered' for r in ('parent', 'keeper')]
-                pending = 'completion' not in record or any(not (self._path(record['run_id']).parent / m).exists() for m in markers)
+                pending = any(not (self._path(record['run_id']).parent / m).exists() for m in markers)
                 if record.get('ended') is not None and record.get('status') != 'running' and pending:
                     try:
                         self._save(record, retry=True)

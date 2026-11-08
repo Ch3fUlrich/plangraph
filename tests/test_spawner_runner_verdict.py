@@ -25,7 +25,7 @@ def test_verdict_has_no_completion_hook_marker(tmp_path, monkeypatch):
     assert saves == []
     record.pop('completion')
     service.retry_completions()
-    assert len(saves) == 1
+    assert saves == []
 
 
 @pytest.mark.parametrize('failure', ['import', 'lock', 'missing-head', 'null-ref', 'reject'])
@@ -63,6 +63,41 @@ def test_forward_failure_boundaries(tmp_path, monkeypatch, failure):
         assert (tmp_path / 'verdict.delivered').exists()
         notify.deliver_verdict(tmp_path, record, endpoint)
         assert len(calls) == (1 if failure == 'reject' else 0)
+
+
+@pytest.mark.parametrize('failure', ['import', 'lock', 'unconfigured', 'io'])
+def test_verdict_retries_are_bounded(tmp_path, monkeypatch, failure, caplog):
+    import builtins
+    from pathlib import Path
+    from plangraph.spawner import notify
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / 'tools'))
+    import seat_verdict as seat
+    record = dict(role='review', item_key='demo:A', given_writer_families=['deepseek'])
+    monkeypatch.setattr(seat, 'evidence_from_record', lambda *a: (
+        dict(served_model='opencode/mimo-v2.6-free', head_sha='d' * 40), 'VERDICT: ACCEPT'))
+    monkeypatch.setattr(seat, 'main', lambda *a: seat.EXIT_IO)
+    monkeypatch.setenv('PG_REVIEWER_TOKEN_DIR', str(tmp_path))
+    keeper = SimpleNamespace(url='unused', item=lambda key: dict(key=key, evidence=[
+        dict(kind='commit+ci', verified=True, ref=dict(commit='d' * 40))]))
+    if failure == 'unconfigured':
+        keeper = None
+    if failure == 'import':
+        original = builtins.__import__
+        def importing(name, *args, **kwargs):
+            if name == 'seat_verdict':
+                raise ImportError('unavailable')
+            return original(name, *args, **kwargs)
+        monkeypatch.setattr(builtins, '__import__', importing)
+    if failure == 'lock':
+        monkeypatch.setattr(notify, 'inbox_lock', lambda *a: (_ for _ in ()).throw(OSError('locked')))
+    for _ in range(5):
+        notify.deliver_verdict(tmp_path, record, keeper)
+    journal = json.loads((tmp_path / 'verdict.json').read_text())
+    assert journal['status'] == 'skipped'
+    assert journal['attempts'] == 3
+    assert (tmp_path / 'verdict.delivered').exists()
+    if failure in ('import', 'lock'):
+        assert 'verdict delivery deferred' in caplog.text
 
 
 def _monitor(tmp_path, monkeypatch, output, *, denied=True, role='review', client='opencode', rc=1):
