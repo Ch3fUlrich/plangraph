@@ -2,6 +2,10 @@ use super::*;
 use pg_worker_core::run::record::{RunRecord, Status};
 use serde_json::json;
 
+#[cfg(target_os = "linux")]
+#[path = "reconcile_store_rl29_tests.rs"]
+mod rl29;
+
 struct StateDir(std::path::PathBuf);
 impl StateDir {
     fn new() -> Self {
