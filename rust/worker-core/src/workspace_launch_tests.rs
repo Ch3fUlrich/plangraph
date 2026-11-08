@@ -293,14 +293,14 @@ fn child_sees_pinned_cwd_pwd_pythonpath_and_external_slot_cache() {
     crate::sandbox_env::confine_check(&mut cmd, f.tmp.path());
     cmd.env("PYTHONDONTWRITEBYTECODE", "0");
     apply_child_env(&mut cmd, &f.repo, &tree, "seat-one", f.tmp.path()).unwrap();
+    let temp = f.tmp.path().canonicalize().unwrap();
+    let cache = cache.canonicalize().unwrap();
+    let pytest = std::ffi::OsStr::new("-p no:cacheprovider");
     for (key, expected) in [
-        ("TMPDIR", f.tmp.path().as_os_str()),
-        ("TEMP", f.tmp.path().as_os_str()),
-        ("TMP", f.tmp.path().as_os_str()),
-        (
-            "PYTEST_ADDOPTS",
-            std::ffi::OsStr::new("-p no:cacheprovider"),
-        ),
+        ("TMPDIR", temp.as_os_str()),
+        ("TEMP", temp.as_os_str()),
+        ("TMP", temp.as_os_str()),
+        ("PYTEST_ADDOPTS", pytest),
     ] {
         assert!(cmd.get_envs().any(|(k, v)| k == key && v == Some(expected)));
     }
@@ -309,16 +309,15 @@ fn child_sees_pinned_cwd_pwd_pythonpath_and_external_slot_cache() {
     assert!(out.status.success());
     let stdout = String::from_utf8(out.stdout).unwrap();
     let lines: Vec<_> = stdout.lines().map(str::to_owned).collect();
+    assert_eq!(lines.len(), 5);
+    assert_eq!(Path::new(&lines[0]).canonicalize().unwrap(), tree);
     assert_eq!(
-        lines,
-        vec![
-            tree.display().to_string(),
-            tree.display().to_string(),
-            cache.join("seat-one").display().to_string(),
-            "1".into(),
-            tree.display().to_string()
-        ]
+        std::env::split_paths(&lines[1]).collect::<Vec<_>>(),
+        vec![tree.clone()]
     );
+    assert_eq!(Path::new(&lines[2]), cache.join("seat-one"));
+    assert_eq!(lines[3], "1");
+    assert_eq!(Path::new(&lines[4]).canonicalize().unwrap(), tree);
 }
 #[test]
 fn all_inherited_and_explicit_git_vars_removed() {

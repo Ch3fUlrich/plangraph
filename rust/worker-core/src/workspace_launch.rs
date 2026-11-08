@@ -186,7 +186,7 @@ pub fn create_writer(
 }
 
 // Git for Windows does not accept Rust's canonical \\?\ worktree arguments.
-fn git_worktree_path(path: &Path) -> std::path::PathBuf {
+pub(crate) fn git_worktree_path(path: &Path) -> std::path::PathBuf {
     #[cfg(windows)]
     {
         use std::path::{Component, Prefix};

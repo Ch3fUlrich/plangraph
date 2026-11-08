@@ -6,9 +6,14 @@ use crate::writer_secret::object;
 fn dirty_untracked_snapshot_ignored_excluded() {
     let (_dir, repo, base, _) = fixture();
     let root = Path::new(&repo.root);
+    let new_name = if cfg!(windows) {
+        "new file"
+    } else {
+        "new\nfile"
+    };
     std::fs::write(root.join(".gitignore"), "ignored\n").unwrap();
     std::fs::write(root.join("ignored"), "not exported").unwrap();
-    std::fs::write(root.join("new\nfile"), "new bytes").unwrap();
+    std::fs::write(root.join(new_name), "new bytes").unwrap();
     std::fs::write(root.join("safe"), "dirty bytes").unwrap();
     let token = ["gh", "p_", &"s".repeat(25)].concat();
     std::fs::write(root.join("bad"), &token).unwrap();
@@ -16,7 +21,7 @@ fn dirty_untracked_snapshot_ignored_excluded() {
     let (dest, receiver, head) = imported(&repo, &bytes);
     let names = entries(dest.path(), &head).unwrap();
     assert!(!names.iter().any(|e| e.2 == b"ignored" || e.2 == b"bad"));
-    for (name, expected) in [("safe", "dirty bytes"), ("new\nfile", "new bytes")] {
+    for (name, expected) in [("safe", "dirty bytes"), (new_name, "new bytes")] {
         let blob = &names.iter().find(|e| e.2 == name.as_bytes()).unwrap().1;
         assert_eq!(object(dest.path(), blob).unwrap().1, expected.as_bytes());
     }
