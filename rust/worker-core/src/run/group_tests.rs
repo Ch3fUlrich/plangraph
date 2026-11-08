@@ -22,6 +22,21 @@ fn plain(script: &str, cwd: &Path, piped: bool) -> Grouped {
         .unwrap()
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn oom_score_inherited_by_first_descendant() {
+    let mut grouped = plain(
+        "cat /proc/self/oom_score_adj; sh -c 'cat /proc/self/oom_score_adj'",
+        Path::new("/"), false,
+    );
+    let mut text = String::new();
+    grouped.child.stdout.take().unwrap().read_to_string(&mut text).unwrap();
+    assert!(grouped.child.wait().unwrap().success());
+    let scores: Vec<i32> = text.split_whitespace().map(|s| s.parse().unwrap()).collect();
+    assert_eq!(scores.len(), 2);
+    assert!(scores.iter().all(|score| *score >= 500));
+}
+
 #[test]
 fn command_contract() {
     let env = [

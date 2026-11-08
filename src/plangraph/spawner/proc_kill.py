@@ -8,10 +8,35 @@ is not proven ours is never snapshotted and never killed.
 import asyncio
 import os
 import time
+import sys
+import json
 from pathlib import Path
 
 WAIT_S = 2.0
 KILL_WAIT_S = 10.0
+
+
+def raise_oom_score(path=Path('/proc/self/oom_score_adj')):
+    """Raise only; injectable proc file keeps policy tests hermetic."""
+    try:
+        current = int(path.read_text().strip())
+        if current < 500:
+            path.write_text('500')
+        return dict(event='oom_score_adj', value=max(current, 500))
+    except PermissionError:
+        return dict(event='oom_score_adj_denied', errno=13)
+
+
+def oom_child_setup():
+    # Runs before exec: even the first grandchild inherits the raised score.
+    event = raise_oom_score()
+    os.write(2, (json.dumps({'plangraph_oom': event}) + '\n').encode())
+
+
+async def oom_process_factory(*args, **kwargs):
+    if sys.platform.startswith('linux'):
+        kwargs['preexec_fn'] = oom_child_setup
+    return await asyncio.create_subprocess_exec(*args, **kwargs)
 
 
 class KillIncomplete(RuntimeError):

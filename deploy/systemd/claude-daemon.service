@@ -1,0 +1,20 @@
+[Unit]
+Description=Claude Code background daemon (own unit; D-5075: not in herdr-server's cgroup)
+After=default.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/claude daemon run
+Restart=always
+RestartSec=5
+# Sessions it starts must outlive a daemon restart and a stop of this unit's main process.
+KillMode=process
+# Not immune like the interactive shells (-900), not first victim: 200 is where herdr/keeper sit.
+# Writer/seat/test trees are raised to >= 500 by the spawner launcher and pytest conftest (OOM-ADJ-INHERIT 1, 2).
+OOMScoreAdjust=200
+OOMPolicy=continue
+
+[Install]
+WantedBy=default.target

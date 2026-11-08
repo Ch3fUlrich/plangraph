@@ -229,7 +229,7 @@ class SpawnerRunner:
         self.on_sample = None
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
-        self.process_factory = process_factory or asyncio.create_subprocess_exec
+        self.process_factory = process_factory or proc_kill.oom_process_factory
         self.tree_killer = tree_killer or self._own_kill
         self.platform = None   # tests inject 'nt'
         self.provider_responses = {}
@@ -711,6 +711,8 @@ class SpawnerRunner:
                 except (ValueError, TypeError):
                     continue
                 if not isinstance(envelope, dict) or set(envelope) != {'autoos_provider_response'}:
+                    if isinstance(envelope, dict) and 'plangraph_oom' in envelope:
+                        job.events.append(envelope['plangraph_oom'])
                     continue
                 response = envelope['autoos_provider_response']
                 if not isinstance(response, dict) or response.get('nonce') != self._nonces.get(job_id) or not self._nonces.get(job_id):

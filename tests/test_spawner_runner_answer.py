@@ -87,3 +87,65 @@ def test_denied_review_verdict_completion(tmp_path, monkeypatch, verdict, framin
         ('text', {'text': verdict}), ('step_finish', {'reason': framing}))
     job = _monitor(tmp_path, monkeypatch, output, denied=True, stderr='')
     assert job.status == ('failed' if framing == 'length' else 'completed')
+def test_oom_adjustment_never_lowers_and_records_denial(tmp_path, monkeypatch):
+    from plangraph.spawner.proc_kill import raise_oom_score
+    path = tmp_path / 'oom_score_adj'
+    for current, expected in [(-900, 500), (750, 750)]:
+        path.write_text(str(current))
+        assert raise_oom_score(path)['event'] == 'oom_score_adj'
+        assert int(path.read_text()) == expected
+    def denied(*args, **kwargs):
+        raise PermissionError(13, 'denied')
+    monkeypatch.setattr(type(path), 'write_text', denied)
+    monkeypatch.setattr(type(path), 'read_text', lambda self: '-900')
+    assert raise_oom_score(path)['event'] == 'oom_score_adj_denied'
+
+
+def test_linux_child_oom_inherits_before_exec():
+    import asyncio
+    import sys
+    import pytest
+    from plangraph.spawner.proc_kill import oom_process_factory
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux proc policy')
+    async def run():
+        proc = await oom_process_factory(
+            sys.executable, '-c',
+            "import subprocess; print(open('/proc/self/oom_score_adj').read().strip()); "
+            "subprocess.run(['cat', '/proc/self/oom_score_adj'], check=True)",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        out, err = await proc.communicate()
+        assert proc.returncode == 0, err
+        assert all(int(score) >= 500 for score in out.splitlines())
+        assert b'oom_score_adj' in err
+    asyncio.run(run())
+
+
+def test_oom_deploy_contract():
+    import configparser
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    unit = configparser.ConfigParser(interpolation=None)
+    text = (root / 'deploy/systemd/claude-daemon.service').read_text()
+    unit.read_string(text)
+    assert int(unit['Service']['OOMScoreAdjust']) > -900
+    assert unit['Service']['KillMode'] == 'process'
+    assert not re.search(r'(?i)(api[_-]?key|token|password|secret)\s*=', text)
+    docs = (root / 'deploy/oom-policy.md').read_text()
+    assert 'systemd-run --user --scope' in docs
+    assert 'claude --bg' in docs
+    for name, matches in [('prefer', ['python3', 'pytest', 'opencode']),
+                          ('avoid', ['herdr', 'claude', 'plangraph-keeper'])]:
+        pattern = (root / f'deploy/earlyoom/{name}.regex').read_text().strip()
+        assert all(re.search(pattern, value) for value in matches)
+
+
+def test_pytest_memory_policy(tmp_path):
+    import conftest
+    mem = tmp_path / 'meminfo'
+    mem.write_text('MemTotal:       15728640 kB\n')
+    assert conftest._oom_worker_count(16, mem) == 4
+    assert conftest._oom_worker_count(2, mem) == 2
+    mem.write_text('MemTotal:       67108864 kB\n')
+    assert conftest._oom_worker_count(16, mem) == 16
