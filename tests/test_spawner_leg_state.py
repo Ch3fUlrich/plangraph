@@ -5,6 +5,36 @@ import pytest
 from plangraph.spawner import leg_state as ls
 
 
+def test_route_free_first_keys():
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS, TIERS
+    from plangraph.planner.review_order import review_key
+    from plangraph.planner.route_policy import implement_key
+    sol = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol')
+    free = replace(sol, id='free-test', tier='free', family='gemini')
+    for key in (review_key, implement_key):
+        assert key(free, TIERS.index('free'), 1) < key(sol, TIERS.index('subscription'), 0)
+
+
+def test_catalog_tiers_preserve_roles():
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.review_order import catalog_tiers
+    rows = [{'id': 'gemini-3.8-flash', 'tier': 'free'}]
+    updated = catalog_tiers(DEFAULT_LEGS, rows)
+    assert next(l for l in updated if l.id == 'agy-gemini-3.8-flash').tier == 'free'
+    assert [l.roles for l in updated] == [l.roles for l in DEFAULT_LEGS]
+    assert next(l for l in updated if l.id == 'deepseek').tier == 'paid'
+
+
+def test_old_limit_evidence_reprobes(store):
+    store.record_provider_response('test/leg', 429, 'quota', {'Retry-After': '86400'}, 'test', now=100)
+    assert store.leg_status('test/leg', now=100 + 21600)['state'] == 'reprobe'
+    # Also exercise a legacy row whose recorded reset exceeds the new cap.
+    with store._connect() as db:
+        db.execute('UPDATE leg_events SET reset_at=?', (100 + 86400,))
+    assert store.leg_status('test/leg', now=100 + 21600)['state'] == 'reprobe'
+
+
 @pytest.fixture
 def store(tmp_path):
     return ls.LegStateStore(tmp_path / "legs.sqlite")

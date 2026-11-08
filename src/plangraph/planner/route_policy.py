@@ -35,10 +35,10 @@ def review_priority(leg) -> int:
 
 
 def implement_key(leg, tier_idx, pos):
-    """The table's lead precedes cost tiers; eligibility is applied first."""
+    """Cost precedes writer preference; eligibility is applied first."""
     from .legs import LEAD_WRITER, WRITER_ORDER
     index = WRITER_ORDER.index(leg.id) if leg.id in WRITER_ORDER else len(WRITER_ORDER)
-    return (leg.id != LEAD_WRITER, tier_idx, index, pos)
+    return (tier_idx, leg.id != LEAD_WRITER, index, pos)
 
 
 @dataclass(frozen=True)
