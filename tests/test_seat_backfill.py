@@ -47,11 +47,15 @@ def test_seat_index_reads_records_once(tmp_path, monkeypatch):
     assert reads == [run / "record.json"]
 
 
-def test_seat_backfill_cached_pr_json(tmp_path, capsys):
+def test_seat_backfill_cached_pr_json(tmp_path, capsys, snapshot_shape):
     run = record(tmp_path, item_key=None)
     (run / "prompt.txt").write_text("Review PR #7")
     snapshot = tmp_path / "snapshot.json"
-    snapshot.write_text(json.dumps({"items": [dict(ITEM, state="in_review")]}))
+    writer = tmp_path / "writer"
+    writer.mkdir()
+    record(writer, role="implement", served_model="gpt-5")
+    item = snapshot_shape([("commit", True, 1, None, SHA)])
+    snapshot.write_text(json.dumps({"items": [dict(item, state="in_review")]}))
     cache = tmp_path / "prs.json"
     cache.write_text(json.dumps({SHA: 7}))
     with patch("urllib.request.urlopen", side_effect=AssertionError("network")):
@@ -127,9 +131,11 @@ def test_seat_backfill_eligible(tmp_path):
         (run.name, "deepseek", True)]
 
 
-def test_seat_backfill_dry_run_no_network_missing(tmp_path, capsys):
+def test_seat_backfill_dry_run_no_network_missing(tmp_path, capsys, snapshot_shape):
     snapshot = tmp_path / "plan.snapshot.json"
-    snapshot.write_text(json.dumps({"items": [dict(ITEM, state="in_review")]}))
+    record(tmp_path, role="implement", served_model="gpt-5")
+    item = snapshot_shape([("commit", True, 1, None, SHA)])
+    snapshot.write_text(json.dumps({"items": [dict(item, state="in_review")]}))
     with patch("urllib.request.urlopen", side_effect=AssertionError("network")):
         assert sv.main(["--backfill-dry-run", "--snapshot", str(snapshot),
                         "--records-dir", str(tmp_path)]) == 0
@@ -140,6 +146,9 @@ def test_seat_backfill_snapshot_apply_reuses_poster(tmp_path, capsys):
     from types import SimpleNamespace
     from unittest.mock import Mock
     run = record(tmp_path)
+    writer = tmp_path / "writer"
+    writer.mkdir()
+    record(writer, role="implement", served_model="gpt-5")
     snapshot = tmp_path / "plan.snapshot.json"
     snapshot.write_text(json.dumps({"items": [dict(
         key=ITEM["key"], state="in_review", epoch=3, writer_model="gpt-5",
@@ -233,3 +242,93 @@ def test_seat_backfill_reason_tally(tmp_path, snapshot_shape, capsys):
     assert "demo:A\tMISSING no commit evidence" in output
     assert "counts\titems=1\teligible=0\tmissing=1\tfailed=0" in output
     assert "reason\tno commit evidence\t1" in output
+
+
+def test_snapshot_writer_model_is_not_evidence():
+    assert sr.writer_families(dict(ITEM, writer_model="gpt-5"), SHA, None, None) == []
+
+
+@pytest.mark.parametrize("at", [None, "same", 10])
+def test_newest_evidence_epoch_breaks_timestamp_ties(snapshot_shape, at):
+    item = snapshot_shape([("commit", True, 2, at, SHA),
+                           ("commit", True, 10, at, "b" * 40)])
+    assert sr.snapshot_item(item)["head_sha"] == "b" * 40
+
+
+def test_numeric_evidence_times_are_not_lexicographic(snapshot_shape):
+    item = snapshot_shape([("commit", True, 1, 9, SHA),
+                           ("commit", True, 2, 10, "b" * 40)])
+    assert sr.snapshot_item(item)["head_sha"] == "b" * 40
+
+
+def test_raw_derived_fields_cannot_bypass_ambiguity(tmp_path, capsys):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    item = dict(ITEM, state="in_review", evidence=[
+        dict(kind="commit", verified=True, epoch=2, ref=sha)
+        for sha in (SHA, "b" * 40)])
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text(json.dumps({"items": [item]}))
+    args = SimpleNamespace(snapshot=snapshot, records_dir=tmp_path, backfill_apply=True)
+    poster = Mock()
+    assert sr.backfill(args, poster) == 0
+    assert "ambiguous verified commits" in capsys.readouterr().out
+    poster.assert_not_called()
+
+
+@pytest.mark.parametrize("returned_missing", [False, True])
+def test_missing_completion_head_is_rejection(tmp_path, returned_missing):
+    record(tmp_path, completion={})
+    if returned_missing:
+        with patch.object(sr, "evidence_from_record", return_value=({}, "VERDICT: PASS")):
+            seats, reasons = sr.eligible_records(ITEM, tmp_path)
+    else:
+        seats, reasons = sr.eligible_records(ITEM, tmp_path)
+    assert not seats
+    assert "head" in " ".join(reasons)
+
+
+@pytest.mark.parametrize("finish,accepted", [("stop", True), ("end_turn", True),
+                                             ("END_TURN", False), ("length", False)])
+def test_discovery_preserves_poster_finish_set(tmp_path, finish, accepted):
+    record(tmp_path, finish_reason=finish)
+    assert bool(sr.eligible_records(ITEM, tmp_path)[0]) is accepted
+
+
+def test_symlinked_host_partition_rejected(tmp_path):
+    host = tmp_path / "host"
+    host.mkdir()
+    run = record(host)
+    alias = tmp_path / "alias"
+    alias.symlink_to(host, target_is_directory=True)
+    path = alias / run.name / "record.json"
+    index = {path: (json.loads(path.read_text()), "")}
+    seats, reasons = sr.eligible_records(ITEM, index)
+    assert not seats
+    assert "spawner fields" in " ".join(reasons)
+
+
+def test_symlinked_writer_partition_is_not_evidence(tmp_path):
+    host = tmp_path / "host"
+    host.mkdir()
+    run = record(host, role="implement", served_model="gpt-5")
+    alias = tmp_path / "alias"
+    alias.symlink_to(host, target_is_directory=True)
+    path = alias / run.name / "record.json"
+    index = {path: (json.loads(path.read_text()), "")}
+    assert sr.writer_families(ITEM, SHA, index, None) == []
+
+
+@pytest.mark.parametrize("completion", [{}, "malformed"])
+def test_missing_head_backfill_tallied(tmp_path, snapshot_shape, capsys, completion):
+    record(tmp_path, completion=completion)
+    host = tmp_path / "writer"
+    host.mkdir()
+    record(host, role="implement", served_model="gpt-5")
+    snapshot = tmp_path / "snapshot.json"
+    item = dict(snapshot_shape([("commit", True, 1, None, SHA)]), state="in_review")
+    snapshot.write_text(json.dumps({"items": [item]}))
+    assert sv.main(["--backfill-dry-run", "--snapshot", str(snapshot),
+                    "--records-dir", str(tmp_path)]) == 0
+    output = capsys.readouterr().out
+    assert "reason\trecord completion.head_sha missing or not 40 hex chars\t1" in output
