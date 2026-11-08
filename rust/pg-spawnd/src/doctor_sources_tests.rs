@@ -96,6 +96,28 @@ fn invalid_command_is_filtered() {
 
 #[test]
 fn configured_host_regexes_match_legacy_filter() {
+    let python = |h: &Value| {
+        use std::io::Write;
+        let mut child = Command::new("python3").args(["-c", r#"
+import json, os, pathlib, sys, tempfile
+from plangraph.spawner import remote_ps
+assert remote_ps.MAX_WORKERS == int(sys.argv[1])
+assert remote_ps.TIMEOUT == int(sys.argv[2])
+with tempfile.TemporaryDirectory() as root:
+    os.environ['XDG_CONFIG_HOME'] = root
+    path = pathlib.Path(root) / 'plangraph'
+    path.mkdir()
+    host = json.load(sys.stdin)
+    (path / 'ps-hosts.json').write_text(json.dumps({'hosts': [host]}))
+    print(int(not remote_ps.configured_hosts()[0].get('invalid', False)))
+"#, &MAX_WORKERS.to_string(), &TIMEOUT.as_secs().to_string()])
+            .env("PYTHONPATH", concat!(env!("CARGO_MANIFEST_DIR"), "/../../src"))
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(h.to_string().as_bytes()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        output.stdout == b"1\n"
+    };
     let cases = [
         (
             "name",
@@ -164,8 +186,9 @@ fn configured_host_regexes_match_legacy_filter() {
                 if expected {
                     assert!(valid(&h), "unexpectedly invalid: {h}");
                 } else {
-                    assert_filtered(h);
+                    assert_filtered(h.clone());
                 }
+                assert_eq!(valid(&h), python(&h), "Python/Rust drift: {h}");
             }
         }
     }

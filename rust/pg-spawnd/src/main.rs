@@ -3,6 +3,7 @@ mod agent_view;
 mod agent_view_projection;
 mod cli;
 mod doctor_sources;
+mod fleet_snapshot;
 #[cfg(test)]
 mod error_tests;
 mod errors;

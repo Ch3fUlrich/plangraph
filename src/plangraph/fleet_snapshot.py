@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import math
 import os
-from collections import Counter
 from pathlib import Path
 
 METRICS = (
@@ -12,70 +11,44 @@ METRICS = (
 )
 
 
-def _metric(value, key):
-    if (isinstance(value, bool) or not isinstance(value, (int, float))
-            or not math.isfinite(value) or value < 0
-            or key in ("cpu_percent", "gpu_percent") and value > 100):
-        return None
-    return value
-
-
 def build_fleet(registry, samples=None, runs=None):
-    """Project registry rows, injected host->metrics, and authoritative run rows.
+    """Project persisted inputs through the spawner's private Rust subcommand."""
+    import json
+    import shutil
+    import subprocess
 
-    Missing run records are unknown, unlike an explicitly empty list. Duplicate
-    host/run pairs count once; conflicting or malformed records fail unknown.
-    Registry aliases resolve samples and runs without exposing private fields.
-    """
-    samples = {} if samples is None else samples
-    hosts, aliases = {}, {}
-    for row in registry:
-        host = row.get("id") or row.get("host_id") or row.get("host")
-        if not isinstance(host, str) or not host:
-            raise ValueError("registry host needs an id")
-        if host in hosts:
-            raise ValueError(f"duplicate registry host: {host}")
-        hosts[host] = row
-        row_aliases = row.get("aliases", [])
-        if not isinstance(row_aliases, (list, tuple)):
-            raise ValueError("registry aliases must be a list or tuple of strings")
-        for alias in [host, *row_aliases]:
-            if not isinstance(alias, str) or not alias:
-                raise ValueError("registry alias needs a nonempty string")
-            if alias in aliases and aliases[alias] != host:
-                raise ValueError(f"ambiguous registry alias: {alias}")
-            aliases[alias] = host
-    counts, seen = Counter(), {}
-    known = runs is not None
-    for run in runs or []:
-        host = aliases.get(run.get("host"))
-        run_id, status = run.get("run_id"), run.get("status")
-        if (host is None or not isinstance(run_id, str) or not run_id
-                or status not in ("running", "completed", "failed", "cancelled",
-                                  "queued", "dry_run", "refused")):
-            known = False
-            continue
-        pair = (host, run_id)
-        if pair in seen and seen[pair] != status:
-            known = False
-        seen[pair] = status
-    for (host, _), status in seen.items():
-        if status == "running":
-            counts[host] += 1
-    canonical_samples = {aliases[key]: value for key, value in samples.items()
-                         if key in aliases}
-    rows = []
-    for host, row in sorted(hosts.items()):
-        sample = canonical_samples.get(host)
-        available = isinstance(sample, dict)
-        sample = sample if available else {}
-        rows.append({
-            "host_id": host, "class": row.get("class"), "caps": row.get("caps"),
-            "sample": {key: _metric(sample.get(key), key) for key in METRICS},
-            "samples": "available" if available else "unavailable",
-            "running_agents": counts[host] if known else None,
-        })
-    return {"hosts": rows, "running_agents": sum(counts.values()) if known else None}
+    def finite(value):
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        if isinstance(value, dict):
+            return {key: finite(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [finite(item) for item in value]
+        return value
+
+    binary = Path(__file__).resolve().parents[2] / 'rust/target/release/pg-spawnd'
+    binary = str(binary) if binary.is_file() else (shutil.which('pg-spawnd') or 'pg-spawnd')
+    try:
+        result = subprocess.run([binary, 'fleet-snapshot'], check=False,
+            input=json.dumps(finite(dict(registry=registry,
+                samples=list((samples or {}).items()), runs=runs))),
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        if result.returncode:
+            reason = result.stderr.strip()
+            if reason not in ('ambiguous registry alias',
+                    'registry aliases must be a list or tuple of strings',
+                    'registry alias needs a nonempty string',
+                    'registry host needs an id', 'duplicate registry host'):
+                reason = 'fleet projection failed'
+            raise ValueError(reason)
+        data = json.loads(result.stdout)
+        rows = [{key: row[key] for key in ('host_id', 'class', 'caps', 'sample',
+                 'samples', 'running_agents')} for row in data['hosts']]
+        for row in rows:
+            row['sample'] = {key: row['sample'][key] for key in METRICS}
+        return dict(hosts=rows, running_agents=data['running_agents'])
+    except (OSError, subprocess.TimeoutExpired, KeyError, TypeError) as exc:
+        raise RuntimeError('fleet projection failed') from None
 
 
 def load_fleet(store, samples=None):

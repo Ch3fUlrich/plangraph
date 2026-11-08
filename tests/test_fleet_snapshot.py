@@ -81,6 +81,16 @@ def test_fleet_loader_existing_records(tmp_path, monkeypatch):
         world.close()
 
 
+def test_fleet_rust_failure_is_public(tmp_path, monkeypatch):
+    import subprocess
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    def fail(*args, **kwargs):
+        return subprocess.CompletedProcess(args, 2, '', f'{tmp_path}/private secret')
+    monkeypatch.setattr(subprocess, 'run', fail)
+    with pytest.raises(ValueError, match='^fleet projection failed$'):
+        fleet.load_fleet(SimpleNamespace(list_bus_hosts=lambda: []))
+
+
 @pytest.mark.parametrize("fails", [False, True])
 def test_fleet_loader_exception_snapshot_still_written(tmp_path, monkeypatch, fails, caplog):
     def load(store):

@@ -152,13 +152,19 @@ async def diagnose(probe=False):
     from .leg_probe import probe_many
     checks, plans = [], {}
     def source_checks():
+        from .remote_ps import configured_hosts, MAX_WORKERS, TIMEOUT as probe_timeout
+        try:
+            count = len(configured_hosts())
+        except (OSError, ValueError, KeyError, TypeError):
+            count = 0
+        timeout = max(TIMEOUT, ((count + MAX_WORKERS - 1) // MAX_WORKERS) * probe_timeout + TIMEOUT)
         binary = Path(__file__).resolve().parents[3] / 'rust/target/release/pg-spawnd'
         binary = str(binary) if binary.is_file() else (shutil.which('pg-spawnd') or 'pg-spawnd')
         detail = 'host query failed'
         try:
             result = subprocess.run([binary, 'doctor-sources'], check=False,
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, timeout=TIMEOUT)
+                stderr=subprocess.DEVNULL, timeout=timeout)
             rows = json.loads(result.stdout)
             if (result.returncode == 0 and isinstance(rows, list)
                     and all(isinstance(row, dict)
