@@ -86,7 +86,7 @@ fn create(repo: &RepoEntry, path: &Path, sha: &str) -> Result<(), WriterError> {
     cmd.args(["-c", "core.hooksPath=", "-c", "submodule.recurse=false"]);
     let out = cmd
         .args(["worktree", "add", "--no-checkout", "--detach", "--"])
-        .arg(path)
+        .arg(crate::workspace_launch::git_worktree_path(path))
         .arg(sha)
         .output()?;
     if !out.status.success() {

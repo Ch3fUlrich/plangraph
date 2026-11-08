@@ -305,7 +305,47 @@ fn confined_read_at(mut dir: std::fs::File, slot: &Path) -> io::Result<Vec<u8>> 
     dir.read_to_end(&mut bytes)?;
     Ok(bytes)
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn confined_read(root: &Path, slot: &Path) -> io::Result<Vec<u8>> {
+    use std::{fs::OpenOptions, io::Read, os::windows::fs::OpenOptionsExt};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+    };
+    lexical_slot(slot).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // Keep every ancestor open without delete/write sharing: no component can
+    // be renamed or changed into a reparse point while resolving its children.
+    let mut held = Vec::new();
+    let mut path = PathBuf::new();
+    let full = root.join(slot);
+    let mut parts = full.components().peekable();
+    while let Some(part) = parts.next() {
+        path.push(part.as_os_str());
+        if matches!(part, Component::Prefix(_) | Component::RootDir) {
+            continue;
+        }
+        let mut file = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&path)?;
+        use std::os::windows::fs::MetadataExt;
+        let meta = file.metadata()?;
+        if meta.file_attributes() & 0x400 != 0 {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        if parts.peek().is_none() {
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            return Ok(bytes);
+        }
+        if !meta.is_dir() {
+            return Err(io::ErrorKind::NotADirectory.into());
+        }
+        held.push(file);
+    }
+    Err(io::ErrorKind::InvalidInput.into())
+}
+#[cfg(not(any(unix, windows)))]
 fn confined_read(_: &Path, _: &Path) -> io::Result<Vec<u8>> {
     Err(io::ErrorKind::Unsupported.into())
 }

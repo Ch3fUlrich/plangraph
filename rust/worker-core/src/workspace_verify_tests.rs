@@ -174,10 +174,31 @@ fn unix_longpaths_not_required() {
 fn windows_longpaths_true_required() {
     let f = Fixture::new();
     for value in ["false", "invalid"] {
-        git(&f.checkout, &["config", "core.longpaths", value]).unwrap();
+        // Override parsing while repairing config: Git for Windows reads longpaths at startup.
+        git(
+            &f.checkout,
+            &[
+                "-c",
+                "core.longpaths=true",
+                "config",
+                "core.longpaths",
+                value,
+            ],
+        )
+        .unwrap();
         assert!(f.verify().is_err());
     }
-    git(&f.checkout, &["config", "--unset", "core.longpaths"]).unwrap();
+    git(
+        &f.checkout,
+        &[
+            "-c",
+            "core.longpaths=true",
+            "config",
+            "--unset",
+            "core.longpaths",
+        ],
+    )
+    .unwrap();
     assert!(f.verify().is_err());
 }
 

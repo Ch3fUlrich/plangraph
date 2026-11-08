@@ -103,6 +103,8 @@ impl StepLog for LocalFileStepLog {
         record.push(b'\n');
         file.write_all(&record)?;
         file.sync_all()?;
+        // Windows cannot open/flush a directory handle for durability this way.
+        #[cfg(unix)]
         fs::File::open(&self.dir)?.sync_all()?;
         Ok(())
     }
@@ -163,12 +165,25 @@ fn git_with_env(
         .output()?)
 }
 fn valid_remote(name: &str) -> bool {
-    if name.is_empty()
-        || name.contains("::")
-        || !name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"/._-:@%+~".contains(&b))
-    {
+    let allowed = |b: u8| b.is_ascii_alphanumeric() || b"/._-:@%+~".contains(&b);
+    #[cfg(windows)]
+    if Path::new(name).is_absolute() {
+        use std::path::{Component, Prefix};
+        // Absolute local paths need no network scheme/host allowlist, but must
+        // obey the shared character rules (plus Windows separators). Only disk
+        // and UNC prefixes are local filesystem paths, never device namespaces.
+        return matches!(
+            Path::new(name).components().next(),
+            Some(Component::Prefix(p))
+                if matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)
+                    | Prefix::UNC(_, _) | Prefix::VerbatimUNC(_, _))
+        ) && !name.contains("::")
+            && name
+                .bytes()
+                .enumerate()
+                .all(|(i, b)| allowed(b) || b == b'\\' || (i == 2 && name.starts_with("\\\\?\\")));
+    }
+    if name.is_empty() || name.contains("::") || !name.bytes().all(allowed) {
         return false;
     }
     if name.starts_with('/') {
@@ -187,6 +202,23 @@ fn valid_remote(name: &str) -> bool {
         .is_some_and(|(host, path)| {
             !host.is_empty() && !host.starts_with('-') && !host.contains('/') && !path.is_empty()
         })
+}
+#[cfg(all(test, windows))]
+#[test]
+fn windows_remote_paths_obey_character_and_namespace_rules() {
+    for name in [r"C:\repo.git", r"\\server\share\repo", r"\\?\C:\repo"] {
+        assert!(valid_remote(name), "{name}");
+    }
+    for name in [
+        r"\\.\device\repo",
+        r"\\?\GLOBALROOT\Device\repo",
+        r"C:\bad name",
+        r"C:\bad&name",
+        "C:\\bad\tname",
+        r"C:\bad::name",
+    ] {
+        assert!(!valid_remote(name), "{name}");
+    }
 }
 fn validate(head: &str, lane: &str, old: Option<&str>, remote: &Remote<'_>) -> Result<()> {
     if !crate::writer_result::oid(head) || old.is_some_and(|s| !crate::writer_result::oid(s)) {
