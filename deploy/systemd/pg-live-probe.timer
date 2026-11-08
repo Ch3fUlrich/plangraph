@@ -1,0 +1,10 @@
+[Unit]
+Description=Rerun feature witnesses daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=pg-live-probe.service
+
+[Install]
+WantedBy=timers.target

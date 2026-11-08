@@ -1,6 +1,56 @@
 # Plangraph Spawner & Model Routing Architecture
+### Writer result finalization
+
+`worker-core::writer_result::check_result` runs the mandatory Rust file-size
+gate before returning a checked result; export rechecks it before content gates,
+bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
+and no publish/push is attempted. Changed tracked files use the Python CI gate's
+400-line rule, exemptions, binary detection, splitlines counting and baseline
+ratchet. CI still runs unchanged `tools/check_file_size.py` over all tracked files.
+
+Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.
+### Doctor host source checks
+
+`python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust
+`pg-spawnd doctor-sources` subcommand. `doctor.py` prefers the checkout's
+`rust/target/release/pg-spawnd`, otherwise resolves `pg-spawnd` on `PATH`, and
+reads its JSON check rows with a ten-second subprocess timeout. There is no
+Python fallback for these checks.
+
+The Rust command reads `plangraph/ps-hosts.json` under `XDG_CONFIG_HOME` (or
+`~/.config`), checking valid entries with `src` or `win_src` in parallel with
+at most 16 workers. SSH uses batch mode, a two-second connection timeout and
+a three-second probe deadline; source checks support POSIX, WSL and Windows
+paths. SSH output and diagnostics are discarded. A missing config or no
+eligible entries produces no source check rows; unreadable or malformed
+configuration produces `ps_hosts: fail` with `invalid configuration`.
+
+Each `ps_host_<name>` row passes with `ok` on SSH exit 0; exit 44 reports
+`src missing`, exit 255 or an SSH launch/I/O error reports `unreachable`, and
+a timeout or other exit reports `host query failed`. If the Rust binary is
+missing, Python adds `ps_hosts: fail` with `unavailable`; a nonzero subcommand
+exit, invalid JSON/non-list response, timeout or other invocation error instead
+reports `host query failed`. Any failed check makes doctor exit 1.
+
 ## Spawn by card
+Overflow admission reads `caps.max_runs` and `caps.mem_floor_mb` for each host
+from the worker-core hosts registry (`$XDG_CONFIG_HOME/plangraph/hosts.json`,
+or `~/.config/plangraph/hosts.json`), the same location used by fleet-sync.
+Local identity is `PLANGRAPH_HOST_NAME` when set, otherwise registry `self`;
+IDs and aliases resolve case-insensitively. Routing and the public-repository
+allowlist still come from `overflow-hosts.json`, but its legacy run/floor caps
+and local limit overrides are ignored. Missing/unreadable registry or missing,
+malformed caps exclude that host from overflow. Local admission instead uses
+conservative defaults of 4 runs / 3000 MB, with a logged reason.
+
+SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel
+lines around the remote spawn JSON. Only the single bracketed JSON receipt is
+accepted; shell-init banners, env-file echoes and JSON after the end are ignored.
+Missing, repeated or reversed sentinel pairs report `receipt_unbracketed` without
+retrying an already acknowledged spawn. Remote stderr stays private, and the
+existing credential-shape masking helper masks receipts before stdout exposure.
+
 Install the package on each host, then use `python -m plangraph.spawner.cli`
 (or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
 or Temporal service is required for this slice. **Grok and manual-only Muse:** `omniroute-grok-4.7` uses `omniroute/gc/grok-4.7` for review only (catalog `grok`, seat `xai`). `opencode-console-muse-spark` uses `console-meta/muse-spark-1.3-contributor`; like `opencode-go-muse-spark`, its catalog family is `muse` (seat `meta`). Neither Muse leg routes automatically, even with a review policy lift. Use `--leg` with an audited `--override-reason` of at least ten characters, for scrubbed or public material only; host checks still apply. Runtime rows derive from `DEFAULT_LEGS`, not AA seeds. Policy `review_allowed_families` lifts bans, not an allowlist; Grok needs no JSON exemption.
@@ -386,7 +436,7 @@ The SQLite catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py
 
 ---
 
-Continue with [review protocol, interfaces, and operations](spawner-operations.md).
+Continue with [review protocol, interfaces, and operations](spawner-operations.md); see [OOM policy](../deploy/oom-policy.md) for repository checks versus live-pressure evidence.
 See [spawner prompt rules](operations/spawner-prompt-rules.md) for fixer reports and retry bounds.
 The served-model probe cache has a five-minute freshness bound,
 not a five-minute completion or delivery SLA; see the operations guide for details.

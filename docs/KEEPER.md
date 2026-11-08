@@ -176,7 +176,7 @@ Allowed edges only: open→claimed, claimed→open, claimed→in_review, in_revi
 Reads (any authenticated principal): `ready(project=None, n=10)` (text `views.brief`), `show(key)` (compact: fields, deps with states, unblocks,
 evidence, lease; ≤ ~300 tokens), `blocked(project)`, `waves()`, `critical_path(project)`, `percent(project)`, `alerts(project)` (lease expiring < 15 min,
 overdue reviews, audit_findings, stall = no ready + nothing in flight + goal unreached, refusals ≥2 on a key), `digest()` (router: per-project counts, stalled, last
-10 DONE with evidence kinds), `snapshot()` (SPEC snapshot JSON; `head` = last event hash), `whoami()`.
+10 DONE with evidence kinds), `snapshot()` (SPEC snapshot JSON; `head` = last event hash; persisted fleet: see docs/fleet-snapshot.md), `whoami()`.
 
 ## Evidence verifiers (`evidence.py`)
 `Result(ok: bool, detail: str, ref: dict)`; registry `VERIFIERS: dict[str, Verifier]`; `Verifier.verify(item, ref, ctx) -> Result`; ctx holds

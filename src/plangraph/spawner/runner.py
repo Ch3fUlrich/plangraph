@@ -229,7 +229,7 @@ class SpawnerRunner:
         self.on_sample = None
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
-        self.process_factory = process_factory or asyncio.create_subprocess_exec
+        self.process_factory = process_factory or proc_kill.oom_process_factory
         self.tree_killer = tree_killer or self._own_kill
         self.platform = None   # tests inject 'nt'
         self.provider_responses = {}
@@ -702,15 +702,15 @@ class SpawnerRunner:
             exit_code = self.jobs[job_id].exit_code if (self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled')
                                                         or self.jobs[job_id].survivors
                                                         or getattr(self.jobs[job_id], 'refusal', None)) else proc.returncode
-
             job = self.jobs[job_id]
-            # Only the fork's exact stderr transport envelope is evidence.
             for line in stderr_text.splitlines():
                 try:
                     envelope = json.loads(line)
                 except (ValueError, TypeError):
                     continue
                 if not isinstance(envelope, dict) or set(envelope) != {'autoos_provider_response'}:
+                    from .proc_kill import record_oom_envelope
+                    record_oom_envelope(job.events, envelope)
                     continue
                 response = envelope['autoos_provider_response']
                 if not isinstance(response, dict) or response.get('nonce') != self._nonces.get(job_id) or not self._nonces.get(job_id):
