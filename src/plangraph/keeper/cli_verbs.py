@@ -3,9 +3,8 @@
 The token is read from ``PG_TOKEN_FILE`` (mode 600), never from argv and never
 printed.  The keeper URL comes from ``--url`` or ``PG_URL``, resolved at call
 time; there is no built-in default (D-A=2).  Exit codes: 0 ok, 2 refused,
-3 unreachable.  On an unreachable keeper a
-*read* verb is answered from the local ``plan.snapshot.json`` (signature-checked when
-configured, M2B) with :mod:`plangraph.views` + a stderr notice; a write only exits 3.
+3 unreachable. Unreachable reads use the local ``plan.snapshot.json`` (signature
+checked when configured) + a stderr notice; unreachable writes only exit 3.
 """
 from __future__ import annotations
 
@@ -20,14 +19,14 @@ import urllib.request
 from pathlib import Path
 
 from .. import views
+from .brief import creation_error
 from . import brief as brief_mod, fmt, outbox
 from .credential_guard import mask_all
 from .snapshot_io import SignError, read_snapshot
 from .cli_local import evidence_ref, local_alerts, local_digest, local_show
 
 __all__ = ["Session", "RefusedCli", "MissingKeeperURL", "Unreachable",
-           "parse_duration",
-           "EXIT_OK", "EXIT_REFUSED", "EXIT_UNREACHABLE"]
+           "parse_duration", "EXIT_OK", "EXIT_REFUSED", "EXIT_UNREACHABLE"]
 
 EXIT_OK = 0
 EXIT_REFUSED = 2
@@ -411,13 +410,14 @@ def cmd_define(args, session):
         fields = payload.get("fields", payload) if isinstance(payload, dict) else payload
         return write(session, "edit_definition", {"key": args.key, "fields": fields})
     items = payload.get("items") if isinstance(payload, dict) else payload
-    tier = getattr(args, "tier", None)
-    if tier:
+    if error := creation_error(items):
+        return _refuse(error)
+    if tier := getattr(args, "tier", None):
         for definition in (items if isinstance(items, list) else [items]):
             if isinstance(definition, dict):
                 definition["review_tier"] = tier
     return write(session, "create_items", {"items": items},
-                 lambda r: fmt.result_text("create_items", r))
+                  lambda r: fmt.result_text("create_items", r))
 
 
 def cmd_render(args, session):

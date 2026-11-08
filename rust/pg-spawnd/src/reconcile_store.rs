@@ -159,6 +159,7 @@ pub(crate) fn lock(
         .map_err(|_| ReconcileError::Io)?
         .ok_or(ReconcileError::Unknown)
 }
+/// Settlement requires both the recorded process and its confinement group gone.
 pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, ReconcileError> {
     let Some(identity) = identity else {
         return Err(ReconcileError::Unknown);
@@ -237,6 +238,7 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
         Err(ReconcileError::Unknown)
     }
 }
+/// Caller holds the state lock; re-read under the record lock before proving gone.
 pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileError> {
     orphan_with(root, row, &mut None)
 }
@@ -304,6 +306,7 @@ pub(crate) fn orphan_with(
     )?;
     Ok(true)
 }
+/// Durable record-only settlement bridge, under state and record locks.
 pub(crate) fn settle(
     state: &Path,
     record: &mut pg_worker_core::run::record::RunRecord,
@@ -342,44 +345,39 @@ pub(crate) fn settle(
         .get_mut(index)
         .filter(|v| v.is_object())
         .ok_or_else(invalid)?;
-    if record.status() == Some(Status::Orphaned) && entry["outcome"]["outcome"] == "orphaned" {
+    if record.status() == Some(Status::Orphaned)
+        && (entry["outcome"]["outcome"] == "orphaned"
+            || entry["outcome_skip_reason"].as_str().is_some())
+    {
         return Ok(());
     }
     let role = serde_json::from_value(record.get("role").cloned().ok_or_else(invalid)?)
         .map_err(|_| invalid())?;
-    let leg = &entry["leg"];
-    let row = crate::evidence_row::OutcomeRow {
-        leg_key: leg["leg_key"].as_str().ok_or_else(invalid)?.into(),
-        route_key: leg["route_key"].as_str().ok_or_else(invalid)?.into(),
-        ts: i64::try_from(now_ms / 1000).map_err(|_| invalid())?,
-        role,
-        outcome: "orphaned".into(),
-        run_id: run.clone(),
-        attempt,
-        duration_s: Some(
-            i64::try_from(
-                now_ms
-                    .checked_sub(seconds(&entry["started"])?)
-                    .ok_or_else(invalid)?
-                    / 1000,
-            )
-            .map_err(|_| invalid())?,
-        ),
-        reset_at: None,
-        reset_assumed: false,
-        reset_clamped: false,
-        open_tools_at_kill: None,
-        s_eff_s: None,
-        line: "reconciled group ended".into(),
-    };
-    crate::evidence_row::validate(&crate::evidence_row::EvidenceRow::Outcome(row.clone()))
-        .map_err(|_| invalid())?;
-    entry["outcome"] = serde_json::to_value(row).map_err(|_| invalid())?;
+    let duration = now_ms
+        .checked_sub(seconds(&entry["started"])?)
+        .ok_or_else(invalid)?
+        / 1000;
+    let row = outcome::build(&entry["leg"], role, &run, attempt, now_ms, duration)?;
+    match row {
+        Ok(row) => entry["outcome"] = row,
+        Err(reason) => {
+            let mut log = pg_worker_core::run::livelog::LiveLog::new(
+                record.path().with_file_name("live.log"),
+                Default::default(),
+            );
+            log.feed(&format!(
+                "reconciliation outcome skipped: run_id={run} attempt={attempt} {reason}\n"
+            ));
+            log.flush();
+            entry["outcome_skip_reason"] = json!(reason);
+        }
+    }
     entry["how"] = json!(how);
     entry["status"] = json!("orphaned");
     if how == "ended_unobserved" {
         entry["reason"] = json!("reattached_group_exited");
     }
+    let diagnostic = entry.clone();
     entry["exit_code"] = Value::Null;
     record
         .transition(Status::Orphaned, now_ms as f64 / 1000.0)
@@ -389,8 +387,11 @@ pub(crate) fn settle(
         .push_event(json!({"event":"RUN_ORPHANED", "attempt":attempt,"how":how,
         "idempotency_key":[run,attempt,"RUN_ORPHANED"]}))
         .map_err(|_| invalid())?;
+    crate::gitconfig_guard::enforce(record, Status::Orphaned, diagnostic);
     record.save().map_err(|_| ReconcileError::Io)
 }
+#[path = "reconcile_store_outcome.rs"]
+mod outcome;
 #[cfg(test)]
 #[path = "reconcile_store_tests.rs"]
 mod tests;

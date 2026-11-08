@@ -55,8 +55,9 @@ def _text(reply):
 
 
 def _pair(pid, project="demo"):
-    return [defn(pid, [], project=project),
-            defn(pid + "G", [pid], project=project, kind="goal")]
+    return [defn(pid, [], project=project, description="Why: Test creation.\nHow: Create a lane."),
+            defn(pid + "G", [pid], project=project, kind="goal",
+                 description="Why: Test creation.\nHow: Create a goal.")]
 
 
 def test_l1_create_own_project_ok_and_show(live):

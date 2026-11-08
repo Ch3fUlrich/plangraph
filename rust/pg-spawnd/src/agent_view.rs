@@ -71,6 +71,9 @@ fn local(home: &Path, state: &Path, host: &str, now: f64) -> Value {
     };
     list(state);
     for path in list(&state.join("runs")) {
+        if fs::metadata(&path).is_ok_and(|m| !m.is_dir()) {
+            continue;
+        }
         let record = path.join("record.json");
         if record.try_exists().unwrap_or(true) {
             ingest(record, "spawner-run");
@@ -83,6 +86,9 @@ fn local(home: &Path, state: &Path, host: &str, now: f64) -> Value {
         }
     }
     for path in list(&home.join(".claude/jobs")) {
+        if fs::metadata(&path).is_ok_and(|m| !m.is_dir()) {
+            continue;
+        }
         let record = path.join("state.json");
         if record.try_exists().unwrap_or(true) {
             ingest(record, "claude");
@@ -108,7 +114,10 @@ fn local(home: &Path, state: &Path, host: &str, now: f64) -> Value {
                         .strip_prefix("~/")
                         .map(|s| home.join(s))
                         .unwrap_or_else(|| s.into());
-                    ingest(path, "opencode");
+                    match fs::metadata(&path) {
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                        _ => ingest(path, "opencode"),
+                    }
                 }
             }
         }
@@ -312,7 +321,11 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
         secs / 60 % 60,
         secs % 60
     );
-    let data = json!({"generated_at":stamp,"hosts":hosts});
+    let mut data = json!({"generated_at":stamp,"hosts":hosts});
+    let words = std::env::var_os("PLANGRAPH_SCRUB_WORDS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config/plangraph/scrub-words.txt"));
+    super::agent_view_projection::mask_words(&mut data, &words);
     if seen.contains("--write") {
         fs::create_dir_all(home.join(".local/state/plangraph")).map_err(|e| e.to_string())?;
         pg_worker_core::run::record_io::atomic_write_private(

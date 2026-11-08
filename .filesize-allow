@@ -7,3 +7,4 @@ deploy/omniroute/apply.sh adapted copy of the AutoOS script (D-3203), split with
 deploy/omniroute/apply.ps1 adapted copy of the AutoOS script (D-3203), split with PG-INSTALL-OMNIROUTE
 tools/split/scrub_ci.toml exception ledger, one exact entry per path, rule and hash, the checker has no grouped form
 tests/test_dell_ci_run.py one Fake-runner suite for tools/dell_ci_run.py; its fixtures (Fake, invoke) live in the file, a split would duplicate them (DELL-CI-ISOLATION-2B r3)
+configuration/opencode/plugins/bash-guard/index.mjs byte copy of the AutoOS OpenCode plugin @f806c42b (D-4844); split only with its AutoOS original

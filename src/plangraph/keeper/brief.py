@@ -12,12 +12,53 @@ deps are never truncated.
 from __future__ import annotations
 
 import json
+import re
 
 __all__ = ["BRIEF_CAP", "BRIEF_WARNING", "brief_requested",
            "latest_note_line", "build", "brief_text", "ensure_cap", "show"]
 
 BRIEF_CAP = 1600
 BRIEF_WARNING = "description missing: brief will be empty"
+
+
+def creation_error(items):
+    """Front-door policy only; storage and legacy imports remain permissive."""
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict) or item.get("kind") == "decision":
+            continue
+        description = item.get("description")
+        if description is not None and not isinstance(description, str):
+            continue  # Leave malformed field validation to the API.
+        missing = missing_markers(description)
+        if missing:
+            key = item.get("key") or item.get("id", "?")
+            return (f"missing_why_how: {key}: description "
+                    f"missing {' and '.join(missing)}")
+    return None
+
+
+def missing_markers(description):
+    """Return required markers without non-blank section content."""
+    sections = re.split(r"(?m)^(Why:|How:)", description or "")
+    present = {sections[i] for i in range(1, len(sections), 2)
+               if sections[i + 1].strip()}
+    return [marker for marker in ("Why:", "How:") if marker not in present]
+
+
+def missing_why_how(items):
+    """Sorted keys of non-terminal items lacking either description section."""
+    return sorted({item["key"] for item in items
+                   if item.get("state") not in ("done", "cancelled")
+                   and missing_markers(item.get("description"))})
+
+
+def brief_description(description):
+    """Put bounded section excerpts first so long introductions cannot hide them."""
+    if missing_markers(description):
+        return description
+    sections = re.split(r"(?m)^(Why:|How:)", description)
+    return "\n".join(sections[i] + " " + sections[i + 1].strip()[:240]
+                     for i in range(1, len(sections), 2))
 
 
 def brief_requested(value) -> bool:
@@ -65,7 +106,7 @@ def build(item, deps=None) -> dict:
             {"key": entry.get("key"), "state": entry.get("state")}
             if isinstance(entry, dict) else {"key": entry, "state": None}
             for entry in deps],
-        "description": item.get("description"),
+        "description": brief_description(item.get("description")),
         "done_criteria": item.get("done_criteria"),
     }
     if item.get("wait"):

@@ -33,6 +33,69 @@ impl Drop for StateDir {
 }
 
 #[test]
+fn reconcile_settle_python_record_without_keys() {
+    let dir = StateDir::new();
+    let mut record = dir.record();
+    record.set(
+        "attempts",
+        json!([{"status":"running", "started":1,
+        "leg":python_leg("agy", "sample-model")} ]),
+    );
+    settle(&dir.0, &mut record, 1, "gone", 2000).unwrap();
+    settle(&dir.0, &mut record, 1, "gone", 3000).unwrap();
+    let saved = RunRecord::read(&dir.0, "run-test").unwrap();
+    assert_eq!(saved.status(), Some(Status::Orphaned));
+    let entry = &saved.get("attempts").unwrap()[0];
+    assert_eq!(entry["outcome"]["leg_key"], "agy/sample-model");
+    assert!(entry["outcome"]["route_key"].is_null());
+    assert!(entry.get("outcome_skip_reason").is_none());
+    assert_eq!(saved.get("events").unwrap()[0]["event"], "RUN_ORPHANED");
+    assert_eq!(saved.get("events").unwrap().as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn reconcile_settle_derives_python_leg_key() {
+    for fixture in leg_fixtures().as_array().unwrap() {
+        let row = outcome::build(
+            &fixture["leg"],
+            pg_worker_core::hosts::Role::Implement,
+            "run-test",
+            1,
+            2000,
+            1,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(row["leg_key"], fixture["expected"]);
+        assert!(row["route_key"].is_null());
+    }
+}
+
+#[test]
+fn reconcile_settle_outcome_row_meets_evidence_contract() {
+    let role = pg_worker_core::hosts::Role::Implement;
+    let leg = json!({"harness": "agy", "model": "m", "route_key": "route"});
+    let row = outcome::build(&leg, role, "run-test", 1, 2000, 1).unwrap();
+    assert_eq!(row.unwrap()["route_key"], "route");
+    for leg in [leg, json!({"harness": "agy", "model": "m"})] {
+        let bad = outcome::build(&leg, role, "bad run id", 1, 2000, 1);
+        assert!(matches!(bad, Err(ReconcileError::Invalid)));
+    }
+}
+
+#[test]
+fn reconcile_settle_no_attempts_still_invalid() {
+    let dir = StateDir::new();
+    let mut record = dir.record();
+    record.set("attempts", json!([]));
+    assert!(matches!(
+        settle(&dir.0, &mut record, 1, "gone", 2000),
+        Err(ReconcileError::Invalid)
+    ));
+    assert_eq!(record.status(), Some(Status::Running));
+}
+
+#[test]
 fn reconcile_inventory_legacy_missing_proc_and_limits() {
     let dir = StateDir::new();
     let mut record = dir.record();
@@ -211,4 +274,61 @@ fn terminal_or_absent_row_requires_settled_probe() {
             }
         }
     }
+}
+
+fn leg_fixtures() -> Value {
+    serde_json::from_str(include_str!("../tests/fixtures/reconcile_legs.json")).unwrap()
+}
+fn python_leg(harness: &str, model: &str) -> Value {
+    leg_fixtures()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["leg"]["harness"] == harness && row["leg"]["model"] == model)
+        .unwrap()["leg"]
+        .clone()
+}
+
+#[test]
+fn reconcile_settle_rejects_malformed_leg_and_keys() {
+    for leg in [
+        Value::Null,
+        json!(3),
+        json!({"leg_key":3}),
+        json!({"route_key":3}),
+        json!({"leg_key":false}),
+        json!({"route_key":[]}),
+    ] {
+        let dir = StateDir::new();
+        let mut record = dir.record();
+        record.set(
+            "attempts",
+            json!([{"status":"running","started":1,"leg":leg}]),
+        );
+        assert!(matches!(
+            settle(&dir.0, &mut record, 1, "gone", 2000),
+            Err(ReconcileError::Invalid)
+        ));
+        assert_eq!(record.status(), Some(Status::Running));
+    }
+}
+
+#[test]
+fn reconcile_skip_reason_and_crate_live_log() {
+    let dir = StateDir::new();
+    let mut record = dir.record();
+    record.set(
+        "attempts",
+        json!([{"status":"running","started":1,"leg":{}}]),
+    );
+    settle(&dir.0, &mut record, 1, "gone", 2000).unwrap();
+    let saved = RunRecord::read(&dir.0, "run-test").unwrap();
+    assert!(saved.get("attempts").unwrap()[0]["outcome_skip_reason"].is_string());
+    assert_eq!(
+        saved.get("attempts").unwrap()[0]["outcome_skip_reason"],
+        "leg_key unavailable"
+    );
+    let log = std::fs::read_to_string(record.path().with_file_name("live.log")).unwrap();
+    assert!(log.contains("run_id=run-test attempt=1 leg_key unavailable"));
+    assert!(!log.contains("route_key unavailable"));
 }

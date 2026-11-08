@@ -22,6 +22,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from .brief import creation_error
 
 __all__ = ["serve", "handle", "HttpKeeper", "main", "TOOLS", "PROTOCOL_VERSION"]
 
@@ -273,6 +274,8 @@ def _call_tool(mid, params, client):
                 or any(not isinstance(entry, dict) for entry in items)):
             return _tool_error(
                 mid, "validation: items must be a list of objects (<= 50)")
+        if error := creation_error(items):
+            return _tool_error(mid, error)
     elif name == "edit":
         if (not isinstance(args.get("key"), str) or not args.get("key")
                 or not isinstance(args.get("fields"), dict)):
