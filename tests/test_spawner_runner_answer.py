@@ -142,7 +142,7 @@ def test_oom_deploy_contract():
     unit = configparser.ConfigParser(interpolation=None)
     text = (root / 'deploy/systemd/claude-daemon.service').read_text()
     unit.read_string(text)
-    assert int(unit['Service']['OOMScoreAdjust']) > -900
+    assert int(unit['Service']['OOMScoreAdjust']) == 200
     assert unit['Service']['KillMode'] == 'process'
     assert not re.search(r'(?i)(api[_-]?key|token|password|secret)\s*=', text)
     docs = (root / 'deploy/oom-policy.md').read_text()

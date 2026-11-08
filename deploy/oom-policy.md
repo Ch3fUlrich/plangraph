@@ -48,4 +48,4 @@ second authenticated session and an external timeout/cleanup watchdog. Do not ru
 4. Assert the original herdr/keeper/daemon PID+start identities and health
    survive, and a subsequent writer can start. Kill/reap remaining probe
    descendants by recorded identity and retain timestamped evidence.
-Repository checks verify child/descendant scores, unchanged parent score, and template/regex contracts, not live earlyoom preference or `claude --bg` isolation; live-pressure survival evidence remains pending (a cgroup-only test cannot prove global kernel-OOM survival).
+Repository checks verify child/descendant scores, unchanged parent score, and template/regex contracts, not live earlyoom preference or `claude --bg` isolation; live-pressure survival evidence comes from the item's router-owned probe, not from this PR (a cgroup-only test cannot prove global kernel-OOM survival).
