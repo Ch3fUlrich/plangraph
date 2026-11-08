@@ -64,6 +64,7 @@ impl Snapshot {
                 }
             }
         }
-        messages.sort(); messages
+        messages.sort();
+        messages
     }
 }
