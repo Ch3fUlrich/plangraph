@@ -105,7 +105,7 @@ fn reconcile_inventory_legacy_missing_proc_and_limits() {
     assert!(rows[0].identity.is_none());
     record.set("max_s", json!(-1));
     record.save().unwrap();
-    assert!(inventory(&dir.0).is_err());
+    assert!(inventory(&dir.0).unwrap().is_empty());
 }
 
 #[test]
@@ -156,7 +156,7 @@ fn reconcile_inventory_ignores_terminal_and_refuses_mismatch() {
     let mut record = dir.record();
     record.set("run_id", json!("run-other"));
     record.save().unwrap();
-    assert!(inventory(&dir.0).is_err());
+    assert!(inventory(&dir.0).unwrap().is_empty());
     record.set("run_id", json!("run-test"));
     record.transition(Status::Orphaned, 2.0).unwrap();
     record.save().unwrap();
@@ -171,7 +171,7 @@ fn reconcile_inventory_refuses_symlink_record() {
     let moved = dir.0.join("saved.json");
     std::fs::rename(record.path(), &moved).unwrap();
     std::os::unix::fs::symlink(moved, record.path()).unwrap();
-    assert!(inventory(&dir.0).is_err());
+    assert!(inventory(&dir.0).unwrap().is_empty());
 }
 
 #[cfg(target_os = "linux")]
@@ -229,6 +229,52 @@ fn reconcile_missing_identity_is_unknown_and_not_settled() {
 #[path = "reconcile_store_cgroup_tests.rs"]
 #[cfg(unix)]
 mod cgroup_tests;
+
+#[cfg(target_os = "linux")]
+#[test]
+fn terminal_or_absent_row_requires_settled_probe() {
+    for status in ["running", "completed", "absent", "missing", "invalid"] {
+        for settled in [false, true] {
+            let dir = StateDir::new();
+            let (_root, scope) = cgroup_tests::ScopeRoot::new(&dir.0);
+            let mut record = dir.record();
+            record.set(
+                "proc",
+                json!({"pid": 2_000_000_000u32, "start_time":null,
+                "group":scope.to_str().unwrap(), "pgid":null}),
+            );
+            record.save().unwrap();
+            let row = inventory(&dir.0).unwrap().remove(0);
+            if status == "missing" {
+                // judge V8: no record.json at settle time takes the absent-record path.
+                std::fs::remove_file(record.path()).unwrap();
+            } else if status == "absent" {
+                record.set("attempts", json!([{"status":"completed"}]));
+            } else {
+                record.set("status", json!(status));
+            }
+            if status != "missing" {
+                record.save().unwrap();
+            }
+            std::fs::write(
+                scope.join("cgroup.events"),
+                if settled {
+                    "populated 0\n"
+                } else {
+                    "populated 1\n"
+                },
+            )
+            .unwrap();
+            std::fs::write(scope.join("cgroup.procs"), "").unwrap();
+            let result = orphan_with(&dir.0, &row, &mut None);
+            if settled && status != "invalid" {
+                assert!(result.unwrap(), "{status}");
+            } else {
+                assert!(matches!(result, Err(ReconcileError::Unknown)), "{status}");
+            }
+        }
+    }
+}
 
 fn leg_fixtures() -> Value {
     serde_json::from_str(include_str!("../tests/fixtures/reconcile_legs.json")).unwrap()

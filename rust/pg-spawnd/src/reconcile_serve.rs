@@ -3,8 +3,13 @@
 #[cfg(windows)]
 use crate::reconcile::job as native;
 use crate::reconcile::ReconcileError;
+#[cfg(any(target_os = "linux", windows))]
+#[path = "reconcile_attach_record.rs"]
+mod reconcile_attach_record;
 #[cfg(target_os = "linux")]
 use crate::reconcile_backend::native;
+#[cfg(any(target_os = "linux", windows))]
+use reconcile_attach_record::attach_record;
 #[cfg(windows)]
 #[path = "reconcile_watch.rs"]
 mod reconcile_watch;
@@ -17,7 +22,6 @@ use std::{
     },
     time::Duration,
 };
-
 pub(crate) struct Guard {
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -35,7 +39,7 @@ impl Drop for Guard {
 /// Only a complete inventory pass can issue this root-bound capability.
 struct Reconciled {
     root: PathBuf,
-    gone: Vec<(String, u32, u64, Option<String>)>,
+    gone: Vec<(String, u32, Option<u64>, Option<String>)>,
 }
 struct Conservative;
 impl slots::GroupLiveness for Conservative {
@@ -68,7 +72,7 @@ fn reclaim_after(root: &Path, proof: Reconciled, now: u64) -> Result<(), Reconci
                 && proof.gone.iter().any(|(run, pid, start, group)| {
                     run == &slot.run_id
                         && *pid == slot.pid
-                        && *start == slot.start_time
+                        && start_matches(*start, slot.start_time)
                         && group == &slot.group
                 })
             {
@@ -77,12 +81,6 @@ fn reclaim_after(root: &Path, proof: Reconciled, now: u64) -> Result<(), Reconci
                 held.push(slot);
             }
         }
-        debug_assert!(eligible.active.iter().all(|slot| proof.gone.contains(&(
-            slot.run_id.clone(),
-            slot.pid,
-            slot.start_time,
-            slot.group.clone()
-        ))));
         let report = slots::reclaim(
             &mut eligible,
             &Conservative,
@@ -107,34 +105,56 @@ fn now() -> Result<u64, ReconcileError> {
         .and_then(|d| u64::try_from(d.as_millis()).ok())
         .ok_or(ReconcileError::Invalid)
 }
-
 #[cfg(any(target_os = "linux", windows))]
 fn replay(root: &Path, store: &crate::evidence::EvidenceStore) -> Result<(), ReconcileError> {
+    replay_with(root, |value| {
+        store
+            .backfill(&[value])
+            .map(|_| ())
+            .map_err(|_| ReconcileError::Io)
+    })
+}
+#[cfg(any(target_os = "linux", windows))]
+fn replay_with(
+    root: &Path,
+    mut backfill: impl FnMut(serde_json::Value) -> Result<(), ReconcileError>,
+) -> Result<(), ReconcileError> {
     let runs = root.join("runs");
     if !runs.exists() {
         return Ok(());
     }
     let mut skipped = false;
     for dir in std::fs::read_dir(runs).map_err(|_| ReconcileError::Io)? {
-        let path = dir
-            .map_err(|_| ReconcileError::Io)?
-            .path()
-            .join("record.json");
+        let Ok(dir) = dir else {
+            skipped = true;
+            continue;
+        };
+        let path = dir.path().join("record.json");
         if !path.is_file() {
+            continue;
+        }
+        let Some(dir) = path.parent() else {
+            skipped = true;
+            continue;
+        };
+        let Ok(_record_lock) = crate::reconcile_store::lock(dir, &dir.join("record.lock")) else {
+            skipped = true;
+            continue;
+        };
+        let Ok(value) = crate::reconcile_store::read(&path) else {
+            skipped = true;
+            continue;
+        };
+        if backfill(value).is_err() {
             skipped = true;
             continue;
         }
-        let dir = path.parent().ok_or(ReconcileError::Invalid)?;
-        let _record_lock = crate::reconcile_store::lock(dir, &dir.join("record.lock"))?;
-        let value = crate::reconcile_store::read(&path)?;
-        store.backfill(&[value]).map_err(|_| ReconcileError::Io)?;
     }
     if skipped {
-        eprintln!("reconciliation replay skipped entries without record files");
+        return Err(ReconcileError::Unknown);
     }
     Ok(())
 }
-
 pub(crate) fn configured(root: &Path) -> Result<Guard, String> {
     let mut guard = Guard {
         stop: Arc::new(AtomicBool::new(false)),
@@ -151,7 +171,8 @@ pub(crate) fn configured(root: &Path) -> Result<Guard, String> {
                 eprintln!("shadow adoption unavailable: {error}");
                 Vec::new()
             }) {
-                if crate::reconcile_store::gone(row.identity.as_ref()).ok() == Some(false)
+                if crate::reconcile_store::gone(&row.run_id, row.identity.as_ref()).ok()
+                    == Some(false)
                     && row
                         .identity
                         .is_some_and(|identity| native::Group::open(&row.run_id, identity).is_ok())
@@ -170,13 +191,13 @@ pub(crate) fn configured(root: &Path) -> Result<Guard, String> {
     start(root, &mut guard).map_err(|e| e.to_string())?;
     Ok(guard)
 }
-
 #[cfg(any(target_os = "linux", windows))]
 fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
     #[cfg(windows)]
     use self::reconcile_watch::{Step, StopPolicy, Watch};
     #[cfg(target_os = "linux")]
     use crate::reconcile_watch::{Step, StopPolicy, Watch};
+    #[cfg(target_os = "linux")]
     use native::Group;
     use pg_worker_core::{activity::Limits, run::record::RunRecord};
     let lock_deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -198,26 +219,28 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
                 .iter()
                 .filter(|slot| slot.bound && slot.run_id == row.run_id)
             {
-                let identity = row.identity.as_ref().ok_or(ReconcileError::Unknown)?;
+                let Some(identity) = row.identity.as_ref() else {
+                    continue;
+                };
                 if identity.pid != slot.pid
-                    || identity.start_time != Some(slot.start_time)
+                    || (identity.start_time.is_none() && identity.group.is_none())
+                    || !start_matches(identity.start_time, slot.start_time)
                     || identity.group != slot.group
-                    || serde_json::to_value(slot.role).map_err(|_| ReconcileError::Invalid)?
-                        != row.role
+                    || serde_json::to_value(slot.role).ok().as_ref()
+                        != Some(&serde_json::json!(row.role))
                 {
-                    return Err(ReconcileError::Invalid);
+                    continue;
                 }
                 validated.push((
                     slot.run_id.clone(),
                     slot.pid,
-                    slot.start_time,
+                    identity.start_time,
                     slot.group.clone(),
                 ));
             }
         }
-        Ok(())
     })
-    .map_err(|_| ReconcileError::Io)??;
+    .map_err(|_| ReconcileError::Io)?;
     // Replay uses daemon-level evidence configuration, never a record's role.
     let store = crate::evidence::EvidenceStore::open(root, crate::evidence::enabled(root, ""))
         .map_err(|_| ReconcileError::Io)?;
@@ -228,31 +251,61 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
         .ok_or(ReconcileError::Invalid)?;
     let mut watched = Vec::new();
     let mut gone = Vec::new();
+    let mut incomplete = false;
     for row in rows {
         if let Some(group) = row.identity.as_ref().and_then(|p| p.group.as_deref()) {
-            native::scope(&row.run_id, group).map_err(|_| ReconcileError::Unknown)?;
+            if native::scope(&row.run_id, group).is_err() {
+                continue;
+            }
         }
-        if crate::reconcile_store::orphan_gone(root, &row)? {
+        let mut authority = None;
+        let Some(settled) = scan_probe(crate::reconcile_store::orphan_with(
+            root,
+            &row,
+            &mut authority,
+        ))?
+        else {
+            incomplete = true;
+            continue;
+        };
+        if settled {
             if let Some(identity) = row.identity {
-                if let Some(start) = identity.start_time {
-                    let key = (row.run_id, identity.pid, start, identity.group.clone());
-                    if validated.contains(&key) && crate::reconcile_store::gone(Some(&identity))? {
-                        gone.push(key);
-                    }
+                let key = (
+                    row.run_id,
+                    identity.pid,
+                    identity.start_time,
+                    identity.group.clone(),
+                );
+                if validated.contains(&key) {
+                    gone.push(key);
                 }
             }
             continue;
         }
-        let leader = Group::open(&row.run_id, row.identity.ok_or(ReconcileError::Unknown)?)
+        #[cfg(target_os = "linux")]
+        let Some(identity) = row.identity
+        else {
+            continue;
+        };
+        #[cfg(windows)]
+        let Some(Some(leader)) = authority
+        else {
+            continue;
+        };
+        #[cfg(target_os = "linux")]
+        let Ok(leader) = Group::open(&row.run_id, identity) else {
+            continue;
+        };
+        let Some((_record_lock, mut record)) = attach_record(root, &row.run_id) else {
+            incomplete = true;
+            continue;
+        };
+        let role = serde_json::from_value(serde_json::json!(row.role))
             .map_err(|_| ReconcileError::Unknown)?;
         #[cfg(windows)]
         let leader = leader.adopt().map_err(|_| ReconcileError::Unknown)?;
-        let dir = root.join("runs").join(&row.run_id);
-        let _record_lock = crate::reconcile_store::lock(&dir, &dir.join("record.lock"))?;
-        let mut record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;
         let watch = Watch::new(
-            serde_json::from_value(serde_json::json!(row.role))
-                .map_err(|_| ReconcileError::Invalid)?,
+            role,
             Limits::default(),
             restart,
             (row.deadline_ms.unwrap_or(horizon).min(horizon), Some(0)),
@@ -262,7 +315,9 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
             },
             record.get("first_activity").is_some_and(|v| !v.is_null()),
         );
-        watch.attach(&mut record, row.attempt)?;
+        if watch.attach(&mut record, row.attempt).is_err() {
+            continue;
+        }
         watched.push((
             row.run_id,
             row.attempt,
@@ -272,6 +327,9 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
         ));
     }
     // No capability is issued on any earlier error, even after partial progress.
+    if incomplete {
+        return Err(ReconcileError::Unknown);
+    }
     gone.retain(|(id, _, _, _)| !watched.iter().any(|(run, _, _, _, _)| run == id));
     replay(root, &store)?;
     reclaim_after(
@@ -314,4 +372,25 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
 #[cfg(not(any(target_os = "linux", windows)))]
 fn start(_: &Path, _: &mut Guard) -> Result<(), ReconcileError> {
     Err(ReconcileError::Unknown)
+}
+#[cfg(any(target_os = "linux", windows))]
+fn scan_probe(result: Result<bool, ReconcileError>) -> Result<Option<bool>, ReconcileError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(_) => Ok(None),
+    }
+}
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "reconcile_serve_tests.rs"]
+mod tests;
+#[cfg(any(target_os = "linux", windows, test))]
+fn start_matches(recorded: Option<u64>, slot: u64) -> bool {
+    recorded.is_none_or(|start| start == slot)
+}
+#[cfg(test)]
+#[test]
+fn settled_unknown_start_reclaim_key() {
+    assert!(start_matches(None, 123));
+    assert!(start_matches(Some(123), 123));
+    assert!(!start_matches(Some(124), 123));
 }
