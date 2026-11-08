@@ -26,6 +26,20 @@ def test_catalog_tiers_preserve_roles():
     assert next(l for l in updated if l.id == 'deepseek').tier == 'paid'
 
 
+def test_registered_pool_seats_exclude_claude_writers():
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import plan_spawn
+    ids = {'omniroute-deepseek-flash', 'omniroute-muse-spark',
+           'agy-sonnet-5.5', 'agy-claude-opus'}
+    legs = tuple(leg for leg in DEFAULT_LEGS if leg.id in ids)
+    assert {leg.id for leg in legs} == ids
+    plan = plan_spawn({'estimate_tokens': 1000}, role='review', legs=legs,
+                      writer_families=('claude',),
+                      leg_reader=lambda *a, **k: {'state': 'ok', 'evidence': None})
+    assert [leg.id for leg in plan.legs] == ['omniroute-deepseek-flash', 'omniroute-muse-spark']
+    assert [leg.id for leg in plan.review_seats] == ['omniroute-deepseek-flash', 'omniroute-muse-spark']
+
+
 @pytest.mark.parametrize('tier', ['free', 'subscription', 'paid'])
 @pytest.mark.parametrize('source', ['id', 'model_id'])
 def test_catalog_tier_identity_and_route_output(tier, source):
