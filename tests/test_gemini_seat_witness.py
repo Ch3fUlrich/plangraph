@@ -14,6 +14,27 @@ from plangraph.spawner import gateway_witness as gw
 LEG = next(leg for leg in DEFAULT_LEGS if leg.id == 'omniroute-agy-gemini-3.8-flash')
 
 
+@pytest.mark.parametrize('listing', [None, frozenset()])
+def test_gateway_gemini_host_admission_without_listing(monkeypatch, listing):
+    from plangraph.routing_support import resolver
+    from plangraph.routing_support.opencode_render import render_gateway_providers
+
+    env = {'OMNIROUTE_BASE_URL': 'http://gateway.test/v1',
+           'OPENCODE_CONFIG_CONTENT': '{}'}
+    monkeypatch.setattr(resolver, 'host_probe_env', lambda extra=None: dict(env))
+    monkeypatch.setattr(resolver, 'served_models', lambda *a, **kw: listing)
+    assert resolver.host_skip_reason({'model': LEG.model, 'harness': 'opencode'},
+                                     probe=lambda child: listing) is None
+    unknown = 'omniroute/agy/unknown-model'
+    assert resolver.host_skip_reason({'model': unknown, 'harness': 'opencode'},
+                                     probe=lambda child: frozenset()) == 'not_served_on_host: ' + unknown
+    assert not resolver.admitted_by_render(unknown)
+    assert render_gateway_providers(env, LEG.model) is None
+    provider = json.loads(env['OPENCODE_CONFIG_CONTENT'])['providers']['omniroute']
+    assert provider['models']['agy/gemini-3.8-flash-high']['modelID'] == 'agy/gemini-3.8-flash-high'
+    assert provider['settings']['baseURL'] == env['OMNIROUTE_BASE_URL']
+
+
 def test_review_selects_gateway_gemini_at_agy_position():
     from plangraph.catalog_data import SEED_MODELS
     row = next(row for row in SEED_MODELS if row['model_id'] == LEG.model)

@@ -29,6 +29,7 @@ from typing import Any, Mapping, Sequence
 from plangraph.routing_support.leg_state import leg_status, model_admitted
 from plangraph.routing_support.catalog_seed import TIER_RUNG
 from plangraph.mimo_policy import ACCEPTED_MIMO_IDS, mimo_path_allowed
+from plangraph.routing_support.opencode_render import ACCEPTED_GEMINI_IDS
 from plangraph.routing_support.clients import build_routing_envelope_headers
 from plangraph.routing_support.risk import (
     RISK_BETA_EXCESS,
@@ -525,8 +526,8 @@ async def plan_for_launch_async(plan, *, dry_run=False, probe=None, env=None):
 
 
 def admitted_by_render(model):
-    """A spawner-rendered mimo provider model, admitted without the keyless listing (gateway 401; D-2868/D-2869)."""
-    return str(model or '').split('#', 1)[0] in ACCEPTED_MIMO_IDS
+    """Explicit rendered models bypass the keyless listing (401; D-2868/D-2869)."""
+    return str(model or '').split('#', 1)[0] in (*ACCEPTED_MIMO_IDS, *ACCEPTED_GEMINI_IDS)
 
 
 def host_skip_reason(row, *, probe=None, env=None):
