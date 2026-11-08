@@ -51,7 +51,7 @@ from .git_guard import writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
-from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry  # re-export: tests import and patch these on runner
+from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry, mismatch_flag, witness_native  # re-export: tests import and patch these on runner
 
 
 def _is_nt() -> bool:
@@ -125,7 +125,6 @@ class JobInfo:
     survivors: list = field(default_factory=list)   # pids that outlived the kill (kill_incomplete)
 
     def to_dict(self) -> dict[str, Any]:
-        from .served_telemetry import mismatch_flag
         return mismatch_flag(asdict(self))
 
 
@@ -789,8 +788,6 @@ class SpawnerRunner:
                 await asyncio.to_thread(render_review_output, job, stdout_text,
                                         lambda text: redact(redact_env_values(text, env)))
 
-            # Gateway response evidence wins; native metadata is only a fallback.
-            from .served_telemetry import witness_native
             await witness_native(self, job_id, job, stdout_text, requested_model)
             # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
             job.served_model = job.served_model or 'unwitnessed'
