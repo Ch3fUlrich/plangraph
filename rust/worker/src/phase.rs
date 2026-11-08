@@ -131,6 +131,24 @@ pub const OUTCOME_DONE: &str = "done";
 pub const OUTCOME_PARTIAL: &str = "partial";
 
 pub fn phase_branch(key: &str) -> Result<String, String> {
+    legacy_phase_branch(key)?;
+    Ok(format!(
+        "phase/h/{}",
+        // Branch identity is permanently FNV-1a-64, independent of content hashes.
+        phase_key_hash(key.as_bytes())
+    ))
+}
+
+#[path = "phase_branch_hash.rs"]
+mod branch_hash;
+use branch_hash::phase_key_hash;
+
+// Kept only for replay of histories recorded before phase-branch-hash-v1.
+#[cfg(test)]
+#[path = "phase_legacy_tests.rs"]
+mod legacy_tests;
+
+pub(crate) fn legacy_phase_branch(key: &str) -> Result<String, String> {
     if key.is_empty() {
         return Err("phase key is empty".to_string());
     }
@@ -514,24 +532,6 @@ mod tests {
             cards: vec![card("a", true, false)],
         };
         assert!(not_ready.startable().is_empty());
-    }
-
-    #[test]
-    fn phase_branch_sanitizes_and_rejects_invalid_keys() {
-        assert_eq!(phase_branch("demo:PH-X").unwrap(), "phase/demo-PH-X");
-        assert_eq!(phase_branch("a b/c").unwrap(), "phase/a-b-c");
-        assert_eq!(phase_branch("a_b.c-1").unwrap(), "phase/a_b.c-1");
-        assert_eq!(
-            phase_branch(&"a".repeat(120)).unwrap(),
-            format!("phase/{}", "a".repeat(120))
-        );
-
-        assert!(phase_branch("").is_err());
-        assert!(phase_branch(".hidden").is_err());
-        assert!(phase_branch("trailing.").is_err());
-        assert!(phase_branch("two..dots").is_err());
-        assert!(phase_branch("branch.lock").is_err());
-        assert!(phase_branch(&"a".repeat(121)).is_err());
     }
 
     #[test]

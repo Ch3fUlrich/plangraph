@@ -141,8 +141,7 @@ def tool_call_only(job, record):
             or any(e.get('event') in protected for e in [*events, *record.get('events', ())])
             or getattr(job, 'status', None) not in ('completed', 'failed')):
         return False
-    text = '\n'.join(line for line in normalize(job.stdout).splitlines()
-                     if not re.fullmatch(r'\s*>\s+\S+\s+·\s+\S+\s*', line))
+    text = without_progress(normalize(job.stdout))
     if not re.fullmatch(r'\s*(?:<tool_call>\s*<function=[^<>]+>(?:(?!</?tool_call>|</function>).)*'
                         r'</function>\s*</tool_call>\s*)+', text, re.S):
         return False
@@ -194,6 +193,11 @@ def fallthrough_reason(service, chosen, job, record):
         if record.get('reason') not in TERMINAL_REASONS:
             record['reason'] = 'harness_limit'
         reason = 'harness_limit: ' + line
+        for status, token in ((429, 'usage_limit'), (402, 'credit_limit')):
+            if line.startswith(f'HTTP {status}: {token}'):
+                record['reason'] = token
+                reason = token + ': ' + line
+                break
         notify_leg_refused(service, record, chosen, reason)
         return reason
     streams = (job.stdout, job.stderr)
@@ -237,7 +241,10 @@ def terminal_reason(record, job=None):
     if special is not None:
         record['reason'] = special
         return
-    opencode = is_opencode(job) or (record.get('chosen_leg') or {}).get('harness') == 'opencode'
+    real = [a for a in record.get('attempts', ()) if a.get('status') != 'skipped']
+    leg = real[-1].get('leg') if real else None
+    leg = leg if isinstance(leg, dict) else {}
+    opencode = is_opencode(job) or (record.get('chosen_leg') or leg).get('harness') == 'opencode'
     if opencode:
         for field in ('reason', 'error'):
             if record.get(field):
@@ -250,7 +257,7 @@ def terminal_reason(record, job=None):
         from plangraph.review.verdict import judge
         # Base dispatch has no job here: use only the final attempt, never the
         # combined stdout tail (an earlier leg's verdict cannot bless this one).
-        attempts = record.get('attempts') or ()
+        attempts = [a for a in record.get('attempts') or () if a.get('status') != 'skipped']
         text = job.stdout if job is not None else (attempts[-1].get('stdout_tail', '') if attempts else '')
         if judge(text, getattr(job, 'response_finish_reason', None)).verdict is None:
             record.update(status='failed', reason='no_verdict')
@@ -276,6 +283,12 @@ def terminal_reason(record, job=None):
         stderr = record.get('stderr_tail', '')
         if opencode:
             stderr = without_progress(stderr)
+        stdout = getattr(job, 'stdout', '') if job is not None else (real[-1].get('stdout_tail', '') if real else record.get('stdout_tail', ''))
+        if (record.get('exit_code') == 1 and record.get('status') == 'failed'
+                and stdout.strip() and not stderr.strip() and not reason
+                and not stdout.lstrip().startswith(('{', '['))):
+            record['reason'] = 'exit1_after_stdout'
+            return
         record['reason'] = (reason or record.get('error')
                             or first_reason(stderr)
                             or f"harness exit {record['exit_code']}")

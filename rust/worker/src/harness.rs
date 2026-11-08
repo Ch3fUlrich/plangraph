@@ -40,6 +40,9 @@ pub trait Harness: Send + Sync {
     fn json_events(&self) -> bool {
         false
     }
+    fn private_server(&self) -> bool {
+        false
+    }
     /// Refuse a run whose arguments could be parsed as options by the CLI
     /// (option smuggling). The prompt is safe because it follows `--`; a
     /// model name has no such protection.
@@ -106,6 +109,9 @@ impl Default for Opencode {
 }
 
 impl Harness for Opencode {
+    fn private_server(&self) -> bool {
+        true
+    }
     fn name(&self) -> &str {
         "opencode"
     }
@@ -118,24 +124,8 @@ impl Harness for Opencode {
         true
     }
 
-    fn command(&self, run: &HarnessRun) -> Command {
-        let mut cmd = Command::new(&self.bin);
-        // No shell: the prompt is a single argv element, so nothing in it is parsed.
-        cmd.arg("run")
-            // Tools run in this process tree, not the shared host service (which
-            // would sit outside the attempt jail and the worker's confined env).
-            .arg("--standalone");
-        // The JSON event stream, no self-update and the per-attempt permission
-        // policy every `opencode run` leg carries.
-        opencode_options(&mut cmd);
-        cmd.arg("-m")
-            .arg(run.model)
-            // `--` ends options: a prompt starting with `-` stays the prompt.
-            .arg("--")
-            .arg(run.prompt)
-            .current_dir(run.workdir)
-            .stdin(Stdio::null());
-        cmd
+    fn command(&self, _run: &HarnessRun) -> Command {
+        unreachable!("Opencode requires the confined private-server path")
     }
 }
 
@@ -366,7 +356,7 @@ impl HarnessRegistry {
 ///
 /// `cancelled` is polled while the child runs so a cancel kills the process
 /// group promptly instead of waiting for stall, timeout or natural exit.
-pub fn run_harness(
+pub(crate) fn run_harness(
     h: &dyn Harness,
     run: &HarnessRun,
     home: &Path,
@@ -376,7 +366,29 @@ pub fn run_harness(
 ) -> std::io::Result<Supervised> {
     h.validate(run)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-    let mut cmd = h.command(run);
+    #[cfg(unix)]
+    if h.private_server() {
+        return run_opencode_server(
+            h,
+            run,
+            home,
+            opts,
+            cancelled,
+            jail,
+            std::time::Duration::from_secs(120),
+        );
+    }
+    let cmd = confined_command(h.command(run), h, run, home, jail)?;
+    supervise_with_cancel(cmd, opts, cancelled)
+}
+
+fn confined_command(
+    mut cmd: Command,
+    h: &dyn Harness,
+    run: &HarnessRun,
+    home: &Path,
+    jail: Option<&JailConfig>,
+) -> std::io::Result<Command> {
     pg_worker_core::sandbox_env::confine_harness(&mut cmd, home);
     if let Some(j) = jail {
         cmd.env("TMPDIR", &j.tmp);
@@ -399,8 +411,12 @@ pub fn run_harness(
             },
         );
     }
-    supervise_with_cancel(cmd, opts, cancelled)
+    Ok(cmd)
 }
+
+#[path = "harness_server.rs"]
+mod server;
+use server::run_opencode_server;
 
 /// Env var naming the Landlock jail helper binary.
 pub const JAIL_BIN_ENV: &str = "PG_JAIL_BIN";
@@ -762,48 +778,6 @@ mod tests {
     }
 
     #[test]
-    fn opencode_command_has_args_cwd_and_env() {
-        let h = Opencode::new();
-        let run = HarnessRun {
-            workdir: Path::new("/tmp/w"),
-            model: "some/model",
-            prompt: "fix the bug",
-        };
-        let c = h.command(&run);
-        assert_eq!(c.get_program(), OsStr::new("opencode"));
-        let args: Vec<String> = c
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(
-            args,
-            [
-                "run",
-                "--standalone",
-                "--format",
-                "json",
-                "-m",
-                "some/model",
-                "--",
-                "fix the bug"
-            ]
-        );
-        assert_eq!(c.get_current_dir(), Some(Path::new("/tmp/w")));
-        assert_eq!(
-            c.get_envs()
-                .find(|(k, _)| k.to_str() == Some("OPENCODE_DISABLE_AUTOUPDATE"))
-                .and_then(|(_, v)| v),
-            Some(OsStr::new("1"))
-        );
-        let cfg = c
-            .get_envs()
-            .find(|(k, _)| k.to_str() == Some(OPENCODE_CONFIG_ENV))
-            .and_then(|(_, v)| v)
-            .expect("per-attempt permission config is set");
-        assert_eq!(cfg, OsStr::new(&opencode_permission_config()));
-    }
-
-    #[test]
     fn permission_config_is_json_that_never_asks() {
         let raw = opencode_permission_config();
         let cfg: serde_json::Value = serde_json::from_str(&raw).expect("config is JSON");
@@ -834,7 +808,7 @@ mod tests {
             model: "some/model",
             prompt: "p",
         };
-        let mut c = Opencode::new().command(&run);
+        let mut c = OpencodeServer::new("http://127.0.0.1:4096").command(&run);
         pg_worker_core::sandbox_env::confine_harness(&mut c, home.path());
         let got = c
             .get_envs()
@@ -945,7 +919,6 @@ mod tests {
             prompt: "--dangerously-skip-permissions",
         };
         let hs: Vec<Box<dyn Harness>> = vec![
-            Box::new(Opencode::new()),
             Box::new(ClaudeCode::new()),
             Box::new(OpencodeServer::new("http://127.0.0.1:4096")),
         ];

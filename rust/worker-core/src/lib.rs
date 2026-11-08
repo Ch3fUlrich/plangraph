@@ -16,6 +16,9 @@ pub mod diffscan;
 pub mod events;
 pub mod exit_class;
 pub mod exports;
+pub mod finalize;
+pub mod finalize_promote;
+pub mod finalize_publish;
 pub mod fleet_alarm_delivery;
 pub mod fleet_cap_resolver;
 pub mod fleet_foundation_tick;
@@ -49,13 +52,18 @@ pub mod placement_rule_store;
 pub mod placement_rules;
 pub mod probe;
 pub mod redact;
+mod redact_tokens;
+/// Minimum body length redacted for the `gh[pousr]_` token family.
+pub const GITHUB_TOKEN_BODY_FLOOR: usize = redact_tokens::SPECS[1].floor;
+mod redact_wrapped;
 pub mod reset;
 pub mod run;
 pub mod sandbox_env;
+mod sandbox_push;
 pub mod scope;
+pub mod seat_pool;
 pub mod slots;
 pub mod stall;
-#[cfg(unix)]
 pub mod watch;
 pub mod workspace;
 pub mod workspace_bundle;
@@ -64,10 +72,14 @@ pub mod workspace_resolver;
 pub mod workspace_verify;
 pub mod worktree;
 pub mod writer_blob;
+pub mod writer_cleanup;
 pub mod writer_result;
+pub mod writer_salvage;
 pub mod writer_sanitize;
 pub mod writer_secret;
 pub mod wsl;
 
+pub mod fleet_foundation_hysteresis;
+pub mod fleet_foundation_seats;
 #[cfg(test)]
 pub(crate) mod testutil;

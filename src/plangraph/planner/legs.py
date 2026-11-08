@@ -86,13 +86,15 @@ from dataclasses import replace as _replace
 _legacy = {leg.id: leg for leg in DEFAULT_LEGS}
 DEFAULT_LEGS = (
     _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",),
-             disabled="D-3950 credits out; re-enable after one passing probe seat, one try per day"),
+             disabled="D-4744 operator disabled, not a route option"),
     Leg("opencode-deepseek-v4.1-flash-free", "free", "opencode",
         "opencode/deepseek-v4.1-flash-free", "deepseek", ("128k",), 100000, True,
-        roles=("review", "implement")),
+        roles=("review", "implement"),
+        disabled="D-4196 opencode zen never worked, use opencode go; never remove (D-3828)"),
     Leg("opencode-glm-5.3-flash-free", "free", "opencode",
         "opencode/glm-5.3-flash-free", "glm", ("128k",), 100000, True,
-        roles=("review", "implement")),
+        roles=("review", "implement"),
+        disabled="D-4196 opencode zen never worked, use opencode go; never remove (D-3828)"),
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
@@ -114,16 +116,30 @@ DEFAULT_LEGS = (
         False, roles=("review",)),
     Leg("opencode-go-glm-5.2", "subscription", "opencode",
         "opencode-go/glm-5.2", "glm", ("128k",), 100000, False,
-        roles=("review",)),
+        roles=("review",), disabled="D-3605 operator: glm not acceptable"),
     Leg("opencode-go-qwen3.8-max", "subscription", "opencode",
         "opencode-go/qwen3.8-max", "qwen", ("128k",), 100000, False,
-        roles=("review",)),
+        roles=("review",), disabled="D-3605 operator: not acceptable"),
+    Leg("omniroute-grok-4.7", "subscription", "opencode", "omniroute/gc/grok-4.7",
+        "grok", ("128k", "256k"), 120000, False, roles=("review",), tool_mode="tools",
+        note="D-3701: grok review seat via OmniRoute gc"),
     Leg("opencode-go-muse-spark", "subscription", "opencode",
         "opencode-go/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
         False, roles=("review",)),
+    Leg("opencode-console-muse-spark", "subscription", "opencode",
+        "console-meta/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
+        False, roles=("review",),
+        note="D-4280: explicit audited selection; scrubbed or public material only"),
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
         False, roles=("review",)),
+    # D-4193: one gateway review leg, placed after the opencode-go review
+    # legs as the fallback seat; its upstream route is not verified.
+    Leg("omniroute-gemini-3.8-flash", "subscription", "opencode",
+        "omniroute/gemini-3.8-flash", "gemini", ("128k",), 100000, True,
+        roles=("review",),
+        disabled="D-4193 upstream route not verified",
+        note="D-4193 upstream route not verified, conservative"),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
     # D-3605 Haiku leg: last, so it sorts after every non-claude review leg.
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
@@ -132,15 +148,14 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# D-3745: the lead writer precedes every tier; others retain D-2683 tier/order.
+# D-3828: retain every leg and its review order, but never fall back writers.
+DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
+                             disabled=leg.disabled or (
+                                 'D-3828: writer disabled; no retained review or orchestrate role'
+                                 if leg.roles == ('implement',) else None))
+                     if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
 WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
-    "opencode-deepseek-v4.1-flash-free",
-    "opencode-glm-5.3-flash-free",
-    "openrouter-free",
-    "agy-gemini-3.8-flash",
-    "mimo-v2.6-pro",
-    "mimo-v2.6-flash",
 )
 LEAD_WRITER = "cx-gpt-6.1-sol"
 

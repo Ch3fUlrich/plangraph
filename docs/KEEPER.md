@@ -19,7 +19,7 @@ tests first (pytest), no network in tests (fakes), no secrets in code/logs/tests
 | `evidence.py` | pluggable verifiers (below) |
 | `importer.py` | YAML dir → router-attributed batch; `export_yaml(conn, dir)` for round trip |
 | `api.py` | HTTP JSON server around `Store` |
-| `cli.py` (`python -m plangraph.keeper.cli` / entry `pg`) | thin client of the API; also `admin` subcommands run locally on the keeper host |
+| `cli.py` (`python -m plangraph.keeper.cli` / entry `pg`) | thin client of the API; also `admin` subcommands run locally on the keeper host; `oversight-check` and `oversight-audit --out-dir DIR --cursor FILE --router-log FILE` live in `cli_oversight.py` |
 | `mcp.py` | stdio MCP server (hand-written JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`; no SDK), same verbs, calls the API |
 
 ## Tables (all in one SQLite file)
@@ -33,7 +33,7 @@ priority, source, note, description, host, corrects, state, epoch, claimed_by, d
 `audit_findings(id PK, ts, key, code, msg)`.
 Event types: `item_created, item_defined, claimed, delegated, released, lease_expired, evidence_added, submitted,
 changes_requested, review_passed, cancelled, priority_set, kind_set`. `items.state`, `epoch`, `claimed_by`, … are a CACHE written in the same
-transaction as the event; `verify_integrity` proves cache == fold.
+transaction as the event; `verify_integrity` proves cache == fold. Retired exec run fences are uncapped per card and survive close; delayed parks without an observed state cannot overwrite newer attempt state writes, and park state moves follow the forward table while legal parks release claims. See `adr-exec-ownership.md`.
 
 **Unknown event types (PG-FOLD-UNKNOWN-TYPE).** A `type` outside `schema.EVENT_TYPES` was written by a newer keeper: this build cannot
 replay it, so `fold(events, unknown=…)` records `{"seq","type","key"}` in an optional side channel and never touches item state (the
@@ -183,7 +183,7 @@ overdue reviews, audit_findings, stall = no ready + nothing in flight + goal unr
 injected adapters so tests use fakes: `ctx.git`, `ctx.ci`, `ctx.runs`, `ctx.semaphore`, `ctx.decisions`, `ctx.now`.
 | kind | ref | passes when |
 |---|---|---|
-| `commit+ci` | `{commit, repo?, ci_url?}` | repo = registered path of the project (`repos` config, router-owned); commit exists and is an ancestor of `main`; commit message has trailer `Plan-Item: <key or id>`; commit time ≥ the claim time; CI check-runs for exactly that sha have conclusion `success` (adapter wraps `gh api repos/{o}/{r}/commits/{sha}/check-runs`; a `forgejo:<owner>/<repo>` value reads Forgejo commit statuses instead — see "Forgejo CI statuses" below; `ci: none` allowed only if the project config says it has no CI) |
+| `commit+ci` | `{commit, repo?, ci_url?}` | repo = registered path of the project (`repos` config, router-owned); commit exists and is an ancestor of `main`; commit message has trailer `Plan-Item: <key or id>`; commit time ≥ the claim time; CI check-runs for exactly that sha have conclusion `success` (adapter wraps `gh api repos/{o}/{r}/commits/{sha}/check-runs`; the merged-PR proof reads `gh api --paginate .../commits/{sha}/pulls` page arrays, no `--slurp` (gh 2.45); a `forgejo:<owner>/<repo>` value reads Forgejo commit statuses instead — see "Forgejo CI statuses" below; `ci: none` allowed only if the project config says it has no CI) |
 | `run-record` | `{run_id}` | file `<runs_dir>/<run_id>/job.json` exists, its `request.title` or `task` text contains the item id or key, and `<run_id>/exit.json` has `rc == 0` (format: `job.json` = `{id, run_id, request{card,title,model,…}, task}`, `exit.json` = `{rc, ended}`); runs_dir is config |
 | `semaphore-task` | `{task_id, project_id, template}` (all positive integers; `template` = template id, REQUIRED, a name is refused) | adapter `GET {base}/api/project/{project_id}/tasks/{task_id}` returns status `success`, `id`/`project_id` matching the ref, and `template_id` equal to `template` (a response without `template_id` fails); the project must be listed in env `PG_SEMAPHORE_PROJECTS` (comma-separated positive ints; unset/empty/malformed fails closed with "semaphore project allowlist not configured", otherwise "project not allowed", before any request); HTTP 401/403 report "semaphore auth refused (code)", other HTTP errors "semaphore request failed (HTTP code)"; real fetcher reads base URL from env `PG_SEMAPHORE_URL` and the token from the file named by env `PG_SEMAPHORE_TOKEN_FILE`; the token value is never logged or returned; endpoint `/api/project/{project_id}/tasks/{id}` (Semaphore UI API) |
 | `decision` | `{id: "D-209"}` | line `| D-209 |` exists in the configured DECISIONS.md |
@@ -281,7 +281,7 @@ for `forgejo:` values), bind, lease defaults. No config value that is a secret i
 ## CLI `pg`
 `pg ready [--project P] [--all] [-n 10]`, `show KEY`, `claim KEY [--lease 2h]`, `delegate KEY WORKER`, `heartbeat KEY`, `release KEY`,
 `evidence KEY --kind K --commit SHA | --run ID | --task N | --decision D-NNN`, `submit KEY`, `verdict KEY --pass|--changes "why"`,
-`waive KEY D-NNN`, `cancel KEY`, `priority KEY N`, `define …`, `blocked`, `waves`, `critical`, `percent`, `alerts`, `digest`, `snapshot`, `whoami`,
+`waive KEY D-NNN`, `cancel KEY`, `priority KEY N`, `define …` (refuses `missing_why_how` unless the description has `Why:` and `How:`; `pg check` warns on open items without), `blocked`, `waves`, `critical`, `percent`, `alerts`, `digest`, `snapshot`, `whoami`,
 `render --out F [--cdn]`, `audit-meta [--project P] [--stale-days N] [--skeleton DIR]`; admin (local, on the keeper host): `pg admin init|add-principal|revoke|verify|import DIR|export DIR`.
 Env `PG_URL`, `PG_TOKEN_FILE` (path of a mode-600 file; never pass a token on argv). Default output = the smallest useful text; `--json` for full.
 Exit codes: 0 ok, 2 refused (stderr `code: msg`), 3 unreachable (CLI then reads the local `plan.snapshot.json` read-only for read verbs and says so).

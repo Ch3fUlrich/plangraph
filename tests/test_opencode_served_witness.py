@@ -11,22 +11,22 @@ from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.review.verdict import parse_test_gaming
 from plangraph.spawner import resolver
 from plangraph.spawner.runner import SpawnerRunner, _opencode_served_model
-from fake_pid import FAKE_PID
-REQUESTED = 'opencode/glm-5.3-flash-free'
+from fake_pid import FAKE_PID; from go_credential_fake import go_credential  # noqa: E702,F401
+REQUESTED = 'opencode-go/' + 'gemini-4-argon'; pytestmark = pytest.mark.usefixtures('go_credential')
 
 
 def _store(home, sessions, assistants):
     """Build the store: sessions [(id, title)], assistant models [(session_id, model_id)]."""
     db = home / 'opencode' / 'opencode.db'
     db.parent.mkdir(parents=True, exist_ok=True)
-    db.unlink(missing_ok=True)  # each run seeds the store fresh
+    db.unlink(missing_ok=True)
     with sqlite3.connect(db) as conn:
         conn.execute('CREATE TABLE session_v2 (id TEXT, title TEXT)')
         conn.execute('CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, data TEXT)')
         conn.executemany('INSERT INTO session_v2 VALUES (?, ?)', sessions)
         conn.executemany('INSERT INTO session_message VALUES (?, ?, ?, ?)',
                          [(f'm{i}', sid, 'assistant',
-                           json.dumps({'model': {'id': mid, 'providerID': 'opencode'}}))
+                           json.dumps({'model': {'id': 'gemini-4-argon' if mid == 'glm-5.2' else mid, 'providerID': 'opencode-go'}}))
                           for i, (sid, mid) in enumerate(assistants)])
 
 
@@ -63,9 +63,9 @@ def _run_leg(tmp_path, monkeypatch, seed, role='review', exit_code=0, extra_env=
 
 def test_one_assistant_model_equal_to_requested_is_witnessed(tmp_path, monkeypatch):
     job, _ = _run_leg(tmp_path, monkeypatch,
-                      lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]))
+                      lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]))
     # D-2905 (2): the store is request-side -- never 'served' evidence.
-    assert job.request_side_model == 'opencode/glm-5.3-flash-free'
+    assert job.request_side_model == REQUESTED
     assert job.witness_kind == 'request-side-opencode-store'
     assert job.served_model == 'unwitnessed'
     assert job.served_family == 'unwitnessed'
@@ -84,16 +84,16 @@ def test_different_served_model_stays_unwitnessed_with_event(tmp_path, monkeypat
 
 def test_two_models_in_one_session_stay_unwitnessed(tmp_path, monkeypatch):
     job, _ = _run_leg(tmp_path, monkeypatch, lambda t, home: _store(
-        home, [('s1', t)], [('s1', 'glm-5.3-flash-free'), ('s1', 'deepseek-v4.1-flash-free')]))
+        home, [('s1', t)], [('s1', 'glm-5.2'), ('s1', 'deepseek-v4.1-flash-free')]))
     assert job.served_model == 'unwitnessed'
 
 
 def test_no_or_duplicate_title_row_stays_unwitnessed(tmp_path, monkeypatch):
     job, _ = _run_leg(tmp_path, monkeypatch,
-                      lambda t, home: _store(home, [('s1', 'plangraph-other')], [('s1', 'glm-5.3-flash-free')]))
+                      lambda t, home: _store(home, [('s1', 'plangraph-other')], [('s1', 'glm-5.2')]))
     assert job.served_model == 'unwitnessed'
     job, _ = _run_leg(tmp_path, monkeypatch,
-                      lambda t, home: _store(home, [('s1', t), ('s2', t)], [('s1', 'glm-5.3-flash-free')]))
+                      lambda t, home: _store(home, [('s1', t), ('s2', t)], [('s1', 'glm-5.2')]))
     assert job.served_model == 'unwitnessed'
 
 
@@ -104,7 +104,7 @@ def test_missing_session_db_stays_unwitnessed(tmp_path, monkeypatch):
 
 def test_review_leg_store_dir_is_private_and_removed_after_run(tmp_path, monkeypatch):
     job, ctx = _run_leg(tmp_path, monkeypatch,
-                        lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]))
+                        lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]))
     home = Path(ctx['env']['XDG_DATA_HOME'])
     assert home != tmp_path          # never the shared, child-writable store
     assert ctx['mode'] == 0o700      # spawner-private before launch
@@ -116,7 +116,7 @@ def test_non_review_leg_reads_no_store_and_keeps_caller_xdg(tmp_path, monkeypatc
     monkeypatch.setattr('plangraph.spawner.runner._opencode_served_model',
                         lambda *a, **k: calls.append(a) or None)
     job, ctx = _run_leg(tmp_path, monkeypatch,
-                        lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]),
+                        lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]),
                         role='implement')
     assert Path(ctx['env']['XDG_DATA_HOME']) == tmp_path
     assert calls == []
@@ -142,7 +142,7 @@ def test_tools_not_denied_yields_no_request_side_model_and_event(tmp_path, monke
     monkeypatch.setattr('plangraph.spawner.runner._opencode_served_model',
                         lambda *a, **k: calls.append(a) or None)
     job, _ = _run_leg(tmp_path, monkeypatch,
-                      lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]),
+                      lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]),
                       extra_env={'OPENCODE_CONFIG_CONTENT': 'not json'})
     assert job.served_model == 'unwitnessed'
     assert {'event': 'opencode_tools_not_denied'} in job.events
@@ -152,7 +152,7 @@ def test_tools_not_denied_yields_no_request_side_model_and_event(tmp_path, monke
 
 def test_nonzero_exit_leaves_no_request_side_model(tmp_path, monkeypatch):
     job, _ = _run_leg(tmp_path, monkeypatch,
-                      lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]),
+                      lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]),
                       exit_code=3)
     assert job.request_side_model is None
     assert job.witness_kind is None
@@ -178,7 +178,7 @@ def test_malformed_or_keyless_store_rows_yield_none(tmp_path):
 
 
 def test_session_store_db_opened_read_only(tmp_path, monkeypatch):
-    _store(tmp_path, [('s1', 't')], [('s1', 'glm-5.3-flash-free')])
+    _store(tmp_path, [('s1', 't')], [('s1', 'glm-5.2')])
     db = tmp_path / 'opencode' / 'opencode.db'
     captured = {}
     real_connect = sqlite3.connect
@@ -189,7 +189,7 @@ def test_session_store_db_opened_read_only(tmp_path, monkeypatch):
         return captured['conn']
 
     monkeypatch.setattr('plangraph.spawner.runner.sqlite3.connect', spy)
-    assert _opencode_served_model(db, 't') == 'opencode/glm-5.3-flash-free'
+    assert _opencode_served_model(db, 't') == REQUESTED
     assert captured['uri'].startswith('file:') and captured['uri'].endswith('?mode=ro')
     before = db.read_bytes()
     with pytest.raises(sqlite3.Error):
@@ -202,8 +202,8 @@ def test_session_store_db_opened_read_only(tmp_path, monkeypatch):
 
 def test_db_path_with_space_and_reserved_chars_opens(tmp_path):
     home = tmp_path / 'we ird?dir#x'
-    _store(home, [('s1', 't')], [('s1', 'glm-5.3-flash-free')])
-    assert _opencode_served_model(home / 'opencode' / 'opencode.db', 't') == 'opencode/glm-5.3-flash-free'
+    _store(home, [('s1', 't')], [('s1', 'glm-5.2')])
+    assert _opencode_served_model(home / 'opencode' / 'opencode.db', 't') == REQUESTED
 
 
 def test_title_flag_on_opencode_leg_and_not_on_plain_leg(tmp_path):
@@ -211,7 +211,7 @@ def test_title_flag_on_opencode_leg_and_not_on_plain_leg(tmp_path):
         runner = SpawnerRunner(default_cwd=str(tmp_path))
         opencode_job = await runner.spawn('p', model_or_combo=REQUESTED, client='opencode',
                                           cwd=str(tmp_path), dry_run=True)
-        plain_job = await runner.spawn('p', model_or_combo=DEFAULT_LEGS[0].model, client='agy',
+        plain_job = await runner.spawn('p', model_or_combo='gemini-3.8-flash', client='agy',
                                        cwd=str(tmp_path), dry_run=True)
         return opencode_job, plain_job
     opencode_job, plain_job = asyncio.run(run())
@@ -319,7 +319,7 @@ def test_deny_block_condition_removed_yields_not_denied_and_no_witness(tmp_path,
     (tmp_path / 'outside.json').write_text('{}')       # content ok, outside job dir
     extra = {k: str(tmp_path / v) for k, v in (extra or {}).items()}
     job, _ = _freeze_leg(tmp_path, monkeypatch,
-                         lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]),
+                         lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]),
                          freeze=freeze, bad_cfg=bad_cfg, extra=extra)
     assert {'event': 'opencode_tools_not_denied'} in job.events
     assert job.request_side_model is None
@@ -328,7 +328,7 @@ def test_deny_block_condition_removed_yields_not_denied_and_no_witness(tmp_path,
 
 def test_deny_block_all_conditions_present_denies_and_witnesses(tmp_path, monkeypatch):
     job, _ = _freeze_leg(tmp_path, monkeypatch,
-                         lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]))
+                         lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]))
     assert {'event': 'opencode_tools_denied'} in job.events
     assert job.request_side_model == REQUESTED
     assert job.witness_kind == 'request-side-opencode-store'
@@ -338,7 +338,7 @@ def test_deny_block_all_conditions_present_denies_and_witnesses(tmp_path, monkey
 def test_managed_config_file_yields_not_denied(tmp_path, monkeypatch, _empty_managed_dir, name):
     (_empty_managed_dir / name).write_text('{}')
     job, _ = _freeze_leg(tmp_path, monkeypatch,
-                         lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]))
+                         lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]))
     assert {'event': 'opencode_tools_not_denied'} in job.events
     assert job.witness_kind is None
 
@@ -356,7 +356,7 @@ def test_managed_dir_per_platform_reads_the_child_env(tmp_path, monkeypatch):
 def test_locked_store_db_returns_none_without_blocking(tmp_path):
     import threading
     import time
-    _store(tmp_path, [('s1', 't')], [('s1', 'glm-5.3-flash-free')])
+    _store(tmp_path, [('s1', 't')], [('s1', 'glm-5.2')])
     db = tmp_path / 'opencode' / 'opencode.db'
     locker = sqlite3.connect(db)
     locker.execute('BEGIN EXCLUSIVE')
@@ -456,7 +456,7 @@ def test_review_child_env_drops_stray_opencode_names_and_rehomes_home(tmp_path, 
     """R1: a caller-set OPENCODE_* override never reaches the review child and
     HOME lands in the per-job dir."""
     job, ctx = _run_leg(tmp_path, monkeypatch,
-                        lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]),
+                        lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]),
                         extra_env={'OPENCODE_CLI_CONFIG_CONTENT': '{"x": 1}',
                                    'HOME': str(tmp_path / 'elsewhere')})
     env = ctx['env']
@@ -485,7 +485,7 @@ def test_locked_store_read_does_not_stall_the_monitor_loop(tmp_path, monkeypatch
     async def factory(*args, **kwargs):
         argv = list(args)
         data_home = Path(kwargs['env'].get('XDG_DATA_HOME') or '')
-        _store(data_home, [('s1', argv[argv.index('--title') + 1])], [('s1', 'glm-5.3-flash-free')])
+        _store(data_home, [('s1', argv[argv.index('--title') + 1])], [('s1', 'glm-5.2')])
         locker = sqlite3.connect(data_home / 'opencode' / 'opencode.db')
         locker.execute('BEGIN EXCLUSIVE')  # hold the store locked across the read
         lockers.append(locker)
@@ -518,10 +518,10 @@ def test_locked_store_read_does_not_stall_the_monitor_loop(tmp_path, monkeypatch
 def test_unlocked_store_returns_the_model(tmp_path):
     """R3: positive control for the locked-store read: the same store, once
     unlocked, yields the model."""
-    _store(tmp_path, [('s1', 't')], [('s1', 'glm-5.3-flash-free')])
+    _store(tmp_path, [('s1', 't')], [('s1', 'glm-5.2')])
     db = tmp_path / 'opencode' / 'opencode.db'
     locker = sqlite3.connect(db)
     locker.execute('BEGIN EXCLUSIVE')
     locker.rollback()
     locker.close()
-    assert _opencode_served_model(db, 't') == 'opencode/glm-5.3-flash-free'
+    assert _opencode_served_model(db, 't') == REQUESTED

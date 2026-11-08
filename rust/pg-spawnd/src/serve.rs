@@ -65,6 +65,7 @@ pub(crate) fn run(
     mut cfg: SupervisorCfg,
 ) -> Result<(), String> {
     cfg.run.state_dir = state.clone();
+    let _recovery = crate::reconcile_serve::configured(&state)?;
     let host = cfg.run.host.clone();
     let supervisor = Arc::new(Supervisor::new(cfg).map_err(|e| e.to_string())?);
     let path = crate::transport_unix::resolve_socket_path(socket.as_deref())?;
@@ -105,6 +106,7 @@ pub(crate) fn run(
     mut cfg: SupervisorCfg,
 ) -> Result<(), String> {
     cfg.run.state_dir = state.clone();
+    let _recovery = crate::reconcile_serve::configured(&state)?;
     let host = cfg.run.host.clone();
     let supervisor = Arc::new(Supervisor::new(cfg).map_err(|e| e.to_string())?);
     if socket.is_some() {

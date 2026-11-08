@@ -1,3 +1,4 @@
+#[cfg(target_os = "linux")]
 use pg_worker_core::fleet_foundation_tick::invoke;
 use serde_json::json;
 

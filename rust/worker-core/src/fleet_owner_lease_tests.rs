@@ -1,4 +1,38 @@
 use super::*;
+#[cfg(windows)]
+#[test]
+fn windows_slots_reject_junction_and_nonrelative_paths() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("root");
+    let outside = d.path().join("outside");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("lease"), b"outside").unwrap();
+    std::fs::write(root.join("lease"), b"inside").unwrap();
+    assert_eq!(confined_read(&root, Path::new("lease")).unwrap(), b"inside");
+    for slot in [Path::new("../outside/lease"), outside.as_path()] {
+        assert_eq!(
+            confined_read(&root, slot).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+    let link = root.join("junction");
+    // Junction creation needs neither Developer Mode nor symlink privileges.
+    let output = std::process::Command::new("cmd")
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(&link)
+        .arg(&outside)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        confined_read(&root, Path::new("junction/lease"))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    std::fs::remove_dir(link).unwrap();
+}
 fn owner() -> Identity {
     Identity {
         pid: 7,

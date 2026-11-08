@@ -1,10 +1,10 @@
 {
-  "_source": "OPERATOR D-3198 (glm off), D-2744/D-3084 (no deepseek, kimi never a seat), D-3072 + D-3198 (qodercli paused, qwen3.8-flash allowed as seat), DECISIONS 3.2 (agy seats off until the harness returns text), D-3552 (deepseek/glm lifted for review seats only)",
+  "_source": "OPERATOR D-3198 (glm off), D-2744/D-3084 (no deepseek, kimi never a seat), D-3072 + D-3198 (qodercli paused, qwen3.8-flash allowed as seat), DECISIONS 3.2 (agy seats off until the harness returns text; lifted for review by OPERATOR D-4699, D-4703), D-3552 (deepseek lifted for review seats only; glm stays off, OPERATOR D-3605/D-4779)",
   "banned_families": ["kimi", "deepseek"],
   "off_families": ["glm"],
-  "review_allowed_families": ["deepseek", "glm"],
+  "review_allowed_families": ["deepseek"],
   "paused_harnesses": {
-    "qodercli": {"allowed_roles": ["review"]},
-    "agy": {"allowed_roles": ["implement", "orchestrate"]}
+    "qodercli": {"allowed_roles": []},
+    "agy": {"allowed_roles": ["implement", "orchestrate", "review"]}
   }
 }

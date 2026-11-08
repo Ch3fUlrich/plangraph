@@ -45,6 +45,12 @@ pub struct Config {
     enabled: bool,
     #[serde(default)]
     stale_pair: bool,
+    #[serde(default)]
+    hysteresis: bool,
+    hysteresis_config: Option<crate::fleet_foundation_hysteresis::Config>,
+    #[serde(default)]
+    seat_supply: bool,
+    seat_supply_config: Option<crate::fleet_foundation_seats::Config>,
     state_path: Option<PathBuf>,
     outbox_path: Option<PathBuf>,
     acks_path: Option<PathBuf>,
@@ -74,6 +80,10 @@ struct State {
     schema_version: u8,
     clock: Option<Clock>,
     pairs: BTreeMap<String, PairState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hysteresis: Option<crate::fleet_foundation_hysteresis::State>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    seat_supply: Option<crate::fleet_foundation_seats::State>,
 }
 fn append(path: &Path, value: Value) -> Result<(), String> {
     let mut bytes = serde_json::to_vec(&value).map_err(|_| "outbox encoding")?;
@@ -105,12 +115,41 @@ pub fn invoke(args: &[String], env: Option<PathBuf>, raw: u64, wall: i64) -> Res
     run(config, raw, wall)
 }
 fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
+    let seats = if c.seat_supply {
+        let section = c
+            .seat_supply_config
+            .as_ref()
+            .ok_or("missing control section")?;
+        section.validate()?;
+        Some(section)
+    } else {
+        None
+    };
     let pairs = if c.stale_pair {
         Some(c.pairs.as_ref().ok_or("missing control section")?)
     } else {
         None
     };
     let state_path = c.state_path.as_ref().ok_or("state path required")?;
+    let parent = state_path.parent().ok_or("state directory required")?;
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    if !parent.is_dir() {
+        return Err("state directory required".into());
+    }
+    let hysteresis = if c.hysteresis {
+        let h = c
+            .hysteresis_config
+            .as_ref()
+            .ok_or("missing control section")?;
+        h.validate()?;
+        Some(h)
+    } else {
+        None
+    };
     let outbox = c.outbox_path.as_ref().ok_or("outbox path required")?;
     let ack_path = c.acks_path.as_ref().ok_or("acks path required")?;
     let tolerance = c.wall_jump_tolerance_s.ok_or("clock tolerance required")?;
@@ -124,26 +163,13 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
             delivery::Delivery::new(format!("stale-pair:{}", g.group), 0, &p.config)?;
         }
     }
-    #[cfg(not(unix))]
-    return Err("unsupported locking target".into());
-    #[cfg(unix)]
     let _lock = {
-        use std::os::fd::AsRawFd;
         let mut name = state_path.as_os_str().to_os_string();
         name.push(".lock");
-        let f = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(name)
-            .map_err(|_| "lock open failed")?;
-        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock {
-                return Ok(json!({"skipped":"locked"}));
-            }
-            return Err("lock failed".into());
+        match crate::lockfile::try_lock(Path::new(&name)).map_err(|_| "lock failed")? {
+            Some(guard) => guard,
+            None => return Ok(json!({"skipped":"locked"})),
         }
-        f
     };
     let mut s: State = match fs::read(state_path) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| "invalid state")?,
@@ -151,6 +177,8 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
             schema_version: 1,
             clock: None,
             pairs: BTreeMap::new(),
+            hysteresis: None,
+            seat_supply: None,
         },
         Err(_) => return Err("state read failed".into()),
     };
@@ -180,6 +208,8 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
         .iter()
         .filter_map(|a| a.strip_prefix("heartbeat:")?.parse::<u64>().ok())
         .max();
+    // Reserve the save file before any externally visible delivery.
+    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|_| "state temporary file")?;
     let mut opened = Vec::new();
     let mut attempts = 0;
     let mut send_errors = Vec::new();
@@ -208,6 +238,11 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
                     },
                 );
             }
+        }
+    }
+    if let Some(p) = pairs {
+        for g in &p.groups {
+            let namespace = format!("stale-pair:{}", g.group);
             let state = s.pairs.get_mut(&g.group).ok_or("missing group state")?;
             let finding = state.detector.observe(
                 &p.config,
@@ -232,20 +267,75 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
             state.delivery.silence.tick(heartbeat, now, &mut sink);
         }
     }
+    let observations = if let Some(h) = hysteresis {
+        crate::fleet_foundation_hysteresis::tick(
+            h,
+            &mut s.hysteresis,
+            wall,
+            now,
+            jump,
+            &acks,
+            heartbeat,
+            &mut |id| send("alarm", id, None),
+            &mut opened,
+            &mut diagnostics,
+        )
+        .unwrap_or_else(|error| {
+            diagnostics.push(error);
+            Vec::new()
+        })
+    } else {
+        Vec::new()
+    };
+    let (seat_summary, requests) = if let Some(c) = seats {
+        crate::fleet_foundation_seats::tick(
+            c,
+            &mut s.seat_supply,
+            wall,
+            clock.total_ms,
+            &acks,
+            heartbeat,
+            &mut |id| send("alarm", id, None),
+            &mut opened,
+        )
+        .unwrap_or_else(|error| {
+            diagnostics.push(error);
+            (Value::Null, Vec::new())
+        })
+    } else {
+        (Value::Null, Vec::new())
+    };
     let _ = send("heartbeat", &format!("heartbeat:{now}"), None);
     s.clock = Some(clock);
     diagnostics.extend(send_errors);
-    let parent = state_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .ok_or("state directory required")?;
-    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|_| "state temporary file")?;
-    serde_json::to_writer(&mut temp, &s).map_err(|_| "state encode")?;
-    temp.as_file().sync_all().map_err(|_| "state sync")?;
-    temp.persist(state_path).map_err(|_| "state rename")?;
+    save_then_requests(
+        || {
+            serde_json::to_writer(&mut temp, &s).map_err(|_| "state encode")?;
+            temp.as_file().sync_all().map_err(|_| "state sync")?;
+            temp.persist(state_path).map_err(|_| "state rename")?;
+            Ok(())
+        },
+        outbox,
+        requests,
+        &mut diagnostics,
+    )?;
     Ok(
-        json!({"enabled":true,"stale_pair":c.stale_pair,"groups":pairs.map_or_else(Vec::new, |p| p.groups.iter().map(|g| &g.group).collect::<Vec<_>>()),"alarms_opened":opened,"attempts_sent":attempts,"diagnostics":diagnostics}),
+        json!({"seat_supply":seat_summary,"observations":observations,"enabled":true,"stale_pair":c.stale_pair,"groups":pairs.map_or_else(Vec::new, |p| p.groups.iter().map(|g| &g.group).collect::<Vec<_>>()),"alarms_opened":opened,"attempts_sent":attempts,"diagnostics":diagnostics}),
     )
+}
+pub(super) fn save_then_requests(
+    save: impl FnOnce() -> Result<(), String>,
+    outbox: &Path,
+    requests: Vec<crate::fleet_seat_probe::Request>,
+    diagnostics: &mut Vec<String>,
+) -> Result<(), String> {
+    save()?;
+    for request in requests {
+        if let Err(error) = append(outbox, json!({"kind":"probe_request","request":request})) {
+            diagnostics.push(error);
+        }
+    }
+    Ok(())
 }
 fn record_alarm(
     finding: &pair::Finding,
@@ -264,6 +354,9 @@ fn record_alarm(
         }
     }
 }
+#[cfg(test)]
+#[path = "fleet_foundation_tick_state_tests.rs"]
+mod state_tests;
 #[cfg(test)]
 #[path = "fleet_foundation_tick_tests.rs"]
 mod tests;

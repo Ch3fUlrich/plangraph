@@ -151,12 +151,15 @@ def test_probe_reports_leak_when_the_writer_commits_into_the_caller_repo(tmp_pat
 @pytest.mark.parametrize('client, binary, model', [
     ('opencode', 'opencode', 'omniroute/cx-gpt-6-luna'),
     ('agy', 'agy', 'gemini-3.8-flash'),
-    ('qodercli', 'qodercli', 'gemini-3.8-flash'),
+    ('qodercli', 'qodercli', 'fixture-qoder-model'),
 ])
 def test_every_harness_client_is_launched_with_the_explicit_cwd(
         tmp_path, monkeypatch, client, binary, model):
     from plangraph.spawner import resolver
     from plangraph.spawner.runner import SpawnerRunner
+    if client == 'qodercli':
+        # Isolate cwd propagation from catalog admission for this synthetic model.
+        monkeypatch.setattr('plangraph.planner.routing.validate_model', lambda model: model)
 
     async def served(*args, **kwargs):
         return None

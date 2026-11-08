@@ -31,6 +31,7 @@ FAMILIES = (
     (r"claude|sonnet|opus|haiku", "anthropic"),
     (r"glm|zhipu", "zhipu"),
     (r"nemotron", "nvidia"),
+    (r"grok", "xai"),
 )
 
 # Risk tags that need two reviewer families at phase end.

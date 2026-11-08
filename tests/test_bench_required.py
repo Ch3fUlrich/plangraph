@@ -3,6 +3,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+from dataclasses import replace
 
 import pytest
 
@@ -26,16 +27,48 @@ def rows(legs):
 
 
 @pytest.mark.parametrize("as_list", [False, True])
-def test_missing_ranked_last_in_tier(as_list):
-    data = rows(WRITERS[1:])
-    p = plan(benchmark=list(data.values()) if as_list else data)
-    assert p.gaps == ({"leg": WRITERS[0].id, "model": WRITERS[0].model,
+def test_missing_ranked_last_in_tier(as_list, monkeypatch):
+    reviewers = tuple(replace(WRITERS[0], id=f"review-{i}", model=f"test/review-{i}",
+                              family=family, roles=("review",), tier="subscription")
+                      for i, family in enumerate(("gpt", "claude", "gemini")))
+    monkeypatch.setattr("plangraph.planner.legs.DEFAULT_LEGS", reviewers)
+    # Input order must differ from ranked order to catch a review tiebreak
+    # that accidentally restores the original legs instead of the ranked legs.
+    def review_plan(**kwargs):
+        return routing.plan_spawn({"estimate_tokens": 1000}, role="review",
+                                  writer_families=("glm",), legs=reviewers[::-1],
+                                  leg_reader=lambda *a, **k: {"state": "available", "evidence": None},
+                                  **kwargs)
+    data = rows(reviewers[:0:-1])
+    # Unequal scores force ranking to reverse the measured input/row order.
+    data[reviewers[1].model]["aa_intelligence"] = 60
+    p = review_plan(benchmark=list(data.values()) if as_list else data)
+    assert p.gaps == ({"leg": reviewers[0].id, "model": reviewers[0].model,
                        "reason": "no benchmark row"},)
-    assert any(WRITERS[0].id in r and "no benchmark row" in r for r in p.reasons)
+    assert any(reviewers[0].id in r and "no benchmark row" in r for r in p.reasons)
     assert [l.id for l in p.legs if l.tier == "subscription"] == [
-        "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]
+        reviewers[1].id, reviewers[2].id, reviewers[0].id]
     assert p.to_dict()["gaps"] == p.gaps
-    assert not plan(benchmark=rows(WRITERS)).gaps
+    assert not review_plan(benchmark=rows(reviewers)).gaps
+
+
+@pytest.mark.parametrize('as_list', [False, True])
+def test_equal_score_review_siblings_preserve_input_order(as_list, monkeypatch):
+    reviewers = tuple(replace(WRITERS[0], id=f'review-{i}', model=f'test/review-{i}',
+                              family='claude', roles=('review',), tier='subscription')
+                      for i in range(2))
+    monkeypatch.setattr('plangraph.planner.legs.DEFAULT_LEGS', reviewers)
+    data = rows(reviewers)
+    # Equal intelligence scores, but the speed tiebreak prefers row order;
+    # same-family seats must still retain the reversed operator input order.
+    data[reviewers[0].model]['verified_tok_per_s'] = 100
+    p = routing.plan_spawn(
+        {'estimate_tokens': 1000}, role='review', writer_families=('gpt',),
+        legs=reviewers[::-1], benchmark=list(data.values()) if as_list else data,
+        leg_reader=lambda *a, **k: {'state': 'available', 'evidence': None})
+    assert not p.gaps
+    assert p.p_source == 'benchmark'
+    assert p.legs == reviewers[::-1]
 
 
 def test_absent_explicit_operator_order():

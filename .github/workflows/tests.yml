@@ -1,6 +1,4 @@
-# One required status check: ci-gate.
-# Branch protection requires only ci-gate; unselected suites skip, while selected
-# suites that skip or fail will fail the gate. Main, nightly and manual runs run everything.
+# Only ci-gate required; selected must pass; unselected suites skip. Main/nightly/manual run all.
 
 name: tests
 
@@ -72,6 +70,17 @@ jobs:
           FILESIZE_REQUIRE_BASE: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before || github.event_name == 'pull_request' && 'origin/main' || 'HEAD~1' }}
         run: python3 tools/check_file_size.py
 
+  # D-4691: added production source must be Rust unless explicitly allowlisted.
+  new-code-lang:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - env:
+          NEWCODE_BASE: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before || github.event_name == 'pull_request' && 'origin/main' || 'HEAD~1' }}
+        run: python3 tools/check_new_code_lang.py
+
   # D-653: every change -> CHANGELOG.md + docs (.docs-map)
   changelog-docs:
     runs-on: ubuntu-24.04
@@ -117,9 +126,7 @@ jobs:
           git config --global user.name "plangraph-ci"
           git config --global user.email "ci@example.invalid"
           git config --global init.defaultBranch main
-      # D-2557: gitleaks for the F4 gate test (PATH or ~/.local/bin) before pytest runs.
-      # Pinned official release only; the digest comes from the release's own checksums
-      # file (never hard-coded, never curl | sh) and every failure path stops the step.
+      # D-2557: pinned gitleaks; verify checksums; digest never hard-coded, never curl | sh.
       - name: Install gitleaks 8.30.1
         run: |
           set -euo pipefail
@@ -134,6 +141,11 @@ jobs:
           mkdir -p ~/.local/bin
           install -m 0755 "$dir/gitleaks" ~/.local/bin/gitleaks
           ~/.local/bin/gitleaks version | grep -Fx 8.30.1
+      - name: Workflow archive policy
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: b=$(git rev-parse --verify --end-of-options "HEAD^1^{commit}") && git show "$b":tests/test_workflow_archive.py > .git/workflow_archive_base.py && python .git/workflow_archive_base.py "$b"
       - name: pytest
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -237,12 +249,12 @@ jobs:
           FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
                   | xargs grep -L sqlite3 | tr '\n' ' ')
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py $FILES --run -n auto
+            python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run -n auto
             exit $?
           fi
           # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
           python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
-            tests/test_projector_ddl.py $FILES
+            tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES
 
   rust:
     needs: select
@@ -278,6 +290,29 @@ jobs:
         env:
           PG_JAIL_BIN: ${{ github.workspace }}/rust/target/debug/pg-jail
         run: cargo test
+
+  rust-windows:
+    needs: select
+    if: needs.select.outputs.rust == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+      - name: cargo test -p pg-spawnd
+        run: cargo test -p pg-spawnd
+      - name: cargo test -p pg-worker-core
+        run: cargo test -p pg-worker-core
 
   rust-worker:
     needs: select
@@ -364,7 +399,7 @@ jobs:
   ci-gate:
     name: ci-gate
     runs-on: ubuntu-24.04
-    needs: [select, scrub, file-size, changelog-docs, pytest, pytest-postgres, rust, rust-worker, rust-spike]
+    needs: [select, scrub, file-size, new-code-lang, changelog-docs, pytest, pytest-postgres, rust, rust-worker, rust-spike]
     if: ${{ always() }}
     steps:
       - uses: actions/checkout@v4
@@ -373,9 +408,7 @@ jobs:
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: python3 tools/ci_select.py gate --needs "$NEEDS_JSON"
-      # The gate runs from the BASE copy so a PR cannot weaken the gate that judges it;
-      # removing the ci-gate job itself is caught only at merge (L1 merges only when
-      # the ci-gate check-run exists and is green).
+      # Use BASE: a PR cannot weaken the gate that judges it; L1 needs green ci-gate at merge.
       - name: Commit trailers
         if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'push') }}
         env:

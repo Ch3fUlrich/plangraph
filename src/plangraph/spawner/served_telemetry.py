@@ -55,18 +55,18 @@ def extract_served_telemetry(output: str, fallback_model: str = "") -> tuple[str
 
 
 def _claude_stream_model(text) -> str | None:
-    """Model id from the stream-json ``system``/init event of a claude -p run (D-3605)."""
+    """Request-side stream witness, preserving the D-3605 contract."""
     for line in str(text or '').splitlines():
         try:
-            data = json.loads(line)
+            event = json.loads(line)
         except ValueError:
             continue
-        if isinstance(data, dict) and data.get('type') == 'system' and isinstance(data.get('model'), str):
-            return data['model']
+        if isinstance(event, dict) and event.get('type') == 'system' and isinstance(event.get('model'), str):
+            return event['model']
     return None
 
 
-def _opencode_served_model(db_path, title) -> str | None:
+def _opencode_served_model(db_path, title, *, all_models=False):
     """Served model witnessed in opencode's session store for one titled session (D-2898).
 
     Only a unanimous assistant model id counts; anything else stays unwitnessed.
@@ -87,5 +87,68 @@ def _opencode_served_model(db_path, title) -> str | None:
         finally:
             conn.close()
     except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
-        return None
-    return next(iter(models)) if len(models) == 1 else None
+        return set() if all_models else None
+    return models if all_models else next(iter(models)) if len(models) == 1 else None
+
+
+def native_models(harness, text):
+    """Read only structured harness metadata, never nested tool/answer text.
+
+    Codex exec JSONL (codex-rs/exec/src/exec_events.rs:38-56,135-139)
+    has thread_id, usage and agent_message.text, but no served model field.
+    routing_support/clients.py:346-347 currently launches plain exec, not JSONL.
+    ACP agy output has no verified served-model field either.
+    Claude init model is recorded in
+    rust/worker-core/tests/fixtures/claude/claude-text-run.jsonl:1.
+    """
+    models = set()
+    for line in str(text or '').splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        model = None
+        if harness == 'claude':
+            if event.get('type') == 'system' and event.get('subtype') == 'init':
+                model = event.get('model')
+        # Recorded OpenCode --format json has no model metadata:
+        # rust/worker/tests/fixtures/opencode/real-ok-text.jsonl:1-2.
+        # Do not invent an info.model schema or consult its child-writable DB.
+        if isinstance(model, str) and model.strip():
+            models.add(model)
+    return models
+
+
+def record_native(job, harness, models, requested):
+    """Record native provenance without promoting it to a gateway witness."""
+    if len(models) != 1:
+        reason = ('non-unanimous native models' if models else
+                  'emits no verified structured served-model telemetry')
+        job.served_witness_reason = f'{harness}: {reason}'
+        return
+    model = next(iter(models))
+    job.served_model, job.served_family = model, detect_model_family(model)
+    if job.witness_kind != 'request-side-claude-stream':
+        job.witness_kind = 'native-' + harness
+    job.served_witness_reason = f'{harness} structured native model metadata'
+    if model != requested:
+        job.events.append(dict(event='served_model_mismatch', requested_model=requested, served_model=model))
+
+
+async def witness_native(runner, job_id, job, text, requested):
+    """Native telemetry for writers and reviews; response-side gateway wins."""
+    from pathlib import Path
+    if job.exit_code != 0 or job.served_model not in (None, '', 'unwitnessed'):
+        return
+    harness = Path(job.command[0]).name if job.command else ''
+    models = native_models(harness, text)
+    record_native(job, harness, models, requested)
+
+
+def mismatch_flag(record):
+    """Shared status projection (Job and persisted run records)."""
+    record['served_model_mismatch'] = any(
+        e.get('event') == 'served_model_mismatch' for e in record.get('events', []))
+    return record

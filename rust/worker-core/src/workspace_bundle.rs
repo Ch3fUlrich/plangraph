@@ -176,7 +176,8 @@ pub fn import_bundle(repo: &RepoEntry, revision: &str, bundle: &Path) -> Result<
     if metadata.len() > 64 * 1024 * 1024 {
         return Err(ResolveError::BundleTooLarge);
     }
-    let bundle = bundle.canonicalize()?;
+    // Git for Windows cannot consume Rust's verbatim canonical path as a bundle URL.
+    let bundle = crate::workspace_launch::git_worktree_path(&bundle.canonicalize()?);
     let root = Path::new(&repo.root);
     git(
         root,

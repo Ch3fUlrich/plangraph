@@ -10,6 +10,7 @@
 use crate::harness::{self, Harness, HarnessRun, SandboxError, run_harness};
 use crate::keeper::Claim;
 use crate::opencode_events::{self, ProviderErrorKind};
+use crate::output_redact::history_text;
 use crate::question::{self, Question, Scan};
 use pg_worker_core::check::{self, CheckResult};
 use pg_worker_core::config::{Config, Tier};
@@ -99,6 +100,8 @@ pub struct AttemptResult {
 /// Everything that can go wrong running an attempt.
 #[derive(Debug, thiserror::Error)]
 pub enum AttemptError {
+    #[error("card admission refused: {0}")]
+    Admission(crate::AdmissionReason),
     #[error(transparent)]
     Git(#[from] GitError),
     #[error("refusing worktree git directory: {0}")]
@@ -110,6 +113,8 @@ pub enum AttemptError {
 }
 
 /// Run one attempt end to end and report how it ended.
+/// The caller supplies the immutable startup Config; this entry never reads
+/// the environment allowlist or its backing file.
 ///
 /// `cancelled` is polled before any harness work (a cancelled attempt still
 /// gets its fresh worktree so the caller's bookkeeping matches reality) and
@@ -136,6 +141,12 @@ pub fn run_attempt_with(
     inp: &AttemptInput,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<AttemptResult, AttemptError> {
+    if inp.claim.card.trim().is_empty() {
+        return Err(AttemptError::Admission(
+            crate::AdmissionReason::NotClaimable(inp.claim.card.clone()),
+        ));
+    }
+    let _owner = crate::card_admit::enter(cfg, &inp.claim.card).map_err(AttemptError::Admission)?;
     // Stamped in one place so every caller's result carries the projector
     // keys, whether the attempt succeeded, was cancelled or was a defect.
     let started = std::time::SystemTime::now();
@@ -276,17 +287,18 @@ fn run_attempt_inner(
     home.stage_harness_auth()?;
     let sup = run_harness(h, &run, home.path(), &opts, cancelled, jail.as_ref())?;
     let output = String::from_utf8_lossy(&sup.output).into_owned();
-    let output_tail = check::tail_lines(&output, cfg.check_tail_lines);
-
+    let output_tail = pg_worker_core::redact::redacted_tail(
+        &output,
+        cfg.check_tail_lines,
+        pg_worker_core::redact::MAX_TAIL_BYTES,
+    );
     // A cancel that arrived while the harness ran kills the agent, so nothing
     // it wrote is committed and the commit/confinement/check stages are
     // skipped: the caller only needs to know the attempt was cancelled.
     if sup.cancelled {
         return Ok(cancelled_result(&branch, &wt.head, output_tail));
     }
-
     let clean = sup.code == Some(0) && !sup.stalled && !sup.timed_out;
-
     // A JSON-emitting harness says more than its exit code can: a provider
     // error is the provider's fault whatever the code says, and an empty
     // stream means the run never got going.
@@ -305,7 +317,6 @@ fn run_attempt_inner(
     // Anything the provider got wrong skips the check: the check would judge
     // work the run never did.
     let provider_failed = provider_rate_limited || provider_error || empty_output;
-
     // A question packet on a run that was not killed is a request for input; an
     // unusable packet is a defect of the harness contract, not something to retry.
     let (question, malformed) = if sup.stalled || sup.timed_out {
@@ -426,11 +437,11 @@ fn run_attempt_inner(
         exit_class: classification.class,
         diff_hash,
         check_hash,
-        check_tail,
+        check_tail: history_text(&check_tail),
         context_overflow: classification.context_overflow,
         branch,
         head,
-        output_tail,
+        output_tail: history_text(&output_tail),
         harness: None,
         model: None,
         combo: None,
@@ -441,7 +452,9 @@ fn run_attempt_inner(
         tokens_out: ev.as_ref().and_then(|e| e.tokens_out),
         cost: None,
         log_ref: None,
-        question: question.filter(|_| classification.class == ExitClass::NeedsInput),
+        question: question
+            .filter(|_| classification.class == ExitClass::NeedsInput)
+            .map(crate::output_redact::question),
     })
 }
 
@@ -513,64 +526,7 @@ fn violations_tail(violations: &[Violation]) -> String {
         .join("\n")
 }
 
-/// A cancelled attempt: keep the branch and head the caller already knows and
-/// skip the commit, confinement and check stages. `output_tail` carries what
-/// the harness printed before it was killed.
-fn cancelled_result(branch: &str, head: &str, output_tail: String) -> AttemptResult {
-    AttemptResult {
-        exit_class: ExitClass::Cancelled,
-        diff_hash: String::new(),
-        check_hash: String::new(),
-        check_tail: String::new(),
-        context_overflow: false,
-        branch: branch.to_string(),
-        head: head.to_string(),
-        output_tail,
-        harness: None,
-        model: None,
-        combo: None,
-        class: None,
-        started_at: None,
-        ended_at: None,
-        tokens_in: None,
-        tokens_out: None,
-        cost: None,
-        log_ref: None,
-        question: None,
-    }
-}
-
-/// A contract-defect result, keeping the diff so the planner can still tell
-/// whether anything was written.
-fn defect_result(
-    dest: &Path,
-    base: &str,
-    branch: &str,
-    head: &str,
-    output_tail: String,
-) -> Result<AttemptResult, AttemptError> {
-    Ok(AttemptResult {
-        exit_class: ExitClass::ContractDefect,
-        diff_hash: confine::diff_hash(dest, base)?,
-        check_hash: String::new(),
-        check_tail: String::new(),
-        context_overflow: false,
-        branch: branch.to_string(),
-        head: head.to_string(),
-        output_tail,
-        harness: None,
-        model: None,
-        combo: None,
-        class: None,
-        started_at: None,
-        ended_at: None,
-        tokens_in: None,
-        tokens_out: None,
-        cost: None,
-        log_ref: None,
-        question: None,
-    })
-}
+include!("attempt_result_helpers.rs");
 
 /// Run the check; on failure run it once more unchanged. A pass on the second
 /// run is a flake, not a fix. Returns the outcome and the last run's result.
@@ -777,21 +733,14 @@ fn verify_git_dir(dest: &Path, repo: &Path, base: &str) -> Result<(), AttemptErr
 
 #[cfg(all(test, unix))]
 mod tests {
-    #[test]
-    fn attempts_have_private_tmp_directories() {
-        let first = super::attempt_tmp().unwrap();
-        let second = super::attempt_tmp().unwrap();
-        assert_ne!(first.path(), second.path());
-        assert_ne!(first.path(), std::env::temp_dir());
-        assert_ne!(second.path(), std::env::temp_dir());
-        let path = first.path().to_path_buf();
-        drop(first);
-        assert!(!path.exists());
+    include!("attempt_admission_tests.rs");
+    mod pilot {
+        include!("attempt_pilot_tests.rs");
     }
     use super::*;
     use std::process::{Command, Stdio};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicBool;
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -959,13 +908,13 @@ mod tests {
             start_to_close: Duration::from_secs(10),
             kill_grace: Duration::from_millis(200),
             check_tail_lines: 20,
-            ..Config::default()
+            ..Config::allow_all_for_tests()
         }
     }
 
     fn claim(repo: &str, base: &str, allow: &[&str], check_cmd: &str) -> Claim {
         Claim {
-            card: "c1".to_string(),
+            card: test_card(),
             repo: repo.to_string(),
             base_sha: base.to_string(),
             check_cmd: check_cmd.to_string(),
@@ -1186,16 +1135,15 @@ mod tests {
     }
 
     #[test]
-    fn legacy_empty_check_kind_runs_red_first_then_writer() {
-        assert_legacy_change_path(false);
+    fn constructed_default_check_kind_runs_red_first_then_writer() {
+        assert_legacy_change_path("default");
+        assert_legacy_change_path("");
     }
-
     #[test]
     fn legacy_json_without_check_kind_runs_red_first_then_writer() {
-        assert_legacy_change_path(true);
+        assert_legacy_change_path("json");
     }
-
-    fn assert_legacy_change_path(from_json: bool) {
+    fn assert_legacy_change_path(kind: &str) {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
         let mut c = claim(
@@ -1204,17 +1152,18 @@ mod tests {
             &["out.txt"],
             "if test ! -f out.txt; then echo scratch > marker; exit 1; fi",
         );
-        if from_json {
+        if kind == "json" {
             let mut value = serde_json::to_value(&c).unwrap();
             value.as_object_mut().unwrap().remove("check_kind");
-            let json = serde_json::to_string(&value).unwrap();
-            c = serde_json::from_str::<Claim>(&json).unwrap();
+            c = serde_json::from_value::<Claim>(value).unwrap();
         } else {
-            c.check_kind.clear();
+            c.check_kind = Claim::default().check_kind;
+            if kind.is_empty() {
+                c.check_kind.clear();
+            }
         }
-        assert_eq!(c.check_kind, "");
+        assert_eq!(c.check_kind, if kind.is_empty() { "" } else { "change" });
         let inp = input(c, 1, root.path());
-        // The red base check creates scratch; cleanup proves that gate ran.
         let h = Fake::new("test ! -e marker && echo hi > out.txt");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(h.runs(), 1);
@@ -1223,7 +1172,6 @@ mod tests {
             .path()
             .join(AttemptId::new(inp.claim.card.clone(), inp.n).dir_name());
         assert!(!dest.join("marker").exists());
-
         // A passing base must park the same legacy claim before the writer.
         let mut passing = inp.clone();
         passing.n += 1;
@@ -1234,14 +1182,15 @@ mod tests {
         assert!(res.check_tail.starts_with("red-first:"));
         assert_eq!(h.runs(), 0);
     }
-
     #[test]
     fn unknown_check_kind_is_a_contract_defect() {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
-        let mut c = claim(&r.path().to_string_lossy(), &base, &["out.txt"], "false");
-        c.check_kind = "typo".into();
-        let inp = input(c, 1, root.path());
+        let path = r.path().to_string_lossy();
+        let c = claim(&path, &base, &["out.txt"], "false");
+        let mut recorded = serde_json::to_value(c).unwrap();
+        recorded["check_kind"] = "typo".into();
+        let inp = input(serde_json::from_value(recorded).unwrap(), 1, root.path());
         let h = Fake::new("echo hi > out.txt");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::ContractDefect);
@@ -1312,15 +1261,12 @@ mod tests {
         }
     }
 
-    /// The `.git` rule is the only thing standing between a healthy worktree
-    /// and a redirected one below: git happily follows the planted link, and
-    /// every other check still passes — so a test that runs without the
-    /// symlink rule fails here.
+    /// The `.git` rule prevents redirecting a healthy worktree via a symlink.
     #[test]
     fn verify_refuses_a_worktree_whose_dot_git_is_a_symlink() {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
-        let id = AttemptId::new("c1", 1);
+        let id = AttemptId::new(test_card(), 1);
         let dest = root.path().join(id.dir_name());
         worktree::create(r.path(), &base, &dest, &id).unwrap();
         // What git made passes as it is: the worktree's `.git` is a gitfile.
@@ -1376,7 +1322,9 @@ mod tests {
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::Ok);
         assert_ne!(res.head, base, "the worker did commit");
-        let dest = root.path().join(AttemptId::new("c1", 1).dir_name());
+        let dest = root
+            .path()
+            .join(AttemptId::new(inp.claim.card.clone(), 1).dir_name());
         assert!(
             !dest.join("HOOK_RAN").exists(),
             "the worker's commit ran a hook from the repository"
@@ -1481,7 +1429,9 @@ mod tests {
              && git -c user.name=harness -c user.email=harness@localhost \
              commit -q -m owned",
         );
-        let dest = root.path().join(AttemptId::new("c1", 1).dir_name());
+        let dest = root
+            .path()
+            .join(AttemptId::new(inp.claim.card.clone(), 1).dir_name());
         let err = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap_err();
         assert!(
             matches!(&err, AttemptError::GitDir(m) if m.contains("worktree storage")),
@@ -1495,7 +1445,7 @@ mod tests {
         assert_ne!(own, base, "control: the harness committed in its own repo");
         // …and the attempt committed nothing: the claim's branch still sits at
         // the base, so no attacker-chosen head can be reported or merged.
-        let branch = AttemptId::new("c1", 1).branch();
+        let branch = AttemptId::new(inp.claim.card.clone(), 1).branch();
         assert_eq!(
             git(r.path(), &["rev-parse", &branch]),
             base,
@@ -1521,7 +1471,10 @@ mod tests {
         let h = Fake::new("echo hi > out.txt");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::Ok);
-        assert_eq!(res.branch, AttemptId::new("c1", 1).branch());
+        assert_eq!(
+            res.branch,
+            AttemptId::new(inp.claim.card.clone(), 1).branch()
+        );
         assert_ne!(res.head, base);
         assert!(!res.diff_hash.is_empty());
         assert_eq!(h.runs(), 1);
@@ -1727,17 +1680,18 @@ mod tests {
         let repo_s = r.path().to_string_lossy().into_owned();
         let h = Fake::new("echo hi > out.txt");
         let cfg = tiny();
+        let claim = claim(&repo_s, &base, &["out.txt"], "test -f out.txt");
         for n in [1u32, 2] {
-            let inp = input(
-                claim(&repo_s, &base, &["out.txt"], "test -f out.txt"),
-                n,
-                root.path(),
-            );
+            let inp = input(claim.clone(), n, root.path());
             let res = run_attempt(&h, &cfg, &Patterns::default(), &inp, &|| false).unwrap();
             assert_eq!(res.exit_class, ExitClass::Ok);
         }
-        let d1 = root.path().join(AttemptId::new("c1", 1).dir_name());
-        let d2 = root.path().join(AttemptId::new("c1", 2).dir_name());
+        let d1 = root
+            .path()
+            .join(AttemptId::new(claim.card.clone(), 1).dir_name());
+        let d2 = root
+            .path()
+            .join(AttemptId::new(claim.card.clone(), 2).dir_name());
         assert!(d1.exists() && d2.exists());
         assert_ne!(d1, d2);
     }
@@ -1910,7 +1864,7 @@ mod tests {
         assert_eq!(res.exit_class, ExitClass::Ok);
         let written = std::fs::read_to_string(
             root.path()
-                .join(AttemptId::new("c1", 2).dir_name())
+                .join(AttemptId::new(inp.claim.card.clone(), 2).dir_name())
                 .join("out.txt"),
         )
         .unwrap();
@@ -1933,7 +1887,7 @@ mod tests {
         // The worktree exists so the probe that follows has something to look at.
         assert!(
             root.path()
-                .join(AttemptId::new("c1", 3).dir_name())
+                .join(AttemptId::new(inp.claim.card.clone(), 3).dir_name())
                 .is_dir()
         );
     }

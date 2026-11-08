@@ -37,7 +37,11 @@ def test_record_collision(tmp_path, monkeypatch, capsys, verb, failures, winerro
     monkeypatch.setattr(cli, 'SpawnService', lambda **kw: service)
     code = cli.main(['--state', str(tmp_path), verb, record['run_id']])
     out, err = capsys.readouterr()
-    if failures == 2:
+    if winerror is None:
+        assert code != 0 and not out
+        assert err == 'run-collision: PermissionError\n'
+        assert len(calls) == 1
+    elif failures == 2:
         assert code == 0 and json.loads(out) == record and not err
         assert len(calls) == 3
     else:
@@ -133,7 +137,7 @@ def test_missing_writer_family(tmp_path, monkeypatch, dispatch):
     from plangraph.planner import routing
 
     service = (DispatchService if dispatch else SpawnService)(_Runner(), state=tmp_path)
-    chosen = next(l for l in DEFAULT_LEGS if l.family == 'qwen')
+    chosen = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol')
     plan = SpawnPlan((chosen,), (), 'test', (), ())
     monkeypatch.setattr(service, 'result', lambda *a, **kw: dict(writer_family=None, given_writer_families=[]))
     monkeypatch.setattr(service, '_route', lambda *a, **kw: plan)

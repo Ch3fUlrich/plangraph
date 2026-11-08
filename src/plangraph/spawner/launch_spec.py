@@ -16,7 +16,6 @@ import tempfile
 import time
 
 from plangraph.planner.routing import DEFAULT_LEGS, SpawnRefused
-from plangraph.planner.legs import leg_active
 from . import context_pack, runner
 from .git_guard import writer_launch
 from .inline_diff import InlineDiffError
@@ -90,8 +89,12 @@ def build(request: dict) -> dict:
     leg = next((leg for leg in DEFAULT_LEGS if leg.id == request['leg']['id']), None)
     if leg is None:
         raise LaunchRefused('unknown_leg', 'unknown leg id')
-    if not leg_active(leg):
-        raise LaunchRefused('leg_inactive', 'leg expired')
+    from .target import admit_leg
+    from plangraph.routing_errors import SpawnRefused
+    try:
+        admit_leg(leg)
+    except SpawnRefused as exc:
+        raise LaunchRefused('leg_inactive', str(exc)) from None
     if request['role'] not in leg.roles:
         raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
     service = SpawnService(state=request['state'])

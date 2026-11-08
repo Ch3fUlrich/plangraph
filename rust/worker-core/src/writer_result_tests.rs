@@ -41,8 +41,14 @@ fn writer_none_launch_missing_root_stays_confined() {
             None,
         )
     };
-    assert!(launch(&f.repo, temp).unwrap().is_none());
+    assert!(matches!(
+        launch(&f.repo, temp),
+        Err(crate::workspace_resolver::ResolveError::Verify(
+            "worktrees_root"
+        ))
+    ));
     assert!(!missing.exists());
+    assert!(!temp.join("missing").exists());
     let nested = temp.join("existing/trees");
     std::fs::create_dir_all(&nested).unwrap();
     f.repo.worktrees_root = nested.to_str().unwrap().into();
@@ -311,4 +317,9 @@ fn gate_failure_creates_no_bundle() {
         Err(WriterError::SecretInHistory)
     ));
     assert_eq!(std::fs::read_dir(root).unwrap().count(), 0);
+}
+#[test]
+fn writer_result_oid_remains_sha1_only() {
+    assert!(oid(&"a".repeat(40)));
+    assert!(!oid(&"a".repeat(64)));
 }

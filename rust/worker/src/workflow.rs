@@ -6,10 +6,8 @@
 //! A pass runs one attempt on a fresh worktree, records it, then either merges
 //! an `ok` result or asks the budget for the next move: retry, re-route, wait,
 //! promote, upgrade the context class, quarantine or park.
-
-use crate::activities::AskInput;
 use crate::activities::{
-    CardActivities, CardOutput, ConfineSpec, DoneInput, GateCheck, GateInput, GateResult,
+    AskInput, CardActivities, CardOutput, ConfineSpec, DoneInput, GateCheck, GateInput, GateResult,
     JanitorInput, MergeInput, MergeResult, ProbeInput, ProbeResult, Tick, park_json_with_attempt,
 };
 use crate::attempt::{AttemptInput, AttemptResult, LegSpec, to_budget_attempt};
@@ -32,25 +30,18 @@ use temporalio_sdk::{
     ActivityOptions, ApplicationFailure, SyncWorkflowContext, TimeoutType,
     WorkflowCancellationToken, WorkflowContext, WorkflowResult, WorkflowTermination,
 };
-
 /// Alarm reason when the total waited time reaches `Config::wait_cap`.
 pub const WAIT_CAP_PARK_REASON: &str = "wait cap reached";
-
 /// Alarm reason when a run of `probe_fail` attempts is abandoned.
 const PROBE_FAIL_PARK_REASON: &str = "probe fail cap reached";
-
 /// Consecutive `probe_fail` attempts tolerated before parking (R2 carry-over).
 const PROBE_FAIL_CAP: usize = 5;
-
 /// Durable pause before asking again when the keeper would not grant the merge lock.
 const MERGE_RETRY_WAIT: Duration = Duration::from_secs(15);
-
 /// Merge-lock retries before the card parks.
 const MERGE_RETRY_CAP: u32 = 20;
-
 /// Alarm reason when the keeper merge lock stayed unavailable.
 const MERGE_LOCK_PARK_REASON: &str = "merge lock unavailable";
-
 /// Temporal patch marker for the card's gate running before a merge.
 ///
 /// Scheduling the `gate` activity adds a command to the workflow history that a
@@ -59,13 +50,11 @@ const MERGE_LOCK_PARK_REASON: &str = "merge lock unavailable";
 /// a card started after the change runs it. The id is pinned by a test: renaming
 /// it would strand every card whose history already carries the old marker.
 const GATE_PATCH: &str = "gate-before-merge-v1";
-
 /// `ctx.patched` marker for the `observe` activity that captures the state a
 /// park presents (EXEC-OBSERVED-STATE, G3-1). Scheduling it is a new command,
 /// so a history recorded before the marker replays without it and parks on the
 /// live-set fallback, exactly as those runs did.
 const OBSERVE_PATCH: &str = "park-observe-v1";
-
 /// `ctx.patched` marker for the park 409 (`exec_stale_state`) re-observe loop
 /// (D4). The loop issues `observe`/`park` commands a history recorded before
 /// the marker has no room for, so an old in-flight card keeps parking once and
@@ -73,43 +62,10 @@ const OBSERVE_PATCH: &str = "park-observe-v1";
 /// renaming it would strand every card whose history already carries the old
 /// marker.
 const PARK_REOBSERVE_PATCH: &str = "park-reobserve-v1";
-
 /// How many times a park refused as stale is re-observed and retried before the
 /// workflow fails with the last cause (D3).
 const PARK_REOBSERVES: u32 = 2;
-
-/// Workflow wire input. Kept here so gate metadata does not change the legacy
-/// activity input contract; missing fields preserve recorded start payloads.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CardInput {
-    #[serde(flatten)]
-    pub legacy: crate::activities::CardInput,
-    #[serde(default)]
-    pub risk_tagged: bool,
-    #[serde(default)]
-    pub heldout_cmd: String,
-    #[serde(default)]
-    pub smoke_checks: Vec<String>,
-    #[serde(default)]
-    pub exports: Vec<String>,
-    #[serde(default)]
-    pub base_sha: Option<String>,
-}
-
-impl std::ops::Deref for CardInput {
-    type Target = crate::activities::CardInput;
-
-    fn deref(&self) -> &Self::Target {
-        &self.legacy
-    }
-}
-
-impl std::ops::DerefMut for CardInput {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.legacy
-    }
-}
-
+pub use crate::card_input::CardInput;
 /// Alarm reason when a question stayed unanswered until the wait cap.
 const QUESTION_PARK_REASON: &str = question::TIMEOUT_PARK_REASON;
 
@@ -229,9 +185,10 @@ impl Card {
     #[run]
     pub async fn run(
         ctx: &mut WorkflowContext<Self>,
-        input: CardInput,
+        mut input: CardInput,
     ) -> WorkflowResult<CardOutput> {
-        // A constant: the policy and the activity options must not vary per run.
+        crate::card_memo::upsert(ctx, &input.claim.card)?;
+        // Constant policy/options, rebuilt like all local state on replay.
         let cfg = Config::default();
         // A child of the workflow token, so native cancel and the signal both reach
         // the activity.
@@ -242,7 +199,6 @@ impl Card {
             op.cancel_with_reason("cancel before start".to_string());
         }
 
-        // Local state, rebuilt exactly on replay.
         let mut history: Vec<Attempt> = Vec::new();
         let mut base_sha = input.claim.base_sha.clone();
         let mut n: u32 = 0;
@@ -256,8 +212,48 @@ impl Card {
         // Questions answered so far; at the limit the next one parks the card.
         let mut question_rounds: u32 = 0;
         let max_question_rounds = input.max_question_rounds.unwrap_or(cfg.max_question_rounds);
-
+        let bounded = ctx.patched(crate::rollover::LIMITS_PATCH);
+        if let Some(r) = input.resume.take() {
+            history = r.history;
+            base_sha = r.base_sha;
+            n = r.n;
+            waits = r.waits;
+            waited = r.waited;
+            context = r.context;
+            limited = r.limited;
+            leg = r.leg;
+            answers = r.answers;
+            question_rounds = r.question_rounds;
+            ctx.state_mut(|s| s.answers.splice(0..0, r.signals).for_each(drop));
+        }
+        let initial_waits = waits;
         loop {
+            if bounded
+                && n > 0
+                && crate::rollover::due(
+                    ctx.history_length(),
+                    waits - initial_waits,
+                    ctx.continue_as_new_suggested(),
+                )
+                && !ctx.state(|s| s.cancel_requested)
+            {
+                input.resume = Some(crate::rollover::Resume {
+                    history,
+                    base_sha,
+                    n,
+                    waits,
+                    waited,
+                    context,
+                    limited,
+                    leg,
+                    answers,
+                    question_rounds,
+                    signals: ctx.state(|s| s.answers.clone()),
+                });
+                return ctx
+                    .continue_as_new(input, Default::default())
+                    .map(|v| match v {});
+            }
             // A cancel that landed between attempts must not start another one.
             if ctx.state(|s| s.cancel_requested) {
                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
@@ -283,11 +279,14 @@ impl Card {
                 .initial_interval(Duration::from_secs(1))
                 .maximum_attempts(1)
                 .build();
-            let opts = ActivityOptions::with_start_to_close_timeout(cfg.start_to_close)
+            let mut opts = ActivityOptions::with_start_to_close_timeout(cfg.start_to_close)
                 .heartbeat_timeout(cfg.heartbeat_timeout)
                 .retry_policy(retry)
                 .cancellation_token(op.clone())
                 .build();
+            if bounded {
+                crate::rollover::bound(&mut opts, cfg.start_to_close);
+            }
             let attempt_input = AttemptInput {
                 claim: Claim {
                     base_sha: base_sha.clone(),
@@ -1714,6 +1713,7 @@ mod tests {
             smoke_checks: Vec::new(),
             exports: Vec::new(),
             base_sha: None,
+            resume: None,
         };
         (root, input)
     }
@@ -1939,7 +1939,7 @@ mod tests {
 
     #[test]
     fn auxiliary_activities_get_bounded_retries() {
-        let cfg = Config::default();
+        let cfg = Config::allow_all_for_tests();
         let retry = activity_options(&cfg)
             .retry_policy
             .expect("auxiliary options carry a retry policy");
@@ -2141,7 +2141,7 @@ mod tests {
 
     #[test]
     fn gate_options_are_bounded() {
-        let cfg = Config::default();
+        let cfg = Config::allow_all_for_tests();
         let opts = gate_options(&cfg);
         assert_eq!(
             opts.close_timeouts.start_to_close(),
@@ -2258,7 +2258,7 @@ mod tests {
 
     #[test]
     fn merge_activity_is_single_attempt() {
-        let cfg = Config::default();
+        let cfg = Config::allow_all_for_tests();
         let retry = once_options(&cfg)
             .retry_policy
             .expect("merge options carry a retry policy");
@@ -2267,7 +2267,7 @@ mod tests {
 
     #[test]
     fn janitor_is_detached_from_workflow_cancellation() {
-        let cfg = Config::default();
+        let cfg = Config::allow_all_for_tests();
         let token = janitor_options(&cfg)
             .cancellation_token
             .expect("the janitor names its own cancellation token");

@@ -11,6 +11,9 @@ import pytest
 from plangraph.spawner import stall_watchdog as w
 
 
+from conftest_watchdog import isolated_process_evidence  # noqa: F401
+
+
 def records(state, count=1, **fields):
     for i in range(count):
         path = state / f'runs/run-{i}/record.json'
@@ -85,6 +88,12 @@ sys.path.insert(0, sys.argv[1])
 sys.modules['plangraph.spawner.runner'] = SimpleNamespace(
     spawn_service=lambda **kw: SimpleNamespace(retry_completions=lambda: None))
 from plangraph.spawner import stall_watchdog as w
+from plangraph.spawner import stuck_watch
+from pathlib import Path
+proc_root = Path('isolated-proc-child')
+proc_root.mkdir(exist_ok=True)
+real_processes = stuck_watch.processes
+stuck_watch.processes = lambda proc: real_processes(proc_root)
 w.read_claims = lambda: []
 raise SystemExit(w.main(['tick']))
 '''
@@ -146,7 +155,7 @@ def test_cap_window_replay(tmp_path, monkeypatch):
 
 
 def test_dry_run_and_cap(tmp_path, monkeypatch, capsys):
-    from plangraph.spawner import runner
+    from plangraph.spawner import runner, stuck_watch
     records(tmp_path, 30, status='running', started=0, pid=123)
     monkeypatch.setattr(os, 'kill', lambda *args: None)
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
@@ -168,6 +177,9 @@ def test_dry_run_and_cap(tmp_path, monkeypatch, capsys):
         from plangraph.spawner import private_io
         dry.setattr(private_io, 'atomic_write_private',
                     lambda *a, **kw: pytest.fail('state write called'))
+        # Guard the cached import too, without letting a lazy import retain the
+        # temporary guard after this context (as in the Postgres CI selection).
+        dry.setattr(stuck_watch, 'atomic_write_private', private_io.atomic_write_private)
         class DryService:
             def retry_completions(self):
                 pytest.fail('retry_completions called')

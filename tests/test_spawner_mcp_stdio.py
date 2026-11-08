@@ -81,7 +81,8 @@ def test_ps_leg():
     assert ps_reply([{'chosen_leg': {'id': 'seat', 'extra': 'omit'}}])['runs'] == [{'leg': 'seat'}]
 
 
-def test_ps_real_records(tmp_path):
+def test_ps_real_records(tmp_path, monkeypatch):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config'))  # no operator SSH fan-out
     service = spawn_service(state=tmp_path)
     directory = tmp_path / 'runs'
     directory.mkdir(parents=True, exist_ok=True)

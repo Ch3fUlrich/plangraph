@@ -21,14 +21,25 @@ from .stall_probe import probe_run, probe_setting
 
 _budget = ContextVar('probe_budget', default=None)
 
-def tick(runs, claims, activity, *, now=None, deliver=None, state=None, dry_run=False, budget=None, hung=None):
+def tick(runs, claims, activity, *, now=None, deliver=None, state=None, dry_run=False, budget=None, hung=None, stuck=False):
     now = time.time() if now is None else now
     deliver = None if dry_run else deliver
     findings = []
     runs = list(runs)
+    if state is not None and stuck:
+        try:
+            from .stuck_watch import check
+            stuck_findings = check(state, runs, now, dry_run=dry_run)
+            findings.extend(stuck_findings)
+            if deliver:
+                for finding in stuck_findings:
+                    if not finding.get('diagnostic_only'):
+                        deliver(dict(finding, kind='alert', recipient='routing'))
+        except Exception as exc:
+            findings.append(dict(rule='stuck-watch-error', reason=type(exc).__name__))
     for run in runs:
         if state is not None:
-            finding = probe_run(state, run, now, dry_run=dry_run or (budget is not None and budget[0] <= 0), hung=hung)
+            finding = probe_run(state, run, now, dry_run=dry_run or (stuck and hung is None and run.get('status') == 'running') or (budget is not None and budget[0] <= 0), hung=hung)
             if finding:
                 findings.append(finding)
                 if deliver:
@@ -274,7 +285,11 @@ def install(host, destination, *, python=None, root=None, run=subprocess.run, di
     else:
         raise ValueError('unsupported watchdog host')
 
-def main(argv=None):
+def main(argv=None, *, hung_config=None):
+    # Host integrations supply structured sampling and leg-scoped actions;
+    # old callers remain disabled rather than guessing process ownership.
+    from .hung_capture import HungBoundary
+    hung = HungBoundary(**hung_config) if hung_config is not None else None
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('tick', 'status', 'install'))
     parser.add_argument('--host', choices=('linux', 'windows'), default=sys.platform if sys.platform == 'linux' else 'windows')
@@ -307,7 +322,7 @@ def main(argv=None):
     finally:
         _budget.reset(token)
     findings = tick(runs, [], lambda s: read_activity(state, s),
-                    deliver=deliver, state=state, dry_run=args.dry_run, budget=budget)
+                    deliver=deliver, state=state, dry_run=args.dry_run, budget=budget, hung=hung, stuck=True)
     error = warning = None
     try:
         findings += tick([r for r in runs if r.get('status') in ('running', 'queued')],

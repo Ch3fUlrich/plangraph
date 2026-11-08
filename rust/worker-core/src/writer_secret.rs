@@ -1,4 +1,5 @@
 //! Shared reachable-content secret policy. Never inspect serialized bundles.
+//! ASCII and UTF-16 LE/BE token text are scanned, including binary containers.
 use crate::{
     hosts::RepoEntry,
     workspace_resolver::git_command,
@@ -10,6 +11,12 @@ use std::{
     process::Stdio,
 };
 pub struct SecretGate;
+#[cfg(test)]
+thread_local! {
+    pub(crate) static LS_TREE_CALLS: std::cell::RefCell<Vec<Vec<String>>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
+}
 #[derive(Debug, PartialEq, Eq)]
 pub struct SecretFinding {
     pub commit: String,
@@ -21,6 +28,24 @@ pub fn scan_bytes(bytes: &[u8]) -> bool {
         .map(|b| char::from(if *b < 128 { *b } else { b' ' }))
         .collect();
     crate::redact::redact(&text) != text
+        || [0, 1].into_iter().any(|offset| {
+            [false, true].into_iter().any(|be| {
+                let text: String = bytes[offset.min(bytes.len())..]
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|b| {
+                        if be {
+                            u16::from_be_bytes([b[0], b[1]])
+                        } else {
+                            u16::from_le_bytes([b[0], b[1]])
+                        }
+                    })
+                    .map(|c| if c < 128 { char::from(c as u8) } else { ' ' })
+                    .collect();
+                crate::redact::redact(&text) != text
+            })
+        })
 }
 pub(crate) fn command(
     root: &Path,
@@ -28,12 +53,21 @@ pub(crate) fn command(
     input: &[u8],
     index: Option<&Path>,
 ) -> Result<Vec<u8>, WriterError> {
+    #[cfg(test)]
+    if args.first() == Some(&"ls-tree") {
+        LS_TREE_CALLS.with(|calls| {
+            calls
+                .borrow_mut()
+                .push(args.iter().map(|arg| (*arg).to_owned()).collect());
+        });
+    }
     let mut file = tempfile::tempfile()?;
     file.write_all(input)?;
     file.seek(SeekFrom::Start(0))?;
     let mut cmd = git_command(root);
     cmd.args(["--no-replace-objects", "-c", "core.hooksPath="])
         .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", "Secret gate")
         .env("GIT_AUTHOR_EMAIL", "gate@example.invalid")
         .env("GIT_COMMITTER_NAME", "Secret gate")
@@ -42,6 +76,12 @@ pub(crate) fn command(
         .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
         .stdin(file)
         .stderr(Stdio::null());
+    #[cfg(unix)]
+    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null");
+    #[cfg(not(unix))]
+    cmd.env("GIT_CONFIG_GLOBAL", "NUL")
+        .env("GIT_CONFIG_SYSTEM", "NUL");
     if let Some(index) = index {
         cmd.env("GIT_INDEX_FILE", index);
     }
@@ -97,11 +137,27 @@ pub fn findings(
     let root = Path::new(&repo.root);
     let list = command(
         root,
-        &["rev-list", "--reverse", tip, "--not", prerequisite],
+        &[
+            "rev-list",
+            "--max-count=257",
+            "--reverse",
+            tip,
+            "--not",
+            prerequisite,
+        ],
         &[],
         None,
     )?;
+    if list
+        .split(|b| *b == b'\n')
+        .filter(|l| !l.is_empty())
+        .count()
+        > 256
+    {
+        return Err(WriterError::Verify);
+    }
     let mut found = Vec::new();
+    let mut scanned = std::collections::BTreeMap::new();
     for line in list.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
         let sha = std::str::from_utf8(line).map_err(|_| WriterError::Git)?;
         let (kind, bytes) = object(root, sha)?;
@@ -120,20 +176,27 @@ pub fn findings(
             });
         }
         for (mode, blob, path) in entries(root, sha)? {
-            if scan_bytes(path.as_bytes()) {
+            if scan_bytes(&path) {
                 found.push(SecretFinding {
                     commit: sha.into(),
-                    path: Some("<path removed by secret gate>".into()),
+                    path: Some(record_path(&path)),
                 });
                 continue;
             }
             if mode == "160000" {
                 continue;
             }
-            if scan_bytes(&object(root, &blob)?.1) {
+            let secret = if let Some(secret) = scanned.get(&blob) {
+                *secret
+            } else {
+                let secret = scan_bytes(&object(root, &blob)?.1);
+                scanned.insert(blob, secret);
+                secret
+            };
+            if secret {
                 found.push(SecretFinding {
                     commit: sha.into(),
-                    path: Some(path),
+                    path: Some(record_path(&path)),
                 });
             }
         }
@@ -143,7 +206,7 @@ pub fn findings(
 pub(crate) fn entries(
     root: &Path,
     tree: &str,
-) -> Result<Vec<(String, String, String)>, WriterError> {
+) -> Result<Vec<(String, String, Vec<u8>)>, WriterError> {
     let bytes = command(root, &["ls-tree", "-rz", tree], &[], None)?;
     bytes
         .split(|b| *b == 0)
@@ -155,13 +218,21 @@ pub(crate) fn entries(
             if fields.len() != 3 {
                 return Err(WriterError::Git);
             }
-            Ok((
-                fields[0].into(),
-                fields[2].into(),
-                String::from_utf8(e[tab + 1..].to_vec()).map_err(|_| WriterError::Verify)?,
-            ))
+            Ok((fields[0].into(), fields[2].into(), e[tab + 1..].to_vec()))
         })
         .collect()
+}
+pub(crate) fn record_path(path: &[u8]) -> String {
+    if scan_bytes(path) {
+        "<path removed by secret gate>".into()
+    } else {
+        String::from_utf8(path.to_vec()).unwrap_or_else(|_| {
+            format!(
+                "<non-UTF-8 path: {}>",
+                path.iter().map(|b| format!("{b:02x}")).collect::<String>()
+            )
+        })
+    }
 }
 impl ContentGate for SecretGate {
     fn check(&self, repo: &RepoEntry, prerequisite: &str, tip: &str) -> Result<(), WriterError> {

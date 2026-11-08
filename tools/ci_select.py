@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 #: Jobs that run on every change: never selected, always required by the gate.
-ALWAYS: tuple[str, ...] = ("scrub", "file-size", "changelog-docs")
+ALWAYS: tuple[str, ...] = ("scrub", "file-size", "new-code-lang", "changelog-docs")
 
 SUITES: tuple[str, ...] = (
     "pytest",

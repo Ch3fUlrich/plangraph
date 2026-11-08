@@ -40,6 +40,7 @@ fn command_contract() {
         "pg-test",
         "agent-tests.slice",
         &RunLimits {
+            windows_holder_max_s: None,
             memory_max: Some("1G".into()),
             tasks_max: Some(12),
         },

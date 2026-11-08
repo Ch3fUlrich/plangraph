@@ -51,7 +51,7 @@ from .git_guard import writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
-from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry  # re-export: tests import and patch these on runner
+from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry, mismatch_flag, witness_native  # re-export: tests import and patch these on runner
 
 
 def _is_nt() -> bool:
@@ -91,6 +91,11 @@ def _resolve_launch(
     return exe, None
 
 
+def is_terminal(status):
+    """Only known final run states are terminal; unknown states remain visible."""
+    return status in ('completed', 'failed', 'cancelled', 'killed', 'dry_run', 'succeeded', 'timeout', 'refused', 'skipped')
+
+
 @dataclass
 class JobInfo:
     """Execution state of a spawned agent task."""
@@ -120,7 +125,7 @@ class JobInfo:
     survivors: list = field(default_factory=list)   # pids that outlived the kill (kill_incomplete)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return mismatch_flag(asdict(self))
 
 
 #: Every tool key the opencode 2.1.0 config schema knows ('*' exists only in
@@ -308,6 +313,13 @@ class SpawnerRunner:
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
+        from .target import resolve_target   # leg ids and admitted combos resolve before providers render
+        model_or_combo, leg = resolve_target(model_or_combo)
+        if leg is not None:
+            if client is not None and client != leg.harness:
+                from plangraph.routing_errors import SpawnRefused
+                raise SpawnRefused('client disagrees with leg harness: ' + leg.id)
+            client = leg.harness
         validate_model(model_or_combo)
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
             prompt = IMPLEMENT_HEADER + "\n\n" + prompt
@@ -383,6 +395,9 @@ class SpawnerRunner:
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
+            # Completion framing distinguishes a final answer from partial text.
+            if '--format' not in cmd:
+                cmd[2:2] = ['--format', 'json']
             # Name the session so the monitor can witness the served model
             # (D-2898). --title goes right after the --model pair so it always
             # precedes any positional/prompt argument ('opencode run' takes
@@ -405,16 +420,14 @@ class SpawnerRunner:
                     needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
             # D-2921 F1 / D-3236: every role (writers too) runs without the global, project and
             # Claude Code config layers -- a global `instructions` entry made a writer change nothing.
-            from .opencode_isolation import close_config_layers
+            from .opencode_isolation import close_config_layers, review_credential_reason
             oc_dir = self._ocdata_dirs[job_id] = close_config_layers(child_env)
             if role == 'review':
-                # D-2905 (1): the per-job dir is also the spawner-owned store, read only after
-                # child exit -- the shared store is child-writable and proves nothing.
-                child_env['XDG_DATA_HOME'] = oc_dir
-                # REVIEW-WITNESS-OPENCODE R1: the child gets NO inherited
-                # config layer at all -- HOME and XDG_CONFIG_HOME live in the
-                # per-job dir and every caller-set OPENCODE_* override outside
-                # _REVIEW_OPENCODE_ENV_ALLOW is dropped.
+                # D-2905 (1): the per-job dir is also the spawner-owned store, read only after child exit
+                # -- the shared store is child-writable and proves nothing. REVIEW-WITNESS-OPENCODE R1:
+                # no inherited config layer: HOME and XDG_CONFIG_HOME live in the per-job dir and every
+                # caller-set OPENCODE_* override outside _REVIEW_OPENCODE_ENV_ALLOW is dropped.
+                render_reason = review_credential_reason(model_or_combo, oc_dir, child_env, render_reason)
                 child_env['HOME'] = oc_dir
                 xdg_config = os.path.join(oc_dir, 'config')
                 os.mkdir(xdg_config, 0o700)
@@ -499,7 +512,8 @@ class SpawnerRunner:
                 cwd=work_dir,
                 writer_email=child_env.get('GIT_AUTHOR_EMAIL'),
             )
-            self.jobs[job_id] = job
+            from .probe_cleanup import register
+            self.jobs[job_id] = job; register(job_id)
             job.prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
             from .run_watchdog import thresholds, edit_signature
             job._watchdog_limits = watchdog or thresholds(role=role)
@@ -671,7 +685,6 @@ class SpawnerRunner:
         if job_id in reaped:
             return
         reaped.add(job_id)
-        job = self.jobs.get(job_id)
         await reap(self, job_id, proc)
 
     async def _monitor_process(
@@ -714,12 +727,25 @@ class SpawnerRunner:
                                            nonce=self._nonces[job_id])
             from .env_redact import redact_env_values
             env = self._child_envs.get(job_id, os.environ)
-            job.stdout = redact(redact_env_values(stdout_text, env))
+            from .opencode_answer import answer_text, final_answer, terminated_after_answer
+            decoded = answer_text(stdout_text) if is_opencode(job) else stdout_text
+            job.stdout = redact(redact_env_values(decoded, env))
             job.stderr = redact(redact_env_values(stderr_text, env))
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
-                job.status = "completed" if exit_code == 0 else "failed"
+                # Preserve the existing denied-review terminal verdict contract.
+                tails = [text.rstrip('\r\n').splitlines()
+                         for text in (stdout_text, final_answer(stdout_text, allow_unfinished=True) or '')]
+                review_verdict = (
+                    exit_code == 1 and is_opencode(job) and job.role == 'review'
+                    and any(event.get('event') == 'opencode_tools_denied' for event in job.events)
+                    and any(lines and lines[-1] in ('VERDICT: ACCEPT', 'VERDICT: REQUEST_CHANGES') for lines in tails)
+                )
+                job.status = 'completed' if exit_code == 0 or review_verdict else 'failed'
+                if not review_verdict and terminated_after_answer(job, stdout_text, stderr_text, exit_code):
+                    job.status = 'terminated_after_answer'
+                    job.events.append({'event': 'terminated_after_answer'})
             if job.status == 'failed' and is_opencode(job):
                 job.events.append(dict(event='harness_failed', error=failure_reason(job)))
             from .opencode_isolation import fail_unchanged_writer
@@ -727,8 +753,8 @@ class SpawnerRunner:
             if not question_exit(job, {}):
                 await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
 
-            # D-2905 (2): the child-writable session store is request-side only ('request-side-opencode-store',
-            # never 'served'); read only for a review leg's own store, all tools denied, exit 0 (D-2905 (1)).
+            # D-2905: the child-writable store is request-side only, for an
+            # exit-0 review's own store with all tools denied.
             if job.command and job.command[0] == 'opencode' and job.role == 'review':
                 oc_dir = self._ocdata_dirs.get(job_id) if exit_code == 0 else None
                 denied = _opencode_tools_denied(
@@ -762,14 +788,14 @@ class SpawnerRunner:
                 await asyncio.to_thread(render_review_output, job, stdout_text,
                                         lambda text: redact(redact_env_values(text, env)))
 
+            await witness_native(self, job_id, job, stdout_text, requested_model)
             # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
             job.served_model = job.served_model or 'unwitnessed'
             job.served_family = job.served_family or 'unwitnessed'
         except asyncio.CancelledError:
+            await self._reap_process(job_id, proc)
             if job_id in self.jobs:
-                if self.jobs[job_id].status not in ('failed', 'stalled', 'timeout'):
-                    self.jobs[job_id].status = "cancelled"
-                    self.jobs[job_id].exit_code = 1
+                from .cancel_job import publish_cancel; publish_cancel(self.jobs[job_id])
                 self.jobs[job_id].end_time = time.time()
         except Exception as exc:
             job = self.jobs[job_id]
@@ -852,26 +878,8 @@ class SpawnerRunner:
 
     async def cancel(self, job_id: str) -> dict[str, Any]:
         """Cancel a running job."""
-        if not isinstance(job_id, str):
-            from plangraph.routing_errors import ParameterRefused
-            raise ParameterRefused('job_id must be a string')
-        if job_id not in self.jobs:
-            raise KeyError(f"Job {job_id} not found")
-        job = self.jobs[job_id]
-        job.status, job.exit_code = "cancelled", 1   # Q14: before the reap, so the monitor keeps it
-
-        proc = self._processes.get(job_id)
-        if proc:
-            await self._reap_process(job_id, proc)
-
-        task = self._tasks.get(job_id)
-        if task and not task.done():
-            task.cancel()
-
-        self._nonces.pop(job_id, None)
-        job.end_time = time.time()
-        self._check_git_config_guard(job_id)   # only a dangerous config mutation turns it 'failed'
-        return {"job_id": job_id, "status": job.status}
+        from .cancel_job import cancel_job
+        return await cancel_job(self, job_id)
 
 
 def spawn_service(*args, **kwargs):
@@ -992,10 +1000,9 @@ def spawn_service(*args, **kwargs):
 
         def _route(self, card, role='implement', writer_families=(), review_of=None, **options):
             from . import leg_state
-            reader = getattr(self.leg_reader, 'leg_status', self.leg_reader) or leg_state.leg_status
             original = self.leg_reader
-            from .leg_probe import read_status
-            self.leg_reader = lambda model, **kw: read_status(reader, model, **kw)
+            from .leg_probe import DispatchReader
+            self.leg_reader = DispatchReader(original, leg_state.leg_status)
             try:
                 return super()._route(card, role, writer_families, review_of, **options)
             finally:
@@ -1009,7 +1016,8 @@ def spawn_service(*args, **kwargs):
             from .run_watchdog import terminal_status, thresholds
             from .question_bridge import rounds_exhausted
             if rounds_exhausted(self, card, role):
-                return dict(status='refused', reason='question_rounds_exhausted', exit_code=2)
+                from plangraph.routing_errors import SpawnRefused
+                raise SpawnRefused('question_rounds_exhausted')
             # Let the base service handle audited overrides, which never fall through.
             if seats or model is not None or leg is not None or not card:
                 return await super()._spawn(
@@ -1100,8 +1108,8 @@ def spawn_service(*args, **kwargs):
                         task = self.runner._tasks.get(job.job_id)
                         if task:
                             await asyncio.wait([task])   # a monitor cancelled by runner.cancel ends the leg, not this loop
-                            if task.cancelled() and job.status not in ('stalled', 'timeout', 'cancelled'):
-                                job.status = 'cancelled'
+                            if task.cancelled():
+                                from .cancel_job import publish_cancel; publish_cancel(job)
                             elif not task.cancelled() and task.exception() is not None:
                                 raise task.exception()
                         if job.survivors:   # kill_incomplete: terminal, no fall-through leg, no second writer
@@ -1144,11 +1152,12 @@ def spawn_service(*args, **kwargs):
                             stdout_tail=job.stdout, stderr_tail=job.stderr))
                         if stop and not unavailable and job.status != 'cancelled':
                             notify_leg_refused(self, record, chosen, reason or 'provider_stop')
-                        if job.status in ('completed', 'dry_run') and not unavailable and not stop:
+                        if job.status in ('completed', 'dry_run', 'terminated_after_answer') and not unavailable and not stop:
                             record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                             served_family=job.served_family, served_witness_reason=job.served_witness_reason,
                             request_side_model=job.request_side_model, witness_kind=job.witness_kind,
+                            served_model_mismatch=any(e.get('event') == 'served_model_mismatch' for e in (getattr(job, 'events', None) or [])),
                             writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                             stdout_tail=record.get('stdout_tail', '') + job.stdout,
                             stderr_tail=record.get('stderr_tail', '') + job.stderr,
@@ -1190,7 +1199,9 @@ def spawn_service(*args, **kwargs):
                         return
                     record.update(status='failed', exit_code=1, error=redact(str(exc)))
                 finally:
-                    if record['status'] == 'running':
+                    if record['status'] == 'running' and record.get('job_id') in self.runner.jobs and self.runner.jobs[record['job_id']].survivors:
+                        record.update(status='failed', exit_code=1, reason='kill_incomplete', survivors=self.runner.jobs[record['job_id']].survivors)
+                    elif record['status'] == 'running':
                         record.update(status='cancelled', exit_code=1)
                     record['ended'] = time.time()
                     terminal_reason(record, job if record.get('job_id') else None)

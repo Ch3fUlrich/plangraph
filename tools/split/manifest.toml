@@ -84,6 +84,14 @@ rules = ["token-shape", "high-entropy"]
 [[scrub.allow]]
 path = "tests/fixtures/temporal/*.json"
 rules = ["high-entropy"]
+# Recorded Temporal history carries base64 payloads and a build id (high-entropy by shape only).
+[[scrub.allow]]
+path = "rust/worker/tests/fixtures/releases/baseline-v1/happy.json"
+rules = ["high-entropy"]
+# Recorded worker histories carry base64 payloads and a build id (high-entropy by shape only).
+[[scrub.allow]]
+path = "rust/worker/tests/fixtures/*.json"
+rules = ["high-entropy"]
 # These two name the rule/guard in prose and file paths next to the word "credential".
 [[scrub.allow]]
 path = "docs/PUBLIC.md"

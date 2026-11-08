@@ -142,8 +142,8 @@ pub(super) fn abs_for(os: Os, p: &str) -> bool {
 fn rel_no_dotdot(os: Os, p: &str) -> bool {
     !abs_for(os, p)
         && !p.starts_with(['/', '\\'])
-        && !(p.len() >= 2 && p.as_bytes()[1] == b':')
-        && !p.split(['/', '\\']).any(|s| s == "..")
+        && (p.len() < 2 || p.as_bytes()[1] != b':')
+        && p.split(['/', '\\']).all(|s| s != "..")
 }
 
 pub(super) fn valid_id(id: &str) -> bool {

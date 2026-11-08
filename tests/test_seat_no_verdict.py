@@ -67,7 +67,7 @@ def test_review_ended_on_quota_leg():
     assert record == before
 
 
-@pytest.mark.parametrize('selection', [dict(model='mimo/mimo-v2.6-flash'), dict(leg='mimo-v2.6-flash')])
+@pytest.mark.parametrize('selection', [dict(model='omniroute/cx-gpt-6.1-sol'), dict(leg='cx-gpt-6.1-sol')])
 def test_live_implement_initial_chosen_leg_none(tmp_path, monkeypatch, selection):
     from plangraph.spawner.service import SpawnService
     saves = []
@@ -195,10 +195,10 @@ def test_warning_uses_record_not_selector(monkeypatch):
 
 
 @pytest.mark.parametrize('harness,mode,inline', [('qodercli', 'tools', False),
-                                               ('opencode', 'tools', False),
+                                               ('opencode', 'tools', True),
                                                ('opencode', 'inline-only', True)])
 def test_diff_delivery(monkeypatch, harness, mode, inline):
-    """No-regression guard: repository-tool legs never inline/refuse the diff."""
+    """Only harnesses with repository tools can omit the inline diff."""
     seat = SeatSpawnMixin()
     seat.runner = SimpleNamespace(default_cwd=None)
     leg = replace(DEFAULT_LEGS[0], harness=harness, tool_mode=mode)

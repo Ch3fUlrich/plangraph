@@ -51,7 +51,8 @@ def test_witness_skips_a_leg_not_served_by_the_gateway():
     # Seat finding (qwen run-5ce67bc0): every config holds an omniroute block, so a mimo leg was probed.
     runner, job = _Runner('job-1'), _job('mimo/mimo-v2.6-pro')
     gw.witness(runner, 'job-1', job, _env('job-1'), fetch=pytest.fail)
-    assert not job.events and not runner.calls
+    assert job.events == [{'event': 'gateway_witness_unavailable', 'reason': 'mimo leg not routed through gateway'}]
+    assert not runner.calls
 
 
 def test_witness_names_ambiguous_rows():
@@ -97,21 +98,39 @@ def test_witness_skips_untagged_or_witnessed_jobs():
     job.events.clear()
     job.served_model = 'cx/gpt-6-luna'
     gw.witness(runner, 'job-1', job, _env('job-1'), fetch=pytest.fail)
-    assert not job.events and not runner.calls
+    assert job.events == [{'event': 'gateway_witness_unavailable', 'reason': 'served_model already set'}]
+    assert not runner.calls
 
 
-def test_fetch_rows_needs_spawner_token_and_sends_it():
-    with pytest.raises(LookupError, match=gw.TOKEN_ENV):
-        gw.fetch_rows('plangraph-job-1', {}, secrets={})
+def test_fetch_rows_needs_spawner_token_and_sends_it(tmp_path):
+    with pytest.raises(LookupError, match='no ' + gw.TOKEN_ENV):
+        gw.fetch_rows('plangraph-job-1', {}, secrets={gw.TOKEN_FILE_ENV: str(tmp_path / 'missing')})
     sent = []
     def opener(request, timeout):
         sent.append(request)
         return io.BytesIO(b'[{"sessionTag": "plangraph-job-1"}]')
     rows = gw.fetch_rows('plangraph-job-1', {'OMNIROUTE_BASE_URL': 'http://gw:20128/v1'},
-                         opener=opener, secrets={gw.TOKEN_ENV: 'tok'})
+                         opener=opener, secrets={gw.TOKEN_ENV: 'tok', 'OMNIROUTE_BASE_URL': 'http://gw:20128/v1'})
     assert rows == [{'sessionTag': 'plangraph-job-1'}]
     assert sent[0].full_url.startswith('http://gw:20128/api/usage/call-logs?sessionTag=plangraph-job-1')
     assert sent[0].get_header('Authorization') == 'Bearer tok'
+
+
+def test_management_url_is_parent_only(monkeypatch):
+    monkeypatch.setenv(gw.TOKEN_ENV, 'parent-token')
+    monkeypatch.setenv('OMNIROUTE_BASE_URL', 'https://parent.example/v1')
+    sent = []
+
+    def opener(request, timeout):
+        sent.append(request)
+        return io.BytesIO(b'[]')
+
+    child = {'OMNIROUTE_BASE_URL': 'https://child.example/v1', gw.TOKEN_ENV: 'child-token'}
+    assert gw.fetch_rows('tag', child, opener=opener) == []
+    assert sent[0].full_url.startswith('https://parent.example/api/usage/call-logs?')
+    assert sent[0].get_header('Authorization') == 'Bearer parent-token'
+    with pytest.raises(LookupError, match='endpoint'):
+        gw.fetch_rows('tag', child, secrets={gw.TOKEN_ENV: 'parent-token'}, opener=pytest.fail)
 
 
 @pytest.mark.parametrize('returncode', [0, 1])   # r2 seat (mimo-pro): a failed seat is witnessed too
@@ -133,7 +152,7 @@ def test_runner_review_seat_on_omniroute_is_witnessed_from_call_log(tmp_path, mo
     async def factory(*args, **kwargs):
         seen['cfg'] = json.loads(kwargs['env'].get('OPENCODE_CONFIG_CONTENT') or '{}')
         async def communicate():
-            return b'VERDICT: ACCEPT', b''
+            return (b'VERDICT: ACCEPT' if returncode == 0 else b'seat died, no verdict line'), b''   # D-4430: a final verdict at rc 1 completes
         return SimpleNamespace(pid=FAKE_PID, returncode=returncode, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
     async def run():
@@ -154,3 +173,19 @@ def test_child_env_never_carries_the_call_log_token(monkeypatch):
     monkeypatch.setenv(gw.TOKEN_ENV, 'tok')
     assert gw.TOKEN_ENV not in build_child_env()
     assert gw.TOKEN_ENV not in build_child_env({gw.TOKEN_ENV: 'tok'})   # extra_env cannot re-add it
+
+
+def test_child_env_never_carries_the_token_file_path(monkeypatch):
+    from plangraph.routing_support.clients import build_child_env
+    monkeypatch.setenv(gw.TOKEN_FILE_ENV, '/x/key')
+    assert gw.TOKEN_FILE_ENV not in build_child_env()
+    assert gw.TOKEN_FILE_ENV not in build_child_env({gw.TOKEN_FILE_ENV: '/x/key'})
+
+
+def test_key_file_owner_only_check_refuses_windows_modes():
+    import stat
+    info = SimpleNamespace(st_mode=stat.S_IFREG | 0o600)
+    assert gw._owner_only(info, windows=False)
+    assert not gw._owner_only(info, windows=True)  # Windows reports 0o666: never trust the mode there
+    info = SimpleNamespace(st_mode=stat.S_IFREG | 0o644)
+    assert not gw._owner_only(info, windows=False)

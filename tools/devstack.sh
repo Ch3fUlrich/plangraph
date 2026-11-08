@@ -6,6 +6,7 @@
 # State (db files, pids, logs) persists in $DEVSTACK_STATE; stop never deletes it so a restart
 # picks up where the last session left off.
 # Health waits (temporal cluster health, pg_isready) are bounded by DEVSTACK_HEALTH_TIMEOUT (default 60 s).
+# The Temporal HTTP API on $TEMPORAL_HTTP_PORT is how the keeper signals workflows (answer_question).
 #
 #   devstack.sh start          # temporal + set-current-version + postgres
 #   devstack.sh stop           # stop kills temporal/keeper and stops postgres; --purge removes
@@ -18,18 +19,15 @@
 # (schema_migrations has 4 rows, verified against postgres:16); order: start, keeper, pg-drill-local.sh.
 #   devstack.sh set-current    # re-run just the worker deployment set-current-version step
 set -euo pipefail
-
 usage() {
   printf '%s\n' \
-    "usage: devstack.sh start|stop [--purge]|status|keeper|set-current" \
-    "env: DEVSTACK_STATE TEMPORAL_CLI TEMPORAL_PORT TEMPORAL_UI_PORT DEVSTACK_DEPLOYMENT" \
+    "usage: devstack.sh start|stop [--purge]|status|keeper|worker|set-current" \
+    "env: DEVSTACK_STATE TEMPORAL_CLI TEMPORAL_PORT TEMPORAL_UI_PORT TEMPORAL_HTTP_PORT DEVSTACK_DEPLOYMENT" \
     "     DEVSTACK_BUILD_ID PG_PORT DEVSTACK_PG_NAME KEEPER_PORT DEVSTACK_PG_MODE PG_BIN" \
     "     DEVSTACK_HEALTH_TIMEOUT" \
     "     TEMPORAL_CLI_VERSION TEMPORAL_CLI_SHA256 DEVSTACK_TEMPORAL_URL_BASE"
 }
-
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-
 # Defaults are overridable so CI and co-located stacks can move ports/paths without editing this file.
 DEVSTACK_STATE="${DEVSTACK_STATE:-$REPO_ROOT/.devstack}"
 # Captured before the default is applied: ensure_temporal_cli may only hit the network when
@@ -38,6 +36,7 @@ TEMPORAL_CLI_EXPLICIT="${TEMPORAL_CLI+1}"
 TEMPORAL_CLI="${TEMPORAL_CLI:-temporal}"
 TEMPORAL_PORT="${TEMPORAL_PORT:-7233}"
 TEMPORAL_UI_PORT="${TEMPORAL_UI_PORT:-8233}"
+TEMPORAL_HTTP_PORT="${TEMPORAL_HTTP_PORT:-18233}"
 DEVSTACK_DEPLOYMENT="${DEVSTACK_DEPLOYMENT:-d}"
 DEVSTACK_BUILD_ID="${DEVSTACK_BUILD_ID:-v1}"
 PG_PORT="${PG_PORT:-55432}"
@@ -50,11 +49,9 @@ DEVSTACK_HEALTH_TIMEOUT="${DEVSTACK_HEALTH_TIMEOUT:-60}"
 TEMPORAL_CLI_VERSION="${TEMPORAL_CLI_VERSION:-1.9.1}"
 TEMPORAL_CLI_SHA256="${TEMPORAL_CLI_SHA256:-}"
 DEVSTACK_TEMPORAL_URL_BASE="${DEVSTACK_TEMPORAL_URL_BASE:-https://github.com/temporalio/cli/releases/download}"
-
 mkdir -p "$DEVSTACK_STATE"
 PG_DSN="postgresql://postgres@127.0.0.1:$PG_PORT/keeper"
 TEMPORAL_ADDR="127.0.0.1:$TEMPORAL_PORT"
-
 pid_of() { # live pid from a pid file, empty when dead or absent.
   # Optional 2nd arg PATTERN: when /proc/<pid>/cmdline is readable the pid only counts as
   # alive if its command line contains PATTERN (guards against pid reuse across execs);
@@ -70,7 +67,6 @@ pid_of() { # live pid from a pid file, empty when dead or absent.
     printf '%s\n' "$pid"
   fi
 }
-
 wait_for() { # wait_for <seconds> <cmd...> — poll once per second until the command succeeds
   local limit="$1"
   shift
@@ -81,19 +77,15 @@ wait_for() { # wait_for <seconds> <cmd...> — poll once per second until the co
   done
   return 1
 }
-
 docker_available() { command -v docker >/dev/null 2>&1; }
-
 pg_docker_up() {
   docker_available || return 1
   [ -n "$(docker ps -q -f "name=^/${DEVSTACK_PG_NAME}$" 2>/dev/null || true)" ]
 }
-
 pg_docker_exists() { # running or merely created — reuse the container instead of hitting name conflicts
   docker_available || return 1
   [ -n "$(docker ps -aq -f "name=^/${DEVSTACK_PG_NAME}$" 2>/dev/null || true)" ]
 }
-
 pg_local_up() {
   local pid=""
   [ -f "$DEVSTACK_STATE/pg/postmaster.pid" ] && pid="$(head -n 1 "$DEVSTACK_STATE/pg/postmaster.pid" 2>/dev/null || true)"
@@ -245,7 +237,8 @@ start_temporal() {
   # start-dev persists to a single db file under the state dir, so restarts keep history.
   # No --headless: we advertise the UI on --ui-port.
   nohup "$TEMPORAL_CLI" server start-dev --ip 127.0.0.1 --port "$TEMPORAL_PORT" \
-    --ui-port "$TEMPORAL_UI_PORT" --db-filename "$DEVSTACK_STATE/temporal.db" \
+    --ui-port "$TEMPORAL_UI_PORT" --http-port "$TEMPORAL_HTTP_PORT" \
+    --db-filename "$DEVSTACK_STATE/temporal.db" \
     >"$DEVSTACK_STATE/temporal.log" 2>&1 &
   pid=$!
   printf '%s\n' "$pid" >"$DEVSTACK_STATE/temporal.pid"
@@ -260,7 +253,7 @@ start_temporal() {
       exit 1
     fi
     if "$TEMPORAL_CLI" operator cluster health --address "$TEMPORAL_ADDR" >/dev/null 2>&1; then
-      echo "temporal: running pid=$pid $TEMPORAL_ADDR ui=127.0.0.1:$TEMPORAL_UI_PORT"
+      echo "temporal: running pid=$pid $TEMPORAL_ADDR ui=127.0.0.1:$TEMPORAL_UI_PORT http=127.0.0.1:$TEMPORAL_HTTP_PORT"
       return 0
     fi
     sleep 1
@@ -283,8 +276,7 @@ start_temporal() {
 }
 
 start_set_current() {
-  # The build-id only becomes settable once a worker has registered it; on a bare devstack that
-  # hasn't happened yet, so warn with the exact retry command and let start continue.
+  # Retry registration races; never report a ready stack without promotion.
   local i
   for ((i = 1; i <= 5; i++)); do
     if set_current_version; then
@@ -293,7 +285,8 @@ start_set_current() {
     fi
     sleep 2
   done
-  echo "WARNING: set-current-version failed; the driver hangs without it — once a worker registers build-id '$DEVSTACK_BUILD_ID' re-run: '$TEMPORAL_CLI worker deployment set-current-version --address $TEMPORAL_ADDR --deployment-name $DEVSTACK_DEPLOYMENT --build-id $DEVSTACK_BUILD_ID --yes' (or 'devstack.sh set-current')" >&2
+  echo "ERROR: set-current-version failed; register the build then retry devstack.sh set-current" >&2
+  return 1
 }
 
 start_pg_local() {
@@ -366,8 +359,8 @@ start_postgres() {
 cmd_start() {
   resolve_pg_mode >/dev/null # fail on a bad DEVSTACK_PG_MODE before anything is started
   start_temporal
-  start_set_current
   start_postgres
+  start_set_current || return 1
 }
 
 stop_pidfile() { # TERM, grace 10 s, then KILL; the pid file goes away either way.
@@ -421,7 +414,7 @@ cmd_status() {
   local ok=0 pid
   pid="$(pid_of "$DEVSTACK_STATE/temporal.pid" start-dev)"
   if [ -n "$pid" ]; then
-    echo "temporal: running pid=$pid $TEMPORAL_ADDR ui=127.0.0.1:$TEMPORAL_UI_PORT"
+    echo "temporal: running pid=$pid $TEMPORAL_ADDR ui=127.0.0.1:$TEMPORAL_UI_PORT http=127.0.0.1:$TEMPORAL_HTTP_PORT"
   else
     echo "temporal: stopped"
     ok=1
@@ -444,6 +437,7 @@ cmd_status() {
   echo "export PG_KEEPER_BACKEND=postgres"
   echo "export PG_DSN=$PG_DSN"
   echo "export TEMPORAL_ADDR=$TEMPORAL_ADDR"
+  echo "export PLANGRAPH_TEMPORAL_HTTP=http://127.0.0.1:$TEMPORAL_HTTP_PORT"
   return "$ok"
 }
 
@@ -465,6 +459,8 @@ with open(sys.argv[1], "w") as fh:
 PY
   )
   chmod 600 "$file"
+  # Keeper signals workflows (answer_question) over the Temporal HTTP API.
+  export PLANGRAPH_TEMPORAL_HTTP="http://127.0.0.1:$TEMPORAL_HTTP_PORT"
   PYTHONPATH="$REPO_ROOT/src" python3 -m plangraph.keeper.cli --config "$file" admin migrate
   export PG_KEEPER_BACKEND=postgres PG_DSN="$PG_DSN"
   # exec so the pid file matches the foreground process the daemon actually runs as; write it
@@ -479,6 +475,10 @@ case "${1:-}" in
   stop) shift; cmd_stop "$@" ;;
   status) cmd_status ;;
   keeper) cmd_keeper ;;
+  worker)
+    export PG_DEPLOYMENT="$DEVSTACK_DEPLOYMENT" PG_BUILD_ID="$DEVSTACK_BUILD_ID"
+    export PG_TEMPORAL_ADDR="http://$TEMPORAL_ADDR"
+    exec "${PG_WORKER_BIN:-$REPO_ROOT/rust/worker/target/debug/pg-worker}" ;;
   set-current) ensure_temporal_cli; set_current_version ;;
   -h|--help|help) usage ;;
   "") usage; exit 2 ;;

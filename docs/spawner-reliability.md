@@ -1,5 +1,25 @@
 # Spawner reliability
 
+## RL29: slice 1 — records, inventory and shadow (partial)
+
+PR changelog: ships record bridges and read-only startup shadow inventory only;
+settlement, RUN_ORPHANED/RUN_REATTACHED, re-attach, kill after max_s, Adopted RL12
+backend, Reconciled capability and reconcile-to-reclaim sequence are next slice.
+Mode `on` still refuses startup. Merge completion/C5 evidence is not claimed.
+
+Run records recognize terminal `orphaned` status (semantic class ORPHANED),
+with a null exit code rather than a manufactured failure code. Normal launch
+records retain validated card `max_s` (1800 seconds when absent); finishing a
+run preserves prior attempts and existing attempt-specific identity, start time,
+deadline and outcome fields without copying legacy fields into completed attempts.
+Attempt-specific values take precedence over legacy fields during inventory.
+
+This slice implements read-only startup inventory in `shadow` mode, not mutating
+startup reconciliation, adoption, recovery events/evidence replay, watchers or
+slot reclaim. It must not be treated as RL29 completion or C5 evidence. Recovery needs
+a follow-up production-line allocation, independent HIGH acceptance and live GO.
+Rollback of these record bridges is `git revert`.
+
 ## RL13: weak CPU activity (P-R6)
 
 `cpu::Sampler` is a pure thirty-second sampler with no daemon caller or switch.
@@ -61,8 +81,8 @@ The gate-known override denominator and unknown-gate count are separate metrics;
 missing gates are never inferred as skips.
 Recovery metrics retain full corrected history, and leg metadata is chronological.
 
-The immutable operator baseline lives in private plangraph-data at
-`research/2026-11-02-legs`. Before RL14 on, compare the pinned window
+The immutable operator baseline lives in a dated research directory in the private data repo.
+Before RL14 on, compare the pinned window
 2026-10-30 10:30Z through 2026-11-02 10:30Z: 641 runs, 155 run-hours,
 77.3 unusable hours, 71 hangs, 43.8 hang hours, and every other stored metric.
 Require relative error at most 5% for every nonzero metric and exact zero
@@ -239,3 +259,69 @@ Invalid report windows are rejected before resolving or reading the state store.
 The remaining behavior and tests require a follow-up size allocation, rather
 than removal of tests to meet the 400-production-line limit. Rollback is
 `git revert`; RL14 must not call this partial API.
+
+Restart inventory now runs before listener acceptance when configured `shadow`.
+Mode precedence is environment, role configuration, top-level configuration,
+then `off`. Explicit `off` bypasses configuration and inventory. Inventory is
+read-only and refuses malformed identities, timestamps and symlinked records.
+Only missing-identity or Linux gone-PID `would_orphan` diagnostics are emitted;
+missing state roots are empty inventories and are not created. Recorded
+identities are not treated as verified liveness. `on` refuses startup until the
+authority-checked backend, watcher, evidence replay and reclaim capability land.
+The record settlement bridge writes semantic ORPHANED as lowercase `orphaned`,
+with null exit status and a stable RUN_ORPHANED key; it is not yet called by
+startup. No slot reclaim or process signalling is enabled by this partial slice.
+# Adopted supervision bridge
+
+The re-attach bridge provides a non-waitable child abstraction, a durable
+`RUN_REATTACHED` marker, restarted first-activity/silence monitoring, and an
+absolute max-time stop using the existing escalation path. Only proven emptiness
+may produce the semantic ORPHANED result; an exit status is never invented.
+These callable primitives are not yet connected to daemon startup. Recovery
+advancement persists attachment and keyed warnings and settles proven-empty groups
+as orphaned with null exit status. Shadow diagnostics classify verified live
+no-scope leaders without signalling. Scope/Job adoption, CPU sampling, and startup
+adoption/reclaim integration remain deferred.
+### Locked restart startup
+
+With an explicit `PLANGRAPH_RELIABILITY_RECONCILE=on`, the daemon takes a
+state-root ownership lock before inventory and retains it through serving.
+A separate reconciliation lock covers inventory, durable orphan or attachment
+decisions, evidence replay and the initial slot-reclaim pass. Unix serve calls
+configured recovery before binding its listener, as does Windows before creating
+its named pipe. There is no TCP serve variant in this tree. Recovery itself never
+binds or listens. Acceptance starts only after recovery succeeds.
+The watcher holds one record lock at a time, not the reconciliation lock.
+Errors refuse startup without issuing
+the private reclaim capability. Off performs no reclaim; shadow remains read-only. Neither off nor shadow
+acquires the daemon owner lock or attaches a watcher; shadow logs would_adopt
+without modifying records, scopes, or children.
+
+Only durably settled, proven-gone identities matching the slot's run, PID, start
+time and group are eligible for startup reclaim. Live, unknown, pending and queued
+entries remain pinned. Adopted no-scope Linux leaders use the existing identity
+checks and watcher deadlines; watcher ownership ends with the daemon and normal
+guard destruction joins without killing children. Linux scope adoption samples
+cumulative `cpu.stat` usage_usec, falling back to summed member `/proc` CPU ticks.
+Only increased CPU time advances weak activity (not first activity); unreadable
+sources and counter resets do not count as activity. Windows Job Object adoption
+is deferred to adopt-3, which needs Windows `pg-worker-core::watch` support;
+Windows startup remains fail-closed. Shared configuration retains the existing
+advisory rollout behavior; enabling mutation still requires explicit environment
+opt-in and the operational live gate.
+<!-- RL29 adopt-2: Linux scopes are confined to the current user's cgroup tree
+and exact run scope name. Missing scopes are gone independently of leader PID;
+CPU usage is a weak signal only and cannot satisfy first activity. Windows
+startup remains fail-closed pending portable worker-core watch support. -->
+# Windows recorded Job recovery
+
+Explicit restart reconciliation can adopt the exact recorded `Local\pg-<run-id>`
+Job Object after checking the recorded process creation time and membership.
+Missing Jobs and nonmember processes follow the ORPHANED recovery path; access
+or query errors remain unknown and hold slots. Termination targets only the
+retained Job handle. Windows has no graceful Job signal, so both termination
+stages use Job termination and still require proof of emptiness.
+Job accounting user plus kernel time feeds the existing CPU sampler and recovery
+activity clock; unavailable accounting never fabricates activity. Off does no
+recovery work; shadow only reports adoption without signals or durable writes.
+This does not authorize enabling reconciliation on a live host.

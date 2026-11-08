@@ -451,7 +451,7 @@ def test_production_e2e_normal_risk_implementation_and_cross_family_review(live_
 
     # Gate verification: Reviewer family is strictly distinct from writer family!
     assert rev1_served_family != writer_family
-    assert rev1_served_family in ("claude", "qwen", "deepseek", "glm", "muse")
+    assert rev1_served_family in ("claude", "qwen", "deepseek", "muse")
     assert rev1_served_model != "mimo/mimo-v2.6-pro"
 
 
@@ -516,7 +516,7 @@ def test_production_e2e_high_risk_dual_cross_family_review(live_gateway: Gateway
     assert rev1_served_family != rev2_served_family, f"rev1 ({rev1_served_family}) matches rev2 ({rev2_served_family})"
 
     # Reviewer 2 should land on a 3rd distinct family (such as gemini, qwen, or muse)
-    assert rev2_served_family in ("gemini", "qwen", "muse", "glm", "deepseek")
+    assert rev2_served_family in ("gemini", "qwen", "muse", "deepseek")
 
 
 # ==============================================================================
@@ -694,7 +694,7 @@ class ProductionGatewayChildRunner(SpawnerRunner):
         return self.jobs[job_id]
 
 
-def test_production_e2e_mcp_server_workflow(live_gateway: GatewayServerInfo):
+def test_production_e2e_mcp_server_workflow(live_gateway: GatewayServerInfo, monkeypatch):
     """Verify MCPSpawnerServer production tools against live gateway with real child execution:
       - plangraph_agent_health
       - plangraph_agent_query_catalog
@@ -703,16 +703,17 @@ def test_production_e2e_mcp_server_workflow(live_gateway: GatewayServerInfo):
       - plangraph_agent_steer
     """
     async def _test():
+        from dataclasses import replace
+        from plangraph.planner import legs
+        monkeypatch.setattr(legs, 'DEFAULT_LEGS', tuple(replace(l, model='mimo/mimo-v2.6-pro') if l.id == 'cx-gpt-6.1-sol' else l for l in legs.DEFAULT_LEGS if l.model != 'mimo/mimo-v2.6-pro'))
         runner = ProductionGatewayChildRunner(gateway_url=live_gateway.base_url)
         mcp_server = MCPSpawnerServer(runner=runner)
 
-        # 1. Health check
         health_resp = await mcp_server.call_tool("plangraph_agent_health", {})
         assert health_resp["status"] == "healthy"
         assert health_resp["spawner_version"] == "2.0.0"
         assert health_resp["catalog_models_count"] >= 22
 
-        # 2. Query catalog tool
         catalog_query = await mcp_server.call_tool(
             "plangraph_agent_query_catalog",
             {"combo": "l2-worker", "family": "mimo", "min_intelligence": 45.0},
@@ -721,7 +722,6 @@ def test_production_e2e_mcp_server_workflow(live_gateway: GatewayServerInfo):
         mimo_ids = [m["id"] for m in catalog_query["models"]]
         assert "mimo/mimo-v2.6-pro" in mimo_ids
 
-        # 3. Spawn agent task (executing child process communicating with live HTTP gateway)
         spawn_resp = await mcp_server.call_tool(
             "plangraph_agent_spawn",
             {
@@ -729,7 +729,7 @@ def test_production_e2e_mcp_server_workflow(live_gateway: GatewayServerInfo):
                     "model_or_combo": "mimo/mimo-v2.6-pro",
                     "card": {"estimate_tokens": 1000},
                     "override_reason": "Hermetic gateway telemetry contract test",
-                "role": "implement",
+                "role": "implement", "leg": "cx-gpt-6.1-sol",
                 "risk": "normal",
                 "dry_run": False,
                 "wait_seconds": 8.0,
@@ -738,7 +738,6 @@ def test_production_e2e_mcp_server_workflow(live_gateway: GatewayServerInfo):
         job_id = spawn_resp["job_id"]
         assert job_id.startswith("job-")
 
-        # 4. Check status tool and verify served telemetry extraction
         status_resp = await mcp_server.call_tool(
             "plangraph_agent_status",
             {"job_id": job_id},

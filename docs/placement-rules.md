@@ -26,6 +26,100 @@ Benchmark forwarding is refused locally without attempting hosts. Remote receipt
 are parsed only inside per-call sentinel markers; shell initialization output is
 ignored. A successful receipt must name the remote run ID; missing IDs are refused.
 
+## Operator view: local Rust rule source
+
+`placement_rule_store::RuleSource` accepts a configured env-file path (or None),
+private cache path, opaque host ID and trusted registry host class. `load` reads
+the real process environment afresh; `load_with_env` injects a map for tests.
+Neither local layer is persisted. `LoadedRules` exposes the effective report,
+keeper revision and `keeper`/`lkg` source; report sources identify each winner.
+
+| Priority (highest first) | Input |
+| --- | --- |
+| 1 | Current process `PG_RULE_` environment |
+| 2 | Current configured env file |
+| 3 | Keeper override for the exact host ID |
+| 4 | Keeper fleet override |
+| 5 | Schema default, including trusted class seed |
+
+| Key | Default / seeds | Inclusive range |
+| --- | --- | --- |
+| `PG_RULE_HOST_MEMORY_FLOOR_MIB` | 6144; alarm metadata 3000 | 0–1048576 |
+| `PG_RULE_HOST_WORKER_CAP_COUNT` | 6; trusted host-class seeds a host → 4, a host → 5 | 0–1024 |
+
+Values are unsigned decimal integers; schema allow-lists and ranges remain
+authoritative. Unknown `PG_RULE_` keys are refused with redacted diagnostics;
+unrelated environment keys are ignored. Invalid overrides fall to the next layer.
+For a local override put `PG_RULE_HOST_WORKER_CAP_COUNT=7` in the configured file
+or process environment. This adapter parses each file line independently: blanks
+and comments are ignored, malformed or non-UTF-8 lines are reported/skipped, and the first
+duplicate wins with a diagnostic. It does not run shell syntax or interpolate.
+Missing files are empty; unreadable files are reported and treated as empty.
+The standalone strict `parse_env_file` API below retains whole-file rejection.
+
+For a durable per-host override, use the authenticated keeper edit surface with
+`scope={"Host":"worker-a"}`, the schema key, string value and current
+`expected_revision`. Fleet uses `scope="Fleet"`; null value removes an override.
+Edits require authorization and atomically append audit history. Rollback appends
+a new revision, never rewrites history. Local overrides still take precedence.
+Only keeper Unavailable enables validated LKG; other keeper errors fail closed.
+Current process/file changes still apply during an outage with a valid LKG. No valid LKG means
+Unavailable, not silent defaults. This adapter does not wire admission or deploy.
+
+## C5 keeper specs and report projection (rulings 1–3)
+
+`placement_rules_report` and `placement_rule_specs` use C4's persistent read
+identity policy. The report materializes one coherent snapshot under one write
+transaction, then calls C1 outside that transaction. The internal
+`_placement_rules_projection` hook runs inside its caller's transaction for C6's
+snapshot.fleet integration. Specs and every resolved value come from Rust.
+
+The shape is `{snapshot,specs,fleet,classes,hosts,context,source,revision}` with
+`context="keeper_only"` and `source="keeper"`. Fleet has no class or host layer;
+Class projections have no host layer. Each stored host ID uses an
+empty class: its worker seed is fleet default 6 unless overridden, even if its
+ID happens to equal a class label. Class labels are not machines. C1 currently
+requires a nonblank transport host ID, so fleet/class calls use a fixed sentinel
+with an empty host map; it can never select a stored host override.
+Memory floor is 6144 MiB, alarm metadata 3000 MiB; worker seeds are fleet 6,
+dispatch VM 4 (D-081), live L2 Proxmox class 5 (D-1485).
+
+Process and env-file layers are always empty. This is not the executing host's
+effective admission report and never guesses registry class from an ID. C7 owns
+current caller environment and cached source; C6 transports this keeper-only
+shape; C8/C9 display context. A tests cover invalid higher-layer fallback with
+diagnostics; corrupt stored keeper overrides instead fail closed as rules_invalid.
+B covers LKG; C9 ties done acceptance together.
+
+C5 limits raw serialized snapshots to 1 MiB and 128 distinct hosts. C4 edits
+check prospective bounds before audit/commit, rolling back revision and values
+on refusal, reserving space for C1's bounded request envelope as well.
+Host IDs must be nonblank, control-free, at most 64 UTF-8 bytes.
+They are opaque keys, never filesystem paths, refs or shell input. All keeper
+paths here remain AUTH_DOOR_PATHS doors. D-4337/#539 fixture fixes reuse the
+up-to-date helper and use a bridge-local test clock without global mutation.
+No live host inputs, deployment, migration or admission cutover is implied.
+
+## C4 keeper transaction adapter (ruling 5)
+
+Persistent authenticated principals read coherent RuleSnapshot values; only a
+persistent router edits or reads the rule ledger. Run/oversight tokens and the
+synthetic system identity cannot use these public methods. Project membership
+never grants fleet administration. C6 owns endpoints and internal system reads.
+Each edit rechecks identity inside the existing keeper write lock, validates the
+exact RuleEdit through C1, and commits revision CAS, value and immutable RuleAudit
+together. Rollback verifies scope/key/previous and appends a new revision, not an
+item event. The existing request audit is separate and may record refusals.
+Commit ambiguity remains fatal; edits are never automatically repeated.
+
+The server-only absolute PG_PLACEMENT_RULES_BIN defaults to
+`/usr/local/bin/pg-placement-rules`. C4 uses fixed argv, empty child environment,
+bounded stdin/stdout and a five-second deadline, reaping only its owned child.
+Rust alone owns allow-list/value policy. Every touched keeper module, including
+the bridge, remains an AUTH_DOOR_PATHS door. Helper installation, API restart and
+schema application require operator GO; no live operation is performed by C4.
+Ledger pagination is revision-ascending, with since >= 0 and limit 1..100.
+
 ## C2 existing-keeper SQLite storage (D5)
 
 Schema v17 installs revision, override and immutable audit tables in the existing
@@ -63,7 +157,8 @@ file: callers report `env_file_invalid` and use an empty env-file layer.
 Error Display codes are `rules_schema`, `rules_io`, and `rules_override`.
 
 Memory floor defaults to 6144 MiB; 3000 MiB is alarm metadata, not an admission
-floor. Worker cap defaults to 6, with semantic dispatch_vm=4 and prox=5 seeds.
+floor. Worker cap defaults to 6; semantic class overrides and their worker seeds
+are defined by the Rust policy and placement-rule schema.
 Only a trusted host-registry adapter may supply the semantic class. These policy
 defaults cannot widen explicit hosts `Caps`; admission integration is deferred.
 
@@ -78,6 +173,7 @@ revision; `None` removes an override, including rollback of an initial insert.
 The hermetic test store demonstrates the contract, not production durability.
 
 `load_cached` validates keeper snapshots through A before atomic cache replace.
+Cache-write failure logs a redacted diagnostic and returns the valid keeper snapshot.
 Only Unavailable permits validated version-1 LKG fallback, without offline expiry.
 The private adapter-owned cache is bounded to 1 MiB, excludes process/env-file
 layers, rejects symlinks/nonregular files and uses a sibling lock/temp plus sync

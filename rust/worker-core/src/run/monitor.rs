@@ -78,6 +78,17 @@ pub(super) fn monitor(
         };
         let g = grouped.as_mut().unwrap();
         let identity = g.group.identity();
+        #[cfg(windows)]
+        record.set("holder_deadline_ms", json!(g.group.holder_deadline_ms()));
+        #[cfg(windows)]
+        if g.group.holder_no_breakaway() {
+            let _ = record.push_event(json!({"event":"holder_no_breakaway"}));
+        }
+        #[cfg(unix)]
+        // SAFETY: getpgid only inspects the spawned child's group membership.
+        let pgid = u32::try_from(unsafe { libc::getpgid(identity.pid as i32) }).ok();
+        #[cfg(not(unix))]
+        let pgid: Option<u32> = None;
         record.set(
             "queued_at",
             record.get("started").cloned().unwrap_or(Value::Null),
@@ -89,7 +100,8 @@ pub(super) fn monitor(
         record.set("job_id", json!(spec.job_id));
         record.set(
             "proc",
-            json!({"pid":identity.pid, "start_time":identity.start_time, "group":identity.group}),
+            json!({"pid":identity.pid, "start_time":identity.start_time,
+                "group":identity.group, "pgid":pgid}),
         );
         let log = record.path().with_file_name("live.log");
         record.set("live_log", json!(log));
@@ -199,6 +211,10 @@ pub(super) fn monitor(
         }
     }
     drop(permit);
+    #[cfg(windows)]
+    if let Some(g) = &grouped {
+        g.group.terminate();
+    }
     drop(grouped);
 }
 fn record_dir_cancelled(rt: &Runtime, id: &str) -> bool {

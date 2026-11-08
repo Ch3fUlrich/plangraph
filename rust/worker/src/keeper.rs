@@ -32,32 +32,9 @@ use std::io::Read;
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// One unit of work handed to a worker.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Claim {
-    pub card: String,
-    pub repo: String,
-    pub base_sha: String,
-    pub check_cmd: String,
-    /// Empty or `change` requires a red base; `regression` skips that gate.
-    #[serde(default)]
-    pub check_kind: String,
-    /// Repo-relative check inputs, protected unless explicitly allowed.
-    #[serde(default)]
-    pub check_reads: Vec<String>,
-    #[serde(default)]
-    pub smoke_checks: Vec<String>,
-    #[serde(default)]
-    pub exports: Vec<String>,
-    #[serde(default)]
-    pub heldout_cmd: String,
-    #[serde(default)]
-    pub risk_tagged: bool,
-    pub allow: Vec<String>,
-    pub forbid: Vec<String>,
-    pub prompt: String,
-}
-
+#[path = "keeper_claim.rs"]
+mod claim;
+pub use claim::Claim;
 /// What one attempt did, sent back so the keeper can pick the next move.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AttemptReport {
@@ -196,6 +173,7 @@ pub trait Keeper: Send + Sync {
         key: &str,
         branch: &str,
         head: &str,
+        pre_patch_phase: Option<&str>,
     ) -> Result<crate::phase::PhaseFinish, KeeperError>;
     fn report_attempt(&self, r: &AttemptReport, exec: &ExecId) -> Result<(), KeeperError>;
     fn park(&self, p: &ParkPacket, exec: &ExecId) -> Result<(), KeeperError>;
@@ -475,10 +453,11 @@ impl Keeper for HttpKeeper {
         key: &str,
         branch: &str,
         head: &str,
+        pre_patch_phase: Option<&str>,
     ) -> Result<crate::phase::PhaseFinish, KeeperError> {
         let value = self.post_json(
             "/v1/phase_finish",
-            &serde_json::json!({ "key": key, "branch": branch, "head": head }),
+            &serde_json::json!({ "key": key, "branch": branch, "head": head, "pre_patch_phase": pre_patch_phase }),
         )?;
         if !value.is_object() {
             return Err(KeeperError::Decode(
@@ -859,6 +838,7 @@ impl Keeper for StubKeeper {
         key: &str,
         branch: &str,
         head: &str,
+        _pre_patch_phase: Option<&str>,
     ) -> Result<crate::phase::PhaseFinish, KeeperError> {
         let mut state = self.lock();
         state.calls.push("phase_finish");
@@ -1018,49 +998,6 @@ impl Keeper for StubKeeper {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn live_states_include_waiting_and_exclude_agent_lease_and_terminal_states() {
-        assert_eq!(
-            super::WORKER_LIVE_STATES,
-            &["open", "ready", "running", "waiting", "needs_input"]
-        );
-        // The projector writes `waiting` (usage_limit/outage attempt ends and
-        // TIMER_STARTED), so a park or ask after a timer must accept it.
-        assert!(super::WORKER_LIVE_STATES.contains(&"waiting"));
-        for state in ["claimed", "parked", "failed", "done", "cancelled"] {
-            assert!(!super::WORKER_LIVE_STATES.contains(&state));
-        }
-    }
-
-    /// EXEC-OBSERVED-STATE: the state the run observed is what park and ask
-    /// send; the live set stands only when there was no usable observation.
-    #[test]
-    fn expected_state_is_the_observation_or_the_live_set_fallback() {
-        let live = || {
-            super::WORKER_LIVE_STATES
-                .iter()
-                .map(|s| (*s).to_owned())
-                .collect::<Vec<_>>()
-        };
-        // A projector-written `waiting` the run read is the CAS it presents,
-        // so the wait-cap park after usage_limit/outage still lands.
-        assert_eq!(
-            super::expected_state_for(Some("waiting".to_owned()), Some(live())),
-            Some(vec!["waiting".to_owned()])
-        );
-        // `claimed` names a claim, not a settable state, and a terminal state
-        // would only swap one refusal for another: both keep the fallback.
-        for observed in ["claimed", "parked", "failed", "done", "cancelled"] {
-            assert_eq!(
-                super::expected_state_for(Some(observed.to_owned()), Some(live())),
-                Some(live()),
-                "{observed} is not an observation the keeper accepts"
-            );
-        }
-        assert_eq!(super::expected_state_for(None, Some(live())), Some(live()));
-        assert_eq!(super::expected_state_for(None, None), None);
-    }
-
     /// The observation the worker reads: `GET /v1/show?key=<card>&fmt=json`.
     #[test]
     fn http_card_state_reads_the_show_json() {
@@ -1423,7 +1360,7 @@ mod tests {
     fn old_claim_json_defaults_check_metadata() {
         let old = r#"{"card":"c","repo":"r","base_sha":"abc","check_cmd":"false","allow":[],"forbid":[],"prompt":"p"}"#;
         let c: Claim = serde_json::from_str(old).unwrap();
-        assert!(c.check_kind.is_empty());
+        assert_eq!(c.check_kind, "change");
         assert!(c.check_reads.is_empty());
         assert!(c.smoke_checks.is_empty());
         assert!(c.exports.is_empty());
@@ -2280,7 +2217,7 @@ mod tests {
         let keeper = HttpKeeper::new(&base);
 
         let got = keeper
-            .phase_finish("p1", "phase/p1", "abc")
+            .phase_finish("p1", "phase/p1", "abc", Some("p1"))
             .expect("phase_finish");
         let captured = handle.join().expect("server thread");
 
@@ -2289,7 +2226,7 @@ mod tests {
         let sent: serde_json::Value = serde_json::from_str(&captured.body).expect("json");
         assert_eq!(
             sent,
-            serde_json::json!({"key":"p1","branch":"phase/p1","head":"abc"})
+            serde_json::json!({"key":"p1","branch":"phase/p1","head":"abc","pre_patch_phase":"p1"})
         );
         assert_eq!(got.state, "merged");
         assert_eq!(got.pr.as_ref().map(|p| p.number), Some(7));
@@ -2301,7 +2238,7 @@ mod tests {
         let keeper = HttpKeeper::new(&base);
 
         let err = keeper
-            .phase_finish("p1", "phase/p1", "abc")
+            .phase_finish("p1", "phase/p1", "abc", None)
             .expect_err("phase_finish");
         let captured = handle.join().expect("server thread");
 
@@ -2314,7 +2251,7 @@ mod tests {
     fn stub_finish_queue_and_calls() {
         let keeper = StubKeeper::default();
         assert!(matches!(
-            keeper.phase_finish("p1", "phase/p1", "h"),
+            keeper.phase_finish("p1", "phase/p1", "h", None),
             Err(KeeperError::Status(404))
         ));
 
@@ -2326,7 +2263,7 @@ mod tests {
         keeper.push_finish(finish.clone());
 
         for _ in 0..2 {
-            let got = keeper.phase_finish("p1", "phase/p1", "h").unwrap();
+            let got = keeper.phase_finish("p1", "phase/p1", "h", None).unwrap();
             assert_eq!(got.state, finish.state);
             assert_eq!(got.pr, finish.pr);
             assert_eq!(got.detail, finish.detail);
@@ -2343,3 +2280,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "keeper_state_tests.rs"]
+mod state_tests;

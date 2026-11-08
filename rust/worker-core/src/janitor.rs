@@ -295,8 +295,10 @@ mod tests {
         let (r, base) = crate::testutil::repo();
         let p = r.path();
         let root = tempfile::tempdir().unwrap();
-        let a = crate::worktree::AttemptId::new("a", 1);
-        let b = crate::worktree::AttemptId::new("b", 1);
+        // These keys have the same readable segment; only the original-key
+        // hash distinguishes them when branch identities are parsed back.
+        let a = crate::worktree::AttemptId::new("a/b", 1);
+        let b = crate::worktree::AttemptId::new("a_b", 1);
         let aw = crate::worktree::create(p, &base, &root.path().join(a.dir_name()), &a).unwrap();
         let bw = crate::worktree::create(p, &base, &root.path().join(b.dir_name()), &b).unwrap();
         let spec = crate::janitor::ProbeSpec {
@@ -307,7 +309,7 @@ mod tests {
         };
 
         let report =
-            crate::janitor::sweep_card(p, "a", &std::collections::HashSet::new(), &spec).unwrap();
+            crate::janitor::sweep_card(p, "a/b", &std::collections::HashSet::new(), &spec).unwrap();
 
         assert_eq!(report.removed.len(), 1);
         assert!(!aw.path.exists());

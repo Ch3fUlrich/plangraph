@@ -2,13 +2,12 @@
 //! against a phase branch.
 
 use std::collections::HashSet;
-use std::time::Duration;
 
+use crate::phase_options::activity_options;
 use futures::future::join_all;
 use pg_worker_core::config::Config;
-use temporalio_common::RetryPolicy;
 use temporalio_macros::{workflow, workflow_methods};
-use temporalio_sdk::{ActivityOptions, ChildWorkflowOptions, WorkflowContext, WorkflowResult};
+use temporalio_sdk::{ChildWorkflowOptions, WorkflowContext, WorkflowResult};
 
 use crate::activities::{
     CardActivities, ClaimCardInput, PhaseBranchInput, PhaseBranchResult, PhasePlanInput,
@@ -19,7 +18,6 @@ use crate::phase::{
     card_workflow_id, next_wave, phase_branch, replan_gate, select_legs,
 };
 use crate::workflow::{Card, CardInput};
-
 fn with_gate_inputs(legacy: crate::activities::CardInput) -> CardInput {
     CardInput {
         risk_tagged: legacy.claim.risk_tagged,
@@ -27,37 +25,17 @@ fn with_gate_inputs(legacy: crate::activities::CardInput) -> CardInput {
         smoke_checks: legacy.claim.smoke_checks.clone(),
         exports: legacy.claim.exports.clone(),
         base_sha: Some(legacy.claim.base_sha.clone()),
+        resume: None,
         legacy,
     }
 }
-
 #[cfg(test)]
-mod gate_input_tests {
-    use super::*;
-
-    #[test]
-    fn claim_gate_metadata_reaches_card_input() {
-        let legacy = serde_json::from_value(serde_json::json!({
-            "claim": {"card":"a", "repo":"r", "base_sha":"abc",
-                "check_cmd":"check", "allow":[], "forbid":[], "prompt":"fix",
-                "risk_tagged":true, "heldout_cmd":"heldout",
-                "smoke_checks":["smoke"], "exports":["api"]},
-            "legs":[], "workroot":"work", "main_branch":"main"
-        }))
-        .unwrap();
-        let input = with_gate_inputs(legacy);
-        assert!(input.risk_tagged);
-        assert_eq!(input.heldout_cmd, "heldout");
-        assert_eq!(input.smoke_checks, vec!["smoke"]);
-        assert_eq!(input.exports, vec!["api"]);
-        assert_eq!(input.base_sha.as_deref(), Some("abc"));
-    }
-}
+#[path = "phase_gate_input_tests.rs"]
+mod gate_input_tests;
 
 #[workflow]
 #[derive(Default)]
 pub struct Phase {}
-
 #[workflow_methods]
 impl Phase {
     #[run]
@@ -65,7 +43,13 @@ impl Phase {
         ctx: &mut WorkflowContext<Self>,
         input: PhaseInput,
     ) -> WorkflowResult<PhaseOutput> {
-        let branch = match phase_branch(&input.key) {
+        let patched = ctx.patched("phase-branch-hash-v1");
+        let branch_name = if patched {
+            phase_branch(&input.key)
+        } else {
+            crate::phase::legacy_phase_branch(&input.key)
+        };
+        let branch = match branch_name {
             Ok(branch) => branch,
             Err(msg) => {
                 return Ok(PhaseOutput {
@@ -82,13 +66,13 @@ impl Phase {
         };
 
         let cfg = Config::default();
+        let claim_before_branch = ctx.patched("phase-claim-before-branch-v1");
         let mut attempted = HashSet::new();
         let mut merged = Vec::new();
         let mut not_merged = Vec::new();
         let mut waves = 0;
         let mut first_plan = true;
         let mut last_blocked: Vec<String> = Vec::new();
-
         loop {
             let plan: PhasePlan = ctx
                 .execute_activity(
@@ -142,39 +126,47 @@ impl Phase {
                 break;
             }
 
-            let head: PhaseBranchResult = match ctx
-                .execute_activity(
-                    CardActivities::ensure_phase_branch,
-                    PhaseBranchInput {
-                        repo: input.repo.clone(),
-                        base_branch: input.base_branch.clone(),
-                        branch: branch.clone(),
+            let mut head: Option<PhaseBranchResult> = if claim_before_branch {
+                None
+            } else {
+                Some(
+                    match ctx
+                        .execute_activity(
+                            CardActivities::ensure_phase_branch,
+                            PhaseBranchInput {
+                                repo: input.repo.clone(),
+                                base_branch: input.base_branch.clone(),
+                                branch: branch.clone(),
+                            },
+                            activity_options(&cfg),
+                        )
+                        .await
+                    {
+                        Ok(head) => head,
+                        Err(err) => {
+                            let blocked = vec![format!("ensure_phase_branch failed: {err}")];
+                            let merged = sorted_unique(merged);
+                            let not_merged = sorted_unique(not_merged);
+                            let outcome = phase_outcome(&merged, &not_merged, &blocked);
+                            return Ok(PhaseOutput {
+                                phase: input.key,
+                                branch,
+                                outcome: outcome.to_string(),
+                                blocked,
+                                merged,
+                                not_merged,
+                                waves,
+                                finish: None,
+                            });
+                        }
                     },
-                    activity_options(&cfg),
                 )
-                .await
-            {
-                Ok(head) => head,
-                Err(err) => {
-                    let blocked = vec![format!("ensure_phase_branch failed: {err}")];
-                    let merged = sorted_unique(merged);
-                    let not_merged = sorted_unique(not_merged);
-                    let outcome = phase_outcome(&merged, &not_merged, &blocked);
-                    return Ok(PhaseOutput {
-                        phase: input.key,
-                        branch,
-                        outcome: outcome.to_string(),
-                        blocked,
-                        merged,
-                        not_merged,
-                        waves,
-                        finish: None,
-                    });
-                }
             };
 
             let mut started_children = Vec::new();
-            for card in wave {
+            let mut branch_failed = false;
+            let mut remaining = wave.into_iter();
+            while let Some(card) = remaining.next() {
                 attempted.insert(card.key.clone());
 
                 let claim = match ctx
@@ -210,8 +202,32 @@ impl Phase {
                     continue;
                 }
 
+                if head.is_none() {
+                    match ctx
+                        .execute_activity(
+                            CardActivities::ensure_phase_branch,
+                            PhaseBranchInput {
+                                repo: input.repo.clone(),
+                                base_branch: input.base_branch.clone(),
+                                branch: branch.clone(),
+                            },
+                            activity_options(&cfg),
+                        )
+                        .await
+                    {
+                        Ok(value) => head = Some(value),
+                        Err(err) => {
+                            last_blocked.push(format!("ensure_phase_branch failed: {err}"));
+                            not_merged.push(card.key.clone());
+                            not_merged.extend(remaining.by_ref().map(|card| card.key.clone()));
+                            branch_failed = true;
+                            break;
+                        }
+                    }
+                }
+
                 let claim = Claim {
-                    base_sha: head.head.clone(),
+                    base_sha: head.as_ref().expect("branch ensured").head.clone(),
                     repo: input.repo.clone(),
                     ..claim
                 };
@@ -253,6 +269,9 @@ impl Phase {
                 }
             }
             waves += 1;
+            if branch_failed {
+                break;
+            }
         }
 
         let mut finish = None;
@@ -280,6 +299,7 @@ impl Phase {
                                     key: input.key.clone(),
                                     branch: branch.clone(),
                                     head: head.head.clone(),
+                                    pre_patch_phase: (!patched).then(|| input.key.clone()),
                                 },
                                 activity_options(&cfg),
                             )
@@ -350,16 +370,6 @@ impl Phase {
     }
 }
 
-fn activity_options(cfg: &Config) -> ActivityOptions {
-    let retry = RetryPolicy::builder()
-        .initial_interval(Duration::from_secs(2))
-        .maximum_attempts(5)
-        .build();
-    ActivityOptions::with_start_to_close_timeout(cfg.start_to_close)
-        .retry_policy(retry)
-        .build()
-}
-
 fn sorted_unique(mut keys: Vec<String>) -> Vec<String> {
     keys.sort();
     keys.dedup();
@@ -377,30 +387,5 @@ pub fn phase_outcome(merged: &[String], not_merged: &[String], blocked: &[String
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn phase_outcome_done_when_nothing_ran() {
-        assert_eq!(phase_outcome(&[], &[], &[]), OUTCOME_DONE);
-    }
-
-    #[test]
-    fn phase_outcome_partial_when_not_merged() {
-        let not_merged = vec!["b".to_string()];
-        assert_eq!(phase_outcome(&[], &not_merged, &[]), OUTCOME_PARTIAL);
-    }
-
-    #[test]
-    fn phase_outcome_partial_when_blocked_later() {
-        let merged = vec!["a".to_string()];
-        let blocked = vec!["phase not ready".to_string()];
-        assert_eq!(phase_outcome(&merged, &[], &blocked), OUTCOME_PARTIAL);
-    }
-
-    #[test]
-    fn phase_outcome_blocked_when_nothing_ran_and_blocked() {
-        let blocked = vec!["phase not ready".to_string()];
-        assert_eq!(phase_outcome(&[], &[], &blocked), OUTCOME_BLOCKED);
-    }
-}
+#[path = "phase_outcome_tests.rs"]
+mod tests;

@@ -1,8 +1,5 @@
-//! Local runs only. Not ported: served-model witnesses, harness-limit leg booking,
-//! writer no-change checks, git config guards, second-leg fall-through, writer
-//! continuation, completion events/delivery markers, dispatch-refusal gate, or
-//! SPAWNER-LIVENESS-D3622 watchdog. Context packs and writer env
-//! belong to the Python launch adapter.
+//! Local runs; witnesses, retry/fall-through, writer checks/continuation, delivery,
+//! dispatch refusal and D3622 liveness remain unported; packs/env use Python.
 use crate::{errors::ToolError, placement::Args};
 use pg_worker_core::run::{
     record::{new_job_id, new_run_id, RunRecord, Status},
@@ -66,7 +63,6 @@ impl Runs {
                 "prompt":args["prompt"],"card":args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
             }),
         )?;
-
         let mut review_args = serde_json::to_value(args).map_err(|_| internal("invalid args"))?;
         review_args["role"] = role.clone();
         let mode = crate::prompt::configured_mode(role.as_str().unwrap_or(""));
@@ -88,11 +84,21 @@ impl Runs {
         }
         crate::prompt::prepare_review(&review_args, &leg, &mut launch, &repos, mode == "on")
             .map_err(|e| internal(&e.to_string()))?;
-
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
+        if !dry && crate::gitconfig_guard::writer_role(&role) {
+            let dir = crate::gitconfig_guard::run_dir(state, &run_id)
+                .map_err(|_| internal("invalid run id"))?;
+            match crate::gitconfig_guard::capture(&launch.cwd, &dir) {
+                Ok(armed) => base["gitconfig_guard"] = json!(armed),
+                Err(_) => {
+                    base["reason"] = json!("gitconfig_capture_refused");
+                    return Ok(create(state, &run_id, host, base, Status::Refused)?.to_value());
+                }
+            }
+        }
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
         }
@@ -127,6 +133,7 @@ impl Runs {
             .into_iter()
             .map(Value::Object)
             .collect();
+        let attempt_id = book_attempt(&mut base, &leg);
         if dry {
             let mut tail = format!("[dry-run] Planned command: {}", launch.argv.join(" "));
             if let Some(stdin) = &launch.stdin {
@@ -140,7 +147,7 @@ impl Runs {
             base["served_model"] = leg["model"].clone();
             base["served_family"] = leg["family"].clone();
             let mut record = create(state, &run_id, host, base, Status::DryRun)?;
-            finish(&mut record, Status::DryRun, &leg);
+            finish(&mut record, Status::DryRun, &leg, attempt_id);
             record
                 .save()
                 .map_err(|_| internal("could not save run record"))?;
@@ -160,7 +167,9 @@ impl Runs {
                 stdin: launch.stdin.map(String::into_bytes),
                 base: base.as_object().unwrap().clone(),
                 events,
-                finish: Some(Box::new(move |record, status| finish(record, status, &leg))),
+                finish: Some(Box::new(move |record, status| {
+                    finish(record, status, &leg, attempt_id)
+                })),
             };
             match self.supervisor.start(spec) {
                 Ok(()) => {}
@@ -281,24 +290,57 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
         std::thread::sleep(Duration::from_millis(20));
     }
 }
-pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
+fn book_attempt(base: &mut Value, leg: &Value) -> u32 {
+    if base.get("attempts").is_none() {
+        base["attempts"] = json!([]);
+    }
+    let attempts = base["attempts"].as_array_mut().unwrap();
+    attempts.push(json!({"leg":leg,"status":"running"}));
+    u32::try_from(attempts.len()).expect("attempt count fits u32")
+}
+pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
+    let diagnostic = crate::gitconfig_guard::guard_diagnostic(record, status, leg, attempt_id);
+    let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
+    let mut attempts = match record.get("attempts") {
+        None if attempt_id == 1 => vec![json!({"legacy_normalized":true})],
+        None => Vec::new(),
+        Some(Value::Array(attempts)) => attempts.clone(),
+        Some(_) => {
+            record.set("attempts_error", json!("attempts must be an array"));
+            return;
+        }
+    };
+    let Some(attempt) = attempt_id
+        .checked_sub(1)
+        .and_then(|index| attempts.get_mut(index as usize))
+        .filter(|entry| entry.is_object())
+    else {
+        record.set("attempts_error", json!("unknown or invalid attempt id"));
+        return;
+    };
     let dry = status == Status::DryRun;
     let unwitnessed = json!("unwitnessed");
-    record.set("attempts", json!([{"leg":leg,"status":status.as_str(),
+    let completion = json!({"leg":leg,"status":status.as_str(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },
         "served_family":if dry { &leg["family"] } else { &unwitnessed },
         "served_witness_reason":"no authenticated harness telemetry; skipped or unobserved leg",
         "request_side_model":null,"witness_kind":null,
         "skip_reason":if status == Status::Completed || dry { None } else { record.get("reason") },
-        "provider_response":null,"stdout_tail":record.get("stdout_tail"),"stderr_tail":record.get("stderr_tail")} ]));
-    record.set(
-        "chosen_leg",
-        if status == Status::Completed || dry {
-            leg.clone()
-        } else {
-            Value::Null
-        },
-    );
+        "provider_response":null,"stdout_tail":record.get("stdout_tail"),"stderr_tail":record.get("stderr_tail")});
+    attempt
+        .as_object_mut()
+        .unwrap()
+        .extend(completion.as_object().unwrap().clone());
+    record.set("attempts", json!(attempts));
+    if record.get("attempts_error").is_some() {
+        record.set("attempts_error", Value::Null);
+    }
+    let chosen = if status == Status::Completed || dry {
+        leg.clone()
+    } else {
+        Value::Null
+    };
+    record.set("chosen_leg", chosen);
     record.set("writer_family", leg["family"].clone());
     if let Some(state) = record
         .path()
@@ -347,7 +389,6 @@ mod record_tests;
 #[cfg(all(test, unix))]
 #[path = "runs_tests.rs"]
 mod tests;
-
 fn wait_duration(value: Option<&Value>) -> Duration {
     #[allow(clippy::manual_clamp)]
     let seconds = value

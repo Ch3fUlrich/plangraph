@@ -117,7 +117,8 @@ def main(argv=None):
         p.add_argument('--review-of')
         p.add_argument('--json', action='store_true')
         if verb == 'spawn':
-            p.add_argument('prompt')
+            p.add_argument('prompt', nargs='?')
+            p.add_argument('--prompt-file')
             p.add_argument('--review-scope', choices=['per-fixer', 'batch'])
             p.add_argument('--model')
             p.add_argument('--leg')
@@ -187,7 +188,13 @@ def main(argv=None):
                 exc = SpawnRefused('spawn by card; card required')
                 service.save_refusal(exc, args.role)
                 raise exc
-            payload = dict(card=args.card, prompt=args.prompt, role=args.role,
+            from .prompt_input import resolve_prompt
+            try:
+                prompt = resolve_prompt(args.prompt, args.prompt_file)
+            except SpawnRefused as exc:
+                service.save_refusal(exc, args.role)
+                raise
+            payload = dict(card=args.card, prompt=prompt, role=args.role,
                 writer_families=args.writer_family, review_of=args.review_of, model=args.model,
                 review_scope=args.review_scope,
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
@@ -351,7 +358,8 @@ raise SystemExit(code)
                     runs[:] = [service.result(r['run_id']) if r.get('status') == 'running' else r for r in runs]
                 result = result if 'seats' in result else runs[0]
         elif args.verb == 'ps':
-            result = service.ps()
+            from .remote_ps import list_runs
+            result = {'runs': list_runs(service.ps()['runs'])}
         elif args.verb == 'cancel':
             result = asyncio.run(service.cancel(args.run_id))
         elif args.verb == 'wait':

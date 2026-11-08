@@ -103,23 +103,32 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
     # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
     assert [leg["id"] for leg in bare["legs"]] == [
-        "opencode-deepseek-v4.1-flash-free",
-        "opencode-glm-5.3-flash-free",
-        "agy-gemini-3.8-flash", "opencode-go-gemini-4-argon", "opencode-go-glm-5.2",
-        "opencode-go-qwen3.8-max", "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash",
+        "agy-gemini-3.8-flash", "opencode-go-gemini-4-argon",
+        "opencode-go-deepseek-v4-flash",
         ]
 
 
-def test_unmapped_leg_no_p(tmp_path, capsys):
+def test_unmapped_leg_no_p(tmp_path, capsys, monkeypatch):
     """I4/D2: a leg missing from the map/DB gets no p (mapped leg: positive control)."""
     from plangraph.spawner.bench_entry import LEG_BENCHMARK_MODEL
     db = seeded_db(tmp_path)
     rows = benchmark_options(False, str(db))["benchmark"]
     for leg_id, model_id in LEG_BENCHMARK_MODEL.items():
         assert rows[leg_id]["model_id"] == model_id
-    plan = route_json(tmp_path, capsys, "--bench-db", str(db))
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import plan_spawn
+    control = next(leg for leg in DEFAULT_LEGS if leg.id == 'agy-gemini-3.8-flash')
+    synthetic = replace(control, id='synthetic-unmapped-review', model='synthetic/no-row')
+    from plangraph.routing_support import resolver
+    catalog_models = resolver.get_catalog_models
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
+        *catalog_models(), {'id': synthetic.model, 'available': 1, 'active': True}])
+    assert synthetic.id not in rows and synthetic.model not in rows
+    plan = plan_spawn(CARD, role='review', writer_families=('claude',),
+                      legs=(synthetic, control), benchmark=rows).to_dict()
     by_leg = {c["leg"]: c for c in plan["candidates"]}
-    for leg in ("opencode-glm-5.3-flash-free", "opencode-deepseek-v4.1-flash-free"):
+    for leg in (synthetic.id,):
         assert leg not in LEG_BENCHMARK_MODEL
         assert by_leg[leg]["u_core"] is None and by_leg[leg]["p_source"] == "prior"
     assert by_leg["agy-gemini-3.8-flash"]["p_source"] == "measured"

@@ -1,0 +1,68 @@
+[
+  {
+    "leg": {
+      "id": "sample-leg",
+      "tier": "subscription",
+      "harness": "agy",
+      "model": "sample-model",
+      "family": "sample",
+      "windows": [
+        "128k"
+      ],
+      "max_request_tokens": 100000,
+      "trains_on_data": false,
+      "claude_family": false,
+      "note": "",
+      "roles": [
+        "implement"
+      ],
+      "tool_mode": "tools",
+      "disabled": null
+    },
+    "expected": "agy/sample-model"
+  },
+  {
+    "leg": {
+      "id": "sample-leg",
+      "tier": "subscription",
+      "harness": "agy",
+      "model": "provider/sample-model",
+      "family": "sample",
+      "windows": [
+        "128k"
+      ],
+      "max_request_tokens": 100000,
+      "trains_on_data": false,
+      "claude_family": false,
+      "note": "",
+      "roles": [
+        "implement"
+      ],
+      "tool_mode": "tools",
+      "disabled": null
+    },
+    "expected": "provider/sample-model"
+  },
+  {
+    "leg": {
+      "id": "sample-leg",
+      "tier": "subscription",
+      "harness": "opencode",
+      "model": "sample-model",
+      "family": "sample",
+      "windows": [
+        "128k"
+      ],
+      "max_request_tokens": 100000,
+      "trains_on_data": false,
+      "claude_family": false,
+      "note": "",
+      "roles": [
+        "implement"
+      ],
+      "tool_mode": "tools",
+      "disabled": null
+    },
+    "expected": "sample-model"
+  }
+]

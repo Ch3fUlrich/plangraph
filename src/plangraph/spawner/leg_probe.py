@@ -2,9 +2,9 @@
 import asyncio
 import math
 import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
 import time
@@ -100,6 +100,19 @@ def read_status(reader, model, **kw):
     return state if '/' in model or unavailable(state) else reader('agy/' + model, **kw)
 
 
+class DispatchReader:
+    """Preserve adapter metadata while applying dispatch key lookup."""
+    def __init__(self, reader, fallback):
+        self.status = getattr(reader, 'leg_status', reader) or fallback
+        self.enabled = getattr(reader, 'enabled', False)
+        self.store = getattr(reader, 'store', None)
+
+    def leg_status(self, model, **scope):
+        return read_status(self.status, model, **scope)
+
+    __call__ = leg_status
+
+
 def _store_for(runner):
     """The store the planner reads; probe results never land elsewhere (M19)."""
     store = getattr(runner, 'leg_reader', None)
@@ -133,17 +146,24 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
     timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout_s)
     state = store if store is not None else leg_state
     start = time.monotonic()
+    # Missing executables describe this host, not the remote leg. Check each
+    # harness independently, before creating a repo or attempting any leg.
+    if shutil.which(leg.harness) is None:
+        return dict(ok=False, state='host-not-ready',
+                    reason='host-not-ready: harness missing: ' + leg.harness,
+                    infra=True, seconds=time.monotonic() - start)
     deadline = start + timeout
     root = tempfile.mkdtemp(prefix='plangraph-leg-probe-')
-    caller_before = await asyncio.to_thread(caller_heads)
     job = None
     spawn_task = None
+    owned_ids = set()
 
     def git(*args):
         return subprocess.check_output(['git', '-C', root, *args], env=probe_env(),
                                        stderr=subprocess.DEVNULL).decode("utf-8", "replace").strip()
 
     try:
+        caller_before = await asyncio.to_thread(caller_heads)
         ok = reason = None
         infra = False
         try:
@@ -162,6 +182,8 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
             ok, reason, infra = False, 'probe infra: git', True
         if ok is None:
             async def launch():
+                from .probe_cleanup import OWNED
+                OWNED.set(owned_ids)
                 return await runner.spawn(prompt=PROMPT, role='implement', model_or_combo=leg.model,
                                          client=leg.harness, cwd=root, extra_env=CHILD_ISOLATION,
                                          watchdog=dict(stall_s=timeout + 60, first_edit_s=timeout + 60,
@@ -200,21 +222,15 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
                 state.record_probe_fail(key(leg), reason, caller='leg-probe')
         return dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start)
     finally:
-        if spawn_task is not None and job is None:
-            # The budget may expire mid-spawn (M10): let spawn finish so the
-            # registered child is cancelled instead of orphaned on rmtree.
+        from .probe_cleanup import cleanup
+        cleanup_task = asyncio.create_task(cleanup(runner, spawn_task, job, root, owned_ids))
+        # A second caller cancellation must not interrupt tree cleanup.
+        while not cleanup_task.done():
             try:
-                job = await asyncio.wait_for(asyncio.shield(spawn_task), timeout + 5)
-            except Exception:
-                job = None
-        if job is not None:
-            task = (getattr(runner, '_tasks', None) or {}).get(job.job_id)
-            if task is not None and not task.done():
-                await runner.cancel(job.job_id)
-                await asyncio.gather(task, return_exceptions=True)
-            elif getattr(job, 'status', 'running') == 'running':
-                await runner.cancel(job.job_id)
-        shutil.rmtree(root, ignore_errors=True)
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                continue
+        cleanup_task.result()
 
 
 _INFLIGHT = {}
@@ -254,6 +270,8 @@ async def before_launch(runner, leg, role, dry_run):
         pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state))
         pending.add_done_callback(lambda _: _INFLIGHT.pop(key(leg), None))
     result = await asyncio.shield(pending)
+    if result.get('state') == 'host-not-ready':
+        return result['reason']
     return admission() if result['ok'] or result.get('infra') else 'down: ' + result['reason']
 
 

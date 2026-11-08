@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 import json
 
 import pytest
@@ -9,7 +10,10 @@ import pytest
 from plangraph.planner.legs import DEFAULT_LEGS, TIERS, Leg, WRITER_ORDER, load_legs, with_measured
 from plangraph.planner.routing import (RouteError, effective_estimate,
                                        next_after_failure, pick_window_class,
-                                       plan_spawn, route_card)
+                                        plan_spawn, route_card)
+
+DEFAULT_LEGS = tuple(dataclasses.replace(leg, disabled=None) for leg in DEFAULT_LEGS)  # mechanics probes ignore live policy
+route_card = functools.partial(route_card, legs=DEFAULT_LEGS)
 
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
@@ -17,7 +21,7 @@ D25_IDS = [
     "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5",
     # D-3552 opencode-go review legs
     "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
-    "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek",
+    "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark", "opencode-go-deepseek-v4-flash", "omniroute-gemini-3.8-flash", "deepseek",
     "claude-haiku-5.5",  # D-3605 Haiku leg
 ]
 #: Route order: tiers ascending, so the subscription Haiku leg precedes paid deepseek.
@@ -56,7 +60,8 @@ def test_default_legs_exact_d25_order():
 
 
 def test_load_legs_none_is_default():
-    assert load_legs(None) is DEFAULT_LEGS
+    from plangraph.planner.legs import DEFAULT_LEGS as production_legs
+    assert load_legs(None) is production_legs
 
 
 def test_load_legs_good_file_replaces(tmp_path):
@@ -145,7 +150,7 @@ def test_90000_goes_256k_and_only_legs_with_that_window():
     assert r.window_class == "256k"
     assert ids(r) == ["qodercli-qwen3.8-flash", "cx-gpt-6.1-sol", "cx-gpt-6-luna",
                       "agy-gemini-3.8-flash",
-                      "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "claude-haiku-5.5", "deepseek"]  # D-3605 Haiku leg
+                      "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "omniroute-grok-4.7", "claude-haiku-5.5", "deepseek"]  # D-3605 Haiku leg
     assert all("256k" in leg.windows for leg in r.legs)
 
 
@@ -159,7 +164,7 @@ def test_risky_tag_removes_trains_on_data_legs_with_reason():
     for tag in ("auth", "secrets", "money", "live-step"):
         r = route_card(card(risk_tags=[tag]))
         assert not any(leg.trains_on_data for leg in r.legs)
-        assert "excluded 3 legs: trains_on_data" in r.reasons
+        assert "excluded 4 legs: trains_on_data" in r.reasons
     # migration / public-contract keep the free trainers
     r = route_card(card(risk_tags=["migration"]))
     assert any(leg.trains_on_data for leg in r.legs)
@@ -312,10 +317,9 @@ def test_empty_tried_uses_first_leg_and_bad_input(route):
     with pytest.raises(ValueError):
         next_after_failure(route, [], "weird", 1)
 
-
-def test_writer_order_d2683_implement_first_seven():
+def test_writer_order_d2683_implement_first_seven(monkeypatch):
     from test_route_free_first import test_writer_order_d2683_implement_first_seven as check
-    check()
+    check(monkeypatch)
 
 
 def test_writer_order_d2683_unavailable_skipped():
@@ -331,22 +335,22 @@ def test_writer_order_d2683_unavailable_skipped():
 
 
 def test_writer_order_d2683_review_order_unchanged():
-    # D-3950: the first eligible free review leg now leads.
+    # D-4196: without a diff, disabled Zen and inline-only Go cannot lead.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="review", writer_families=("claude",))
-    assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert plan.first_leg.id == "agy-gemini-3.8-flash"
 
 
 def test_writer_order_d2683_writer_family_exclusion():
     # D-3745: Sol leads implement; family exclusions still apply for both roles.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
-    assert plan_rev.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert plan_rev.first_leg.id == "agy-gemini-3.8-flash"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
     assert plan_imp.first_leg.id == "cx-gpt-6.1-sol" and "gemini" not in {l.family for l in plan_imp.legs}
     # F2: writer_families does not exclude implement legs
     plan_wf = plan_spawn(c, role="implement", writer_families=("gemini",))
-    assert plan_wf.first_leg.id == "cx-gpt-6.1-sol" and "agy-gemini-3.8-flash" in [l.id for l in plan_wf.legs]
+    assert [l.id for l in plan_wf.legs] == ["cx-gpt-6.1-sol"]
 
 
 def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
@@ -363,14 +367,18 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
         return {"state": "available", "evidence": None}
 
     c = {"estimate_tokens": 20000, "risk_tags": []}
-    plan = plan_spawn(c, role="implement", benchmark=rows, leg_reader=reader)
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS
+    # Historical six-slot ordering contract, independent of production disable policy.
+    legs = tuple(replace(leg, disabled=None) if leg.id in {
+        "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free"} else leg
+        for leg in DEFAULT_LEGS)
+    plan = plan_spawn(c, role="implement", benchmark=rows, leg_reader=reader, legs=legs)
     assert plan.first_leg.id == "cx-gpt-6.1-sol"
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
-    assert any(s["leg"] == "mimo-v2.6-pro" and s["reason"] == "limited" for s in plan.skipped)
-    expected_writers = ["cx-gpt-6.1-sol", "opencode-deepseek-v4.1-flash-free",  # D-3745: lead first,
-                        "opencode-glm-5.3-flash-free", "openrouter-free", "agy-gemini-3.8-flash",  # then tier/order
-                        "mimo-v2.6-flash"]
-    assert [l.id for l in plan.legs[:len(expected_writers)]] == expected_writers
+    review = plan_spawn(dict(c, diff_ref={"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}), role="review", writer_families=("gpt",), benchmark=rows, leg_reader=reader)
+    assert {s["leg"]: s["reason"] for s in review.skipped}["mimo-v2.6-pro"] == "limited"
+    assert [l.id for l in plan.legs] == ["cx-gpt-6.1-sol"]
 
 
 def test_no_implement_plan_leg_has_claude_family():
@@ -382,9 +390,11 @@ def test_no_implement_plan_leg_has_claude_family():
         from plangraph.planner.route_policy import DEFAULT_POLICY_PATH, load_route_policy
         for diff in ({"diff_ref": {"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}}, {}):
             review = plan_spawn({"estimate_tokens": estimate, **diff}, role="review", writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH))
-            if estimate == 100000: assert [leg.id for leg in review.review_seats] == (["mimo-v2.6-flash", "claude-haiku-5.5"] if diff else ["claude-haiku-5.5"])
-            assert not any(leg.claude_family for leg in (review.review_seats[:-1] if estimate == 100000 else review.review_seats))
-def test_alternate_limit_lookup_restricted_to_agy_harness():
+            if estimate == 100000: assert [leg.id for leg in review.review_seats] == (["mimo-v2.6-flash", "agy-gemini-3.8-flash"] if diff else ["agy-gemini-3.8-flash", "claude-haiku-5.5"])  # D-4699: agy review pause lifted
+            assert not any(leg.claude_family for leg in (review.review_seats[:-1] if estimate == 100000 and not diff else review.review_seats))
+def test_alternate_limit_lookup_restricted_to_agy_harness(monkeypatch):
+    from mechanics_legs import install_fallthrough_legs
+    install_fallthrough_legs(monkeypatch)
     from plangraph.planner.routing import next_leg_after_provider_stop, SpawnPlan
     from plangraph.planner.legs import DEFAULT_LEGS
 
@@ -450,13 +460,3 @@ def test_alternate_limit_lookup_restricted_to_agy_harness():
     )
     assert nxt_agy is not None
     assert nxt_agy.id == "mimo-v2.6-pro"
-
-
-def test_writer_order_sol_family_excluded():
-    from test_route_free_first import test_writer_order_sol_family_excluded as check
-    check()
-
-
-def test_writer_order_privacy_excludes_training_sol():
-    from test_route_free_first import test_writer_order_privacy_excludes_training_sol as check
-    check()

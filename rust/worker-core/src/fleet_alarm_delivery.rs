@@ -67,7 +67,7 @@ impl Deliveries {
         });
         if record.acknowledged
             || record.attempts >= self.maximum_attempts
-            || !record.next_retry.is_some_and(|due| now >= due)
+            || record.next_retry.is_none_or(|due| now < due)
         {
             return false;
         }
@@ -143,7 +143,9 @@ impl HeartbeatMonitor {
         if !out.clock_discontinuity {
             if let Some(t) = last_acknowledged_heartbeat.filter(|t| *t > self.last_heartbeat) {
                 self.last_heartbeat = t;
-                self.active = None;
+                if now.saturating_sub(t) < self.silence_after {
+                    self.active = None;
+                }
             }
         }
         if now.saturating_sub(self.last_heartbeat) >= self.silence_after {

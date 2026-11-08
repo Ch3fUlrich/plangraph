@@ -12,6 +12,16 @@ import os
 import uuid
 
 
+# These children expose skill tools, but no repository/shell tools (D-4681).
+INLINE_DIFF_HARNESSES = frozenset({'opencode'})
+
+
+def _needs_inline_diff(leg, card):
+    return (getattr(leg, 'tool_mode', 'tools') == 'inline-only'
+            or (getattr(leg, 'harness', None) in INLINE_DIFF_HARNESSES
+                and card.get('diff_ref') is not None))
+
+
 def annotate_review_warning(record):
     from plangraph.planner.legs import REVIEW_UNFIT_SEATS
     model = (record.get('chosen_leg') or {}).get('model')
@@ -89,12 +99,12 @@ class SeatSpawnMixin:
 
         ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
         ``document_review`` allows explicit ``--leg`` document reviews and dry-run planning; live routed
-        inline-only review legs need the card's diff and refuse without ``diff_ref`` (r3)."""
-        if getattr(leg, 'tool_mode', 'tools') != 'inline-only':
-            return prompt
-        from . import context_pack
-        prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
-        if role == 'review':
+        inline-only review legs need the card's diff and refuse without ``diff_ref`` (r3).
+        OpenCode tools-mode reviews inline a diff when supplied, but also support non-diff reviews."""
+        if getattr(leg, 'tool_mode', 'tools') == 'inline-only':
+            from . import context_pack
+            prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
+        if role == 'review' and _needs_inline_diff(leg, card):
             from .inline_diff import InlineDiffError, inline_diff_prompt
             try:
                 prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,

@@ -91,3 +91,23 @@ HOST-AGENT still owns sampling and its service or Run key, WSL2, GPU support, pr
 this watchdog task is not that service. HOST-SAMPLES-API owns token ingest, server clock/staleness,
 rollups/retention/migrations. Bootstrap depends on neither and adds no sampler.
 For catalog/routing/MCP details see [`docs/SPAWNER.md`](../docs/SPAWNER.md).
+
+### Default Omnigraph connection
+
+After watchdog installation both bootstraps run the same fail-soft Omnigraph helper:
+read site config, cache the client pinned only in `.mcp.json` with `npm cache add`,
+install session environment, then verify `/healthz` using a bearer header.
+Copy `site.env.example` outside the repository to `~/.config/plangraph/site.env`
+(Windows: `%USERPROFILE%\.config\plangraph\site.env`), or select it with
+`PLANGRAPH_SITE_ENV`. Supply `OMNIGRAPH_BASE_URL` and `OMNIGRAPH_TOKEN_FILE`;
+the latter names an owner-only file containing one token line. Never commit either.
+On Windows remove inherited grants to other accounts from that file's ACL.
+Missing/private-file problems print `OPERATOR:` instructions without values.
+Linux installs a mode-0600 profile, sourced once by `.profile` and existing
+`.zshenv`; tokens are reread at shell start with permissions checked again.
+Windows stores both values in the user environment. Start a new session
+after setup (Windows applications may require sign-out to refresh environment).
+Unchanged files and cached pins are skipped on rerun; verification still runs.
+Dry-run only describes these steps: no reads of secrets, writes, npm or network.
+No npm/curl diagnostics or private values are printed. A failed health check
+reports only its status; an unconfirmed path is skipped without another request.

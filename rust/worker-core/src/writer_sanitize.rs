@@ -4,7 +4,7 @@ use crate::{
     writer_result::{oid, ContentGate, WriterError},
     writer_secret::{command, entries, message, object, scan_bytes, SecretGate},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub struct SanitizedHistory {
@@ -17,11 +17,20 @@ pub fn sanitize_history(
     base: &str,
     tip: &str,
 ) -> Result<SanitizedHistory, WriterError> {
+    sanitize_history_with_drops(repo, base, tip, Vec::new())
+}
+pub(crate) fn sanitize_history_with_drops(
+    repo: &RepoEntry,
+    base: &str,
+    tip: &str,
+    snapshot_drops: Vec<Vec<u8>>,
+) -> Result<SanitizedHistory, WriterError> {
     if !oid(base) || !oid(tip) {
         return Err(WriterError::Invalid);
     }
     let root = Path::new(&repo.root);
-    command(root, &["merge-base", "--is-ancestor", base, tip], &[], None)?;
+    command(root, &["merge-base", "--is-ancestor", base, tip], &[], None)
+        .map_err(|_| WriterError::Verify)?;
     // Check every prerequisite ancestor, including root commits, through the shared gate.
     let empty_tree = command(root, &["mktree"], &[], None)?;
     let empty_tree = std::str::from_utf8(&empty_tree)
@@ -32,6 +41,7 @@ pub fn sanitize_history(
         root,
         &[
             "rev-list",
+            "--max-count=257",
             "--reverse",
             "--topo-order",
             &format!("{base}..{tip}"),
@@ -39,6 +49,15 @@ pub fn sanitize_history(
         &[],
         None,
     )?;
+    if commits
+        .split(|b| *b == b'\n')
+        .filter(|l| !l.is_empty())
+        .count()
+        > 256
+    {
+        return Err(WriterError::Verify);
+    }
+    let mut dropped: BTreeSet<_> = snapshot_drops.into_iter().collect();
     let mut result = SanitizedHistory {
         tip: base.into(),
         sha_map: BTreeMap::new(),
@@ -53,16 +72,14 @@ pub fn sanitize_history(
         command(root, &["read-tree", "--empty"], &[], Some(&index))?;
         let mut records = Vec::new();
         for (mode, blob, path) in entries(root, commit)? {
-            let path_secret = scan_bytes(path.as_bytes());
+            let path_secret = scan_bytes(&path);
             if path_secret || (mode != "160000" && scan_bytes(&object(root, &blob)?.1)) {
-                result.dropped_paths.push(if path_secret {
-                    "<path removed by secret gate>".into()
-                } else {
-                    path
-                });
+                dropped.insert(path);
                 continue;
             }
-            records.extend_from_slice(format!("{mode} {blob}\t{path}\0").as_bytes());
+            records.extend_from_slice(format!("{mode} {blob}\t").as_bytes());
+            records.extend_from_slice(&path);
+            records.push(0);
         }
         command(
             root,
@@ -104,8 +121,11 @@ pub fn sanitize_history(
             .into();
         result.sha_map.insert(commit.into(), result.tip.clone());
     }
+    result.dropped_paths = dropped
+        .iter()
+        .map(|p| crate::writer_secret::record_path(p))
+        .collect();
     result.dropped_paths.sort();
-    result.dropped_paths.dedup();
     #[cfg(test)]
     REBUILD_LEAK.with(|leak| {
         if leak.get() {

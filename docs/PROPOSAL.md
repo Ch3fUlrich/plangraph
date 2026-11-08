@@ -1,4 +1,4 @@
-# Plan graph — proposal v2 (M1) · plangraph-L1-main · 2026-10-01 · Sonnet 5.5
+# Plan graph — proposal v2 (M1) · the operator · 2026-10-01 · Sonnet 5.5
 
 **Ask:** choose the architecture (§2). **Recommendation: C — a small "plan-keeper" service we write on SQLite, reusing
 Python graphlib and Cytoscape.js; Beads' ideas, not its store.** C departs from [R2-imm], which prefers Postgres for

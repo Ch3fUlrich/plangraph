@@ -24,6 +24,7 @@ from plangraph.routing_support import resolver
 from plangraph.routing_support.catalog_db import CatalogDB
 from plangraph.catalog_data import SEED_MODELS
 
+from historical_legs import without_d4196
 from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _repo, _row, _seeded, _service, live_policy, pre_d3552_policy)  # noqa: F401
 
 
@@ -31,9 +32,8 @@ from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _r
 
 @pytest.fixture(autouse=True)
 def fixed_route_table(monkeypatch):
-    # Registry/coverage behavior is independent of current provider credits.
-    legs = tuple(replace(leg, disabled=None) if leg.id == "qodercli-qwen3.8-flash"
-                 else leg for leg in DEFAULT_LEGS)
+    # Historical registry/policy behavior is independent of credits and D-4196.
+    legs = tuple(replace(leg, disabled=None) if leg.id == "qodercli-qwen3.8-flash" else leg for leg in without_d4196())
     monkeypatch.setitem(plan_spawn.__kwdefaults__, "legs", legs)
 
 def test_schema_has_harness_and_tool_mode_columns():
@@ -100,11 +100,11 @@ def test_legs_carry_tool_mode():
 def test_override_with_catalog_harness_spawns(tmp_path, monkeypatch):
     db = _seeded()
     db.conn.execute("UPDATE catalog_models SET available=1, status='active' WHERE model_id=?",
-                    ("opencode-go/qwen3.8-max",))
+                    ("opencode-go/gemini-4-argon",))
     db.conn.commit()
     svc = _service(tmp_path, monkeypatch, db)
-    record = asyncio.run(svc.spawn(card=CARD, prompt="task", role="implement",
-                                   model="opencode-go/qwen3.8-max",
+    record = asyncio.run(svc.spawn(card=CARD, prompt="task", role="review", writer_families=("gpt",),
+                                   model="opencode-go/gemini-4-argon",
                                    override_reason="registry route test", dry_run=True))
     assert record["status"] == "dry_run"
     assert record["chosen_leg"]["harness"] == "opencode"
@@ -129,11 +129,13 @@ def test_default_policy_file():
     policy = load_route_policy()
     assert {"kimi", "deepseek"} <= set(policy.banned_families)
     assert "glm" in policy.off_families
-    # D-3552: deepseek/glm lifted for review seats only; kimi never (D-3084).
-    assert policy.review_allowed_families == ("deepseek", "glm")
+    # D-4779/D-3605: only deepseek is lifted; GLM remains off.
+    assert policy.review_allowed_families == ("deepseek",)
     assert "kimi" not in policy.review_allowed_families
-    assert policy.allows("qodercli", "review") and not policy.allows("qodercli", "implement")
-    assert not policy.allows("agy", "review") and policy.allows("agy", "implement")
+    assert not policy.allows("qodercli", "review")
+    assert not policy.allows("qodercli", "implement")
+    # D-4699/D-4703: the agy review pause is lifted.
+    assert policy.allows("agy", "review") and policy.allows("agy", "implement")
 
 
 def test_policy_file_validation(tmp_path):
@@ -155,14 +157,16 @@ def test_policy_env_path(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
-def test_route_skips_banned_and_off_families(role):
+def test_route_skips_banned_and_off_families(role, tmp_path):
     plan = plan_spawn(CARD, role=role, writer_families=("mimo",))
     families = {leg.family for leg in plan.legs}
     assert "kimi" not in families
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
     if role == "review":
-        # D-3552: deepseek/glm lift for review seats only; kimi never (D-3084).
-        assert {"deepseek", "glm"} <= families
+        # D-4779/D-3605: deepseek is lifted, GLM is disabled and off.
+        assert "deepseek" in families
+        assert "glm" not in families
+        assert reasons["opencode-go-glm-5.2"].startswith("disabled:")
         return
     # implement/orchestrate stay banned/off (D-3552).
     assert not families & {"deepseek", "glm"}
@@ -172,15 +176,23 @@ def test_route_skips_banned_and_off_families(role):
                            ("opencode-glm-5.3-flash-free", "off_family")):
         assert policy.skip_reason(by_id[leg_id], role) == reason
         if role == "implement":
-            assert reasons[leg_id] == reason
+            assert reasons == {}  # Role-ineligible legs are not policy skips.
+            assert [leg.id for leg in plan.legs] == ['cx-gpt-6.1-sol']
+            from plangraph.planner.routing import SpawnRefused
+            from plangraph.spawner.service import SpawnService
+            with pytest.raises(SpawnRefused, match=r"leg disabled: .*D-4196"):
+                asyncio.run(SpawnService(state=tmp_path).spawn(
+                    card=CARD, leg=leg_id, override_reason="policy regression", dry_run=True))
 
 
 def test_route_skips_paused_harness_per_role():
     review = plan_spawn(CARD, role="review", writer_families=("mimo",))
     ids = [leg.id for leg in review.legs]
-    assert "qodercli-qwen3.8-flash" in ids
-    assert "agy-gemini-3.8-flash" not in ids
-    assert {s["leg"]: s["reason"] for s in review.skipped}["agy-gemini-3.8-flash"] == "paused_harness"
+    assert "qodercli-qwen3.8-flash" not in ids
+    assert "agy-gemini-3.8-flash" in ids  # D-4699/D-4703: agy review pause lifted
+    pause = RoutePolicy(paused_harnesses={"agy": ("implement",)})
+    held = plan_spawn(CARD, role="review", writer_families=("mimo",), policy=pause)
+    assert {s["leg"]: s["reason"] for s in held.skipped}["agy-gemini-3.8-flash"] == "paused_harness"
     writer = plan_spawn(CARD, role="implement")
     assert writer.first_leg.id == "cx-gpt-6.1-sol"  # D-3745: eligible lead precedes free tier
     # Sol also uses opencode: pausing that harness must exclude the lead,
@@ -195,7 +207,7 @@ def test_route_skips_paused_harness_per_role():
     reasons = {s["leg"]: s["reason"] for s in paused.skipped}
     assert {leg_id: reasons[leg_id] for leg_id in paused_ids} == dict.fromkeys(
         paused_ids, "paused_harness")
-    assert paused.first_leg.id == "agy-gemini-3.8-flash"
+    assert not paused.legs
 
 
 def test_explicit_policy_argument_wins():
@@ -251,7 +263,7 @@ def test_high_needs_two_families_per_part_incl_non_claude():
 
 def test_uncoverable_parts_are_an_error():
     only = RoutePolicy(banned_families=("deepseek", "glm", "gpt", "mimo", "gemini", "muse",
-                                        "north", "laguna", "nvidia", "openai", "openrouter", "kimi"),
+                                        "north", "laguna", "nvidia", "openai", "openrouter", "kimi", "grok"),
                        off_families=(), paused_harnesses={})
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",), policy=only)
     assert plan.error and "qwen" in _families(plan)

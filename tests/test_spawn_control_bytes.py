@@ -55,7 +55,7 @@ def test_service(tmp_path, monkeypatch, hardened, dry_run, fixer):
 def test_launch_spec(tmp_path, monkeypatch):
     from plangraph.spawner import launch_spec as spec
     req = dict(run_id='run-' + 'a' * 32, job_id='test', role='implement', dry_run=True,
-               leg={'id': 'mimo-v2.6-flash'}, prompt='\x0c', card={},
+               leg={'id': 'cx-gpt-6.1-sol'}, prompt='\x0c', card={},
                cwd=str(tmp_path), state=str(tmp_path / 'state'))
     with pytest.raises(spec.LaunchRefused, match='U\\+000C') as caught:
         spec.build(req)
@@ -67,7 +67,7 @@ def test_launch_spec(tmp_path, monkeypatch):
         assert prompt == 'clean' and card['context'] == '\x0c'
         raise ContextReached
     monkeypatch.setattr(spec.context_pack, 'annotate', annotate)
-    monkeypatch.setattr(spec, 'leg_active', lambda leg: True)
+    monkeypatch.setattr('plangraph.spawner.target.admit_leg', lambda leg: None)
     req.update(prompt='clean', card={'context': '\x0c'})
     with pytest.raises(ContextReached):
         spec.build(req)
@@ -80,6 +80,7 @@ def test_launch_spec_cli(tmp_path, monkeypatch, capsys):
         calls.append(args)
         raise AssertionError('process launch forbidden')
     monkeypatch.setattr(subprocess, 'Popen', no_process)
+    monkeypatch.setattr(cli, '_start_supervisor', no_process)
     monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setenv('USERPROFILE', str(tmp_path))
     req = dict(run_id='run-' + 'b' * 32, job_id='test', role='implement', dry_run=False,
@@ -91,6 +92,32 @@ def test_launch_spec_cli(tmp_path, monkeypatch, capsys):
     assert 'U+000B' in captured.err and 'private-prompt' not in captured.err
     assert captured.out == '' and calls == []
     assert not (tmp_path / 'state').exists()
+
+
+@pytest.mark.parametrize('explicit', [False, True])
+def test_none_role_refused(tmp_path, monkeypatch, explicit):
+    from plangraph.spawner import cli, launch_spec
+    calls = []
+    def no_process(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError('process launch forbidden')
+    monkeypatch.setattr(subprocess, 'Popen', no_process)
+    monkeypatch.setattr(cli, '_start_supervisor', no_process)
+    service = SpawnService(SimpleNamespace(jobs={}, spawn=no_process), tmp_path)
+    options = {'leg': 'mimo-v2.6-flash'} if explicit else {}
+    with pytest.raises(ValueError, match='role must be implement'):
+        asyncio.run(service.spawn(card={'estimate_tokens': 1}, prompt='\x0b', role=None, **options))
+    records = list((tmp_path / 'runs').glob('*/record.json'))
+    assert len(records) == 1
+    record = json.loads(records[0].read_text())
+    assert record['role'] is None and record['status'] == 'failed'
+    req = dict(run_id='run-' + 'c' * 32, job_id='test', role=None, dry_run=False,
+               leg={'id': 'mimo-v2.6-flash'}, prompt='\x0b', card={},
+               cwd=str(tmp_path), state=str(tmp_path / 'spec-state'))
+    with pytest.raises(launch_spec.InvalidRequest, match='^role$'):
+        launch_spec.build(req)
+    assert not (tmp_path / 'spec-state').exists()
+    assert calls == []
 
 
 @pytest.mark.parametrize('file', [False, True])

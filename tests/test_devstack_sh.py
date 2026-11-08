@@ -88,6 +88,7 @@ class Stack:
             "TEMPORAL_CLI": str(bin_dir / "temporal"),
             "TEMPORAL_PORT": "17999",
             "TEMPORAL_UI_PORT": "18999",
+            "TEMPORAL_HTTP_PORT": "18998",
             "PG_PORT": "55999",
             "DEVSTACK_PG_NAME": "devstack-test-pg",
             "DEVSTACK_PG_MODE": "docker",
@@ -120,7 +121,7 @@ def test_start_launches_temporal_set_current_and_one_docker_pg(stack):
     lines = stack.lines()
     dev = [l for l in lines if l.startswith("temporal server start-dev")]
     assert dev == [f"temporal server start-dev --ip 127.0.0.1 --port 17999 --ui-port 18999 "
-                   f"--db-filename {stack.state}/temporal.db"]
+                   f"--http-port 18998 --db-filename {stack.state}/temporal.db"]
     setcur = [l for l in lines if l.startswith("temporal worker deployment set-current-version")]
     assert len(setcur) == 1
     assert "--address 127.0.0.1:17999 --deployment-name d --build-id v1" in setcur[0]
@@ -161,10 +162,12 @@ def test_status_reports_running_then_stopped_after_stop(stack):
     assert stack.run("start").returncode == 0
     r = stack.run("status")
     assert r.returncode == 0
-    assert any(l.startswith("temporal: running") for l in r.stdout.splitlines())
+    assert any(l.startswith("temporal: running") and "http=127.0.0.1:18998" in l
+               for l in r.stdout.splitlines())
     assert "postgres: running (docker devstack-test-pg)" in r.stdout
     assert "export PG_DSN=postgresql://postgres@127.0.0.1:55999/keeper" in r.stdout
     assert "export PG_KEEPER_BACKEND=postgres" in r.stdout
+    assert "export PLANGRAPH_TEMPORAL_HTTP=http://127.0.0.1:18998" in r.stdout
     assert stack.run("stop").returncode == 0
     r = stack.run("status")
     assert r.returncode == 1
@@ -282,17 +285,24 @@ def test_docker_run_failure_removes_partial_container_with_volume(stack):
     assert not any(l.startswith("docker rm") and " -v" not in l for l in stack.lines())
 
 
-def test_set_current_failure_does_not_fail_start(stack):
+def test_set_current_failure_fails_start(stack):
     # the script retries 5x with 2 s sleeps; allow headroom
     r = stack.run("start", timeout=40, extra_env={"FAKE_SETCUR_FAIL": "1"})
-    assert r.returncode == 0
-    assert "WARNING: set-current-version failed" in r.stderr
+    assert r.returncode != 0
+    assert "ERROR: set-current-version failed" in r.stderr
 
 
 def test_bogus_pg_mode_exits_2(stack):
     r = stack.run("start", extra_env={"DEVSTACK_PG_MODE": "bogus"})
     assert r.returncode == 2
     assert "DEVSTACK_PG_MODE" in r.stderr
+
+
+def test_help_does_not_launch_services(stack):
+    result = stack.run("--help")
+    assert result.returncode == 0
+    assert "start|stop [--purge]|status|keeper|worker|set-current" in result.stdout
+    assert stack.lines() == []
 
 
 def test_bogus_pg_mode_is_rejected_before_temporal_starts(stack):
@@ -319,3 +329,20 @@ def test_shellcheck_clean():
     # real PATH for this test only (shutil.which above + inherited os.environ below)
     r = subprocess.run(["shellcheck", str(SCRIPT)], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_start_defaults_temporal_http_port_to_18233(stack):
+    # devstack.sh defaults TEMPORAL_HTTP_PORT to 18233, the devstack's own HTTP API port: the live
+    # HTTP API uses 7243 (8233 is the UI). The keeper signals workflows through this URL,
+    # so both the start-dev flag and status export must use 18233 when the variable is unset.
+    stack.env.pop("TEMPORAL_HTTP_PORT")
+    try:
+        assert stack.run("start").returncode == 0
+        dev = [l for l in stack.lines() if l.startswith("temporal server start-dev")]
+        assert len(dev) == 1, dev
+        assert "--http-port 18233" in dev[0]
+        r = stack.run("status")
+        assert r.returncode == 0
+        assert "export PLANGRAPH_TEMPORAL_HTTP=http://127.0.0.1:18233" in r.stdout
+    finally:
+        stack.run("stop", timeout=60)

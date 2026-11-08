@@ -19,6 +19,12 @@ pub enum WriterError {
     Verify,
     #[error("git")]
     Git,
+    #[error("salvage cleanup failed: {cleanup} (bundle error: {bundle:?})")]
+    SalvageCleanup {
+        bundle: Option<Box<WriterError>>,
+        #[source]
+        cleanup: Box<WriterError>,
+    },
     #[error("io")]
     Io,
     #[error("secret_in_history")]
