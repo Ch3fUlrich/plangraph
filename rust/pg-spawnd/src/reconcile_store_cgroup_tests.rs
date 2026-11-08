@@ -1,7 +1,7 @@
 use super::*;
-struct ScopeRoot;
+pub(super) struct ScopeRoot;
 impl ScopeRoot {
-    fn new(root: &std::path::Path) -> (Self, std::path::PathBuf) {
+    pub(super) fn new(root: &std::path::Path) -> (Self, std::path::PathBuf) {
         crate::reconcile_backend::native::TEST_ROOT
             .with(|value| *value.borrow_mut() = Some(root.into()));
         let scope = root.join(format!(

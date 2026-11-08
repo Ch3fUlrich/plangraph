@@ -167,11 +167,43 @@ fn reconcile_missing_identity_is_unknown_and_not_settled() {
 #[cfg(unix)]
 mod cgroup_tests;
 
+#[cfg(target_os = "linux")]
 #[test]
 fn terminal_or_absent_row_requires_settled_probe() {
-    for _running in [false, true] {
-        assert!(settled_result(Ok(true)).unwrap());
-        assert!(!settled_result(Ok(false)).unwrap());
-        assert!(settled_result(Err(ReconcileError::Unknown)).is_err());
+    for status in ["running", "completed", "absent", "invalid"] {
+        for settled in [false, true] {
+            let dir = StateDir::new();
+            let (_root, scope) = cgroup_tests::ScopeRoot::new(&dir.0);
+            let mut record = dir.record();
+            record.set(
+                "proc",
+                json!({"pid": 2_000_000_000u32, "start_time":null,
+                "group":scope.to_str().unwrap(), "pgid":null}),
+            );
+            record.save().unwrap();
+            let row = inventory(&dir.0).unwrap().remove(0);
+            if status == "absent" {
+                record.set("attempts", json!([{"status":"completed"}]));
+            } else {
+                record.set("status", json!(status));
+            }
+            record.save().unwrap();
+            std::fs::write(
+                scope.join("cgroup.events"),
+                if settled {
+                    "populated 0\n"
+                } else {
+                    "populated 1\n"
+                },
+            )
+            .unwrap();
+            std::fs::write(scope.join("cgroup.procs"), "").unwrap();
+            let result = orphan_with(&dir.0, &row, &mut None);
+            if settled && status != "invalid" {
+                assert!(result.unwrap(), "{status}");
+            } else {
+                assert!(matches!(result, Err(ReconcileError::Unknown)), "{status}");
+            }
+        }
     }
 }

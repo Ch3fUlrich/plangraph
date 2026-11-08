@@ -4,6 +4,8 @@
 mod tests;
 use crate::reconcile_store::Proc;
 #[cfg(windows)]
+use pg_worker_core::watch::windows as job_api;
+#[cfg(windows)]
 use pg_worker_core::{
     cpu::CpuSample,
     watch::{
@@ -134,20 +136,14 @@ fn validate<'a>(run: &str, identity: &'a Proc) -> io::Result<(&'a str, u64)> {
 impl Group {
     pub(crate) fn probe(&mut self) -> io::Result<bool> {
         if self.1.as_ref().map(process_live).transpose()? == Some(false) {
-            return if self.0.empty()? {
-                Ok(true)
-            } else {
-                Err(io::ErrorKind::WouldBlock.into())
-            };
+            return exited_probe(self.0.empty());
         }
         probe(&mut self.0)
     }
     pub(crate) fn orphan_empty(&mut self) -> io::Result<bool> {
-        if !self.probe()? {
-            return Ok(false);
-        }
-        self.0.terminate()?;
-        Ok(true)
+        // Both paths check emptiness before any termination authority is used.
+        self.probe()?;
+        orphan_empty(&mut self.0)
     }
     pub(crate) fn open(run: &str, identity: Proc) -> io::Result<Self> {
         Self::acquire(run, identity)?.ok_or_else(|| io::ErrorKind::NotFound.into())
@@ -158,18 +154,20 @@ impl Group {
             return Ok(None);
         };
         let mut api = LocalJob { job, process: None };
-        // Verify membership once, then retain that exact process for liveness.
+        // Verify accepts a non-member as gone; acquisition must also prove empty.
         let member = api.member(identity.pid, start)?;
-        if !member && api.process.as_ref().map(process_live).transpose()? == Some(true) {
-            return Err(io::ErrorKind::PermissionDenied.into());
-        }
+        acquire_decision(
+            member,
+            api.process.as_ref().map(process_live).transpose()?,
+            || api.active().map(|active| !active),
+        )?;
         let retained = api
             .process
             .as_ref()
             .map(|handle| handle.try_clone())
             .transpose()?;
         Ok(Some(Self(
-            AdoptedJob::verify(Some(api), identity.pid, start)?,
+            acquire_verified(api, identity.pid, start)?,
             retained,
         )))
     }
@@ -201,7 +199,6 @@ impl Child for Group {
 trait OrphanJob {
     fn gone(&mut self) -> io::Result<bool>;
     fn empty(&mut self) -> io::Result<bool>;
-    #[cfg(test)]
     fn terminate(&mut self) -> io::Result<()>;
 }
 #[cfg(windows)]
@@ -212,7 +209,6 @@ impl OrphanJob for AdoptedJob<LocalJob> {
     fn empty(&mut self) -> io::Result<bool> {
         self.empty()
     }
-    #[cfg(test)]
     fn terminate(&mut self) -> io::Result<()> {
         self.terminate()
     }
@@ -227,7 +223,7 @@ fn probe(job: &mut impl OrphanJob) -> io::Result<bool> {
     }
     Ok(true)
 }
-#[cfg(test)]
+#[cfg(any(windows, test))]
 fn orphan_empty(job: &mut impl OrphanJob) -> io::Result<bool> {
     if !probe(job)? {
         return Ok(false);
@@ -241,6 +237,43 @@ fn orphan_empty(job: &mut impl OrphanJob) -> io::Result<bool> {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     Ok(true)
+}
+
+#[cfg(any(windows, test))]
+fn exited_probe(empty: io::Result<bool>) -> io::Result<bool> {
+    if empty? {
+        Ok(true)
+    } else {
+        Err(io::ErrorKind::WouldBlock.into())
+    }
+}
+
+#[cfg(any(windows, test))]
+fn acquire_decision(
+    member: bool,
+    live: Option<bool>,
+    empty: impl FnOnce() -> io::Result<bool>,
+) -> io::Result<()> {
+    if !member {
+        if live == Some(true) {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        exited_probe(empty())?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn acquire_verified<A: job_api::JobApi>(
+    api: A,
+    pid: u32,
+    start: u64,
+) -> io::Result<job_api::AdoptedJob<A>> {
+    let mut job = job_api::AdoptedJob::verify(Some(api), pid, start)?;
+    if job.is_gone()? {
+        exited_probe(job.empty())?;
+    }
+    Ok(job)
 }
 
 #[cfg(windows)]

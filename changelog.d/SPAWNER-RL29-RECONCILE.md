@@ -6,3 +6,4 @@
 - Complete unknown-start membership adoption, absent-Job tri-state mapping, row-local scan skips, and settlement-based reclamation without reopening Jobs.
 - Move recovery-only Windows membership policy into spawnd, share settlement/adoption authority within a scan, and isolate invalid rows and scoped unknown-start reclaim keys.
 - Retain Windows process authority, settle advanced records only after conclusive probes, report incomplete replay, and reclaim validated unknown-start slots.
+Round 3: preserve unknown status and incomplete replay, share exited-Job acquisition decisions, and exercise direct orphan settlement across record states.

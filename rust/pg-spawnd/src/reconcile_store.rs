@@ -1,4 +1,3 @@
-//! Bounded startup inventory and atomic orphan settlement.
 use crate::reconcile::ReconcileError;
 use pg_worker_core::run::record::valid_run_id;
 use serde::Deserialize;
@@ -159,7 +158,6 @@ pub(crate) fn lock(
         .map_err(|_| ReconcileError::Io)?
         .ok_or(ReconcileError::Unknown)
 }
-/// Pure tri-state: true = gone, false = verified alive, Unknown = unverifiable.
 pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, ReconcileError> {
     let Some(identity) = identity else {
         return Err(ReconcileError::Unknown);
@@ -194,7 +192,6 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
                     .start_time
                     .is_some_and(|expected| expected != start)
                 {
-                    // A reused PID does not prove the old group is empty.
                 } else {
                     return Ok(false);
                 }
@@ -202,15 +199,11 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
             Err(_) => return Err(ReconcileError::Unknown),
         }
-        // Neither a missing PID nor a start mismatch proves a legacy group gone.
-        // Only a PGID recorded at spawn identifies the group to probe; even a
-        // reused leader cannot be distinguished from the original live group.
         let pgid = identity.pgid.ok_or(ReconcileError::Unknown)?;
         let pgid = i32::try_from(pgid)
             .ok()
             .filter(|id| *id > 0)
             .ok_or(ReconcileError::Unknown)?;
-        // SAFETY: signal zero only probes the recorded process group.
         if unsafe { libc::kill(-pgid, 0) } == 0 {
             return Ok(false);
         }
@@ -243,7 +236,6 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
         Err(ReconcileError::Unknown)
     }
 }
-/// Caller holds the state lock; re-read under the record lock before proving gone.
 pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileError> {
     orphan_with(root, row, &mut None)
 }
@@ -269,14 +261,22 @@ pub(crate) fn orphan_with(
     let result = crate::reconcile::job::settle_probe(row, authority);
     #[cfg(not(windows))]
     let result = gone(&row.run_id, row.identity.as_ref());
-    if !settled_result(result)? {
+    if !result? {
         return Ok(false);
     }
-    if current.is_none() {
+    if current.is_none()
+        && !dir
+            .join("record.json")
+            .try_exists()
+            .map_err(|_| ReconcileError::Unknown)?
+    {
         return Ok(true);
     }
     let mut record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;
     if record.status() != Some(Status::Running) {
+        return helpers::terminal(record.status());
+    }
+    if current.is_none() {
         return Ok(true);
     }
     if record
@@ -303,7 +303,6 @@ pub(crate) fn orphan_with(
     )?;
     Ok(true)
 }
-/// Durable record-only settlement bridge, under state and record locks.
 pub(crate) fn settle(
     state: &Path,
     record: &mut pg_worker_core::run::record::RunRecord,
@@ -394,7 +393,3 @@ pub(crate) fn settle(
 #[cfg(test)]
 #[path = "reconcile_store_tests.rs"]
 mod tests;
-// Record advancement cannot turn an inconclusive process probe into proof.
-fn settled_result(probe: Result<bool, ReconcileError>) -> Result<bool, ReconcileError> {
-    probe
-}

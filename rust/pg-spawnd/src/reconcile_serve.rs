@@ -114,7 +114,6 @@ fn replay(root: &Path, store: &crate::evidence::EvidenceStore) -> Result<(), Rec
         };
         let path = dir.path().join("record.json");
         if !path.is_file() {
-            skipped = true;
             continue;
         }
         let Some(dir) = path.parent() else {
@@ -132,7 +131,7 @@ fn replay(root: &Path, store: &crate::evidence::EvidenceStore) -> Result<(), Rec
         store.backfill(&[value]).map_err(|_| ReconcileError::Io)?;
     }
     if skipped {
-        eprintln!("reconciliation replay incomplete: unreadable or locked records");
+        return Err(ReconcileError::Unknown);
     }
     Ok(())
 }
@@ -204,6 +203,7 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
                     continue;
                 };
                 if identity.pid != slot.pid
+                    || (identity.start_time.is_none() && identity.group.is_none())
                     || !start_matches(identity.start_time, slot.start_time)
                     || identity.group != slot.group
                     || serde_json::to_value(slot.role).ok().as_ref()
@@ -231,6 +231,7 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
         .ok_or(ReconcileError::Invalid)?;
     let mut watched = Vec::new();
     let mut gone = Vec::new();
+    let mut incomplete = false;
     for row in rows {
         if let Some(group) = row.identity.as_ref().and_then(|p| p.group.as_deref()) {
             if native::scope(&row.run_id, group).is_err() {
@@ -244,6 +245,7 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
             &mut authority,
         ))?
         else {
+            incomplete = true;
             continue;
         };
         if settled {
@@ -275,17 +277,10 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
             continue;
         };
         let dir = root.join("runs").join(&row.run_id);
-        let Ok(_record_lock) = crate::reconcile_store::lock(&dir, &dir.join("record.lock")) else {
-            continue;
-        };
-        let Ok(mut record) = RunRecord::read(root, &row.run_id) else {
-            continue;
-        };
-        let role = serde_json::from_value(serde_json::json!(row.role));
-        if skip_row(true, role.is_ok()) {
-            continue;
-        }
-        let role = role.map_err(|_| ReconcileError::Invalid)?;
+        let _record_lock = crate::reconcile_store::lock(&dir, &dir.join("record.lock"))?;
+        let mut record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Unknown)?;
+        let role = serde_json::from_value(serde_json::json!(row.role))
+            .map_err(|_| ReconcileError::Unknown)?;
         let watch = Watch::new(
             role,
             Limits::default(),
@@ -309,6 +304,9 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
         ));
     }
     // No capability is issued on any earlier error, even after partial progress.
+    if incomplete {
+        return Err(ReconcileError::Unknown);
+    }
     gone.retain(|(id, _, _, _)| !watched.iter().any(|(run, _, _, _, _)| run == id));
     replay(root, &store)?;
     reclaim_after(
@@ -376,6 +374,7 @@ fn unknown_scan_row_does_not_abort_later_rows() {
         .unwrap();
     assert_eq!(decisions, vec![None, None, None, Some(false), Some(true)]);
 }
+#[cfg(any(target_os = "linux", windows, test))]
 fn start_matches(recorded: Option<u64>, slot: u64) -> bool {
     recorded.is_none_or(|start| start == slot)
 }
@@ -385,14 +384,4 @@ fn settled_unknown_start_reclaim_key() {
     assert!(start_matches(None, 123));
     assert!(start_matches(Some(123), 123));
     assert!(!start_matches(Some(124), 123));
-}
-fn skip_row(lock_ok: bool, role_ok: bool) -> bool {
-    !lock_ok || !role_ok
-}
-#[cfg(test)]
-#[test]
-fn lock_or_role_failure_skips_row() {
-    assert!(skip_row(false, true));
-    assert!(skip_row(true, false));
-    assert!(!skip_row(true, true));
 }

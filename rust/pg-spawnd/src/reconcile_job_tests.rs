@@ -185,10 +185,26 @@ fn absent_with_live_leader_is_unknown() {
 }
 #[test]
 fn exited_leader_empty_job_settles() {
-    let mut job = JobFake {
-        gone: true,
-        active: Ok(false),
-        terminated: false,
+    assert!(acquire_decision(false, Some(false), || Ok(true)).is_ok());
+    assert!(acquire_decision(false, None, || Ok(true)).is_ok());
+    assert!(acquire_decision(false, Some(false), || Ok(false)).is_err());
+    assert!(acquire_decision(false, Some(true), || Ok(true)).is_err());
+    assert!(exited_probe(Ok(true)).unwrap());
+    assert!(exited_probe(Ok(false)).is_err());
+    assert!(exited_probe(Err(io::ErrorKind::PermissionDenied.into())).is_err());
+}
+
+#[test]
+fn gone_run_id_mismatch_is_unknown() {
+    let identity = Proc {
+        pid: 42,
+        start_time: None,
+        group: Some("Local\\pg-run-other".into()),
+        pgid: None,
     };
-    assert!(map_probe(orphan_empty(&mut job)).unwrap());
+    assert!(scope("run-test", identity.group.as_deref().unwrap()).is_err());
+    assert!(matches!(
+        crate::reconcile_store::gone("run-test", Some(&identity)),
+        Err(crate::reconcile::ReconcileError::Unknown)
+    ));
 }
