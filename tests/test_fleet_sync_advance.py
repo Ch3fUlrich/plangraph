@@ -31,7 +31,8 @@ def fleet(tmp_path, monkeypatch):
         hosts.append({'id': name, 'os': 'linux', 'transport': 'ssh', 'repos': {
             'plangraph': {'root': str(tmp_path / 'repo'), 'live_dir': str(root / 'current'),
                           'worktrees_root': str(tmp_path / 'trees'),
-                          'health_checks': {k: ['/bin/true'] for k in ('doctor', 'whoami', 'spawn')}}}})
+                          'health_checks': {k: ['/bin/true', '--dry-run']
+                                            for k in ('doctor', 'whoami', 'spawn')}}}})
     record = tmp_path / 'release.json'
     record.write_text(json.dumps({'sha': 'a' * 40}))
     return {'hosts': hosts}, record
@@ -71,9 +72,18 @@ def test_fleet_sync_advance_rollback(fleet, phase):
 
 def test_fleet_sync_advance_success_prune(fleet):
     root = fleet[1].parent
+    spawn = root / 'spawn'
+    calls = root / 'spawn-calls'
+    spawn.write_text('#!/usr/bin/python3\nimport pathlib,sys\n'
+                     'assert "--dry-run" in sys.argv\n'
+                     f'with pathlib.Path({str(calls)!r}).open("a") as f: f.write("spawn\\n")\n')
+    spawn.chmod(0o755)
+    for host in fleet[0]['hosts']:
+        host['repos']['plangraph']['health_checks']['spawn'] = [str(spawn), '--dry-run']
     for number in range(1, 6):
         (root / 'host-a/releases' / (str(number) * 40)).mkdir()
     assert invoke(fleet) == 0
+    assert calls.read_text().splitlines() == ['spawn', 'spawn']
     for name in ('host-a', 'host-b'):
         assert (root / name / 'current').resolve().name == 'a' * 40
     assert (root / 'host-a/releases' / ('b' * 40)).exists()
@@ -92,11 +102,77 @@ def test_fleet_sync_windows_pointer_fake(fleet):
     root = Path(repo['live_dir']).parent
     pointer = root / 'current.pointer'
     pointer.write_text(str(root / 'releases' / ('b' * 40)))
-    assert worker({'repo': repo, 'sha': 'a' * 40, 'windows': True})['ok']
-    assert Path(pointer.read_text()).name == 'a' * 40
-    repo['health_checks']['doctor'] = ['/bin/false']
-    assert not worker({'repo': repo, 'sha': 'a' * 40, 'windows': True})['ok']
-    assert Path(pointer.read_text()).name == 'a' * 40
+    check = root / 'health'
+    seen = root / 'switched'
+    check.write_text('#!/usr/bin/python3\nimport pathlib,sys\n'
+                     f'p=pathlib.Path({str(pointer)!r})\n'
+                     'if pathlib.Path(p.read_text()).name == "a"*40:\n'
+                     f' pathlib.Path({str(seen)!r}).touch()\n sys.exit(1)\n')
+    check.chmod(0o755)
+    repo['health_checks']['doctor'] = [str(check)]
+    result = worker({'repo': repo, 'sha': 'a' * 40, 'windows': True})
+    assert not result['ok']
+    assert seen.exists()
+    assert {'step': 'switch', 'status': 'OK'} in result['events']
+    assert {'step': 'post-health', 'status': 'FAILED'} in result['events']
+    assert result['events'][-1] == {'step': 'rollback', 'status': 'OK'}
+    assert Path(pointer.read_text()).name == 'b' * 40
+
+
+@pytest.mark.parametrize('problem', ['health_checks', 'plangraph', 'unknown', 'spawn'])
+def test_fleet_sync_advance_cli_refusal(fleet, monkeypatch, capsys, problem):
+    from plangraph.fleet_sync import advance as module
+    from plangraph.fleet_sync.__main__ import main
+    registry, record = fleet
+    repo = registry['hosts'][1]['repos']['plangraph']
+    if problem == 'health_checks':
+        del repo['health_checks']
+    elif problem == 'plangraph':
+        del registry['hosts'][1]['repos']['plangraph']
+    elif problem == 'spawn':
+        repo['health_checks']['spawn'] = ['/bin/true']
+    path = record.parent / 'hosts.json'
+    path.write_text(json.dumps(registry))
+    monkeypatch.setattr(module, 'release_path', lambda: record)
+    monkeypatch.setattr(module.subprocess, 'check_output',
+                        lambda *a, **k: pytest.fail('host contacted'))
+    assert main(['advance', '--sha', 'a' * 40, '--hosts', 'host-a',
+                 'absent' if problem == 'unknown' else 'host-b', '--go', 'D-1234',
+                 '--registry', str(path)]) == 2
+    output = capsys.readouterr()
+    assert not output.out
+    assert len(output.err.splitlines()) == 1
+    assert not (record.parent / 'host-a/releases' / ('a' * 40)).exists()
+
+
+@pytest.mark.parametrize('kind', ['relative', 'symlink'])
+def test_fleet_sync_advance_cleanup_refusal(fleet, kind):
+    repo = fleet[0]['hosts'][0]['repos']['plangraph']
+    if kind == 'relative':
+        repo['worktrees_root'] = 'trees'
+    else:
+        alias = fleet[1].parent / 'alias'
+        alias.symlink_to(Path(repo['live_dir']).parent, target_is_directory=True)
+        repo['worktrees_root'] = str(alias)
+    with pytest.raises(ValueError, match='cleanup'):
+        invoke(fleet, dry_run=True)
+
+
+def test_fleet_sync_advance_lock(fleet):
+    from plangraph.fleet_sync.advance import rollout_lock
+    lock = fleet[1].parent / '.local/state/plangraph/fleet-sync.lock'
+    with rollout_lock(lock), pytest.raises(ValueError, match='already running'):
+        invoke(fleet)
+    assert not lock.exists()
+
+
+def test_fleet_sync_worker_lock(fleet):
+    repo = fleet[0]['hosts'][0]['repos']['plangraph']
+    lock = Path(repo['live_dir']).parent / '.advance.lock'
+    lock.touch()
+    with pytest.raises(FileExistsError):
+        worker({'repo': repo, 'sha': 'a' * 40, 'windows': False})
+    assert lock.exists()
 
 
 def test_fleet_sync_advance_cli_requires_go():

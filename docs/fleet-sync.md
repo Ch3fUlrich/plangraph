@@ -20,6 +20,8 @@ are ps-only. Overflow retains a deny-by-default empty public_repos allowlist.
 `drift --json` emits an array. Missing objects or unreachable transports produce
 `unknown`, never a fabricated zero; drift always exits 0. Counts use local Git
 objects, so fetch the release and host commits first.
+Routerctl calls `python3 -m plangraph.fleet_sync drift`; its integration lives in
+the private data repository.
 
 ## Advance and rollback (slice 2)
 
@@ -31,12 +33,14 @@ each SHA; retain that requirement until 10 clean live runs. This command records
 the supplied decision reference, not an independent verification of router approval.
 
 Set `repos.plangraph.live_dir` to an absolute `<live_root>/current`, outside
-`worktrees_root`; generated consumer configs continue to use that path. Releases
+an absolute `worktrees_root`; local paths are resolved to reject symlink overlaps.
+Generated consumer configs continue to use that path. Releases
 are detached clones at `<live_root>/releases/<sha>`, independent of worktree cleanup.
 Configure `health_checks` with three argv arrays: `doctor` (spawner doctor),
 `whoami` (keeper whoami), and `spawn` (one dry-run spawn). These commands run from
-the candidate checkout before switching and from current after switching. Commands
-are injected configuration: operators must ensure spawn includes its dry-run flag.
+the candidate checkout before switching and from current after switching; spawn
+runs only once, after switching. Commands
+are injected configuration: advance refuses spawn argv without `--dry-run`.
 No shell expansion occurs for health commands; output is suppressed.
 
 POSIX current is atomically replaced as a symlink. Windows uses an atomically
@@ -52,4 +56,9 @@ Pruning retains three releases, always including current and previous.
 `--dry-run` validates inputs and prints each host plan without contacting hosts,
 writing logs, or changing files. Actual runs append JSON step/status records to
 `~/.local/state/plangraph/fleet-sync.log`, excluding commands, env and error text.
-Run only one advance per fleet at a time. Routerctl integration is a later slice.
+An exclusive controller lock prevents concurrent advances from the same controller;
+an exclusive live-root lock also prevents different controllers interleaving on a host.
+After a crash, inspect the rollout before manually removing a stale lock
+(`~/.local/state/plangraph/fleet-sync.lock` or `<live_root>/.advance.lock`).
+Selected ps-only hosts, missing health checks, and unknown host ids are refused
+before contacting any host (exit 2, one diagnostic line per problem).

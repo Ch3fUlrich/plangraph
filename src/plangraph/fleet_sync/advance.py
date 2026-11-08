@@ -5,9 +5,24 @@ import os
 import re
 import shlex
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from .release import release_path
+
+
+@contextmanager
+def rollout_lock(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        raise ValueError('advance already running; inspect stale lock before removing it') from None
+    try:
+        os.close(fd)
+        yield
+    finally:
+        path.unlink()
 
 
 def worker(config):
@@ -19,13 +34,20 @@ def worker(config):
 
     repo, sha = config['repo'], config['sha']
     root = Path(repo['live_dir']).parent
+    if not Path(repo['worktrees_root']).is_absolute():
+        raise ValueError('worktrees_root must be absolute')
+    if '--dry-run' not in repo['health_checks']['spawn']:
+        raise ValueError('spawn health command requires --dry-run')
     cleanup = Path(repo['worktrees_root']).resolve()
     if root.resolve().is_relative_to(cleanup) or cleanup.is_relative_to(root.resolve()):
         raise ValueError('live root overlaps cleanup')
     releases, current = root / 'releases', root / 'current'
     windows = config['windows']
     pointer = root / 'current.pointer' if windows else current
-    previous = (pointer.read_text() if windows else os.readlink(pointer)) if pointer.exists() else None
+    lock = root / '.advance.lock'
+    fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    os.close(fd)
+    previous = None
     target, events, step = releases / sha, [], 'prepare'
 
     def switch(value):
@@ -40,12 +62,13 @@ def worker(config):
             temporary.symlink_to(value, target_is_directory=True)
         os.replace(temporary, pointer)
 
-    def health(directory):
-        for name in ('doctor', 'whoami', 'spawn'):
+    def health(directory, post=False):
+        for name in (('doctor', 'whoami', 'spawn') if post else ('doctor', 'whoami')):
             subprocess.run(repo['health_checks'][name], cwd=directory, check=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
 
     try:
+        previous = (pointer.read_text() if windows else os.readlink(pointer)) if pointer.exists() else None
         if releases.is_symlink() or target.is_symlink():
             raise ValueError('release paths must not be symlinks')
         releases.mkdir(parents=True, exist_ok=True)
@@ -71,7 +94,7 @@ def worker(config):
         switch(str(target))
         events.append({'step': step, 'status': 'OK'})
         step = 'post-health'
-        health(target if windows else current)
+        health(target if windows else current, post=True)
         events.append({'step': step, 'status': 'OK'})
         step = 'prune'
         pinned = {target.resolve(), (root / previous).resolve() if previous else target.resolve()}
@@ -95,6 +118,8 @@ def worker(config):
         except OSError:
             events.append({'step': 'rollback', 'status': 'FAILED'})
         return {'ok': False, 'events': events}
+    finally:
+        lock.unlink()
 
 
 def transport(host, config):
@@ -109,6 +134,13 @@ def transport(host, config):
 
 
 def advance(registry, sha, hosts, go, dry_run=False, record=None, log=None, run=transport):
+    if dry_run:
+        return _advance(registry, sha, hosts, go, True, record, log, run)
+    with rollout_lock(Path.home() / '.local/state/plangraph/fleet-sync.lock'):
+        return _advance(registry, sha, hosts, go, False, record, log, run)
+
+
+def _advance(registry, sha, hosts, go, dry_run, record, log, run):
     if not go or not re.fullmatch(r'D-[0-9]+', go):
         raise ValueError('router GO required (D-825)')
     if not re.fullmatch('[0-9a-f]{40,64}', sha) or json.loads(
@@ -118,21 +150,40 @@ def advance(registry, sha, hosts, go, dry_run=False, record=None, log=None, run=
     if not hosts or len(set(hosts)) != len(hosts):
         raise ValueError('explicit canary-first host order required')
     configs = []
+    problems = []
     for name in hosts:
+        if name not in selected:
+            problems.append(f'{name}: unknown host')
+            continue
         host = selected[name]
-        repo = host['repos']['plangraph']
+        repo = host.get('repos', {}).get('plangraph')
+        if not repo:
+            problems.append(f'{name}: missing repos.plangraph')
+            continue
+        if not isinstance(repo.get('health_checks'), dict):
+            problems.append(f'{name}: missing health_checks')
+            continue
         path = PureWindowsPath if host['os'] == 'windows' else PurePosixPath
         live, cleanup = path(repo['live_dir']), path(repo['worktrees_root'])
+        if host['os'] != 'windows':
+            live = Path(live).parent.resolve() / live.name
+            cleanup = Path(cleanup).resolve()
         if (host['transport'] not in ('local', 'ssh') or live.name != 'current'
-                or not live.is_absolute() or '..' in live.parts
+                or not path(repo['worktrees_root']).is_absolute()
+                or not path(repo['live_dir']).is_absolute() or '..' in live.parts
                 or live.parent.is_relative_to(cleanup) or cleanup.is_relative_to(live.parent)):
             raise ValueError('live root must be outside worktree cleanup')
         for key in ('doctor', 'whoami', 'spawn'):
-            command = repo['health_checks'][key]
+            command = repo['health_checks'].get(key)
             if not isinstance(command, list) or not command or not all(
                     isinstance(arg, str) and arg for arg in command):
                 raise ValueError('health commands must be argv arrays')
+        if '--dry-run' not in repo['health_checks']['spawn']:
+            problems.append(f'{name}: spawn health command requires --dry-run')
+            continue
         configs.append((host, {'repo': repo, 'sha': sha, 'windows': host['os'] == 'windows'}))
+    if problems:
+        raise ValueError('\n'.join(problems))
     for host, config in configs:
         if dry_run:
             print(f"{host['id']}: prepare {sha}; pre-health; switch current; post-health; prune")

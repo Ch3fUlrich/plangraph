@@ -42,7 +42,13 @@ def main(argv=None):
             print(json.dumps(data) if args.json else '\n'.join(
                 f"{r['host']} {r['live_sha']} {r['release_sha']} {r['behind']}" for r in data))
         return 0
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+    except ValueError as error:
+        if args.command == 'advance':
+            print(str(error), file=sys.stderr)
+            return 2
+        print('fleet sync input or query failed', file=sys.stderr)
+        return 0 if args.command == 'drift' else 1
+    except (OSError, KeyError, TypeError, subprocess.SubprocessError):
         print('fleet sync input or query failed', file=sys.stderr)
         return 0 if args.command == 'drift' else 1
 
