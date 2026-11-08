@@ -167,12 +167,14 @@ mod platform {
             "run::group_windows_tests::holder_helper",
             "--nocapture",
         ]);
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .creation_flags(CREATE_SUSPENDED | CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW)
-            .spawn().map_err(|e| io::Error::other(format!("JobUnavailable: holder launch/breakaway refused: {e}")))?;
+        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        // Breakaway is refused inside a job without BREAKAWAY_OK (CI runners, some services):
+        // then the holder stays in that outer job, still outliving a daemon kill.
+        let mut child = match command.creation_flags(CREATE_SUSPENDED | CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW).spawn() {
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW).spawn(),
+            spawned => spawned,
+        }
+        .map_err(|e| io::Error::other(format!("JobUnavailable: holder launch refused: {e}")))?;
         let setup = (|| {
             let mut duplicate = std::ptr::null_mut();
             // Only the trusted suspended helper receives QUERY/TERMINATE, never inheritance.
