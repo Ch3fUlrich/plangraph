@@ -11,7 +11,8 @@ Preference is not immunity and does not override cgroup memory limits.
 From the user's login session, not a nested herdr service:
 
 ```sh
-systemd-run --user --scope --unit=claude-bg --property=OOMScoreAdjust=200 claude --bg
+systemd-run --user --scope --unit=claude-bg \
+  --property=OOMScoreAdjust=200 claude --bg
 ```
 
 The user manager creates a sibling scope outside herdr-server's cgroup;
@@ -27,7 +28,7 @@ remains an operator choice. On the 15 GiB router host use at most `-n 2`.
 ## Router-owned live probe script specification
 
 Run only in an approved disposable memory-pressure window, with a second
-login and an external timeout/cleanup watchdog. Do not run in CI.
+an authenticated session and an external timeout/cleanup watchdog. Do not run in CI.
 1. Record PID, start time, cgroup, oom_score_adj, and health endpoints for
    herdr, keeper, and the daemon; verify the daemon is outside herdr's cgroup.
 2. Launch a bounded disposable hog through each writer/seat/review launcher;
