@@ -43,3 +43,16 @@ pub(super) fn terminal(
         _ => Err(crate::reconcile::ReconcileError::Unknown),
     }
 }
+pub(crate) fn lock(
+    root: &Path,
+    path: &Path,
+) -> Result<pg_worker_core::lockfile::LockGuard, ReconcileError> {
+    check(root, true)?;
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        _ => check(path, false)?,
+    }
+    pg_worker_core::lockfile::try_lock(path)
+        .map_err(|_| ReconcileError::Io)?
+        .ok_or(ReconcileError::Unknown)
+}

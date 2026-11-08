@@ -21,6 +21,7 @@ pub(crate) struct Entry {
 }
 #[path = "reconcile_store_helpers.rs"]
 mod helpers;
+pub(crate) use helpers::lock;
 use helpers::{check, seconds};
 pub(crate) fn read(path: &Path) -> Result<Value, ReconcileError> {
     check(path, false)?;
@@ -151,19 +152,6 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
         }
     }
     Ok(result)
-}
-pub(crate) fn lock(
-    root: &Path,
-    path: &Path,
-) -> Result<pg_worker_core::lockfile::LockGuard, ReconcileError> {
-    check(root, true)?;
-    match std::fs::symlink_metadata(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-        _ => check(path, false)?,
-    }
-    pg_worker_core::lockfile::try_lock(path)
-        .map_err(|_| ReconcileError::Io)?
-        .ok_or(ReconcileError::Unknown)
 }
 /// Settlement requires both the recorded process and its confinement group gone.
 pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, ReconcileError> {
