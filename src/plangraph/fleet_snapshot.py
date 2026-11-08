@@ -33,9 +33,14 @@ def build_fleet(registry, samples=None, runs=None):
         host = row.get("id") or row.get("host_id") or row.get("host")
         if not isinstance(host, str) or not host:
             raise ValueError("registry host needs an id")
+        if host in hosts:
+            raise ValueError(f"duplicate registry host: {host}")
         hosts[host] = row
-        aliases[host] = host
-        for alias in row.get("aliases", []):
+        for alias in [host, *row.get("aliases", [])]:
+            if not isinstance(alias, str) or not alias:
+                raise ValueError("registry alias needs a nonempty string")
+            if alias in aliases and aliases[alias] != host:
+                raise ValueError(f"ambiguous registry alias: {alias}")
             aliases[alias] = host
     counts, seen = Counter(), {}
     known = runs is not None

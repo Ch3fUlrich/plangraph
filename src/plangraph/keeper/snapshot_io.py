@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import time
@@ -32,7 +33,9 @@ def write_snapshot(server, principal) -> None:
         from ..fleet_snapshot import load_fleet
         snapshot["fleet"] = load_fleet(server.store)
     except Exception:  # noqa: BLE001 - optional fleet must never fail a snapshot
+        logging.getLogger(__name__).exception("Fleet snapshot projection failed")
         snapshot["fleet"] = None
+        snapshot["fleet_error"] = "projection_failed"
     body = timing.measured(part="encode_ms")(lambda: json.dumps(snapshot).encode("utf-8"))()
     path.parent.mkdir(parents=True, exist_ok=True)
     key = getattr(server.config, "signing_key", None)

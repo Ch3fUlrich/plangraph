@@ -1,1 +1,1 @@
-- Persist fleet registry rows and run-record counts in keeper snapshots, with unknown metrics until HOST-SAMPLES-API is wired and a failure-isolated loader outside keeper.
+- Persist fleet registry rows and run-record counts in keeper snapshots; refuse colliding aliases and log/mark projection failures. Exercise the real SQLite store, spawner record writer and hosts-page snapshot reader. Metrics remain unknown (not zero); HOST-FLEET-SNAPSHOT-METRICS owns sampler integration (D-5051).

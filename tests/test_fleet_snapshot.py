@@ -6,6 +6,8 @@ import pytest
 
 from plangraph import fleet_snapshot as fleet
 from plangraph.keeper.snapshot_io import write_snapshot
+from keeper_util import World
+from plangraph.spawner.service import SpawnService
 
 REGISTRY = [{"id": "a", "aliases": ["alias"], "class": "worker",
              "caps": {"max_runs": 4}}, {"id": "b"}]
@@ -57,21 +59,30 @@ def test_fleet_unknown_counts(runs):
 
 def test_fleet_loader_existing_records(tmp_path, monkeypatch):
     monkeypatch.setenv("PLANGRAPH_SPAWN_STATE", str(tmp_path))
-    store = SimpleNamespace(list_bus_hosts=lambda: [{"host": "a"}, {"host": "b"}])
-    assert fleet.load_fleet(store)["running_agents"] is None
-    record = tmp_path / "runs/run-one/record.json"
-    record.parent.mkdir(parents=True)
-    record.write_text(json.dumps({"host": "a", "run_id": "one", "status": "running"}))
-    result = fleet.load_fleet(store)
-    assert result["running_agents"] == 1
-    assert all(r["samples"] == "unavailable" for r in result["hosts"])
-    record.write_text("broken json")
-    assert fleet.load_fleet(store)["running_agents"] is None
-    assert not (tmp_path / "watchdog").exists()
+    world = World(tmp_path, backend="sqlite")
+    try:
+        world.store.upsert_bus_hosts([
+            dict(host=h, node_id=h, key_id=h, endpoint=None,
+                 health="offline", last_seen=None) for h in ("a", "b")])
+        assert fleet.load_fleet(world.store)["running_agents"] is None
+        service = SpawnService(state=tmp_path)
+        for i, status in enumerate(("running", "completed", "failed", "cancelled",
+                                    "queued", "dry_run", "refused")):
+            monkeypatch.setenv("PLANGRAPH_HOST", "a")
+            service._save(dict(run_id=f"run-{i}", status=status))
+        result = fleet.load_fleet(world.store)
+        assert result["running_agents"] == 1
+        assert [r["running_agents"] for r in result["hosts"]] == [1, 0]
+        assert all(r["sample"] == dict.fromkeys(fleet.METRICS) for r in result["hosts"])
+        (tmp_path / "runs/run-0/record.json").write_text("broken json")
+        assert fleet.load_fleet(world.store)["running_agents"] is None
+        assert not (tmp_path / "watchdog").exists()
+    finally:
+        world.close()
 
 
 @pytest.mark.parametrize("fails", [False, True])
-def test_fleet_loader_exception_snapshot_still_written(tmp_path, monkeypatch, fails):
+def test_fleet_loader_exception_snapshot_still_written(tmp_path, monkeypatch, fails, caplog):
     def load(store):
         if fails:
             raise OSError("unreadable")
@@ -85,3 +96,16 @@ def test_fleet_loader_exception_snapshot_still_written(tmp_path, monkeypatch, fa
     body = json.loads(path.read_text())
     assert body["items"] == []
     assert body["fleet"] == (None if fails else fleet.build_fleet(REGISTRY, runs=[]))
+    if fails:
+        assert body["fleet_error"] == "projection_failed"
+        assert "Fleet snapshot projection failed" in caplog.text
+
+
+@pytest.mark.parametrize("registry", [
+    [{"id": "a", "aliases": ["shared"]}, {"id": "b", "aliases": ["shared"]}],
+    [{"id": "a", "aliases": ["b"]}, {"id": "b"}],
+    [{"id": "a"}, {"id": "b", "aliases": ["a"]}],
+])
+def test_colliding_aliases_refused(registry):
+    with pytest.raises(ValueError, match="ambiguous registry alias"):
+        fleet.build_fleet(registry, {"a": {"cpu_percent": 1}}, [])
