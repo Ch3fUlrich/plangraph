@@ -4,7 +4,6 @@ use pg_worker_core::run::record::valid_run_id;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{io::Read, path::Path};
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Proc {
@@ -153,7 +152,6 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
     }
     Ok(result)
 }
-
 pub(crate) fn lock(
     root: &Path,
     path: &Path,
@@ -167,7 +165,6 @@ pub(crate) fn lock(
         .map_err(|_| ReconcileError::Io)?
         .ok_or(ReconcileError::Unknown)
 }
-
 /// Settlement requires both the recorded process and its confinement group gone.
 pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
     let Some(identity) = identity else {
@@ -257,7 +254,6 @@ pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
         Err(ReconcileError::Unknown)
     }
 }
-
 /// Caller holds the state lock; re-read under the record lock before proving gone.
 pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileError> {
     use pg_worker_core::run::record::{RunRecord, Status};
@@ -304,7 +300,6 @@ pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileErr
     )?;
     Ok(true)
 }
-
 /// Durable record-only settlement bridge, under state and record locks.
 pub(crate) fn settle(
     state: &Path,
@@ -357,14 +352,19 @@ pub(crate) fn settle(
         .ok_or_else(invalid)?
         / 1000;
     let row = outcome::build(&entry["leg"], role, &run, attempt, now_ms, duration)?;
-    if let Some(row) = row {
-        crate::evidence_row::validate(&crate::evidence_row::EvidenceRow::Outcome(row.clone()))
-            .map_err(|_| invalid())?;
-        entry["outcome"] = serde_json::to_value(row).map_err(|_| invalid())?;
-    } else {
-        let reason = outcome::missing(&entry["leg"]);
-        eprintln!("reconciliation outcome skipped: run_id={run} attempt={attempt} {reason}");
-        entry["outcome_skip_reason"] = json!(reason);
+    match row {
+        Ok(row) => entry["outcome"] = row,
+        Err(reason) => {
+            let mut log = pg_worker_core::run::livelog::LiveLog::new(
+                record.path().with_file_name("live.log"),
+                Default::default(),
+            );
+            log.feed(&format!(
+                "reconciliation outcome skipped: run_id={run} attempt={attempt} {reason}\n"
+            ));
+            log.flush();
+            entry["outcome_skip_reason"] = json!(reason);
+        }
     }
     entry["how"] = json!(how);
     entry["status"] = json!("orphaned");
@@ -384,9 +384,8 @@ pub(crate) fn settle(
     crate::gitconfig_guard::enforce(record, Status::Orphaned, diagnostic);
     record.save().map_err(|_| ReconcileError::Io)
 }
+#[path = "reconcile_store_outcome.rs"]
+mod outcome;
 #[cfg(test)]
 #[path = "reconcile_store_tests.rs"]
 mod tests;
-
-#[path = "reconcile_store_outcome.rs"]
-mod outcome;

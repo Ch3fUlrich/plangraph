@@ -46,40 +46,18 @@ fn reconcile_settle_python_record_without_keys() {
     let saved = RunRecord::read(&dir.0, "run-test").unwrap();
     assert_eq!(saved.status(), Some(Status::Orphaned));
     let entry = &saved.get("attempts").unwrap()[0];
-    assert!(entry.get("outcome").is_none());
-    assert_eq!(entry["outcome_skip_reason"], "route_key unavailable");
+    assert_eq!(entry["outcome"]["leg_key"], "agy/sample-model");
+    assert!(entry["outcome"]["route_key"].is_null());
+    assert!(entry.get("outcome_skip_reason").is_none());
+    assert_eq!(saved.get("events").unwrap()[0]["event"], "RUN_ORPHANED");
     assert_eq!(saved.get("events").unwrap().as_array().unwrap().len(), 1);
 }
 
 #[test]
 fn reconcile_settle_derives_python_leg_key() {
-    for (harness, model, expected) in [
-        ("agy", "sample-model", "agy/sample-model"),
-        ("agy", "provider/sample-model", "provider/sample-model"),
-        ("opencode", "sample-model", "sample-model"),
-    ] {
-        let dir = StateDir::new();
-        let mut record = dir.record();
-        record.set(
-            "attempts",
-            json!([{"status":"running", "started":1,
-            "leg":python_leg(harness, model)}]),
-        );
-        let output = std::process::Command::new("python3")
-            .args(["-c", "from types import SimpleNamespace; from plangraph.spawner.leg_probe import key; import sys; print(key(SimpleNamespace(harness=sys.argv[1], model=sys.argv[2])))", harness, model])
-            .env("PYTHONPATH", concat!(env!("CARGO_MANIFEST_DIR"), "/../../src"))
-            .output().unwrap();
-        assert!(output.status.success());
-        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected);
-        settle(&dir.0, &mut record, 1, "gone", 2000).unwrap();
-        assert_eq!(
-            record.get("attempts").unwrap()[0]["outcome_skip_reason"],
-            "route_key unavailable"
-        );
-        let mut leg = python_leg(harness, model);
-        leg["route_key"] = json!("route"); // Legacy keyed producer only.
+    for fixture in leg_fixtures().as_array().unwrap() {
         let row = outcome::build(
-            &leg,
+            &fixture["leg"],
             pg_worker_core::hosts::Role::Implement,
             "run-test",
             1,
@@ -88,7 +66,8 @@ fn reconcile_settle_derives_python_leg_key() {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(row.leg_key, expected);
+        assert_eq!(row["leg_key"], fixture["expected"]);
+        assert!(row["route_key"].is_null());
     }
 }
 
@@ -239,12 +218,17 @@ fn reconcile_missing_identity_is_unknown_and_not_settled() {
 #[cfg(unix)]
 mod cgroup_tests;
 
+fn leg_fixtures() -> Value {
+    serde_json::from_str(include_str!("../tests/fixtures/reconcile_legs.json")).unwrap()
+}
 fn python_leg(harness: &str, model: &str) -> Value {
-    json!({"id":"sample-leg", "tier":"subscription", "harness":harness,
-        "model":model, "family":"sample", "windows":["128k"],
-        "max_request_tokens":100000, "trains_on_data":false,
-        "claude_family":false, "note":"", "roles":["implement"],
-        "tool_mode":"tools", "disabled":null})
+    leg_fixtures()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["leg"]["harness"] == harness && row["leg"]["model"] == model)
+        .unwrap()["leg"]
+        .clone()
 }
 
 #[test]
@@ -272,7 +256,7 @@ fn reconcile_settle_rejects_malformed_leg_and_keys() {
 }
 
 #[test]
-fn reconcile_skip_read_after_write_python_and_rust() {
+fn reconcile_skip_reason_and_crate_live_log() {
     let dir = StateDir::new();
     let mut record = dir.record();
     record.set(
@@ -282,13 +266,11 @@ fn reconcile_skip_read_after_write_python_and_rust() {
     settle(&dir.0, &mut record, 1, "gone", 2000).unwrap();
     let saved = RunRecord::read(&dir.0, "run-test").unwrap();
     assert!(saved.get("attempts").unwrap()[0]["outcome_skip_reason"].is_string());
-    let output = std::process::Command::new("python3")
-        .args(["-c", "from plangraph.spawner.service import SpawnService; from pathlib import Path; import sys; s=SpawnService.__new__(SpawnService); s.state=Path(sys.argv[1]); assert s.result('run-test')['attempts'][0]['outcome_skip_reason']", dir.0.to_str().unwrap()])
-        .env("PYTHONPATH", concat!(env!("CARGO_MANIFEST_DIR"), "/../../src"))
-        .output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+    assert_eq!(
+        saved.get("attempts").unwrap()[0]["outcome_skip_reason"],
+        "leg_key unavailable"
     );
+    let log = std::fs::read_to_string(record.path().with_file_name("live.log")).unwrap();
+    assert!(log.contains("run_id=run-test attempt=1 leg_key unavailable"));
+    assert!(!log.contains("route_key unavailable"));
 }

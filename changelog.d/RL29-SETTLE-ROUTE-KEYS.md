@@ -1,10 +1,11 @@
 ### Fixed
 
-- Reconciliation settles Python-spawner orphan records without requiring synthetic
-  leg/route keys. It derives leg bookkeeping keys using Python's model/harness
-  rule; when route attribution is unavailable (Python does not write or compute a
-  route key), it logs run/attempt and the missing attribution and records why the
-  outcome row was skipped. This also settles leg-key-only records previously
-  refused for lacking a route key; fully keyed outcomes retain their attribution.
-  Non-object legs and wrong-typed keys remain invalid. Real Python records cannot
-  produce attributed outcomes until a route identity contract exists (D-4691).
+- Reconciliation settles real Python-spawner orphans as RUN_ORPHANED and writes
+  their outcome row, deriving leg_key using spawner.leg_probe.key(). The attempt
+  writer in SpawnService._spawn (spawner/service.py) writes asdict(chosen), not a
+  route identity, so route_key is null when absent; settlement never requires it.
+  Such unattributed rows remain in the run record, outside the attributed evidence
+  adapter. Explicit keys remain intact; malformed legs/keys remain invalid.
+  Missing leg identity records its skip reason through the shared private LiveLog
+  with run/attempt context. Shared full-Leg fixtures check Python/Rust key parity
+  without requiring Python in cargo tests.

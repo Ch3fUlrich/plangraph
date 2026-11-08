@@ -9,17 +9,6 @@ fn key(leg: &Value, name: &str) -> Result<Option<String>, ReconcileError> {
     }
 }
 
-pub(super) fn missing(leg: &Value) -> &'static str {
-    match (
-        leg["leg_key"].is_null() && !leg["model"].is_string(),
-        leg["route_key"].is_null(),
-    ) {
-        (true, true) => "leg_key and route_key unavailable",
-        (true, false) => "leg_key unavailable",
-        _ => "route_key unavailable",
-    }
-}
-
 pub(super) fn build(
     leg: &Value,
     role: pg_worker_core::hosts::Role,
@@ -27,13 +16,13 @@ pub(super) fn build(
     attempt: u32,
     now_ms: u64,
     duration: u64,
-) -> Result<Option<crate::evidence_row::OutcomeRow>, ReconcileError> {
+) -> Result<Result<Value, &'static str>, ReconcileError> {
     if !leg.is_object() {
         return Err(ReconcileError::Invalid);
     }
     let leg_key = key(leg, "leg_key")?;
     let route_key = key(leg, "route_key")?;
-    // src/plangraph/spawner/leg_probe.py:71, key(): bare agy models only.
+    // Python leg_probe.key(); checked by test_reconcile_leg_key_fixture.py.
     let leg_key = leg_key.or_else(|| {
         let model = leg["model"].as_str()?;
         Some(if leg["harness"] == "agy" && !model.contains('/') {
@@ -42,25 +31,29 @@ pub(super) fn build(
             model.to_owned()
         })
     });
-    // Python service writes asdict(Leg), with no route_key. No Python writer
-    // or route-key algorithm exists: do not invent evidence attribution.
-    let (Some(leg_key), Some(route_key)) = (leg_key, route_key) else {
-        return Ok(None);
+    // SpawnService._spawn's attempt writer (spawner/service.py) writes asdict(chosen),
+    // served_model and served_family, but no route identity. Keep it null rather
+    // than inventing attribution or losing a real orphan's outcome.
+    let Some(leg_key) = leg_key else {
+        return Ok(Err("leg_key unavailable"));
     };
-    Ok(Some(crate::evidence_row::OutcomeRow {
-        leg_key,
-        route_key,
-        ts: i64::try_from(now_ms / 1000).map_err(|_| ReconcileError::Invalid)?,
-        role,
-        outcome: "orphaned".into(),
-        run_id: run.into(),
-        attempt,
-        duration_s: Some(i64::try_from(duration).map_err(|_| ReconcileError::Invalid)?),
-        reset_at: None,
-        reset_assumed: false,
-        reset_clamped: false,
-        open_tools_at_kill: None,
-        s_eff_s: None,
-        line: "reconciled group ended".into(),
-    }))
+    if leg_key.is_empty() || route_key.as_ref().is_some_and(|key| key.is_empty()) {
+        return Err(ReconcileError::Invalid);
+    }
+    Ok(Ok(json!({
+        "leg_key": leg_key,
+        "route_key": route_key,
+        "ts": i64::try_from(now_ms / 1000).map_err(|_| ReconcileError::Invalid)?,
+        "role": role,
+        "outcome": "orphaned",
+        "run_id": run,
+        "attempt": attempt,
+        "duration_s": i64::try_from(duration).map_err(|_| ReconcileError::Invalid)?,
+        "reset_at": null,
+        "reset_assumed": false,
+        "reset_clamped": false,
+        "open_tools_at_kill": null,
+        "s_eff_s": null,
+        "line": "reconciled group ended"
+    })))
 }

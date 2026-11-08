@@ -67,6 +67,10 @@ impl Drop for GroupChild {
 fn reconcile_on_killed_group_orphaned_once_across_startups() {
     let dir = StateDir::new();
     let mut record = dir.record();
+    record.set(
+        "plan",
+        json!({"first_leg":python_leg("agy", "sample-model")}),
+    );
     let mut child = GroupChild::new();
     record.set("proc", child.identity());
     record.save().unwrap();
@@ -89,6 +93,11 @@ fn reconcile_on_killed_group_orphaned_once_across_startups() {
     let value: Value = serde_json::from_slice(&before).unwrap();
     assert_eq!(value["status"], "orphaned");
     assert_eq!(value["attempts"][0]["outcome"]["outcome"], "orphaned");
+    assert_eq!(
+        value["attempts"][0]["outcome"]["leg_key"],
+        "agy/sample-model"
+    );
+    assert!(value["attempts"][0]["outcome"]["route_key"].is_null());
     assert_eq!(value["events"].as_array().unwrap().len(), 1);
     assert_eq!(value["events"][0]["event"], "RUN_ORPHANED");
     assert_eq!(value["events"][0]["how"], "gone");
