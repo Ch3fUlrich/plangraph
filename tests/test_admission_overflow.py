@@ -12,6 +12,8 @@ from plangraph.spawner.seat_spawn import SeatSpawnMixin
 
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
+    monkeypatch.setattr(overflow, 'registry_caps', lambda: {'self': 'local', 'hosts': [
+        {'id': 'local', 'caps': {'max_runs': 4, 'mem_floor_mb': 3000}}]})
     path = tmp_path / 'hosts.json'
     monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(path))
     monkeypatch.setattr(a, 'resources', lambda service: (4, 6000))
@@ -21,7 +23,8 @@ def setup(tmp_path, monkeypatch):
     remote = Mock(return_value={'run_id': 'run-abc', 'status': 'running'})
     monkeypatch.setattr(overflow, 'remote_spawn', remote)
     monkeypatch.setattr(overflow, 'ready_records', lambda config: {
-        'host-a': {'ssh': 'host-a', 'ok': True, 'fresh': True, 'live_runs': 0, 'mem_available_mb': 6000}})
+        'host-a': {'ssh': 'host-a', 'ok': True, 'fresh': True, 'live_runs': 0,
+                   'mem_available_mb': 6000, 'run_cap': 4, 'floor_mb': 3000}})
     return service, path, remote
 
 
@@ -31,6 +34,19 @@ def test_local_room_never_overflows(setup, monkeypatch):
     monkeypatch.setattr(overflow, 'decide', Mock(side_effect=AssertionError('overflow called')))
     assert a.admit(service, {}) is None
     remote.assert_not_called()
+
+
+@pytest.mark.parametrize('live,memory,cap,floor', [(2, 6000, 2, 3000), (0, 6000, 4, 7000)])
+def test_registry_caps_override_legacy_limits(setup, monkeypatch, live, memory, cap, floor):
+    service, path, remote = setup
+    config = json.loads(path.read_text())
+    config.update(local_run_cap=99, local_floor_mb=0)
+    path.write_text(json.dumps(config))
+    monkeypatch.setattr(a, 'resources', lambda service: (live, memory))
+    monkeypatch.setattr(overflow, 'registry_caps', lambda: {'self': 'local', 'hosts': [
+        {'id': 'local', 'caps': {'max_runs': cap, 'mem_floor_mb': floor}}]})
+    assert a.admit(service, {})['host'] == 'host-a'
+    remote.assert_called_once()
 
 
 @pytest.mark.parametrize('resources', [(4, 6000), (0, 2999)])
@@ -118,7 +134,8 @@ def test_no_config_golden_records(setup, tmp_path, monkeypatch):
 
 def test_each_failure_reason(setup, monkeypatch):
     service, _, remote = setup
-    row = {'ssh': 'alias', 'ok': True, 'fresh': True, 'live_runs': 0, 'mem_available_mb': 6000}
+    row = {'ssh': 'alias', 'ok': True, 'fresh': True, 'live_runs': 0,
+           'mem_available_mb': 6000, 'run_cap': 4, 'floor_mb': 3000}
     monkeypatch.setattr(overflow, 'ready_records', lambda config: {
         'host-a': dict(row), 'host-b': dict(row)})
     remote.side_effect = [overflow.RemoteRefusal('remote copy failed'),

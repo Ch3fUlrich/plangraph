@@ -1,0 +1,11 @@
+[Unit]
+Description=Critical-path keeper inactivity alerts
+After=plangraph-keeper.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/plangraph
+Environment=PYTHONPATH=%h/code/plangraph/src
+EnvironmentFile=%h/.config/plangraph/crit-path-stall.env
+ExecStart=/usr/bin/python3 -m plangraph.keeper.crit_path_stall --config %h/.local/share/plangraph/keeper.json
+TimeoutStartSec=5min

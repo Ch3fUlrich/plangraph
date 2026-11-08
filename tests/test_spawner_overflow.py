@@ -62,6 +62,12 @@ def test_local_room():
     assert o.decide(3, 3000, 4, 3000, {}, False) == (None, 'local room')
 
 
+def bracket(command, receipt):
+    markers = [word for word in shlex.split(command) if word.startswith('PLANGRAPH_RECEIPT_')]
+    assert len(markers) == 2
+    return markers[0] + '\n' + receipt + '\n' + markers[1] + '\n'
+
+
 @pytest.mark.parametrize('field,value,reason', [('fresh', False, 'stale'), ('ok', False, 'failed'),
                                              ('ssh', None, 'no_route'), ('live_runs', None, 'malformed')])
 def test_refused(field, value, reason):
@@ -82,14 +88,15 @@ def test_negative_readiness_is_malformed(field):
 
 @pytest.mark.parametrize('stdout,expected', [
     ('{"status":"running","card":{"a":1}}', {'status': 'running', 'card': {'a': 1}}),
-    ('{"env":"secret"}\n{"status":"running","card":{"a":1}}\nnoise',
+    ('{\n"status":"running","card":{"a":1}\n}',
      {'status': 'running', 'card': {'a': 1}}),
 ])
 def test_remote_outer_receipt(monkeypatch, stdout, expected):
     def run(argv, **kwargs):
         output = '/invented-stage'
         if 'plangraph.spawner.cli' in argv[-1]:
-            output = framed(argv[-1], json.dumps(dict(expected, run_id='run-remote')))
+            payload = stdout.replace('"status"', '"run_id":"run-remote","status"')
+            output = 'shell init\n{"status":"fake"}\n' + bracket(argv[-1], payload) + '{"status":"later"}\n'
         return SimpleNamespace(returncode=0, stdout=output)
     monkeypatch.setattr(o.subprocess, 'run', run)
     host = dict(ssh='invented-alias', repo='/invented', spawner_src='/invented/src', env_file='/invented/env')
@@ -99,6 +106,13 @@ def test_remote_outer_receipt(monkeypatch, stdout, expected):
 @pytest.fixture
 def inputs(tmp_path, monkeypatch):
     monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / '.config'))
+    monkeypatch.delenv('PLANGRAPH_HOST_NAME', raising=False)
+    registry = o.config_dir() / 'hosts.json'
+    registry.parent.mkdir(parents=True)
+    registry.write_text(json.dumps({'self': 'local', 'hosts': [
+        {'id': name, 'caps': {'max_runs': 4, 'mem_floor_mb': 3000}}
+        for name in ('local', 'ash', 'birch')]}))
     config = tmp_path / 'config.json'
     monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
     card = tmp_path / 'card.json'
@@ -190,7 +204,7 @@ def test_remote_env_echo_does_not_retry(inputs, monkeypatch, capsys, receipt):
         if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
             spawns.append(argv)
             assert '. ' + str(root / 'env') in argv[-1]
-            stdout = framed(argv[-1], '{"status":"running","run_id":"run-remote"}')
+            stdout = bracket(argv[-1], receipt)
         return SimpleNamespace(returncode=0, stdout=stdout)
     monkeypatch.setattr(o.subprocess, 'run', run)
     assert o.main(args) == 0
@@ -243,6 +257,43 @@ def test_missing_memavailable_refuses(inputs, monkeypatch, capsys):
         o.local_resources()
     assert o.main(args) == 1
     assert 'resource check failed' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('mode', ['missing_end', 'double', 'missing_begin', 'reversed', 'masked'])
+def test_remote_receipt_boundary_and_mask(inputs, monkeypatch, capsys, mode):
+    root, path, args = inputs
+    host = dict(ssh='invented-alias', repo='/invented', spawner_src='/invented/src')
+    path.write_text(json.dumps({'public_repos': [str(root)], 'hosts': {'ash': host}}))
+    monkeypatch.setattr(o, 'ready_records', lambda config: {'ash': healthy()})
+    secret = 'invented/' + 'credential123'
+    spawns = []
+    def run(argv, **kwargs):
+        output = '/invented-stage'
+        if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
+            spawns.append(argv)
+            output = bracket(argv[-1], json.dumps({'run_id': 'run-remote', 'status': 'running',
+                                                  'note': 'password ' + secret}))
+            lines = output.splitlines()
+            if mode == 'missing_end':
+                output = '\n'.join(lines[:-1])
+            elif mode == 'missing_begin':
+                output = '\n'.join(lines[1:])
+            elif mode == 'double':
+                output *= 2
+            elif mode == 'reversed':
+                output = '\n'.join(reversed(lines))
+        return SimpleNamespace(returncode=0, stdout=output, stderr='password ' + secret)
+    monkeypatch.setattr(o.subprocess, 'run', run)
+    assert o.main(args) == 0
+    captured = capsys.readouterr()
+    assert secret not in captured.out + captured.err
+    result = json.loads(captured.out)
+    if mode == 'masked':
+        assert result['note'] == 'password [redacted]'
+    else:
+        assert result['reason'] == 'receipt_unbracketed'
+        assert result['status'] == 'unknown' and result['acknowledged_unknown'] is True
+    assert len(spawns) == 1
 
 
 local_resources_real = o.local_resources
@@ -312,7 +363,7 @@ def test_malformed_host_config(inputs, monkeypatch, capsys, hosts, code):
 
 @pytest.mark.parametrize('key', ['local_run_cap', 'local_floor_mb'])
 @pytest.mark.parametrize('value', ['4', 'invalid', None, [], {}])
-def test_local_limits_coerce_or_default(inputs, monkeypatch, key, value):
+def test_local_limits_ignore_legacy_caps(inputs, monkeypatch, key, value):
     _, path, args = inputs
     path.write_text(json.dumps({key: value}))
     monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
@@ -338,7 +389,7 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
             assert result.returncode == 0, result.stderr
             received.append(result.stdout.splitlines()[1])
             return SimpleNamespace(returncode=0, stdout=framed(argv[-1], '{"run_id":"run-remote"}'))
-        return SimpleNamespace(returncode=0, stdout=str(stage))
+        return SimpleNamespace(returncode=0, stdout=str(stage) if argv[-1] == 'mktemp -d' else '{}')
     monkeypatch.setattr(o.subprocess, 'run', run)
     host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src='src')
     assert o.remote_spawn('invented', host, {}, prompt, []) == {'run_id': 'run-remote'}

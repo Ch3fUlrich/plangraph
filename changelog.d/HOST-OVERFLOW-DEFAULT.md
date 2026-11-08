@@ -1,1 +1,2 @@
 - Default CLI and MCP spawn now overflow to a configured healthy host at the local run cap or memory floor; otherwise, report the "overflow unconfigured" reason.
+- Replan-0408 preserves HOST-RUN-CAPS registry limits for default CLI/MCP overflow and ignores legacy overflow-hosts.json caps.

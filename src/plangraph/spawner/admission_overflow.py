@@ -26,13 +26,8 @@ def admit(service, options, *, card=None):
             config = {}
     except (OSError, ValueError):
         config = {}
-    def limit(key, default):
-        try:
-            return max(0, int(config.get(key, default)))
-        except (ValueError, TypeError, OverflowError):
-            return default
     live, memory = resources(service)
-    cap, floor = limit('local_run_cap', 4), limit('local_floor_mb', 3000)
+    cap, floor = overflow.local_limits(overflow.registry_caps())
     if live < cap and memory >= floor:
         return None
     if not configured:

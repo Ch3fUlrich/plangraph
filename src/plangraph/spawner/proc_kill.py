@@ -8,10 +8,34 @@ is not proven ours is never snapshotted and never killed.
 import asyncio
 import os
 import time
+import sys
+import json
 from pathlib import Path
 
 WAIT_S = 2.0
 KILL_WAIT_S = 10.0
+
+
+def raise_oom_score(path=Path('/proc/self/oom_score_adj')):
+    """Raise only; injectable proc file keeps policy tests hermetic."""
+    try:
+        current = int(path.read_text().strip())
+        if current < 500:
+            path.write_text('500')
+        return dict(event='oom_score_adj', value=max(current, 500))
+    except PermissionError:
+        return dict(event='oom_score_adj_denied', errno=13)
+    except (OSError, ValueError) as error:
+        return dict(event='oom_score_adj_failed', errno=getattr(error, 'errno', None))
+
+
+async def oom_process_factory(*args, **kwargs):
+    path = kwargs.pop('oom_path', '/proc/self/oom_score_adj')
+    if sys.platform.startswith('linux'):
+        # Execute a fresh interpreter before policy I/O: no Python after fork.
+        # A file entry point also works with env_clear and arbitrary child cwd.
+        args = (sys.executable, str(Path(__file__).resolve()), str(path), *args)
+    return await asyncio.create_subprocess_exec(*args, **kwargs)
 
 
 class KillIncomplete(RuntimeError):
@@ -284,3 +308,29 @@ async def finish(root, ident, members, *, platform=None, command_factory=None,
                                 members=left, proc_root=proc_root, ident=ident)
     await verify(root, ident, members, platform=platform, proc_root=proc_root, wait_s=wait_s,
                  live_pids=live_pids, reterminate=reterminate)
+
+
+def record_oom_envelope(events, envelope):
+    """Child transport is untrusted: retain at most one event of each known kind."""
+    if not isinstance(envelope, dict) or set(envelope) != {'plangraph_oom'}:
+        return
+    event = envelope['plangraph_oom']
+    if not isinstance(event, dict) or event.get('event') not in {
+            'oom_score_adj', 'oom_score_adj_denied', 'oom_score_adj_failed'}:
+        return
+    name = event['event']
+    if not any(isinstance(old, dict) and old.get('event') == name for old in events):
+        events.append({'event': name})
+
+
+if __name__ == '__main__':
+    if len(sys.argv) < 3:
+        os.write(2, b'oom wrapper: expected score path and command\n')
+        sys.exit(2)
+    event = raise_oom_score(Path(sys.argv[1]))
+    os.write(2, (json.dumps({'plangraph_oom': event}) + '\n').encode())
+    try:
+        os.execvp(sys.argv[2], sys.argv[2:])
+    except OSError:
+        os.write(2, b'oom wrapper: command execution failed\n')
+        sys.exit(127)
