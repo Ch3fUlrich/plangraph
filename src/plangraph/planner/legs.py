@@ -104,7 +104,7 @@ DEFAULT_LEGS = (
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
     Leg("omniroute-agy-gemini-3.8-flash", "subscription", "opencode",
-        "omniroute/agy-gemini-3.8-flash", "gemini", ("128k",), 100000, False,
+        "omniroute/agy/gemini-3.8-flash-tiered-high", "gemini", ("128k",), 100000, False,
         roles=("review",), tool_mode="tools",
         note="D-4997: direct agy Gemini seat via gateway; response-side call-log witness"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
