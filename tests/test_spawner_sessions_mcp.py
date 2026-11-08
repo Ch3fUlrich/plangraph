@@ -6,11 +6,50 @@ import asyncio
 import json
 import os
 import threading
+import time
 import types
 import pytest
 from plangraph.routing_errors import ParameterRefused
 from sessions_support import UUID1, UUID2, MODEL, EFFORT, MODE, PROMPT, FakeRun, make, go
 from sessions_support import site  # noqa: F401
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("kind", ["empty", "whitespace", "missing_prompt_file"])
+def test_mcp_session_prompt_refused_before_launch(site, monkeypatch, kind, dry_run):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+
+    run = FakeRun()
+    server = MCPSpawnerServer(state=site.state, session_run=run)
+    monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
+    missing = site.tmp_path / "missing-prompt.txt"
+    args = dict(name="alpha", cwd=str(site.proj), model=MODEL, effort=EFFORT,
+                mcp_config=str(site.mcp), permission_mode=MODE, dry_run=dry_run)
+    if kind == "missing_prompt_file":
+        args["prompt_file"] = str(missing)
+    else:
+        args["prompt"] = "" if kind == "empty" else " \t\r\n"
+
+    async def invoke():
+        started = time.monotonic()
+        with pytest.raises(ParameterRefused) as caught:
+            await server.call_tool("plangraph_session_launch", args)
+        assert time.monotonic() - started < 1
+        if kind == "missing_prompt_file":
+            assert str(missing) in str(caught.value)
+        else:
+            assert "prompt" in str(caught.value) and "blank" in str(caught.value)
+
+    asyncio.run(invoke())
+    assert run.calls == []
+    assert not list((site.state / "runs").glob("*/record.json"))
+    assert not list((site.state / "sessions").glob("*.json"))
+    assert not list((site.state / "sessions").glob("*.prompt.txt"))
+    if dry_run:
+        assert not site.state.exists()  # dry-run refusals leave no audit or state
+    else:
+        audit = (site.state / "sessions" / "audit.log").read_text().splitlines()
+        assert len(audit) == 1 and json.loads(audit[0])["ok"] is False
 
 
 def test_mcp_tools_listed_and_dispatch(site, monkeypatch):

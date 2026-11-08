@@ -142,13 +142,15 @@ def test_missing_card_input_refused(tmp_path, service):
     assert isinstance(service.refusals[0][0], SpawnRefused)
 
 
-@pytest.mark.parametrize('kind', ['blank', 'missing_prompt', 'missing_input', 'valid'])
-def test_mcp_prompt_admission(tmp_path, kind):
+@pytest.mark.parametrize('dry_run', [False, True])
+@pytest.mark.parametrize('kind', ['empty', 'blank', 'missing_prompt', 'missing_input', 'valid'])
+def test_mcp_prompt_admission(tmp_path, kind, dry_run):
     import asyncio
     from plangraph.spawner.mcp import MCPSpawnerServer
     path = tmp_path / 'prompt.txt'
     text = 'Read the supplied material\n'
-    args = {'card': {'estimate_tokens': 10}, 'prompt': ' \n'}
+    args = {'card': {'estimate_tokens': 10},
+            'prompt': '' if kind == 'empty' else ' \n', 'dry_run': dry_run}
     if kind in ('missing_prompt', 'valid'):
         args.pop('prompt')
         args['prompt_file'] = str(path)
@@ -170,9 +172,10 @@ def test_mcp_prompt_admission(tmp_path, kind):
     else:
         with pytest.raises(SpawnRefused) as exc:
             asyncio.run(server.call_tool('plangraph_agent_spawn', args))
-        if kind != 'blank':
+        if kind not in ('empty', 'blank'):
             assert str(path) in str(exc.value)
         assert not payloads
+        assert not list(tmp_path.rglob('record.json'))
     assert time.monotonic() - start < 1
 
 
