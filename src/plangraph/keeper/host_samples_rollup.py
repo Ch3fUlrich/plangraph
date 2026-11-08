@@ -86,9 +86,11 @@ def combine(entries):
 
 def rollup(conn, source, target, width, now):
     groups = {}
+    latest = conn.execute(f'SELECT MAX(received_at) FROM host_samples_{target}').fetchone()[0]
+    lower = max(0, latest - width) if latest is not None else 0
     for row in conn.execute(f'SELECT * FROM host_samples_{source} '
-                            'WHERE received_at<? ORDER BY received_at,seq',
-                            (now // width * width,)).fetchall():
+                            'WHERE received_at>=? AND received_at<? ORDER BY received_at,seq',
+                            (lower, now // width * width)).fetchall():
         key = (row['host_id'], row['received_at'] // width * width)
         groups.setdefault(key, []).append(row)
     for (host, bucket), rows in groups.items():

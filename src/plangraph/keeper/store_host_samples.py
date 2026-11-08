@@ -136,17 +136,23 @@ class HostSamplesMixin:
         return dict(id=ident, host_id=host_id, token=token)
 
     def revoke_host_token(self, principal, token_id):
+        """Refuse unknown ids; revoking an already-revoked id is idempotent."""
         self._host_reader(principal, True)
         with self._write():
             self._host_reader(principal, True)
-            self.conn.execute('UPDATE host_sample_tokens SET revoked_at=? WHERE id=?',
-                              (self.clock(), token_id))
+            row = self.conn.execute('UPDATE host_sample_tokens '
+                                    'SET revoked_at=COALESCE(revoked_at,?) WHERE id=? RETURNING id',
+                                    (self.clock(), token_id)).fetchone()
+            if row is None:
+                raise Refused('not_found', 'unknown host token id')
         return dict(id=token_id)
 
     def ingest_host_sample(self, principal, body):
         self._host_pg()
         if type(principal) is not HostPrincipal:
             raise Refused('forbidden', 'host ingest token required')
+        if type(body) is not dict or not body:
+            invalid()
         with self._write():
             row = self.conn.execute('SELECT host_id FROM host_sample_tokens WHERE id=? '
                                     'AND revoked_at IS NULL', (principal.token_id,)).fetchone()
@@ -192,15 +198,22 @@ class HostSamplesMixin:
         globals()['host_id'](host_id)
         if resolution not in ('raw', '1m', '1h'):
             invalid()
-        start, end = float(start), float(end)
+        try:
+            start, end = float(start), float(end)
+        except (ValueError, TypeError, OverflowError):
+            invalid()
         number(start)
         number(end)
         if end < start:
             invalid()
+        cap = {'raw': 86400, '1m': 30 * 86400}.get(resolution)
+        if cap is not None and end - start > cap:
+            invalid()
         rows = self.conn.execute(f'SELECT * FROM host_samples_{resolution} WHERE host_id=? '
-                                 'AND received_at>=? AND received_at<? ORDER BY received_at,seq',
+                                 'AND received_at>=? AND received_at<? ORDER BY received_at,seq LIMIT 10000',
                                  (host_id, start, end)).fetchall()
-        return [self._host_row(row) for row in rows]
+        result = [self._host_row(row) for row in rows]
+        return dict(rows=result, truncated=True) if len(result) == 10000 else result
 
     def maintain_host_samples(self):
         self._host_pg()
