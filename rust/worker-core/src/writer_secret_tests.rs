@@ -65,6 +65,8 @@ pub(crate) fn fixture() -> (tempfile::TempDir, RepoEntry, String, String) {
         .trim()
         .to_owned();
     let repo = RepoEntry {
+        live_dir: None,
+        health_checks: None,
         root: root.to_str().unwrap().into(),
         worktrees_root: String::new(),
         remote: String::new(),
