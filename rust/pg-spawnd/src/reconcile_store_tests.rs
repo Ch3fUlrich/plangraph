@@ -170,7 +170,7 @@ mod cgroup_tests;
 #[cfg(target_os = "linux")]
 #[test]
 fn terminal_or_absent_row_requires_settled_probe() {
-    for status in ["running", "completed", "absent", "invalid"] {
+    for status in ["running", "completed", "absent", "missing", "invalid"] {
         for settled in [false, true] {
             let dir = StateDir::new();
             let (_root, scope) = cgroup_tests::ScopeRoot::new(&dir.0);
@@ -182,12 +182,17 @@ fn terminal_or_absent_row_requires_settled_probe() {
             );
             record.save().unwrap();
             let row = inventory(&dir.0).unwrap().remove(0);
-            if status == "absent" {
+            if status == "missing" {
+                // judge V8: no record.json at settle time takes the absent-record path.
+                std::fs::remove_file(record.path()).unwrap();
+            } else if status == "absent" {
                 record.set("attempts", json!([{"status":"completed"}]));
             } else {
                 record.set("status", json!(status));
             }
-            record.save().unwrap();
+            if status != "missing" {
+                record.save().unwrap();
+            }
             std::fs::write(
                 scope.join("cgroup.events"),
                 if settled {
