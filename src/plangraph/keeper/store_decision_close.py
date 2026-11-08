@@ -108,6 +108,7 @@ def close_decision(store, principal, key, decision, epoch, batch_ref, now):
             "UPDATE items SET state='done', reviewer=?, updated_at=? WHERE key=? AND epoch=?",
             (principal.name, store._iso(now), key, fresh["epoch"]))
         store._race_guard(cursor, key, fresh["state"], fresh["epoch"])
+        store._exec_clear(store.conn, key, principal, now)
         payload = {"decision_ref": decision, "decision_ids": [decision],
                    "row_sha256": digest, "decision_commit_sha": sha}
         store._append(principal, key, "closed_on_decision", payload, now)
