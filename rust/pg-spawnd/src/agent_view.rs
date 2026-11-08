@@ -23,7 +23,6 @@ fn children(path: &Path) -> Result<Vec<PathBuf>, String> {
         Ok(entries) => entries
             .map(|e| e.map(|e| e.path()).map_err(|e| e.to_string()))
             .collect(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -114,10 +113,7 @@ fn local(home: &Path, state: &Path, host: &str, now: f64) -> Value {
                         .strip_prefix("~/")
                         .map(|s| home.join(s))
                         .unwrap_or_else(|| s.into());
-                    match fs::metadata(&path) {
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                        _ => ingest(path, "opencode"),
-                    }
+                    ingest(path, "opencode");
                 }
             }
         }
