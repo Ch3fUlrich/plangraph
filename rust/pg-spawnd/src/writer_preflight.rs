@@ -4,7 +4,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) fn collect(cwd: &std::path::Path, prompt: &str) -> io::Result<Option<String>> {
+pub(crate) fn refuse_collection(cwd: &std::path::Path, prompt: &serde_json::Value, base: &mut serde_json::Value) -> bool {
+    let error = collect(cwd, prompt.as_str().unwrap_or("")).unwrap_or_else(|e| Some(e.to_string()));
+    if let Some(error) = error {
+        base["reason"] = serde_json::json!("test_env_unready");
+        base["error"] = serde_json::json!(error);
+        return true;
+    }
+    false
+}
+
+fn collect(cwd: &std::path::Path, prompt: &str) -> io::Result<Option<String>> {
     let tests: Vec<_> = prompt
         .split(|c: char| c.is_whitespace() || "`\"'(),;".contains(c))
         .filter(|s| s.starts_with("tests/") && (s.ends_with(".py") || s.contains(".py::")))

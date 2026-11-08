@@ -87,18 +87,7 @@ impl Runs {
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
         if !dry && crate::gitconfig_guard::writer_role(&role) {
-            let collection = crate::gitconfig_guard::writer_preflight::collect(
-                &launch.cwd,
-                args["prompt"].as_str().unwrap_or(""),
-            );
-            let error = match collection {
-                Ok(error) => error,
-                Err(error) => Some(error.to_string()),
-            };
-            if let Some(error) = error {
-                base["reason"] = json!("test_env_unready");
-                base["error"] = json!(error);
-                return Ok(create(state, &run_id, host, base, Status::Refused)?.to_value());
+            if crate::gitconfig_guard::writer_preflight::refuse_collection(&launch.cwd, &args["prompt"], &mut base) {                 return Ok(create(state, &run_id, host, base, Status::Refused)?.to_value());
             }
             let dir = crate::gitconfig_guard::run_dir(state, &run_id)
                 .map_err(|_| internal("invalid run id"))?;
