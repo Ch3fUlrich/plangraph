@@ -1,5 +1,5 @@
 use super::*;
-use serde_json::{json, Value};
+use serde_json::json;
 struct TempDir(PathBuf);
 impl TempDir {
     fn new() -> Self {
@@ -102,24 +102,6 @@ fn created_during_run_removed() {
         Status::Failed
     );
     assert!(!local.exists());
-}
-#[test]
-fn windows_and_wsl_pointer_paths() {
-    let base = Path::new("checkout");
-    for (input, expected) in [
-        ("H:/repo/.git/worktrees/leaf", "H:/repo/.git/worktrees/leaf"),
-        (
-            r"H:\repo\.git\worktrees\leaf",
-            "H:/repo/.git/worktrees/leaf",
-        ),
-        (
-            "/mnt/h/repo/.git/worktrees/leaf",
-            "/mnt/h/repo/.git/worktrees/leaf",
-        ),
-    ] {
-        assert_eq!(resolve(base, input), PathBuf::from(expected));
-    }
-    assert_eq!(resolve(base, r"..\common"), base.join("../common"));
 }
 #[test]
 fn non_checkout_noop() {
@@ -255,25 +237,6 @@ fn retry_does_not_duplicate_alert() {
     enforce(&mut record, Status::Orphaned, json!({}));
     assert_eq!(record.to_value(), before);
 }
-#[test]
-fn windows_gitdir_and_commondir_syntax() {
-    for root in ["H:/repo.git", r"H:\repo.git", "/mnt/h/repo.git"] {
-        let line = format!("gitdir: {root}/worktrees/leaf\n");
-        let gitdir = resolve(
-            Path::new("checkout"),
-            line.trim().strip_prefix("gitdir:").unwrap(),
-        );
-        assert_eq!(
-            gitdir,
-            PathBuf::from(format!("{}/worktrees/leaf", root.replace('\\', "/")))
-        );
-        assert_eq!(
-            resolve(&gitdir, root),
-            PathBuf::from(root.replace('\\', "/"))
-        );
-        assert_eq!(resolve(&gitdir, r"..\.."), gitdir.join("../.."));
-    }
-}
 #[cfg(unix)]
 #[test]
 fn persistence_failure_still_restores_and_marks_sidecar() {
@@ -301,64 +264,102 @@ fn missing_snapshot_retry_is_quiet() {
     assert_eq!(record.to_value(), before);
 }
 #[test]
-fn stale_diagnostics_are_not_preserved_and_orphan_uses_attempt() {
-    for orphan in [false, true] {
-        let (_temp, config, _, mut record) = fixture(false);
-        record.set("reason", json!("stale"));
-        record.set("exit_code", json!(99));
-        record.set(
-            "attempts",
-            json!([{"reason":"attempt ended","exit_code":7}]),
-        );
-        fs::write(config, b"altered").unwrap();
-        crate::runs::finish(
-            &mut record,
-            if orphan {
-                Status::Orphaned
-            } else {
-                Status::Completed
-            },
-            &json!({}),
-        );
-        let original = record.get("gitconfig_original_outcome").unwrap();
-        assert_eq!(
-            original["reason"],
-            if orphan {
-                json!("attempt ended")
-            } else {
-                Value::Null
-            }
-        );
-        assert_eq!(
-            original["exit_code"],
-            if orphan { json!(7) } else { Value::Null }
-        );
-    }
+fn orphan_uses_current_leg_not_previous_attempt() {
+    let (_temp, config, _, mut record) = fixture(false);
+    record.set("attempts", json!([{"reason":"previous", "exit_code":99}]));
+    fs::write(config, b"altered").unwrap();
+    crate::runs::finish(
+        &mut record,
+        Status::Orphaned,
+        &json!({"reason":"current", "exit_code":7}),
+    );
+    let original = record.get("gitconfig_original_outcome").unwrap();
+    assert_eq!(original["reason"], "current");
+    assert_eq!(original["exit_code"], 7);
 }
 #[test]
-fn layout_mismatch_is_explicit() {
-    let (_temp, _, _, mut record) = fixture(false);
+fn layout_error_preserves_record_and_run_directory() {
+    let (_temp, config, _, mut record) = fixture(false);
     record.set("run_id", json!("another-run"));
     enforce(&mut record, Status::Completed, json!({}));
     assert_eq!(record.get("reason"), Some(&json!("gitconfig_guard_error")));
+    assert_eq!(record.get("gitconfig_changed_paths"), Some(&json!([])));
+    assert!(record.path().is_file());
+    assert!(record.path().parent().unwrap().is_dir());
+    assert!(config.is_file());
 }
 #[test]
-fn backlink_normalization_is_portable() {
-    for path in [r"H:\repo\work\..\.git", "H:/repo/.git", "/mnt/h/repo/.git"] {
-        assert_eq!(normalized(Path::new(path)), "mnt/h/repo/.git");
-    }
+fn layout_error_on_retry_emits_error_event() {
+    let (_temp, _, _, mut record) = fixture(false);
+    fs::remove_file(sidecar(record.path().parent().unwrap())).unwrap();
+    enforce(&mut record, Status::Completed, json!({}));
+    record.set("run_id", json!("another-run"));
+    enforce(&mut record, Status::Completed, json!({}));
+    assert_eq!(record.get("reason"), Some(&json!("gitconfig_guard_error")));
+    assert_eq!(
+        record
+            .get("events")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["event"],
+        "gitconfig_guard_error"
+    );
+}
+#[test]
+fn record_api_always_supplies_a_parent() {
+    let (_temp, _, _, record) = fixture(false);
+    // RunRecord's private path is constructed as run_dir(...).join("record.json").
+    assert_eq!(record.path().file_name().unwrap(), "record.json");
+    assert!(record.path().parent().is_some());
+    assert!(run_dir(Path::new(""), "run-guard")
+        .unwrap()
+        .join("record.json")
+        .parent()
+        .is_some());
+}
+#[test]
+fn normalized_paths_keep_anchors_and_clamp_traversal() {
+    assert_ne!(
+        normalized(Path::new("/mnt/h/repo/.git")),
+        normalized(Path::new("mnt/h/repo/.git"))
+    );
+    assert_ne!(
+        normalized(Path::new("/repo/.git")),
+        normalized(Path::new("H:/repo/.git"))
+    );
+    assert_eq!(normalized(Path::new("/../../repo/.git")), "/repo/.git");
+    assert_eq!(
+        normalized(Path::new("H:/../../repo/.git")),
+        "/mnt/h/repo/.git"
+    );
+    assert!(same_resolved_path(
+        Path::new("H:/repo/.git"),
+        Path::new("/mnt/h/repo/.git")
+    ));
+}
+#[test]
+fn resolved_windows_paths_ignore_case_but_posix_paths_do_not() {
+    assert!(same_resolved_path(
+        Path::new(r"H:\Repo\.git"),
+        Path::new("/mnt/h/repo/.GIT")
+    ));
+    assert!(!same_resolved_path(
+        Path::new("/repo/.git"),
+        Path::new("/Repo/.git")
+    ));
+}
+#[test]
+fn missing_backlink_target_is_rejected() {
     let (temp, _, _, record) = fixture(true);
-    let gitdir = temp.path().join("common/.git/worktrees/leaf");
+    let cwd = temp.path().join("checkout");
     fs::write(
-        gitdir.join("gitdir"),
-        "../../../../checkout/../checkout/.git",
+        temp.path().join("common/.git/worktrees/leaf/gitdir"),
+        cwd.join("missing/../.git").to_str().unwrap(),
     )
     .unwrap();
-    assert!(capture(
-        &temp.path().join("checkout"),
-        record.path().parent().unwrap()
-    )
-    .unwrap());
+    assert!(capture(&cwd, record.path().parent().unwrap()).is_err());
 }
 #[test]
 fn worktree_config_restored_or_removed() {

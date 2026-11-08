@@ -39,24 +39,49 @@ fn resolve(base: &Path, text: &str) -> PathBuf {
 }
 
 fn normalized(path: &Path) -> String {
-    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
     let mut text = path.to_string_lossy().replace('\\', "/");
     text = text.strip_prefix("//?/").unwrap_or(&text).to_owned();
     let b = text.as_bytes();
     if b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
         text = format!("/mnt/{}{}", (b[0] as char).to_ascii_lowercase(), &text[2..]);
     }
+    let absolute = text.starts_with('/');
+    let floor = if text.as_bytes().get(6) == Some(&b'/') && text.starts_with("/mnt/") {
+        2
+    } else {
+        0
+    };
     let mut parts = Vec::new();
     for part in text.split('/') {
         match part {
             "" | "." => {}
             ".." => {
-                parts.pop();
+                if parts.len() > floor && parts.last().is_some_and(|p| *p != "..") {
+                    parts.pop();
+                } else if !absolute {
+                    parts.push(part);
+                }
             }
             _ => parts.push(part),
         }
     }
-    parts.join("/")
+    format!("{}{}", if absolute { "/" } else { "" }, parts.join("/"))
+}
+
+fn same_resolved_path(left: &Path, right: &Path) -> bool {
+    let left = normalized(left);
+    let right = normalized(right);
+    let windows = |p: &str| {
+        p.strip_prefix("/mnt/").is_some_and(|tail| {
+            let b = tail.as_bytes();
+            b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b'/'
+        })
+    };
+    if windows(&left) || windows(&right) {
+        left.eq_ignore_ascii_case(&right)
+    } else {
+        left == right
+    }
 }
 
 pub(crate) fn capture(cwd: &Path, run_dir: &Path) -> io::Result<bool> {
@@ -88,7 +113,9 @@ pub(crate) fn capture(cwd: &Path, run_dir: &Path) -> io::Result<bool> {
                 }
                 // Git's backlink binds this administrative directory to this checkout.
                 let backlink = fs::read_to_string(gitdir.join("gitdir"))?;
-                if normalized(&resolve(&gitdir, &backlink)) != normalized(&dot) {
+                let backlink = fs::canonicalize(resolve(&gitdir, &backlink))?;
+                let dot = fs::canonicalize(&dot)?;
+                if !same_resolved_path(&backlink, &dot) {
                     return Err(io::Error::other("gitconfig_untrusted_gitdir"));
                 }
                 paths.push(common.join("config"));
@@ -173,15 +200,11 @@ pub(crate) fn enforce(
         .zip(record.get("run_id"))
         .and_then(|(state, id)| run_dir(state, id.as_str()?).ok());
     let layout_error = dir.as_deref() != parent || dir.is_none();
-    let dir = dir
-        .or_else(|| parent.map(Path::to_owned))
-        .unwrap_or_default();
-    let path = sidecar(&dir);
     let snapshots = (!layout_error)
-        .then(|| fs::read(path).ok())
+        .then(|| dir.as_deref().and_then(|dir| fs::read(sidecar(dir)).ok()))
         .flatten()
         .and_then(|b| serde_json::from_slice::<Vec<Snapshot>>(&b).ok());
-    let mut paths: Vec<_> = snapshots
+    let paths: Vec<_> = snapshots
         .as_ref()
         .map(|s| {
             s.iter()
@@ -192,12 +215,8 @@ pub(crate) fn enforce(
                 .collect()
         })
         .unwrap_or_default();
-    if layout_error {
-        paths.push(record.path().to_owned());
-        paths.push(dir.clone());
-    }
     let previous = record.get("gitconfig_original_outcome").is_some();
-    if previous && snapshots.is_none() {
+    if previous && snapshots.is_none() && !layout_error {
         return Status::Failed;
     }
     if snapshots.is_some() && paths.is_empty() {
@@ -236,9 +255,9 @@ pub(crate) fn enforce(
     record.set("gitconfig_restore_error", json!(error));
     if !persisted || !save_verdict(record) {
         record.set("gitconfig_verdict_save_error", json!(true));
-        if !save_verdict(record) {
+        if !save_verdict(record) && !layout_error {
             let _ = durable(
-                &dir.join("gitconfig.verdict-save-error"),
+                &dir.unwrap().join("gitconfig.verdict-save-error"),
                 b"gitconfig_verdict_save_error\n",
             );
         }
