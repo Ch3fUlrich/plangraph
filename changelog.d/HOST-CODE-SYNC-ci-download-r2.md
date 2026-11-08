@@ -1,0 +1,1 @@
+- **HOST-CODE-SYNC:** Cache verified gitleaks 8.30.1 with a bounded GitHub attempt and Go proxy/checksum-database fallback; guard every release, Temporal CDN, and Go install download against uncached or unverified additions.
