@@ -275,6 +275,7 @@ fn resolved_windows_paths_ignore_case_but_posix_paths_do_not() {
         Path::new("/Repo/.git")
     ));
 }
+#[cfg(unix)] // Windows resolves `missing\\..` lexically: the backlink is the real .git
 #[test]
 fn missing_backlink_target_is_rejected() {
     let (temp, _, _, record) = fixture(true);
