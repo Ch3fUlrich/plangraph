@@ -80,7 +80,6 @@ fn unchanged_outcome_untouched() {
 fn per_worktree_changed_restored() {
     let (_temp, _, local, mut record) = fixture(true);
     fs::write(&local, b"original local\n").unwrap();
-    // Recapture after adding an existing worktree config.
     let snapshots_path = record.path().with_file_name("gitconfig.snapshot");
     let mut snapshots: Vec<Snapshot> =
         serde_json::from_slice(&fs::read(&snapshots_path).unwrap()).unwrap();
@@ -227,7 +226,6 @@ fn persistence_failure_still_restores_and_marks_sidecar() {
     let (_temp, config, _, mut record) = fixture(false);
     let original = fs::read(&config).unwrap();
     fs::write(&config, b"altered").unwrap();
-    // An unreplaceable record path forces atomic saves to fail, even as root.
     fs::remove_file(record.path()).unwrap();
     fs::create_dir(record.path()).unwrap();
     enforce(&mut record, Status::Completed, json!({}));
@@ -256,7 +254,7 @@ fn orphan_selects_attempt_by_id_through_settle() {
         json!([
             {"started":1,"reason":"current","exit_code":7,
              "leg":{"leg_key":"leg","route_key":"route"}},
-            {"started":1,"reason":"previous","exit_code":99}
+            {"started":0,"reason":"previous","exit_code":99}
         ]),
     );
     fs::write(config, b"altered").unwrap();
@@ -264,7 +262,7 @@ fn orphan_selects_attempt_by_id_through_settle() {
     let original = record.get("gitconfig_original_outcome").unwrap();
     assert_eq!(original["status"], "orphaned");
     assert_eq!(original["reason"], "current");
-    assert!(original["exit_code"].is_null());
+    assert_eq!(original["exit_code"], 7);
 }
 #[test]
 fn resolved_windows_paths_ignore_case_but_posix_paths_do_not() {
@@ -321,7 +319,6 @@ fn worktree_config_symlink_swap_restored() {
     assert!(!path.exists());
     assert_eq!(fs::read(outside).unwrap(), b"untouched");
 }
-
 #[test]
 fn resolve_preserves_windows_and_wsl_spellings() {
     assert_eq!(
@@ -353,19 +350,32 @@ fn extended_unc_backlink_is_refused() {
         r"\\?\UNC\srv\share",
     )
     .unwrap();
-    let error = capture(
-        &temp.path().join("checkout"),
-        record.path().parent().unwrap(),
-    )
-    .unwrap_err();
+    let cwd = temp.path().join("checkout");
+    let error = capture(&cwd, record.path().parent().unwrap()).unwrap_err();
     assert_eq!(error.to_string(), "gitconfig_capture_refused");
 }
 #[test]
 fn mixed_posix_windows_case_is_exact() {
-    assert!(!same_resolved_path(
-        Path::new("/MNT/H/repo/.git"),
-        Path::new("H:/repo/.git")
-    ));
+    let drive = Path::new("H:/repo/.git");
+    assert!(same_resolved_path(drive, Path::new("/mnt/h/repo/.git")));
+    for (path, expected) in [
+        ("/../../repo", "/repo"),
+        ("H:/../../repo", "/mnt/h/repo"),
+        ("/mnt/h/../../repo", "/mnt/h/repo"),
+        ("../../repo", "../../repo"),
+        ("/repo/./child/../.git", "/repo/.git"),
+    ] {
+        assert_eq!(normalized(Path::new(path)), expected);
+    }
+    assert!(!same_resolved_path(Path::new("/MNT/H/repo/.git"), drive));
+}
+#[test]
+fn sync_file_and_directory() {
+    let temp = TempDir::new();
+    let file = temp.path().join("sync-file");
+    fs::write(&file, b"durable").unwrap();
+    sync(&file).unwrap();
+    sync(temp.path()).unwrap();
 }
 #[cfg(unix)]
 #[test]
@@ -383,9 +393,7 @@ fn layout_error_save_failure_marks_real_directory_on_every_retry() {
         let events = record.get("events").unwrap().as_array().unwrap();
         assert_eq!(events.len(), count);
         assert_eq!(events.last().unwrap()["event"], "gitconfig_guard_error");
-        assert!(record
-            .path()
-            .with_file_name("gitconfig.verdict-save-error")
-            .is_file());
+        let marker = record.path().with_file_name("gitconfig.verdict-save-error");
+        assert!(marker.is_file());
     }
 }

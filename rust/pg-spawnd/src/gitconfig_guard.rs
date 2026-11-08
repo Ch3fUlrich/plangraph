@@ -183,9 +183,18 @@ fn safe(path: &Path) -> io::Result<()> {
 
 fn durable(path: &Path, bytes: &[u8]) -> io::Result<()> {
     atomic_write_private(path, bytes)?;
-    fs::File::open(path)?.sync_all()?;
-    #[cfg(unix)]
-    fs::File::open(path.parent().unwrap())?.sync_all()?;
+    sync(path)?;
+    sync(path.parent().unwrap())?;
+    Ok(())
+}
+
+fn sync(path: &Path) -> io::Result<()> {
+    if path.is_dir() {
+        #[cfg(unix)]
+        fs::File::open(path)?.sync_all()?;
+    } else {
+        fs::OpenOptions::new().write(true).open(path)?.sync_all()?;
+    }
     Ok(())
 }
 
@@ -281,9 +290,8 @@ fn save_verdict(record: &RunRecord) -> bool {
 }
 
 fn durable_record(record: &RunRecord) -> io::Result<()> {
-    fs::File::open(record.path())?.sync_all()?;
-    #[cfg(unix)]
-    fs::File::open(record.path().parent().unwrap())?.sync_all()?;
+    sync(record.path())?;
+    sync(record.path().parent().unwrap())?;
     Ok(())
 }
 
