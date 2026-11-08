@@ -111,6 +111,43 @@ mod reconcile_store_settle_probe_tests {
     }
 
     #[test]
+    fn rl29_live_group_stays_live_past_hold_deadline() {
+        let dir = StateDir::new();
+        let mut member = Member::new();
+        let mut identity = member.identity();
+        let (_guard, group) = populated(&dir, &member, &mut identity);
+        let mut record = dir.record();
+        record.set("proc", identity.clone());
+        record.save().unwrap();
+        seed_hold(&dir);
+        let mut hold = saved(&dir);
+        // Inject a monotonic clock observation far beyond the original budget.
+        hold["effective_now_ms"] = json!(u64::MAX);
+        std::fs::write(sidecar(&dir), serde_json::to_vec(&hold).unwrap()).unwrap();
+        for _ in 0..3 {
+            assert!(matches!(
+                gone(
+                    "run-test",
+                    Some(&serde_json::from_value(identity.clone()).unwrap())
+                ),
+                Ok(false)
+            ));
+            assert!(!reconcile(&dir).unwrap());
+            assert!(member.alive());
+            assert_eq!(
+                saved(&dir),
+                hold,
+                "live proof must not spend uncertainty budget"
+            );
+            assert_eq!(
+                RunRecord::read(&dir.0, "run-test").unwrap().status(),
+                Some(Status::Running)
+            );
+        }
+        repair_and_reclaim(&dir, &mut member, &group, identity);
+    }
+
+    #[test]
     fn rl29_dead_leader_populated_saved_group_reclaims_after_grace() {
         let dir = StateDir::new();
         let mut member = Member::new();

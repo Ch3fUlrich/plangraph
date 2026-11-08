@@ -243,13 +243,16 @@ pub(crate) fn orphan_with(
     }
     #[cfg(windows)]
     let result = crate::reconcile::job::settle_probe(row, authority);
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     let result = gone(&row.run_id, row.identity.as_ref());
+    // No authenticated confinement/leader proof backend on other Unix hosts.
+    #[cfg(not(any(target_os = "linux", windows)))]
+    let result: Result<bool, ReconcileError> = Err(ReconcileError::Unknown);
     if !matches!(result, Ok(true)) {
         match result {
-            Ok(false) => {
-                hold::retain(&dir, row)?;
-            }
+            // Positive liveness is not uncertainty: never spend the stale
+            // identity budget or emit RECONCILE_UNRESOLVED for a live run.
+            Ok(false) => {}
             Err(ReconcileError::Unknown) => {
                 if !hold::retain(&dir, row)? {
                     return Err(ReconcileError::Unknown);
