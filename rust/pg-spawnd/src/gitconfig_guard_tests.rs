@@ -1,5 +1,4 @@
-use super::*;
-use serde_json::json;
+use {super::*, serde_json::json};
 pub(super) struct TempDir(PathBuf);
 impl TempDir {
     pub(super) fn new() -> Self {
@@ -38,7 +37,7 @@ pub(super) fn fixture(linked: bool) -> (TempDir, PathBuf, PathBuf, RunRecord) {
         temp.path(),
         "run-guard",
         "local",
-        json!({}).as_object().unwrap().clone(),
+        json!({"attempts":[{}]}).as_object().unwrap().clone(),
         Status::Running,
         1.0,
     )
@@ -56,7 +55,7 @@ fn changed_common_worktree_restored_and_failed_after_restart() {
     fs::write(&config, b"[core]\n\tworktree = intruder\n").unwrap();
     drop(record);
     let mut record = RunRecord::read(temp.path(), "run-guard").unwrap();
-    crate::runs::finish(&mut record, Status::Completed, &json!({}));
+    crate::runs::finish(&mut record, Status::Completed, &json!({}), 1);
     assert_eq!(fs::read(config).unwrap(), before);
     assert_eq!(record.status(), Some(Status::Failed));
     assert_eq!(record.get("reason"), Some(&json!("gitconfig_tampered")));
@@ -144,6 +143,7 @@ fn verdict_survives_retry_and_preserves_diagnostic() {
         &mut record,
         Status::Failed,
         &json!({"reason":"harness exit 7","exit_code":7}),
+        1,
     );
     let mut record = RunRecord::read(temp.path(), "run-guard").unwrap();
     assert_eq!(
