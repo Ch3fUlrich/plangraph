@@ -235,7 +235,23 @@ pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
             _ => Err(ReconcileError::Unknown),
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        let name = identity.group.as_deref().ok_or(ReconcileError::Unknown)?;
+        let run = name
+            .strip_prefix("Local\\pg-")
+            .ok_or(ReconcileError::Unknown)?;
+        let copy = Proc {
+            pid: identity.pid,
+            start_time: identity.start_time,
+            group: identity.group.clone(),
+            pgid: identity.pgid,
+        };
+        crate::reconcile::job::Group::open(run, copy)
+            .and_then(|mut job| job.is_gone())
+            .map_err(|_| ReconcileError::Unknown)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = identity;
         Err(ReconcileError::Unknown)
@@ -254,6 +270,10 @@ pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileErr
         return Ok(true);
     };
     if !gone(current.identity.as_ref())? {
+        return Ok(false);
+    }
+    #[cfg(windows)]
+    if !crate::reconcile::job::orphan_empty(&current)? {
         return Ok(false);
     }
     let mut record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;
@@ -363,6 +383,7 @@ pub(crate) fn settle(
         entry["reason"] = json!("reattached_group_exited");
     }
     entry["exit_code"] = Value::Null;
+    let diagnostic = entry.clone();
     record
         .transition(Status::Orphaned, now_ms as f64 / 1000.0)
         .map_err(|_| invalid())?;
@@ -371,9 +392,9 @@ pub(crate) fn settle(
         .push_event(json!({"event":"RUN_ORPHANED", "attempt":attempt,"how":how,
         "idempotency_key":[run,attempt,"RUN_ORPHANED"]}))
         .map_err(|_| invalid())?;
+    crate::gitconfig_guard::enforce(record, Status::Orphaned, diagnostic);
     record.save().map_err(|_| ReconcileError::Io)
 }
-
 #[cfg(test)]
 #[path = "reconcile_store_tests.rs"]
 mod tests;

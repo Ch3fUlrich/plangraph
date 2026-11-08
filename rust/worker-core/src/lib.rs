@@ -64,7 +64,6 @@ pub mod scope;
 pub mod seat_pool;
 pub mod slots;
 pub mod stall;
-#[cfg(unix)]
 pub mod watch;
 pub mod workspace;
 pub mod workspace_bundle;

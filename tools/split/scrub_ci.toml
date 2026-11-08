@@ -853,3 +853,21 @@ path = "deploy/omniroute/README.md"
 rule = "credential-shape"
 value_sha256 = "ffcc82384f460741a3a5a31cd6330c0240a63318fc05b387df830391eaca456c"
 why = "Relative evidence directory fragment, not a credential"
+
+[[scrub.allow_value]]
+path = "configuration/opencode/plugins/bash-guard/index.mjs"
+rule = "credential-shape"
+value_sha256 = "af896a5f354b5297fb7dde9efe8f2b1de11e2fc5315fe28ce1d7468c1953b7ab"
+why = "AutoOS bash-guard plugin comment naming a guarded path (byte copy @f806c42b, D-4844)"
+
+[[scrub.allow_value]]
+path = "configuration/opencode/plugins/bash-guard/index.mjs"
+rule = "credential-shape"
+value_sha256 = "304cb3d3a87d6100ec926af8140985ef874d05ac3c8d0e1e66d3192c9c4647c0"
+why = "AutoOS bash-guard plugin comment naming a guarded path (byte copy @f806c42b, D-4844)"
+
+[[scrub.allow_value]]
+path = "configuration/opencode/plugins/bash-guard/index.mjs"
+rule = "credential-shape"
+value_sha256 = "fc27ccfa93f112c61779d5d8e15c2a47633c1a27a17cc66b5021e490d76d347a"
+why = "AutoOS bash-guard plugin comment naming a guarded path (byte copy @f806c42b, D-4844)"

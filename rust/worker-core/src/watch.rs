@@ -5,6 +5,9 @@ use crate::{
     stall,
 };
 use std::{io, process::ExitStatus};
+#[cfg(any(windows, test))]
+#[path = "watch_windows.rs"]
+pub mod windows;
 
 #[cfg(all(test, unix))]
 #[path = "watch_blind_tests.rs"]
@@ -12,7 +15,7 @@ mod blind_tests;
 #[path = "watch_supervise.rs"]
 #[cfg(unix)]
 mod supervise;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "watch_tests.rs"]
 mod tests;
 #[path = "watch_unix.rs"]

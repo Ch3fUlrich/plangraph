@@ -80,7 +80,7 @@ fn baseline(state: &std::path::Path, since: i64, until: i64, report: &Value) -> 
     pg_worker_core::run::record_io::atomic_write_private(&path, report.to_string().as_bytes())
         .map_err(|e| e.to_string())
 }
-fn timestamp(s: &str) -> Result<i64, String> {
+pub(crate) fn timestamp(s: &str) -> Result<i64, String> {
     let parse = || -> Option<i64> {
         let b = s.as_bytes();
         if !s.is_ascii()
