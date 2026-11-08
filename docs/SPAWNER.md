@@ -1,4 +1,13 @@
 # Plangraph Spawner & Model Routing Architecture
+### Writer result finalization
+
+`worker-core::writer_result::check_result` runs the mandatory Rust file-size
+gate before returning a checked result; export rechecks it before content gates,
+bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
+and no publish/push is attempted. Changed tracked files use the Python CI gate's
+400-line rule, exemptions, binary detection, splitlines counting and baseline
+ratchet. CI still runs unchanged `tools/check_file_size.py` over all tracked files.
+
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.
 ### Doctor host source checks

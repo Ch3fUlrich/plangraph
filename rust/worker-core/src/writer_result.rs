@@ -35,6 +35,8 @@ pub enum WriterError {
     Unrecorded,
     #[error("conflict")]
     Conflict,
+    #[error("HOLD gate file-size: {0}")]
+    FileSize(String),
 }
 impl From<std::io::Error> for WriterError {
     fn from(_: std::io::Error) -> Self {
@@ -135,6 +137,7 @@ pub fn check_result(
             return Err(WriterError::Verify);
         }
     }
+    file_size::check(checkout, base, &head).map_err(WriterError::FileSize)?;
     Ok(CheckedResult {
         repo_id: workspace.repo_id.clone(),
         base_sha: base.into(),
@@ -201,3 +204,6 @@ pub fn export_result(
 #[cfg(test)]
 #[path = "writer_result_tests.rs"]
 mod tests;
+
+#[path = "writer_file_size.rs"]
+mod file_size;
