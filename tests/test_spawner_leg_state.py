@@ -26,6 +26,15 @@ def test_catalog_tiers_preserve_roles():
     assert next(l for l in updated if l.id == 'deepseek').tier == 'paid'
 
 
+def test_manual_disable_expiry():
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS, leg_active
+    leg = replace(DEFAULT_LEGS[1], disabled='temporary operator stop', expires=160)
+    assert not leg_active(leg, now=159)
+    assert leg_active(leg, now=160)
+    assert not leg_active(replace(leg, expires=None), now=100000)
+
+
 def test_old_limit_evidence_reprobes(store):
     store.record_provider_response('test/leg', 429, 'quota', {'Retry-After': '86400'}, 'test', now=100)
     assert store.leg_status('test/leg', now=100 + 21600)['state'] == 'reprobe'

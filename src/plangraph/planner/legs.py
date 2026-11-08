@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import time
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,7 +58,7 @@ class Leg:
     roles: tuple[str, ...] = ("orchestrate",)
     tool_mode: str = "tools"
     disabled: str | None = None
-
+    expires: float | None = None
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
          note=""):
@@ -64,7 +66,6 @@ def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=Fals
                claude, note)
 
 
-#: D25 order.  Position is the preference inside a tier.
 DEFAULT_LEGS: tuple[Leg, ...] = (
     _leg("qodercli-qwen3.8-flash", "free", "qodercli", "Qwen3.8-Flash", "qwen",
          ("128k", "256k"), 100000, False,
@@ -140,7 +141,6 @@ DEFAULT_LEGS = (
         disabled="D-4193 upstream route not verified",
         note="D-4193 upstream route not verified, conservative"),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
-    # D-3605 Haiku leg: last, so it sorts after every non-claude review leg.
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
         tool_mode="tools",
@@ -164,9 +164,10 @@ _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",
 _STR_FIELDS = ("id", "tier", "harness", "model", "family", "note", "tool_mode")
 
 
-def leg_active(leg: Leg) -> bool:
-    """Local policy may disable a leg; OmniRoute owns temporal availability."""
-    return leg.disabled is None
+def leg_active(leg: Leg, now=None) -> bool:
+    """Temporary operator stops expire; permanent safety exclusions do not."""
+    return leg.disabled is None or (leg.expires is not None and
+                                   (time.time() if now is None else now) >= leg.expires)
 
 
 def _is_int(value) -> bool:
@@ -204,6 +205,9 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         problems.append(f"{where}.tool_mode: {raw['tool_mode']!r} not in {TOOL_MODES}")
     windows = raw.get("windows")
     disabled = raw.get("disabled")
+    expiry = raw.get('expires')
+    if expiry is not None and (isinstance(expiry, bool) or not isinstance(expiry, (int, float)) or not math.isfinite(expiry)):
+        problems.append(f"{where}.expires: must be a finite epoch timestamp")
     if disabled is not None and (not isinstance(disabled, str) or not disabled.strip()):
         problems.append(f"{where}.disabled: must be a non-empty reason string")
     roles = raw.get("roles", ("orchestrate",))
@@ -228,7 +232,6 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     if len(problems) > start:
         return None
     data = dict(raw)
-    data.pop("expires", None)  # Old operator rows remain loadable, without local expiry.
     data["windows"] = tuple(windows)
     data["roles"] = tuple(roles)
     return Leg(**data)
