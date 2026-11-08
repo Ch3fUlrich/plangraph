@@ -249,15 +249,18 @@ def audit_once(out_dir, router_log, cursor, known_keys, *, emit=None):
         last = max(last, number)
         if number <= after:
             continue
-        if re.search(r"(?<![\w-])GO(?![\w-])", line) and not re.search(
-                r"\bGO-HEAD\s*[:=]?\s*`?[0-9a-fA-F]{40}(?![0-9a-fA-F])", line):
+        cells = line.strip().strip("|").split("|")
+        decision = cells[2] if len(cells) >= 3 else line
+        if re.search(r"(?<![\w-])GO(?![\w-])", decision) and not re.search(
+                r"\bGO-HEAD\s*[:=]?\s*`?[0-9a-fA-F]{40}(?![0-9a-fA-F])", decision):
             findings.append(f"{row_id}: GO without 40-hex GO-HEAD")
         # A directive's colon has no key suffix; keeper keys do (repo:item).
         closes = re.search(
             r"\bCloses\b\s*:?\s*(.*?)(?=\||\b\w+:(?![\w.-])|$)",
-            line, re.I)
+            decision, re.I)
         if closes:
             for key in re.findall(r"[\w.-]+:[\w.-]+", closes.group(1)):
+                key = key.rstrip(".,;)]")
                 if key not in keys:
                     findings.append(f"{row_id}: Closes unknown keeper key {key}")
     label = f"sha256 {sha} last D-{last}"

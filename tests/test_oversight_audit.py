@@ -43,9 +43,9 @@ def test_unchanged_is_one_quiet_line(inputs, capsys):
 
 def test_go_and_unknown_closes(inputs, capsys):
     inputs[1].write_text(
-        "| D-2 | GO | Closes: fixture:missing |\n"
-        f"| D-3 | GO | GO-HEAD: {'a' * 40} | Closes fixture:known |\n"
-        f"| D-4 | GO | GO-HEAD: {'a' * 41} |\n")
+        "| D-2 | fixture | GO Closes: fixture:missing |\n"
+        f"| D-3 | fixture | GO GO-HEAD: {'a' * 40} Closes fixture:known |\n"
+        f"| D-4 | fixture | GO GO-HEAD: {'a' * 41} |\n")
     run(inputs, lambda: {"fixture:known"})
     output = capsys.readouterr().out
     assert "D-2: GO without 40-hex GO-HEAD" in output
@@ -59,8 +59,8 @@ def test_go_requires_standalone_token(inputs, capsys):
         "| D-1 | NO-GO |\n"
         "| D-2 | GO-HEAD: missing |\n"
         "| D-3 | GO |\n"
-        "| D-4 | GO | GO-HEAD: abc123 |\n"
-        f"| D-5 | GO | GO-HEAD: {'a' * 40} |\n"
+        "| D-4 | fixture | GO GO-HEAD: abc123 |\n"
+        f"| D-5 | fixture | GO GO-HEAD: {'a' * 40} |\n"
         "| D-6 | XGO GO_X GO-away |\n")
     run(inputs)
     lines = capsys.readouterr().out.splitlines()
@@ -82,6 +82,23 @@ def test_closes_stops_at_cells_and_directives(inputs, capsys):
         "D-3: Closes unknown keeper key fixture:missing",
         "D-3: Closes unknown keeper key fixture:absent",
     ]
+
+
+@pytest.mark.parametrize("punctuation", [".", ",", ";", ")", "]"])
+def test_closes_strips_trailing_punctuation(inputs, capsys, punctuation):
+    inputs[1].write_text(
+        f"| D-1 | fixture | Closes: plangraph:ITEM-X{punctuation} |\n"
+        f"| D-2 | fixture | Closes: fixture:missing{punctuation} |\n")
+    run(inputs, {"plangraph:ITEM-X"})
+    assert capsys.readouterr().out.splitlines()[1:] == [
+        "D-2: Closes unknown keeper key fixture:missing",
+    ]
+
+
+def test_project_cell_directives_are_ignored(inputs, capsys):
+    inputs[1].write_text("| D-1 | GO Closes: x:y | HOLD |\n")
+    run(inputs)
+    assert "quiet" in capsys.readouterr().out
 
 
 def test_cursor_only_advances_after_all_prints(inputs):
