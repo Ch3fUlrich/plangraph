@@ -133,13 +133,18 @@ def test_benchmark_local_refusal(setup):
     remote.assert_not_called()
 
 
-def test_remote_id_required(setup):
-    service, _, remote = setup
-    assert a.admit(service, {})['run_id'] == 'run-abc'
-    remote.return_value = {'status': 'running'}
+@pytest.mark.parametrize('status', [None, 'queued', 'running'])
+def test_remote_status_saved_and_visible_to_ps(setup, tmp_path, status):
+    from plangraph.spawner.service import SpawnService
+    _, _, remote = setup
+    service = SpawnService(state=str(tmp_path / 'state'))
+    service.runner.default_cwd = str(tmp_path)
+    remote.return_value = {'run_id': 'run-abc'}
+    if status is not None:
+        remote.return_value['status'] = status
     result = a.admit(service, {})
-    assert result['status'] == 'queued'
-    assert 'remote receipt missing run id' in result['reason']
+    assert result['status'] == (status or 'unknown')
+    assert result in service.ps()['runs']
 
 
 def test_all_refusals_queue(setup, monkeypatch):

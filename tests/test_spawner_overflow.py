@@ -16,19 +16,17 @@ def framed(command, payload):
             payload + '\nPLANGRAPH_RECEIPT_END_' + token + '\n{"status":"secret-after"}')
 
 
-@pytest.mark.parametrize('payload,reason', [
-    ('{"status":"running"}', 'remote receipt missing run id'),
-    ('not json', 'remote receipt invalid'),
-])
-def test_framed_receipt_refusal(monkeypatch, payload, reason):
+@pytest.mark.parametrize('payload', ['{"status":"running"}', 'not json'])
+def test_framed_receipt_acknowledged_unknown(monkeypatch, payload):
     def run(argv, **kwargs):
         stdout = '/stage'
         if 'plangraph.spawner.cli' in argv[-1]:
             stdout = framed(argv[-1], payload)
         return SimpleNamespace(returncode=0, stdout=stdout)
     monkeypatch.setattr(o.subprocess, 'run', run)
-    with pytest.raises(o.RemoteRefusal, match=reason):
-        o.remote_spawn('host', dict(ssh='stub', repo='/repo', spawner_src='/src'), {}, '', [])
+    result = o.remote_spawn('host', dict(ssh='stub', repo='/repo', spawner_src='/src'), {}, '', [])
+    assert result['status'] == 'unknown'
+    assert result['host'] == 'host'
 
 
 def test_only_sentinel_receipt_printed(inputs, monkeypatch, capsys):
@@ -198,6 +196,37 @@ def test_remote_env_echo_does_not_retry(inputs, monkeypatch, capsys, receipt):
     assert o.main(args) == 0
     assert len(spawns) == 1
     assert json.loads(capsys.readouterr().out)['host'] == 'ash'
+
+
+@pytest.mark.parametrize('receipt', ['unreadable', '{}', '[]', '{"status":"running"}'])
+@pytest.mark.parametrize('entry', ['main', 'admit'])
+def test_acknowledged_unknown_never_retries(inputs, monkeypatch, capsys, receipt, entry):
+    from plangraph.spawner import admission_overflow as admission
+    root, path, args = inputs
+    host = dict(ssh='invented-alias', repo='/invented', spawner_src='/invented/src')
+    path.write_text(json.dumps({'public_repos': [str(root)], 'hosts': {'ash': host, 'birch': host}}))
+    monkeypatch.setattr(o, 'ready_records', lambda config: {'ash': healthy(), 'birch': healthy()})
+    spawns = []
+    def run(argv, **kwargs):
+        stdout = '/invented-stage\n'
+        if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
+            spawns.append(argv)
+            stdout = receipt if receipt == 'unreadable' else framed(argv[-1], receipt)
+        return SimpleNamespace(returncode=0, stdout=stdout)
+    monkeypatch.setattr(o.subprocess, 'run', run)
+    if entry == 'main':
+        assert o.main(args) == 0
+        record = json.loads(capsys.readouterr().out)
+    else:
+        service = o.cli.SpawnService(state=str(root / 'state'))
+        service.runner.default_cwd = str(root)
+        monkeypatch.setattr(admission, 'resources', lambda service: (4, 6000))
+        record = admission.admit(service, {}, card={})
+        assert record in service.ps()['runs']
+    assert record['status'] == 'unknown'
+    assert record['host'] == 'ash'
+    assert record['acknowledged_unknown'] is True
+    assert len(spawns) == 1
 
 
 def test_missing_memavailable_refuses(inputs, monkeypatch, capsys):

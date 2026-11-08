@@ -68,10 +68,9 @@ def admit(service, options, *, card=None):
         except (OSError, ValueError, KeyError, TypeError) as exc:
             result = None
             refusal = 'remote spawn ' + type(exc).__name__
-        if result is not None and not (isinstance(result.get('run_id'), str) and result['run_id'].strip()):
-            result, refusal = None, 'remote receipt missing run id'
         if result is not None:
             record = dict(result, host=name, overflow_reason=decision.reason, overflow_remote=True)
+            record.setdefault('status', 'unknown')
             break
         rows[name]['refusal'] = refusal
     service._save(record)

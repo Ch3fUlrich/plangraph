@@ -141,11 +141,13 @@ def remote_spawn(name, host, card, prompt, options):
                 raise ValueError
             receipt = json.loads(framed[0])
         except (IndexError, ValueError):
-            raise RemoteRefusal('remote receipt invalid') from None
-        if not isinstance(receipt, dict):
-            raise RemoteRefusal('remote receipt invalid')
-        if not isinstance(receipt.get('run_id'), str) or not receipt['run_id'].strip():
-            raise RemoteRefusal('remote receipt missing run id')
+            receipt = None
+        if (not isinstance(receipt, dict) or not isinstance(receipt.get('run_id'), str)
+                or not receipt['run_id'].strip()):
+            # rc=0 acknowledges a spawn, even across receipt version skew. A local
+            # tracking ID is not a remote run ID and must never trigger failover.
+            return {'run_id': 'run-' + uuid.uuid4().hex, 'status': 'unknown',
+                    'host': name, 'acknowledged_unknown': True}
         return receipt
     finally:
         ssh('rm -f -- ' + q(directory + '/card.json') + ' ' + q(directory + '/prompt.txt') +
