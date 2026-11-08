@@ -92,7 +92,7 @@ pub(crate) fn startup(
         }
         // Only a verified live leader can support a read-only adoption decision.
         let gone = matches!(
-            crate::reconcile_store::gone(row.identity.as_ref()),
+            crate::reconcile_store::gone(&row.run_id, row.identity.as_ref()),
             Ok(true)
         );
         if gone {
@@ -101,7 +101,15 @@ pub(crate) fn startup(
                 run_id: row.run_id,
                 attempt: row.attempt,
             });
-        } else if let Some(kind) = now.and_then(|now| shadow_live(&row, now)) {
+        } else if let Some(kind) = now
+            .filter(|_| {
+                matches!(
+                    crate::reconcile_store::gone(&row.run_id, row.identity.as_ref()),
+                    Ok(false)
+                )
+            })
+            .and_then(|now| shadow_live(&row, now))
+        {
             eprintln!("{kind} {} {}", row.run_id, row.attempt);
         }
     }
@@ -206,3 +214,27 @@ pub(crate) mod job;
 #[cfg(test)]
 #[path = "reconcile_tests.rs"]
 mod tests;
+
+#[cfg(target_os = "linux")]
+pub(crate) fn populated_alive(
+    identity: &crate::reconcile_store::Proc,
+    path: &std::path::Path,
+) -> Result<bool, ReconcileError> {
+    let stat = std::fs::read_to_string(format!("/proc/{}/stat", identity.pid))
+        .map_err(|_| ReconcileError::Unknown)?;
+    let (_, rest) = stat.rsplit_once(')').ok_or(ReconcileError::Unknown)?;
+    let fields: Vec<_> = rest.split_whitespace().collect();
+    if fields.first().is_some_and(|s| !["Z", "X"].contains(s))
+        && identity
+            .start_time
+            .is_none_or(|start| fields.get(19).and_then(|s| s.parse::<u64>().ok()) == Some(start))
+        && std::fs::read_to_string(path.join("cgroup.procs"))
+            .map_err(|_| ReconcileError::Unknown)?
+            .split_whitespace()
+            .any(|s| s.parse::<u32>().ok() == Some(identity.pid))
+    {
+        Ok(false)
+    } else {
+        Err(ReconcileError::Unknown)
+    }
+}
