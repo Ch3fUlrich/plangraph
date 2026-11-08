@@ -97,7 +97,13 @@ def fill_status(status, plan):
     ]
     for row in status["close_skipped"]:
         row["owner"] = "router"
-        row["action"] = "reconcile D-row Closes with the item key; never reopen a done item"
+        row["action"] = {
+            "Closes does not list the key":
+                "reconcile D-row Closes with the item key; never reopen a done item",
+            "not in graph":
+                "reconcile the item key with the graph before retrying the close",
+        }.get(row["reason"],
+              "investigate the skipped-close reason before retrying the close")
     status["choices_skipped"] = [
         {"key": key, "state": st} for key, st in plan.choices_skipped
     ]

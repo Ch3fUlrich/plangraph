@@ -20,15 +20,22 @@ import md_sync_plan as plan  # noqa: E402
 from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
 
 
-def test_close_skip_status_has_accountable_owner():
+@pytest.mark.parametrize("reason, action", [
+    ("not in graph", "reconcile the item key with the graph before retrying the close"),
+    ("other reason", "investigate the skipped-close reason before retrying the close"),
+])
+def test_close_skip_status_has_accountable_owner(reason, action):
     pending = plan.Plan()
     pending.close_skipped = [("Q-1", "D-1", "routing:Q-1")]
-    pending.dclose_skipped = [("D-2", "D-2", "demo:X", "not in graph")]
+    pending.dclose_skipped = [("D-2", "D-2", "demo:X", reason)]
     status = md_sync.status_doc("dry")
     md_sync.fill_status(status, pending)
     assert [row["owner"] for row in status["close_skipped"]] == [
         "router", "router"]
     assert all(row["action"] for row in status["close_skipped"])
+    assert status["close_skipped"][1] == {
+        "id": "D-2", "decision": "D-2", "key": "demo:X", "reason": reason,
+        "owner": "router", "action": action}
 
 
 @pytest.fixture
