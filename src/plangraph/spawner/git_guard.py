@@ -114,4 +114,32 @@ def writer_launch(prompt, role, model, run_id):
             {'GIT_AUTHOR_NAME': name,
              'GIT_AUTHOR_EMAIL': email,
              'GIT_COMMITTER_NAME': name,
-             'GIT_COMMITTER_EMAIL': email})
+              'GIT_COMMITTER_EMAIL': email})
+
+
+def writer_completion(job):
+    """The runner, not its caller or child's prose, owns writer publication."""
+    if job.role not in ('implement', 'fix') or job.status != 'completed':
+        return
+    import sys
+    try:
+        result = subprocess.run(
+            [sys.executable, 'tools/preflight.py', '--writer-push'],
+            cwd=job.cwd, capture_output=True, text=True, timeout=1800)
+        failed = result.returncode != 0
+        reasons = [line for line in result.stdout.splitlines()
+                   if line.startswith(('FAIL ', 'INFRA ', 'HOLD '))]
+        reason = '; '.join(reasons) or 'preflight'
+    except (OSError, subprocess.SubprocessError):
+        failed, reason = True, 'preflight_unavailable'
+    if failed:
+        job.status, job.exit_code = 'hold', 1
+        job.stderr = 'HOLD ' + reason
+        job.events.append(dict(event='writer_hold', reason=reason))
+
+
+def admit_brief(prompt, role, header):
+    brief = prompt.removeprefix(header).split('\nEnd every commit message with the trailer line: Writer: ', 1)[0]
+    if role in ('implement', 'review') and not brief.strip():
+        from plangraph.routing_errors import SpawnRefused
+        raise SpawnRefused('prompt_empty')

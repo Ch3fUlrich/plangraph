@@ -25,6 +25,13 @@ fn save(state: &Path, host: &str, base: Value, status: Status) -> Result<Value, 
 }
 fn validate(args: &Args) -> Result<(), ToolError> {
     crate::leg_ref::check_review_role(args)?;
+    if args
+        .get("prompt")
+        .and_then(Value::as_str)
+        .is_some_and(|s| s.trim().is_empty())
+    {
+        return Err(parameter("prompt_empty"));
+    }
     if !args.contains_key("prompt") {
         return Err(ToolError::Key("prompt".into()));
     }

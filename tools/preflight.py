@@ -53,6 +53,7 @@ def main(argv=None, root=None):
     parser.add_argument("--base", default="origin/main")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--fast", action="store_true")
+    parser.add_argument("--writer-push", action="store_true")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--keep-going", action="store_true", help="default behaviour")
     mode.add_argument("--fail-fast", action="store_true")
@@ -103,6 +104,8 @@ def main(argv=None, root=None):
                         print(output, end="", flush=True)
                     status = "PASS" if not code else ("INFRA" if INFRA.search(output) else "FAIL")
                     if code:
+                        if args.writer_push:
+                            print('HOLD ' + Path(command[1] if len(command) > 1 else command[0]).name)
                         break
             except (OSError, subprocess.CalledProcessError, ValueError):
                 status = "FAIL"
@@ -114,7 +117,39 @@ def main(argv=None, root=None):
                 stopped = args.fail_fast
         summary.append(f"{status} {family} {time.monotonic() - start:.3f}")
     print("\n".join(summary))
+    if args.writer_push and not exit_code:
+        return writer_push(root, env)
     return exit_code
+
+
+def writer_push(root, env):
+    """Fail closed on reused lanes, then dry-run before publishing this branch."""
+    def git(*args):
+        return run(["git", *args], root, env)
+
+    code, branch = git("symbolic-ref", "--quiet", "--short", "HEAD")
+    if code or not branch.strip().startswith("lane/"):
+        print("HOLD held_commit: writer requires a named lane branch")
+        return 1
+    # Merged PR heads survive as merge parents even when the lane has new work.
+    code, merges = git("log", "origin/main", "--merges", "--format=%P%x09%B%x00")
+    if code:
+        print("HOLD held_commit: base unavailable")
+        return 1
+    for entry in merges.split("\0"):
+        parents, _, message = entry.strip().partition("\t")
+        if branch.strip() not in message:
+            continue
+        for tip in parents.split()[1:]:
+            if git("merge-base", "--is-ancestor", tip, "HEAD")[0] == 0:
+                print("HOLD held_commit: merged lane needs a new branch name")
+                return 1
+    for gate, args in (("push_dry_run", ("--dry-run",)), ("push", ())):
+        code, _ = git("push", *args, "origin", "HEAD:refs/heads/" + branch.strip())
+        if code:
+            print("HOLD " + gate)
+            return 1
+    return 0
 
 
 if __name__ == "__main__":

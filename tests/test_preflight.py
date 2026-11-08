@@ -167,3 +167,33 @@ def test_private_word_added_line_redacted(repo):
     result = private_scrub(repo, True)
     assert result.returncode == 1
     assert 'new.txt:1: private-word' in result.stdout
+
+
+@pytest.mark.parametrize('gate', ['held_commit', 'push_dry_run', 'push', None])
+def test_writer_publish(repo, monkeypatch, capsys, gate):
+    calls = []
+    def run(command, cwd, env):
+        calls.append(command)
+        if 'symbolic-ref' in command:
+            return 0, 'lane/test\n'
+        if 'log' in command:
+            return 0, 'aaa bbb\tMerge pull request from lane/test\0' if gate == 'held_commit' else ''
+        if 'push' in command:
+            return (1, '') if gate == ('push_dry_run' if '--dry-run' in command else 'push') else (0, '')
+        return 0, ''
+    monkeypatch.setattr(preflight, 'run', run)
+    assert preflight.writer_push(repo, {}) == (1 if gate else 0)
+    if gate:
+        assert 'HOLD ' + gate in capsys.readouterr().out
+    pushes = [c for c in calls if 'push' in c]
+    assert len(pushes) == (0 if gate == 'held_commit' else 1 if gate == 'push_dry_run' else 2)
+
+
+def test_prompt_empty():
+    import asyncio
+    from plangraph.spawner.runner import SpawnerRunner, IMPLEMENT_HEADER
+    from plangraph.routing_errors import SpawnRefused
+    for role in ('implement', 'review'):
+        for prompt in (' \n\t', IMPLEMENT_HEADER + '\n\n'):
+            with pytest.raises(SpawnRefused, match='prompt_empty'):
+                asyncio.run(SpawnerRunner().spawn(prompt, model_or_combo='omniroute/cx-gpt-6.1-sol', role=role))

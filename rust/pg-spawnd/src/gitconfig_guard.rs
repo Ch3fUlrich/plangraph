@@ -1,4 +1,3 @@
-//! Durable private git configuration snapshots; never expose their contents.
 use pg_worker_core::run::{
     record::{RunRecord, Status},
     record_io::atomic_write_private,
@@ -365,3 +364,37 @@ mod layout_tests;
 #[cfg(test)]
 #[path = "gitconfig_guard_tests.rs"]
 mod tests;
+
+pub(crate) fn writer_completion(record: &mut RunRecord, status: Status) -> Status {
+    if status != Status::Completed
+        || record.get("role").and_then(serde_json::Value::as_str) != Some("implement")
+    {
+        return status;
+    }
+    let cwd = record
+        .get("cwd")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let output = std::process::Command::new("python3")
+        .args(["tools/preflight.py", "--writer-push"])
+        .current_dir(cwd)
+        .output();
+    if output.as_ref().is_ok_and(|o| o.status.success()) {
+        return status;
+    }
+    let reason = output
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|s| {
+                    s.starts_with("FAIL ") || s.starts_with("INFRA ") || s.starts_with("HOLD ")
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
+        .unwrap_or_default();
+    record.set("reason", json!(format!("HOLD preflight: {reason}")));
+    record.set("status", json!("failed"));
+    record.set("exit_code", json!(1));
+    Status::Failed
+}

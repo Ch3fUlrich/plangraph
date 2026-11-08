@@ -122,7 +122,7 @@ def completion_event(record, cwd):
     rc = record.get('exit_code')
     return redact(dict(event_id=record['run_id'] + ':completion', run_id=record['run_id'],
         idempotency_key=record['run_id'] + ':' + record['status'],
-        event='DONE' if rc == 0 else 'FAILED', rc=rc, head_sha=head,
+        event='HOLD' if record.get('status') == 'hold' else 'DONE' if rc == 0 else 'FAILED', rc=rc, head_sha=head,
         reason=record.get('reason'),
         **({'watchdog': record['watchdog']} if 'watchdog' in record else {}),
         parent_session=os.environ.get('PLANGRAPH_SPAWN_PARENT_SESSION'),

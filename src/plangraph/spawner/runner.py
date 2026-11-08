@@ -47,7 +47,7 @@ _keeper_unconfigured_last_warned = None
 
 from .env_redact import first_reason, redact
 from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
-from .git_guard import writer_launch
+from .git_guard import writer_launch, writer_completion, admit_brief
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
@@ -311,7 +311,6 @@ class SpawnerRunner:
         client: str | None = None,
         watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial',  # REMOVE-AT-R10
     ) -> JobInfo:
-        """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
         from .target import resolve_target   # leg ids and admitted combos resolve before providers render
         model_or_combo, leg = resolve_target(model_or_combo)
@@ -320,6 +319,7 @@ class SpawnerRunner:
                 from plangraph.routing_errors import SpawnRefused
                 raise SpawnRefused('client disagrees with leg harness: ' + leg.id)
             client = leg.harness
+        admit_brief(prompt, role, IMPLEMENT_HEADER)
         validate_model(model_or_combo)
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
             prompt = IMPLEMENT_HEADER + "\n\n" + prompt
@@ -693,7 +693,6 @@ class SpawnerRunner:
         proc: asyncio.subprocess.Process,
         requested_model: str,
     ) -> None:
-        """Monitor process execution until completion."""
         try:
             from .run_watchdog import collect
             stdout_bytes, stderr_bytes = await collect(self, job_id, proc)
@@ -810,6 +809,7 @@ class SpawnerRunner:
             except Exception:
                 pass
             self._check_git_config_guard(job_id)
+            await asyncio.to_thread(writer_completion, self.jobs[job_id])
             self._git_guards.pop(job_id, None)
             self._stdin_payloads.pop(job_id, None)
             self._child_envs.pop(job_id, None)

@@ -344,3 +344,11 @@ Runs sample file signatures/git HEAD (edits), non-header output (activity), and 
 
 A refused dispatch (rate limit, quota, credits out, auth: HTTP 401/402/403/429 or a 429/402 provider envelope in the first output lines, first 30 s and 40 lines) ends the run at once instead of `running` until a stall rule fires: `run_watchdog.collect` marks the job failed (exit 7, event `dispatch_refused`) and reaps the process tree, `fallthrough_reason` books the leg down (`unavailable_until`, `PLANGRAPH_LEG_DOWN_S`, default 1800 s for credit/auth lines without a reset time), and one `LEG_REFUSED` line (run id, leg, reason) goes to the parent inbox and `PLANGRAPH_SPAWN_NOTIFY_CMD`. Process CPU accounting lives in `spawner/run_cpu.py`.
 Cross-host ps: see [site configuration and transport](spawner-ps.md).
+# Writer completion gates
+
+Writer completion runs the repository `tools/preflight.py` before DONE:
+file size, changelog/docs map, commit trailers and scrub (including configured
+private words on added lines). Publication additionally rejects merged lane
+reuse and requires `git push --dry-run` before push. Failures report HOLD with
+the gate reason; a merged lane requires a new branch name. Empty implement or
+review briefs are refused as `prompt_empty`, regardless of injected framing.

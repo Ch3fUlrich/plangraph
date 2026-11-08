@@ -1,5 +1,4 @@
 //! Local runs; witnesses, retry/fall-through, writer checks/continuation, delivery,
-//! dispatch refusal and D3622 liveness remain unported; packs/env use Python.
 use crate::{errors::ToolError, placement::Args};
 use pg_worker_core::run::{
     record::{new_job_id, new_run_id, RunRecord, Status},
@@ -301,6 +300,7 @@ fn book_attempt(base: &mut Value, leg: &Value) -> u32 {
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
     let diagnostic = crate::gitconfig_guard::guard_diagnostic(record, status, leg, attempt_id);
     let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
+    let status = crate::gitconfig_guard::writer_completion(record, status);
     let mut attempts = match record.get("attempts") {
         None if attempt_id == 1 => vec![json!({"legacy_normalized":true})],
         None => Vec::new(),
