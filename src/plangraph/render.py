@@ -35,6 +35,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from plangraph.keeper.credential_guard import mask_all
+
 __all__ = ["render", "main", "default_vendor_dir", "cdn_script_tags", "build_sha"]
 
 #: Assets (template, CSS, JS) shipped next to this module.
@@ -312,7 +314,7 @@ def render(
                 (Path.home() / '.local/state/plangraph/agents-view.json').read_text(encoding='utf-8')))
         except (OSError, ValueError, TypeError):
             private_agents = None
-        safe_snapshot['agents_view'] = private_agents
+        safe_snapshot['agents_view'], _ = mask_all(private_agents)
     safe_snapshot["items"] = items
 
     if not cdn and _new_ui(safe_snapshot):  # §14b: the new page is --cdn only (v1)

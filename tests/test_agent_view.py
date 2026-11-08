@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -28,6 +29,62 @@ def test_render_reads_private_file(home, monkeypatch):
     assert 'remote' in document
     assert '"agents_view":' in document
     assert '"readable":false' in document.replace(' ', '')
+
+
+def test_render_masks_private_view_strings(tmp_path, monkeypatch):
+    from plangraph.keeper.credential_guard import find_shapes
+    from plangraph.render import render
+
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
+    raw = 'login ' + 'operator' + '/' + 'syntheticpass'
+    assert find_shapes(raw)
+    row = dict(name=raw, model=raw, state=raw, item=raw, age_s=raw,
+               runtime='opencode')
+    put(tmp_path, '.local/state/plangraph/agents-view.json', dict(
+        generated_at=raw, hosts=[dict(host=raw, readable=True, agents=[row])]))
+    document = render({'items': []}, tmp_path, cdn=True, live_agents=True)
+    assert raw not in document
+    assert ('operator' + '/' + 'syntheticpass') not in document
+    view = json.loads(re.search(
+        r'<script[^>]*id="snapshot-data"[^>]*>(.*?)</script>', document, re.S).group(1))['agents_view']
+    assert view['generated_at'] == 'login [redacted]'
+    host = view['hosts'][0]
+    assert host['host'] == 'login [redacted]'
+    assert host['reason'] is None
+    assert host['agents'][0] == dict(
+        host='login [redacted]', runtime='opencode',
+        **{field: 'login [redacted]' for field in row if field != 'runtime'})
+
+
+def test_render_clean_private_view_unchanged(tmp_path, monkeypatch):
+    from plangraph.render import render
+
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
+    row = dict(host='local', name='worker', runtime='opencode', model='model',
+               state='idle', item=None, age_s=3)
+    view = dict(generated_at='stamp', hosts=[dict(
+        host='local', readable=True, reason=None, agents=[row]),
+        unavailable('remote', 'unreadable')])
+    put(tmp_path, '.local/state/plangraph/agents-view.json', view)
+    document = render({'items': []}, tmp_path, cdn=True, live_agents=True)
+    assert json.dumps(view, separators=(',', ':')) in document
+
+
+def test_render_unreadable_private_view_is_null(tmp_path, monkeypatch):
+    from plangraph.render import render
+
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
+    target = put(tmp_path, '.local/state/plangraph/agents-view.json', {'hosts': []})
+    read_text = Path.read_text
+
+    def unreadable(path, *args, **kwargs):
+        if path == target:
+            raise PermissionError('private inventory unreadable')
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'read_text', unreadable)
+    document = render({'items': []}, tmp_path, cdn=True, live_agents=True)
+    assert '"agents_view":null' in document
 
 
 def test_page_unknown(tmp_path, monkeypatch):
