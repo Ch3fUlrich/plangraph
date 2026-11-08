@@ -1,4 +1,8 @@
-//! Local runs only; context packs and writer env belong to the Python launch adapter.
+//! Local runs only. Not ported: served-model witnesses, harness-limit leg booking,
+//! writer no-change checks, second-leg fall-through, writer
+//! continuation, completion events/delivery markers, dispatch-refusal gate, or
+//! SPAWNER-LIVENESS-D3622 watchdog. Context packs and writer env
+//! belong to the Python launch adapter.
 use crate::{errors::ToolError, placement::Args};
 use pg_worker_core::run::{
     record::{new_job_id, new_run_id, RunRecord, Status},
@@ -293,11 +297,8 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
     }
 }
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
-    let diagnostic = json!({"reason":leg.get("reason"), "exit_code":leg.get("exit_code")});
-    let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
-    let dry = status == Status::DryRun;
-    let unwitnessed = json!("unwitnessed");
     let mut attempts = match record.get("attempts") {
+        None if attempt_id == 1 => vec![json!({"legacy_normalized":true})],
         None => Vec::new(),
         Some(Value::Array(attempts)) => attempts.clone(),
         Some(_) => {
@@ -305,10 +306,6 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
             return;
         }
     };
-    // Normalize legacy first legs only; never invent ids in populated history.
-    if attempts.is_empty() && attempt_id == 1 {
-        attempts.push(json!({"leg":leg,"status":"running"}));
-    }
     let Some(attempt) = attempt_id
         .checked_sub(1)
         .and_then(|index| attempts.get_mut(index as usize))
@@ -317,6 +314,10 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         record.set("attempts_error", json!("unknown or invalid attempt id"));
         return;
     };
+    let diagnostic = json!({"reason":leg.get("reason"), "exit_code":leg.get("exit_code")});
+    let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
+    let dry = status == Status::DryRun;
+    let unwitnessed = json!("unwitnessed");
     let completion = json!({"leg":leg,"status":status.as_str(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },
         "served_family":if dry { &leg["family"] } else { &unwitnessed },
@@ -381,14 +382,12 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         }
     }
 }
-
 #[cfg(all(test, unix))]
 #[path = "runs_record_tests.rs"]
 mod record_tests;
 #[cfg(all(test, unix))]
 #[path = "runs_tests.rs"]
 mod tests;
-
 fn wait_duration(value: Option<&Value>) -> Duration {
     #[allow(clippy::manual_clamp)]
     let seconds = value

@@ -54,6 +54,7 @@ fn guard_diagnostic_ignores_stale_record_values() {
     record.set("reason", json!("stale earlier attempt"));
     record.set("exit_code", json!(9));
     fs::write(config, b"altered").unwrap();
+    record.set("attempts", json!([{"status":"running"}]));
     crate::runs::finish(&mut record, Status::Completed, &json!({}), 1);
     let original = record.get("gitconfig_original_outcome").unwrap();
     assert_eq!(original["status"], "completed");
