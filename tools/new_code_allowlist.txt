@@ -11,6 +11,7 @@ src/plangraph/fleet_sync/__main__.py | lane started before the gate (D-5062, rul
 src/plangraph/fleet_sync/drift.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
 src/plangraph/fleet_sync/genconfig.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
 src/plangraph/fleet_sync/release.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
+src/plangraph/spawner/ps_host_doctor.py | lane started before the gate (D-5062, rule 9.14), retired by SPAWNER-RUST-PORT
 src/plangraph/keeper/cli_output_verbs.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
 src/plangraph/keeper/crit_path_stall.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
 src/plangraph/keeper/store_decision_close.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
