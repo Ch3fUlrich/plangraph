@@ -16,7 +16,7 @@ def test_head_excludes_untracked_staged_and_worktree_changes(tmp_path, monkeypat
                GIT_CONFIG_VALUE_1="", GIT_AUTHOR_NAME="Test", GIT_COMMITTER_NAME="Test",
                GIT_AUTHOR_EMAIL="test@example.invalid",
                GIT_COMMITTER_EMAIL="test@example.invalid")
-    for key in os.environ:
+    for key in list(os.environ):
         if key.startswith("GIT_"):
             monkeypatch.delenv(key)
     for key, value in env.items():

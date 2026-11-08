@@ -157,7 +157,7 @@ def select_tests(root, changed, within=None):
 
 def changed_files(root, base, head=None):
     head = head or None
-    merge = subprocess.check_output(["git", "merge-base", base, head or "HEAD"], cwd=root, text=True).strip()
+    merge = subprocess.check_output(["git", "merge-base", base, "HEAD" if head is None else head], cwd=root, text=True).strip()
     revisions = [merge, head] if head is not None else [merge]
     tracked = subprocess.check_output(["git", "diff", "--name-only", "-z", "--no-renames", *revisions], cwd=root)
     untracked = (b"" if head is not None else subprocess.check_output(
