@@ -111,6 +111,78 @@ class KeeperSink:
                 raise RuntimeError('keeper did not acknowledge run completion')
             response.read()
 
+    def item(self, key):
+        from urllib.parse import urlencode
+        token = Path(self.token_file).read_text(encoding='utf-8').strip()
+        request = urllib.request.Request(
+            self.url.rstrip('/') + '/v1/show?' + urlencode({'key': key, 'fmt': 'json'}),
+            headers={'Authorization': 'Bearer ' + token})
+        with urllib.request.build_opener(_NoRedirectHandler()).open(request, timeout=10) as response:
+            return json.load(response)
+
+
+def deliver_verdict(directory, record, keeper):
+    """Independent, locked verdict outbox; refusal is auditable, I/O is retried."""
+    if record.get('role') != 'review':
+        return
+    import contextlib
+    import io
+    import sys
+    tools = Path(__file__).resolve().parents[3] / 'tools'
+    if str(tools) not in sys.path:
+        sys.path.insert(0, str(tools))
+    import seat_verdict as seat
+    from .item_key import valid_item
+    directory = Path(directory)
+    marker = directory / 'verdict.delivered'
+    journal = directory / 'verdict.json'
+    with inbox_lock(journal):
+        if marker.exists():
+            return
+        def outcome(status, reason):
+            atomic_write_private(journal, json.dumps({'status': status, 'reason': reason}) + '\n')
+        try:
+            key = record.get('item_key')
+            if not valid_item(key):
+                outcome('skipped', 'missing item key')
+                return
+            if (directory / 'evidence.json').exists():
+                outcome('skipped', 'forward delivery requires record-derived evidence')
+                return
+            evidence, text = seat.evidence_from_record(directory)
+            family = seat.model_family(evidence.get('served_model'))
+            writers = record.get('given_writer_families') or []
+            if not family or not writers or family in writers or any(w not in seat.KNOWN_FAMILIES for w in writers):
+                outcome('skipped', 'unwitnessed family or invalid/overlapping writer families')
+                return
+            if seat.parse_verdict(text)[0] is None:
+                outcome('skipped', 'no parseable VERDICT line')
+                return
+            token_dir = os.environ.get('PG_REVIEWER_TOKEN_DIR')
+            if not keeper or not keeper.url or not token_dir:
+                outcome('retry', 'keeper verdict transport not configured')
+                return
+            item = keeper.item(key)
+            heads = {row.get('ref', {}).get('commit') for row in item.get('evidence', [])
+                     if row.get('verified') and row.get('kind') == 'commit+ci'}
+            if item.get('key') != key or heads != {evidence['head_sha']}:
+                outcome('skipped', 'missing or ambiguous item evidenced head')
+                return
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                rc = seat.main(['--key', key, '--seat-dir', str(directory),
+                    '--writer-family', ','.join(writers), '--head', evidence['head_sha'],
+                    '--token-dir', token_dir, '--url', keeper.url])
+            if rc == 0:
+                atomic_write_private(marker, 'delivered\n')
+                outcome('delivered', 'keeper acknowledged')
+            else:
+                outcome('retry' if rc == seat.EXIT_IO else 'skipped', 'seat verifier exit ' + str(rc))
+        except ValueError as exc:
+            outcome('skipped', str(exc))
+        except Exception as exc:
+            outcome('retry', type(exc).__name__)
+
 
 def completion_event(record, cwd):
     from .runner import redact
