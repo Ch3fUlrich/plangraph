@@ -1,1 +1,2 @@
 - RL29-WIN-JOB-SURVIVES-DAEMON prep: native windows-latest CI job runs cargo test for pg-worker-core and pg-spawnd (Gate-Edit D-4884); six Unix-path publish tests gated cfg(unix).
+- D-4895: run all pg-spawnd tests and count/run only worker-core Windows Job/group/watch tests; remaining 83 worker-core Windows failures tracked by plangraph:WORKER-CORE-WINDOWS-TESTS for full-suite restoration.
