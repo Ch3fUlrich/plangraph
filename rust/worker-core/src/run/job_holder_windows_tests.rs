@@ -56,7 +56,8 @@ fn native_dead_pid_then_live_handover_expires() {
         assert_ne!(unsafe { SetEvent(event.as_raw_handle()) }, 0);
         std::thread::sleep(Duration::from_millis(250));
         assert!(!gone(g.child.id()));
-        assert_eq!(slot.pid().load(Ordering::SeqCst), pid);
+        until(|| slot.pid().load(Ordering::SeqCst) == 0);
+        assert_eq!(slot.pid().load(Ordering::SeqCst), 0);
         assert_ne!(unsafe { ResetEvent(event.as_raw_handle()) }, 0);
         slot.pid().store(0, Ordering::SeqCst);
     }

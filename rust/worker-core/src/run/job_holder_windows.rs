@@ -52,7 +52,6 @@ mod platform {
         },
     };
     static HOLDER: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-    /// The embedder must register a binary dispatching `__job-holder` before launch.
     pub fn set_holder_path(path: std::path::PathBuf) {
         let _ = HOLDER.set(path);
     }
@@ -153,9 +152,6 @@ mod platform {
     pub fn outcome_event(name: &str, create: bool) -> io::Result<OwnedHandle> {
         adoption_event(&format!("{name}-outcome"), false, create)
     }
-    pub fn rejected_event(name: &str, create: bool) -> io::Result<OwnedHandle> {
-        adoption_event(&format!("{name}-rejected"), false, create)
-    }
     // The same-user Job/event DACL is the admission boundary, not the PID slot.
     // A same-user, non-inheritable mapping carries the requesting daemon PID.
     #[link(name = "kernel32")]
@@ -174,7 +170,7 @@ mod platform {
             let name: Vec<u16> = format!("{name}-holder-request").encode_utf16().chain(Some(0)).collect();
             unsafe {
                 let raw = if create {
-                    CreateFileMappingW(INVALID_HANDLE_VALUE, std::ptr::null(), 4, 0, 4, name.as_ptr())
+                    CreateFileMappingW(INVALID_HANDLE_VALUE, std::ptr::null(), 4, 0, 8, name.as_ptr())
                 } else {
                     OpenFileMappingW(6, 0, name.as_ptr())
                 };
@@ -185,7 +181,7 @@ mod platform {
                 if create && GetLastError() == ERROR_ALREADY_EXISTS {
                     return Err(io::Error::other("existing holder request"));
                 }
-                let view = MapViewOfFile(raw, 6, 0, 0, 4);
+                let view = MapViewOfFile(raw, 6, 0, 0, 8);
                 if view.is_null() {
                     return Err(io::Error::last_os_error());
                 }
@@ -193,8 +189,12 @@ mod platform {
             }
         }
         pub fn pid(&self) -> &std::sync::atomic::AtomicU32 {
-            // SAFETY: aligned, shared four-byte mapping remains live through self.
+            // SAFETY: aligned first word of the retained eight-byte mapping.
             unsafe { &*self.1.cast() }
+        }
+        pub fn holder_pid(&self) -> &std::sync::atomic::AtomicU32 {
+            // SAFETY: second aligned word in the retained eight-byte mapping.
+            unsafe { &*self.1.add(1).cast() }
         }
     }
     #[rustfmt::skip]
@@ -202,7 +202,6 @@ mod platform {
         fn drop(&mut self) { let _ = &self.0; unsafe { UnmapViewOfFile(self.1); } }
     }
     #[rustfmt::skip]
-    /// Ok(true): breakaway was refused and the holder runs inside the caller's outer job.
     pub fn launch(holder: &std::path::Path, job: &OwnedHandle, seconds: u64, name: &str) -> io::Result<bool> {
         #[cfg(test)]
         if FAIL_LAUNCH.get() {
@@ -285,7 +284,6 @@ mod platform {
                 .ok_or_else(|| io::Error::other("invalid adoption handle"))?;
             // Ticket handles come only from the launching same-user daemon over its
             // private stdin pipe, via DuplicateHandle into this suspended helper.
-            // The single-user Job DACL is the trust boundary, not the usize encoding.
             let mut owner = unsafe { OwnedHandle::from_raw_handle(event as _) };
             let name = lines
                 .next()
@@ -293,8 +291,11 @@ mod platform {
             let event = adoption_event(name, false, true)?;
             let closing = adoption_event(name, true, true)?;
             let outcome = outcome_event(name, true)?;
-            let rejected = rejected_event(name, true)?;
             let request = RequestSlot::open(name, true)?;
+            let pid = unsafe { GetCurrentProcessId() };
+            request
+                .holder_pid()
+                .store(pid, std::sync::atomic::Ordering::SeqCst);
             let mut deadline = None;
             let mut admitted = false;
             let job = unsafe { OwnedHandle::from_raw_handle(raw as _) };
@@ -309,14 +310,20 @@ mod platform {
                     {
                         eprintln!("holder acknowledgement: {}", io::Error::last_os_error());
                         std::thread::sleep(Duration::from_millis(100));
-                        continue;
+                    } else {
+                        admitted = false;
                     }
-                    admitted = false;
                 }
-                if deadline.is_none()
-                    && unsafe { WaitForSingleObject(owner.as_raw_handle(), 0) } == WAIT_OBJECT_0
-                {
-                    deadline = Some(Instant::now() + Duration::from_secs(seconds));
+                if deadline.is_none() {
+                    match unsafe { WaitForSingleObject(owner.as_raw_handle(), 0) } {
+                        WAIT_TIMEOUT => {}
+                        status => {
+                            if status != WAIT_OBJECT_0 {
+                                eprintln!("holder owner wait: {}", io::Error::last_os_error());
+                            }
+                            deadline = Some(Instant::now() + Duration::from_secs(seconds));
+                        }
+                    }
                 }
                 let closing_now =
                     deadline.is_some_and(|d| Instant::now() + Duration::from_secs(6) >= d);
@@ -330,7 +337,6 @@ mod platform {
                 // owner's retained handle controls loss detection and a fresh window.
                 if !closing_now
                     && unsafe { WaitForSingleObject(event.as_raw_handle(), 0) } == WAIT_OBJECT_0
-                    && unsafe { WaitForSingleObject(rejected.as_raw_handle(), 0) } == WAIT_TIMEOUT
                 {
                     let pid = request.pid().load(std::sync::atomic::Ordering::SeqCst);
                     if pid != 0 && pid < u32::MAX - 1 {
@@ -339,6 +345,10 @@ mod platform {
                         let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
                         if raw.is_null() {
                             eprintln!("holder requester lost: {}", io::Error::last_os_error());
+                            if unsafe { ResetEvent(event.as_raw_handle()) } == 0 {
+                                eprintln!("holder reset: {}", io::Error::last_os_error());
+                            }
+                            request.pid().store(0, std::sync::atomic::Ordering::SeqCst);
                         } else {
                             let next = unsafe { OwnedHandle::from_raw_handle(raw) };
                             if crate::watch::windows::claim_adoption(request.pid(), pid) {

@@ -127,14 +127,20 @@ mod native {
     }
     impl JobApi for NativeJob {
         fn adopted(&mut self) -> io::Result<()> {
-            use crate::run::job_holder_windows::{
-                adoption_event, outcome_event, rejected_event, RequestSlot,
-            };
+            use crate::run::job_holder_windows::{adoption_event, outcome_event, RequestSlot};
             let event = adoption_event(&self.1, false, false)?;
             let closing = adoption_event(&self.1, true, false)?;
             let outcome = outcome_event(&self.1, false)?;
-            let rejected = rejected_event(&self.1, false)?;
             let request = RequestSlot::open(&self.1, false)?;
+            let pid = request
+                .holder_pid()
+                .load(std::sync::atomic::Ordering::SeqCst);
+            let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+            if raw.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: successful open transfers ownership; retained through the exchange.
+            let holder = unsafe { OwnedHandle::from_raw_handle(raw) };
             if unsafe { WaitForSingleObject(closing.as_raw_handle(), 0) } != WAIT_TIMEOUT {
                 return Err(io::Error::other("holder deadline within adoption margin"));
             }
@@ -148,7 +154,6 @@ mod native {
                 )
                 .map_err(|_| io::Error::other("holder adoption already requested"))?;
             let result = if unsafe { ResetEvent(outcome.as_raw_handle()) } == 0
-                || unsafe { ResetEvent(rejected.as_raw_handle()) } == 0
                 || unsafe { SetEvent(event.as_raw_handle()) } == 0
             {
                 Err(io::Error::last_os_error())
@@ -167,18 +172,21 @@ mod native {
                 std::sync::atomic::Ordering::SeqCst,
             ) == Err(u32::MAX);
             if committed {
-                while unsafe { WaitForSingleObject(outcome.as_raw_handle(), 1000) } != WAIT_OBJECT_0
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                let handles = [holder.as_raw_handle(), outcome.as_raw_handle()];
+                match unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, INFINITE) } {
+                    status if status == WAIT_OBJECT_0 + 1 => {}
+                    _ => {
+                        request.pid().store(0, std::sync::atomic::Ordering::SeqCst);
+                        return Err(io::Error::other("holder exited or adoption wait failed"));
+                    }
                 }
             }
-            let mut cleanup_error = None;
-            for handle in [&event, &rejected] {
-                if unsafe { ResetEvent(handle.as_raw_handle()) } == 0 {
-                    cleanup_error = Some(io::Error::last_os_error());
-                }
-            }
+            let cleanup_error =
+                (unsafe { ResetEvent(event.as_raw_handle()) } == 0).then(io::Error::last_os_error);
             request.pid().store(0, std::sync::atomic::Ordering::SeqCst);
+            if let Some(error) = &cleanup_error {
+                eprintln!("adoption cleanup: {error}");
+            }
             if committed {
                 Ok(())
             } else {
