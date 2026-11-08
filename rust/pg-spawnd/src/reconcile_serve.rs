@@ -231,7 +231,9 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
     let mut gone = Vec::new();
     for row in rows {
         if let Some(group) = row.identity.as_ref().and_then(|p| p.group.as_deref()) {
-            native::scope(&row.run_id, group).map_err(|_| ReconcileError::Unknown)?;
+            if native::scope(&row.run_id, group).is_err() {
+                continue;
+            }
         }
         let Some(settled) = scan_probe(crate::reconcile_store::orphan_gone(root, &row))? else {
             continue;
@@ -240,23 +242,24 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
             if let Some(identity) = row.identity {
                 if let Some(start) = identity.start_time {
                     let key = (row.run_id, identity.pid, start, identity.group.clone());
-                    if validated.contains(&key)
-                        && matches!(
-                            crate::reconcile_store::gone(&key.0, Some(&identity)),
-                            Ok(true)
-                        )
-                    {
+                    if validated.contains(&key) {
                         gone.push(key);
                     }
                 }
             }
             continue;
         }
-        let leader = Group::open(&row.run_id, row.identity.ok_or(ReconcileError::Unknown)?)
-            .map_err(|_| ReconcileError::Unknown)?;
+        let Some(identity) = row.identity else {
+            continue;
+        };
+        let Ok(leader) = Group::open(&row.run_id, identity) else {
+            continue;
+        };
         let dir = root.join("runs").join(&row.run_id);
         let _record_lock = crate::reconcile_store::lock(&dir, &dir.join("record.lock"))?;
-        let mut record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;
+        let Ok(mut record) = RunRecord::read(root, &row.run_id) else {
+            continue;
+        };
         let watch = Watch::new(
             serde_json::from_value(serde_json::json!(row.role))
                 .map_err(|_| ReconcileError::Invalid)?,
@@ -327,18 +330,23 @@ fn start(_: &Path, _: &mut Guard) -> Result<(), ReconcileError> {
 fn scan_probe(result: Result<bool, ReconcileError>) -> Result<Option<bool>, ReconcileError> {
     match result {
         Ok(value) => Ok(Some(value)),
-        Err(ReconcileError::Unknown) => Ok(None),
-        Err(error) => Err(error),
+        Err(_) => Ok(None),
     }
 }
 #[cfg(all(test, any(target_os = "linux", windows)))]
 #[test]
 fn unknown_scan_row_does_not_abort_later_rows() {
-    let rows = [Err(ReconcileError::Unknown), Ok(false), Ok(true)];
+    let rows = [
+        Err(ReconcileError::Unknown),
+        Err(ReconcileError::Io),
+        Err(ReconcileError::Invalid),
+        Ok(false),
+        Ok(true),
+    ];
     let decisions = rows
         .into_iter()
         .map(scan_probe)
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    assert_eq!(decisions, vec![None, Some(false), Some(true)]);
+    assert_eq!(decisions, vec![None, None, None, Some(false), Some(true)]);
 }

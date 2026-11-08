@@ -346,6 +346,24 @@ fn grouped_probe_distinguishes_alive_gone_and_unknown() {
     identity.group = Some(scope.to_str().unwrap().into());
     std::fs::write(scope.join("cgroup.events"), "populated 1\n").unwrap();
     std::fs::write(scope.join("cgroup.procs"), child.0.id().to_string()).unwrap();
+    identity.start_time = None;
+    assert!(!gone("run-test", Some(&identity)).unwrap());
+    assert!(crate::reconcile_backend::native::Group::open(
+        "run-test",
+        Proc {
+            pid: identity.pid,
+            start_time: None,
+            group: identity.group.clone(),
+            pgid: identity.pgid
+        }
+    )
+    .is_ok());
+    std::fs::write(scope.join("cgroup.procs"), "").unwrap();
+    assert!(matches!(
+        gone("run-test", Some(&identity)),
+        Err(ReconcileError::Unknown)
+    ));
+    std::fs::write(scope.join("cgroup.procs"), child.0.id().to_string()).unwrap();
     assert!(!gone("run-test", Some(&identity)).unwrap());
     child.stop();
     assert!(matches!(

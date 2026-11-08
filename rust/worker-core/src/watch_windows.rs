@@ -141,8 +141,12 @@ mod native {
                 return Err(io::Error::last_os_error());
             }
             Ok(inside != 0
-                && (u64::from(created.dwHighDateTime) << 32 | u64::from(created.dwLowDateTime))
-                    == start)
+                && exit.dwHighDateTime == 0
+                && exit.dwLowDateTime == 0
+                && (start == 0
+                    || (u64::from(created.dwHighDateTime) << 32
+                        | u64::from(created.dwLowDateTime))
+                        == start))
         }
         fn active(&mut self) -> io::Result<bool> {
             Ok(self.accounting()?.ActiveProcesses != 0)

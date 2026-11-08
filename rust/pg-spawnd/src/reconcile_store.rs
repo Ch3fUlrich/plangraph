@@ -239,9 +239,10 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
             group: identity.group.clone(),
             pgid: identity.pgid,
         };
-        crate::reconcile::job::Group::open(run_id, copy)
-            .and_then(|mut job| job.probe())
-            .map_err(|_| ReconcileError::Unknown)
+        match crate::reconcile::job::map_open(crate::reconcile::job::Group::open(run_id, copy))? {
+            Some(mut job) => crate::reconcile::job::map_probe(job.probe()),
+            None => Ok(true),
+        }
     }
     #[cfg(not(any(target_os = "linux", windows)))]
     {

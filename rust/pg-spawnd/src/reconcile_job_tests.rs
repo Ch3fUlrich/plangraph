@@ -12,23 +12,27 @@ fn exact_job_binding_only() {
     assert!(scope("../escape", "Local\\pg-../escape").is_err());
 }
 #[test]
-fn absent_start_and_groupless_records_refused() {
+fn unknown_start_requires_scoped_group() {
     for group in [None, Some("Local\\pg-run-test".to_string())] {
-        assert!(validate(
-            "run-test",
-            &Proc {
-                pid: 42,
-                start_time: None,
-                group,
-                pgid: None
-            }
-        )
-        .is_err());
+        let expected = group.is_some();
+        assert_eq!(
+            validate(
+                "run-test",
+                &Proc {
+                    pid: 42,
+                    start_time: None,
+                    group,
+                    pgid: None
+                }
+            )
+            .is_ok(),
+            expected
+        );
     }
 }
 #[test]
 fn reconcile_job_zero_identity_refused() {
-    for (pid, start_time) in [(0, Some(99)), (42, Some(0)), (42, None)] {
+    for (pid, start_time) in [(0, Some(99)), (42, Some(0))] {
         assert!(validate(
             "run-test",
             &Proc {
@@ -80,7 +84,10 @@ fn gone_nonempty_or_unreadable_job_is_unknown() {
             active,
             terminated: false,
         };
-        assert!(orphan_empty(&mut job).is_err());
+        assert!(matches!(
+            map_probe(orphan_empty(&mut job)),
+            Err(crate::reconcile::ReconcileError::Unknown)
+        ));
         assert!(!job.terminated);
     }
 }
@@ -129,4 +136,40 @@ fn pure_gone_probe_never_terminates() {
     assert!(probe(&mut job).unwrap());
     assert!(!job.terminated);
     assert!(scope("run-test", "Local\\pg-run-other").is_err());
+}
+
+#[test]
+fn shared_mapping_distinguishes_absent_from_unverifiable() {
+    assert!(matches!(
+        map_open::<()>(Err(io::ErrorKind::NotFound.into())),
+        Ok(None)
+    ));
+    assert!(matches!(
+        map_open::<()>(Err(io::ErrorKind::PermissionDenied.into())),
+        Err(crate::reconcile::ReconcileError::Unknown)
+    ));
+    for kind in [
+        io::ErrorKind::NotFound,
+        io::ErrorKind::WouldBlock,
+        io::ErrorKind::PermissionDenied,
+    ] {
+        assert!(matches!(
+            map_probe(Err(kind.into())),
+            Err(crate::reconcile::ReconcileError::Unknown)
+        ));
+    }
+    let mut job = JobFake {
+        gone: true,
+        active: Ok(true),
+        terminated: false,
+    };
+    assert!(matches!(
+        map_probe(probe(&mut job)),
+        Err(crate::reconcile::ReconcileError::Unknown)
+    ));
+    assert!(!job.terminated);
+    job.active = Ok(false);
+    assert!(map_probe(orphan_empty(&mut job)).unwrap());
+    assert!(job.terminated);
+    assert!(!map_probe(Ok(false)).unwrap());
 }

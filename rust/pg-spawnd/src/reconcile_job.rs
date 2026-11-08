@@ -31,10 +31,10 @@ fn validate<'a>(run: &str, identity: &'a Proc) -> io::Result<(&'a str, u64)> {
         .as_deref()
         .ok_or(io::ErrorKind::PermissionDenied)?;
     scope(run, name)?;
-    let start = identity
-        .start_time
-        .filter(|v| *v != 0)
-        .ok_or(io::ErrorKind::PermissionDenied)?;
+    if identity.start_time == Some(0) {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    let start = identity.start_time.unwrap_or(0);
     Ok((name, start))
 }
 #[cfg(windows)]
@@ -127,7 +127,7 @@ pub(crate) fn settle_probe(
 ) -> Result<bool, crate::reconcile::ReconcileError> {
     let unknown = || crate::reconcile::ReconcileError::Unknown;
     let p = row.identity.as_ref().ok_or_else(unknown)?;
-    Group::open(
+    let job = map_open(Group::open(
         &row.run_id,
         Proc {
             pid: p.pid,
@@ -135,7 +135,25 @@ pub(crate) fn settle_probe(
             group: p.group.clone(),
             pgid: p.pgid,
         },
-    )
-    .and_then(|mut job| job.orphan_empty())
-    .map_err(|_| unknown())
+    ))?;
+    match job {
+        Some(mut job) => map_probe(job.orphan_empty()),
+        None => Ok(true),
+    }
+}
+
+// Only opening a scoped name may interpret NotFound as an absent group.
+pub(crate) fn map_open<T>(
+    result: io::Result<T>,
+) -> Result<Option<T>, crate::reconcile::ReconcileError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(crate::reconcile::ReconcileError::Unknown),
+    }
+}
+pub(crate) fn map_probe(
+    result: io::Result<bool>,
+) -> Result<bool, crate::reconcile::ReconcileError> {
+    result.map_err(|_| crate::reconcile::ReconcileError::Unknown)
 }

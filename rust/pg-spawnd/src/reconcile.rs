@@ -225,8 +225,9 @@ pub(crate) fn populated_alive(
     let (_, rest) = stat.rsplit_once(')').ok_or(ReconcileError::Unknown)?;
     let fields: Vec<_> = rest.split_whitespace().collect();
     if fields.first().is_some_and(|s| !["Z", "X"].contains(s))
-        && identity.start_time.is_some()
-        && fields.get(19).and_then(|s| s.parse::<u64>().ok()) == identity.start_time
+        && identity
+            .start_time
+            .is_none_or(|start| fields.get(19).and_then(|s| s.parse::<u64>().ok()) == Some(start))
         && std::fs::read_to_string(path.join("cgroup.procs"))
             .map_err(|_| ReconcileError::Unknown)?
             .split_whitespace()
