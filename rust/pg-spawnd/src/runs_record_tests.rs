@@ -144,7 +144,7 @@ fn orphan_settle_selects_non_last_non_first_attempt() {
         json!({
             "role":"implement", "attempts":[first,
                 {"status":"running","started":1,"exit_code":7,
-                 "leg":{"leg_key":"leg","route_key":"route"}}, last]
+                 "leg":{}}, last]
         }),
         Status::Running,
     )
@@ -158,6 +158,7 @@ fn orphan_settle_selects_non_last_non_first_attempt() {
     // code separately, rather than presenting it as this orphan's exit code.
     assert_eq!(attempts[1]["exit_code"], Value::Null);
     assert_eq!(attempts[1]["prior_exit_code"], 7);
+    assert_eq!(attempts[1]["outcome_skip_reason"], "leg_key unavailable");
     assert_eq!(attempts[1]["served_model"], "unwitnessed");
     assert_eq!(attempts[2], last);
     assert_eq!(saved.status(), Some(Status::Orphaned));

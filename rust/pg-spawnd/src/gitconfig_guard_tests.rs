@@ -42,7 +42,7 @@ fn changed_common_worktree_restored_and_failed_after_restart() {
     drop(record);
     let mut record = RunRecord::read(temp.path(), "run-guard").unwrap();
     let attempts = record.get("attempts").cloned();
-    crate::runs::finish(&mut record, Status::Completed, &json!({}), 1);
+    crate::runs::finish(&mut record, Status::Completed, &json!({}), 2);
     assert_eq!(record.get("attempts").cloned(), attempts);
     assert!(record.get("attempts_error").is_some());
     assert_eq!(fs::read(config).unwrap(), before);

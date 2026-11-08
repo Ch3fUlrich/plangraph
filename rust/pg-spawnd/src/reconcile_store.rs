@@ -373,7 +373,6 @@ pub(crate) fn settle(
     if how == "ended_unobserved" {
         entry["reason"] = json!("reattached_group_exited");
     }
-    let diagnostic = entry.clone();
     // Recovery did not observe this exit; retain any earlier code separately.
     if !entry["exit_code"].is_null() {
         entry["prior_exit_code"] = entry["exit_code"].clone();
@@ -388,12 +387,12 @@ pub(crate) fn settle(
         .push_event(json!({"event":"RUN_ORPHANED", "attempt":attempt,"how":how,
         "idempotency_key":[run,attempt,"RUN_ORPHANED"]}))
         .map_err(|_| invalid())?;
-    let status = crate::gitconfig_guard::enforce(record, Status::Orphaned, diagnostic);
-    crate::runs::finish(record, status, &leg, attempt);
+    crate::runs::finish(record, Status::Orphaned, &leg, attempt);
     record.save().map_err(|_| ReconcileError::Io)
 }
 #[path = "reconcile_store_outcome.rs"]
 mod outcome;
+pub(crate) use outcome::guard_diagnostic;
 #[cfg(test)]
 #[path = "reconcile_store_tests.rs"]
 mod tests;

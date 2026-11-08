@@ -1,6 +1,25 @@
 //! Attribution for the record-only settlement bridge.
 use super::*;
 
+pub(crate) fn guard_diagnostic(
+    record: &pg_worker_core::run::record::RunRecord,
+    status: pg_worker_core::run::record::Status,
+    leg: &Value,
+    attempt: u32,
+) -> Value {
+    let mut diagnostic = attempt
+        .checked_sub(1)
+        .and_then(|index| record.get("attempts")?.get(index as usize))
+        .filter(|entry| entry.is_object())
+        .cloned()
+        .unwrap_or_else(|| json!({"reason":leg.get("reason"), "exit_code":leg.get("exit_code")}));
+    if status == pg_worker_core::run::record::Status::Orphaned && diagnostic["exit_code"].is_null()
+    {
+        diagnostic["exit_code"] = diagnostic["prior_exit_code"].clone();
+    }
+    diagnostic
+}
+
 fn key(leg: &Value, name: &str) -> Result<Option<String>, ReconcileError> {
     match &leg[name] {
         Value::Null => Ok(None),
