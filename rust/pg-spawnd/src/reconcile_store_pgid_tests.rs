@@ -15,7 +15,7 @@ impl Leader {
 }
 impl Drop for Leader {
     fn drop(&mut self) {
-        self.0.kill().unwrap();
+        let _ = self.0.kill();
         self.0.wait().unwrap();
     }
 }
@@ -23,96 +23,118 @@ impl Drop for Leader {
 #[test]
 fn every_running_identity_is_bounded_or_verified() {
     use pg_worker_core::slots;
-    let leader = Leader::new();
-    let stat = std::fs::read_to_string(format!("/proc/{}/stat", leader.0.id())).unwrap();
-    let start: u64 = stat
-        .rsplit_once(')')
-        .unwrap()
-        .1
-        .split_whitespace()
-        .nth(19)
-        .unwrap()
-        .parse()
-        .unwrap();
-    let mut dead = std::process::Command::new("true").spawn().unwrap();
-    dead.wait().unwrap();
-    let mut counts = [0, 0];
-    for pid in [0, leader.0.id(), dead.id()] {
-        for pgid in [None, Some(leader.0.id()), Some(dead.id())] {
-            for grouped in [false, true] {
-                for recorded in [None, Some(start), Some(start + 1)] {
-                    let label =
-                        format!("pid={pid} pgid={pgid:?} group={grouped} start={recorded:?}");
-                    let dir = StateDir::new();
-                    let (_scope_root, scope) = cgroup_tests::ScopeRoot::new(&dir.0);
-                    std::fs::write(scope.join("cgroup.events"), "populated 1\n").unwrap();
-                    std::fs::write(scope.join("cgroup.procs"), leader.0.id().to_string()).unwrap();
-                    let mut record = dir.record();
-                    record.set(
-                        "attempts",
-                        json!([{"status":"running", "started":1,
-                        "leg":{"leg_key":"leg","route_key":"route"},
-                        "proc":{"pid":pid,"pgid":pgid,"start_time":recorded,
-                            "group":grouped.then(|| scope.to_str().unwrap())}}]),
-                    );
-                    record.save().unwrap();
-                    slots::with_table(&dir.0, std::time::Duration::from_secs(1), |t| {
-                        t.active.push(slots::ActiveSlot {
-                            run_id: "run-test".into(),
-                            pid,
-                            start_time: recorded.unwrap_or(0),
-                            role: pg_worker_core::hosts::Role::Implement,
-                            class: slots::SlotClass::Other,
-                            repo_id: "test".into(),
-                            seat_slot: None,
-                            group: None,
-                            reservation_mb: 0,
-                            created_ms: 0,
-                            bound: true,
-                        });
-                    })
-                    .unwrap();
-                    // Bound: first reconciliation at/after started + 10 seconds.
-                    // started=1 exercises the expired bound without wall-clock sleeps.
-                    let verified = recorded == Some(start)
-                        && (pid == leader.0.id() || (pid == 0 && pgid == Some(leader.0.id())));
-                    let row = inventory(&dir.0).unwrap().remove(0);
-                    for _ in 0..if verified { 2 } else { 1 } {
-                        let result = orphan_gone(&dir.0, &row);
-                        if verified {
-                            assert!(!matches!(result, Ok(true)), "{label}");
-                        } else {
-                            assert!(result.unwrap(), "{label}");
-                        }
+    for state in ["live", "Z", "gone"] {
+        let mut leader = Leader::new();
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", leader.0.id())).unwrap();
+        let start: u64 = stat
+            .rsplit_once(')')
+            .unwrap()
+            .1
+            .split_whitespace()
+            .nth(19)
+            .unwrap()
+            .parse()
+            .unwrap();
+        if state != "live" {
+            leader.0.kill().unwrap();
+            if state == "gone" {
+                leader.0.wait().unwrap();
+            } else {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    let stat =
+                        std::fs::read_to_string(format!("/proc/{}/stat", leader.0.id())).unwrap();
+                    if stat.rsplit_once(')').unwrap().1.split_whitespace().next() == Some("Z") {
+                        break;
                     }
-                    let saved = RunRecord::read(&dir.0, "run-test").unwrap();
-                    assert_eq!(
-                        saved.status(),
-                        Some(if verified {
-                            Status::Running
-                        } else {
-                            Status::Orphaned
-                        }),
-                        "{label}"
-                    );
-                    let slots = slots::with_table(&dir.0, std::time::Duration::from_secs(1), |t| {
-                        t.active.len()
-                    })
-                    .unwrap();
-                    assert_eq!(slots, usize::from(verified), "{label}");
-                    if !verified {
-                        assert_eq!(
-                            saved.get("attempts").unwrap()[0]["status"],
-                            "orphaned",
-                            "{label}"
-                        );
-                    }
-                    counts[usize::from(verified)] += 1;
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::yield_now();
                 }
             }
         }
+        let mut dead = std::process::Command::new("true").spawn().unwrap();
+        dead.wait().unwrap();
+        let mut counts = [0, 0];
+        for pid in [0, leader.0.id(), dead.id()] {
+            for pgid in [None, Some(leader.0.id()), Some(dead.id())] {
+                for grouped in [false, true] {
+                    for recorded in [None, Some(start), Some(start + 1)] {
+                        let label =
+                            format!("pid={pid} pgid={pgid:?} group={grouped} start={recorded:?}");
+                        let dir = StateDir::new();
+                        let (_scope_root, scope) = cgroup_tests::ScopeRoot::new(&dir.0);
+                        std::fs::write(scope.join("cgroup.events"), "populated 1\n").unwrap();
+                        std::fs::write(scope.join("cgroup.procs"), leader.0.id().to_string())
+                            .unwrap();
+                        let mut record = dir.record();
+                        record.set(
+                            "attempts",
+                            json!([{"status":"running", "started":1,
+                        "leg":{"leg_key":"leg","route_key":"route"},
+                        "proc":{"pid":pid,"pgid":pgid,"start_time":recorded,
+                            "group":grouped.then(|| scope.to_str().unwrap())}}]),
+                        );
+                        record.save().unwrap();
+                        slots::with_table(&dir.0, std::time::Duration::from_secs(1), |t| {
+                            t.active.push(slots::ActiveSlot {
+                                run_id: "run-test".into(),
+                                pid,
+                                start_time: recorded.unwrap_or(0),
+                                role: pg_worker_core::hosts::Role::Implement,
+                                class: slots::SlotClass::Other,
+                                repo_id: "test".into(),
+                                seat_slot: None,
+                                group: None,
+                                reservation_mb: 0,
+                                created_ms: 0,
+                                bound: true,
+                            });
+                        })
+                        .unwrap();
+                        // Bound: first reconciliation at/after started + 10 seconds.
+                        // started=1 exercises the expired bound without wall-clock sleeps.
+                        let verified = state != "gone"
+                            && recorded == Some(start)
+                            && (pid == leader.0.id() || (pid == 0 && pgid == Some(leader.0.id())));
+                        let row = inventory(&dir.0).unwrap().remove(0);
+                        for _ in 0..if verified { 2 } else { 1 } {
+                            let result = orphan_gone(&dir.0, &row);
+                            if verified {
+                                assert!(!matches!(result, Ok(true)), "{label}");
+                            } else {
+                                assert!(result.unwrap(), "{label}");
+                            }
+                        }
+                        let saved = RunRecord::read(&dir.0, "run-test").unwrap();
+                        assert_eq!(
+                            saved.status(),
+                            Some(if verified {
+                                Status::Running
+                            } else {
+                                Status::Orphaned
+                            }),
+                            "{label}"
+                        );
+                        let slots =
+                            slots::with_table(&dir.0, std::time::Duration::from_secs(1), |t| {
+                                t.active.len()
+                            })
+                            .unwrap();
+                        assert_eq!(slots, usize::from(verified), "{label}");
+                        if !verified {
+                            assert_eq!(
+                                saved.get("attempts").unwrap()[0]["status"],
+                                "orphaned",
+                                "{label}"
+                            );
+                        }
+                        counts[usize::from(verified)] += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(counts, if state == "gone" { [54, 0] } else { [46, 8] });
     }
-    assert_eq!(counts, [46, 8]);
 }
 
 #[test]

@@ -11,6 +11,33 @@ mod pgid_tests;
 mod recovery_tests;
 
 struct StateDir(std::path::PathBuf);
+
+#[test]
+fn orphan_gone_uses_running_rows_missing_identity() {
+    let dir = StateDir::new();
+    let mut record = dir.record();
+    record.set(
+        "attempts",
+        json!([{"status":"running","leg":{"leg_key":"leg"}}]),
+    );
+    record.save().unwrap();
+    let row = Entry {
+        run_id: "run-test".into(),
+        role: "implement".into(),
+        attempt: 1,
+        identity: None,
+        deadline_ms: Some(u64::MAX - 10_000),
+    };
+    assert!(matches!(
+        orphan_gone(&dir.0, &row),
+        Err(ReconcileError::Unknown)
+    ));
+    let row = Entry {
+        deadline_ms: Some(1),
+        ..row
+    };
+    assert!(orphan_gone(&dir.0, &row).unwrap());
+}
 impl StateDir {
     fn new() -> Self {
         let path = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());

@@ -256,6 +256,7 @@ pub(crate) fn orphan_with(
     {
         return Err(ReconcileError::Unknown);
     }
+    // Gate on running inventory membership, not identity presence; pass the row.
     if current.is_some() && unknown::unverified_not_gone(row) {
         return unknown::settle_unknown(root, row);
     }
@@ -395,6 +396,5 @@ mod outcome;
 #[cfg(test)]
 #[path = "reconcile_store_tests.rs"]
 mod tests;
-
 #[path = "reconcile_store_unknown.rs"]
 mod unknown;

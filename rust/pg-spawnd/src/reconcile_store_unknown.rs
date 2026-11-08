@@ -8,34 +8,47 @@ pub(super) fn unverified_not_gone(row: &Entry) -> bool {
 }
 
 pub(super) fn needs_grace(row: &Entry) -> bool {
+    needs_grace_with(row, leader_start)
+}
+
+fn needs_grace_with(row: &Entry, probe: impl Fn(u32) -> Option<u64>) -> bool {
+    row.identity.as_ref().is_none_or(|p| {
+        let Some(expected) = p.start_time else {
+            return true;
+        };
+        probe(if p.pid == 0 {
+            p.pgid.unwrap_or(0)
+        } else {
+            p.pid
+        }) != Some(expected)
+    })
+}
+
+fn leader_start(leader: u32) -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
         // A scope name or a live process group is not a verified leader identity.
-        row.identity.as_ref().is_none_or(|p| {
-            let Some(expected) = p.start_time else {
-                return true;
-            };
-            let leader = if p.pid == 0 {
-                p.pgid.unwrap_or(0)
-            } else {
-                p.pid
-            };
-            std::fs::read_to_string(format!("/proc/{leader}/stat"))
-                .ok()
-                .and_then(|stat| {
-                    let (_, rest) = stat.rsplit_once(')')?;
-                    let fields: Vec<_> = rest.split_whitespace().collect();
-                    (!matches!(*fields.first()?, "Z" | "X"))
-                        .then(|| fields.get(19)?.parse::<u64>().ok())?
-                })
-                != Some(expected)
-        })
+        std::fs::read_to_string(format!("/proc/{leader}/stat"))
+            .ok()
+            .and_then(|stat| {
+                let (_, rest) = stat.rsplit_once(')')?;
+                let fields: Vec<_> = rest.split_whitespace().collect();
+                // Z/X leaders can still have live process-group members.
+                fields.get(19)?.parse::<u64>().ok()
+            })
     }
     #[cfg(not(target_os = "linux"))]
-    row.identity
-        .as_ref()
-        .is_none_or(|p| p.pid == 0 && p.group.is_none() && p.start_time.is_none())
+    {
+        // No portable start-time probe here. A scope name is not identity proof;
+        // gone() can still prove an empty Windows job before grace is applied.
+        let _ = leader;
+        None
+    }
 }
+
+#[cfg(test)]
+#[path = "reconcile_store_grace_tests.rs"]
+mod tests;
 
 #[cfg(target_os = "linux")]
 pub(super) fn pgid_gone(identity: &Proc) -> Result<bool, ReconcileError> {
