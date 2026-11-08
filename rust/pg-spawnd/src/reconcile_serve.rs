@@ -102,6 +102,18 @@ fn now() -> Result<u64, ReconcileError> {
 }
 #[cfg(any(target_os = "linux", windows))]
 fn replay(root: &Path, store: &crate::evidence::EvidenceStore) -> Result<(), ReconcileError> {
+    replay_with(root, |value| {
+        store
+            .backfill(&[value])
+            .map(|_| ())
+            .map_err(|_| ReconcileError::Io)
+    })
+}
+#[cfg(any(target_os = "linux", windows))]
+fn replay_with(
+    root: &Path,
+    mut backfill: impl FnMut(serde_json::Value) -> Result<(), ReconcileError>,
+) -> Result<(), ReconcileError> {
     let runs = root.join("runs");
     if !runs.exists() {
         return Ok(());
@@ -128,7 +140,10 @@ fn replay(root: &Path, store: &crate::evidence::EvidenceStore) -> Result<(), Rec
             skipped = true;
             continue;
         };
-        store.backfill(&[value]).map_err(|_| ReconcileError::Io)?;
+        if backfill(value).is_err() {
+            skipped = true;
+            continue;
+        }
     }
     if skipped {
         return Err(ReconcileError::Unknown);
@@ -276,9 +291,10 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
         let Ok(leader) = Group::open(&row.run_id, identity) else {
             continue;
         };
-        let dir = root.join("runs").join(&row.run_id);
-        let _record_lock = crate::reconcile_store::lock(&dir, &dir.join("record.lock"))?;
-        let mut record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Unknown)?;
+        let Some((_record_lock, mut record)) = attach_record(root, &row.run_id) else {
+            incomplete = true;
+            continue;
+        };
         let role = serde_json::from_value(serde_json::json!(row.role))
             .map_err(|_| ReconcileError::Unknown)?;
         let watch = Watch::new(
@@ -357,23 +373,19 @@ fn scan_probe(result: Result<bool, ReconcileError>) -> Result<Option<bool>, Reco
         Err(_) => Ok(None),
     }
 }
-#[cfg(all(test, any(target_os = "linux", windows)))]
-#[test]
-fn unknown_scan_row_does_not_abort_later_rows() {
-    let rows = [
-        Err(ReconcileError::Unknown),
-        Err(ReconcileError::Io),
-        Err(ReconcileError::Invalid),
-        Ok(false),
-        Ok(true),
-    ];
-    let decisions = rows
-        .into_iter()
-        .map(scan_probe)
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    assert_eq!(decisions, vec![None, None, None, Some(false), Some(true)]);
+#[cfg(any(target_os = "linux", windows))]
+fn attach_record(
+    root: &Path,
+    run: &str,
+) -> Option<(LockGuard, pg_worker_core::run::record::RunRecord)> {
+    let dir = root.join("runs").join(run);
+    let lock = crate::reconcile_store::lock(&dir, &dir.join("record.lock")).ok()?;
+    let record = pg_worker_core::run::record::RunRecord::read(root, run).ok()?;
+    Some((lock, record))
 }
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "reconcile_serve_tests.rs"]
+mod tests;
 #[cfg(any(target_os = "linux", windows, test))]
 fn start_matches(recorded: Option<u64>, slot: u64) -> bool {
     recorded.is_none_or(|start| start == slot)

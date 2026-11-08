@@ -1,3 +1,4 @@
+//! Durable run inventory, row locking, and conservative process reconciliation.
 use crate::reconcile::ReconcileError;
 use pg_worker_core::run::record::valid_run_id;
 use serde::Deserialize;
@@ -188,11 +189,10 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
                     .rsplit_once(')')
                     .and_then(|(_, rest)| rest.split_whitespace().nth(19)?.parse::<u64>().ok())
                     .ok_or(ReconcileError::Unknown)?;
-                if identity
+                if !identity
                     .start_time
                     .is_some_and(|expected| expected != start)
                 {
-                } else {
                     return Ok(false);
                 }
             }
@@ -204,6 +204,7 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
             .ok()
             .filter(|id| *id > 0)
             .ok_or(ReconcileError::Unknown)?;
+        // SAFETY: pgid is a checked positive i32; signal zero only probes the process group.
         if unsafe { libc::kill(-pgid, 0) } == 0 {
             return Ok(false);
         }
