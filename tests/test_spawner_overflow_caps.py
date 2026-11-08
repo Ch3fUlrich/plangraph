@@ -92,6 +92,7 @@ def test_cli_shared_ram_refusal(registry, monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(o.Path, 'read_text', lambda p, *a, **kw:
         'MemAvailable: 5168128 kB\n' if str(p) == '/proc/meminfo' else original(p, *a, **kw))
     service = o.cli.SpawnService(state=tmp_path / 'state')
+    monkeypatch.setattr(service, 'route', lambda *args, **kwargs: None)
     monkeypatch.setattr(service, 'ps', lambda: {'runs': [{'status': 'running'}] * 50})
     monkeypatch.setattr(o.cli, 'SpawnService', lambda **kw: service)
     reason = o.admit_local('implement')

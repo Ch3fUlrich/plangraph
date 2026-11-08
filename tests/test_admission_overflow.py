@@ -94,6 +94,7 @@ def test_no_config_below_floor_refuses_spawn(setup, monkeypatch, capsys, entry):
     monkeypatch.setattr(overflow, 'ready_records', lambda config, role: {})
     shared = SharedService()
     shared.runner, shared._save = service.runner, service._save
+    shared.route = Mock()
     if entry == 'seat':
         result = asyncio.run(shared.spawn(prompt='Implement the requested change.'))
     elif entry == 'mcp':
@@ -109,7 +110,8 @@ def test_no_config_below_floor_refuses_spawn(setup, monkeypatch, capsys, entry):
                          'Implement the requested change.']) == 5
         result = json.loads(capsys.readouterr().out)
     assert result['status'] == 'queued' and result['exit_code'] == 5
-    assert 'memory:' in result['reason']
+    assert result['reason'] == ('memory: free 4000 MB, floor 3000 MB, role 2048 MB'
+                                '; queue: repo is not public (absent or unknown allowlist)')
     remote.assert_not_called()
     shared._save.assert_called_once_with(result)
 
@@ -117,12 +119,45 @@ def test_no_config_below_floor_refuses_spawn(setup, monkeypatch, capsys, entry):
 def test_direct_cli_below_floor_attempts_overflow(setup, monkeypatch, capsys):
     from plangraph.spawner import cli
     service, _, remote = setup
+    service.route = Mock()
     monkeypatch.setattr(cli, 'SpawnService', lambda **kw: service)
     monkeypatch.setattr(cli, '_start_supervisor', Mock(side_effect=AssertionError('local supervisor')))
     assert cli.main(['spawn', '--card', '{"task":"test"}',
                      'Implement the requested change.']) == 0
     assert json.loads(capsys.readouterr().out)['host'] == 'ash'
     remote.assert_called_once()
+
+
+@pytest.mark.parametrize('arguments,message', [
+    (['--card', '{"task":"test"}', '--review-scope', 'batch', 'task'],
+     'review_scope only valid for role=review'),
+    (['task'], 'spawn by card; card required'),
+    (['--card', '{"task":"test"}'], 'prompt'),
+    (['--card', '{"task":"test"}', 'bad\x01prompt'], 'prompt contains control U+0001'),
+])
+def test_cli_validates_before_overflow(setup, monkeypatch, capsys, arguments, message):
+    from plangraph.spawner import cli
+    service, _, remote = setup
+    service.save_refusal = Mock()
+    service.route = Mock()
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: service)
+    assert cli.main(['spawn', *arguments]) == 2
+    assert message in capsys.readouterr().err
+    remote.assert_not_called()
+    service._save.assert_not_called()
+    service.save_refusal.assert_called_once()
+
+
+def test_cli_route_validates_before_overflow(setup, monkeypatch, capsys):
+    from plangraph.spawner import cli
+    from plangraph.planner.routing import SpawnRefused
+    service, _, remote = setup
+    service.route = Mock(side_effect=SpawnRefused('invalid route'))
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: service)
+    assert cli.main(['spawn', '--card', '{"task":"test"}', 'task']) == 2
+    assert capsys.readouterr().err.strip() == 'invalid route'
+    remote.assert_not_called()
+    service._save.assert_not_called()
 
 
 @pytest.mark.parametrize('entry', ['cli', 'mcp'])

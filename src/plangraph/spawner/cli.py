@@ -99,8 +99,6 @@ def _supervise():
 
 def _card(value):
     return json.loads(Path(value[1:]).read_text(encoding='utf-8') if value.startswith('@') else value)
-
-
 def main(argv=None):
     if (argv if argv is not None else sys.argv[1:]) == ['--supervise']:
         return _supervise()
@@ -191,6 +189,8 @@ def main(argv=None):
             from .prompt_input import resolve_prompt
             try:
                 prompt = resolve_prompt(args.prompt, args.prompt_file)
+                from .prompt_guard import admit_prompt
+                if args.role == 'implement': admit_prompt(prompt, SpawnRefused)
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise
@@ -199,12 +199,6 @@ def main(argv=None):
                 review_scope=args.review_scope,
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
                 no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
-            if not args.dry_run:
-                from .seat_spawn import admit
-                admitted = admit(service, payload, card=args.card)
-                if admitted is not None:
-                    print(json.dumps(admitted, indent=2))
-                    return admitted.get('exit_code', 0)
             from plangraph.settings import admit_review_scope
             try:
                 admit_review_scope(args.card, args.role, args.review_scope)
@@ -214,6 +208,12 @@ def main(argv=None):
             if not args.model and not args.leg:
                 # service.route saves the refusal record itself (one record per route error).
                 service.route(args.card, args.role, args.writer_family, args.review_of, **options)
+            if not args.dry_run:
+                from .seat_spawn import admit
+                admitted = admit(service, payload, card=args.card)
+                if admitted is not None:
+                    print(json.dumps(admitted, indent=2))
+                    return admitted.get('exit_code', 0)
             if args.dry_run:
                 result = asyncio.run(service.spawn(**payload, wait_seconds=None))
             else:
