@@ -12,7 +12,7 @@ From the user's login session, not a nested herdr service:
 
 ```sh
 systemd-run --user --scope --unit=claude-bg \
-  --property=OOMScoreAdjust=200 claude --bg
+  -p OOMScoreAdjust=200 claude --bg
 ```
 
 The user manager creates a sibling scope outside herdr-server's cgroup;
