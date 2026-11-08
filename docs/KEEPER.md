@@ -1,5 +1,4 @@
 # Keeper contract (M2a) — store, state machine, evidence, API, CLI, MCP
-
 Store snapshot filters (S1): `open=1` / `closed=1`, UTC `since`, item `fields` (always `key`), and `blocks`; nonblank filters add selection/returned counts in `filter`. Activity uses only `since`; aliases and progress stay full; decision text follows selected evidence before field projection. No filters preserves legacy bytes; HTTP wiring is S2. Signed snapshots, serve and pull stay full.
 Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12 **stdlib only** (sqlite3, http.server, hashlib,
 secrets, json, graphlib, subprocess, urllib); PyYAML only in the importer. Package `src/plangraph/keeper/`. Every file ≤ 400 lines,
@@ -20,6 +19,7 @@ tests first (pytest), no network in tests (fakes), no secrets in code/logs/tests
 | `importer.py` | YAML dir → router-attributed batch; `export_yaml(conn, dir)` for round trip |
 | `api.py` | HTTP JSON server around `Store` |
 | `cli.py` (`python -m plangraph.keeper.cli` / entry `pg`) | thin client of the API; also `admin` subcommands run locally on the keeper host |
+| `cli_oversight.py` | `oversight-check` writes the digest and raises alarms; `oversight-audit --out-dir DIR --cursor FILE --router-log FILE` audits the digest and router log once (cursor and router-log paths are required). |
 | `mcp.py` | stdio MCP server (hand-written JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`; no SDK), same verbs, calls the API |
 
 ## Tables (all in one SQLite file)

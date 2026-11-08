@@ -169,12 +169,17 @@ def cmd_oversight_check(args, session):
         return EXIT_REFUSED
     try:
         out = Path(getattr(args, "out_dir", None) or ".")
-        out.mkdir(parents=True, exist_ok=True)
+        if not getattr(args, "audit", False):
+            out.mkdir(parents=True, exist_ok=True)
         conn = kdb.open_db(cfg.db, **cfg.db_options)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"oversight-check: {exc}", file=sys.stderr)
         return EXIT_REFUSED
     try:
+        if getattr(args, "audit", False):
+            audit_once(args.out_dir, args.router_log, args.cursor,
+                       {row[0] for row in conn.execute("SELECT key FROM items")})
+            return EXIT_OK
         now = time.time()
         # Two distinct git shapes: stall's R1/R2 understand the config object,
         # R4 needs a `git(args) -> str` callable (see oversight.run_checks).
@@ -202,10 +207,65 @@ def cmd_oversight_check(args, session):
 
 
 def add_parser(sub, make):
+    audit = make(sub, "oversight-audit", help="one-shot digest and router audit")
+    audit.set_defaults(command="oversight-check", audit=True)
+    audit.add_argument("--out-dir", default=".", metavar="DIR")
+    audit.add_argument("--cursor", required=True, type=Path)
+    audit.add_argument("--router-log", required=True, type=Path)
     p = make(sub, "oversight-check",
              help="RT-OVERSIGHT-CHECKS: run the checks, write the digest, raise alarms")
     p.add_argument("--out-dir", default=".", metavar="DIR",
                    help="write DIR/digest.json, DIR/digest.sha256 and the atomic"
                         " DIR/digest.pair.json (default .)")
     p.add_argument("--no-alarms", action="store_true",
-                   help="write the digest but leave projector_alarms alone")
+                    help="write the digest but leave projector_alarms alone")
+
+
+def audit_once(out_dir, router_log, cursor, known_keys, *, emit=None):
+    """Read fixtures or local files; flush output before atomically advancing.
+
+    The cursor records both digest identity and the highest numeric D-row ID.
+    A changed digest replays its findings, not previously audited router rows.
+    ``known_keys`` is a supplied iterable (or zero-argument snapshot function).
+    No keeper mutation or network operation is performed here.
+    """
+    text, sha = read_digest(Path(out_dir))
+    cursor = Path(cursor)
+    previous = json.loads(cursor.read_text()) if cursor.exists() else {}
+    after = int(previous.get("last_row", 0))
+    last = after
+    findings = []
+    if previous.get("sha256") != sha:
+        for finding in json.loads(text):
+            findings.append(f"{finding['rule']} {finding['key']}: "
+                            f"{finding['detail']}")
+    keys = set(known_keys() if callable(known_keys) else known_keys)
+    # Router decisions are Markdown table rows, identified by the first cell.
+    for line in Path(router_log).read_text().splitlines():
+        match = re.match(r"\s*\|\s*\**(D-(\d+))\b", line)
+        if not match:
+            continue
+        row_id, number = match.group(1), int(match.group(2))
+        last = max(last, number)
+        if number <= after:
+            continue
+        if re.search(r"\bGO\b", line) and not re.search(
+                r"\bGO-HEAD\s*[:=]?\s*`?[0-9a-fA-F]{40}(?![0-9a-fA-F])", line):
+            findings.append(f"{row_id}: GO without 40-hex GO-HEAD")
+        closes = re.search(r"\bCloses\b\s*:?\s*(.*)", line, re.I)
+        if closes:
+            for key in re.findall(r"[\w.-]+:[\w.-]+", closes.group(1)):
+                if key not in keys:
+                    findings.append(f"{row_id}: Closes unknown keeper key {key}")
+    label = f"sha256 {sha} last D-{last}"
+    lines = [f"oversight-audit {label}: {len(findings)} findings"
+             if findings else f"oversight-audit quiet {label}"]
+    lines.extend(" ".join(f.splitlines()) for f in findings)
+    if len(lines) > 10:
+        lines = lines[:9] + [f"dropped {len(findings) - 8} findings"]
+    if emit is None:
+        emit = lambda line: print(line, flush=True)
+    for line in lines:
+        emit(line)
+    _atomic_write(cursor, (json.dumps({"sha256": sha, "last_row": last})
+                           + "\n").encode("ascii"))
