@@ -13,14 +13,28 @@ fn child(mode: &str) -> Vec<String> {
 fn feature_requires_fresh_matching_latest_pass() {
     let s = spec();
     let pass = run("p:F", &s, 100).unwrap();
-    assert!(close_gate("feature", "p:F", Some(&s), &[pass.clone()], 101).is_ok());
+    assert!(close_gate("feature", "p:F", Some(&s), std::slice::from_ref(&pass), 101).is_ok());
     assert!(close_gate("feature", "p:F", None, &[], 101).is_err());
-    assert!(close_gate("feature", "p:G", Some(&s), &[pass.clone()], 101).is_err());
-    assert!(close_gate("feature", "p:F", Some(&s), &[pass.clone()], 86501).is_err());
-    assert!(close_gate("feature", "p:F", Some(&s), &[pass.clone()], 99).is_err());
+    assert!(close_gate("feature", "p:G", Some(&s), std::slice::from_ref(&pass), 101).is_err());
+    assert!(close_gate(
+        "feature",
+        "p:F",
+        Some(&s),
+        std::slice::from_ref(&pass),
+        86501
+    )
+    .is_err());
+    assert!(close_gate("feature", "p:F", Some(&s), std::slice::from_ref(&pass), 99).is_err());
     let mut changed = s.clone();
     changed.expected = "different".into();
-    assert!(close_gate("feature", "p:F", Some(&changed), &[pass.clone()], 101).is_err());
+    assert!(close_gate(
+        "feature",
+        "p:F",
+        Some(&changed),
+        std::slice::from_ref(&pass),
+        101
+    )
+    .is_err());
     let mut failed = pass.clone();
     failed.passed = false;
     failed.at = 101;
