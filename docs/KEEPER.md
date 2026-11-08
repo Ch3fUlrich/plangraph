@@ -19,7 +19,7 @@ tests first (pytest), no network in tests (fakes), no secrets in code/logs/tests
 | `evidence.py` | pluggable verifiers (below) |
 | `importer.py` | YAML dir → router-attributed batch; `export_yaml(conn, dir)` for round trip |
 | `api.py` | HTTP JSON server around `Store` |
-| `cli.py` (`python -m plangraph.keeper.cli` / entry `pg`) | thin client of the API; also `admin` subcommands run locally on the keeper host |
+| `cli.py` (`python -m plangraph.keeper.cli` / entry `pg`) | thin client of the API; also `admin` subcommands run locally on the keeper host; `oversight-check` and `oversight-audit --out-dir DIR --cursor FILE --router-log FILE` live in `cli_oversight.py` |
 | `mcp.py` | stdio MCP server (hand-written JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`; no SDK), same verbs, calls the API |
 
 ## Tables (all in one SQLite file)
