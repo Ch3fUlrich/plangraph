@@ -29,13 +29,29 @@ def test_close_skip_status_has_accountable_owner(reason, action):
     pending.close_skipped = [("Q-1", "D-1", "routing:Q-1")]
     pending.dclose_skipped = [("D-2", "D-2", "demo:X", reason)]
     status = md_sync.status_doc("dry")
+    if reason == "other reason":
+        with pytest.raises(ValueError, match="unsupported skipped-close reason"):
+            md_sync.fill_status(status, pending)
+        return
     md_sync.fill_status(status, pending)
     assert [row["owner"] for row in status["close_skipped"]] == [
         "router", "router"]
     assert all(row["action"] for row in status["close_skipped"])
+    assert status["close_skipped"][0] == {
+        "id": "Q-1", "decision": "D-1", "key": "routing:Q-1",
+        "reason": "Closes does not list the key", "owner": "router",
+        "action": "reconcile D-row Closes with the item key; never reopen a done item"}
     assert status["close_skipped"][1] == {
         "id": "D-2", "decision": "D-2", "key": "demo:X", "reason": reason,
         "owner": "router", "action": action}
+
+
+@pytest.mark.parametrize("reason", ["other reason", "not in Graph", "not in graph "])
+def test_close_skip_reason_drift_fails_explicitly(reason):
+    pending = plan.Plan()
+    pending.dclose_skipped = [("D-2", "D-2", "demo:X", reason)]
+    with pytest.raises(ValueError, match="unsupported skipped-close reason"):
+        md_sync.fill_status(md_sync.status_doc("dry"), pending)
 
 
 @pytest.fixture
