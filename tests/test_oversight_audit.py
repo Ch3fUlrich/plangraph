@@ -54,6 +54,36 @@ def test_go_and_unknown_closes(inputs, capsys):
     assert "D-4: GO without" in output
 
 
+def test_go_requires_standalone_token(inputs, capsys):
+    inputs[1].write_text(
+        "| D-1 | NO-GO |\n"
+        "| D-2 | GO-HEAD: missing |\n"
+        "| D-3 | GO |\n"
+        "| D-4 | GO | GO-HEAD: abc123 |\n"
+        f"| D-5 | GO | GO-HEAD: {'a' * 40} |\n"
+        "| D-6 | XGO GO_X GO-away |\n")
+    run(inputs)
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1:] == [
+        "D-3: GO without 40-hex GO-HEAD",
+        "D-4: GO without 40-hex GO-HEAD",
+    ]
+
+
+def test_closes_stops_at_cells_and_directives(inputs, capsys):
+    inputs[1].write_text(
+        "| D-1 | HOLD | Closes: fixture:known | fixture:other |\n"
+        "| D-2 | HOLD | Closes: fixture:known Waives: fixture:waived |\n"
+        "| D-3 | HOLD | Closes: fixture:known, fixture:missing "
+        "fixture:absent Waives: fixture:waived |\n")
+    run(inputs, {"fixture:known"})
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1:] == [
+        "D-3: Closes unknown keeper key fixture:missing",
+        "D-3: Closes unknown keeper key fixture:absent",
+    ]
+
+
 def test_cursor_only_advances_after_all_prints(inputs):
     run(inputs, emit=lambda _: None)
     before = inputs[2].read_bytes()
