@@ -3,6 +3,7 @@
 import argparse
 import ast
 import json
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -154,9 +155,10 @@ def select_tests(root, changed, within=None):
     return {"tests": filter_within(sorted(selected), within), "reason": "reverse imports and explicit file references"}
 
 
-def changed_files(root, base):
-    merge = subprocess.check_output(["git", "merge-base", base, "HEAD"], cwd=root, text=True).strip()
-    tracked = subprocess.check_output(["git", "diff", "--name-only", "-z", "--no-renames", merge], cwd=root)
+def changed_files(root, base, head=None):
+    merge = subprocess.check_output(["git", "merge-base", base, head or "HEAD"], cwd=root, text=True).strip()
+    tracked = subprocess.check_output(["git", "diff", "--name-only", "-z", "--no-renames", merge,
+                                       *([head] if head else [])], cwd=root)
     untracked = subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=root)
     return sorted(set(p.decode() for p in (tracked + untracked).split(b"\0") if p))
 
@@ -164,6 +166,7 @@ def changed_files(root, base):
 def main(root=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
+    parser.add_argument("--head", help="explicit revision; otherwise include checkout changes")
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
     parser.add_argument("-n", "--workers", default="auto")
@@ -180,15 +183,17 @@ def main(root=None):
             if not (root / w).exists():
                 print(f"unknown --within path: {w}", file=sys.stderr)
                 return 2
-    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base), within=args.within)
+    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within)
     print(json.dumps(plan), flush=True)
     if args.within is not None and not plan["tests"]:
         print("no pg-affected tests")
         return 0
     if args.run and plan["tests"]:
         start = time.monotonic()
-        result = subprocess.run([sys.executable, "-m", "pytest", "-n", args.workers,
-                                 "--dist", "loadgroup", *plan["tests"]], cwd=root)
+        parallel = (["-n", args.workers, "--dist", "loadgroup"]
+                    if importlib.util.find_spec("xdist") is not None else [])
+        result = subprocess.run([sys.executable, "-m", "pytest", *parallel,
+                                 *plan["tests"]], cwd=root)
         print(f"affected wall seconds: {time.monotonic() - start:.3f}")
         return result.returncode
     return 0
