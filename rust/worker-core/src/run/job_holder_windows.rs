@@ -1,4 +1,7 @@
-//! Private, fixed-lifetime Windows Job keeper; no reconnect or renewal protocol.
+//! Private Windows Job keeper; the fixed deadline bounds only the orphan window.
+pub fn terminate_at_expiry(adopted: bool) -> bool {
+    !adopted
+}
 pub fn validate_max_s(value: Option<&str>) -> Result<u64, String> {
     let seconds = value.unwrap_or("28800").parse::<u64>().ok();
     seconds
@@ -111,12 +114,25 @@ mod platform {
             Ok(job)
         }
     }
+    pub fn adoption_event(name: &str) -> io::Result<OwnedHandle> {
+        let name: Vec<u16> = format!("{name}-holder-adopted")
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        // SAFETY: terminated name; manual-reset, initially unsignaled, non-inheritable.
+        let raw = unsafe { CreateEventW(std::ptr::null(), 1, 0, name.as_ptr()) };
+        if raw.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
+    }
     #[rustfmt::skip]
-    pub fn launch(job: &OwnedHandle, deadline: u64) -> io::Result<()> {
+    pub fn launch(job: &OwnedHandle, deadline: u64, name: &str) -> io::Result<()> {
         #[cfg(test)]
         if FAIL_LAUNCH.get() {
             return Err(io::Error::other("injected holder launch failure"));
         }
+        let event = adoption_event(name)?;
         let mut command = Command::new(std::env::current_exe()?);
         #[cfg(not(test))]
         command.arg("__job-holder");
@@ -139,7 +155,12 @@ mod platform {
                 &mut duplicate, JOB_OBJECT_QUERY | JOB_OBJECT_TERMINATE, 0, 0) } == 0 {
                 return Err(io::Error::last_os_error());
             }
-            let ticket = format!("{} {deadline}\n", duplicate as usize);
+            let mut adopted = std::ptr::null_mut();
+            if unsafe { DuplicateHandle(GetCurrentProcess(), event.as_raw_handle(), child.as_raw_handle(),
+                &mut adopted, 0x00100000, 0, 0) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let ticket = format!("{} {deadline}\n{}\n", duplicate as usize, adopted as usize);
             child.stdin.take().unwrap().write_all(ticket.as_bytes())?;
             super::super::group_windows::resume(child.id())?;
             let mut ready = [0];
@@ -173,13 +194,27 @@ mod platform {
             }
             let mut ticket = String::new();
             std::io::stdin().take(128).read_to_string(&mut ticket)?;
-            let (raw, deadline) =
-                parse_ticket(&ticket).ok_or_else(|| io::Error::other("invalid holder ticket"))?;
+            let mut lines = ticket.lines();
+            let (raw, deadline) = parse_ticket(lines.next().unwrap_or_default())
+                .ok_or_else(|| io::Error::other("invalid holder ticket"))?;
+            let event = lines
+                .next()
+                .and_then(|s| s.parse::<usize>().ok())
+                .filter(|&h| h != 0)
+                .ok_or_else(|| io::Error::other("invalid adoption handle"))?;
+            let event = unsafe { OwnedHandle::from_raw_handle(event as _) };
             let job = unsafe { OwnedHandle::from_raw_handle(raw as _) };
             std::io::stdout().write_all(&[1])?;
             loop {
                 if now_ms() >= deadline {
-                    if unsafe { TerminateJobObject(job.as_raw_handle(), 1) } == 0 {
+                    let adopted = match unsafe { WaitForSingleObject(event.as_raw_handle(), 0) } {
+                        WAIT_OBJECT_0 => true,
+                        WAIT_TIMEOUT => false,
+                        _ => return Err(io::Error::last_os_error()),
+                    };
+                    if terminate_at_expiry(adopted)
+                        && unsafe { TerminateJobObject(job.as_raw_handle(), 1) } == 0
+                    {
                         return Err(io::Error::last_os_error());
                     }
                     return Ok(());
@@ -216,6 +251,11 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn adoption_prevents_expiry_termination() {
+        assert!(terminate_at_expiry(false));
+        assert!(!terminate_at_expiry(true));
+    }
     #[test]
     fn bounds() {
         assert_eq!(validate_max_s(None), Ok(28800));

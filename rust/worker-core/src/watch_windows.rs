@@ -3,6 +3,9 @@ use crate::cpu::CpuSample;
 use std::io;
 
 pub trait JobApi: Send {
+    fn adopted(&mut self) -> io::Result<()> {
+        Ok(())
+    }
     fn member(&mut self, pid: u32, start: u64) -> io::Result<bool>;
     fn active(&mut self) -> io::Result<bool>;
     fn terminate(&mut self) -> io::Result<()>;
@@ -18,6 +21,11 @@ impl<A: JobApi> AdoptedJob<A> {
             Some(api) => !api.member(pid, start)?,
             None => true,
         };
+        if !gone {
+            if let Some(api) = api.as_mut() {
+                api.adopted()?;
+            }
+        }
         Ok(Self { api, gone })
     }
     pub fn cpu(&mut self) -> io::Result<CpuSample> {
@@ -66,7 +74,7 @@ mod native {
             Threading::*,
         },
     };
-    pub struct NativeJob(OwnedHandle);
+    pub struct NativeJob(OwnedHandle, OwnedHandle);
     impl NativeJob {
         pub fn open(name: &str) -> io::Result<Option<Self>> {
             let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
@@ -83,7 +91,11 @@ mod native {
                 };
             }
             // SAFETY: successful open transfers an owned handle.
-            Ok(Some(Self(unsafe { OwnedHandle::from_raw_handle(raw) })))
+            let job = unsafe { OwnedHandle::from_raw_handle(raw) };
+            let event = crate::run::job_holder_windows::adoption_event(&String::from_utf16_lossy(
+                &name[..name.len() - 1],
+            ))?;
+            Ok(Some(Self(job, event)))
         }
         fn accounting(&self) -> io::Result<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION> {
             // SAFETY: zero-initialized output and exact buffer size.
@@ -104,6 +116,13 @@ mod native {
         }
     }
     impl JobApi for NativeJob {
+        fn adopted(&mut self) -> io::Result<()> {
+            // SAFETY: verified Job remains owned; manual-reset event stays signaled.
+            if unsafe { SetEvent(self.1.as_raw_handle()) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
         fn member(&mut self, pid: u32, start: u64) -> io::Result<bool> {
             // SAFETY: query-only process handle; retained through identity/membership checks.
             let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };

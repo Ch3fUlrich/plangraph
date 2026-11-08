@@ -253,3 +253,30 @@ fn holder_launch_failure_is_closed() {
     assert!(matches!(result, Err(LaunchError::JobUnavailable)));
     assert!(!named("pg-win-holder-fail"));
 }
+
+#[test]
+fn adopted_run_survives_holder_expiry() {
+    use crate::watch::windows::{AdoptedJob, NativeJob};
+    let unit = "pg-win-holder-adopted";
+    let (mut g, _dir) = launch_bounded(unit, "sleep", false, false, Some(1)).unwrap();
+    let pid = g.child.id();
+    let deadline = g.group.holder_deadline_ms().unwrap();
+    drop(g.group);
+    let mut adopted = AdoptedJob::verify(
+        NativeJob::open(&job_name(unit)).unwrap(),
+        pid,
+        creation_time(pid).unwrap(),
+    )
+    .unwrap();
+    while super::job_holder_windows::now_ms() <= deadline + 300 {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        !gone(pid),
+        "adopted payload must survive the orphan deadline"
+    );
+    assert!(!adopted.is_gone().unwrap());
+    adopted.terminate().unwrap();
+    until(|| gone(pid));
+    g.child.wait().unwrap();
+}

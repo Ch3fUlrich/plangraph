@@ -104,7 +104,7 @@ pub fn spawn_grouped(
         if unsafe { AssignProcessToJobObject(job.as_raw_handle(), process.as_raw_handle()) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        super::job_holder_windows::launch(&job, holder_deadline_ms)?;
+        super::job_holder_windows::launch(&job, holder_deadline_ms, &name)?;
         resume(pid)
     })();
     if setup.is_err() {
