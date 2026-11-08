@@ -122,6 +122,15 @@ class KeeperSink:
 
 
 def deliver_verdict(directory, record, keeper):
+    """Never let optional verdict delivery interrupt completion persistence."""
+    try:
+        _deliver_verdict(directory, record, keeper)
+    except Exception:
+        # Import, lock, and journal failures leave the outbox pending for replay.
+        return
+
+
+def _deliver_verdict(directory, record, keeper):
     """Independent, locked verdict outbox; refusal is auditable, I/O is retried."""
     if record.get('role') != 'review':
         return
@@ -141,7 +150,12 @@ def deliver_verdict(directory, record, keeper):
             return
         def outcome(status, reason):
             atomic_write_private(journal, json.dumps({'status': status, 'reason': reason}) + '\n')
+            if status in ('skipped', 'delivered'):
+                atomic_write_private(marker, status + '\n')
         try:
+            if journal.exists() and json.loads(journal.read_text()).get('status') in ('skipped', 'delivered'):
+                atomic_write_private(marker, 'terminal\n')
+                return
             key = record.get('item_key')
             if not valid_item(key):
                 outcome('skipped', 'missing item key')
@@ -150,6 +164,9 @@ def deliver_verdict(directory, record, keeper):
                 outcome('skipped', 'forward delivery requires record-derived evidence')
                 return
             evidence, text = seat.evidence_from_record(directory)
+            head = evidence.get('head_sha')
+            if not isinstance(head, str) or len(head) != 40 or any(c not in '0123456789abcdefABCDEF' for c in head):
+                raise ValueError('missing or invalid record head_sha')
             family = seat.model_family(evidence.get('served_model'))
             writers = record.get('given_writer_families') or []
             if not family or not writers or family in writers or any(w not in seat.KNOWN_FAMILIES for w in writers):
@@ -163,7 +180,12 @@ def deliver_verdict(directory, record, keeper):
                 outcome('retry', 'keeper verdict transport not configured')
                 return
             item = keeper.item(key)
-            heads = {row.get('ref', {}).get('commit') for row in item.get('evidence', [])
+            rows = item.get('evidence', [])
+            if not isinstance(rows, list) or any(not isinstance(row, dict) or
+                    (row.get('verified') and row.get('kind') == 'commit+ci' and
+                     not isinstance(row.get('ref'), dict)) for row in rows):
+                raise ValueError('malformed item evidence')
+            heads = {row.get('ref', {}).get('commit') for row in rows
                      if row.get('verified') and row.get('kind') == 'commit+ci'}
             if item.get('key') != key or heads != {evidence['head_sha']}:
                 outcome('skipped', 'missing or ambiguous item evidenced head')
@@ -174,7 +196,6 @@ def deliver_verdict(directory, record, keeper):
                     '--writer-family', ','.join(writers), '--head', evidence['head_sha'],
                     '--token-dir', token_dir, '--url', keeper.url])
             if rc == 0:
-                atomic_write_private(marker, 'delivered\n')
                 outcome('delivered', 'keeper acknowledged')
             else:
                 outcome('retry' if rc == seat.EXIT_IO else 'skipped', 'seat verifier exit ' + str(rc))

@@ -58,6 +58,21 @@ def test_target_merge_proves_non_pr_repository_with_green_ci(topology):
     assert result.ok, result.detail
 
 
+@pytest.mark.parametrize('case', ['direct', 'off-target'])
+def test_local_merge_fallback_refuses_unmerged_evidence(topology, case):
+    git, lane, outer = topology
+    repo = git.repo_path('routing')
+    sha = subprocess.check_output(['git', '-C', repo, 'rev-parse', outer + '^1'], text=True).strip()
+    if case == 'off-target':
+        git.repo_ref = lambda project: 'lane'
+        sha = outer
+    ci = FakeCI(runs=[{'name': 'build', 'head_sha': sha, 'conclusion': 'success'}])
+    ci.merged_pr_for = lambda *args: None
+    result = verify('commit+ci', {'commit': sha}, make_ctx(
+        git=git, ci=ci, merge_principals=('merger@example.invalid',)))
+    assert not result.ok, result.detail
+
+
 @pytest.mark.parametrize("use_lane", [False, True])
 def test_matching_outer_pr_passes(topology, use_lane):
     git, lane, outer = topology

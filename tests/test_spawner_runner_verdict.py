@@ -8,6 +8,63 @@ import pytest
 from plangraph.spawner.runner import JobInfo, SpawnerRunner
 
 
+def test_verdict_has_no_completion_hook_marker(tmp_path, monkeypatch):
+    from plangraph.spawner.runner import spawn_service
+    service = spawn_service(state=tmp_path)
+    record = dict(run_id='run-review', role='review', ended=1, status='completed', completion={})
+    directory = service._path(record['run_id']).parent
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in ('parent.delivered', 'keeper.delivered', 'verdict.delivered',
+                 'parent.hook.delivered', 'keeper.hook.delivered'):
+        (directory / name).touch()
+    monkeypatch.setenv('PLANGRAPH_SPAWN_NOTIFY_CMD', 'unused')
+    monkeypatch.setattr(service, 'ps', lambda: {'runs': [record]})
+    saves = []
+    monkeypatch.setattr(service, '_save', lambda *a, **kw: saves.append(a))
+    service.retry_completions()
+    assert saves == []
+    record.pop('completion')
+    service.retry_completions()
+    assert len(saves) == 1
+
+
+@pytest.mark.parametrize('failure', ['import', 'lock', 'missing-head', 'null-ref', 'reject'])
+def test_forward_failure_boundaries(tmp_path, monkeypatch, failure):
+    import builtins
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / 'tools'))
+    import seat_verdict as seat
+    from plangraph.spawner import notify
+    record = {'role': 'review', 'item_key': 'demo:A', 'given_writer_families': ['deepseek']}
+    evidence = {'served_model': 'opencode/mimo-v2.6-free', 'head_sha': 'd' * 40}
+    if failure == 'missing-head':
+        evidence.pop('head_sha')
+    monkeypatch.setattr(seat, 'evidence_from_record', lambda *a: (evidence, 'VERDICT: ACCEPT'))
+    monkeypatch.setenv('PG_REVIEWER_TOKEN_DIR', str(tmp_path))
+    calls = []
+    monkeypatch.setattr(seat, 'main', lambda *a: calls.append(a) or seat.EXIT_PASS_REFUSED)
+    endpoint = SimpleNamespace(url='unused', item=lambda key: {'key': key, 'evidence': [
+        {'kind': 'commit+ci', 'verified': True,
+         'ref': None if failure == 'null-ref' else {'commit': 'd' * 40}}]})
+    if failure == 'import':
+        original = builtins.__import__
+        def importing(name, *args, **kwargs):
+            if name == 'seat_verdict':
+                raise ImportError('unavailable')
+            return original(name, *args, **kwargs)
+        monkeypatch.setattr(builtins, '__import__', importing)
+    if failure == 'lock':
+        monkeypatch.setattr(notify, 'inbox_lock', lambda *a: (_ for _ in ()).throw(OSError('locked')))
+    notify.deliver_verdict(tmp_path, record, endpoint)
+    if failure in ('import', 'lock'):
+        assert not (tmp_path / 'verdict.delivered').exists()
+    else:
+        assert json.loads((tmp_path / 'verdict.json').read_text())['status'] == 'skipped'
+        assert (tmp_path / 'verdict.delivered').exists()
+        notify.deliver_verdict(tmp_path, record, endpoint)
+        assert len(calls) == (1 if failure == 'reject' else 0)
+
+
 def _monitor(tmp_path, monkeypatch, output, *, denied=True, role='review', client='opencode', rc=1):
     runner = SpawnerRunner(default_cwd=str(tmp_path))
     job = JobInfo('verdict-job', 'running', 'review', 'test-model', role=role,

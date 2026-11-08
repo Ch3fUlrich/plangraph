@@ -10,11 +10,13 @@ from pathlib import Path
 import pytest
 
 # Reconstructed judge result shape from run-e855aab3 (not a live record).
-@pytest.mark.parametrize("text", ["VERDICT ACCEPT\nRULING B", "VERDICT: ACCEPT\nRULING B"])
-def test_judge_result_shape(text):
+@pytest.mark.parametrize("word,want,ok", [("ACCEPT", "pass", True), ("CHANGES", "fix", False)])
+@pytest.mark.parametrize("separator", [" ", ": "])
+def test_judge_result_shape(word, want, ok, separator):
     from plangraph.review.verdict import parse_verdict
-    assert parse_verdict(text) == "pass"
-    assert sv.parse_verdict(text)[0] is True
+    text = f"VERDICT{separator}{word}\nRULING B"
+    assert parse_verdict(text) == want
+    assert sv.parse_verdict(text)[0] is ok
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))

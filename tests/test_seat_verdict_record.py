@@ -108,7 +108,9 @@ def test_forward_skips_without_post(tmp_path, monkeypatch, change, reason):
     outcome = json.loads((directory / 'verdict.json').read_text())
     assert outcome['status'] == 'skipped'
     assert reason in outcome['reason']
-    assert not (directory / 'verdict.delivered').exists()
+    assert (directory / 'verdict.delivered').exists()
+    monkeypatch.setattr(sv, 'evidence_from_record', lambda *a: pytest.fail('terminal skip replayed'))
+    deliver_verdict(directory, record, None)
 
 
 def test_record_pass_without_test_gaming_refused(tmp_path, capsys):
