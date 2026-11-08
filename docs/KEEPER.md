@@ -268,7 +268,7 @@ it a weaker proof, so it is attachable **only by the router through
 `add_evidence_router`**; a claimant or delegate naming kind `commit` is refused `forbidden`
 and stores nothing.  Unknown project (no `repos` entry), missing repo and any git error all
 fail closed as unverified.
-
+Origin-main `decision_ref` closes need no batch file; see [decision-close proof, usage and refusals](keeper/keeper-decision-close.md).
 ## API (stdlib `http.server`, threaded; one Store with a lock; bind 127.0.0.1 by default, `--host`)
 `POST /v1/<verb>` JSON body → JSON; `GET /v1/{ready,show,blocked,waves,critical_path,percent,alerts,digest,snapshot,whoami,health}` plus
 `GET /v1/audit-meta?project=&stale_days=` (router/L1 only, and `GET /v1/changelog?since=`);
