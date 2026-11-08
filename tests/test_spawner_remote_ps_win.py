@@ -19,7 +19,7 @@ def configure(tmp_path, monkeypatch, **fields):
 
 @pytest.mark.parametrize('win_src', ['C:/opt/plangraph/src',
                                    r'C:\opt\plangraph\src',
-                                   'd:/opt/plan_graph-1.2/src', 'C:/'])
+                                   'd:/opt/plan_graph-1.2/src', 'C:/', 'C:/source space'])
 def test_windows_native_command(tmp_path, monkeypatch, win_src):
     host = configure(tmp_path, monkeypatch, win_src=win_src)
     assert remote_ps.configured_hosts() == [host]
@@ -32,7 +32,7 @@ def test_windows_native_command(tmp_path, monkeypatch, win_src):
                         f'set "PYTHONPATH={win_src}"&& python -m plangraph.spawner.remote_ps']
         assert kwargs['stdin'] == subprocess.DEVNULL
         assert kwargs['stdout'] == subprocess.PIPE
-        assert kwargs['stderr'] == subprocess.PIPE
+        assert kwargs['stderr'] == subprocess.DEVNULL
         assert kwargs.get('shell', False) is False
         return original([sys.executable, '-c', 'print(\'{"runs": []}\', end="")'],
                         **kwargs)
@@ -45,7 +45,7 @@ def test_windows_native_command(tmp_path, monkeypatch, win_src):
     None, True, 1, [], {}, '', 'relative/src', '/opt/plangraph/src',
     'C:src', 'C', 'CC:/src', '1:/src', r'\\server\src',
     'C:/src\n', 'C:/src\r', 'C:/src\t', 'C:/é',
-    *['C:/opt/a' + char + 'b/src' for char in ' &\"\';|$%^<>`()=:!+*?'],
+    *['C:/opt/a' + char + 'b/src' for char in '&\"\';|$%^<>`()=:!+*?'],
 ])
 def test_invalid_windows_source_never_reaches_ssh(tmp_path, monkeypatch, win_src):
     configure(tmp_path, monkeypatch, win_src=win_src)

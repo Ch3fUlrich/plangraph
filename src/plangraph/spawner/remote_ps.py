@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import selectors
+import shlex
 import time
 from .runner import is_terminal
 
@@ -28,40 +29,63 @@ SRC_MISSING = 44
 
 def source_check(host):
     if 'win_src' in host:
-        return f'if not exist "{host["win_src"]}\\" exit /b {SRC_MISSING}'
-    return f'test -d {host["src"]} || exit {SRC_MISSING}'
+        src = host['win_src']
+        if not isinstance(src, str) or not re.fullmatch(r'[A-Za-z]:[/\\][A-Za-z0-9_ ./\\-]*', src):
+            raise ValueError('invalid configuration')
+        return f'if not exist "{src}\\" exit /b {SRC_MISSING}'
+    return f'test -d {source_path(host["src"])} || exit {SRC_MISSING}'
+
+
+def source_path(src):
+    if src.startswith('~/'):
+        return '"$HOME"/' + shlex.quote(src[2:])
+    return shlex.quote(src)
+
+
+def host_command(host, *, query=False):
+    """Build the same source probe and shell wrapper for both callers."""
+    module = 'python3 -m plangraph.spawner.remote_ps'
+    if 'win_src' in host:
+        command = source_check(host)
+        if query:
+            command += (f' & set "PYTHONPATH={host["win_src"]}"&& '
+                        'python -m plangraph.spawner.remote_ps')
+        return command
+    command = source_check(host) if 'src' in host else ''
+    if query:
+        command += f'; PYTHONPATH={source_path(host["src"])} {module}' if command else module
+    if 'wsl_distro' in host:
+        distro = host['wsl_distro']
+        if not isinstance(distro, str) or not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_.-]*', distro):
+            raise ValueError('invalid configuration')
+        command = f'wsl -d {distro} -- sh -c {shlex.quote(command)}'
+    return command
+
+
+def exit_reason(code):
+    return {0: None, SRC_MISSING: 'host src missing', 255: 'host unreachable'}.get(
+        code, 'host query failed')
 
 
 def query_host(host, timeout):
-    command = 'python3 -m plangraph.spawner.remote_ps'
-    if 'win_src' in host:
-        command = (f'{source_check(host)} & set "PYTHONPATH={host["win_src"]}"&& '
-                   'python -m plangraph.spawner.remote_ps')
-    elif 'wsl_distro' in host:
-        command = (f"wsl -d {host['wsl_distro']} -- sh -c "
-                   f"'{source_check(host)}; PYTHONPATH={host['src']} "
-                   "python3 -m plangraph.spawner.remote_ps'")
-    elif 'src' in host:
-        command = f"{source_check(host)}; PYTHONPATH={host['src']} {command}"
+    command = host_command(host, query=True)
     with subprocess.Popen(
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
          '--', host['target'], command],
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         ) as process:
         deadline = time.monotonic() + timeout
         output = bytearray()
-        diagnostics = bytearray()
         try:
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
-                selector.register(process.stderr, selectors.EVENT_READ)
                 while selector.get_map():
                     remaining = deadline - time.monotonic()
                     events = selector.select(max(0, remaining))
                     if remaining <= 0 or not events:
                         raise TimeoutError('host query failed')
                     for key, _ in events:
-                        buffer = output if key.fileobj is process.stdout else diagnostics
+                        buffer = output
                         chunk = os.read(key.fd, min(65536, MAX_OUTPUT + 1 - len(buffer)))
                         buffer.extend(chunk)
                         if len(buffer) > MAX_OUTPUT:
@@ -69,14 +93,9 @@ def query_host(host, timeout):
                         if not chunk:
                             selector.unregister(key.fileobj)
             code = process.wait(timeout=max(0, deadline - time.monotonic()))
-            if code == 255:
-                raise HostQueryError('host unreachable')
-            if code == SRC_MISSING or (code and (
-                    b"No module named 'plangraph" in diagnostics
-                    or b'No module named plangraph' in diagnostics)):
-                raise HostQueryError('host src missing')
-            if code:
-                raise ValueError('host query failed')
+            reason = exit_reason(code)
+            if reason:
+                raise HostQueryError(reason)
             return output.decode('utf-8', errors='replace')
         finally:
             if process.poll() is None:
@@ -103,18 +122,18 @@ def configured_hosts():
                  or host['target'].startswith('-')
                  or ('win_src' in host and (
                      not isinstance(host['win_src'], str)
-                     or not re.fullmatch(r'[A-Za-z]:[/\\][A-Za-z0-9_./\\-]*',
+                      or not re.fullmatch(r'[A-Za-z]:[/\\][A-Za-z0-9_ ./\\-]*',
                                          host['win_src'])
                      or 'src' in host or 'wsl_distro' in host))
                 or ('src' in host and (
                     not isinstance(host['src'], str)
-                    or not re.fullmatch(r'(?:/|~/)[A-Za-z0-9_./-]*', host['src'])))
+                     or not re.fullmatch(r'(?:/|~/)[A-Za-z0-9_ ./-]*', host['src'])))
                 or ('wsl_distro' in host and (
                     not isinstance(host['wsl_distro'], str)
                     or not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_.-]*',
                                         host['wsl_distro'])
                     or not isinstance(host.get('src'), str)
-                    or not re.fullmatch(r'/[A-Za-z0-9_./-]*', host['src'])))):
+                     or not re.fullmatch(r'/[A-Za-z0-9_ ./-]*', host['src'])))):
             validated.append(dict(name='invalid-config', invalid=True))
         else:
             validated.append(host)

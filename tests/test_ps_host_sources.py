@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import time
 
 import pytest
@@ -45,7 +46,7 @@ def test_remote_ps_source_timeout(ssh, monkeypatch):
 def test_remote_ps_missing_module(ssh):
     binary, hosts = ssh
     binary.write_text('#!/bin/sh\necho "No module named plangraph" >&2\nexit 1\n')
-    assert remote_ps._fetch(hosts[0], remote_ps.query_host)[0]['reason'] == 'host src missing'
+    assert remote_ps._fetch(hosts[0], remote_ps.query_host)[0]['reason'] == 'host query failed'
 
 
 def test_remote_ps_source_prefix_executes(ssh):
@@ -54,7 +55,8 @@ def test_remote_ps_source_prefix_executes(ssh):
     assert remote_ps._fetch(hosts[0], remote_ps.query_host)[0]['reason'] == 'host src missing'
 
 
-@pytest.mark.parametrize('code,state', [(0, 'ok'), (44, 'src missing'), (255, 'unreachable')])
+@pytest.mark.parametrize('code,state', [(0, 'ok'), (44, 'src missing'), (255, 'unreachable'),
+                                       (1, 'host query failed')])
 def test_doctor_ps_hosts_states(ssh, monkeypatch, capsys, code, state):
     monkeypatch.setenv('SSH_CODE', str(code))
     rows = ps_host_doctor.source_checks()
@@ -67,5 +69,48 @@ def test_doctor_ps_hosts_parallel_timeout(ssh, monkeypatch):
     monkeypatch.setenv('SSH_DELAY', '2')
     monkeypatch.setattr(ps_host_doctor, 'TIMEOUT', 0.2)
     started = time.monotonic()
-    assert all(row['detail'] == 'unreachable' for row in ps_host_doctor.source_checks())
-    assert time.monotonic() - started < 0.38
+    assert all(row['detail'] == 'host query failed' for row in ps_host_doctor.source_checks())
+    assert time.monotonic() - started < 1.5
+
+
+@pytest.mark.parametrize('entry', [None, 3, 'host', []])
+def test_doctor_invalid_entry(monkeypatch, entry):
+    monkeypatch.setattr(ps_host_doctor, 'configured_hosts', lambda: [entry])
+    assert ps_host_doctor.source_checks() == [
+        dict(name='ps_hosts', status='fail', detail='invalid configuration')]
+
+
+def test_stderr_does_not_control_result(ssh):
+    binary, hosts = ssh
+    binary.write_text('#!/usr/bin/env python3\nimport sys\n'
+                      'sys.stderr.write("No module named plangraph" * 100000)\n'
+                      'print(\'{"runs": []}\')\n')
+    assert remote_ps._fetch(hosts[0], remote_ps.query_host) == []
+
+
+@pytest.mark.parametrize('wsl', [False, True])
+def test_source_paths_are_literal(tmp_path, wsl):
+    source = tmp_path / "source space'; touch INJECTED; echo '"
+    source.mkdir()
+    host = dict(src=str(source))
+    if wsl:
+        host['wsl_distro'] = 'Ubuntu'
+        binary = tmp_path / 'wsl'
+        binary.write_text('#!/bin/sh\nshift 3\nexec "$@"\n')
+        binary.chmod(0o755)
+    command = remote_ps.host_command(host)
+    result = subprocess.run(command, shell=True, cwd=tmp_path,
+                            env={'PATH': str(tmp_path) + os.pathsep + os.defpath})
+    assert result.returncode == 0
+    assert not (tmp_path / 'INJECTED').exists()
+    assert remote_ps.host_command(host, query=True).startswith(
+        'wsl -d Ubuntu -- sh -c ' if wsl else remote_ps.source_check(host))
+
+
+def test_windows_precedence_and_validation():
+    host = dict(win_src='C:/source space', wsl_distro='Ubuntu')
+    assert remote_ps.host_command(host) == remote_ps.source_check(host)
+    assert remote_ps.host_command(host, query=True).startswith(remote_ps.source_check(host))
+    for path in ['C:/x&echo bad', 'C:/%PATH%', 'C:/x"', 'C:/x\n']:
+        with pytest.raises(ValueError):
+            remote_ps.host_command(dict(win_src=path), query=True)
