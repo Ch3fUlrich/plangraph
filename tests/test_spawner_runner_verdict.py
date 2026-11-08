@@ -28,7 +28,25 @@ def test_verdict_has_no_completion_hook_marker(tmp_path, monkeypatch):
     assert saves == []
 
 
-@pytest.mark.parametrize('failure', ['import', 'lock', 'missing-head', 'null-ref', 'reject'])
+def test_missing_verdict_marker_redrives_review(tmp_path, monkeypatch):
+    from plangraph.spawner.runner import spawn_service
+    service = spawn_service(state=tmp_path)
+    record = dict(run_id='run-review', role='review', ended=1, status='completed', completion={})
+    directory = service._path(record['run_id']).parent
+    directory.mkdir(parents=True)
+    for name in ('parent.delivered', 'keeper.delivered',
+                 'parent.hook.delivered', 'keeper.hook.delivered'):
+        (directory / name).touch()
+    monkeypatch.setenv('PLANGRAPH_SPAWN_NOTIFY_CMD', 'unused')
+    monkeypatch.setattr(service, 'ps', lambda: {'runs': [record]})
+    saves = []
+    monkeypatch.setattr(service, '_save', lambda *a, **kw: saves.append(a))
+    service.retry_completions()
+    assert len(saves) == 1
+    assert saves[0][0] is record
+
+
+@pytest.mark.parametrize('failure', ['import', 'lock', 'missing-head', 'null-ref', 'reject', 'post', 'post-value'])
 def test_forward_failure_boundaries(tmp_path, monkeypatch, failure):
     import builtins
     from pathlib import Path
@@ -43,6 +61,11 @@ def test_forward_failure_boundaries(tmp_path, monkeypatch, failure):
     monkeypatch.setenv('PG_REVIEWER_TOKEN_DIR', str(tmp_path))
     calls = []
     monkeypatch.setattr(seat, 'main', lambda *a: calls.append(a) or seat.EXIT_PASS_REFUSED)
+    if failure in ('post', 'post-value'):
+        def post(*args):
+            calls.append(args)
+            raise (ValueError if failure == 'post-value' else RuntimeError)('ambiguous acknowledgement')
+        monkeypatch.setattr(seat, 'main', post)
     endpoint = SimpleNamespace(url='unused', item=lambda key: {'key': key, 'evidence': [
         {'kind': 'commit+ci', 'verified': True,
          'ref': None if failure == 'null-ref' else {'commit': 'd' * 40}}]})
@@ -58,14 +81,28 @@ def test_forward_failure_boundaries(tmp_path, monkeypatch, failure):
     notify.deliver_verdict(tmp_path, record, endpoint)
     if failure in ('import', 'lock'):
         assert not (tmp_path / 'verdict.delivered').exists()
+        if failure == 'lock':
+            assert not (tmp_path / 'verdict.json').exists()
     else:
         assert json.loads((tmp_path / 'verdict.json').read_text())['status'] == 'skipped'
         assert (tmp_path / 'verdict.delivered').exists()
         notify.deliver_verdict(tmp_path, record, endpoint)
-        assert len(calls) == (1 if failure == 'reject' else 0)
+        assert len(calls) == (1 if failure in ('reject', 'post', 'post-value') else 0)
 
 
-@pytest.mark.parametrize('failure', ['import', 'lock', 'unconfigured', 'io'])
+def test_lock_failure_preserves_attempt_accounting(tmp_path, monkeypatch):
+    from plangraph.spawner import notify
+    journal = tmp_path / 'verdict.json'
+    previous = '{"status": "retry", "attempts": 2}\n'
+    journal.write_text(previous)
+    monkeypatch.setattr(notify, 'inbox_lock', lambda *a: (_ for _ in ()).throw(OSError('locked')))
+    for _ in range(5):
+        notify.deliver_verdict(tmp_path, {'role': 'review'}, None)
+    assert journal.read_text() == previous
+    assert not (tmp_path / 'verdict.delivered').exists()
+
+
+@pytest.mark.parametrize('failure', ['import', 'unconfigured', 'io'])
 def test_verdict_retries_are_bounded(tmp_path, monkeypatch, failure, caplog):
     import builtins
     from pathlib import Path

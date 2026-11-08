@@ -130,10 +130,6 @@ def deliver_verdict(directory, record, keeper):
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning('verdict delivery deferred: %s', type(exc).__name__)
-        try:
-            _verdict_outcome(Path(directory), 'retry', type(exc).__name__)
-        except Exception:
-            logging.getLogger(__name__).warning('verdict refusal journal unavailable')
 
 
 def _verdict_outcome(directory, status, reason):
@@ -160,7 +156,6 @@ def _deliver_verdict(directory, record, keeper):
     tools = Path(__file__).resolve().parents[3] / 'tools'
     if str(tools) not in sys.path:
         sys.path.insert(0, str(tools))
-    import seat_verdict as seat
     from .item_key import valid_item
     directory = Path(directory)
     marker = directory / 'verdict.delivered'
@@ -170,7 +165,9 @@ def _deliver_verdict(directory, record, keeper):
             return
         def outcome(status, reason):
             _verdict_outcome(directory, status, reason)
+        verifier_started = False
         try:
+            import seat_verdict as seat
             if journal.exists() and json.loads(journal.read_text()).get('status') in ('skipped', 'delivered'):
                 atomic_write_private(marker, 'terminal\n')
                 return
@@ -210,6 +207,7 @@ def _deliver_verdict(directory, record, keeper):
                 return
             output = io.StringIO()
             with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                verifier_started = True
                 rc = seat.main(['--key', key, '--seat-dir', str(directory),
                     '--writer-family', ','.join(writers), '--head', evidence['head_sha'],
                     '--token-dir', token_dir, '--url', keeper.url])
@@ -220,7 +218,9 @@ def _deliver_verdict(directory, record, keeper):
         except ValueError as exc:
             outcome('skipped', str(exc))
         except Exception as exc:
-            outcome('retry', type(exc).__name__)
+            import logging
+            logging.getLogger(__name__).warning('verdict delivery deferred: %s', type(exc).__name__)
+            outcome('skipped' if verifier_started else 'retry', type(exc).__name__)
 
 
 def completion_event(record, cwd):
