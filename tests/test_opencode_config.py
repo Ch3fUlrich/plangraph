@@ -11,7 +11,8 @@ CONFIG_PATH = ROOT / "opencode.jsonc"
 
 @pytest.mark.parametrize("settings", [{}, {"headerTimeout": False, "chunkTimeout": 900000},
                                       {"headerTimeout": 1000, "chunkTimeout": 2000},
-                                      {"headerTimeout": 1234.75, "chunkTimeout": 900000.5}])
+                                      {"headerTimeout": 1234.75, "chunkTimeout": 900000.5},
+                                      {"headerTimeout": 0.5, "chunkTimeout": 0.25}])
 def test_gateway_gemini_seat_bounds_silent_requests(settings):
     from plangraph.routing_support.opencode_render import render_gateway_providers
     env = {"OMNIROUTE_BASE_URL": "http://gateway.invalid",
@@ -25,7 +26,7 @@ def test_gateway_gemini_seat_bounds_silent_requests(settings):
         assert type(rendered[key]) is int
         assert 0 < rendered[key] <= 60000
         value = settings.get(key)
-        expected = int(min(value, 60000)) if type(value) in (int, float) and value > 0 else 60000
+        expected = max(1, int(min(value, 60000))) if type(value) in (int, float) and value > 0 else 60000
         assert rendered[key] == expected
         if type(settings.get(key)) is int and settings[key] > 0:
             assert rendered[key] <= settings[key]
