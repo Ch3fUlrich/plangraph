@@ -39,6 +39,7 @@ pub struct JobGroup {
     identity: Identity,
     observed: Mutex<HashMap<u32, OwnedHandle>>,
     holder_deadline_ms: u64,
+    holder_no_breakaway: bool,
 }
 pub fn spawn_grouped(
     unit: &str,
@@ -93,6 +94,7 @@ pub fn spawn_grouped(
         .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
     let mut child = cmd.spawn()?;
     let pid = child.id();
+    let mut no_breakaway = false;
     let setup = (|| {
         // SAFETY: numeric child pid; requested rights suffice for assignment.
         let process = own(unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) })?;
@@ -101,7 +103,7 @@ pub fn spawn_grouped(
             return Err(io::Error::last_os_error());
         }
         let holder = super::job_holder_windows::holder_path()?;
-        super::job_holder_windows::launch(
+        no_breakaway = super::job_holder_windows::launch(
             &holder,
             &job,
             limits.windows_holder_max_s.unwrap_or(28800),
@@ -126,6 +128,7 @@ pub fn spawn_grouped(
             identity,
             observed: Mutex::new(HashMap::new()),
             holder_deadline_ms,
+            holder_no_breakaway: no_breakaway,
         }),
     })
 }
@@ -192,6 +195,9 @@ pub(super) fn resume(pid: u32) -> io::Result<()> {
 impl RunGroup for JobGroup {
     fn holder_deadline_ms(&self) -> Option<u64> {
         (self.holder_deadline_ms != 0).then_some(self.holder_deadline_ms)
+    }
+    fn holder_no_breakaway(&self) -> bool {
+        self.holder_no_breakaway
     }
     fn identity(&self) -> &Identity {
         &self.identity

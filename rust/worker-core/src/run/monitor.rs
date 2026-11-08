@@ -80,6 +80,10 @@ pub(super) fn monitor(
         let identity = g.group.identity();
         #[cfg(windows)]
         record.set("holder_deadline_ms", json!(g.group.holder_deadline_ms()));
+        #[cfg(windows)]
+        if g.group.holder_no_breakaway() {
+            let _ = record.push_event(json!({"event":"holder_no_breakaway"}));
+        }
         #[cfg(unix)]
         // SAFETY: getpgid only inspects the spawned child's group membership.
         let pgid = u32::try_from(unsafe { libc::getpgid(identity.pid as i32) }).ok();

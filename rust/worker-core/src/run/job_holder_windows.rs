@@ -153,7 +153,8 @@ mod platform {
         adoption_event(&format!("{name}-outcome"), false, create)
     }
     #[rustfmt::skip]
-    pub fn launch(holder: &std::path::Path, job: &OwnedHandle, seconds: u64, name: &str) -> io::Result<()> {
+    /// Ok(true): breakaway was refused and the holder runs inside the caller's outer job.
+    pub fn launch(holder: &std::path::Path, job: &OwnedHandle, seconds: u64, name: &str) -> io::Result<bool> {
         #[cfg(test)]
         if FAIL_LAUNCH.get() {
             return Err(io::Error::other("injected holder launch failure"));
@@ -170,8 +171,12 @@ mod platform {
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
         // Breakaway is refused inside a job without BREAKAWAY_OK (CI runners, some services):
         // then the holder stays in that outer job, still outliving a daemon kill.
+        let mut no_breakaway = false;
         let mut child = match command.creation_flags(CREATE_SUSPENDED | CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW).spawn() {
-            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW).spawn(),
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+                no_breakaway = true;
+                command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW).spawn()
+            }
             spawned => spawned,
         }
         .map_err(|e| io::Error::other(format!("JobUnavailable: holder launch refused: {e}")))?;
@@ -210,7 +215,7 @@ mod platform {
                 let _ = child.wait();
             });
         }
-        setup
+        setup.map(|()| no_breakaway)
     }
     #[cfg(test)]
     thread_local! { pub static FAIL_LAUNCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
