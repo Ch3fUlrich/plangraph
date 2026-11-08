@@ -25,10 +25,41 @@ fn signal(pid: u32, signal: i32) {
     assert_eq!(unsafe { libc::kill(pid as i32, signal) }, 0);
 }
 
+struct GroupGuard(std::process::Child);
+impl Drop for GroupGuard {
+    fn drop(&mut self) {
+        unsafe { libc::kill(-(self.0.id() as i32), libc::SIGKILL) };
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn panic_guard_kills_owned_process_group() {
+    use std::os::unix::process::CommandExt;
+    let mut pid = 0;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let child = Command::new("sleep")
+            .arg("60")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        pid = child.id();
+        let _guard = GroupGuard(child);
+        assert_eq!(unsafe { libc::kill(-(pid as i32), 0) }, 0);
+        panic!("exercise process-group cleanup during test unwind");
+    }));
+    assert!(result.is_err());
+    assert_eq!(unsafe { libc::kill(-(pid as i32), 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+    assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+}
+
 #[test]
 fn killed_daemon_exited_shell_reconciles_before_reclaim_exactly_once() {
-    // Keep this the only process-spawning test in this dedicated binary:
-    // subreaper is process-wide (common's other test only checks TempDir).
+    // Subreaper is process-wide; the panic test reaps only its owned child.
     // Adopt and reap the exited shell after killing its stopped parent, rather
     // than relying on the host's PID 1 to reap promptly (not true in containers).
     assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) }, 0);

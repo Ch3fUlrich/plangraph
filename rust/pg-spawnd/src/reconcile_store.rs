@@ -97,10 +97,7 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
             }
             let role = record["role"].as_str().ok_or(ReconcileError::Invalid)?;
             crate::reconcile::mode(None, &Value::Null, role)?;
-            let mut attempts = record["attempts"]
-                .as_array()
-                .ok_or(ReconcileError::Invalid)?
-                .clone();
+            let mut attempts = unknown::attempts(&record)?;
             if attempts.is_empty() {
                 attempts.push(json!({"status":"running", "proc":record["proc"],
                 "started":record["started"], "leg":record["plan"]["first_leg"]}));
@@ -128,7 +125,7 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
                     Some(value) => {
                         let proc: Proc = serde_json::from_value(value.clone())
                             .map_err(|_| ReconcileError::Invalid)?;
-                        if proc.pid == 0
+                        if (proc.pid == 0 && proc.pgid.is_none())
                             || proc.start_time == Some(0)
                             || proc.pgid.is_some_and(|id| id == 0 || id > i32::MAX as u32)
                             || proc.group.as_ref().is_some_and(|g| g.is_empty())
@@ -283,8 +280,7 @@ pub(crate) fn orphan_with(
     }
     if record
         .get("attempts")
-        .and_then(Value::as_array)
-        .is_some_and(Vec::is_empty)
+        .is_none_or(|v| v.as_array().is_some_and(Vec::is_empty))
     {
         record.set(
             "attempts",
@@ -387,6 +383,8 @@ pub(crate) fn settle(
         "idempotency_key":[run,attempt,"RUN_ORPHANED"]}))
         .map_err(|_| invalid())?;
     crate::runs::finish(record, Status::Orphaned, &leg, attempt);
+    // Reclaim first: a failed table write leaves a running, retryable record.
+    unknown::reclaim(state, &run)?;
     record.save().map_err(|_| ReconcileError::Io)
 }
 #[path = "reconcile_store_outcome.rs"]

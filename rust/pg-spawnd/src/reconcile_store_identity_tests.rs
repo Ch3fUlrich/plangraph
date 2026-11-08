@@ -121,16 +121,7 @@ fn unknown_identity_is_bounded() {
         );
         record.save().unwrap();
         let row = inventory(&dir.0).unwrap().remove(0);
-        if !deadline {
-            assert!(matches!(
-                orphan_gone(&dir.0, &row),
-                Err(ReconcileError::Unknown)
-            ));
-            assert_eq!(
-                RunRecord::read(&dir.0, &row.run_id).unwrap().get("status"),
-                Some(&json!("running"))
-            );
-        }
+        // Both deadline and no-deadline rows are already past their time grace.
         assert!(orphan_gone(&dir.0, &row).unwrap());
         let record = RunRecord::read(&dir.0, &row.run_id).unwrap();
         assert_eq!(record.get("status"), Some(&json!("orphaned")));

@@ -4,6 +4,8 @@ use serde_json::json;
 #[cfg(target_os = "linux")]
 #[path = "reconcile_store_identity_tests.rs"]
 mod identity_tests;
+#[path = "reconcile_store_recovery_tests.rs"]
+mod recovery_tests;
 
 struct StateDir(std::path::PathBuf);
 impl StateDir {
@@ -215,7 +217,15 @@ fn reconcile_crashed_daemon_real_child_inventory_is_read_only() {
 #[test]
 fn reconcile_missing_identity_is_unknown_and_not_settled() {
     let dir = StateDir::new();
-    let record = dir.record();
+    let mut record = dir.record();
+    record.set(
+        "started",
+        json!(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()),
+    );
+    record.save().unwrap();
     assert!(matches!(
         crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
         Err(ReconcileError::Unknown)
