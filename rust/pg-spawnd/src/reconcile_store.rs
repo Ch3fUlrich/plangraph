@@ -4,6 +4,7 @@ use pg_worker_core::run::record::valid_run_id;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{io::Read, path::Path};
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Proc {
@@ -152,6 +153,7 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
     }
     Ok(result)
 }
+
 pub(crate) fn lock(
     root: &Path,
     path: &Path,
@@ -165,6 +167,7 @@ pub(crate) fn lock(
         .map_err(|_| ReconcileError::Io)?
         .ok_or(ReconcileError::Unknown)
 }
+
 /// Settlement requires both the recorded process and its confinement group gone.
 pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
     let Some(identity) = identity else {
@@ -254,6 +257,7 @@ pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
         Err(ReconcileError::Unknown)
     }
 }
+
 /// Caller holds the state lock; re-read under the record lock before proving gone.
 pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileError> {
     use pg_worker_core::run::record::{RunRecord, Status};
@@ -300,6 +304,7 @@ pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileErr
     )?;
     Ok(true)
 }
+
 /// Durable record-only settlement bridge, under state and record locks.
 pub(crate) fn settle(
     state: &Path,
@@ -347,35 +352,19 @@ pub(crate) fn settle(
     }
     let role = serde_json::from_value(record.get("role").cloned().ok_or_else(invalid)?)
         .map_err(|_| invalid())?;
-    let leg = &entry["leg"];
-    // Python spawner.leg_probe.key: only bare agy models gain a prefix.
-    let leg_key = leg["leg_key"].as_str().map(str::to_owned).or_else(|| {
-        let model = leg["model"].as_str()?;
-        Some(if leg["harness"] == "agy" && !model.contains('/') {
-            format!("agy/{model}")
-        } else {
-            model.to_owned()
-        })
-    });
-    // Python's asdict(Leg) records have no route_key or route-key algorithm.
-    // Do not invent evidence attribution when that identity is unavailable.
-    let route_key = leg["route_key"].as_str();
-    let skip_reason =
-        (leg_key.is_none() || route_key.is_none()).then_some("leg or route key unavailable");
-    #[rustfmt::skip] // Keep the settlement bridge within its bounded module size.
-    let row = crate::evidence_row::OutcomeRow {
-        leg_key: leg_key.unwrap_or_else(|| "unattributed".into()), route_key: route_key.unwrap_or("unattributed").into(),
-        ts: i64::try_from(now_ms / 1000).map_err(|_| invalid())?, role, outcome: "orphaned".into(), run_id: run.clone(), attempt,
-        duration_s: Some(i64::try_from(now_ms.checked_sub(seconds(&entry["started"])?).ok_or_else(invalid)? / 1000).map_err(|_| invalid())?),
-        reset_at: None, reset_assumed: false, reset_clamped: false, open_tools_at_kill: None, s_eff_s: None, line: "reconciled group ended".into(),
-    };
-    crate::evidence_row::validate(&crate::evidence_row::EvidenceRow::Outcome(row.clone()))
-        .map_err(|_| invalid())?;
-    if let Some(reason) = skip_reason {
-        eprintln!("reconciliation outcome skipped: {reason}");
-        entry["outcome_skip_reason"] = json!(reason);
-    } else {
+    let duration = now_ms
+        .checked_sub(seconds(&entry["started"])?)
+        .ok_or_else(invalid)?
+        / 1000;
+    let row = outcome::build(&entry["leg"], role, &run, attempt, now_ms, duration)?;
+    if let Some(row) = row {
+        crate::evidence_row::validate(&crate::evidence_row::EvidenceRow::Outcome(row.clone()))
+            .map_err(|_| invalid())?;
         entry["outcome"] = serde_json::to_value(row).map_err(|_| invalid())?;
+    } else {
+        let reason = outcome::missing(&entry["leg"]);
+        eprintln!("reconciliation outcome skipped: run_id={run} attempt={attempt} {reason}");
+        entry["outcome_skip_reason"] = json!(reason);
     }
     entry["how"] = json!(how);
     entry["status"] = json!("orphaned");
@@ -398,3 +387,6 @@ pub(crate) fn settle(
 #[cfg(test)]
 #[path = "reconcile_store_tests.rs"]
 mod tests;
+
+#[path = "reconcile_store_outcome.rs"]
+mod outcome;
