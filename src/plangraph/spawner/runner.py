@@ -754,9 +754,8 @@ class SpawnerRunner:
             if not question_exit(job, {}):
                 await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
 
-            from .served_telemetry import witness_native
-            await witness_native(self, job_id, job, stdout_text, requested_model)
-            # Response-side gateway evidence takes precedence over native metadata.
+            # D-2905: the child-writable store is request-side only, for an
+            # exit-0 review's own store with all tools denied.
             if job.command and job.command[0] == 'opencode' and job.role == 'review':
                 oc_dir = self._ocdata_dirs.get(job_id) if exit_code == 0 else None
                 denied = _opencode_tools_denied(
@@ -767,7 +766,7 @@ class SpawnerRunner:
                                              Path(oc_dir) / 'opencode' / 'opencode.db',
                                              f'plangraph-{job_id}')
                      if oc_dir and denied else None)
-                if m is not None and m == requested_model and job.witness_kind != 'native-opencode':
+                if m is not None and m == requested_model:
                     job.request_side_model = m
                     job.witness_kind = 'request-side-opencode-store'
                 elif oc_dir and denied:
@@ -782,10 +781,17 @@ class SpawnerRunner:
                                        refusal_text_chars=len(answer[0]) if answer else 0))
                 job.status = 'failed'
             if job.command and job.command[0] == 'claude' and exit_code == 0:   # D-3605
+                m = _claude_stream_model(stdout_text)
+                if m is not None and m == requested_model:
+                    job.request_side_model = m
+                    job.witness_kind = 'request-side-claude-stream'
                 # D-3649: the review text (VERDICT line) is the stream's final result, not the raw stream.
                 await asyncio.to_thread(render_review_output, job, stdout_text,
                                         lambda text: redact(redact_env_values(text, env)))
 
+            # Gateway response evidence wins; native metadata is only a fallback.
+            from .served_telemetry import witness_native
+            await witness_native(self, job_id, job, stdout_text, requested_model)
             # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
             job.served_model = job.served_model or 'unwitnessed'
             job.served_family = job.served_family or 'unwitnessed'

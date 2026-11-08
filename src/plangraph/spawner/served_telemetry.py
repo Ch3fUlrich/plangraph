@@ -55,9 +55,15 @@ def extract_served_telemetry(output: str, fallback_model: str = "") -> tuple[str
 
 
 def _claude_stream_model(text) -> str | None:
-    """Unanimous init/assistant model, never the assistant's free text."""
-    models = native_models('claude', text)
-    return next(iter(models)) if len(models) == 1 else None
+    """Request-side stream witness, preserving the D-3605 contract."""
+    for line in str(text or '').splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get('type') == 'system' and isinstance(event.get('model'), str):
+            return event['model']
+    return None
 
 
 def _opencode_served_model(db_path, title, *, all_models=False):
@@ -92,6 +98,8 @@ def native_models(harness, text):
     has thread_id, usage and agent_message.text, but no served model field.
     routing_support/clients.py:346-347 currently launches plain exec, not JSONL.
     ACP agy output has no verified served-model field either.
+    Claude init model is recorded in
+    rust/worker-core/tests/fixtures/claude/claude-text-run.jsonl:1.
     """
     models = set()
     for line in str(text or '').splitlines():
@@ -105,16 +113,9 @@ def native_models(harness, text):
         if harness == 'claude':
             if event.get('type') == 'system' and event.get('subtype') == 'init':
                 model = event.get('model')
-            elif event.get('type') == 'assistant' and isinstance(event.get('message'), dict):
-                model = event['message'].get('model')
-        elif harness == 'opencode' and event.get('type') in ('step_start', 'step_finish'):
-            info = event.get('info')
-            if isinstance(info, dict) and info.get('role') == 'assistant':
-                m = info.get('model')
-                if isinstance(m, dict):
-                    provider, mid = m.get('providerID'), m.get('id', m.get('modelID'))
-                    if isinstance(provider, str) and provider and isinstance(mid, str) and mid:
-                        model = provider + '/' + mid
+        # Recorded OpenCode --format json has no model metadata:
+        # rust/worker/tests/fixtures/opencode/real-ok-text.jsonl:1-2.
+        # Do not invent an info.model schema or consult its child-writable DB.
         if isinstance(model, str) and model.strip():
             models.add(model)
     return models
@@ -129,7 +130,8 @@ def record_native(job, harness, models, requested):
         return
     model = next(iter(models))
     job.served_model, job.served_family = model, detect_model_family(model)
-    job.witness_kind = 'native-' + harness
+    if job.witness_kind != 'request-side-claude-stream':
+        job.witness_kind = 'native-' + harness
     job.served_witness_reason = f'{harness} structured native model metadata'
     if model != requested:
         job.events.append(dict(event='served_model_mismatch', requested_model=requested, served_model=model))
@@ -137,16 +139,11 @@ def record_native(job, harness, models, requested):
 
 async def witness_native(runner, job_id, job, text, requested):
     """Native telemetry for writers and reviews; response-side gateway wins."""
-    import asyncio
     from pathlib import Path
+    if job.exit_code != 0 or job.served_model not in (None, '', 'unwitnessed'):
+        return
     harness = Path(job.command[0]).name if job.command else ''
     models = native_models(harness, text)
-    if harness == 'opencode':
-        directory = runner._ocdata_dirs.get(job_id)
-        if directory:
-            stored = await asyncio.to_thread(_opencode_served_model,
-                Path(directory) / 'opencode' / 'opencode.db', f'plangraph-{job_id}', all_models=True)
-            models.update(stored)
     record_native(job, harness, models, requested)
 
 

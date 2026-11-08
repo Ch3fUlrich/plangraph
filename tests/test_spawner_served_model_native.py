@@ -14,8 +14,6 @@ def stream(*events):
 @pytest.mark.parametrize('harness,events,model', [
     ('claude', [{'type': 'system', 'subtype': 'init', 'model': 'claude-sonnet-4'},
                 {'type': 'assistant', 'message': {'model': 'claude-sonnet-4'}}], 'claude-sonnet-4'),
-    ('opencode', [{'type': 'step_start', 'part': {'type': 'step-start'},
-                  'info': {'role': 'assistant', 'model': {'providerID': 'openai', 'modelID': 'gpt-5'}}}], 'openai/gpt-5'),
 ])
 def test_match_and_mismatch(harness, events, model):
     for requested in (model, 'different'):
@@ -42,7 +40,7 @@ def test_missing_and_spoof(harness, text):
 
 def test_nonunanimous():
     text = stream({'type': 'system', 'subtype': 'init', 'model': 'a'},
-                  {'type': 'assistant', 'message': {'model': 'b'}})
+                  {'type': 'system', 'subtype': 'init', 'model': 'b'})
     job = SimpleNamespace(events=[], served_model='unwitnessed', witness_kind=None)
     record_native(job, 'claude', native_models('claude', text), 'a')
     assert job.served_model == 'unwitnessed'
@@ -69,3 +67,54 @@ def test_status_flag():
     job = JobInfo('native-status', 'completed', 'task', 'requested')
     record_native(job, 'claude', {'claude-sonnet-4'}, 'requested')
     assert job.to_dict()['served_model_mismatch'] is True
+
+
+def test_unverified_opencode_schema_is_not_evidence():
+    assert native_models('opencode', stream({'type': 'step_start', 'info': {
+        'role': 'assistant', 'model': {'providerID': 'spoof', 'id': 'model'}}})) == set()
+
+
+def test_native_requires_success_and_preserves_gateway():
+    import asyncio
+    from plangraph.spawner.served_telemetry import witness_native
+    for exit_code, served in ((1, 'unwitnessed'), (0, 'gateway-model')):
+        job = SimpleNamespace(command=['claude'], exit_code=exit_code,
+                              served_model=served, events=[], witness_kind=None)
+        asyncio.run(witness_native(None, 'job', job, stream(
+            {'type': 'system', 'subtype': 'init', 'model': 'native'}), 'native'))
+        assert job.served_model == served
+
+
+def test_store_spoof_never_sets_served_model(tmp_path, monkeypatch):
+    from test_opencode_served_witness import _run_leg, _store
+    job, _ = _run_leg(tmp_path, monkeypatch, lambda title, home: _store(
+        home, [('s', title)], [('s', 'spoof')]))
+    assert job.served_model == 'unwitnessed'
+
+
+def test_review_store_keeps_request_side_model(tmp_path, monkeypatch):
+    from test_opencode_served_witness import REQUESTED, _run_leg, _store
+    job, _ = _run_leg(tmp_path, monkeypatch, lambda title, home: _store(
+        home, [('s', title)], [('s', 'glm-5.2')]))
+    assert job.request_side_model == REQUESTED
+    assert job.witness_kind == 'request-side-opencode-store'
+
+
+def test_gateway_runs_before_native_fallback(tmp_path, monkeypatch):
+    from test_opencode_served_witness import _run_leg, _store
+    calls = []
+
+    def gateway(runner, job_id, job, env):
+        # Same unset-model gate as the real gateway witness.
+        if job.served_model and job.served_model != 'unwitnessed':
+            return
+        calls.append('gateway')
+        job.served_model = 'gateway-model'
+        job.witness_kind = 'gateway'
+
+    monkeypatch.setattr('plangraph.spawner.gateway_witness.witness', gateway)
+    job, _ = _run_leg(tmp_path, monkeypatch, lambda title, home: _store(
+        home, [('s', title)], [('s', 'glm-5.2')]))
+    assert calls == ['gateway']
+    assert job.served_model == 'gateway-model'
+    assert job.witness_kind == 'gateway'
