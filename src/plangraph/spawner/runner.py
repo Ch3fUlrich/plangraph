@@ -1,5 +1,4 @@
 """Async job pool for executing and managing spawned agents via OmniRoute ACP.
-
 Features:
   - Async SpawnerRunner managing non-blocking agent executions
   - Tracks active jobs (spawn, status, steer, cancel)
@@ -7,7 +6,6 @@ Features:
   - OmniRoute ACP-first execution with full Windows Tailnet environment preservation
 """
 from __future__ import annotations
-
 import asyncio
 import hashlib
 import json
@@ -24,7 +22,6 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from os.path import abspath as _abspath  # tests stub runner.os (test_w36_regressions)
 from typing import Any, Mapping, Sequence
-
 from plangraph.spawner.clients import (
     STDIN_PROMPT_HARNESSES,
     build_child_env,

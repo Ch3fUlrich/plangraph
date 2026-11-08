@@ -8,13 +8,11 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
 };
-
 #[derive(Serialize, Deserialize)]
 struct Snapshot {
     path: PathBuf,
     bytes: Option<Vec<u8>>,
 }
-
 pub(crate) fn writer_role(role: &serde_json::Value) -> bool {
     use pg_worker_core::hosts::Role;
     // Only known read-only roles may opt out; new or malformed roles fail closed.
@@ -23,7 +21,6 @@ pub(crate) fn writer_role(role: &serde_json::Value) -> bool {
         Ok(Role::Review | Role::Research)
     )
 }
-
 pub(crate) fn guard_diagnostic(
     record: &RunRecord,
     status: Status,
@@ -46,7 +43,6 @@ pub(crate) fn guard_diagnostic(
     }
     diagnostic
 }
-
 fn optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
@@ -54,7 +50,6 @@ fn optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
         Err(e) => Err(e),
     }
 }
-
 // Classify Windows absolute paths even when testing on Unix. Do not join a
 // drive path onto a Unix cwd, nor translate WSL mounts into drive paths.
 fn resolve(base: &Path, text: &str) -> PathBuf {
@@ -68,7 +63,6 @@ fn resolve(base: &Path, text: &str) -> PathBuf {
         base.join(text)
     }
 }
-
 fn normalized(path: &Path) -> String {
     let mut text = path.to_string_lossy().replace('\\', "/");
     text = text.strip_prefix("//?/").unwrap_or(&text).to_owned();

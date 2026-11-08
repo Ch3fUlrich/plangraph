@@ -12,7 +12,6 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-
 pub(crate) struct Runs {
     pub supervisor: Arc<Supervisor>,
     pub jobs: Mutex<BTreeMap<String, String>>,
@@ -395,7 +394,6 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         }
     }
 }
-
 #[cfg(all(test, unix))]
 #[path = "runs_record_tests.rs"]
 mod record_tests;
