@@ -2,12 +2,12 @@ use super::*;
 use serde_json::json;
 pub(super) struct TempDir(PathBuf);
 impl TempDir {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let path = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
         fs::create_dir(&path).unwrap();
         Self(path)
     }
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.0
     }
 }
