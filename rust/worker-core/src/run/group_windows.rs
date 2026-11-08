@@ -38,12 +38,13 @@ pub struct JobGroup {
     job: OwnedHandle,
     identity: Identity,
     observed: Mutex<HashMap<u32, OwnedHandle>>,
+    holder_deadline_ms: u64,
 }
 pub fn spawn_grouped(
     unit: &str,
     spec: &LaunchSpec<'_>,
     _confinement: &Confinement,
-    _limits: &RunLimits,
+    limits: &RunLimits,
 ) -> Result<Grouped, LaunchError> {
     validate_unit(unit)?;
     let name = job_name(unit);
@@ -52,18 +53,21 @@ pub fn spawn_grouped(
         .chain(Some(0))
         .collect();
     // SAFETY: thread-local error slot and terminated name are valid.
-    let raw = unsafe {
-        SetLastError(0);
-        CreateJobObjectW(ptr::null(), wide.as_ptr())
-    };
-    let error = (!raw.is_null()).then(io::Error::last_os_error);
-    let job = own(raw).map_err(|_| LaunchError::JobUnavailable)?;
-    if error.and_then(|e| e.raw_os_error()) == Some(ERROR_ALREADY_EXISTS as i32) {
-        return Err(LaunchError::JobExists);
-    }
+    let job = super::job_holder_windows::secure_job(wide.as_ptr()).map_err(|e| {
+        if e.raw_os_error() == Some(ERROR_ALREADY_EXISTS as i32) {
+            LaunchError::JobExists
+        } else {
+            LaunchError::JobUnavailable
+        }
+    })?;
+    let holder_deadline_ms = super::job_holder_windows::deadline_ms(
+        super::job_holder_windows::now_ms(),
+        limits.windows_holder_max_s.unwrap_or(28800),
+    )
+    .ok_or(LaunchError::JobUnavailable)?;
     // SAFETY: all-zero limit information is valid before setting the sole flag.
     let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { mem::zeroed() };
-    // Open: daemon death closes the job, unlike Linux; R7e must reconcile restarts.
+    // The independent holder retains this kill-on-close Job across daemon death.
     info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     // SAFETY: owned job and correctly sized, initialized information buffer.
     if unsafe {
@@ -100,6 +104,7 @@ pub fn spawn_grouped(
         if unsafe { AssignProcessToJobObject(job.as_raw_handle(), process.as_raw_handle()) } == 0 {
             return Err(io::Error::last_os_error());
         }
+        super::job_holder_windows::launch(&job, holder_deadline_ms)?;
         resume(pid)
     })();
     if setup.is_err() {
@@ -118,6 +123,7 @@ pub fn spawn_grouped(
             job,
             identity,
             observed: Mutex::new(HashMap::new()),
+            holder_deadline_ms,
         }),
     })
 }
@@ -145,7 +151,7 @@ pub(super) fn creation_time(pid: u32) -> Option<u64> {
     }
     Some((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
 }
-fn resume(pid: u32) -> io::Result<()> {
+pub(super) fn resume(pid: u32) -> io::Result<()> {
     // Child exposes no main-thread handle, so std spawning requires a host-wide snapshot.
     // SAFETY: thread snapshot API has no pointer inputs; RAII closes the result.
     let snapshot = own(unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) })?;
@@ -182,6 +188,9 @@ fn resume(pid: u32) -> io::Result<()> {
     }
 }
 impl RunGroup for JobGroup {
+    fn holder_deadline_ms(&self) -> Option<u64> {
+        Some(self.holder_deadline_ms)
+    }
     fn identity(&self) -> &Identity {
         &self.identity
     }

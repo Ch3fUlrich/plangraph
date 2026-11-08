@@ -78,6 +78,8 @@ pub(super) fn monitor(
         };
         let g = grouped.as_mut().unwrap();
         let identity = g.group.identity();
+        #[cfg(windows)]
+        record.set("holder_deadline_ms", json!(g.group.holder_deadline_ms()));
         #[cfg(unix)]
         // SAFETY: getpgid only inspects the spawned child's group membership.
         let pgid = u32::try_from(unsafe { libc::getpgid(identity.pid as i32) }).ok();

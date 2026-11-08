@@ -16,6 +16,13 @@ use windows_sys::Win32::{
 };
 
 #[test]
+fn holder_helper() {
+    if std::env::args().any(|s| s == "--exact") {
+        std::process::exit(super::job_holder_windows::helper());
+    }
+}
+
+#[test]
 fn fake_child() {
     let Ok(mode) = std::env::var("PG_FAKE_CHILD") else {
         return;
@@ -58,6 +65,15 @@ fn launch(
     missing: bool,
     piped: bool,
 ) -> Result<(Grouped, tempfile::TempDir), LaunchError> {
+    launch_bounded(unit, mode, missing, piped, None)
+}
+fn launch_bounded(
+    unit: &str,
+    mode: &str,
+    missing: bool,
+    piped: bool,
+    seconds: Option<u64>,
+) -> Result<(Grouped, tempfile::TempDir), LaunchError> {
     let dir = tempfile::tempdir().unwrap();
     let program = if missing {
         dir.path().join("missing.exe")
@@ -88,6 +104,7 @@ fn launch(
         },
         &Confinement::default(),
         &RunLimits {
+            windows_holder_max_s: seconds,
             memory_max: Some("1".into()),
             tasks_max: Some(1),
         },
@@ -152,6 +169,7 @@ fn name_lifetime_collision_and_drop() {
         Err(LaunchError::JobExists)
     ));
     let pid = g.child.id();
+    g.group.kill();
     drop(g.group);
     until(|| gone(pid));
     g.child.wait().unwrap();
@@ -212,4 +230,26 @@ fn invalid_and_missing_program() {
         Err(LaunchError::Io(_))
     ));
     assert!(!named("pg-win-missing"));
+}
+
+#[test]
+fn daemon_close_survives_then_fixed_holder_expiry_kills() {
+    let (mut g, _dir) =
+        launch_bounded("pg-win-holder-expiry", "sleep", false, false, Some(1)).unwrap();
+    let pid = g.child.id();
+    assert!(g.group.holder_deadline_ms().is_some());
+    drop(g.group);
+    assert!(!gone(pid), "closing daemon handle must not kill payload");
+    until(|| gone(pid));
+    g.child.wait().unwrap();
+    until(|| !named("pg-win-holder-expiry"));
+}
+
+#[test]
+fn holder_launch_failure_is_closed() {
+    super::job_holder_windows::FAIL_LAUNCH.set(true);
+    let result = launch("pg-win-holder-fail", "sleep", false, false);
+    super::job_holder_windows::FAIL_LAUNCH.set(false);
+    assert!(matches!(result, Err(LaunchError::JobUnavailable)));
+    assert!(!named("pg-win-holder-fail"));
 }

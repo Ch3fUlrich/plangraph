@@ -62,6 +62,10 @@ impl Options {
             host,
             ..Config::default()
         });
+        cfg.run.limits.windows_holder_max_s =
+            Some(pg_worker_core::run::job_holder_windows::validate_max_s(
+                env("PG_SPAWND_WINDOWS_HOLDER_MAX_S").as_deref(),
+            )?);
         if self.no_scope {
             cfg.run.confinement = Confinement::Plain;
         }
@@ -78,6 +82,34 @@ impl Options {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn windows_holder_daemon_setting() {
+        for (value, valid) in [
+            ("600", true),
+            ("172800", true),
+            ("599", false),
+            ("172801", false),
+            ("NaN", false),
+            ("inf", false),
+        ] {
+            let cfg = Options::default().resolve_with(|key| {
+                (key == "PG_SPAWND_WINDOWS_HOLDER_MAX_S").then(|| value.into())
+            });
+            assert_eq!(cfg.is_ok(), valid);
+            if let Ok(cfg) = cfg {
+                assert_eq!(cfg.run.limits.windows_holder_max_s, value.parse().ok());
+            }
+        }
+        assert_eq!(
+            Options::default()
+                .resolve_with(|_| None)
+                .unwrap()
+                .run
+                .limits
+                .windows_holder_max_s,
+            Some(28800)
+        );
+    }
     #[test]
     fn flags_table() {
         for (flag, value, valid) in [
