@@ -168,7 +168,7 @@ pub(crate) fn lock(
         .ok_or(ReconcileError::Unknown)
 }
 
-/// Settlement requires both the recorded process and its confinement group gone.
+/// Pure tri-state: true = gone, false = verified alive, Unknown = unverifiable.
 pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, ReconcileError> {
     let Some(identity) = identity else {
         return Err(ReconcileError::Unknown);
@@ -181,7 +181,7 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
             return match std::fs::read_to_string(path.join("cgroup.events")) {
                 Ok(text) => match text.lines().find_map(|s| s.strip_prefix("populated ")) {
                     Some("0") => Ok(true),
-                    Some("1") => Err(ReconcileError::Unknown),
+                    Some("1") => crate::reconcile::populated_alive(identity, &path),
                     _ => Err(ReconcileError::Unknown),
                 },
                 Err(e)
@@ -240,7 +240,7 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
             pgid: identity.pgid,
         };
         crate::reconcile::job::Group::open(run_id, copy)
-            .and_then(|mut job| job.orphan_empty())
+            .and_then(|mut job| job.probe())
             .map_err(|_| ReconcileError::Unknown)
     }
     #[cfg(not(any(target_os = "linux", windows)))]
@@ -261,7 +261,11 @@ pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileErr
     else {
         return Ok(true);
     };
-    if !gone(&current.run_id, current.identity.as_ref())? {
+    #[cfg(windows)]
+    let settled = crate::reconcile::job::settle_probe(&current)?;
+    #[cfg(not(windows))]
+    let settled = gone(&current.run_id, current.identity.as_ref())?;
+    if !settled {
         return Ok(false);
     }
     let mut record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;

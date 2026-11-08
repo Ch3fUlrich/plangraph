@@ -53,12 +53,13 @@ fn reconcile_job_zero_identity_refused() {
 }
 
 struct JobFake {
+    gone: bool,
     active: io::Result<bool>,
     terminated: bool,
 }
 impl OrphanJob for JobFake {
     fn gone(&mut self) -> io::Result<bool> {
-        Ok(true)
+        Ok(self.gone)
     }
     fn empty(&mut self) -> io::Result<bool> {
         self.active
@@ -75,6 +76,7 @@ impl OrphanJob for JobFake {
 fn gone_nonempty_or_unreadable_job_is_unknown() {
     for active in [Ok(true), Err(io::ErrorKind::PermissionDenied.into())] {
         let mut job = JobFake {
+            gone: true,
             active,
             terminated: false,
         };
@@ -85,13 +87,13 @@ fn gone_nonempty_or_unreadable_job_is_unknown() {
 #[test]
 fn orphan_cleanup_uses_verified_handle() {
     let mut job = JobFake {
+        gone: true,
         active: Ok(false),
         terminated: false,
     };
     assert!(orphan_empty(&mut job).unwrap());
     assert!(job.terminated);
 }
-#[cfg(windows)]
 #[test]
 fn gone_rejects_foreign_run_before_open() {
     let identity = Proc {
@@ -104,4 +106,27 @@ fn gone_rejects_foreign_run_before_open() {
         crate::reconcile_store::gone("run-test", Some(&identity)),
         Err(crate::reconcile::ReconcileError::Unknown)
     ));
+}
+
+#[test]
+fn live_job_probe_and_cleanup_never_terminate() {
+    let mut job = JobFake {
+        gone: false,
+        active: Ok(true),
+        terminated: false,
+    };
+    assert!(!probe(&mut job).unwrap());
+    assert!(!orphan_empty(&mut job).unwrap());
+    assert!(!job.terminated);
+}
+#[test]
+fn pure_gone_probe_never_terminates() {
+    let mut job = JobFake {
+        gone: true,
+        active: Ok(false),
+        terminated: false,
+    };
+    assert!(probe(&mut job).unwrap());
+    assert!(!job.terminated);
+    assert!(scope("run-test", "Local\\pg-run-other").is_err());
 }

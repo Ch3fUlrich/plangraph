@@ -336,3 +336,22 @@ fn reconcile_zombie_leader_is_not_gone() {
     }
     assert!(!gone("run-test", Some(&identity)).unwrap());
 }
+
+#[test]
+fn grouped_probe_distinguishes_alive_gone_and_unknown() {
+    let dir = StateDir::new();
+    let (_root, scope) = ScopeRoot::new(&dir.0);
+    let mut child = GroupChild::new();
+    let mut identity: Proc = serde_json::from_value(child.identity()).unwrap();
+    identity.group = Some(scope.to_str().unwrap().into());
+    std::fs::write(scope.join("cgroup.events"), "populated 1\n").unwrap();
+    std::fs::write(scope.join("cgroup.procs"), child.0.id().to_string()).unwrap();
+    assert!(!gone("run-test", Some(&identity)).unwrap());
+    child.stop();
+    assert!(matches!(
+        gone("run-test", Some(&identity)),
+        Err(ReconcileError::Unknown)
+    ));
+    std::fs::write(scope.join("cgroup.events"), "populated 0\n").unwrap();
+    assert!(gone("run-test", Some(&identity)).unwrap());
+}

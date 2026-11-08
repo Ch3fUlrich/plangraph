@@ -233,12 +233,18 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
         if let Some(group) = row.identity.as_ref().and_then(|p| p.group.as_deref()) {
             native::scope(&row.run_id, group).map_err(|_| ReconcileError::Unknown)?;
         }
-        if crate::reconcile_store::orphan_gone(root, &row)? {
+        let Some(settled) = scan_probe(crate::reconcile_store::orphan_gone(root, &row))? else {
+            continue;
+        };
+        if settled {
             if let Some(identity) = row.identity {
                 if let Some(start) = identity.start_time {
                     let key = (row.run_id, identity.pid, start, identity.group.clone());
                     if validated.contains(&key)
-                        && crate::reconcile_store::gone(&key.0, Some(&identity))?
+                        && matches!(
+                            crate::reconcile_store::gone(&key.0, Some(&identity)),
+                            Ok(true)
+                        )
                     {
                         gone.push(key);
                     }
@@ -315,4 +321,24 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
 #[cfg(not(any(target_os = "linux", windows)))]
 fn start(_: &Path, _: &mut Guard) -> Result<(), ReconcileError> {
     Err(ReconcileError::Unknown)
+}
+
+#[cfg(any(target_os = "linux", windows))]
+fn scan_probe(result: Result<bool, ReconcileError>) -> Result<Option<bool>, ReconcileError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(ReconcileError::Unknown) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[test]
+fn unknown_scan_row_does_not_abort_later_rows() {
+    let rows = [Err(ReconcileError::Unknown), Ok(false), Ok(true)];
+    let decisions = rows
+        .into_iter()
+        .map(scan_probe)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(decisions, vec![None, Some(false), Some(true)]);
 }
