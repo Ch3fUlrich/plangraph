@@ -9,7 +9,12 @@ import pytest
 from plangraph.spawner import host_ready as h
 
 CONFIG = dict(ssh='invented-alias', repo='/invented/repo', spawner_src='/invented/source',
-              env_file='/invented/env', run_cap=4, floor_mb=3000)
+              env_file='/invented/env', run_cap=4, floor_mb=3000, session_unit='worker')
+
+
+@pytest.fixture(autouse=True)
+def isolated_config(tmp_path, monkeypatch):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
 
 
 def runner(argv, **kwargs):
@@ -17,7 +22,11 @@ def runner(argv, **kwargs):
     assert argv[:5] == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
     assert kwargs['timeout'] > 0
     output = ''
-    if 'meminfo' in script:
+    if 'echo src_missing' in script:
+        output = 'ok'
+    elif 'rev-list' in script:
+        output = '0'
+    elif 'meminfo' in script:
         output = 'MemAvailable: 8000000 kB\n'
     elif 'df -Pk' in script:
         output = 'Filesystem 1024-blocks Used Available Capacity Mounted\nfake 9000000 0 9000000 0% /\n'
@@ -37,7 +46,7 @@ def test_green_atomic(tmp_path):
     assert result['live_runs'] == 1
     assert result['mem_available_mb'] == 7812
     assert result['disk_free_gb'] == 8
-    assert result['spawner_session'] is None
+    assert result['spawner_session'] is True
     assert json.loads((tmp_path / 'fiction.json').read_text()) == result
     assert (tmp_path / 'fiction.json').stat().st_mode & 0o777 == 0o600
     assert list(tmp_path.iterdir()) == [tmp_path / 'fiction.json']

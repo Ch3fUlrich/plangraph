@@ -226,3 +226,26 @@ restore plan, never silently introduce revision zero alongside retained history.
 SQLite rollback is service/config rollback retaining tables. C4 owns transaction
 behavior and forward audit rollback; C6 owns routes. Mandatory ephemeral PG CI
 must pass before merge; C3 storage alone does not close the item.
+# Host readiness consumer contract
+
+`python3 -m plangraph.spawner.host_ready` checks each overflow host, including
+its configured spawner source and matching `ps-hosts.json` source. Source paths
+must exist and import `plangraph` with that path as `PYTHONPATH`. Unsupported
+source transports fail closed. A session probe must be configured.
+
+After fetching origin/main, `behind_main` reports the number of commits in
+`HEAD..origin/main`; unreadable or unreachable means JSON `null`, never zero.
+SHA equality is checked separately, so divergent or ahead checkouts also fail.
+Memory, disk, doctor, keeper reach, session and capacity remain independent checks.
+
+For routerctl to grep (no private-repository change required), every failure is
+one stable line: `HOST-NOT-READY <host> <check> <reason>`. These lines go to stdout
+normally and stderr with `--json`, preserving machine-readable JSON stdout.
+Missing source uses check `src_missing`; lag uses `behind_main` and reason
+`N behind`; unreachable hosts report `unreachable`, leaving other values unknown.
+All-green hosts emit no such line. Reasons never include raw transport output.
+
+Live acceptance remains a deployment obligation: demonstrate both hosts green,
+merge/CI success and a non-writer-family review seat. Hermetic tests do not claim
+that evidence. Named defect: configured source checkout deleted while remote ps
+continued using its stale configured path; the source probe now detects this.

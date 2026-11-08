@@ -8,10 +8,12 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 import time
 
 from .doctor import clean
 from .private_io import atomic_write_private
+from .host_ready_source import check_sources
 
 HOST_TIMEOUT = 120
 MAX_AGE = 600
@@ -31,7 +33,8 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
     record = dict(host=name, ok=False, checked_at=None, failures=[], reachable=False,
                   mem_available_mb=None, disk_free_gb=None, checkout_sha=None,
                   main_sha=None, doctor_ok=None, keeper_ok=None,
-                  spawner_session=None, live_runs=None)
+                  spawner_session=None, live_runs=None, behind_main=None,
+                  src_ok=None)
     deadline = time.monotonic() + timeout
 
     def fail(check, reason):
@@ -70,6 +73,7 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
             fail('reachable', 'no_route')
         elif command('reachable', 'true') is not None:
             record['reachable'] = True
+            record['src_ok'] = check_sources(name, config, command, fail)
             repo = shlex.quote(config['repo'])
             prefix = 'cd ' + shlex.quote(config['spawner_src']) + ' && '
             if config.get('env_file'):
@@ -88,6 +92,14 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
             fetched = command('fetch', 'git -C ' + repo + ' fetch origin main')
             if fetched is not None:
                 record['main_sha'] = measure('main', 'git -C ' + repo + ' rev-parse origin/main', sha)
+                def count(s):
+                    if not re.fullmatch(r'\d+', s.strip()):
+                        raise ValueError()
+                    return int(s.strip())
+                record['behind_main'] = measure('behind_main', 'git -C ' + repo +
+                    ' rev-list --count HEAD..origin/main', count)
+                if record['behind_main']:
+                    fail('behind_main', str(record['behind_main']) + ' behind')
             if record['checkout_sha'] and record['main_sha'] and record['checkout_sha'] != record['main_sha']:
                 fail('checkout', 'behind')
             def parse_doctor(output):
@@ -118,6 +130,8 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                     ('.service', '.scope', '.socket', '.target', '.timer', '.path',
                      '.mount', '.automount', '.swap', '.slice', '.device')) else 'pgrep -f -- ')
                 record['spawner_session'] = command('session', probe + shlex.quote(session)) is not None
+            else:
+                fail('session', 'not_configured')
             runs = measure('runs', prefix + 'cli ps', lambda s: json.loads(s)['runs'])
             if runs is not None:
                 record['live_runs'] = sum(r['status'] == 'running' for r in runs)
@@ -130,6 +144,8 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
     except (KeyError, TypeError, ValueError, IndexError):
         fail('config', 'invalid_response_or_config')
     record['checked_at'] = datetime.now(timezone.utc).isoformat()
+    if not record['reachable']:
+        fail('unreachable', 'other_checks_unknown')
     record['ok'] = not record['failures']
     try:
         atomic_write_private(Path(state) / (name + '.json'), json.dumps(record))
@@ -166,6 +182,11 @@ def main(argv=None):
     else:
         for record in records:
             print(record['host'] + (' ok' if record['ok'] else ' FAIL ' + '; '.join(record['failures'])))
+    for record in records:
+        for failure in record['failures']:
+            check, _, reason = failure.partition(': ')
+            print(f"HOST-NOT-READY {record['host']} {check} {reason}",
+                  file=sys.stderr if args.json else sys.stdout)
     return int(any(not r['ok'] for r in records))
 
 

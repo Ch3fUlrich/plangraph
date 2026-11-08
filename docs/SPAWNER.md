@@ -391,7 +391,7 @@ See [spawner prompt rules](operations/spawner-prompt-rules.md) for fixer reports
 The served-model probe cache has a five-minute freshness bound,
 not a five-minute completion or delivery SLA; see the operations guide for details.
 
-Cross-host ps: see [site configuration and transport](spawner-ps.md).
+Cross-host ps: see [site configuration and transport](spawner-ps.md); readiness failure-line contract: [host readiness](placement-rules.md#host-readiness-consumer-contract).
 # Remote ps protocol
 
 The SSH ps endpoint serializes only running and queued records. Terminal history
