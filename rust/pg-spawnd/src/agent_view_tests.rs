@@ -12,6 +12,17 @@ fn fixture() -> PathBuf {
     fs::create_dir_all(&path).unwrap();
     path
 }
+
+/// Temp-dir cleanup: Windows may still hold a handle on a file the view just
+/// read, so retry briefly and never fail the test on cleanup alone.
+fn cleanup(home: &Path) {
+    for _ in 0..10 {
+        if fs::remove_dir_all(home).is_ok() || !home.exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
 fn put(home: &Path, path: &str, value: Value) {
     let path = home.join(path);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -70,7 +81,7 @@ fn sources_sidecars_finished_and_bad_rows() {
             .len(),
         1
     );
-    fs::remove_dir_all(home).unwrap();
+    cleanup(&home);
 }
 #[test]
 fn unreadable_is_not_zero() {
@@ -80,7 +91,7 @@ fn unreadable_is_not_zero() {
         local(&home, &home.join("absent"), "local", 0.0)["readable"],
         false
     );
-    fs::remove_dir_all(home).unwrap();
+    cleanup(&home);
 }
 #[test]
 fn plain_entries_are_empty_but_absent_lane_is_unknown() {
@@ -104,7 +115,7 @@ fn plain_entries_are_empty_but_absent_lane_is_unknown() {
     let data = local(&home, &home.join("state"), "local", 0.0);
     assert_eq!(data["readable"], false);
     assert_eq!(data["reason"], "source_unreadable");
-    fs::remove_dir_all(home).unwrap();
+    cleanup(&home);
 }
 fn empty_sources(home: &Path) {
     for path in ["state/runs", "state/sessions", ".claude/jobs"] {
@@ -119,7 +130,7 @@ fn present_empty_sources_are_zero() {
     assert_eq!(data["readable"], true);
     assert_eq!(data["reason"], Value::Null);
     assert_eq!(data["agents"], json!([]));
-    fs::remove_dir_all(home).unwrap();
+    cleanup(&home);
 }
 #[test]
 fn each_missing_source_directory_is_unknown() {
@@ -131,7 +142,7 @@ fn each_missing_source_directory_is_unknown() {
         assert_eq!(data["readable"], false, "{path}");
         assert_eq!(data["reason"], "source_unreadable", "{path}");
         assert_eq!(data["agents"], json!([]));
-        fs::remove_dir_all(home).unwrap();
+        cleanup(&home);
     }
 }
 #[cfg(unix)]
@@ -183,12 +194,12 @@ fn permission_denied_sources_are_unknown() {
         if path == "overflow.json" {
             assert_eq!(overflow[0]["readable"], false);
             assert_eq!(overflow[0]["reason"], "source_unreadable");
-            fs::remove_dir_all(home).unwrap();
+            cleanup(&home);
             continue;
         }
         assert_eq!(data["readable"], false, "{path}");
         assert_eq!(data["reason"], "source_unreadable", "{path}");
-        fs::remove_dir_all(home).unwrap();
+        cleanup(&home);
     }
 }
 #[test]
@@ -201,7 +212,7 @@ fn empty_run_and_job_directories_are_absent() {
         assert_eq!(data["readable"], true, "{path}");
         assert_eq!(data["reason"], Value::Null, "{path}");
         assert_eq!(data["agents"], json!([]));
-        fs::remove_dir_all(home).unwrap();
+        cleanup(&home);
     }
 }
 #[test]
@@ -213,7 +224,7 @@ fn config_read_error_is_unknown() {
     assert_eq!(data["readable"], false);
     assert_eq!(data["reason"], "source_unreadable");
     assert_eq!(data["agents"], json!([]));
-    fs::remove_dir_all(home).unwrap();
+    cleanup(&home);
 }
 #[test]
 fn overflow_config_missing_empty_and_unreadable() {
@@ -227,7 +238,7 @@ fn overflow_config_missing_empty_and_unreadable() {
     let hosts = configured_hosts(&config);
     assert_eq!(hosts[0]["readable"], false);
     assert_eq!(hosts[0]["reason"], "source_unreadable");
-    fs::remove_dir_all(home).unwrap();
+    cleanup(&home);
 }
 #[test]
 fn collector_units_are_local_and_ordered() {
@@ -269,7 +280,7 @@ fn missing_run_ids_keep_distinct_source_files() {
     }
     let data = local(&home, &home.join("state"), "local", 20.0);
     assert_eq!(data["agents"].as_array().unwrap().len(), 4);
-    fs::remove_dir_all(home).unwrap();
+    cleanup(&home);
 }
 #[test]
 fn source_failure_does_not_skip_other_sources() {
@@ -284,7 +295,7 @@ fn source_failure_does_not_skip_other_sources() {
     let data = local(&home, &state, "local", 20.0);
     assert_eq!(data["readable"], false);
     assert_eq!(data["agents"].as_array().unwrap().len(), 1);
-    fs::remove_dir_all(home).unwrap();
+    cleanup(&home);
 }
 #[test]
 fn identities_are_run_ids_not_names() {
@@ -305,7 +316,7 @@ fn identities_are_run_ids_not_names() {
     let rows = data["agents"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|r| r["model"] == "preferred"));
-    fs::remove_dir_all(home).unwrap();
+    cleanup(&home);
 }
 #[test]
 fn remote_validation_and_quotes() {
@@ -363,5 +374,5 @@ fn private_atomic_projection() {
             0o600
         );
     }
-    fs::remove_dir_all(home).unwrap();
+    cleanup(&home);
 }
