@@ -5,6 +5,29 @@ import pytest
 from plangraph.spawner import leg_state as ls
 
 
+@pytest.mark.parametrize('leg_id', ['agy-gemini-4-argon', 'opencode-big-pickle',
+                                  'opencode-deepseek-v4.1-flash-free'])
+def test_missing_legs_roles_and_probe_evidence(leg_id, store):
+    from plangraph.planner.legs import DEFAULT_LEGS, leg_active
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
+    assert leg_active(leg)
+    assert set(leg.roles) == {'review', 'implement'}
+    store.record_probe_pass(leg.model, 'leg-probe', now=100)
+    assert store.last_probe_ts(leg.model) == 100
+    assert store.leg_status(leg.model, now=101)['state'] == 'ok'
+
+
+def test_go_usage_limit_leaves_personal_free_available(store):
+    from plangraph.routing_support.resolver import is_model_available
+    go, personal = 'opencode-go/gemini-4-argon', 'opencode/big-pickle'
+    store.record_provider_response(go, 429, 'usage_limit', {'Retry-After': '60'}, 'test')
+    store.record_probe_pass(personal, 'leg-probe')
+    rows = [{'id': model, 'tier': tier, 'available': 1, 'active': True} for model, tier in
+            [(go, 'subscription'), (personal, 'free')]]
+    available = [row['id'] for row in rows if is_model_available(row, store.leg_status)]
+    assert available == [personal]
+
+
 def test_route_free_first_keys():
     from dataclasses import replace
     from plangraph.planner.legs import DEFAULT_LEGS, TIERS

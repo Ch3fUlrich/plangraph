@@ -152,7 +152,9 @@ DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'imp
                              disabled=leg.disabled or (
                                  'D-3828: writer disabled; no retained review or orchestrate role'
                                  if leg.roles == ('implement',) else None))
-                     if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
+                     if leg.id not in {'cx-gpt-6.1-sol', 'agy-gemini-4-argon',
+                                       'opencode-big-pickle', 'opencode-deepseek-v4.1-flash-free'}
+                     else leg for leg in DEFAULT_LEGS)
 WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
 )
