@@ -139,7 +139,9 @@ def jev_write(store, principal, name, body):
 # the handler's required-field reader.
 def _close_on_decision(store, principal, body, need):
     return store.close_on_decision(principal, need(body, "key"),
-                                   need(body, "batch_ref"))
+                                   body.get("batch_ref"),
+                                   decision_ref=body.get("decision_ref"),
+                                   epoch=body.get("epoch"))
 
 
 def _withdraw_review(store, principal, body, need):

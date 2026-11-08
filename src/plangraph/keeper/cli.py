@@ -168,7 +168,10 @@ def _add_writes(sub):
 
     close = _p(sub, "close", help="router: close a tier-none item on a decision batch")
     close.add_argument("key")
-    close.add_argument("--batch", required=True, metavar="PATH@SHA",
+    proof = close.add_mutually_exclusive_group(required=True)
+    close.add_argument("--epoch", type=int)
+    proof.add_argument("--decision-ref", metavar="D-NNNN")
+    proof.add_argument("--batch", metavar="PATH@SHA",
                        help="batch file path@sha256 inside a batch_roots dir")
 
     legacy = _p(sub, "legacy", help="router: set an open legacy item's state")
