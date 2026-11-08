@@ -1,13 +1,4 @@
-"""Keeper-side routing (design 4.3, 5; D25): pick a window class and an ordered leg plan.
-
-``route_card`` turns a card into a :class:`Route`: the window class (the card's own, or
-the smallest class that holds the effective estimate at 55% of the window), the eligible
-legs (tier order, then ``legs.py`` order) and the review level.  ``next_after_failure``
-walks the plan after a failed attempt (design 4.5): rotate inside a tier on a provider
-problem, retry on the same leg while the tier budget lasts, then promote to the next
-tier, else park.  The window class only grows on a context overflow.  Pure functions,
-no I/O.
-"""
+"""Keeper routing and spawner boundary (design 4.3, 5; D25)."""
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
@@ -31,7 +22,7 @@ from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
            "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
             "SpawnRefused", "SpawnPlan", "plan_spawn",
-             "hand_picked", "next_leg_after_provider_stop", "benchmark_rows_from_db"]
+              "hand_picked", "next_leg_after_provider_stop", "benchmark_rows_from_db"]
 
 #: Window sizes in tokens.
 WINDOW_TOKENS = {"128k": 131072, "256k": 262144, "1m": 1048576}

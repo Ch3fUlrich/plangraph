@@ -4,12 +4,17 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
+import secrets
 import shlex
 import subprocess
 import tempfile
 from typing import NamedTuple
+
+from plangraph.keeper.credential_guard import mask
+from plangraph.fleet_sync.genconfig import config_dir
 
 from . import cli
 from .private_io import atomic_write_private
@@ -18,6 +23,43 @@ from .private_io import atomic_write_private
 class Decision(NamedTuple):
     host: str | None
     reason: str
+
+
+def registry_caps():
+    """Read the same registry location and JSON format as fleet-sync."""
+    try:
+        registry = json.loads((config_dir() / 'hosts.json').read_text())
+        if not isinstance(registry['hosts'], list):
+            raise ValueError('hosts must be a list')
+        return registry
+    except (OSError, ValueError, KeyError, TypeError):
+        logging.warning('hosts registry missing or malformed; overflow disabled, local defaults 4/3000')
+        return {'hosts': [], 'self': None}
+
+
+def host_caps(registry, name):
+    for host in registry['hosts']:
+        if not isinstance(host, dict):
+            continue
+        aliases = host.get('aliases')
+        names = [host.get('id'), *(aliases if isinstance(aliases, list) else [])]
+        if not isinstance(name, str) or not any(
+                isinstance(alias, str) and alias.lower() == name.lower() for alias in names):
+            continue
+        caps = host.get('caps')
+        if isinstance(caps, dict) and all(type(caps.get(key)) is int and caps[key] >= minimum
+                                         for key, minimum in (('max_runs', 1), ('mem_floor_mb', 0))):
+            return caps['max_runs'], caps['mem_floor_mb']
+        break
+    logging.warning('host %r: missing or malformed registry caps; not an overflow target', name)
+    return None
+
+
+def local_limits(registry):
+    caps = host_caps(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry.get('self'))
+    if caps is None:
+        logging.warning('local admission using conservative defaults: 4 runs / 3000 MB')
+    return caps or (4, 3000)
 
 
 def decide(local_live, local_mem_mb, run_cap, floor_mb, ready_records, public):
@@ -39,14 +81,17 @@ def decide(local_live, local_mem_mb, run_cap, floor_mb, ready_records, public):
             elif any(type(row.get(key)) is not int or row[key] < 0
                      for key in ('live_runs', 'mem_available_mb')):
                 reason = 'malformed readiness'
-            elif row['live_runs'] >= row.get('run_cap', 4):
+            elif any(type(row.get(key)) is not int or row[key] < minimum
+                     for key, minimum in (('run_cap', 1), ('floor_mb', 0))):
+                reason = 'missing or malformed registry caps'
+            elif row['live_runs'] >= row['run_cap']:
                 reason = 'run cap'
-            elif row['mem_available_mb'] < row.get('floor_mb', 3000):
+            elif row['mem_available_mb'] < row['floor_mb']:
                 reason = 'memory floor'
         if reason:
             refused.append(f'{name}: {reason}')
         else:
-            candidates.append((-(row.get('run_cap', 4) - row['live_runs']), -row['mem_available_mb'], name))
+            candidates.append((-(row['run_cap'] - row['live_runs']), -row['mem_available_mb'], name))
     if candidates:
         return Decision(min(candidates)[2], 'local run cap or memory floor')
     return Decision(None, 'queue: ' + ('; '.join(refused) or 'no overflow hosts configured'))
@@ -54,6 +99,7 @@ def decide(local_live, local_mem_mb, run_cap, floor_mb, ready_records, public):
 
 def ready_records(config):
     records = {}
+    registry = registry_caps()
     for name, host in config.get('hosts', {}).items():
         row = {}
         try:
@@ -70,6 +116,11 @@ def ready_records(config):
             row['fresh'] = 0 <= age <= 600
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             row['refusal'] = 'missing or malformed readiness'
+        caps = host_caps(registry, name)
+        if caps is None:
+            row.setdefault('refusal', 'missing or malformed registry caps')
+        else:
+            row.update(run_cap=caps[0], floor_mb=caps[1])
         records[name] = row
     return records
 
@@ -122,23 +173,26 @@ def remote_spawn(name, host, card, prompt, options):
         # A sentinel prevents command substitution from stripping trailing newlines.
         commands.append('prompt=$(cat ' + q(directory + '/prompt.txt') + ' && printf .)')
         spawn = shlex.join(command) + ' "${prompt%.}" ' + shlex.join(options)
+        nonce = secrets.token_hex(16)
+        begin, end = (f'PLANGRAPH_RECEIPT_{nonce}_{suffix}' for suffix in ('BEGIN', 'END'))
+        commands.append("printf '%s\\n' " + q(begin))
         commands.append('PLANGRAPH_HOST_NAME=' + q(name) + ' PYTHONPATH=' + q(host['spawner_src']) + ' ' + spawn)
+        commands.append("printf '\\n%s\\n' " + q(end))
         result = ssh(' && '.join(commands))
         if result.returncode:
             return None
-        # Decode objects amid shell noise, including pretty-printed JSON. Never
-        # retry an acknowledged spawn merely because its receipt is unreadable.
-        decoder = json.JSONDecoder()
-        receipt, furthest = None, -1
-        for index in [i for i, char in enumerate(result.stdout) if char == '{']:
-            try:
-                payload, end = decoder.raw_decode(result.stdout[index:])
-                if isinstance(payload, dict) and index + end > furthest:
-                    receipt, furthest = payload, index + end
-            except ValueError:
-                pass
-        # Shell initialization may echo JSON; only expose a spawn receipt.
-        if receipt is not None and ('status' in receipt or receipt == {}):
+        # Mask before parsing/exposing any remote output, including JSON keys.
+        # Never retry an acknowledged spawn merely because its receipt is unreadable.
+        output, _ = mask(result.stdout)
+        lines = output.splitlines()
+        if lines.count(begin) != 1 or lines.count(end) != 1 or lines.index(begin) >= lines.index(end):
+            return {'warning': 'remote spawn succeeded; receipt unavailable',
+                    'reason': 'receipt_unbracketed'}
+        try:
+            receipt = json.loads('\n'.join(lines[lines.index(begin) + 1:lines.index(end)]))
+        except ValueError:
+            receipt = None
+        if isinstance(receipt, dict) and ('status' in receipt or receipt == {}):
             return receipt
         return {'warning': 'remote spawn succeeded; receipt unavailable'}
     finally:
@@ -159,13 +213,7 @@ def main(argv=None):
             config = json.loads(path.read_text())
         except (OSError, ValueError):
             config = {}
-        limits = []
-        for key, default in (('local_run_cap', 4), ('local_floor_mb', 3000)):
-            try:
-                limits.append(int(config.get(key, default)))
-            except (TypeError, ValueError, OverflowError):
-                limits.append(default)
-        run_cap, floor_mb = limits
+        run_cap, floor_mb = local_limits(registry_caps())
         live, memory = local_resources()
         if decide(live, memory, run_cap, floor_mb, {}, False).reason == 'local room':
             return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
@@ -195,7 +243,7 @@ def main(argv=None):
                 result = None
             if result is not None:
                 result.update(host=name, overflow_reason=decision.reason)
-                print(json.dumps(result))
+                print(mask(json.dumps(result))[0])
                 return 0
             records[name]['refusal'] = 'remote spawn failed'
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
