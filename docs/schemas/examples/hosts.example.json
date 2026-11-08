@@ -25,7 +25,7 @@
       "repos": {
         "plangraph": {
           "root": "/srv/fleet/code/repos/plangraph",
-          "live_dir": "/srv/fleet/live/plangraph",
+          "live_dir": "/srv/fleet/live/plangraph/current",
           "health_checks": {
             "doctor": ["python3", "-m", "plangraph.spawner", "doctor"],
             "whoami": ["pg", "keeper", "whoami"],

@@ -152,8 +152,34 @@ def test_fleet_sync_unreachable(capsys, tmp_path):
 def test_fleet_sync_hosts_schema():
     schema = json.loads(Path('docs/schemas/hosts.schema.json').read_text())
     repo = {'root': '/srv/repo', 'worktrees_root': '/srv/trees', 'remote': 'example',
-            'import_roots': [], 'cache_env': {}, 'live_dir': '/srv/live'}
+            'import_roots': [], 'cache_env': {}, 'live_dir': '/srv/live/current'}
     jsonschema.validate(repo, {'$ref': '#/$defs/repoEntry', '$defs': schema['$defs']})
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(dict(repo, live_dir=''),
                             {'$ref': '#/$defs/repoEntry', '$defs': schema['$defs']})
+
+
+@pytest.mark.parametrize('contents', [None, '{', '{}', '{"hosts": null}'])
+@pytest.mark.parametrize('json_output', [False, True])
+def test_fleet_sync_bad_registry_fails(tmp_path, capsys, contents, json_output):
+    from plangraph.fleet_sync.__main__ import main
+    path = tmp_path / 'hosts.json'
+    if contents is not None:
+        path.write_text(contents)
+    assert main(['drift', '--registry', str(path)] + (['--json'] if json_output else [])) == 1
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert 'failed' in captured.err
+
+
+@pytest.mark.parametrize('live', ['C:/fleet/live/current', r'C:\fleet\live\current'])
+def test_fleet_sync_windows_config(tmp_path, monkeypatch, live):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    registry = {'hosts': [{'id': 'win-host', 'transport': 'ssh', 'os': 'windows',
+                          'repos': {'plangraph': {'live_dir': live}}}]}
+    assert genconfig.sync(registry, True) == 0
+    assert remote_ps.configured_hosts() == [
+        {'name': 'win-host', 'target': 'win-host', 'win_src': live + '/src'}]
+    config = json.loads((genconfig.config_dir() / 'overflow-hosts.json').read_text())
+    assert config == {'hosts': {}, 'public_repos': []}
+    assert overflow.ready_records(config) == {}
