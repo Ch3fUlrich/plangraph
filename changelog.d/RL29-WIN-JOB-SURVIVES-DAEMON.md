@@ -26,3 +26,4 @@ owner process handle and configured bound to the retained holder, with a repeata
 authenticated handshake and restart tests; that protocol does not fit this round's
 300-line production budget safely. Adoption still protects only the first loss.
 The base workflow has no rust-windows job, so no filter line was added.
+After merging the rust-windows job, CI now includes run::job_holder_windows with the per-filter zero-test guard.
