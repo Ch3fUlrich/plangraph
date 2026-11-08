@@ -33,6 +33,68 @@ impl Drop for StateDir {
 }
 
 #[test]
+fn reconcile_settle_python_record_without_keys() {
+    let dir = StateDir::new();
+    let mut record = dir.record();
+    // service.py writes leg=asdict(chosen), not synthetic evidence identities.
+    record.set(
+        "attempts",
+        json!([{
+            "status":"running", "started":1, "served_model":null,
+            "served_family":null, "served_witness_reason":null,
+            "skip_reason":null, "provider_response":null,
+            "leg":{"id":"sample-leg", "tier":"subscription", "harness":"agy",
+                "model":"sample-model", "family":"sample", "windows":["128k"],
+                "max_request_tokens":100000, "trains_on_data":false,
+                "claude_family":false, "note":"", "roles":["implement"],
+                "tool_mode":"tools", "disabled":null}
+        }]),
+    );
+    settle(&dir.0, &mut record, 1, "gone", 2000).unwrap();
+    settle(&dir.0, &mut record, 1, "gone", 3000).unwrap();
+    let saved = RunRecord::read(&dir.0, "run-test").unwrap();
+    assert_eq!(saved.status(), Some(Status::Orphaned));
+    let entry = &saved.get("attempts").unwrap()[0];
+    assert!(entry.get("outcome").is_none());
+    assert_eq!(entry["outcome_skip_reason"], "leg or route key unavailable");
+    assert_eq!(saved.get("events").unwrap().as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn reconcile_settle_derives_python_leg_key() {
+    for (harness, model, expected) in [
+        ("agy", "sample-model", "agy/sample-model"),
+        ("agy", "provider/sample-model", "provider/sample-model"),
+        ("opencode", "sample-model", "sample-model"),
+    ] {
+        let dir = StateDir::new();
+        let mut record = dir.record();
+        record.set(
+            "attempts",
+            json!([{"status":"running", "started":1,
+            "leg":{"harness":harness,"model":model,"route_key":"route"}}]),
+        );
+        settle(&dir.0, &mut record, 1, "gone", 2000).unwrap();
+        assert_eq!(
+            record.get("attempts").unwrap()[0]["outcome"]["leg_key"],
+            expected
+        );
+    }
+}
+
+#[test]
+fn reconcile_settle_no_attempts_still_invalid() {
+    let dir = StateDir::new();
+    let mut record = dir.record();
+    record.set("attempts", json!([]));
+    assert!(matches!(
+        settle(&dir.0, &mut record, 1, "gone", 2000),
+        Err(ReconcileError::Invalid)
+    ));
+    assert_eq!(record.status(), Some(Status::Running));
+}
+
+#[test]
 fn reconcile_inventory_legacy_missing_proc_and_limits() {
     let dir = StateDir::new();
     let mut record = dir.record();
