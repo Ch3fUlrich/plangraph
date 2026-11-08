@@ -157,3 +157,48 @@ fn absent_recorded_base_holds_without_fallback() {
     f.ws.base_sha = None;
     assert_hold(&f, "no base");
 }
+
+#[test]
+fn empty_range_passes_at_head_and_away_from_checkout() {
+    let f = Fixture::new();
+    record(&f, "large.rs", &"x\n".repeat(401));
+    let base = git(&f.tree, &["rev-parse", "HEAD"]).unwrap();
+    assert!(file_size::check(&f.tree, &base, "HEAD").is_ok());
+    record(&f, "later.rs", "small");
+    assert!(file_size::check(&f.tree, &base, &base).is_ok());
+}
+
+#[test]
+fn base_at_checkout_is_not_confused_with_requested_head() {
+    let f = Fixture::new();
+    record(&f, "later.rs", "original");
+    let head = git(&f.tree, &["rev-parse", "HEAD"]).unwrap();
+    record(&f, "later.rs", "small");
+    let error = file_size::check(&f.tree, "HEAD", &head).unwrap_err();
+    assert!(error.contains("checkout is not at head"), "{error}");
+}
+
+#[test]
+fn missing_baseline_and_unreadable_baseline_are_distinct() {
+    let f = Fixture::new();
+    let base = git(&f.tree, &["rev-parse", "HEAD"]).unwrap();
+    record(&f, ".filesize-baseline", "large.rs 450\n");
+    let error = file_size::check(&f.tree, &base, "HEAD").unwrap_err();
+    assert_eq!(error, ".filesize-baseline: no baseline at base");
+    let base = git(&f.tree, &["rev-parse", "HEAD"]).unwrap();
+    let blob = git(&f.tree, &["rev-parse", "HEAD:.filesize-baseline"]).unwrap();
+    let object = git(
+        &f.tree,
+        &[
+            "rev-parse",
+            "--git-path",
+            &format!("objects/{}/{}", &blob[..2], &blob[2..]),
+        ],
+    )
+    .unwrap();
+    record(&f, "later.rs", "small");
+    std::fs::remove_file(f.tree.join(object)).unwrap();
+    let error = file_size::check(&f.tree, &base, "HEAD").unwrap_err();
+    assert!(error.starts_with("git show failed:"), "{error}");
+    assert!(!error.contains("no baseline at base"), "{error}");
+}

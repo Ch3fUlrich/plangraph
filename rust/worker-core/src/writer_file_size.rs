@@ -10,7 +10,11 @@ fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
         .output()
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
-        return Err(format!("git {} failed", args[0]));
+        return Err(format!(
+            "git {} failed: {}",
+            args[0],
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     Ok(out.stdout)
 }
@@ -74,13 +78,17 @@ pub(super) fn check(root: &Path, base: &str, head: &str) -> Result<(), String> {
         return Err("no base".into());
     }
     // The recorded run base maps to Python's FILESIZE_REQUIRE_BASE, not its
-    // optional local origin/main -> HEAD fallback. Resolve only that commit.
+    // optional local origin/main -> HEAD fallback. Resolve both range endpoints.
     let resolved = git(
         root,
         &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
     )?;
-    if resolved == git(root, &["rev-parse", "HEAD"])? {
-        return Err("base is HEAD itself".into());
+    let resolved_head = git(
+        root,
+        &["rev-parse", "--verify", &format!("{head}^{{commit}}")],
+    )?;
+    if resolved == resolved_head {
+        return Ok(());
     }
     let allow = config(root, ".filesize-allow")?;
     let mut allowed = std::collections::BTreeSet::new();
@@ -107,10 +115,17 @@ pub(super) fn check(root: &Path, base: &str, head: &str) -> Result<(), String> {
                 }
             }
         }
-        Err(_) if !counts.is_empty() => {
-            return Err(".filesize-baseline: no baseline at base".into())
+        Err(error) => {
+            // A missing path is optional only when no current counts need a
+            // ratchet. Object corruption and other git failures must still hold.
+            let entry = git(root, &["ls-tree", base, "--", ".filesize-baseline"])?;
+            if !entry.is_empty() {
+                return Err(error);
+            }
+            if !counts.is_empty() {
+                return Err(".filesize-baseline: no baseline at base".into());
+            }
         }
-        Err(_) => {}
     }
     let changed = git(
         root,
