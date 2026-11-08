@@ -7,7 +7,7 @@ fn dirty_untracked_snapshot_ignored_excluded() {
     let (_dir, repo, base, _) = fixture();
     let root = Path::new(&repo.root);
     let new_name = if cfg!(windows) {
-        "new file"
+        "NEW~1.TXT"
     } else {
         "new\nfile"
     };

@@ -43,23 +43,27 @@ impl Fixture {
             // g trims Git's line terminator; reject multiple URLs independently.
             let remote = g(&root.join(name), &["remote", "get-url", "--all", "origin"]);
             assert_eq!(remote.lines().count(), 1);
-            let normalize = |path: &Path| {
-                let canonical = fs::canonicalize(path).unwrap();
-                #[cfg(windows)]
-                {
-                    crate::workspace_launch::git_worktree_path(&canonical)
-                        .to_str()
-                        .unwrap()
-                        .replace('\\', "/")
-                        .to_ascii_lowercase()
-                }
-                #[cfg(not(windows))]
-                canonical
-            };
-            assert_eq!(
-                normalize(Path::new(&remote)),
-                normalize(&root.join("origin"))
-            );
+            #[cfg(not(windows))]
+            assert_eq!(remote, root.join("origin").to_str().unwrap());
+            #[cfg(windows)]
+            {
+                let normalize = |path: &Path| {
+                    fs::canonicalize(path).ok().map(|canonical| {
+                        crate::workspace_launch::git_worktree_path(&canonical)
+                            .to_string_lossy()
+                            .replace('\\', "/")
+                            .to_ascii_lowercase()
+                    })
+                };
+                // URL-form remotes are not filesystem paths; never canonicalize them.
+                assert!(
+                    Path::new(&remote).is_absolute(),
+                    "non-path remote: {remote}"
+                );
+                let expected = normalize(&root.join("origin"));
+                assert!(expected.is_some());
+                assert_eq!(normalize(Path::new(&remote)), expected);
+            }
             RepoEntry {
                 root: root.join(name).to_str().unwrap().into(),
                 remote,

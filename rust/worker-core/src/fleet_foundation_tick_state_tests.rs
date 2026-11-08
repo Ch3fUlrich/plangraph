@@ -171,6 +171,9 @@ fn fleet_foundation_lock() {
         wall_jump_tolerance_s: Some(2),
         pairs: None,
     };
+    assert!(crate::lockfile::try_lock(&d.path().join("state.lock"))
+        .unwrap()
+        .is_none());
     assert_eq!(run(c, 0, 0).unwrap(), json!({"skipped":"locked"}));
     assert!(!state.exists());
 }
