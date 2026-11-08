@@ -216,10 +216,15 @@ def send(url, token, payload):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--key", required=True, help="item key to review")
-    ap.add_argument("--seat-dir", required=True, type=Path)
-    ap.add_argument("--writer-family", required=True)
-    ap.add_argument("--token-dir", required=True, type=Path)
+    ap.add_argument("--key", help="item key to review")
+    ap.add_argument("--seat-dir", type=Path)
+    ap.add_argument("--writer-family")
+    ap.add_argument("--token-dir", type=Path)
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--backfill-dry-run", action="store_true")
+    mode.add_argument("--backfill-apply", action="store_true")
+    ap.add_argument("--snapshot", type=Path, default=Path("plan.snapshot.json"))
+    ap.add_argument("--records-dir", type=Path)
     ap.add_argument("--url", default=os.environ.get("PG_URL"))
     ap.add_argument("--head", help="expected record completion.head_sha "
                                   "(record-derived evidence only); binds the "
@@ -227,6 +232,15 @@ def main(argv=None):
                                   "the launch commit")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+    if args.backfill_dry_run or args.backfill_apply:
+        if args.records_dir is None:
+            args.records_dir = Path.home() / ".local/share/plangraph/spawner-records"
+        if args.backfill_apply and (not args.url or not args.token_dir or args.dry_run):
+            ap.error("--backfill-apply requires --url and --token-dir, without --dry-run")
+        from seat_record import backfill
+        return backfill(args, main)
+    if any(v is None for v in (args.key, args.seat_dir, args.writer_family, args.token_dir)):
+        ap.error("single-record mode requires --key, --seat-dir, --writer-family, --token-dir")
     writer_families = parse_writer_families(args.writer_family)
     from_record = False
     if not (args.seat_dir / "evidence.json").exists() and \

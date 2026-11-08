@@ -3,6 +3,7 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
+- **SEAT-VERDICT-TO-KEEPER (D-5044):** Add local TSV seat-record backfill discovery and explicit apply through the existing verdict poster; derive writers from evidenced Git trailers or implement records, select newest verified evidence with epoch ambiguity checks, discover host-partitioned records, and tally specific missing reasons while preserving exact-head and verdict safety checks.
 - **SPAWNER-PROBE-HOST-NOT-READY:** Report missing probe harness binaries as host-not-ready without attempting the leg or recording shared leg events.
 - **KEEPER-SNAP-S1-FILTERS S1b:** Scope decision text to selected evidence before field projection; keep progress over all items with independent columns, preserve legacy snapshots, and close S1a validation/docs LOWs.
 - **PG-CHANGELOG-FRAGMENTS (D-3732):** Add changelog fragments and a fold tool so open PRs no longer conflict on CHANGELOG.md.
