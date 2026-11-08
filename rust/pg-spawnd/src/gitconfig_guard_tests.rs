@@ -1,6 +1,5 @@
 use super::*;
-use serde_json::json;
-
+use serde_json::{json, Value};
 struct TempDir(PathBuf);
 impl TempDir {
     fn new() -> Self {
@@ -17,7 +16,6 @@ impl Drop for TempDir {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
-
 fn fixture(linked: bool) -> (TempDir, PathBuf, PathBuf, RunRecord) {
     let temp = TempDir::new();
     let cwd = temp.path().join("checkout");
@@ -51,7 +49,6 @@ fn fixture(linked: bool) -> (TempDir, PathBuf, PathBuf, RunRecord) {
     record.save().unwrap();
     (temp, config, gitdir.join("config"), record)
 }
-
 #[test]
 fn changed_common_worktree_restored_and_failed_after_restart() {
     let (temp, config, _, record) = fixture(true);
@@ -69,7 +66,6 @@ fn changed_common_worktree_restored_and_failed_after_restart() {
     );
     assert!(!record.to_value().to_string().contains("intruder"));
 }
-
 #[test]
 fn unchanged_outcome_untouched() {
     let (_temp, _, _, mut record) = fixture(false);
@@ -80,7 +76,6 @@ fn unchanged_outcome_untouched() {
     );
     assert_eq!(record.to_value(), before);
 }
-
 #[test]
 fn per_worktree_changed_restored() {
     let (_temp, _, local, mut record) = fixture(true);
@@ -98,7 +93,6 @@ fn per_worktree_changed_restored() {
     );
     assert_eq!(fs::read(local).unwrap(), b"original local\n");
 }
-
 #[test]
 fn created_during_run_removed() {
     let (_temp, _, local, mut record) = fixture(true);
@@ -109,7 +103,6 @@ fn created_during_run_removed() {
     );
     assert!(!local.exists());
 }
-
 #[test]
 fn windows_and_wsl_pointer_paths() {
     let base = Path::new("checkout");
@@ -128,14 +121,12 @@ fn windows_and_wsl_pointer_paths() {
     }
     assert_eq!(resolve(base, r"..\common"), base.join("../common"));
 }
-
 #[test]
 fn non_checkout_noop() {
     let temp = TempDir::new();
     assert!(!capture(temp.path(), &temp.path().join("run")).unwrap());
     assert!(!temp.path().join("run").exists());
 }
-
 #[test]
 fn settle_restores_and_persists_verdict() {
     let (temp, config, _, mut record) = fixture(true);
@@ -165,7 +156,6 @@ fn settle_restores_and_persists_verdict() {
         b"[core]\n\tworktree = original\n"
     );
 }
-
 #[test]
 fn missing_snapshot_is_explicit() {
     let (_temp, config, _, mut record) = fixture(false);
@@ -181,7 +171,6 @@ fn missing_snapshot_is_explicit() {
     );
     assert_eq!(record.get("gitconfig_restore_error"), Some(&json!(true)));
 }
-
 #[test]
 fn verdict_survives_retry_and_preserves_diagnostic() {
     let (temp, config, _, mut record) = fixture(false);
@@ -200,7 +189,6 @@ fn verdict_survives_retry_and_preserves_diagnostic() {
     assert_eq!(original["reason"], "harness exit 7");
     assert_eq!(original["exit_code"], 7);
 }
-
 #[test]
 fn submodule_without_commondir() {
     let temp = TempDir::new();
@@ -210,7 +198,6 @@ fn submodule_without_commondir() {
     fs::write(cwd.join(".git"), "gitdir: ../.git/modules/sub").unwrap();
     assert!(capture(&cwd, &temp.path().join("run")).unwrap());
 }
-
 #[test]
 fn poisoned_pointers_rejected_without_reading_configs() {
     let (temp, config, _, record) = fixture(true);
@@ -231,7 +218,6 @@ fn poisoned_pointers_rejected_without_reading_configs() {
     assert_eq!(fs::read(outside.join("config")).unwrap(), b"untouched");
     assert!(config.exists());
 }
-
 #[cfg(unix)]
 #[test]
 fn replaced_config_symlink_never_touches_target() {
@@ -247,7 +233,6 @@ fn replaced_config_symlink_never_touches_target() {
     assert_eq!(fs::read(outside).unwrap(), b"untouched");
     assert_eq!(record.get("gitconfig_restore_error"), Some(&json!(false)));
 }
-
 #[test]
 fn external_bare_worktree_and_backlink_validation() {
     let (temp, _, _, record) = fixture(true);
@@ -261,7 +246,6 @@ fn external_bare_worktree_and_backlink_validation() {
     fs::write(gitdir.join("gitdir"), bare.join("HEAD").to_str().unwrap()).unwrap();
     assert!(capture(&cwd, record.path().parent().unwrap()).is_err());
 }
-
 #[test]
 fn retry_does_not_duplicate_alert() {
     let (_temp, config, _, mut record) = fixture(false);
@@ -271,7 +255,6 @@ fn retry_does_not_duplicate_alert() {
     enforce(&mut record, Status::Orphaned, json!({}));
     assert_eq!(record.to_value(), before);
 }
-
 #[test]
 fn windows_gitdir_and_commondir_syntax() {
     for root in ["H:/repo.git", r"H:\repo.git", "/mnt/h/repo.git"] {
@@ -291,7 +274,6 @@ fn windows_gitdir_and_commondir_syntax() {
         assert_eq!(resolve(&gitdir, r"..\.."), gitdir.join("../.."));
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn persistence_failure_still_restores_and_marks_sidecar() {
@@ -308,4 +290,106 @@ fn persistence_failure_still_restores_and_marks_sidecar() {
         .path()
         .with_file_name("gitconfig.verdict-save-error")
         .exists());
+}
+#[test]
+fn missing_snapshot_retry_is_quiet() {
+    let (_temp, _, _, mut record) = fixture(false);
+    fs::remove_file(sidecar(record.path().parent().unwrap())).unwrap();
+    enforce(&mut record, Status::Completed, json!({}));
+    let before = record.to_value();
+    enforce(&mut record, Status::Orphaned, json!({}));
+    assert_eq!(record.to_value(), before);
+}
+#[test]
+fn stale_diagnostics_are_not_preserved_and_orphan_uses_attempt() {
+    for orphan in [false, true] {
+        let (_temp, config, _, mut record) = fixture(false);
+        record.set("reason", json!("stale"));
+        record.set("exit_code", json!(99));
+        record.set(
+            "attempts",
+            json!([{"reason":"attempt ended","exit_code":7}]),
+        );
+        fs::write(config, b"altered").unwrap();
+        crate::runs::finish(
+            &mut record,
+            if orphan {
+                Status::Orphaned
+            } else {
+                Status::Completed
+            },
+            &json!({}),
+        );
+        let original = record.get("gitconfig_original_outcome").unwrap();
+        assert_eq!(
+            original["reason"],
+            if orphan {
+                json!("attempt ended")
+            } else {
+                Value::Null
+            }
+        );
+        assert_eq!(
+            original["exit_code"],
+            if orphan { json!(7) } else { Value::Null }
+        );
+    }
+}
+#[test]
+fn layout_mismatch_is_explicit() {
+    let (_temp, _, _, mut record) = fixture(false);
+    record.set("run_id", json!("another-run"));
+    enforce(&mut record, Status::Completed, json!({}));
+    assert_eq!(record.get("reason"), Some(&json!("gitconfig_guard_error")));
+}
+#[test]
+fn backlink_normalization_is_portable() {
+    for path in [r"H:\repo\work\..\.git", "H:/repo/.git", "/mnt/h/repo/.git"] {
+        assert_eq!(normalized(Path::new(path)), "mnt/h/repo/.git");
+    }
+    let (temp, _, _, record) = fixture(true);
+    let gitdir = temp.path().join("common/.git/worktrees/leaf");
+    fs::write(
+        gitdir.join("gitdir"),
+        "../../../../checkout/../checkout/.git",
+    )
+    .unwrap();
+    assert!(capture(
+        &temp.path().join("checkout"),
+        record.path().parent().unwrap()
+    )
+    .unwrap());
+}
+#[test]
+fn worktree_config_restored_or_removed() {
+    for linked in [false, true] {
+        let (temp, config, local, mut record) = fixture(linked);
+        let path = if linked { local } else { config }.with_file_name("config.worktree");
+        fs::write(&path, b"original").unwrap();
+        capture(
+            &temp.path().join("checkout"),
+            record.path().parent().unwrap(),
+        )
+        .unwrap();
+        fs::write(&path, b"altered").unwrap();
+        enforce(&mut record, Status::Completed, json!({}));
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+    }
+    let (_temp, config, _, mut record) = fixture(false);
+    let path = config.with_file_name("config.worktree");
+    fs::write(&path, b"created").unwrap();
+    enforce(&mut record, Status::Completed, json!({}));
+    assert!(!path.exists());
+}
+#[cfg(unix)]
+#[test]
+fn worktree_config_symlink_swap_restored() {
+    let (temp, config, _, mut record) = fixture(false);
+    let outside = temp.path().join("outside");
+    fs::write(&outside, b"untouched").unwrap();
+    let path = config.with_file_name("config.worktree");
+    std::os::unix::fs::symlink(&outside, &path).unwrap();
+    enforce(&mut record, Status::Completed, json!({}));
+    assert!(!path.exists());
+    assert_eq!(fs::read(outside).unwrap(), b"untouched");
 }

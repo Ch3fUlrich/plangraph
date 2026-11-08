@@ -38,6 +38,27 @@ fn resolve(base: &Path, text: &str) -> PathBuf {
     }
 }
 
+fn normalized(path: &Path) -> String {
+    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let mut text = path.to_string_lossy().replace('\\', "/");
+    text = text.strip_prefix("//?/").unwrap_or(&text).to_owned();
+    let b = text.as_bytes();
+    if b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        text = format!("/mnt/{}{}", (b[0] as char).to_ascii_lowercase(), &text[2..]);
+    }
+    let mut parts = Vec::new();
+    for part in text.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    parts.join("/")
+}
+
 pub(crate) fn capture(cwd: &Path, run_dir: &Path) -> io::Result<bool> {
     let cwd = fs::canonicalize(cwd)?;
     let dot = cwd.join(".git");
@@ -67,7 +88,7 @@ pub(crate) fn capture(cwd: &Path, run_dir: &Path) -> io::Result<bool> {
                 }
                 // Git's backlink binds this administrative directory to this checkout.
                 let backlink = fs::read_to_string(gitdir.join("gitdir"))?;
-                if fs::canonicalize(resolve(&gitdir, &backlink))? != dot {
+                if normalized(&resolve(&gitdir, &backlink)) != normalized(&dot) {
                     return Err(io::Error::other("gitconfig_untrusted_gitdir"));
                 }
                 paths.push(common.join("config"));
@@ -87,6 +108,11 @@ pub(crate) fn capture(cwd: &Path, run_dir: &Path) -> io::Result<bool> {
     } else {
         return Ok(false);
     }
+    let worktree_paths: Vec<_> = paths
+        .iter()
+        .map(|p| p.with_file_name("config.worktree"))
+        .collect();
+    paths.extend(worktree_paths);
     let snapshots = paths
         .into_iter()
         .map(|path| {
@@ -140,18 +166,22 @@ pub(crate) fn enforce(
     if record.get("gitconfig_guard") != Some(&json!(true)) {
         return outcome;
     }
-    let parent = record.path().parent().unwrap();
-    let dir = run_dir(
-        parent.parent().unwrap().parent().unwrap(),
-        parent.file_name().unwrap().to_str().unwrap(),
-    )
-    .unwrap();
-    debug_assert_eq!(parent, dir);
+    let parent = record.path().parent();
+    let dir = parent
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .zip(record.get("run_id"))
+        .and_then(|(state, id)| run_dir(state, id.as_str()?).ok());
+    let layout_error = dir.as_deref() != parent || dir.is_none();
+    let dir = dir
+        .or_else(|| parent.map(Path::to_owned))
+        .unwrap_or_default();
     let path = sidecar(&dir);
-    let snapshots = fs::read(path)
-        .ok()
+    let snapshots = (!layout_error)
+        .then(|| fs::read(path).ok())
+        .flatten()
         .and_then(|b| serde_json::from_slice::<Vec<Snapshot>>(&b).ok());
-    let paths: Vec<_> = snapshots
+    let mut paths: Vec<_> = snapshots
         .as_ref()
         .map(|s| {
             s.iter()
@@ -162,11 +192,20 @@ pub(crate) fn enforce(
                 .collect()
         })
         .unwrap_or_default();
+    if layout_error {
+        paths.push(record.path().to_owned());
+        paths.push(dir.clone());
+    }
     let previous = record.get("gitconfig_original_outcome").is_some();
+    if previous && snapshots.is_none() {
+        return Status::Failed;
+    }
     if snapshots.is_some() && paths.is_empty() {
         return if previous { Status::Failed } else { outcome };
     }
-    let reason = if snapshots.is_none() {
+    let reason = if layout_error {
+        "gitconfig_guard_error"
+    } else if snapshots.is_none() {
         "gitconfig_snapshot_missing"
     } else {
         "gitconfig_tampered"

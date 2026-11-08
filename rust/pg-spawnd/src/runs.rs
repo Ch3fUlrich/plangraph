@@ -293,8 +293,16 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
     }
 }
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
-    let diagnostic = json!({"reason":leg.get("reason").or_else(|| record.get("reason")),
-        "exit_code":leg.get("exit_code").or_else(|| record.get("exit_code"))});
+    let source = if status == Status::Orphaned {
+        record
+            .get("attempts")
+            .and_then(Value::as_array)
+            .and_then(|a| a.last())
+            .unwrap_or(leg)
+    } else {
+        leg
+    };
+    let diagnostic = json!({"reason":source.get("reason"), "exit_code":source.get("exit_code")});
     let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
     let dry = status == Status::DryRun;
     let unwitnessed = json!("unwitnessed");
