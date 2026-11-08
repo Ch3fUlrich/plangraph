@@ -11,9 +11,9 @@ def catalog_tiers(legs, rows):
     from dataclasses import replace
     from .legs import TIERS
     tiers = {row.get('id', row.get('model_id')): row.get('tier') for row in rows}
-    # Gemini Flash uses the catalog's free allocation, not AgY's default pool.
-    from plangraph.routing_support.catalog_seed import SEED_QUOTA_POOLS
-    tiers['gemini-3.8-flash'] = next(p['tier'] for p in SEED_QUOTA_POOLS
-                                   if p['pool_id'] == 'agy-gemini-flash')
+    # Harness-local model names resolve through their catalog provider prefix.
+    for leg in legs:
+        catalog_id = f'{leg.harness}/{leg.model}'
+        if leg.model not in tiers and catalog_id in tiers: tiers[leg.model] = tiers[catalog_id]
     return tuple(replace(leg, tier=tiers[leg.model])
                  if tiers.get(leg.model) in TIERS else leg for leg in legs)

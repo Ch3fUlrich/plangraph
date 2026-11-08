@@ -30,15 +30,15 @@ _KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_
 
 
 def review_priority(leg) -> int:
-    """D-4147 role order, not a cost/free-tier preference."""
-    return 2 if "haiku" in leg.model.lower() else 0 if leg.family == "mimo" else 1
+    """Gemini and MiMo occupy the preferred cross-family review seats."""
+    return {"gemini": 0, "mimo": 1}.get(leg.family, 3 if "haiku" in leg.model.lower() else 2)
 
 
 def implement_key(leg, tier_idx, pos):
     """Cost precedes writer preference; eligibility is applied first."""
     from .legs import LEAD_WRITER, WRITER_ORDER
     index = WRITER_ORDER.index(leg.id) if leg.id in WRITER_ORDER else len(WRITER_ORDER)
-    return (tier_idx, leg.id != LEAD_WRITER, index, pos)
+    return (leg.id != LEAD_WRITER, tier_idx, index, pos)
 
 
 @dataclass(frozen=True)
