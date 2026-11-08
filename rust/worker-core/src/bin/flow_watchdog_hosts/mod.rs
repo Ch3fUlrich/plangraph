@@ -21,8 +21,8 @@ pub fn messages(hosts: &[Host]) -> Vec<String> {
     for host in hosts {
         if host.tmp_used_percent > DISK_USED_PERCENT || host.root_used_percent > DISK_USED_PERCENT {
             messages.push(format!(
-                "host-disk: host={} /tmp={}%; /={}%; threshold={}%",
-                host.host, host.tmp_used_percent, host.root_used_percent, DISK_USED_PERCENT
+                "host-disk: host={}",
+                serde_json::to_string(&host.host).unwrap()
             ));
         }
         if host.checkout_head != host.origin_main_head
@@ -31,15 +31,12 @@ pub fn messages(hosts: &[Host]) -> Vec<String> {
                 || host.age_hours > CHECKOUT_AGE_HOURS)
         {
             messages.push(format!(
-                "host-code: host={} checkout={} origin/main={} behind={} age_hours={}",
-                host.host,
-                host.checkout_head,
-                host.origin_main_head,
-                host.behind_commits,
-                host.age_hours
+                "host-code: host={}",
+                serde_json::to_string(&host.host).unwrap()
             ));
         }
     }
     messages.sort();
+    messages.dedup();
     messages
 }

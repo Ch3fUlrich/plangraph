@@ -53,12 +53,10 @@ impl Snapshot {
         for (name, rows, threshold, eligible) in rules {
             for row in rows {
                 if row.age_minutes > threshold && eligible(row) {
-                    // JSON escaping guarantees one physical line even for unusual identifiers.
                     let message = format!(
-                        "{name} item={} owner={} age_minutes={}",
+                        "{name} item={} owner={}",
                         serde_json::to_string(&row.item).unwrap(),
-                        serde_json::to_string(&row.owner).unwrap(),
-                        row.age_minutes
+                        serde_json::to_string(&row.owner).unwrap()
                     );
                     if !messages.contains(&message) {
                         messages.push(message);
@@ -66,6 +64,6 @@ impl Snapshot {
                 }
             }
         }
-        messages
+        messages.sort(); messages
     }
 }

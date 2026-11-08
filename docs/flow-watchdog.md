@@ -13,10 +13,10 @@ atomically refresh `~/.local/state/plangraph/flow-snapshot.json` before each tic
 same CI window (infra failures are a subset of failures); `review_age_hours` is
 the maximum age of an in_review item; `review_rounds` is the maximum per PR;
 `critical_idle_hours` is the #690 critical-path idle measurement; `coding_vm_runs`
-and `dell_idle` describe placement; `host_drift` compares expected host code refs;
+and `worker_idle` describe placement; `host_drift` compares expected host code refs;
 `closes_recent` and `closes_previous` count equal-length daily windows.
-The fields above are required; budget must be positive. Missing data alerts routing without writing state.
-The seven condition groups produce eight rule names: placement and host drift are separate.
+The fields above are required; budget must be positive. Missing data queues a durable invalid-snapshot alert.
+The seven condition groups produce 8 rule names: placement and host drift are separate.
 
 Collectors may also supply `hosts` (an omitted list defaults to empty for compatibility).
 Each entry requires `host`, `tmp_used_percent`, `root_used_percent`, `checkout_head`,
@@ -26,7 +26,7 @@ is behind origin/main by more than 10 commits **or** 24 hours. The collector mus
 provide the ancestry-based behind count and age in hours since the first missing
 origin/main commit, not the checkout commit's timestamp. Equal heads or a zero
 behind count do not alert merely because the checkout is old. These two additional
-conditions emit per-host lines including diagnostic values; no Git or host access
+conditions emit stable per-host identities with JSON-escaped identifiers; no Git or host access
 is performed by the checker. Collectors must refresh origin/main before measuring.
 
 Routing uses the existing `PLANGRAPH_WATCHDOG_DELIVERY` JSON argv bridge contract

@@ -15,7 +15,7 @@ mod tests {
             review_rounds: 2,
             critical_idle_hours: 11.0,
             coding_vm_runs: 0,
-            dell_idle: true,
+            worker_idle: true,
             host_drift: false,
             closes_recent: 5,
             closes_previous: 4,
@@ -39,7 +39,7 @@ mod tests {
         assert_eq!(findings(&s).len(), 8);
         s.infra_failed = 2;
         assert!(!ci(&s));
-        s.dell_idle = false;
+        s.worker_idle = false;
         assert!(!placement(&s));
         s.ci_total = 0;
         s.ci_failed = 0;

@@ -3,7 +3,7 @@ use std::{fs, process::Command};
 fn snapshot() -> serde_json::Value {
     serde_json::json!({"pace":1,"budget":2,"ci_failed":0,"ci_total":0,
         "infra_failed":0,"review_age_hours":0,"review_rounds":0,
-        "critical_idle_hours":0,"coding_vm_runs":0,"dell_idle":false,
+        "critical_idle_hours":0,"coding_vm_runs":0,"worker_idle":false,
         "host_drift":false,"closes_recent":0,"closes_previous":0})
 }
 
@@ -43,7 +43,7 @@ macro_rules! check {
             assert_eq!(found.len(), 1);
             let message = found[0]["message"].as_str().unwrap();
             assert_eq!(message.lines().count(), 1);
-            for expected in [$rule, "item-1", "owner-1", "age_minutes="] {
+            for expected in [$rule, "item-1", "owner-1", "owner="] {
                 assert!(message.contains(expected), "{message}");
             }
         }

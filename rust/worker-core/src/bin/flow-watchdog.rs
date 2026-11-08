@@ -26,7 +26,7 @@ struct Snapshot {
     review_rounds: u64,
     critical_idle_hours: f64,
     coding_vm_runs: u64,
-    dell_idle: bool,
+    worker_idle: bool,
     host_drift: bool,
     closes_recent: u64,
     closes_previous: u64,
@@ -48,7 +48,7 @@ fn critical(s: &Snapshot) -> bool {
     s.critical_idle_hours > 12.0
 }
 fn placement(s: &Snapshot) -> bool {
-    s.coding_vm_runs > 0 && s.dell_idle
+    s.coding_vm_runs > 0 && s.worker_idle
 }
 fn drift(s: &Snapshot) -> bool {
     s.host_drift
@@ -115,26 +115,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Ok(s)
     })();
-    let s = match validated {
-        Ok(s) => s,
-        Err(e) => {
-            let event = serde_json::json!({"kind":"alert", "recipient":"routing",
-            "message":"FLOW-WATCHDOG: invalid snapshot"})
-            .to_string();
-            eprintln!("FLOW-WATCHDOG: invalid snapshot: {e}");
-            let _ = deliver("PLANGRAPH_WATCHDOG_DELIVERY", &event);
-            return Err(e);
-        }
-    };
+    if let Err(e) = &validated { eprintln!("FLOW-WATCHDOG: invalid snapshot: {e}"); }
     let dir = Path::new(&args[2]);
     fs::create_dir_all(dir)?;
     let pending = dir.join("pending.json");
-    let legacy = findings(&s).join(",");
-    let mut messages = s.stuck.messages();
-    messages.extend(hosts::messages(&s.hosts));
-    if !legacy.is_empty() {
-        messages.insert(0, legacy);
-    }
+    let messages = match &validated {
+        Ok(s) => {
+            let mut messages = s.stuck.messages();
+            messages.extend(hosts::messages(&s.hosts));
+            let legacy = findings(s).join(",");
+            if !legacy.is_empty() { messages.insert(0, legacy); }
+            messages
+        }
+        Err(_) => vec!["invalid snapshot".to_owned()],
+    };
     let active = messages.join("\n");
     let queue_path = dir.join("queue.json");
     let mut queue: Vec<serde_json::Value> = match fs::read(&queue_path) {
@@ -192,7 +186,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ("routing.ok", "PLANGRAPH_WATCHDOG_DELIVERY"),
             ("push.ok", "PLANGRAPH_FLOW_PUSH"),
         ] {
-            if !dir.join(marker).exists() && deliver(variable, &event)? {
+            if !dir.join(marker).exists() && deliver(variable, &event).unwrap_or(false) {
                 atomic(&dir.join(marker), "ok")?;
             }
         }
@@ -207,5 +201,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             atomic(&queue_path, &serde_json::to_string(&queue)?)?;
         }
     }
-    Ok(())
+    validated.map(|_| ())
 }

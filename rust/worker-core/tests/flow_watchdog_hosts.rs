@@ -4,7 +4,7 @@ fn active(host: serde_json::Value) -> String {
     let dir = tempfile::tempdir().unwrap();
     let snapshot = serde_json::json!({"pace":66,"budget":66,"ci_failed":0,
         "ci_total":10,"infra_failed":0,"review_age_hours":0,"review_rounds":0,
-        "critical_idle_hours":0,"coding_vm_runs":0,"dell_idle":false,
+        "critical_idle_hours":0,"coding_vm_runs":0,"worker_idle":false,
         "host_drift":false,"closes_recent":4,"closes_previous":4,"hosts":[host]});
     let input = dir.path().join("input.json");
     fs::write(&input, snapshot.to_string()).unwrap();
@@ -43,7 +43,7 @@ fn checkout_alerts_by_commit_count_or_age_only_when_behind() {
             "behind_commits":commits,"age_hours":age}));
         assert_eq!(result.contains("host-code"), fires, "{result}");
         if fires {
-            assert!(result.contains("fixture") && result.contains("a") && result.contains("b"));
+            assert!(result.contains("host-code: host=\"fixture\""));
         }
     }
 }
