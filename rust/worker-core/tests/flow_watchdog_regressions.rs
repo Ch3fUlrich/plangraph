@@ -8,10 +8,19 @@ fn safe() -> serde_json::Value {
 fn run(s: &serde_json::Value, dir: &Path, push: bool) -> std::process::Output {
     fs::write(dir.join("input.json"), s.to_string()).unwrap();
     Command::new(env!("CARGO_BIN_EXE_flow-watchdog"))
-        .arg(dir.join("input.json")).arg(dir)
+        .arg(dir.join("input.json"))
+        .arg(dir)
         .env("PLANGRAPH_WATCHDOG_DELIVERY", "[\"/bin/cat\"]")
-        .env("PLANGRAPH_FLOW_PUSH", if push { "[\"/bin/cat\"]" } else { "[\"/bin/false\"]" })
-        .output().unwrap()
+        .env(
+            "PLANGRAPH_FLOW_PUSH",
+            if push {
+                "[\"/bin/cat\"]"
+            } else {
+                "[\"/bin/false\"]"
+            },
+        )
+        .output()
+        .unwrap()
 }
 #[test]
 fn stale_markers_cannot_ack_a_new_event() {
@@ -19,44 +28,84 @@ fn stale_markers_cannot_ack_a_new_event() {
     // A directory forces marker reset to fail, simulating interruption before reset.
     fs::create_dir(d.path().join("routing.ok")).unwrap();
     fs::write(d.path().join("push.ok"), "ok").unwrap();
-    let mut s = safe(); s["host_drift"] = true.into();
-    assert!(!run(&s, d.path(), true).status.success());
+    let mut s = safe();
+    s["host_drift"] = true.into();
+    let out = run(&s, d.path(), true);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("reset routing.ok"));
     assert!(!d.path().join("pending.json").exists());
 }
 #[test]
 fn failed_push_does_not_freeze_clear_and_refire() {
     let d = tempfile::tempdir().unwrap();
-    let mut s = safe(); s["host_drift"] = true.into();
+    let mut s = safe();
+    s["host_drift"] = true.into();
     assert!(run(&s, d.path(), false).status.success());
     assert!(run(&safe(), d.path(), false).status.success());
     assert_eq!(fs::read_to_string(d.path().join("active")).unwrap(), "");
     assert!(run(&s, d.path(), false).status.success());
     assert!(run(&s, d.path(), true).status.success());
     assert!(!d.path().join("pending.json").exists());
-    let queue: Vec<serde_json::Value> = serde_json::from_str(
-        &fs::read_to_string(d.path().join("queue.json")).unwrap()).unwrap();
+    let queue: Vec<serde_json::Value> =
+        serde_json::from_str(&fs::read_to_string(d.path().join("queue.json")).unwrap()).unwrap();
     assert!(queue.is_empty());
 }
 #[test]
 fn zero_negative_and_missing_budget_are_not_healthy() {
     for budget in [0, -1] {
-        let d = tempfile::tempdir().unwrap(); let mut s = safe(); s["budget"] = budget.into();
+        let d = tempfile::tempdir().unwrap();
+        let mut s = safe();
+        s["budget"] = budget.into();
         assert!(!run(&s, d.path(), true).status.success());
+        assert!(!d.path().join("active").exists());
+        assert!(!d.path().join("queue.json").exists());
+        assert!(!d.path().join("pending.json").exists());
     }
-    let d = tempfile::tempdir().unwrap(); let mut s = safe();
+    let d = tempfile::tempdir().unwrap();
+    let mut s = safe();
     s.as_object_mut().unwrap().remove("budget");
-    assert!(!run(&s, d.path(), true).status.success());
+    let out = run(&s, d.path(), true);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("FLOW-WATCHDOG: invalid snapshot"));
+    assert!(!d.path().join("active").exists());
 }
 #[test]
 fn inconsistent_counts_are_rejected_without_state() {
     for (failed, infra) in [(11, 0), (1, 2)] {
-        let d = tempfile::tempdir().unwrap(); let mut s = safe();
-        s["ci_failed"] = failed.into(); s["infra_failed"] = infra.into();
+        let d = tempfile::tempdir().unwrap();
+        let mut s = safe();
+        s["ci_failed"] = failed.into();
+        s["infra_failed"] = infra.into();
         let out = run(&s, d.path(), true);
         assert!(!out.status.success());
         assert!(String::from_utf8_lossy(&out.stderr).contains("inconsistent CI counts"));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("FLOW-WATCHDOG: invalid snapshot"));
         assert!(!d.path().join("active").exists());
     }
+}
+#[test]
+fn routing_continues_and_backlog_is_bounded_when_push_fails() {
+    let d = tempfile::tempdir().unwrap();
+    for i in 0..260 {
+        let mut s = safe();
+        s[if i % 2 == 0 {
+            "host_drift"
+        } else {
+            "coding_vm_runs"
+        }] = if i % 2 == 0 { true.into() } else { 1.into() };
+        assert!(run(&s, d.path(), false).status.success());
+        let queue: Vec<serde_json::Value> =
+            serde_json::from_str(&fs::read_to_string(d.path().join("queue.json")).unwrap())
+                .unwrap();
+        assert!(queue.last().unwrap()["routing_done"]
+            .as_bool()
+            .unwrap_or(false));
+        assert!(queue.len() <= 256);
+    }
+}
+#[test]
+fn documented_rule_count_matches_checker() {
+    assert!(include_str!("../../../docs/flow-watchdog.md").contains("eight rule names"));
 }
 #[test]
 fn every_rule_fires_in_isolation_and_retries_failed_hook() {
@@ -65,11 +114,18 @@ fn every_rule_fires_in_isolation_and_retries_failed_hook() {
         ("ci_failed", serde_json::json!(2), "ci-fail-rate"),
         ("review_age_hours", serde_json::json!(25), "review-age"),
         ("review_rounds", serde_json::json!(4), "review-rounds"),
-        ("critical_idle_hours", serde_json::json!(13), "critical-path-idle"),
+        (
+            "critical_idle_hours",
+            serde_json::json!(13),
+            "critical-path-idle",
+        ),
         ("coding_vm_runs", serde_json::json!(1), "placement"),
         ("host_drift", serde_json::json!(true), "host-drift"),
-        ("closes_recent", serde_json::json!(3), "closes-trend")] {
-        let d = tempfile::tempdir().unwrap(); let mut s = safe(); s[field] = value;
+        ("closes_recent", serde_json::json!(3), "closes-trend"),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = safe();
+        s[field] = value;
         assert!(run(&safe(), d.path(), true).status.success());
         assert!(run(&s, d.path(), false).status.success());
         let pending = fs::read_to_string(d.path().join("pending.json")).unwrap();
@@ -80,7 +136,9 @@ fn every_rule_fires_in_isolation_and_retries_failed_hook() {
         fs::write(d.path().join("routing.ok"), "checkpoint retained").unwrap();
         assert!(run(&s, d.path(), true).status.success());
         assert!(!d.path().join("pending.json").exists());
-        assert_eq!(fs::read_to_string(d.path().join("routing.ok")).unwrap(),
-            "checkpoint retained");
+        assert_eq!(
+            fs::read_to_string(d.path().join("routing.ok")).unwrap(),
+            "checkpoint retained"
+        );
     }
 }

@@ -15,7 +15,8 @@ the maximum age of an in_review item; `review_rounds` is the maximum per PR;
 `critical_idle_hours` is the #690 critical-path idle measurement; `coding_vm_runs`
 and `dell_idle` describe placement; `host_drift` compares expected host code refs;
 `closes_recent` and `closes_previous` count equal-length daily windows.
-All fields are required; budget must be positive. Missing data is not healthy.
+All fields are required; budget must be positive. Missing data alerts routing without writing state.
+The seven condition groups produce eight rule names: placement and host drift are separate.
 
 Routing uses the existing `PLANGRAPH_WATCHDOG_DELIVERY` JSON argv bridge contract
 (see stall-watchdog.md): one JSON alert on stdin with recipient `routing` and one
@@ -27,6 +28,6 @@ Without a hook, events wait in a durable queue. Successful channels are
 checkpointed independently. Identical active sets are suppressed until recovery
 or a changed set; delivery is at-least-once across a crash during acknowledgement.
 Systemd prevents concurrent ticks of this service; do not run manual concurrent
-instances against its state directory. New transitions queue behind pending
-delivery without freezing deduplication. Collectors, freshness and host integration
+instances against its state directory. Routing advances despite pending push;
+the queue retains its head and newest 255 events, reporting overflow on stderr. Collectors, freshness and host integration
 are deployment prerequisites, not supplied by this checker.
