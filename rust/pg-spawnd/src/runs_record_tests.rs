@@ -72,6 +72,7 @@ fn finish_settles_non_last_attempt_and_rejects_unknown_ids() {
     let attempts = record.get("attempts").unwrap().clone();
     assert_eq!(attempts[0]["status"], "orphaned");
     assert_eq!(attempts[0]["exit_code"], 7);
+    assert_eq!(attempts[0]["leg"]["exit_code"], 3);
     assert_eq!(attempts[0]["custom"], "first");
     assert_eq!(attempts[1], last);
     for id in [0, 3] {
@@ -88,9 +89,9 @@ fn finish_settles_non_last_attempt_and_rejects_unknown_ids() {
 }
 
 #[test]
-fn finish_rejects_empty_and_non_object_entries_without_appending() {
+fn finish_rejects_non_object_entries_without_appending() {
     let dir = std::env::temp_dir().join(new_run_id());
-    for attempts in [json!([]), json!([null]), json!([7])] {
+    for attempts in [json!([null]), json!([7])] {
         let mut record = create(
             &dir,
             "run-invalid",
@@ -123,7 +124,7 @@ fn orphan_settle_selects_non_last_non_first_attempt() {
         "fixture",
         json!({
             "role":"implement", "attempts":[first,
-                {"status":"running","started":1,"exit_code":7,
+                {"status":"running","started":1,"exit_code":null,
                  "leg":{"leg_key":"leg","route_key":"route"}}, last]
         }),
         Status::Running,
@@ -134,9 +135,33 @@ fn orphan_settle_selects_non_last_non_first_attempt() {
     let attempts = saved.get("attempts").unwrap();
     assert_eq!(attempts[0], first);
     assert_eq!(attempts[1]["status"], "orphaned");
+    // An unobserved process has no observed exit code; recovery keeps it null.
     assert_eq!(attempts[1]["exit_code"], Value::Null);
     assert_eq!(attempts[2], last);
     assert_eq!(saved.status(), Some(Status::Orphaned));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn finish_normalizes_legacy_unbooked_first_attempt_only() {
+    let dir = std::env::temp_dir().join(new_run_id());
+    for base in [json!({}), json!({"attempts":[]})] {
+        let mut record = create(&dir, "run-legacy", "fixture", base, Status::Running)
+            .unwrap_or_else(|_| panic!("fixture record creation failed"));
+        finish(&mut record, Status::Completed, &json!({}), 2);
+        assert_eq!(record.get("attempts"), Some(&json!([])));
+        finish(
+            &mut record,
+            Status::Completed,
+            &json!({"model":"legacy"}),
+            1,
+        );
+        let attempts = record.get("attempts").unwrap().as_array().unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0]["status"], "completed");
+        assert_eq!(attempts[0]["leg"]["model"], "legacy");
+        assert_eq!(record.get("attempts_error"), Some(&Value::Null));
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 

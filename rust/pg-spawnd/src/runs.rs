@@ -1,8 +1,4 @@
-//! Local runs only. Not ported: served-model witnesses, harness-limit leg booking,
-//! writer no-change checks, second-leg fall-through, writer
-//! continuation, completion events/delivery markers, dispatch-refusal gate, or
-//! SPAWNER-LIVENESS-D3622 watchdog. Context packs and writer env
-//! belong to the Python launch adapter.
+//! Local runs only; context packs and writer env belong to the Python launch adapter.
 use crate::{errors::ToolError, placement::Args};
 use pg_worker_core::run::{
     record::{new_job_id, new_run_id, RunRecord, Status},
@@ -138,10 +134,8 @@ impl Runs {
             .into_iter()
             .map(Value::Object)
             .collect();
-        // Book before launch and capture this id in the completion callback.
-        let attempts = vec![json!({"leg":leg,"status":"running"})];
-        let attempt_id = attempts.len() as u32;
-        base["attempts"] = json!(attempts);
+        let attempt_id = 1;
+        base["attempts"] = json!([{"leg":leg,"status":"running"}]);
         if dry {
             let mut tail = format!("[dry-run] Planned command: {}", launch.argv.join(" "));
             if let Some(stdin) = &launch.stdin {
@@ -311,6 +305,10 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
             return;
         }
     };
+    // Normalize legacy first legs only; never invent ids in populated history.
+    if attempts.is_empty() && attempt_id == 1 {
+        attempts.push(json!({"leg":leg,"status":"running"}));
+    }
     let Some(attempt) = attempt_id
         .checked_sub(1)
         .and_then(|index| attempts.get_mut(index as usize))
@@ -383,12 +381,14 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         }
     }
 }
+
 #[cfg(all(test, unix))]
 #[path = "runs_record_tests.rs"]
 mod record_tests;
 #[cfg(all(test, unix))]
 #[path = "runs_tests.rs"]
 mod tests;
+
 fn wait_duration(value: Option<&Value>) -> Duration {
     #[allow(clippy::manual_clamp)]
     let seconds = value

@@ -1,4 +1,5 @@
-use {super::*, serde_json::json};
+use super::*;
+use serde_json::json;
 pub(super) struct TempDir(PathBuf);
 impl TempDir {
     pub(super) fn new() -> Self {
@@ -252,8 +253,7 @@ fn orphan_selects_attempt_by_id_through_settle() {
     record.set(
         "attempts",
         json!([
-            {"started":1,"reason":"current","exit_code":7,
-             "leg":{"leg_key":"leg","route_key":"route"}},
+            {"started":1,"reason":"current","exit_code":7,"leg":{"leg_key":"leg","route_key":"route"}},
             {"started":0,"reason":"previous","exit_code":99}
         ]),
     );
