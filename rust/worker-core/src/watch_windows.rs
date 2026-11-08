@@ -1,6 +1,16 @@
 //! Recorded Job adoption; no spawn, pipe or waitpid authority.
 use crate::cpu::CpuSample;
 use std::io;
+#[cfg(any(windows, test))]
+pub(crate) fn claim_adoption(slot: &std::sync::atomic::AtomicU32, pid: u32) -> bool {
+    slot.compare_exchange(
+        pid,
+        u32::MAX,
+        std::sync::atomic::Ordering::SeqCst,
+        std::sync::atomic::Ordering::SeqCst,
+    )
+    .is_ok()
+}
 
 pub trait JobApi: Send {
     fn adopted(&mut self) -> io::Result<()> {
@@ -117,14 +127,31 @@ mod native {
     }
     impl JobApi for NativeJob {
         fn adopted(&mut self) -> io::Result<()> {
-            use crate::run::job_holder_windows::{adoption_event, outcome_event};
+            use crate::run::job_holder_windows::{
+                adoption_event, outcome_event, rejected_event, RequestSlot,
+            };
             let event = adoption_event(&self.1, false, false)?;
             let closing = adoption_event(&self.1, true, false)?;
             let outcome = outcome_event(&self.1, false)?;
+            let rejected = rejected_event(&self.1, false)?;
+            let request = RequestSlot::open(&self.1, false)?;
             if unsafe { WaitForSingleObject(closing.as_raw_handle(), 0) } != WAIT_TIMEOUT {
                 return Err(io::Error::other("holder deadline within adoption margin"));
             }
+            request
+                .pid()
+                .compare_exchange(
+                    0,
+                    unsafe { GetCurrentProcessId() },
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                )
+                .map_err(|_| io::Error::other("holder adoption already requested"))?;
             // SAFETY: verified Job remains owned; manual-reset event stays signaled.
+            unsafe {
+                ResetEvent(outcome.as_raw_handle());
+                ResetEvent(rejected.as_raw_handle());
+            }
             if unsafe { SetEvent(event.as_raw_handle()) } == 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -133,7 +160,22 @@ mod native {
             if unsafe { WaitForSingleObject(outcome.as_raw_handle(), 5000) } == WAIT_OBJECT_0 {
                 Ok(())
             } else {
-                Err(io::Error::other("holder did not acknowledge adoption"))
+                unsafe {
+                    SetEvent(rejected.as_raw_handle());
+                }
+                let committed = request
+                    .pid()
+                    .swap(u32::MAX - 1, std::sync::atomic::Ordering::SeqCst)
+                    == u32::MAX;
+                // A concurrently committed acknowledgement wins; otherwise rejection
+                // remains latched so a delayed holder cannot admit this requester.
+                if unsafe { WaitForSingleObject(outcome.as_raw_handle(), 1000) } == WAIT_OBJECT_0
+                    || committed
+                {
+                    Ok(())
+                } else {
+                    Err(io::Error::other("holder did not acknowledge adoption"))
+                }
             }
         }
         fn member(&mut self, pid: u32, start: u64) -> io::Result<bool> {

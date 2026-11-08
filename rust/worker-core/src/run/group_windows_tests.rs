@@ -41,7 +41,10 @@ fn fake_child() {
             thread::sleep(Duration::from_secs(30));
             let _ = child.wait();
         }
-        "sleep" => thread::sleep(Duration::from_secs(30)),
+        "sleep" => {
+            println!("payload-ready");
+            thread::sleep(Duration::from_secs(30));
+        }
         "echo" => println!("{}", std::env::var("FOO").unwrap()),
         "exit3" => std::process::exit(3),
         "injob" => {
@@ -133,7 +136,7 @@ fn named(unit: &str) -> bool {
     }
 }
 fn until(mut predicate: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while !predicate() {
         assert!(Instant::now() < deadline);
         thread::sleep(Duration::from_millis(10));
@@ -259,7 +262,7 @@ fn owner_process() {
     };
     let expiry = std::env::var("PG_OWNER_EXPIRY").unwrap() == "1";
     let unit = std::env::var("PG_OWNER_UNIT").unwrap();
-    let (g, _dir) = launch_bounded(
+    let (mut g, _dir) = launch_bounded(
         &unit,
         "sleep",
         false,
@@ -267,6 +270,17 @@ fn owner_process() {
         Some(if expiry { 1 } else { 10 }),
     )
     .unwrap();
+    // libtest writes startup output. Killing its pipe reader before startup
+    // completes makes the payload panic on Windows (broken pipe), not leave a Job.
+    let mut output = std::io::BufReader::new(g.child.stdout.take().unwrap());
+    let mut line = String::new();
+    while !line.contains("payload-ready") {
+        line.clear();
+        assert_ne!(
+            std::io::BufRead::read_line(&mut output, &mut line).unwrap(),
+            0
+        );
+    }
     std::fs::write(
         path,
         format!("{} {}", g.child.id(), creation_time(g.child.id()).unwrap()),
@@ -296,6 +310,11 @@ fn adopter_process() {
     let mut job = AdoptedJob::verify(Some(api), pid, start).unwrap();
     assert!(!job.is_gone().unwrap());
     job.adopt().unwrap();
+    if let Ok(path) = std::env::var("PG_ADOPT_READY") {
+        std::fs::write(path, "ready").unwrap();
+        thread::sleep(Duration::from_secs(30));
+        return;
+    }
     thread::sleep(Duration::from_secs(11));
     assert!(!job.is_gone().unwrap());
     job.terminate().unwrap();
@@ -324,6 +343,23 @@ fn killed_owner_adopted_by_fresh_process() {
     owner.kill().unwrap();
     owner.wait().unwrap();
     assert!(!gone(pid));
+    let ready = dir.path().join("adopted");
+    let mut adopter = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "run::group_windows_tests::adopter_process",
+            "--nocapture",
+        ])
+        .env("PG_ADOPT_TICKET", &ticket)
+        .env("PG_OWNER_UNIT", &unit)
+        .env("PG_ADOPT_READY", &ready)
+        .spawn()
+        .unwrap();
+    until(|| ready.exists());
+    adopter.kill().unwrap();
+    adopter.wait().unwrap();
+    assert!(!gone(pid));
+    thread::sleep(Duration::from_millis(300));
     assert!(Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",

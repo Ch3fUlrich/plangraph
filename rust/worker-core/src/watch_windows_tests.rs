@@ -198,3 +198,13 @@ fn errors_and_invalid_accounting_are_not_activity() {
     job.api.as_mut().unwrap().times = (i64::MAX, i64::MAX);
     assert!(job.cpu().is_ok());
 }
+#[test]
+fn rejection_and_admission_have_one_winner() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let slot = AtomicU32::new(42);
+    assert_eq!(slot.swap(u32::MAX - 1, Ordering::SeqCst), 42);
+    assert!(!super::claim_adoption(&slot, 42));
+    slot.store(42, Ordering::SeqCst);
+    assert!(super::claim_adoption(&slot, 42));
+    assert_eq!(slot.swap(u32::MAX - 1, Ordering::SeqCst), u32::MAX);
+}

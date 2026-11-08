@@ -152,6 +152,54 @@ mod platform {
     pub fn outcome_event(name: &str, create: bool) -> io::Result<OwnedHandle> {
         adoption_event(&format!("{name}-outcome"), false, create)
     }
+    pub fn rejected_event(name: &str, create: bool) -> io::Result<OwnedHandle> {
+        adoption_event(&format!("{name}-rejected"), false, create)
+    }
+    // A same-user, non-inheritable mapping carries the requesting daemon PID.
+    // The Job and event DACLs remain the admission boundary.
+    #[link(name = "kernel32")]
+    #[rustfmt::skip]
+    extern "system" {
+        fn CreateFileMappingW(file: HANDLE, attributes: *const SECURITY_ATTRIBUTES,
+            protect: u32, high: u32, low: u32, name: *const u16) -> HANDLE;
+        fn OpenFileMappingW(access: u32, inherit: i32, name: *const u16) -> HANDLE;
+        fn MapViewOfFile(mapping: HANDLE, access: u32, high: u32, low: u32, size: usize) -> *mut u32;
+        fn UnmapViewOfFile(address: *const u32) -> i32;
+    }
+    pub struct RequestSlot(OwnedHandle, *mut u32);
+    #[rustfmt::skip]
+    impl RequestSlot {
+        pub fn open(name: &str, create: bool) -> io::Result<Self> {
+            let name: Vec<u16> = format!("{name}-holder-request").encode_utf16().chain(Some(0)).collect();
+            unsafe {
+                let raw = if create {
+                    CreateFileMappingW(INVALID_HANDLE_VALUE, std::ptr::null(), 4, 0, 4, name.as_ptr())
+                } else {
+                    OpenFileMappingW(6, 0, name.as_ptr())
+                };
+                if raw.is_null() {
+                    return Err(io::Error::last_os_error());
+                }
+                let handle = OwnedHandle::from_raw_handle(raw);
+                if create && GetLastError() == ERROR_ALREADY_EXISTS {
+                    return Err(io::Error::other("existing holder request"));
+                }
+                let view = MapViewOfFile(raw, 6, 0, 0, 4);
+                if view.is_null() {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(Self(handle, view))
+            }
+        }
+        pub fn pid(&self) -> &std::sync::atomic::AtomicU32 {
+            // SAFETY: aligned, shared four-byte mapping remains live through self.
+            unsafe { &*self.1.cast() }
+        }
+    }
+    #[rustfmt::skip]
+    impl Drop for RequestSlot {
+        fn drop(&mut self) { let _ = &self.0; unsafe { UnmapViewOfFile(self.1); } }
+    }
     #[rustfmt::skip]
     /// Ok(true): breakaway was refused and the holder runs inside the caller's outer job.
     pub fn launch(holder: &std::path::Path, job: &OwnedHandle, seconds: u64, name: &str) -> io::Result<bool> {
@@ -237,15 +285,17 @@ mod platform {
             // Ticket handles come only from the launching same-user daemon over its
             // private stdin pipe, via DuplicateHandle into this suspended helper.
             // The single-user Job DACL is the trust boundary, not the usize encoding.
-            let owner = unsafe { OwnedHandle::from_raw_handle(event as _) };
+            let mut owner = unsafe { OwnedHandle::from_raw_handle(event as _) };
             let name = lines
                 .next()
                 .ok_or_else(|| io::Error::other("missing Job name"))?;
             let event = adoption_event(name, false, true)?;
             let closing = adoption_event(name, true, true)?;
             let outcome = outcome_event(name, true)?;
-            let mut acknowledged = false;
+            let rejected = rejected_event(name, true)?;
+            let request = RequestSlot::open(name, true)?;
             let mut deadline = None;
+            let mut admitted = false;
             let job = unsafe { OwnedHandle::from_raw_handle(raw as _) };
             std::io::stdout().write_all(&[1])?;
             // Readiness is binary, without a newline: flush before waiting for the
@@ -255,6 +305,10 @@ mod platform {
                 if deadline.is_none()
                     && unsafe { WaitForSingleObject(owner.as_raw_handle(), 0) } == WAIT_OBJECT_0
                 {
+                    if admitted {
+                        request.pid().store(0, std::sync::atomic::Ordering::SeqCst);
+                        admitted = false;
+                    }
                     deadline = Some(Instant::now() + Duration::from_secs(seconds));
                 }
                 let closing_now =
@@ -266,18 +320,31 @@ mod platform {
                 }
                 // Admission and expiry are serialized here, not in the requester.
                 if !closing_now
-                    && !acknowledged
+                    && deadline.is_some()
                     && unsafe { WaitForSingleObject(event.as_raw_handle(), 0) } == WAIT_OBJECT_0
+                    && unsafe { WaitForSingleObject(rejected.as_raw_handle(), 0) } == WAIT_TIMEOUT
                 {
+                    let pid = request.pid().load(std::sync::atomic::Ordering::SeqCst);
+                    let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+                    if raw.is_null() {
+                        return Err(io::Error::last_os_error());
+                    }
+                    let next = unsafe { OwnedHandle::from_raw_handle(raw) };
+                    if !crate::watch::windows::claim_adoption(request.pid(), pid) {
+                        continue;
+                    }
+                    owner = next;
+                    unsafe {
+                        ResetEvent(event.as_raw_handle());
+                    }
                     if unsafe { SetEvent(outcome.as_raw_handle()) } == 0 {
                         return Err(io::Error::last_os_error());
                     }
-                    acknowledged = true;
+                    deadline = None;
+                    admitted = true;
                 }
                 if deadline.is_some_and(|d| Instant::now() >= d) {
-                    if terminate_at_expiry(acknowledged)
-                        && unsafe { TerminateJobObject(job.as_raw_handle(), 1) } == 0
-                    {
+                    if unsafe { TerminateJobObject(job.as_raw_handle(), 1) } == 0 {
                         return Err(io::Error::last_os_error());
                     }
                     return Ok(());
@@ -309,41 +376,25 @@ mod platform {
     }
 }
 #[cfg(test)]
+#[rustfmt::skip]
 mod tests {
     use super::*;
     #[test]
-    fn adoption_prevents_expiry_termination() {
-        assert!(terminate_at_expiry(false));
-        assert!(!terminate_at_expiry(true));
-    }
-    #[test]
-    fn bounds() {
+    fn adoption_prevents_expiry_termination() { assert!(terminate_at_expiry(false)); assert!(!terminate_at_expiry(true)); }
+    #[test] fn bounds() {
         assert_eq!(validate_max_s(None), Ok(28800));
-        for s in ["600", "172800"] {
-            assert!(validate_max_s(Some(s)).is_ok());
-        }
-        for s in ["599", "172801", "NaN", "inf", "-1", ""] {
-            assert!(validate_max_s(Some(s)).is_err());
-        }
+        for s in ["600", "172800"] { assert!(validate_max_s(Some(s)).is_ok()); }
+        for s in ["599", "172801", "NaN", "inf", "-1", ""] { assert!(validate_max_s(Some(s)).is_err()); }
     }
-    #[test]
-    fn deadlines_and_tickets() {
+    #[test] fn deadlines_and_tickets() {
         assert_eq!(deadline_ms(10, 600), Some(600010));
         assert_eq!(deadline_ms(u64::MAX, 1), None);
         assert_eq!(deadline_ms(1, u64::MAX), None);
         assert_eq!(parse_ticket("42 600010\n"), Some((42, 600010)));
-        for s in ["", "0 1", "1 0", "1 2 3", "-1 2"] {
-            assert!(parse_ticket(s).is_none());
-        }
+        for s in ["", "0 1", "1 0", "1 2 3", "-1 2"] { assert!(parse_ticket(s).is_none()); }
     }
-    #[test]
-    fn restrictive_dacl() {
-        assert_eq!(
-            job_dacl("S-1-5-21-123"),
-            Some("D:P(A;;GA;;;SY)(A;;GA;;;S-1-5-21-123)".into())
-        );
-        for s in ["", "S-1-5-", "S-1-5-21)(A;;GA;;;WD)"] {
-            assert!(job_dacl(s).is_none());
-        }
+    #[test] fn restrictive_dacl() {
+        assert_eq!(job_dacl("S-1-5-21-123"), Some("D:P(A;;GA;;;SY)(A;;GA;;;S-1-5-21-123)".into()));
+        for s in ["", "S-1-5-", "S-1-5-21)(A;;GA;;;WD)"] { assert!(job_dacl(s).is_none()); }
     }
 }
