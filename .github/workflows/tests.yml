@@ -314,6 +314,8 @@ jobs:
       # The remaining 83 worker-core Windows failures (worktree_add, run-id Invalid,
       # locking target, remote) are tracked by plangraph:WORKER-CORE-WINDOWS-TESTS,
       # which adds all of worker-core back.
+      - name: CI-ONLY full worker-core on Windows
+        run: cargo test -p pg-worker-core --no-fail-fast
       - name: cargo test worker-core Windows Job/group/holder/watch
         run: |
           $filters = @('run::group_windows_tests::', 'watch::windows::tests::', 'run::job_holder_windows')
