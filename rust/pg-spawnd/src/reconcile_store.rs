@@ -116,10 +116,16 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
                     .filter(|v| !v.is_null())
                     .map(|v| v.as_u64().ok_or(ReconcileError::Invalid))
                     .transpose()?;
-                let identity = if attempt["proc"].is_null() {
+                // In-flight attempts use the run-level launch identity.
+                let identity_value = attempt
+                    .get("proc")
+                    .filter(|p| !p.is_null())
+                    .or_else(|| (index + 1 == attempts.len()).then_some(&record["proc"]))
+                    .unwrap_or(&Value::Null);
+                let identity = if identity_value.is_null() {
                     None
                 } else {
-                    let proc: Proc = serde_json::from_value(attempt["proc"].clone())
+                    let proc: Proc = serde_json::from_value(identity_value.clone())
                         .map_err(|_| ReconcileError::Invalid)?;
                     if proc.pid == 0
                         || proc.start_time == Some(0)
@@ -316,14 +322,13 @@ pub(crate) fn settle(
 ) -> Result<(), ReconcileError> {
     use pg_worker_core::run::record::Status;
     let invalid = || ReconcileError::Invalid;
-    if ![
+    let allowed = [
         "gone",
         "ended_unobserved",
         "killed_max_s",
         "reattach_timeout",
-    ]
-    .contains(&how)
-    {
+    ];
+    if !allowed.contains(&how) {
         return Err(invalid());
     }
     let run = record
@@ -354,11 +359,14 @@ pub(crate) fn settle(
     let role = serde_json::from_value(record.get("role").cloned().ok_or_else(invalid)?)
         .map_err(|_| invalid())?;
     let duration = now_ms
-        .checked_sub(seconds(&entry["started"])?)
+        .checked_sub(seconds(
+            entry
+                .get("started")
+                .unwrap_or_else(|| record.get("started").unwrap_or(&Value::Null)),
+        )?)
         .ok_or_else(invalid)?
         / 1000;
-    let row = outcome::build(&entry["leg"], role, &run, attempt, now_ms, duration)?;
-    match row {
+    match outcome::build(&entry["leg"], role, &run, attempt, now_ms, duration)? {
         Ok(row) => entry["outcome"] = row,
         Err(reason) => {
             let mut log = pg_worker_core::run::livelog::LiveLog::new(
