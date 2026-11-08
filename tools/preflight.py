@@ -3,6 +3,7 @@
 import argparse
 import importlib.util
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -66,7 +67,7 @@ def main(argv=None, root=None):
     mode.add_argument("--keep-going", action="store_true", help="default behaviour")
     mode.add_argument("--fail-fast", action="store_true")
     args = parser.parse_args(argv)
-    root = Path(root or Path.cwd())
+    root = Path(root or Path(__file__).resolve().parent.parent)
     tools = Path(os.environ.get("PREFLIGHT_TOOLS_DIR", Path(__file__).resolve().parent))
     env = dict(os.environ, FILESIZE_REQUIRE_BASE=args.base, NEWCODE_BASE=args.base,
                CHANGELOG_BASE=args.base, CARGO_BUILD_JOBS="4")
@@ -89,7 +90,7 @@ def main(argv=None, root=None):
     tests = python("affected_tests.py", "--base", args.base, "--head", args.head,
                    "--root", str(root), "--run")
     if importlib.util.find_spec("xdist") is not None:
-        tests += ["--workers", "auto"]
+        tests += ["--workers", "2"]
     families = [("scrub", scrubs),
                 ("policy", [python("check_file_size.py", "--head", args.head), python("check_new_code_lang.py", "--head", args.head),
                             python("check_changelog_docs.py", "--head", args.head),
@@ -108,7 +109,13 @@ def main(argv=None, root=None):
                     cwd = root / "rust" if family == "rust" else root
                     code, output = run(command, cwd, env)
                     print(output, end="", flush=True)
-                    status = "PASS" if not code else "FAIL"
+                    infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
+                    if infra:
+                        print(f"{family}: INFRA HTTP 5xx; rerun once", flush=True)
+                        code, output = run(command, cwd, env)
+                        print(output, end="", flush=True)
+                        infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
+                    status = "PASS" if not code else ("INFRA" if infra else "FAIL")
                     if code:
                         break
                 if family == "scrub" and not words and status == "PASS":

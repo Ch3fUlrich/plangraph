@@ -182,22 +182,37 @@ def measure(root, allowed, head=None):
     mangles non-ASCII ones through ``core.quotePath`` into strings that name
     no file at all - such a file would silently never be measured.
     """
-    run = git(root, "ls-tree", "-rz", "--name-only", head) if head else git(root, "ls-files", "-z")
+    if head:
+        tree = subprocess.run(["git", "-C", str(root), "ls-tree", "-rz", head],
+                              capture_output=True, check=True).stdout
+        entries = []
+        for entry in filter(None, tree.split(b"\0")):
+            meta, raw_path = entry.split(b"\t", 1)
+            _, kind, oid = meta.split()
+            rel = os.fsdecode(raw_path)
+            if kind == b"blob" and not is_excluded(rel) and rel not in allowed:
+                entries.append((rel, oid))
+        result = subprocess.run(["git", "-C", str(root), "cat-file", "--batch"],
+                                input=b"".join(oid + b"\n" for _, oid in entries),
+                                capture_output=True, check=True).stdout
+        measured, binaries, offset = {}, 0, 0
+        for rel, _ in entries:
+            end = result.index(b"\n", offset)
+            size = int(result[offset:end].split()[2])
+            data = result[end + 1:end + 1 + size]
+            offset = end + size + 2
+            if b"\0" in data[:BINARY_SNIFF_BYTES]:
+                binaries += 1
+            else:
+                measured[rel] = len(data.decode("utf-8", "replace").splitlines())
+        return measured, binaries
+    run = git(root, "ls-files", "-z")
     if run.returncode != 0:
         raise SystemExit("check-file-size: git ls-files failed: %s"
                          % run.stderr.strip())
     measured, binaries = {}, 0
     for rel in run.stdout.split("\0"):
         if not rel or is_excluded(rel) or rel in allowed:
-            continue
-        if head:
-            blob = git(root, "show", f"{head}:{rel}")
-            if blob.returncode:
-                continue
-            if "\0" in blob.stdout[:8192]:
-                binaries += 1
-            else:
-                measured[rel] = len(blob.stdout.splitlines())
             continue
         full = full_path(root, rel)
         if not os.path.isfile(full):

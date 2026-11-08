@@ -49,9 +49,11 @@ def test_failure(repo, monkeypatch, capsys, family, tool):
 
 def test_infra_retry(repo, monkeypatch, capsys):
     calls = fake_runner(monkeypatch, "scrub_check.py", "HTTP 503 download failed\n")
-    assert preflight.main(["--base", "HEAD"], repo) == 1
-    assert len(calls) == 6
-    assert "FAIL scrub " in capsys.readouterr().out
+    assert preflight.main(["--base", "HEAD"], repo) == 3
+    assert len(calls) == 7
+    output = capsys.readouterr().out
+    assert output.count("rerun once") == 1
+    assert "INFRA scrub " in output
 
 
 def test_fast_summary_and_ci_env(repo, monkeypatch, capsys):
@@ -88,6 +90,28 @@ def test_retry_recovers(repo, monkeypatch, capsys):
     assert preflight.main(["--base", "HEAD", "--fast"], repo) == 1
     assert len(calls) == 5
     assert "FAIL scrub " in capsys.readouterr().out
+
+
+def test_http_retry_recovers(repo, monkeypatch, capsys):
+    calls = []
+
+    def run(*args):
+        calls.append(args)
+        return (1, "HTTP/1.1 503 unavailable\n") if len(calls) == 1 else (0, "")
+
+    monkeypatch.setattr(preflight, "run", run)
+    assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
+    assert len(calls) == 6
+    assert "rerun once" in capsys.readouterr().out
+
+
+def test_default_root_is_script_relative(repo, monkeypatch):
+    calls = fake_runner(monkeypatch)
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(preflight, "rust_commands", lambda *a: [])
+    assert preflight.main(["--fast"]) == 0
+    assert all(cwd == Path(preflight.__file__).resolve().parents[1]
+               for _, cwd, _ in calls)
 
 
 def test_rust_selection(repo, monkeypatch):

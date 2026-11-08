@@ -19,6 +19,24 @@ WORKFLOWS = ROOT / ".github" / "workflows" / "tests.yml"
 ZERO = "0" * 40
 
 
+def test_timeout_is_labelled(monkeypatch, capsys):
+    import runpy
+    hook = runpy.run_path(str(HOOK))
+
+    def timeout():
+        raise subprocess.TimeoutExpired("synthetic", 30)
+
+    monkeypatch.setitem(hook["main"].__globals__, "push_main", timeout)
+    assert hook["main"]() == 1
+    assert capsys.readouterr().err == "pre-push: subprocess timeout: push refused\n"
+
+
+def test_delete_only_push_skips_gates(tmp_path):
+    result = run_hook(tmp_path, [f"(delete) {ZERO} refs/heads/old {'1' * 40}"])
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
 def fake_ip():
     """IPv4 just above the RFC 5737 doc range: obviously fake, built at runtime so
     no address literal appears in the diff (scrub_check allow-lists 192.0.2.x

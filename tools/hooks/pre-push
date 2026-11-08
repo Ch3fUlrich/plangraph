@@ -145,7 +145,18 @@ def changelog_docs_warn(base, head):
 
 
 def main():
+    try:
+        return push_main()
+    except subprocess.TimeoutExpired:
+        print("pre-push: subprocess timeout: push refused", file=sys.stderr)
+        return 1
+
+
+def push_main():
     refs = [rec.split(maxsplit=3) for rec in sys.stdin.read().splitlines()]
+    refs = [rec for rec in refs if not (len(rec) == 4 and is_zero(rec[1]))]
+    if not refs:
+        return 0
     for rec in refs:
         if (len(rec) != 4 or
                 not all(re.fullmatch(r"[0-9a-fA-F]+", rec[i]) for i in (1, 3)) or
@@ -154,9 +165,6 @@ def main():
             print("pre-push: malformed push record: push refused", file=sys.stderr)
             return 1
         _, local_sha, remote_ref, remote_sha = rec
-        if is_zero(local_sha):
-            print(f"pre-push: refused delete of {remote_ref}", file=sys.stderr)
-            return 1
         if is_zero(remote_sha):
             continue
         if git("cat-file", "-e", remote_sha).returncode != 0:
@@ -231,16 +239,18 @@ def main():
         print(f"pre-push: {len(hits)} scrub hit(s): push refused "
               "(rule ids above; matched values are never shown)", file=sys.stderr)
         return 1
-    if os.environ.get("PREFLIGHT_SKIP") != "1":
+    root = Path(git_out("rev-parse", "--show-toplevel"))
+    preflight = root / "tools/preflight.py"
+    if os.environ.get("PREFLIGHT_SKIP") != "1" and preflight.is_file():
         for _, local_sha, _, remote_sha in refs:
-            command = [sys.executable, str(TOOLS / "preflight.py"),
+            command = [sys.executable, str(preflight),
                        "--base", base_commit(remote_sha, local_sha), "--head", local_sha]
             if os.environ.get("PREFLIGHT_FAST") == "1":
                 command.append("--fast")
             result = subprocess.run(command, timeout=300)
             if result.returncode:
                 return result.returncode
-    else:
+    elif os.environ.get("PREFLIGHT_SKIP") == "1":
         print("pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)",
               file=sys.stderr)
     return 0
