@@ -38,7 +38,7 @@ fn killed_daemon_exited_shell_reconciles_before_reclaim_exactly_once() {
     let leg = json!({"id":"leg", "harness":"sh", "model":"fake", "family":"fake",
         "leg_key":"sh/fake", "route_key":"crash-test"});
     let spec = json!({"argv":["/bin/sh","-c",
-        "n=0; while [ ! -f release ] && [ $n -lt 1000 ]; do n=$((n+1)); sleep 0.01; done; exit 0"],
+        "n=0; while [ ! -f release ] && [ $n -lt 60000 ]; do n=$((n+1)); sleep 0.01; done; exit 0"],
         "cwd":state,"env":{"PROMPT":"test"},"stdin":null,"prompt":"test"});
     for (name, body) in [
         (
@@ -112,6 +112,16 @@ fn killed_daemon_exited_shell_reconciles_before_reclaim_exactly_once() {
             .trim_start()
             .starts_with('T')
     });
+    assert!(
+        !std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .unwrap()
+            .rsplit_once(')')
+            .unwrap()
+            .1
+            .trim_start()
+            .starts_with('Z'),
+        "shell must still be running before release/crash"
+    );
     std::fs::write(state.join("release"), "").unwrap();
     // Zombie means the shell has exited, but the stopped daemon cannot observe
     // completion or persist a terminal record before the crash.
@@ -173,9 +183,11 @@ fn killed_daemon_exited_shell_reconciles_before_reclaim_exactly_once() {
         Some(&json!("running"))
     );
     drop(lock);
-    // Socket creation is ordered after reconciliation and reclaim in serve.
+    // serve.rs:68 runs configured recovery before bind_listener at :82;
+    // reconcile_serve.rs:203-213 takes the lock before inventory, and :335-342
+    // reclaims before returning. Thus connection is a completion marker.
     until(|| socket.exists());
-    drop(std::os::unix::net::UnixStream::connect(&socket).unwrap());
+    drop(common::wait_connect(&socket, Duration::from_secs(10)));
     assert!(blocked.child.try_wait().unwrap().is_none());
     assert_eq!(slots_count(), 0);
     blocked.child.kill().unwrap();
@@ -185,7 +197,7 @@ fn killed_daemon_exited_shell_reconciles_before_reclaim_exactly_once() {
     for _ in 0..2 {
         let mut restarted = start();
         until(|| socket.exists());
-        drop(std::os::unix::net::UnixStream::connect(&socket).unwrap());
+        drop(common::wait_connect(&socket, Duration::from_secs(10)));
         assert!(restarted.child.try_wait().unwrap().is_none());
         let record = RunRecord::read(state, id).unwrap();
         assert_eq!(record.get("status"), Some(&json!("orphaned")));

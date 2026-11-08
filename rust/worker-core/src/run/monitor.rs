@@ -103,6 +103,15 @@ pub(super) fn monitor(
             json!({"pid":identity.pid, "start_time":identity.start_time,
                 "group":identity.group, "pgid":pgid}),
         );
+        // Book the launched attempt before persisting Running; retries must not
+        // borrow a previous attempt's run-level identity during recovery.
+        if let Some(mut attempts) = record.get("attempts").and_then(Value::as_array).cloned() {
+            if let Some(attempt) = attempts.last_mut() {
+                attempt["proc"] = record.get("proc").cloned().unwrap();
+                attempt["started"] = record.get("started").cloned().unwrap();
+            }
+            record.set("attempts", json!(attempts));
+        }
         let log = record.path().with_file_name("live.log");
         record.set("live_log", json!(log));
         record.set("last_activity_ts", Value::Null);

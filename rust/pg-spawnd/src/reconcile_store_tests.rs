@@ -216,11 +216,11 @@ fn reconcile_crashed_daemon_real_child_inventory_is_read_only() {
 fn reconcile_missing_identity_is_unknown_and_not_settled() {
     let dir = StateDir::new();
     let record = dir.record();
-    let before = std::fs::read(record.path()).unwrap();
     assert!(matches!(
         crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
         Err(ReconcileError::Unknown)
     ));
+    let before = std::fs::read(record.path()).unwrap();
     assert!(
         crate::reconcile::startup(&dir.0, Some("shadow"), &json!({}))
             .unwrap()

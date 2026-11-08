@@ -123,26 +123,21 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
                     .filter(|v| !v.is_null())
                     .map(|v| v.as_u64().ok_or(ReconcileError::Invalid))
                     .transpose()?;
-                // Only the sole first attempt can borrow the run identity: there
-                // is no older attempt to inherit. Retries without proc fail closed.
-                let identity_value = attempt
-                    .get("proc")
-                    .filter(|p| !p.is_null())
-                    .or_else(|| (attempts.len() == 1).then_some(&record["proc"]))
-                    .unwrap_or(&Value::Null);
-                let identity = if identity_value.is_null() {
-                    None
-                } else {
-                    let proc: Proc = serde_json::from_value(identity_value.clone())
-                        .map_err(|_| ReconcileError::Invalid)?;
-                    if proc.pid == 0
-                        || proc.start_time == Some(0)
-                        || proc.pgid.is_some_and(|id| id == 0 || id > i32::MAX as u32)
-                        || proc.group.as_ref().is_some_and(|g| g.is_empty())
-                    {
-                        return Err(ReconcileError::Invalid);
+                let identity = match attempt.get("proc").filter(|p| !p.is_null()) {
+                    None => None,
+                    Some(value) => {
+                        let proc: Proc = serde_json::from_value(value.clone())
+                            .map_err(|_| ReconcileError::Invalid)?;
+                        if proc.pid == 0
+                            || proc.start_time == Some(0)
+                            || proc.pgid.is_some_and(|id| id == 0 || id > i32::MAX as u32)
+                            || proc.group.as_ref().is_some_and(|g| g.is_empty())
+                        {
+                            None
+                        } else {
+                            Some(proc)
+                        }
                     }
-                    Some(proc)
                 };
                 rows.push(Entry {
                     run_id: id.into(),
@@ -207,7 +202,6 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
             .ok()
             .filter(|id| *id > 0)
             .ok_or(ReconcileError::Unknown)?;
-        // SAFETY: pgid is a checked positive i32; signal zero only probes the process group.
         if unsafe { libc::kill(-pgid, 0) } == 0 {
             return Ok(false);
         }
@@ -262,6 +256,9 @@ pub(crate) fn orphan_with(
     {
         return Err(ReconcileError::Unknown);
     }
+    if row.identity.is_none() {
+        return unknown::settle_unknown(root, row);
+    }
     #[cfg(windows)]
     let result = crate::reconcile::job::settle_probe(row, authority);
     #[cfg(not(windows))]
@@ -308,7 +305,6 @@ pub(crate) fn orphan_with(
     )?;
     Ok(true)
 }
-/// Durable record-only settlement bridge, under state and record locks.
 pub(crate) fn settle(
     state: &Path,
     record: &mut pg_worker_core::run::record::RunRecord,
@@ -320,7 +316,7 @@ pub(crate) fn settle(
     let invalid = || ReconcileError::Invalid;
     if !matches!(
         how,
-        "gone" | "ended_unobserved" | "killed_max_s" | "reattach_timeout"
+        "gone" | "ended_unobserved" | "killed_max_s" | "reattach_timeout" | "unknown_identity"
     ) {
         return Err(invalid());
     }
@@ -351,7 +347,6 @@ pub(crate) fn settle(
     }
     let role = serde_json::from_value(record.get("role").cloned().ok_or_else(invalid)?)
         .map_err(|_| invalid())?;
-    // Missing attempt timestamps have unknown duration, not the run's age.
     let duration = match entry.get("started").filter(|v| !v.is_null()) {
         Some(start) => now_ms.checked_sub(seconds(start)?).ok_or_else(invalid)? / 1000,
         None => 0,
@@ -371,12 +366,13 @@ pub(crate) fn settle(
         }
     }
     entry["how"] = json!(how);
+    if how == "unknown_identity" {
+        entry["reason"] = json!(how);
+    }
     entry["status"] = json!("orphaned");
     if how == "ended_unobserved" {
         entry["reason"] = json!("reattached_group_exited");
     }
-    // Unlike the spawn hook, recovery did not observe this exit: keep it null
-    // and retain any earlier code separately (docs/spawner-reliability.md:11).
     if !entry["exit_code"].is_null() {
         entry["prior_exit_code"] = entry["exit_code"].clone();
     }
@@ -398,3 +394,6 @@ mod outcome;
 #[cfg(test)]
 #[path = "reconcile_store_tests.rs"]
 mod tests;
+
+#[path = "reconcile_store_unknown.rs"]
+mod unknown;

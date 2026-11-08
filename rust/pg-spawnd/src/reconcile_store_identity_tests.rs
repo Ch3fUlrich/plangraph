@@ -37,7 +37,7 @@ fn inventory_attempt_identity_table() {
             json!([
             {"status":"running","started":2,"leg":{},"proc":null}]),
             1,
-            Some(start),
+            None,
         ),
         (
             "start mismatch",
@@ -51,7 +51,7 @@ fn inventory_attempt_identity_table() {
             "pid zero",
             json!([
             {"status":"running","started":2,"leg":{},"proc":{"pid":0}}]),
-            0,
+            1,
             None,
         ),
     ] {
@@ -62,7 +62,12 @@ fn inventory_attempt_identity_table() {
         record.save().unwrap();
         let rows = inventory(&dir.0).unwrap();
         assert_eq!(rows.len(), count, "{name}");
-        if let Some(row) = rows.first() {
+        for (index, row) in rows.iter().enumerate() {
+            let expected = if name == "older null" && index == 1 {
+                Some(start)
+            } else {
+                expected
+            };
             assert_eq!(
                 row.identity.as_ref().and_then(|p| p.start_time),
                 expected,
@@ -100,4 +105,39 @@ fn missing_attempt_start_has_zero_duration_and_no_deadline() {
         record.get("attempts").unwrap()[0]["outcome"]["duration_s"],
         0
     );
+}
+
+#[test]
+fn unknown_identity_is_bounded() {
+    for deadline in [false, true] {
+        let dir = StateDir::new();
+        let mut record = dir.record();
+        record.set(
+            "attempts",
+            json!([
+            {"status":"completed"},
+            {"status":"running","started":1,"max_s":if deadline { json!(1) } else { Value::Null },
+             "leg":{"leg_key":"leg"},"proc":null}]),
+        );
+        record.save().unwrap();
+        let row = inventory(&dir.0).unwrap().remove(0);
+        if !deadline {
+            assert!(matches!(
+                orphan_gone(&dir.0, &row),
+                Err(ReconcileError::Unknown)
+            ));
+            assert_eq!(
+                RunRecord::read(&dir.0, &row.run_id).unwrap().get("status"),
+                Some(&json!("running"))
+            );
+        }
+        assert!(orphan_gone(&dir.0, &row).unwrap());
+        let record = RunRecord::read(&dir.0, &row.run_id).unwrap();
+        assert_eq!(record.get("status"), Some(&json!("orphaned")));
+        assert_eq!(
+            record.get("attempts").unwrap()[1]["reason"],
+            "unknown_identity"
+        );
+        assert!(inventory(&dir.0).unwrap().is_empty());
+    }
 }
