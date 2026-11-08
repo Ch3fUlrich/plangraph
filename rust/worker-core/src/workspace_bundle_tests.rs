@@ -39,13 +39,23 @@ impl Fixture {
         g(&source, &["commit", "--allow-empty", "-m", "unpushed base"]);
         g(&source, &["commit", "--allow-empty", "-m", "unpushed head"]);
         let head = g(&source, &["rev-parse", "HEAD"]);
-        let entry = |name: &str| RepoEntry {
-            root: root.join(name).to_str().unwrap().into(),
-            remote: g(&root.join(name), &["remote", "get-url", "--all", "origin"]),
-            worktrees_root: String::new(),
-            python: None,
-            import_roots: vec![],
-            cache_env: BTreeMap::new(),
+        let entry = |name: &str| {
+            // g trims Git's line terminator; reject multiple URLs independently.
+            let remote = g(&root.join(name), &["remote", "get-url", "--all", "origin"]);
+            assert_eq!(remote.lines().count(), 1);
+            let normalize = |s: &str| s.replace('\\', "/").to_ascii_lowercase();
+            assert_eq!(
+                normalize(&remote),
+                normalize(root.join("origin").to_str().unwrap())
+            );
+            RepoEntry {
+                root: root.join(name).to_str().unwrap().into(),
+                remote,
+                worktrees_root: String::new(),
+                python: None,
+                import_roots: vec![],
+                cache_env: BTreeMap::new(),
+            }
         };
         let (source, receiver) = (entry("source"), entry("receiver"));
         Self {

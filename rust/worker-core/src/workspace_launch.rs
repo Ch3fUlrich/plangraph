@@ -112,6 +112,8 @@ pub fn create_writer(
         .ok_or(ResolveError::Invalid("base"))?;
     ensure_commit(repo, base, Duration::from_secs(30))?;
     let trees = Path::new(&repo.worktrees_root).canonicalize()?;
+    // safe_id admits only ASCII alphanumerics, '-' and '_': exactly one leaf,
+    // with no traversal, trailing dot/space or drive-relative Windows syntax.
     let dest = trees.join(run_id);
     require(
         fs::symlink_metadata(&dest).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound),
@@ -184,19 +186,6 @@ pub fn create_writer(
 }
 
 // Git for Windows does not accept Rust's canonical \\?\ worktree arguments.
-#[cfg(all(test, windows))]
-#[test]
-fn git_worktree_paths_preserve_native_identity() {
-    for (verbatim, native) in [
-        (r"\\?\C:\trees\run", r"C:\trees\run"),
-        (r"\\?\c:\trees with spaces\run", r"c:\trees with spaces\run"),
-        (r"\\?\UNC\server\share\run", r"\\server\share\run"),
-        (r"C:\trees\run", r"C:\trees\run"),
-    ] {
-        assert_eq!(git_worktree_path(Path::new(verbatim)), Path::new(native));
-    }
-}
-
 fn git_worktree_path(path: &Path) -> std::path::PathBuf {
     #[cfg(windows)]
     {
@@ -206,6 +195,9 @@ fn git_worktree_path(path: &Path) -> std::path::PathBuf {
             Some(Component::Prefix(prefix)) => prefix,
             _ => return path.to_path_buf(),
         };
+        if components.next() != Some(Component::RootDir) {
+            return path.to_path_buf();
+        }
         let mut native = std::ffi::OsString::new();
         match prefix.kind() {
             Prefix::VerbatimDisk(drive) => native.push(format!("{}:", char::from(drive))),
@@ -220,9 +212,7 @@ fn git_worktree_path(path: &Path) -> std::path::PathBuf {
         native.push("\\");
         let mut result = std::path::PathBuf::from(native);
         for component in components {
-            if component != Component::RootDir {
-                result.push(component.as_os_str());
-            }
+            result.push(component.as_os_str());
         }
         result
     }
@@ -393,3 +383,7 @@ mod tests;
 #[cfg(test)]
 #[path = "workspace_launch_env_tests.rs"]
 mod env_tests;
+
+#[cfg(test)]
+#[path = "workspace_launch_path_tests.rs"]
+mod path_tests;
