@@ -149,7 +149,7 @@ fn switch_off_still_artifacts() {
         &state,
         "run-test",
         "local",
-        json!({"role":"review"}),
+        json!({"role":"review","attempts":[{}]}),
         pg_worker_core::run::record::Status::Completed,
     )
     .ok()

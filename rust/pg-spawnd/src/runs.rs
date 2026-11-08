@@ -138,6 +138,10 @@ impl Runs {
             .into_iter()
             .map(Value::Object)
             .collect();
+        // Book before launch and capture this id in the completion callback.
+        let attempts = vec![json!({"leg":leg,"status":"running"})];
+        let attempt_id = attempts.len() as u32;
+        base["attempts"] = json!(attempts);
         if dry {
             let mut tail = format!("[dry-run] Planned command: {}", launch.argv.join(" "));
             if let Some(stdin) = &launch.stdin {
@@ -151,7 +155,7 @@ impl Runs {
             base["served_model"] = leg["model"].clone();
             base["served_family"] = leg["family"].clone();
             let mut record = create(state, &run_id, host, base, Status::DryRun)?;
-            finish(&mut record, Status::DryRun, &leg, 1);
+            finish(&mut record, Status::DryRun, &leg, attempt_id);
             record
                 .save()
                 .map_err(|_| internal("could not save run record"))?;
@@ -172,7 +176,7 @@ impl Runs {
                 base: base.as_object().unwrap().clone(),
                 events,
                 finish: Some(Box::new(move |record, status| {
-                    finish(record, status, &leg, 1)
+                    finish(record, status, &leg, attempt_id)
                 })),
             };
             match self.supervisor.start(spec) {
@@ -307,10 +311,6 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
             return;
         }
     };
-    // Launch currently books only the first leg; recovery uses the same one-based ids.
-    if attempts.is_empty() && attempt_id == 1 {
-        attempts.push(json!({}));
-    }
     let Some(attempt) = attempt_id
         .checked_sub(1)
         .and_then(|index| attempts.get_mut(index as usize))
@@ -331,6 +331,9 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         .unwrap()
         .extend(completion.as_object().unwrap().clone());
     record.set("attempts", json!(attempts));
+    if record.get("attempts_error").is_some() {
+        record.set("attempts_error", Value::Null);
+    }
     record.set(
         "chosen_leg",
         if status == Status::Completed || dry {
@@ -380,14 +383,12 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         }
     }
 }
-
 #[cfg(all(test, unix))]
 #[path = "runs_record_tests.rs"]
 mod record_tests;
 #[cfg(all(test, unix))]
 #[path = "runs_tests.rs"]
 mod tests;
-
 fn wait_duration(value: Option<&Value>) -> Duration {
     #[allow(clippy::manual_clamp)]
     let seconds = value
