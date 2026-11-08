@@ -16,13 +16,16 @@ fn layout_error_preserves_record_and_run_directory() {
 
 #[test]
 fn created_during_run_removed() {
-    let (_temp, _, local, mut record) = fixture(true);
+    let (_temp, config, local, mut record) = fixture(true);
+    let original = fs::read(&config).unwrap();
+    assert!(!local.exists());
     fs::write(&local, b"new local\n").unwrap();
     assert_eq!(
         enforce(&mut record, Status::Completed, json!({})),
         Status::Failed
     );
     assert!(!local.exists());
+    assert_eq!(fs::read(&config).unwrap(), original);
 }
 
 #[test]
@@ -34,13 +37,12 @@ fn non_checkout_noop() {
 
 #[test]
 fn record_api_always_supplies_a_parent() {
-    let (_temp, _, _, record) = fixture(false);
-    // RunRecord's private path is constructed as run_dir(...).join("record.json").
-    assert_eq!(record.path().file_name().unwrap(), "record.json");
-    assert!(record.path().parent().is_some());
-    assert!(run_dir(Path::new(""), "run-guard")
+    let (temp, _, _, record) = fixture(false);
+    let expected = run_dir(temp.path(), "run-guard")
         .unwrap()
-        .join("record.json")
-        .parent()
-        .is_some());
+        .join("record.json");
+    assert_eq!(record.path(), expected.as_path());
+    let parent = record.path().parent().unwrap();
+    assert!(!parent.as_os_str().is_empty());
+    assert!(parent.is_dir());
 }
