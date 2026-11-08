@@ -197,8 +197,14 @@ def measure(root, allowed, head=None):
                                 capture_output=True, check=True).stdout
         measured, binaries, offset = {}, 0, 0
         for rel, _ in entries:
-            end = result.index(b"\n", offset)
-            size = int(result[offset:end].split()[2])
+            try:
+                end = result.index(b"\n", offset)
+                oid, kind, raw_size = result[offset:end].split()
+                size = int(raw_size)
+                if kind != b"blob" or size < 0:
+                    raise ValueError
+            except ValueError:
+                raise SystemExit("check-file-size: malformed git cat-file --batch header") from None
             data = result[end + 1:end + 1 + size]
             offset = end + size + 2
             if b"\0" in data[:BINARY_SNIFF_BYTES]:
