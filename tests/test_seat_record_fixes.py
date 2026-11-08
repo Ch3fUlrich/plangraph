@@ -10,6 +10,62 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import seat_record  # noqa: E402
 import seat_verdict as sv  # noqa: E402
 
+
+@pytest.mark.parametrize("value", ["invalid", {}, [], True, -1, 0, 1.5])
+def test_invalid_cached_pr_is_unresolved(value):
+    assert seat_record.merged_pr({"head_sha": "a" * 40}, None, lambda _: value) is None
+
+
+@pytest.mark.parametrize("text", ["09:30 run:1 sha:abc", "demo:B", "demo:A demo:B"])
+def test_prompt_tokens_do_not_lose_other_seats(tmp_path, text):
+    from test_seat_backfill import ITEM, record
+    good = record(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    bad = record(other)
+    (bad / "prompt.txt").write_text("Review item demo:A " + text)
+    seats, reasons = seat_record.eligible_records(ITEM, tmp_path)
+    assert good.name in [s["run_id"] for s in seats]
+    assert len(seats) == (2 if text.startswith("09") else 1), reasons
+
+
+def test_backfill_defects_are_not_missing_seats(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text(json.dumps({"items": [{"key": "demo:A", "state": "in_review"}]}))
+    args = SimpleNamespace(snapshot=snapshot, records_dir=tmp_path, backfill_apply=False)
+    with patch.object(seat_record, "snapshot_item", side_effect=TypeError("defect")):
+        with pytest.raises(TypeError, match="defect"):
+            seat_record.backfill(args, None)
+
+
+def test_cache_read_once_and_poison_does_not_hide_seats(tmp_path, capsys, monkeypatch):
+    from test_seat_backfill import ITEM, SHA, record
+    from types import SimpleNamespace
+    record(tmp_path)
+    writer = tmp_path / "writer"
+    writer.mkdir()
+    record(writer, role="implement", served_model="gpt-5")
+    snapshot = tmp_path / "snapshot.json"
+    item = dict(ITEM, state="in_review", evidence=[
+        dict(kind="commit", verified=True, epoch=1, ref=SHA)])
+    snapshot.write_text(json.dumps({"items": [item, item]}))
+    cache = tmp_path / "cache.json"
+    cache.write_text(json.dumps({SHA: "poison"}))
+    original, reads = Path.read_text, []
+    def read(path, *args, **kwargs):
+        if path == cache:
+            reads.append(path)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", read)
+    args = SimpleNamespace(snapshot=snapshot, records_dir=tmp_path, pr_cache=cache,
+                           backfill_apply=False, format="json")
+    assert seat_record.backfill(args, None) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert all(r["status"] == "ELIGIBLE" and r["pr_number"] is None for r in rows)
+    assert reads == [cache]
+
 # real-artifact copies live under fixtures/real/ (excluded from the public tree by
 # tools/split/manifest.toml); tests that need them skip when the dir is absent.
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "real" / "seat_records"
