@@ -10,10 +10,13 @@ def catalog_tiers(legs, rows):
     """Project explicit catalog costs, never admission or writer permissions."""
     from dataclasses import replace
     from .legs import TIERS
-    tiers = {row.get('id', row.get('model_id')): row.get('tier') for row in rows}
+    tiers = {row.get('id') or row.get('model_id'): row.get('tier') for row in rows}
+    for row in rows:
+        if row.get('harness') and row.get('upstream_id'):
+            tiers.setdefault(f"{row['harness']}/{row['upstream_id']}", row.get('tier'))
     # Harness-local model names resolve through their catalog provider prefix.
-    for leg in legs:
-        catalog_id = f'{leg.harness}/{leg.model}'
-        if leg.model not in tiers and catalog_id in tiers: tiers[leg.model] = tiers[catalog_id]
-    return tuple(replace(leg, tier=tiers[leg.model])
-                 if tiers.get(leg.model) in TIERS else leg for leg in legs)
+    def tier(leg):
+        catalog_id = leg.model if '/' in leg.model else f'{leg.harness}/{leg.model}'
+        return tiers.get(catalog_id, tiers.get(leg.model))
+    return tuple(replace(leg, tier=tier(leg))
+                 if tier(leg) in TIERS else leg for leg in legs)

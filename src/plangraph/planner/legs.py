@@ -71,7 +71,7 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
          note="free while qoder credits remain, until its rate limit"),
     _leg("mimo-v2.6-flash", "subscription", "opencode",
          "mimo/mimo-v2.6-flash", "mimo", ("128k", "256k", "1m"), 200000, False),
-    _leg("agy-gemini-3.8-flash", "subscription", "agy", "gemini-3.8-flash", "gemini",
+    _leg("agy-gemini-3.8-flash", "free", "agy", "gemini-3.8-flash", "gemini",
          ("128k", "256k", "1m"), 900000, False,
          note="gemini after its Friday-evening reset"),
     _leg("agy-sonnet-5.5", "subscription", "agy", "claude-sonnet-5-5-medium", "claude",

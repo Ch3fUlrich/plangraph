@@ -26,6 +26,26 @@ def test_catalog_tiers_preserve_roles():
     assert next(l for l in updated if l.id == 'deepseek').tier == 'paid'
 
 
+@pytest.mark.parametrize('tier', ['free', 'subscription', 'paid'])
+@pytest.mark.parametrize('source', ['id', 'model_id'])
+def test_catalog_tier_identity_and_route_output(tier, source):
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.review_order import catalog_tiers
+    from plangraph.planner.routing import SpawnPlan
+    leg = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-3.8-flash')
+    # Provider-qualified catalog identity must win over an unrelated bare name.
+    rows = [{source: 'agy/' + leg.model, 'tier': tier},
+            {source: leg.model, 'tier': 'paid' if tier != 'paid' else 'free'}]
+    for role in ('implement', 'review'):
+        projected, = catalog_tiers((replace(leg, roles=(role,)),), rows)
+        output = SpawnPlan((projected,), (), 'test', (projected,), ()).to_dict()
+        assert output['first_leg']['tier'] == tier
+        assert output['legs'][0]['tier'] == tier
+        assert output['review_seats'][0]['tier'] == tier
+        assert projected.roles == (role,)
+
+
 def test_old_limit_evidence_reprobes(store):
     store.record_provider_response('test/leg', 429, 'quota', {'Retry-After': '86400'}, 'test', now=100)
     assert store.leg_status('test/leg', now=100 + 21600)['state'] == 'reprobe'

@@ -707,7 +707,7 @@ def rank_candidates(
 
         remaining = out_band
 
-    return sorted(ranked, key=lambda m: (TIER_RUNG.get(m.get('tier'), 99), 'deepseek-direct' in str(m.get('id', ''))))
+    return ranked
 
 
 def select_top_candidate(
