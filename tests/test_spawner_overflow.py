@@ -70,6 +70,13 @@ def test_remote_outer_receipt(monkeypatch, stdout, expected):
 @pytest.fixture
 def inputs(tmp_path, monkeypatch):
     monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / '.config'))
+    monkeypatch.delenv('PLANGRAPH_HOST_NAME', raising=False)
+    registry = o.config_dir() / 'hosts.json'
+    registry.parent.mkdir(parents=True)
+    registry.write_text(json.dumps({'self': 'local', 'hosts': [
+        {'id': name, 'caps': {'max_runs': 4, 'mem_floor_mb': 3000}}
+        for name in ('local', 'ash', 'birch')]}))
     config = tmp_path / 'config.json'
     monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
     card = tmp_path / 'card.json'
