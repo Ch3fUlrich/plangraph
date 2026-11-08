@@ -1,5 +1,4 @@
-//! Local runs; witnesses, retry/fall-through, writer checks/continuation, delivery,
-//! dispatch refusal and D3622 liveness remain unported; packs/env use Python.
+//! Local runs; Python retains witnesses, retries, continuation and delivery.
 use crate::{errors::ToolError, placement::Args};
 use pg_worker_core::run::{
     record::{new_job_id, new_run_id, RunRecord, Status},
@@ -10,10 +9,9 @@ use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
-
 pub(crate) struct Runs {
     pub supervisor: Arc<Supervisor>,
     pub jobs: Mutex<BTreeMap<String, String>>,
@@ -102,16 +100,22 @@ impl Runs {
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
         }
-        let item = args["card"]["item_key"].as_str()
+        let item = args["card"]["item_key"]
+            .as_str()
             .or_else(|| args["card"]["item"].as_str())
-            .filter(|s| !s.is_empty()).map(str::to_owned)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
             .or_else(|| {
-                std::env::var("PLANGRAPH_SPAWN_ITEM").ok().filter(|s| !s.is_empty())
+                std::env::var("PLANGRAPH_SPAWN_ITEM")
+                    .ok()
+                    .filter(|s| !s.is_empty())
             })
             .or_else(|| {
                 let prompt = args["prompt"].as_str().unwrap_or("");
-                static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\bplangraph:[A-Za-z0-9._:-]+").unwrap());
-                let keys: std::collections::BTreeSet<_> = RE.find_iter(prompt).map(|m| m.as_str()).collect();
+                static RE: LazyLock<regex::Regex> =
+                    LazyLock::new(|| regex::Regex::new(r"\bplangraph:[A-Za-z0-9._:-]+").unwrap());
+                let keys: std::collections::BTreeSet<_> =
+                    RE.find_iter(prompt).map(|m| m.as_str()).collect();
                 (keys.len() == 1).then(|| keys.first().unwrap().to_string())
             });
         base["item_key"] = match item {
@@ -120,12 +124,14 @@ impl Runs {
                 if base.get("warnings").is_none() {
                     base["warnings"] = json!([]);
                 }
-                base["warnings"].as_array_mut().unwrap().push(json!("invalid item_key; stored as null"));
+                let warnings = base["warnings"].as_array_mut().unwrap();
+                warnings.push(json!("invalid item_key; stored as null"));
                 Value::Null
             }
             None => Value::Null,
         };
-        let mut events: Vec<Value> = launch.events
+        let mut events: Vec<Value> = launch
+            .events
             .unwrap_or_default()
             .into_iter()
             .map(Value::Object)
@@ -361,10 +367,8 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
             if result.is_ok() {
                 record.set("seat_dir", json!(record.path().with_file_name("seat")));
             } else {
-                record.set(
-                    "review_artifact_error",
-                    json!("review artifacts unavailable"),
-                );
+                let error = json!("review artifacts unavailable");
+                record.set("review_artifact_error", error);
             }
         }
         let role = value["role"].as_str().unwrap_or("");
@@ -382,7 +386,6 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         }
     }
 }
-
 #[cfg(all(test, unix))]
 #[path = "runs_record_tests.rs"]
 mod record_tests;
@@ -391,10 +394,7 @@ mod record_tests;
 mod tests;
 fn wait_duration(value: Option<&Value>) -> Duration {
     #[allow(clippy::manual_clamp)]
-    let seconds = value
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0)
-        .max(0.0)
-        .min(3600.0);
+    let seconds = value.and_then(Value::as_f64).unwrap_or(0.0);
+    let seconds = seconds.max(0.0).min(3600.0);
     Duration::from_secs_f64(seconds)
 }

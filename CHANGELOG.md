@@ -3,8 +3,6 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
-- **SEAT-VERDICT-TO-KEEPER (D-5047):** Preserve Python review item identity and add opt-in, best-effort completion verdict posting with recorded outcomes.
-- **SEAT-VERDICT-TO-KEEPER:** Record spawn item identity and offer opt-in verdict posting with exact-head writer evidence. Backfill discovery, apply, and live before/after counts are not delivered here.
 - **SPAWNER-PROBE-HOST-NOT-READY:** Report missing probe harness binaries as host-not-ready without attempting the leg or recording shared leg events.
 - **KEEPER-SNAP-S1-FILTERS S1b:** Scope decision text to selected evidence before field projection; keep progress over all items with independent columns, preserve legacy snapshots, and close S1a validation/docs LOWs.
 - **PG-CHANGELOG-FRAGMENTS (D-3732):** Add changelog fragments and a fold tool so open PRs no longer conflict on CHANGELOG.md.

@@ -1,8 +1,89 @@
 import asyncio
+import json
 import pytest
 from plangraph.planner.routing import SpawnRefused
 from registry_route_util import _Runner, _service
 from plangraph.spawner.runner import spawn_service
+
+
+@pytest.mark.parametrize('model', ['unknown-model', 'gemini'])
+def test_autopost_refuses_unknown_or_writer_family(tmp_path, monkeypatch, model):
+    from plangraph.spawner import item_key
+    monkeypatch.setenv('PLANGRAPH_SEAT_AUTOPOST', '1')
+    monkeypatch.setenv('PG_URL', 'http://keeper.invalid')
+    snapshot = tmp_path / 'snapshot.json'
+    snapshot.write_text(json.dumps({'items': [{'key': 'p:x', 'writer_evidence': [
+        dict(verified=True, head_sha='a' * 40, role='implement', family='google')]}]}))
+    monkeypatch.setenv('PLANGRAPH_SEAT_SNAPSHOT', str(snapshot))
+    calls = []
+    monkeypatch.setattr(item_key, '_post_verdict', lambda args: calls.append(args))
+    record = dict(role='review', status='completed', item_key='p:x',
+                  served_model=model, completion={'head_sha': 'a' * 40})
+    assert item_key.autopost(record, tmp_path / 'record.json')
+    assert not calls
+    assert record['events'][-1]['reason'] == 'ValueError'
+
+
+@pytest.mark.parametrize('code', [0, 2, 3, 4])
+def test_scheduled_outcome_survives_return(tmp_path, monkeypatch, code):
+    from plangraph.spawner import item_key
+    monkeypatch.setenv('PLANGRAPH_SEAT_AUTOPOST', '1')
+    record = dict(role='review', status='completed')
+    def post(record, path):
+        record['seat_autopost_attempted'] = True
+        record.setdefault('events', []).append(dict(event='seat_autopost', exit_code=code))
+        return True
+    monkeypatch.setattr(item_key, 'autopost', post)
+    assert item_key.schedule_autopost(record, tmp_path / 'record.json')
+    assert record['events'][-1]['exit_code'] == code
+    assert json.loads((tmp_path / 'seat-autopost.json').read_text())['exit_code'] == code
+
+
+def test_scheduled_failure_is_diagnosed(tmp_path, monkeypatch):
+    from plangraph.spawner import item_key
+    monkeypatch.setenv('PLANGRAPH_SEAT_AUTOPOST', '1')
+    def fail(*args):
+        raise OSError('private diagnostic must not leak')
+    monkeypatch.setattr(item_key, 'autopost', fail)
+    record = dict(role='review', status='completed')
+    assert item_key.schedule_autopost(record, tmp_path / 'record.json')
+    assert record['events'][-1]['reason'] == 'OSError'
+    assert 'private' not in (tmp_path / 'seat-autopost.json').read_text()
+
+
+def test_service_persists_autopost_outcome(tmp_path, monkeypatch):
+    from plangraph.spawner import item_key
+    service = spawn_service(_Runner(), state=tmp_path)
+    def post(record, path):
+        record.setdefault('events', []).append(dict(event='seat_autopost', exit_code=2))
+        return True
+    monkeypatch.setattr(item_key, 'schedule_autopost', post)
+    record = dict(run_id='run-outcome', role='review', status='completed',
+                  ended=1, completion={'item': 'p:x'})
+    service._save(record)
+    saved = json.loads(service._path(record['run_id']).read_text())
+    assert saved['events'][-1] == dict(event='seat_autopost', exit_code=2)
+
+
+@pytest.mark.parametrize('fault,expected', [
+    ('wrong_family', 2), ('head', 2), ('verdict', 3), ('forged', 2)])
+def test_poster_refusals_are_hermetic(tmp_path, monkeypatch, fault, expected):
+    from test_seat_record_fixes import rec_dir, argv_for, sv
+    seat = rec_dir(tmp_path, 'run-' + '1' * 32,
+                   tail='nothing decided' if fault == 'verdict' else 'VERDICT: FIX')
+    args = argv_for(seat, writers='xiaomi' if fault == 'wrong_family' else 'google',
+                    head='b' * 40 if fault == 'head' else 'a' * 40)
+    args.remove('--dry-run')
+    args.extend(['--url', 'http://keeper.invalid'])
+    if fault == 'forged':
+        record = json.loads((seat / 'record.json').read_text())
+        record['run_id'] = 'run-' + '2' * 32
+        (seat / 'record.json').write_text(json.dumps(record))
+    def forbidden(*args, **kwargs):
+        pytest.fail('refused evidence must not reach network')
+    monkeypatch.setattr(sv, 'send', forbidden)
+    assert sv.main(args) == expected
+
 @pytest.mark.parametrize('pattern', ['sys.path.insert', 'keeper.json', '._maybe_fetch'])
 def test_autopost_runtime_is_isolated(pattern):
     from pathlib import Path

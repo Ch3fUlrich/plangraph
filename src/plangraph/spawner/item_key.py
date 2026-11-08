@@ -1,9 +1,19 @@
 """Spawn-time item identity; invalid optional metadata never refuses a run."""
-import os; import re; import json; import subprocess; import sys
-import threading
+import json
+import logging
+import os
+import re
+import subprocess
+import sys
 from pathlib import Path
+
+from plangraph.review.family import model_family
+
+
 def valid_item(value):
     return isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9._:-]{1,200}', value) is not None
+
+
 def annotate_item(record, card, *, inherit=False, prompt=''):
     value = (card.get('item_key') or card.get('item')) if isinstance(card, dict) else None
     if (not isinstance(value, str) or not value) and not inherit:
@@ -20,30 +30,33 @@ def annotate_item(record, card, *, inherit=False, prompt=''):
         event = dict(event='seat_item_missing', level='warning')
         if event not in record.setdefault('events', []):
             record['events'].append(event)
+
+
 def _post_verdict(args):
     poster = Path(__file__).resolve().parents[3] / 'tools/seat_verdict.py'
     result = subprocess.run([sys.executable, str(poster), *args],
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                            text=True, timeout=45, check=False)
+                            text=True, encoding='utf-8', errors='replace', timeout=45, check=False)
     if result.returncode not in (0, 2, 3, 4):
         raise RuntimeError('poster crashed or IO failed')
     return result.returncode
 def schedule_autopost(record, path):
-    """Keep optional network work outside completion persistence and delivery."""
-    def work():
-        copy = dict(record)
-        copy.pop('seat_autopost_attempted', None)
-        try:
-            if autopost(copy, path):
-                from .private_io import atomic_write_private
-                atomic_write_private(path.parent / 'seat-autopost.json', json.dumps(copy['events'][-1]))
-        except Exception:
-            pass  # Diagnostics persistence must not affect completion either.
-    if (os.environ.get('PLANGRAPH_SEAT_AUTOPOST') == '1'
-            and record.get('status') == 'completed' and record.get('role') in ('review', 'judge')
-            and not record.get('seat_autopost_attempted')):
+    """Finish the bounded optional post before returning; retain every outcome."""
+    try:
+        if not autopost(record, path):
+            return False
+    except Exception as exc:
         record['seat_autopost_attempted'] = True
-        threading.Thread(target=work, daemon=True).start()
+        record.setdefault('events', []).append(dict(
+            event='seat_autopost', level='warning', reason=type(exc).__name__))
+    try:
+        from .private_io import atomic_write_private
+        atomic_write_private(path.parent / 'seat-autopost.json', json.dumps(record['events'][-1]))
+    except Exception as exc:
+        logging.getLogger(__name__).warning('seat outcome persistence failed: %s', type(exc).__name__)
+    return True
+
+
 def autopost(record, path):
     """Best-effort, opt-in completion hook; never jeopardize a finished run."""
     if (os.environ.get('PLANGRAPH_SEAT_AUTOPOST') != '1'
@@ -56,7 +69,8 @@ def autopost(record, path):
         key = record.get('item_key')
         head = record.get('completion', {}).get('head_sha')
         url = os.environ.get('PG_URL')
-        if not key or not head or not record.get('served_model') or not url:
+        family = model_family(record.get('served_model'))
+        if not key or not head or not family or not url:
             raise ValueError('missing item, completion head, served family, or PG_URL')
         snapshot = Path(os.environ.get('PLANGRAPH_SEAT_SNAPSHOT', 'plan.snapshot.json'))
         data = json.loads(snapshot.read_text()) if snapshot.exists() else {}
@@ -70,6 +84,8 @@ def autopost(record, path):
                           and e.get('role') == 'implement' and e.get('family')})
         if not writers:
             raise ValueError('unknown writer families')
+        if family in writers:
+            raise ValueError('served family is a writer family')
         code = _post_verdict(['--seat-dir', str(path.parent), '--head', head,
                              '--key', key, '--writer-family', ','.join(writers),
                              '--token-dir', os.environ.get('PLANGRAPH_SEAT_TOKEN_DIR',

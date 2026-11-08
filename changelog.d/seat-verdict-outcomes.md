@@ -1,0 +1,1 @@
+- Preserve review item identity and record bounded opt-in verdict posting outcomes, including refusal and failure. Backfill discovery, apply, and live count verification remain undelivered.
