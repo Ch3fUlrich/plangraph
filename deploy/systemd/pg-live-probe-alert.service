@@ -3,4 +3,4 @@ Description=Alert on feature probe failure
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/logger -p daemon.alert -t pg-live-probe Daily feature probe failed; inspect journalctl -u pg-live-probe.service
+ExecStart=/usr/bin/logger -p daemon.alert -t pg-live-probe -- "Daily feature probe failed, inspect: journalctl --unit pg-live-probe.service"
