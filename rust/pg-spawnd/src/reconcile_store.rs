@@ -382,8 +382,8 @@ pub(crate) fn settle(
     if how == "ended_unobserved" {
         entry["reason"] = json!("reattached_group_exited");
     }
-    entry["exit_code"] = Value::Null;
     let diagnostic = entry.clone();
+    entry["exit_code"] = Value::Null;
     record
         .transition(Status::Orphaned, now_ms as f64 / 1000.0)
         .map_err(|_| invalid())?;

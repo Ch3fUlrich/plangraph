@@ -38,6 +38,52 @@ fn resolve(base: &Path, text: &str) -> PathBuf {
     }
 }
 
+fn normalized(path: &Path) -> String {
+    let mut text = path.to_string_lossy().replace('\\', "/");
+    text = text.strip_prefix("//?/").unwrap_or(&text).to_owned();
+    let b = text.as_bytes();
+    if b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        text = format!("/mnt/{}{}", (b[0] as char).to_ascii_lowercase(), &text[2..]);
+    }
+    let absolute = text.starts_with('/');
+    let floor = if text.as_bytes().get(6) == Some(&b'/') && text.starts_with("/mnt/") {
+        2
+    } else {
+        0
+    };
+    let mut parts = Vec::new();
+    for part in text.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.len() > floor && parts.last().is_some_and(|p| *p != "..") {
+                    parts.pop();
+                } else if !absolute {
+                    parts.push(part);
+                }
+            }
+            _ => parts.push(part),
+        }
+    }
+    format!("{}{}", if absolute { "/" } else { "" }, parts.join("/"))
+}
+
+fn same_resolved_path(left: &Path, right: &Path) -> bool {
+    let left = normalized(left);
+    let right = normalized(right);
+    let windows = |p: &str| {
+        p.strip_prefix("/mnt/").is_some_and(|tail| {
+            let b = tail.as_bytes();
+            b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b'/'
+        })
+    };
+    if windows(&left) && windows(&right) {
+        left.eq_ignore_ascii_case(&right)
+    } else {
+        left == right
+    }
+}
+
 pub(crate) fn capture(cwd: &Path, run_dir: &Path) -> io::Result<bool> {
     let cwd = fs::canonicalize(cwd)?;
     let dot = cwd.join(".git");
@@ -67,7 +113,17 @@ pub(crate) fn capture(cwd: &Path, run_dir: &Path) -> io::Result<bool> {
                 }
                 // Git's backlink binds this administrative directory to this checkout.
                 let backlink = fs::read_to_string(gitdir.join("gitdir"))?;
-                if fs::canonicalize(resolve(&gitdir, &backlink))? != dot {
+                if backlink
+                    .trim()
+                    .replace('\\', "/")
+                    .to_ascii_lowercase()
+                    .starts_with("//?/unc/")
+                {
+                    return Err(io::Error::other("gitconfig_capture_refused"));
+                }
+                let backlink = fs::canonicalize(resolve(&gitdir, &backlink))?;
+                let dot = fs::canonicalize(&dot)?;
+                if !same_resolved_path(&backlink, &dot) {
                     return Err(io::Error::other("gitconfig_untrusted_gitdir"));
                 }
                 paths.push(common.join("config"));
@@ -87,6 +143,11 @@ pub(crate) fn capture(cwd: &Path, run_dir: &Path) -> io::Result<bool> {
     } else {
         return Ok(false);
     }
+    let worktree_paths: Vec<_> = paths
+        .iter()
+        .map(|p| p.with_file_name("config.worktree"))
+        .collect();
+    paths.extend(worktree_paths);
     let snapshots = paths
         .into_iter()
         .map(|path| {
@@ -122,9 +183,18 @@ fn safe(path: &Path) -> io::Result<()> {
 
 fn durable(path: &Path, bytes: &[u8]) -> io::Result<()> {
     atomic_write_private(path, bytes)?;
-    fs::File::open(path)?.sync_all()?;
-    #[cfg(unix)]
-    fs::File::open(path.parent().unwrap())?.sync_all()?;
+    sync(path)?;
+    sync(path.parent().unwrap())?;
+    Ok(())
+}
+
+fn sync(path: &Path) -> io::Result<()> {
+    if path.is_dir() {
+        #[cfg(unix)]
+        fs::File::open(path)?.sync_all()?;
+    } else {
+        fs::OpenOptions::new().write(true).open(path)?.sync_all()?;
+    }
     Ok(())
 }
 
@@ -140,16 +210,17 @@ pub(crate) fn enforce(
     if record.get("gitconfig_guard") != Some(&json!(true)) {
         return outcome;
     }
-    let parent = record.path().parent().unwrap();
-    let dir = run_dir(
-        parent.parent().unwrap().parent().unwrap(),
-        parent.file_name().unwrap().to_str().unwrap(),
-    )
-    .unwrap();
-    debug_assert_eq!(parent, dir);
-    let path = sidecar(&dir);
-    let snapshots = fs::read(path)
-        .ok()
+    let parent_path = record.path().parent().map(Path::to_owned);
+    let parent = parent_path.as_deref();
+    let dir = parent
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .zip(record.get("run_id"))
+        .and_then(|(state, id)| run_dir(state, id.as_str()?).ok());
+    let layout_error = dir.as_deref() != parent || dir.is_none();
+    let snapshots = (!layout_error)
+        .then(|| dir.as_deref().and_then(|dir| fs::read(sidecar(dir)).ok()))
+        .flatten()
         .and_then(|b| serde_json::from_slice::<Vec<Snapshot>>(&b).ok());
     let paths: Vec<_> = snapshots
         .as_ref()
@@ -163,10 +234,15 @@ pub(crate) fn enforce(
         })
         .unwrap_or_default();
     let previous = record.get("gitconfig_original_outcome").is_some();
+    if previous && snapshots.is_none() && !layout_error {
+        return Status::Failed;
+    }
     if snapshots.is_some() && paths.is_empty() {
         return if previous { Status::Failed } else { outcome };
     }
-    let reason = if snapshots.is_none() {
+    let reason = if layout_error {
+        "gitconfig_guard_error"
+    } else if snapshots.is_none() {
         "gitconfig_snapshot_missing"
     } else {
         "gitconfig_tampered"
@@ -198,10 +274,12 @@ pub(crate) fn enforce(
     if !persisted || !save_verdict(record) {
         record.set("gitconfig_verdict_save_error", json!(true));
         if !save_verdict(record) {
-            let _ = durable(
-                &dir.join("gitconfig.verdict-save-error"),
-                b"gitconfig_verdict_save_error\n",
-            );
+            if let Some(dir) = dir.as_deref().filter(|_| !layout_error).or(parent) {
+                let _ = durable(
+                    &dir.join("gitconfig.verdict-save-error"),
+                    b"gitconfig_verdict_save_error\n",
+                );
+            }
         }
     }
     Status::Failed
@@ -212,9 +290,8 @@ fn save_verdict(record: &RunRecord) -> bool {
 }
 
 fn durable_record(record: &RunRecord) -> io::Result<()> {
-    fs::File::open(record.path())?.sync_all()?;
-    #[cfg(unix)]
-    fs::File::open(record.path().parent().unwrap())?.sync_all()?;
+    sync(record.path())?;
+    sync(record.path().parent().unwrap())?;
     Ok(())
 }
 
@@ -250,6 +327,9 @@ fn restore(snapshots: &[Snapshot]) -> bool {
     failed
 }
 
+#[cfg(test)]
+#[path = "gitconfig_guard_layout_tests.rs"]
+mod layout_tests;
 #[cfg(test)]
 #[path = "gitconfig_guard_tests.rs"]
 mod tests;
