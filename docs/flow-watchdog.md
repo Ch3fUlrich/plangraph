@@ -15,7 +15,7 @@ the maximum age of an in_review item; `review_rounds` is the maximum per PR;
 `critical_idle_hours` is the #690 critical-path idle measurement; `coding_vm_runs`
 and `dell_idle` describe placement; `host_drift` compares expected host code refs;
 `closes_recent` and `closes_previous` count equal-length daily windows.
-All fields are required: missing observations are not treated as healthy.
+All fields are required; budget must be positive. Missing data is not healthy.
 
 Routing uses the existing `PLANGRAPH_WATCHDOG_DELIVERY` JSON argv bridge contract
 (see stall-watchdog.md): one JSON alert on stdin with recipient `routing` and one
@@ -23,10 +23,10 @@ message line combining all firing rules. `PLANGRAPH_FLOW_PUSH` is an explicit
 JSON argv push hook receiving the same event. No existing push implementation or
 #690 implementation was found in this checkout; measurement reuse is an input
 contract, not a claim of live integration. Both hooks must be wired by deployment.
-Without a hook, the event stays in pending.json. Successful channels are
+Without a hook, events wait in a durable queue. Successful channels are
 checkpointed independently. Identical active sets are suppressed until recovery
 or a changed set; delivery is at-least-once across a crash during acknowledgement.
 Systemd prevents concurrent ticks of this service; do not run manual concurrent
-instances against its state directory. A pending alert is retried before a new
-transition is accepted. Collectors, freshness enforcement and host integration
+instances against its state directory. New transitions queue behind pending
+delivery without freezing deduplication. Collectors, freshness and host integration
 are deployment prerequisites, not supplied by this checker.

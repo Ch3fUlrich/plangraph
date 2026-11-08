@@ -1,9 +1,9 @@
 use std::{fs, process::Command};
-
 fn run(snapshot: &serde_json::Value, dir: &std::path::Path) -> std::process::Output {
     let input = dir.join("input.json");
     fs::write(&input, snapshot.to_string()).unwrap();
     Command::new(env!("CARGO_BIN_EXE_flow-watchdog"))
+        .env_remove("PLANGRAPH_WATCHDOG_DELIVERY").env_remove("PLANGRAPH_FLOW_PUSH")
         .args([input.to_str().unwrap(), dir.to_str().unwrap()])
         .output().unwrap()
 }
