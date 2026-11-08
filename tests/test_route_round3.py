@@ -52,3 +52,27 @@ def test_top_level_definition_spacing():
                     node, (ast.FunctionDef, ast.ClassDef)):
                 start = min([node.lineno] + [d.lineno for d in node.decorator_list])
                 assert lines[previous.end_lineno:start - 1] == ["", ""], (name, node.name)
+
+
+def test_registered_fallback_inputs():
+    from plangraph.planner.legs import DEFAULT_LEGS
+    table = {leg.id: leg for leg in DEFAULT_LEGS}
+    for id in ("omniroute-deepseek-flash", "omniroute-muse-spark", "agy-opus",
+               "opencode-gemini-4-argon"):
+        assert table[id].disabled is None
+    assert table["deepseek"].tier == "paid"
+    assert table["opencode-gemini-4-argon"].model == "opencode/gemini-4-argon"
+
+
+def test_each_role_falls_through_failed_and_limited():
+    from plangraph.planner.route_policy import RoutePolicy
+    base = next(leg for leg in DEFAULT_LEGS if leg.id == "opencode-deepseek-v4.1-flash-free")
+    for role in ("implement", "review", "orchestrate"):
+        legs = (replace(base, id="first", roles=(role,)),
+                replace(base, id="second", model="opencode/big-pickle", family="pickle", roles=(role,)))
+        for state in ("limited", "down"):
+            def reader(model, **kwargs):
+                return {"state": state if model == base.model else "available", "evidence": None}
+            plan = plan_spawn({"estimate_tokens": 1000}, role=role, legs=legs,
+                              policy=RoutePolicy(), leg_reader=reader, writer_families=("gpt",))
+            assert [leg.id for leg in plan.legs] == ["second"]
