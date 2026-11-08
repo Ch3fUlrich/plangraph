@@ -6,10 +6,13 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import secrets
 import shlex
 import subprocess
 import tempfile
 from typing import NamedTuple
+
+from plangraph.keeper.credential_guard import mask
 
 from . import cli
 from .private_io import atomic_write_private
@@ -122,23 +125,26 @@ def remote_spawn(name, host, card, prompt, options):
         # A sentinel prevents command substitution from stripping trailing newlines.
         commands.append('prompt=$(cat ' + q(directory + '/prompt.txt') + ' && printf .)')
         spawn = shlex.join(command) + ' "${prompt%.}" ' + shlex.join(options)
+        nonce = secrets.token_hex(16)
+        begin, end = (f'PLANGRAPH_RECEIPT_{nonce}_{suffix}' for suffix in ('BEGIN', 'END'))
+        commands.append("printf '%s\\n' " + q(begin))
         commands.append('PLANGRAPH_HOST_NAME=' + q(name) + ' PYTHONPATH=' + q(host['spawner_src']) + ' ' + spawn)
+        commands.append("printf '\\n%s\\n' " + q(end))
         result = ssh(' && '.join(commands))
         if result.returncode:
             return None
-        # Decode objects amid shell noise, including pretty-printed JSON. Never
-        # retry an acknowledged spawn merely because its receipt is unreadable.
-        decoder = json.JSONDecoder()
-        receipt, furthest = None, -1
-        for index in [i for i, char in enumerate(result.stdout) if char == '{']:
-            try:
-                payload, end = decoder.raw_decode(result.stdout[index:])
-                if isinstance(payload, dict) and index + end > furthest:
-                    receipt, furthest = payload, index + end
-            except ValueError:
-                pass
-        # Shell initialization may echo JSON; only expose a spawn receipt.
-        if receipt is not None and ('status' in receipt or receipt == {}):
+        # Mask before parsing/exposing any remote output, including JSON keys.
+        # Never retry an acknowledged spawn merely because its receipt is unreadable.
+        output, _ = mask(result.stdout)
+        lines = output.splitlines()
+        if lines.count(begin) != 1 or lines.count(end) != 1 or lines.index(begin) >= lines.index(end):
+            return {'warning': 'remote spawn succeeded; receipt unavailable',
+                    'reason': 'receipt_unbracketed'}
+        try:
+            receipt = json.loads('\n'.join(lines[lines.index(begin) + 1:lines.index(end)]))
+        except ValueError:
+            receipt = None
+        if isinstance(receipt, dict) and ('status' in receipt or receipt == {}):
             return receipt
         return {'warning': 'remote spawn succeeded; receipt unavailable'}
     finally:
@@ -195,7 +201,7 @@ def main(argv=None):
                 result = None
             if result is not None:
                 result.update(host=name, overflow_reason=decision.reason)
-                print(json.dumps(result))
+                print(mask(json.dumps(result))[0])
                 return 0
             records[name]['refusal'] = 'remote spawn failed'
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
