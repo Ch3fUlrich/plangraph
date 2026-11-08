@@ -74,6 +74,7 @@
       "required": ["root", "worktrees_root", "remote", "import_roots", "cache_env"],
       "properties": {
         "root": { "type": "string", "minLength": 1 },
+        "live_dir": { "type": "string", "minLength": 1 },
         "worktrees_root": { "type": "string", "minLength": 1 },
         "remote": { "type": "string", "minLength": 1 },
         "python": { "type": ["string", "null"], "minLength": 1 },

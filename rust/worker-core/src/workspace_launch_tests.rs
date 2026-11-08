@@ -78,6 +78,7 @@ impl Fixture {
         Self {
             tmp,
             repo: RepoEntry {
+                live_dir: None,
                 root: root.to_str().unwrap().into(),
                 worktrees_root: trees.to_str().unwrap().into(),
                 remote: root.to_str().unwrap().into(),
