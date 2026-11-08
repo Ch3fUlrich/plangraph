@@ -78,7 +78,40 @@ def test_repository_workflow_downloads():
     paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
     paths += sorted((ROOT / ".github/workflows").glob("*.yaml"))
     total = sum(assert_retries(p.read_text(), p.relative_to(ROOT)) for p in paths)
-    assert total == 5
+    assert total == 2  # Temporal downloads live in the shared composite action.
+
+
+def test_temporal_workflow_cache_and_retry_window():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())
+    sites = [
+        job_name
+        for job_name, job in workflow["jobs"].items()
+        for step in job.get("steps", [])
+        if step.get("uses") == "./.github/actions/setup-temporal"
+    ]
+    assert sorted(sites) == ["pytest", "pytest-postgres", "rust-worker"]
+    # No inline Temporal download can bypass the shared cache condition.
+    assert "temporalio/cli/releases/download" not in (
+        ROOT / ".github/workflows/tests.yml"
+    ).read_text()
+    action = yaml.safe_load((ROOT / ".github/actions/setup-temporal/action.yml").read_text())
+    cache, download, export = action["runs"]["steps"]
+    assert cache["uses"] == "actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809"
+    assert cache["with"]["key"] == "temporal-cli-${{ runner.os }}-${{ runner.arch }}-1.9.1"
+    assert cache["with"]["path"] == "~/.cache/temporal-cli/1.9.1/temporal"
+    assert download["if"] == f"steps.{cache['id']}.outputs.cache-hit != 'true'"
+    commands = list(downloads((ROOT / ".github/actions/setup-temporal/action.yml").read_text()))
+    assert len(commands) == 1
+    command = commands[0][1]
+    assert int(command[command.index("--retry-max-time") + 1]) >= 300
+    assert int(command[command.index("--retry") + 1]) >= 20
+    assert int(command[command.index("--retry-delay") + 1]) >= 15
+    assert "--retry-all-errors" in command
+    assert "sha256sum -c -" in download["run"]
+    assert "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5" in download["run"]
+    assert "install -m 0755" in download["run"]
+    assert "if" not in export  # Cache hits must also export the binary path.
+    assert 'TEMPORAL_CLI=$HOME/.cache/temporal-cli/1.9.1/temporal' in export["run"]
 
 
 def workflow(command):
