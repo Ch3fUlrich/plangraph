@@ -40,6 +40,8 @@ impl Fixture {
         Self {
             _tmp: tmp,
             repo: RepoEntry {
+                live_dir: None,
+                health_checks: None,
                 root: root.to_str().unwrap().into(),
                 worktrees_root: trees.to_str().unwrap().into(),
                 remote: root.to_str().unwrap().into(),

@@ -166,9 +166,13 @@ def _add_writes(sub):
     set_kind.add_argument("key")
     set_kind.add_argument("kind", help="question or operator_task (the keeper checks)")
 
-    close = _p(sub, "close", help="router: close a tier-none item on a decision batch")
+    close = _p(sub, "close", help="claimant/router: close tier-none or decision/operator_task items on proof")
     close.add_argument("key")
-    close.add_argument("--batch", required=True, metavar="PATH@SHA",
+    proof = close.add_mutually_exclusive_group()
+    close.add_argument("--epoch", type=int,
+                       help="current claim epoch (claimants require it with --decision-ref; not --batch)")
+    proof.add_argument("--decision-ref", metavar="D-NNNN")
+    proof.add_argument("--batch", metavar="PATH@SHA",
                        help="batch file path@sha256 inside a batch_roots dir")
 
     legacy = _p(sub, "legacy", help="router: set an open legacy item's state")

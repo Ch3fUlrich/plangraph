@@ -2,6 +2,8 @@
 
 `tests.yml` runs on every pull request to `main`, every push to `main`, and manual dispatch.
 
+The three Temporal CLI consumers share a SHA-pinned cache action keyed by OS, architecture and CLI version; cache misses retain the archive SHA-256 check and retry downloads across a six-minute window.
+
 The `select` job (`tools/ci_select.py`) maps changed paths to suites: `scrub`, `pytest`, `pytest-postgres`, `rust`, `rust-worker`, `rust-spike`. Unknown paths, or a change under `.github/`, `requirements-ci.txt`, or `tools/ci_select.py`, run every suite; a docs-only change runs `scrub` only.
 
 The `ci-gate` job fails if any selected suite failed, was skipped, or was cancelled.
