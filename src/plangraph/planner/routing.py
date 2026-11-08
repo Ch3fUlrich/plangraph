@@ -22,15 +22,7 @@ from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
            "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
             "SpawnRefused", "SpawnPlan", "plan_spawn",
-              "hand_picked", "next_leg_after_provider_stop", "benchmark_rows_from_db",
-              "read_run_records"]
-
-
-def read_run_records(state: Path):
-    """Read without repairs; absent run directories mean unknown, not empty."""
-    from plangraph.spawner.stall_watchdog import read_runs
-
-    return read_runs(state, dry_run=True) if (state / "runs").is_dir() else None
+              "hand_picked", "next_leg_after_provider_stop", "benchmark_rows_from_db"]
 
 #: Window sizes in tokens.
 WINDOW_TOKENS = {"128k": 131072, "256k": 262144, "1m": 1048576}
