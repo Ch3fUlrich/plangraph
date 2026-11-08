@@ -125,7 +125,8 @@ class JobInfo:
     survivors: list = field(default_factory=list)   # pids that outlived the kill (kill_incomplete)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        from .served_telemetry import mismatch_flag
+        return mismatch_flag(asdict(self))
 
 
 #: Every tool key the opencode 2.1.0 config schema knows ('*' exists only in
@@ -753,8 +754,9 @@ class SpawnerRunner:
             if not question_exit(job, {}):
                 await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
 
-            # D-2905 (2): the child-writable session store is request-side only ('request-side-opencode-store',
-            # never 'served'); read only for a review leg's own store, all tools denied, exit 0 (D-2905 (1)).
+            from .served_telemetry import witness_native
+            await witness_native(self, job_id, job, stdout_text, requested_model)
+            # Response-side gateway evidence takes precedence over native metadata.
             if job.command and job.command[0] == 'opencode' and job.role == 'review':
                 oc_dir = self._ocdata_dirs.get(job_id) if exit_code == 0 else None
                 denied = _opencode_tools_denied(
@@ -765,7 +767,7 @@ class SpawnerRunner:
                                              Path(oc_dir) / 'opencode' / 'opencode.db',
                                              f'plangraph-{job_id}')
                      if oc_dir and denied else None)
-                if m is not None and m == requested_model:
+                if m is not None and m == requested_model and job.witness_kind != 'native-opencode':
                     job.request_side_model = m
                     job.witness_kind = 'request-side-opencode-store'
                 elif oc_dir and denied:
@@ -780,10 +782,6 @@ class SpawnerRunner:
                                        refusal_text_chars=len(answer[0]) if answer else 0))
                 job.status = 'failed'
             if job.command and job.command[0] == 'claude' and exit_code == 0:   # D-3605
-                m = _claude_stream_model(stdout_text)
-                if m is not None and m == requested_model:
-                    job.request_side_model = m
-                    job.witness_kind = 'request-side-claude-stream'
                 # D-3649: the review text (VERDICT line) is the stream's final result, not the raw stream.
                 await asyncio.to_thread(render_review_output, job, stdout_text,
                                         lambda text: redact(redact_env_values(text, env)))
@@ -1156,6 +1154,7 @@ def spawn_service(*args, **kwargs):
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                             served_family=job.served_family, served_witness_reason=job.served_witness_reason,
                             request_side_model=job.request_side_model, witness_kind=job.witness_kind,
+                            served_model_mismatch=job.to_dict()['served_model_mismatch'],
                             writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                             stdout_tail=record.get('stdout_tail', '') + job.stdout,
                             stderr_tail=record.get('stderr_tail', '') + job.stderr,

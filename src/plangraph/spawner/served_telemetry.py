@@ -55,18 +55,12 @@ def extract_served_telemetry(output: str, fallback_model: str = "") -> tuple[str
 
 
 def _claude_stream_model(text) -> str | None:
-    """Model id from the stream-json ``system``/init event of a claude -p run (D-3605)."""
-    for line in str(text or '').splitlines():
-        try:
-            data = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(data, dict) and data.get('type') == 'system' and isinstance(data.get('model'), str):
-            return data['model']
-    return None
+    """Unanimous init/assistant model, never the assistant's free text."""
+    models = native_models('claude', text)
+    return next(iter(models)) if len(models) == 1 else None
 
 
-def _opencode_served_model(db_path, title) -> str | None:
+def _opencode_served_model(db_path, title, *, all_models=False):
     """Served model witnessed in opencode's session store for one titled session (D-2898).
 
     Only a unanimous assistant model id counts; anything else stays unwitnessed.
@@ -87,5 +81,77 @@ def _opencode_served_model(db_path, title) -> str | None:
         finally:
             conn.close()
     except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
-        return None
-    return next(iter(models)) if len(models) == 1 else None
+        return set() if all_models else None
+    return models if all_models else next(iter(models)) if len(models) == 1 else None
+
+
+def native_models(harness, text):
+    """Read only structured harness metadata, never nested tool/answer text.
+
+    Codex exec JSONL (codex-rs/exec/src/exec_events.rs:38-56,135-139)
+    has thread_id, usage and agent_message.text, but no served model field.
+    routing_support/clients.py:346-347 currently launches plain exec, not JSONL.
+    ACP agy output has no verified served-model field either.
+    """
+    models = set()
+    for line in str(text or '').splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        model = None
+        if harness == 'claude':
+            if event.get('type') == 'system' and event.get('subtype') == 'init':
+                model = event.get('model')
+            elif event.get('type') == 'assistant' and isinstance(event.get('message'), dict):
+                model = event['message'].get('model')
+        elif harness == 'opencode' and event.get('type') in ('step_start', 'step_finish'):
+            info = event.get('info')
+            if isinstance(info, dict) and info.get('role') == 'assistant':
+                m = info.get('model')
+                if isinstance(m, dict):
+                    provider, mid = m.get('providerID'), m.get('id', m.get('modelID'))
+                    if isinstance(provider, str) and provider and isinstance(mid, str) and mid:
+                        model = provider + '/' + mid
+        if isinstance(model, str) and model.strip():
+            models.add(model)
+    return models
+
+
+def record_native(job, harness, models, requested):
+    """Record native provenance without promoting it to a gateway witness."""
+    if len(models) != 1:
+        reason = ('non-unanimous native models' if models else
+                  'emits no verified structured served-model telemetry')
+        job.served_witness_reason = f'{harness}: {reason}'
+        return
+    model = next(iter(models))
+    job.served_model, job.served_family = model, detect_model_family(model)
+    job.witness_kind = 'native-' + harness
+    job.served_witness_reason = f'{harness} structured native model metadata'
+    if model != requested:
+        job.events.append(dict(event='served_model_mismatch', requested_model=requested, served_model=model))
+
+
+async def witness_native(runner, job_id, job, text, requested):
+    """Native telemetry for writers and reviews; response-side gateway wins."""
+    import asyncio
+    from pathlib import Path
+    harness = Path(job.command[0]).name if job.command else ''
+    models = native_models(harness, text)
+    if harness == 'opencode':
+        directory = runner._ocdata_dirs.get(job_id)
+        if directory:
+            stored = await asyncio.to_thread(_opencode_served_model,
+                Path(directory) / 'opencode' / 'opencode.db', f'plangraph-{job_id}', all_models=True)
+            models.update(stored)
+    record_native(job, harness, models, requested)
+
+
+def mismatch_flag(record):
+    """Shared status projection (Job and persisted run records)."""
+    record['served_model_mismatch'] = any(
+        e.get('event') == 'served_model_mismatch' for e in record.get('events', []))
+    return record
