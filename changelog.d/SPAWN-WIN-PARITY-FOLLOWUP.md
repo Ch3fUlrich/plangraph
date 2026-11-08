@@ -1,1 +1,1 @@
-Fail closed on rejected stdin delivery, move oversized Windows Qoder prompts to stdin, and preserve environments on config-size refusal.
+Fail closed on rejected stdin delivery, move oversized Windows Qoder prompts to stdin, and preserve environments on config-size refusal. Oversized Windows agy prompts use stream-json stdin instead of argv refusal; the last result supplies answer/verdict text, and ERROR or missing results fail closed. Short prompts and Linux argv delivery are unchanged (D-5135, D-5122).
