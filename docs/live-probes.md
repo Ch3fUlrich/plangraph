@@ -1,6 +1,6 @@
 # Feature live probes (D-5050)
 
-An item of kind `feature` carries `live_probe`: an absolute executable argv,
+The runner envelope for an item of kind `feature` carries `live_probe`: an absolute executable argv,
 exact expected stdout (including newline), and optional `timeout_secs` (default
 30, maximum 300). A keeper query is expressed as a read-only command returning a
 small deterministic witness. Exit zero alone is insufficient. Commands are
@@ -11,8 +11,8 @@ Minimal exported item envelope (the keeper schema/export hook is not installed):
 ```json
 [
   {"key":"plangraph:OVERFLOW", "kind":"feature", "live_probe":{
-    "command":["/usr/local/bin/pg-witness","overflow-to-dell","--since-seconds","86400"],
-    "expected":"overflow-to-dell: witnessed\n"}},
+    "command":["/usr/local/bin/pg-witness","overflow-placement","--since-seconds","86400"],
+    "expected":"overflow-placement: witnessed\n"}},
   {"key":"plangraph:SPAWNER", "kind":"feature", "live_probe":{
     "command":["/usr/local/bin/pg-witness","spawner-served-model","--since-seconds","86400"],
     "expected":"spawner-served-model: witnessed\n"}}
@@ -20,7 +20,7 @@ Minimal exported item envelope (the keeper schema/export hook is not installed):
 ```
 
 These are example query-adapter contracts, not bundled executables or claims of
-live success. The first must find a real overflow placement on the dell target
+live success. The first must find a real overflow placement on the configured target
 within 24h. The second must join a completed spawner run with its served-model
 witness, verifying requested and actually served model identity within 24h;
 configuration or a model-list response alone is not evidence. Return nonzero or

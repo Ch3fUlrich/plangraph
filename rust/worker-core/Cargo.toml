@@ -11,6 +11,7 @@ name = "pg_worker_core"
 name = "live_probe_child"
 path = "tests/support/live_probe_child.rs"
 test = false
+required-features = ["test-support"]
 
 [features]
 test-support = []

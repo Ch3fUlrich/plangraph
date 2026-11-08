@@ -66,7 +66,16 @@ fn validate(spec: &Spec) -> Result<(), String> {
 }
 
 pub fn run(item: &str, spec: &Spec, now: u64) -> Result<ResultRecord, String> {
-    validate(spec)?;
+    let passed = validate(spec).and_then(|()| execute(spec)).unwrap_or(false);
+    Ok(ResultRecord {
+        item: item.into(),
+        spec: spec.clone(),
+        at: now,
+        passed,
+    })
+}
+
+fn execute(spec: &Spec) -> Result<bool, String> {
     // File-backed output avoids pipe deadlock. Read only the expected length +1.
     let mut output = tempfile::tempfile().map_err(|e| e.to_string())?;
     let mut command = Command::new(&spec.command[0]);
@@ -84,16 +93,40 @@ pub fn run(item: &str, spec: &Spec, now: u64) -> Result<ResultRecord, String> {
     if let Ok(mut child) = command.spawn() {
         let start = Instant::now();
         loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    passed = status.success();
+            // WNOWAIT observes exit without reaping: the group ID remains reserved
+            // until cleanup has signalled the group and wait() reaps its leader.
+            #[cfg(unix)]
+            let finished = unsafe {
+                let mut info: libc::siginfo_t = std::mem::zeroed();
+                let rc = libc::waitid(
+                    libc::P_PID,
+                    child.id(),
+                    &mut info,
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                );
+                if rc != 0 {
                     break;
                 }
-                Ok(None) if start.elapsed() < Duration::from_secs(spec.timeout_secs) => {
-                    std::thread::sleep(Duration::from_millis(10));
+                if info.si_pid() != 0 {
+                    passed = info.si_code == libc::CLD_EXITED && info.si_status() == 0;
+                    true
+                } else {
+                    false
                 }
-                _ => break,
+            };
+            #[cfg(not(unix))]
+            let finished = match child.try_wait() {
+                Ok(Some(status)) => {
+                    passed = status.success();
+                    true
+                }
+                Ok(None) => false,
+                Err(_) => break,
+            };
+            if finished || start.elapsed() >= Duration::from_secs(spec.timeout_secs) {
+                break;
             }
+            std::thread::sleep(Duration::from_millis(10));
         }
         #[cfg(unix)]
         unsafe {
@@ -110,10 +143,5 @@ pub fn run(item: &str, spec: &Spec, now: u64) -> Result<ResultRecord, String> {
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     passed &= bytes == spec.expected.as_bytes();
-    Ok(ResultRecord {
-        item: item.into(),
-        spec: spec.clone(),
-        at: now,
-        passed,
-    })
+    Ok(passed)
 }

@@ -1,3 +1,4 @@
+#![cfg(feature = "test-support")]
 use pg_worker_core::live_probe::*;
 use serde_json::json;
 
@@ -94,4 +95,57 @@ fn daily_runner_records_failure_and_gate_refuses_it() {
     assert!(!last.passed);
     std::fs::write(&journal, "broken json\n").unwrap();
     assert!(!invoke("gate").status.success());
+}
+
+#[test]
+fn output_setup_failure_invalidates_prior_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let items = dir.path().join("items.json");
+    let journal = dir.path().join("results.jsonl");
+    std::fs::write(
+        &items,
+        serde_json::to_vec(&json!([{
+            "key":"p:F", "kind":"feature", "live_probe":spec()
+        }]))
+        .unwrap(),
+    )
+    .unwrap();
+    let invoke = |mode: &str, tmp: &std::path::Path| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_pg-live-probe"))
+            .arg(mode)
+            .arg(&items)
+            .arg(&journal)
+            .env("TMPDIR", tmp)
+            .output()
+            .unwrap()
+    };
+    assert!(invoke("run", dir.path()).status.success());
+    assert!(!invoke("run", &dir.path().join("missing")).status.success());
+    assert!(!invoke("gate", dir.path()).status.success());
+    assert_eq!(std::fs::read_to_string(journal).unwrap().lines().count(), 2);
+}
+
+#[test]
+fn freshness_boundary_and_equal_timestamp_order() {
+    let s = spec();
+    let pass = run("p:F", &s, 100).unwrap();
+    assert!(close_gate(
+        "feature",
+        "p:F",
+        Some(&s),
+        std::slice::from_ref(&pass),
+        86500
+    )
+    .is_ok());
+    let mut fail = pass.clone();
+    fail.passed = false;
+    assert!(close_gate(
+        "feature",
+        "p:F",
+        Some(&s),
+        &[pass.clone(), fail.clone()],
+        100
+    )
+    .is_err());
+    assert!(close_gate("feature", "p:F", Some(&s), &[fail, pass], 100).is_ok());
 }
