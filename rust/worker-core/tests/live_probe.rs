@@ -80,6 +80,7 @@ fn daily_runner_records_failure_and_gate_refuses_it() {
             .arg(mode)
             .arg(&items)
             .arg(&journal)
+            .args(if mode == "gate" { vec!["p:F"] } else { vec![] })
             .output()
             .unwrap()
     };
@@ -115,6 +116,7 @@ fn output_setup_failure_invalidates_prior_pass() {
             .arg(mode)
             .arg(&items)
             .arg(&journal)
+            .args(if mode == "gate" { vec!["p:F"] } else { vec![] })
             .env("TMPDIR", tmp)
             .output()
             .unwrap()
@@ -148,4 +150,62 @@ fn freshness_boundary_and_equal_timestamp_order() {
     )
     .is_err());
     assert!(close_gate("feature", "p:F", Some(&s), &[fail, pass], 100).is_ok());
+}
+
+fn gate_fixture(items: serde_json::Value, stale: bool, target: Option<&str>) -> bool {
+    let dir = tempfile::tempdir().unwrap();
+    let items_path = dir.path().join("items.json");
+    let journal = dir.path().join("results.jsonl");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let record = run("p:F", &spec(), if stale { now - 86401 } else { now }).unwrap();
+    std::fs::write(&items_path, serde_json::to_vec(&items).unwrap()).unwrap();
+    std::fs::write(&journal, serde_json::to_vec(&record).unwrap()).unwrap();
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_pg-live-probe"));
+    cmd.arg("gate").arg(items_path).arg(journal);
+    if let Some(key) = target {
+        cmd.arg(key);
+    }
+    cmd.output().unwrap().status.success()
+}
+
+#[test]
+fn gate_refuses_empty_items() {
+    assert!(!gate_fixture(json!([]), false, Some("p:F")));
+    assert!(!gate_fixture(json!([]), false, None));
+}
+
+#[test]
+fn gate_refuses_partial_items() {
+    let items = json!([{"key":"p:G", "kind":"feature", "live_probe":spec()}]);
+    assert!(!gate_fixture(items.clone(), false, Some("p:F")));
+    assert!(!gate_fixture(items, false, None));
+}
+
+#[test]
+fn gate_exempts_only_explicitly_listed_non_feature() {
+    let items = json!([{"key":"p:B", "kind":"bug"}]);
+    assert!(gate_fixture(items.clone(), false, Some("p:B")));
+    assert!(!gate_fixture(items.clone(), false, Some("p:F")));
+    assert!(!gate_fixture(items, false, None));
+}
+
+#[test]
+fn gate_accepts_passing_target_record() {
+    assert!(gate_fixture(
+        json!([{"key":"p:F", "kind":"feature", "live_probe":spec()}]),
+        false,
+        Some("p:F")
+    ));
+}
+
+#[test]
+fn gate_refuses_stale_target_record() {
+    assert!(!gate_fixture(
+        json!([{"key":"p:F", "kind":"feature", "live_probe":spec()}]),
+        true,
+        Some("p:F")
+    ));
 }

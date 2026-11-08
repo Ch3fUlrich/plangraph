@@ -27,25 +27,33 @@ fn main() {
 
 fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.len() != 3 || !["run", "gate"].contains(&args[0].as_str()) {
-        return Err("usage: pg-live-probe run|gate ITEMS.json JOURNAL.jsonl".into());
+    let gate = args.first().is_some_and(|arg| arg == "gate");
+    if !((gate && args.len() == 4)
+        || (args.first().is_some_and(|arg| arg == "run") && args.len() == 3))
+    {
+        return Err("usage: pg-live-probe run ITEMS.json JOURNAL.jsonl | gate ITEMS.json JOURNAL.jsonl ITEM_KEY".into());
     }
     let items: Vec<Item> = serde_json::from_reader(std::fs::File::open(&args[1])?)?;
     let timestamp = now()?;
-    if args[0] == "gate" {
+    if gate {
+        let mut matching = items.iter().filter(|item| item.key == args[3]);
+        let item = matching
+            .next()
+            .ok_or("closing item missing from ITEMS.json")?;
+        if matching.next().is_some() {
+            return Err("duplicate closing item in ITEMS.json".into());
+        }
         let records: Vec<ResultRecord> = std::io::BufReader::new(std::fs::File::open(&args[2])?)
             .lines()
             .map(|line| Ok(serde_json::from_str(&line?)?))
             .collect::<Result<_, Box<dyn std::error::Error>>>()?;
-        for item in items {
-            close_gate(
-                &item.kind,
-                &item.key,
-                item.live_probe.as_ref(),
-                &records,
-                timestamp,
-            )?;
-        }
+        close_gate(
+            &item.kind,
+            &item.key,
+            item.live_probe.as_ref(),
+            &records,
+            timestamp,
+        )?;
     } else {
         let mut journal = OpenOptions::new()
             .create(true)

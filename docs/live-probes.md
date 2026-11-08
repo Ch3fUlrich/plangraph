@@ -43,9 +43,12 @@ The engine and item schema are AUTH_DOOR_PATHS. The non-door Rust `close_gate`
 requires the latest trusted result for the item to pass, match its current spec,
 and be no older than 24h (future results fail). A newer failure invalidates an
 older pass. Non-feature kinds retain their existing behavior. `pg-live-probe gate
-ITEMS.json JOURNAL.jsonl` is the fail-closed adapter (0 pass, 1 refusal); the keeper
+ITEMS.json JOURNAL.jsonl ITEM_KEY` is the fail-closed adapter (0 pass, 1 refusal); the keeper
 must generate a single-item envelope from its authoritative snapshot and read
 only the runner-owned journal. Worker-provided result objects are not evidence.
+The closing key is mandatory and must occur exactly once in the envelope; empty
+or partial exports missing that key are refused. A non-feature item is exempt
+only when its matching entry explicitly declares a non-feature kind.
 
 Exact one-line hook required before **every** transition to `done`, inside its
 write transaction, after reloading the item:
