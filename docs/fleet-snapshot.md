@@ -3,7 +3,8 @@
 The persisted keeper snapshot writer attaches `fleet` using
 `plangraph.fleet_snapshot.load_fleet`. This is a read-only projection outside
 the keeper auth path. Loader failures produce `fleet: null`; plan snapshot
-generation and signing continue normally. Failures log a traceback and add
+generation and signing continue normally. Failures log one line with the exception
+type and a fixed short summary (no traceback, exception message or private paths) and add
 `fleet_error: "projection_failed"`, making a broken store API visible. Direct store snapshot reads remain
 unchanged.
 
@@ -32,3 +33,4 @@ renders every registry host once, with unknown metrics displayed as `unknown`.
 Old snapshots without `fleet` retain the unavailable message. The SQLite-to-
 snapshot-to-page integration test exercises this path. Registry aliases shared
 by different hosts (including canonical ids) are refused, never last-wins.
+Aliases must be a list or tuple of nonempty strings; other containers are refused.

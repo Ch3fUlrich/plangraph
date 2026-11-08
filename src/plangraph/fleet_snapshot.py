@@ -36,7 +36,10 @@ def build_fleet(registry, samples=None, runs=None):
         if host in hosts:
             raise ValueError(f"duplicate registry host: {host}")
         hosts[host] = row
-        for alias in [host, *row.get("aliases", [])]:
+        row_aliases = row.get("aliases", [])
+        if not isinstance(row_aliases, (list, tuple)):
+            raise ValueError("registry aliases must be a list or tuple of strings")
+        for alias in [host, *row_aliases]:
             if not isinstance(alias, str) or not alias:
                 raise ValueError("registry alias needs a nonempty string")
             if alias in aliases and aliases[alias] != host:

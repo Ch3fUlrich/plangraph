@@ -128,6 +128,8 @@ def test_persisted_registry_snapshot_hosts_page(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from keeper_util import World
     from plangraph.keeper.snapshot_io import read_snapshot, write_snapshot
+    from plangraph import fleet_snapshot
+    from plangraph.spawner.service import SpawnService
 
     monkeypatch.setenv("PLANGRAPH_SPAWN_STATE", str(tmp_path / "spawn"))
     world = World(tmp_path, backend="sqlite")
@@ -135,12 +137,25 @@ def test_persisted_registry_snapshot_hosts_page(tmp_path, monkeypatch):
         world.store.upsert_bus_hosts([
             dict(host=h, node_id=h, key_id=h, endpoint=None,
                  health="offline", last_seen=None) for h in ("z", "a", "idle")])
+        service = SpawnService(state=tmp_path / "spawn")
+        for host, run_id, status in (("a", "run-live1", "running"),
+                                     ("a", "run-live2", "running"),
+                                     ("z", "run-done", "completed")):
+            monkeypatch.setenv("PLANGRAPH_HOST", host)
+            service._save(dict(run_id=run_id, status=status))
+        load_fleet = fleet_snapshot.load_fleet
+        monkeypatch.setattr(fleet_snapshot, "load_fleet", lambda store: load_fleet(
+            store, samples={"a": {"cpu_percent": 12.5}}))
         path = tmp_path / "snapshot.json"
         write_snapshot(SimpleNamespace(store=world.store,
                        config=SimpleNamespace(snapshot=path)), world.p("system"))
         out = view(tmp_path, read_snapshot(path))
         assert [r[0] for r in out["rows"]] == ["a", "idle", "z"]
-        assert all(r[3:] == ["unknown"] * 7 for r in out["rows"])
+        assert out["rows"][0][3] == "12.5"
+        assert out["rows"][0][4:-1] == ["unknown"] * 5
+        assert [r[-1] for r in out["rows"]] == ["2", "0", "0"]
+        assert "Fleet running agents: 2" in out["text"]
+        assert all(r[3:-1] == ["unknown"] * 6 for r in out["rows"][1:])
         path.write_text('{"items": []}')
         assert "unavailable" in view(tmp_path, read_snapshot(path))["text"]
     finally:

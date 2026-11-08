@@ -85,7 +85,7 @@ def test_fleet_loader_existing_records(tmp_path, monkeypatch):
 def test_fleet_loader_exception_snapshot_still_written(tmp_path, monkeypatch, fails, caplog):
     def load(store):
         if fails:
-            raise OSError("unreadable")
+            raise OSError(f"unreadable store: {tmp_path}/private/store.sqlite\nsecret detail")
         return fleet.build_fleet(REGISTRY, runs=[])
 
     monkeypatch.setattr(fleet, "load_fleet", load)
@@ -99,6 +99,12 @@ def test_fleet_loader_exception_snapshot_still_written(tmp_path, monkeypatch, fa
     if fails:
         assert body["fleet_error"] == "projection_failed"
         assert "Fleet snapshot projection failed" in caplog.text
+        assert "OSError: projection unavailable" in caplog.text
+        assert str(tmp_path) not in caplog.text
+        assert "secret detail" not in caplog.text
+        assert "Traceback" not in caplog.text
+        assert len(caplog.records) == 1
+        assert caplog.records[0].exc_info is None
 
 
 @pytest.mark.parametrize("registry", [
@@ -109,3 +115,16 @@ def test_fleet_loader_exception_snapshot_still_written(tmp_path, monkeypatch, fa
 def test_colliding_aliases_refused(registry):
     with pytest.raises(ValueError, match="ambiguous registry alias"):
         fleet.build_fleet(registry, {"a": {"cpu_percent": 1}}, [])
+
+
+@pytest.mark.parametrize("aliases", ["abc", None, {}, 1, [1], (None,)])
+def test_invalid_aliases_refused(aliases):
+    with pytest.raises(ValueError, match="registry alias"):
+        fleet.build_fleet([{"id": "a", "aliases": aliases}])
+
+
+@pytest.mark.parametrize("aliases", [["alias"], ("alias",)])
+def test_alias_containers_supported(aliases):
+    result = fleet.build_fleet([{"id": "a", "aliases": aliases}],
+                              {"alias": {"cpu_percent": 12.5}}, [])
+    assert result["hosts"][0]["sample"]["cpu_percent"] == 12.5

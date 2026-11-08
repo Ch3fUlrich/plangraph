@@ -32,8 +32,10 @@ def write_snapshot(server, principal) -> None:
     try:
         from ..fleet_snapshot import load_fleet
         snapshot["fleet"] = load_fleet(server.store)
-    except Exception:  # noqa: BLE001 - optional fleet must never fail a snapshot
-        logging.getLogger(__name__).exception("Fleet snapshot projection failed")
+    except Exception as exc:  # noqa: BLE001 - optional fleet must never fail a snapshot
+        # Exception messages can contain private store paths; use a fixed summary.
+        logging.getLogger(__name__).warning(
+            "Fleet snapshot projection failed: %s: projection unavailable", type(exc).__name__)
         snapshot["fleet"] = None
         snapshot["fleet_error"] = "projection_failed"
     body = timing.measured(part="encode_ms")(lambda: json.dumps(snapshot).encode("utf-8"))()
