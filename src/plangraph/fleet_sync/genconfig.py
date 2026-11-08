@@ -4,7 +4,7 @@ import os
 import re
 from pathlib import Path
 
-from plangraph.spawner.private_io import atomic_write_private
+from plangraph.routing_support.private_io import atomic_write_private
 
 
 def config_dir():
