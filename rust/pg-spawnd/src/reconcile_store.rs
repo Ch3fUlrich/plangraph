@@ -169,25 +169,19 @@ pub(crate) fn lock(
 }
 
 /// Settlement requires both the recorded process and its confinement group gone.
-pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
+pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, ReconcileError> {
     let Some(identity) = identity else {
         return Err(ReconcileError::Unknown);
     };
     #[cfg(target_os = "linux")]
     {
         if let Some(group) = &identity.group {
-            let run = Path::new(group)
-                .file_name()
-                .and_then(|s| s.to_str())
-                .and_then(|s| s.strip_prefix("pg-"))
-                .and_then(|s| s.strip_suffix(".scope"))
-                .ok_or(ReconcileError::Unknown)?;
-            let path = crate::reconcile_backend::native::scope(run, group)
+            let path = crate::reconcile_backend::native::scope(run_id, group)
                 .map_err(|_| ReconcileError::Unknown)?;
             return match std::fs::read_to_string(path.join("cgroup.events")) {
                 Ok(text) => match text.lines().find_map(|s| s.strip_prefix("populated ")) {
                     Some("0") => Ok(true),
-                    Some("1") => Ok(false),
+                    Some("1") => Err(ReconcileError::Unknown),
                     _ => Err(ReconcileError::Unknown),
                 },
                 Err(e)
@@ -238,22 +232,20 @@ pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
     #[cfg(windows)]
     {
         let name = identity.group.as_deref().ok_or(ReconcileError::Unknown)?;
-        let run = name
-            .strip_prefix("Local\\pg-")
-            .ok_or(ReconcileError::Unknown)?;
+        crate::reconcile::job::scope(run_id, name).map_err(|_| ReconcileError::Unknown)?;
         let copy = Proc {
             pid: identity.pid,
             start_time: identity.start_time,
             group: identity.group.clone(),
             pgid: identity.pgid,
         };
-        crate::reconcile::job::Group::open(run, copy)
-            .and_then(|mut job| job.is_gone())
+        crate::reconcile::job::Group::open(run_id, copy)
+            .and_then(|mut job| job.orphan_empty())
             .map_err(|_| ReconcileError::Unknown)
     }
     #[cfg(not(any(target_os = "linux", windows)))]
     {
-        let _ = identity;
+        let _ = (run_id, identity);
         Err(ReconcileError::Unknown)
     }
 }
@@ -269,11 +261,7 @@ pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileErr
     else {
         return Ok(true);
     };
-    if !gone(current.identity.as_ref())? {
-        return Ok(false);
-    }
-    #[cfg(windows)]
-    if !crate::reconcile::job::orphan_empty(&current)? {
+    if !gone(&current.run_id, current.identity.as_ref())? {
         return Ok(false);
     }
     let mut record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;

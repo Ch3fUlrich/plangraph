@@ -110,7 +110,11 @@ fn reconcile_removed_scope_requires_recorded_group_gone() {
     record.save().unwrap();
     let before = std::fs::read(record.path()).unwrap();
     std::fs::remove_dir(&scope).unwrap();
-    assert!(gone(Some(&serde_json::from_value(identity.clone()).unwrap())).unwrap());
+    assert!(gone(
+        "run-test",
+        Some(&serde_json::from_value(identity.clone()).unwrap())
+    )
+    .unwrap());
     crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
     let settled = std::fs::read(record.path()).unwrap();
     assert_ne!(before, settled);
@@ -130,7 +134,10 @@ fn reconcile_removed_scope_requires_recorded_group_gone() {
             std::fs::create_dir(scope.join("cgroup.events")).unwrap();
         }
         assert!(matches!(
-            gone(Some(&serde_json::from_value(identity.clone()).unwrap())),
+            gone(
+                "run-test",
+                Some(&serde_json::from_value(identity.clone()).unwrap())
+            ),
             Err(ReconcileError::Unknown)
         ));
         assert!(matches!(
@@ -161,7 +168,7 @@ fn reconcile_removed_scope_without_recorded_pgid_unknown_untouched() {
     record.save().unwrap();
     let before = std::fs::read(record.path()).unwrap();
     std::fs::remove_dir(&scope).unwrap();
-    assert!(gone(Some(&serde_json::from_value(identity).unwrap())).unwrap());
+    assert!(gone("run-test", Some(&serde_json::from_value(identity).unwrap())).unwrap());
     crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
     assert_ne!(before, std::fs::read(record.path()).unwrap());
 }
@@ -219,17 +226,23 @@ fn reconcile_named_group_members_override_reused_leader_identity() {
         pgid: None,
     };
     std::fs::write(group.join("cgroup.events"), "populated 1\nfrozen 0\n").unwrap();
-    assert!(!gone(Some(&identity)).unwrap());
+    assert!(matches!(
+        gone("run-test", Some(&identity)),
+        Err(ReconcileError::Unknown)
+    ));
     std::fs::write(group.join("cgroup.procs"), "").unwrap();
     let child = group.join("child");
     std::fs::create_dir(&child).unwrap();
     std::fs::write(child.join("cgroup.threads"), "123\n").unwrap();
-    assert!(!gone(Some(&identity)).unwrap());
+    assert!(matches!(
+        gone("run-test", Some(&identity)),
+        Err(ReconcileError::Unknown)
+    ));
     std::fs::write(group.join("cgroup.events"), "populated 0\nfrozen 0\n").unwrap();
-    assert!(gone(Some(&identity)).unwrap());
+    assert!(gone("run-test", Some(&identity)).unwrap());
     std::fs::remove_file(group.join("cgroup.events")).unwrap();
     assert!(matches!(
-        gone(Some(&identity)),
+        gone("run-test", Some(&identity)),
         Err(ReconcileError::Unknown)
     ));
 }
@@ -272,9 +285,12 @@ fn reconcile_nonleader_live_pid_group_esrch_is_not_settled() {
     let before = std::fs::read(record.path()).unwrap();
     child.stop();
     assert!(!std::path::Path::new(&format!("/proc/{}", child.0.id())).exists());
-    assert!(!gone(Some(&recorded)).unwrap());
+    assert!(!gone("run-test", Some(&recorded)).unwrap());
     let legacy: Proc = serde_json::from_value(record.get("proc").unwrap().clone()).unwrap();
-    assert!(matches!(gone(Some(&legacy)), Err(ReconcileError::Unknown)));
+    assert!(matches!(
+        gone("run-test", Some(&legacy)),
+        Err(ReconcileError::Unknown)
+    ));
     assert!(matches!(
         crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
         Err(ReconcileError::Unknown)
@@ -298,7 +314,7 @@ fn reconcile_exited_leader_live_member_is_not_gone() {
     );
     leader.stop();
     assert!(!std::path::Path::new(&format!("/proc/{}", leader.0.id())).exists());
-    assert!(!gone(Some(&identity)).unwrap());
+    assert!(!gone("run-test", Some(&identity)).unwrap());
     assert!(member.0.try_wait().unwrap().is_none());
 }
 
@@ -318,5 +334,5 @@ fn reconcile_zombie_leader_is_not_gone() {
         assert!(std::time::Instant::now() < deadline);
         std::thread::yield_now();
     }
-    assert!(!gone(Some(&identity)).unwrap());
+    assert!(!gone("run-test", Some(&identity)).unwrap());
 }

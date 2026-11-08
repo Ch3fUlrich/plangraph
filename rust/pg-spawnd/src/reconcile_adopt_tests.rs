@@ -106,7 +106,7 @@ fn gone_scope_ignores_live_reused_leader() {
         pgid: None,
         group: Some(path),
     };
-    assert!(crate::reconcile_store::gone(Some(&identity)).unwrap());
+    assert!(crate::reconcile_store::gone(run, Some(&identity)).unwrap());
 }
 #[test]
 fn foreign_and_traversal_scopes_refused() {

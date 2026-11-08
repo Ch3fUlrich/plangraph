@@ -151,7 +151,8 @@ pub(crate) fn configured(root: &Path) -> Result<Guard, String> {
                 eprintln!("shadow adoption unavailable: {error}");
                 Vec::new()
             }) {
-                if crate::reconcile_store::gone(row.identity.as_ref()).ok() == Some(false)
+                if crate::reconcile_store::gone(&row.run_id, row.identity.as_ref()).ok()
+                    == Some(false)
                     && row
                         .identity
                         .is_some_and(|identity| native::Group::open(&row.run_id, identity).is_ok())
@@ -236,7 +237,9 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
             if let Some(identity) = row.identity {
                 if let Some(start) = identity.start_time {
                     let key = (row.run_id, identity.pid, start, identity.group.clone());
-                    if validated.contains(&key) && crate::reconcile_store::gone(Some(&identity))? {
+                    if validated.contains(&key)
+                        && crate::reconcile_store::gone(&key.0, Some(&identity))?
+                    {
                         gone.push(key);
                     }
                 }

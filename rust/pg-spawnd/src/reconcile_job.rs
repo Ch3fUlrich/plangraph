@@ -15,14 +15,6 @@ use std::io;
 #[cfg(windows)]
 use std::process::ExitStatus;
 #[cfg(windows)]
-pub(crate) fn orphan_empty(
-    row: &crate::reconcile_store::Entry,
-) -> Result<bool, crate::reconcile::ReconcileError> {
-    use crate::reconcile::ReconcileError;
-    let identity = row.identity.as_ref().ok_or(ReconcileError::Unknown)?;
-    Group::orphan_empty(&row.run_id, identity).map_err(|_| ReconcileError::Unknown)
-}
-#[cfg(windows)]
 pub(crate) struct Group(AdoptedJob<NativeJob>);
 pub(crate) fn scope(run: &str, recorded: &str) -> io::Result<()> {
     if !pg_worker_core::run::record::valid_run_id(run) || recorded != format!("Local\\pg-{run}") {
@@ -47,16 +39,8 @@ fn validate<'a>(run: &str, identity: &'a Proc) -> io::Result<(&'a str, u64)> {
 }
 #[cfg(windows)]
 impl Group {
-    pub(crate) fn orphan_empty(run: &str, identity: &Proc) -> io::Result<bool> {
-        let copy = Proc {
-            pid: identity.pid,
-            start_time: identity.start_time,
-            group: identity.group.clone(),
-            pgid: identity.pgid,
-        };
-        let mut job = Self::open(run, copy)?;
-        job.terminate()?;
-        job.empty()
+    pub(crate) fn orphan_empty(&mut self) -> io::Result<bool> {
+        orphan_empty(&mut self.0)
     }
     pub(crate) fn open(run: &str, identity: Proc) -> io::Result<Self> {
         let (name, start) = validate(run, &identity)?;
@@ -68,9 +52,6 @@ impl Group {
     }
     pub(crate) fn cpu(&mut self) -> io::Result<CpuSample> {
         self.0.cpu()
-    }
-    pub(crate) fn is_gone(&mut self) -> io::Result<bool> {
-        self.0.is_gone()
     }
 }
 #[cfg(windows)]
@@ -90,4 +71,38 @@ impl Child for Group {
     fn kill(&mut self) -> io::Result<()> {
         self.0.terminate()
     }
+}
+
+// Probes and cleanup share the handle that passed verification.
+#[cfg(any(windows, test))]
+trait OrphanJob {
+    fn gone(&mut self) -> io::Result<bool>;
+    fn empty(&mut self) -> io::Result<bool>;
+    fn terminate(&mut self) -> io::Result<()>;
+}
+#[cfg(windows)]
+impl OrphanJob for AdoptedJob<NativeJob> {
+    fn gone(&mut self) -> io::Result<bool> {
+        self.is_gone()
+    }
+    fn empty(&mut self) -> io::Result<bool> {
+        self.empty()
+    }
+    fn terminate(&mut self) -> io::Result<()> {
+        self.terminate()
+    }
+}
+#[cfg(any(windows, test))]
+fn orphan_empty(job: &mut impl OrphanJob) -> io::Result<bool> {
+    if !job.gone()? {
+        return Ok(false);
+    }
+    if !job.empty()? {
+        return Err(io::ErrorKind::WouldBlock.into());
+    }
+    job.terminate()?;
+    if !job.empty()? {
+        return Err(io::ErrorKind::WouldBlock.into());
+    }
+    Ok(true)
 }

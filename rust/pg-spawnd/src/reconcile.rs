@@ -92,7 +92,7 @@ pub(crate) fn startup(
         }
         // Only a verified live leader can support a read-only adoption decision.
         let gone = matches!(
-            crate::reconcile_store::gone(row.identity.as_ref()),
+            crate::reconcile_store::gone(&row.run_id, row.identity.as_ref()),
             Ok(true)
         );
         if gone {
