@@ -1,0 +1,75 @@
+//! Attribution for the record-only settlement bridge.
+use super::*;
+
+fn key(leg: &Value, name: &str) -> Result<Option<String>, ReconcileError> {
+    match &leg[name] {
+        Value::Null => Ok(None),
+        Value::String(s) => Ok(Some(s.clone())),
+        _ => Err(ReconcileError::Invalid),
+    }
+}
+
+pub(super) fn build(
+    leg: &Value,
+    role: pg_worker_core::hosts::Role,
+    run: &str,
+    attempt: u32,
+    now_ms: u64,
+    duration: u64,
+) -> Result<Result<Value, &'static str>, ReconcileError> {
+    if !leg.is_object() {
+        return Err(ReconcileError::Invalid);
+    }
+    let leg_key = key(leg, "leg_key")?;
+    let route_key = key(leg, "route_key")?;
+    // Python leg_probe.key(); checked by test_reconcile_leg_key_fixture.py.
+    let leg_key = leg_key.or_else(|| {
+        let model = leg["model"].as_str()?;
+        Some(if leg["harness"] == "agy" && !model.contains('/') {
+            format!("agy/{model}")
+        } else {
+            model.to_owned()
+        })
+    });
+    // SpawnService._spawn's attempt writer (spawner/service.py) writes asdict(chosen),
+    // served_model and served_family, but no route identity. Keep it null rather
+    // than inventing attribution or losing a real orphan's outcome.
+    let Some(leg_key) = leg_key else {
+        return Ok(Err("leg_key unavailable"));
+    };
+    if leg_key.is_empty() || route_key.as_ref().is_some_and(|key| key.is_empty()) {
+        return Err(ReconcileError::Invalid);
+    }
+    let row = json!({
+        "leg_key": leg_key,
+        "route_key": route_key,
+        "ts": i64::try_from(now_ms / 1000).map_err(|_| ReconcileError::Invalid)?,
+        "role": role,
+        "outcome": "orphaned",
+        "run_id": run,
+        "attempt": attempt,
+        "duration_s": i64::try_from(duration).map_err(|_| ReconcileError::Invalid)?,
+        "reset_at": null,
+        "reset_assumed": false,
+        "reset_clamped": false,
+        "open_tools_at_kill": null,
+        "s_eff_s": null,
+        "line": "reconciled group ended"
+    });
+    contract(&row)?;
+    Ok(Ok(row))
+}
+
+/// The evidence-row contract for the written row. A null route_key (Python
+/// writes no route identity) is checked under a non-empty stand-in so every
+/// other field still meets the contract; the row itself keeps the null.
+fn contract(row: &Value) -> Result<(), ReconcileError> {
+    let mut checked = row.clone();
+    if checked["route_key"].is_null() {
+        checked["route_key"] = json!("unattributed");
+    }
+    let row: crate::evidence_row::OutcomeRow =
+        serde_json::from_value(checked).map_err(|_| ReconcileError::Invalid)?;
+    crate::evidence_row::validate(&crate::evidence_row::EvidenceRow::Outcome(row))
+        .map_err(|_| ReconcileError::Invalid)
+}
