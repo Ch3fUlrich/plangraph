@@ -29,6 +29,7 @@ fn fixture(linked: bool) -> (TempDir, PathBuf, PathBuf, RunRecord) {
         fs::write(cwd.join(".git"), "gitdir: ../common/.git/worktrees/leaf\n").unwrap();
         fs::write(gitdir.join("commondir"), "../..\n").unwrap();
         fs::write(gitdir.join("gitdir"), cwd.join(".git").to_str().unwrap()).unwrap();
+        fs::write(common.join("HEAD"), "ref: refs/heads/main\n").unwrap();
         common.join("config")
     } else {
         fs::create_dir(cwd.join(".git")).unwrap();
@@ -73,7 +74,10 @@ fn changed_common_worktree_restored_and_failed_after_restart() {
 fn unchanged_outcome_untouched() {
     let (_temp, _, _, mut record) = fixture(false);
     let before = record.to_value();
-    assert_eq!(enforce(&mut record, Status::Completed), Status::Completed);
+    assert_eq!(
+        enforce(&mut record, Status::Completed, json!({})),
+        Status::Completed
+    );
     assert_eq!(record.to_value(), before);
 }
 
@@ -88,7 +92,10 @@ fn per_worktree_changed_restored() {
     snapshots[1].bytes = optional(&local).unwrap();
     atomic_write_private(&snapshots_path, &serde_json::to_vec(&snapshots).unwrap()).unwrap();
     fs::write(&local, b"changed local\n").unwrap();
-    assert_eq!(enforce(&mut record, Status::Orphaned), Status::Failed);
+    assert_eq!(
+        enforce(&mut record, Status::Orphaned, json!({})),
+        Status::Failed
+    );
     assert_eq!(fs::read(local).unwrap(), b"original local\n");
 }
 
@@ -96,7 +103,10 @@ fn per_worktree_changed_restored() {
 fn created_during_run_removed() {
     let (_temp, _, local, mut record) = fixture(true);
     fs::write(&local, b"new local\n").unwrap();
-    assert_eq!(enforce(&mut record, Status::Completed), Status::Failed);
+    assert_eq!(
+        enforce(&mut record, Status::Completed, json!({})),
+        Status::Failed
+    );
     assert!(!local.exists());
 }
 
@@ -161,7 +171,10 @@ fn missing_snapshot_is_explicit() {
     let (_temp, config, _, mut record) = fixture(false);
     fs::remove_file(sidecar(record.path().parent().unwrap())).unwrap();
     fs::write(&config, b"altered").unwrap();
-    assert_eq!(enforce(&mut record, Status::Completed), Status::Failed);
+    assert_eq!(
+        enforce(&mut record, Status::Completed, json!({})),
+        Status::Failed
+    );
     assert_eq!(
         record.get("reason"),
         Some(&json!("gitconfig_snapshot_missing"))
@@ -172,12 +185,17 @@ fn missing_snapshot_is_explicit() {
 #[test]
 fn verdict_survives_retry_and_preserves_diagnostic() {
     let (temp, config, _, mut record) = fixture(false);
-    record.set("reason", json!("harness exit 7"));
-    record.set("exit_code", json!(7));
     fs::write(config, b"altered").unwrap();
-    crate::runs::finish(&mut record, Status::Failed, &json!({}));
+    crate::runs::finish(
+        &mut record,
+        Status::Failed,
+        &json!({"reason":"harness exit 7","exit_code":7}),
+    );
     let mut record = RunRecord::read(temp.path(), "run-guard").unwrap();
-    assert_eq!(enforce(&mut record, Status::Completed), Status::Failed);
+    assert_eq!(
+        enforce(&mut record, Status::Completed, json!({})),
+        Status::Failed
+    );
     let original = record.get("gitconfig_original_outcome").unwrap();
     assert_eq!(original["reason"], "harness exit 7");
     assert_eq!(original["exit_code"], 7);
@@ -222,7 +240,72 @@ fn replaced_config_symlink_never_touches_target() {
     fs::write(&outside, b"untouched").unwrap();
     fs::remove_file(&config).unwrap();
     std::os::unix::fs::symlink(&outside, &config).unwrap();
-    assert_eq!(enforce(&mut record, Status::Completed), Status::Failed);
+    assert_eq!(
+        enforce(&mut record, Status::Completed, json!({})),
+        Status::Failed
+    );
     assert_eq!(fs::read(outside).unwrap(), b"untouched");
-    assert_eq!(record.get("gitconfig_restore_error"), Some(&json!(true)));
+    assert_eq!(record.get("gitconfig_restore_error"), Some(&json!(false)));
+}
+
+#[test]
+fn external_bare_worktree_and_backlink_validation() {
+    let (temp, _, _, record) = fixture(true);
+    let external = TempDir::new();
+    let bare = external.path().join("repo.git");
+    fs::rename(temp.path().join("common/.git"), &bare).unwrap();
+    let cwd = temp.path().join("checkout");
+    let gitdir = bare.join("worktrees/leaf");
+    fs::write(cwd.join(".git"), format!("gitdir: {}", gitdir.display())).unwrap();
+    assert!(capture(&cwd, record.path().parent().unwrap()).unwrap());
+    fs::write(gitdir.join("gitdir"), bare.join("HEAD").to_str().unwrap()).unwrap();
+    assert!(capture(&cwd, record.path().parent().unwrap()).is_err());
+}
+
+#[test]
+fn retry_does_not_duplicate_alert() {
+    let (_temp, config, _, mut record) = fixture(false);
+    fs::write(config, b"altered").unwrap();
+    enforce(&mut record, Status::Completed, json!({}));
+    let before = record.to_value();
+    enforce(&mut record, Status::Orphaned, json!({}));
+    assert_eq!(record.to_value(), before);
+}
+
+#[test]
+fn windows_gitdir_and_commondir_syntax() {
+    for root in ["H:/repo.git", r"H:\repo.git", "/mnt/h/repo.git"] {
+        let line = format!("gitdir: {root}/worktrees/leaf\n");
+        let gitdir = resolve(
+            Path::new("checkout"),
+            line.trim().strip_prefix("gitdir:").unwrap(),
+        );
+        assert_eq!(
+            gitdir,
+            PathBuf::from(format!("{}/worktrees/leaf", root.replace('\\', "/")))
+        );
+        assert_eq!(
+            resolve(&gitdir, root),
+            PathBuf::from(root.replace('\\', "/"))
+        );
+        assert_eq!(resolve(&gitdir, r"..\.."), gitdir.join("../.."));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn persistence_failure_still_restores_and_marks_sidecar() {
+    let (_temp, config, _, mut record) = fixture(false);
+    let original = fs::read(&config).unwrap();
+    fs::write(&config, b"altered").unwrap();
+    // An unreplaceable record path forces atomic saves to fail, even as root.
+    fs::remove_file(record.path()).unwrap();
+    fs::create_dir(record.path()).unwrap();
+    enforce(&mut record, Status::Completed, json!({}));
+    assert_eq!(fs::read(config).unwrap(), original);
+    assert_eq!(record.get("gitconfig_restore_error"), Some(&json!(false)));
+    assert!(record
+        .path()
+        .with_file_name("gitconfig.verdict-save-error")
+        .exists());
 }

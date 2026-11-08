@@ -12,3 +12,9 @@ and pre-restore verdicts are synced; missing snapshots have a distinct failure
 reason. All non-dry roles are guarded, restoration is verified with one retry,
 and event delivery failures are recorded. Restart, settle, submodule, poisoned
 pointer, missing-sidecar and symlink regression tests cover the failure paths.
+
+Round 3: validate linked administrative directories and backlinks independently of
+checkout location (including bare repositories); preserve explicit finish/settle
+outcomes, avoid duplicate alerts, and restore even after verdict storage failure.
+Retry verdict saves with a durable failure sidecar, and replace poisoned config
+symlinks without following their targets. Cover Windows/WSL pointer syntax.

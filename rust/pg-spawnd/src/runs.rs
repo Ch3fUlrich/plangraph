@@ -94,7 +94,7 @@ impl Runs {
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
         if !dry {
-            let dir = pg_worker_core::run::record::run_dir(state, &run_id)
+            let dir = crate::gitconfig_guard::run_dir(state, &run_id)
                 .map_err(|_| internal("invalid run id"))?;
             match crate::gitconfig_guard::capture(&launch.cwd, &dir) {
                 Ok(armed) => base["gitconfig_guard"] = json!(armed),
@@ -293,7 +293,9 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
     }
 }
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
-    let status = crate::gitconfig_guard::enforce(record, status);
+    let diagnostic = json!({"reason":leg.get("reason").or_else(|| record.get("reason")),
+        "exit_code":leg.get("exit_code").or_else(|| record.get("exit_code"))});
+    let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
     let dry = status == Status::DryRun;
     let unwitnessed = json!("unwitnessed");
     let mut attempts = match record.get("attempts") {

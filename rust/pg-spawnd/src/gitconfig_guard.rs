@@ -53,16 +53,14 @@ pub(crate) fn capture(cwd: &Path, run_dir: &Path) -> io::Result<bool> {
             .strip_prefix("gitdir:")
             .ok_or_else(|| io::Error::other("invalid gitdir pointer"))?;
         let gitdir = resolve(&cwd, pointer);
-        safe(&gitdir)?;
         let gitdir = fs::canonicalize(gitdir)?;
         safe(&gitdir.join("commondir"))?;
         match fs::read_to_string(gitdir.join("commondir")) {
             Ok(text) => {
                 let common = resolve(&gitdir, &text);
-                safe(&common)?;
                 let common = fs::canonicalize(common)?;
-                if !common.starts_with(cwd.parent().unwrap_or(&cwd))
-                    || common.file_name() != Some(std::ffi::OsStr::new(".git"))
+                if !common.join("HEAD").is_file()
+                    || !common.join("config").is_file()
                     || gitdir.parent() != Some(common.join("worktrees").as_path())
                 {
                     return Err(io::Error::other("gitconfig_untrusted_gitdir"));
@@ -130,11 +128,26 @@ fn durable(path: &Path, bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn enforce(record: &mut RunRecord, outcome: Status) -> Status {
+pub(crate) fn run_dir(state: &Path, id: &str) -> io::Result<PathBuf> {
+    pg_worker_core::run::record::run_dir(state, id).map_err(|_| io::Error::other("invalid run id"))
+}
+
+pub(crate) fn enforce(
+    record: &mut RunRecord,
+    outcome: Status,
+    diagnostic: serde_json::Value,
+) -> Status {
     if record.get("gitconfig_guard") != Some(&json!(true)) {
         return outcome;
     }
-    let path = sidecar(record.path().parent().unwrap());
+    let parent = record.path().parent().unwrap();
+    let dir = run_dir(
+        parent.parent().unwrap().parent().unwrap(),
+        parent.file_name().unwrap().to_str().unwrap(),
+    )
+    .unwrap();
+    debug_assert_eq!(parent, dir);
+    let path = sidecar(&dir);
     let snapshots = fs::read(path)
         .ok()
         .and_then(|b| serde_json::from_slice::<Vec<Snapshot>>(&b).ok());
@@ -150,8 +163,8 @@ pub(crate) fn enforce(record: &mut RunRecord, outcome: Status) -> Status {
         })
         .unwrap_or_default();
     let previous = record.get("gitconfig_original_outcome").is_some();
-    if snapshots.is_some() && paths.is_empty() && !previous {
-        return outcome;
+    if snapshots.is_some() && paths.is_empty() {
+        return if previous { Status::Failed } else { outcome };
     }
     let reason = if snapshots.is_none() {
         "gitconfig_snapshot_missing"
@@ -161,19 +174,11 @@ pub(crate) fn enforce(record: &mut RunRecord, outcome: Status) -> Status {
     // Keep the original result, including its diagnostic, separate from the
     // security outcome. Finalize's subsequent terminal transition is a no-op.
     if !previous {
-        let diagnostic = if outcome == Status::Orphaned {
-            record
-                .get("attempts")
-                .and_then(|v| v.as_array())
-                .and_then(|v| v.last())
-        } else {
-            None
-        };
         record.set(
             "gitconfig_original_outcome",
             json!({"status":outcome.as_str(),
-            "reason":diagnostic.and_then(|v| v.get("reason")).or_else(|| record.get("reason")),
-            "exit_code":diagnostic.and_then(|v| v.get("exit_code")).or_else(|| record.get("exit_code"))}),
+            "reason":diagnostic["reason"],
+            "exit_code":diagnostic["exit_code"]}),
         );
     }
     record.set("reason", json!(reason));
@@ -187,14 +192,23 @@ pub(crate) fn enforce(record: &mut RunRecord, outcome: Status) -> Status {
     {
         record.set("gitconfig_delivery_error", json!(true));
     }
-    // Never erase evidence on disk until the security verdict is durable.
-    let persisted = record.save().is_ok() && durable_record(record).is_ok();
-    let error = !persisted || snapshots.map(|s| restore(&s)).unwrap_or(true);
+    let persisted = save_verdict(record);
+    let error = snapshots.map(|s| restore(&s)).unwrap_or(true);
     record.set("gitconfig_restore_error", json!(error));
-    if record.save().is_err() {
+    if !persisted || !save_verdict(record) {
         record.set("gitconfig_verdict_save_error", json!(true));
+        if !save_verdict(record) {
+            let _ = durable(
+                &dir.join("gitconfig.verdict-save-error"),
+                b"gitconfig_verdict_save_error\n",
+            );
+        }
     }
     Status::Failed
+}
+
+fn save_verdict(record: &RunRecord) -> bool {
+    (0..2).any(|_| record.save().is_ok() && durable_record(record).is_ok())
 }
 
 fn durable_record(record: &RunRecord) -> io::Result<()> {
@@ -208,7 +222,13 @@ fn restore(snapshots: &[Snapshot]) -> bool {
     let mut failed = false;
     for snapshot in snapshots {
         for _ in 0..2 {
-            if safe(&snapshot.path).is_err() {
+            if safe(snapshot.path.parent().unwrap()).is_err() {
+                failed = true;
+                break;
+            }
+            if fs::symlink_metadata(&snapshot.path).is_ok_and(|m| m.file_type().is_symlink())
+                && fs::remove_file(&snapshot.path).is_err()
+            {
                 failed = true;
                 break;
             }
