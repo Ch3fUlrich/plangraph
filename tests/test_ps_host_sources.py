@@ -54,19 +54,21 @@ def test_remote_ps_source_prefix_executes(ssh):
     assert remote_ps._fetch(hosts[0], remote_ps.query_host)[0]['reason'] == 'host src missing'
 
 
-@pytest.mark.parametrize('mode,detail', [('ok', 'ok'), ('exit', 'host query failed'),
+@pytest.mark.parametrize('mode,detail', [('ok', 'ok'), ('extra', 'ok'), ('exit', 'host query failed'),
     ('json', 'host query failed'), ('shape', 'host query failed'),
     ('timeout', 'host query failed'), ('missing', 'unavailable'),
     *[(rows, 'host query failed') for rows in [
         ['x'], [None], [3], [[]], [{}],
         [dict(name='a', status='pass')],
-        [dict(name='a', status='pass', detail=3)],
-        [dict(name='a', status='pass', detail='ok', extra='x')],
+        *[[dict(name='a', status='pass', detail='ok') | {key: value}]
+          for key in ('name', 'status', 'detail') for value in (None, 3, [], {})],
         [dict(name='a', status='pass', detail='ok'), 'x'],
     ]]])
 def test_doctor_rust_sources(monkeypatch, mode, detail):
     import asyncio
     rows = [dict(name='ps_host_a', status='pass', detail='ok')]
+    if mode == 'extra':
+        rows[0]['extra'] = {'future': 2}
     if isinstance(mode, list):
         rows = mode
     def run(command, **kwargs):
@@ -86,7 +88,8 @@ def test_doctor_rust_sources(monkeypatch, mode, detail):
     monkeypatch.setattr(doctor, 'mcp', mcp)
     monkeypatch.setattr(doctor.shutil, 'which', lambda name: None)
     result = asyncio.run(doctor.diagnose())['checks'][0]
-    assert result == (rows[0] if mode == 'ok' else
+    assert result == ({key: rows[0][key] for key in ('name', 'status', 'detail')}
+        if mode in ('ok', 'extra') else
         dict(name='ps_hosts', status='fail', detail=detail))
 
 

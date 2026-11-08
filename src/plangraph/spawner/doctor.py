@@ -162,10 +162,11 @@ async def diagnose(probe=False):
             rows = json.loads(result.stdout)
             if (result.returncode == 0 and isinstance(rows, list)
                     and all(isinstance(row, dict)
-                            and set(row) == {'name', 'status', 'detail'}
-                            and all(isinstance(value, str) for value in row.values())
+                            and all(isinstance(row.get(key), str)
+                                    for key in ('name', 'status', 'detail'))
                             for row in rows)):
-                return rows
+                return [{key: row[key] for key in ('name', 'status', 'detail')}
+                        for row in rows]
         except FileNotFoundError:
             detail = 'unavailable'
         except (OSError, subprocess.TimeoutExpired, ValueError, UnicodeError):
