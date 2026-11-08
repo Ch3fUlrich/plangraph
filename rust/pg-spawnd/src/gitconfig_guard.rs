@@ -16,6 +16,29 @@ struct Snapshot {
     bytes: Option<Vec<u8>>,
 }
 
+pub(crate) fn guard_diagnostic(
+    record: &RunRecord,
+    status: Status,
+    leg: &serde_json::Value,
+    attempt: u32,
+) -> serde_json::Value {
+    let mut diagnostic = attempt
+        .checked_sub(1)
+        .and_then(|index| record.get("attempts")?.get(index as usize))
+        .filter(|entry| entry.is_object())
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if status == Status::Orphaned && diagnostic["exit_code"].is_null() {
+        diagnostic["exit_code"] = diagnostic["prior_exit_code"].clone();
+    }
+    for field in ["exit_code", "reason"] {
+        if diagnostic[field].is_null() {
+            diagnostic[field] = leg[field].clone();
+        }
+    }
+    diagnostic
+}
+
 fn optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),

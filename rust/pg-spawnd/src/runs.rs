@@ -299,7 +299,7 @@ fn book_attempt(base: &mut Value, leg: &Value) -> u32 {
     u32::try_from(attempts.len()).expect("attempt count fits u32")
 }
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
-    let diagnostic = crate::reconcile_store::guard_diagnostic(record, status, leg, attempt_id);
+    let diagnostic = crate::gitconfig_guard::guard_diagnostic(record, status, leg, attempt_id);
     let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
     let mut attempts = match record.get("attempts") {
         None if attempt_id == 1 => vec![json!({"legacy_normalized":true})],

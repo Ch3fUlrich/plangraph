@@ -127,6 +127,7 @@ fn missing_snapshot_is_explicit() {
 #[test]
 fn verdict_survives_retry_and_preserves_diagnostic() {
     let (temp, config, _, mut record) = fixture(false);
+    record.set("attempts", json!([{"status":"running","leg":{}}]));
     fs::write(config, b"altered").unwrap();
     crate::runs::finish(
         &mut record,

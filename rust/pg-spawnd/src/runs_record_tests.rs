@@ -166,6 +166,30 @@ fn orphan_settle_selects_non_last_non_first_attempt() {
 }
 
 #[test]
+fn orphan_settle_with_valid_attribution_preserves_prior_code() {
+    let dir = std::env::temp_dir().join(new_run_id());
+    let leg = json!({"leg_key":"leg","route_key":"route","model":"fixture"});
+    let mut record = create(
+        &dir,
+        "run-valid",
+        "fixture",
+        json!({"role":"implement","attempts":[
+            {"status":"running","started":1,"exit_code":7,"leg":leg}]}),
+        Status::Running,
+    )
+    .unwrap_or_else(|_| panic!("fixture creation failed"));
+    crate::reconcile_store::settle(&dir, &mut record, 1, "gone", 2000).unwrap();
+    let saved = RunRecord::read(&dir, "run-valid").unwrap();
+    let attempt = &saved.get("attempts").unwrap()[0];
+    assert_eq!(saved.status(), Some(Status::Orphaned));
+    assert_eq!(attempt["exit_code"], Value::Null);
+    assert_eq!(attempt["prior_exit_code"], 7);
+    assert_eq!(attempt["outcome"]["leg_key"], "leg");
+    assert_eq!(crate::evidence_row::adapted(&saved.to_value()).0.len(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn finish_normalizes_legacy_unbooked_first_attempt_only() {
     let dir = std::env::temp_dir().join(new_run_id());
     let record = create(&dir, "run-legacy", "fixture", json!({}), Status::Running)

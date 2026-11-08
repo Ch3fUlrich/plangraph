@@ -373,7 +373,8 @@ pub(crate) fn settle(
     if how == "ended_unobserved" {
         entry["reason"] = json!("reattached_group_exited");
     }
-    // Recovery did not observe this exit; retain any earlier code separately.
+    // Unlike the spawn hook, recovery did not observe this exit: keep it null
+    // and retain any earlier code separately (docs/spawner-reliability.md:11).
     if !entry["exit_code"].is_null() {
         entry["prior_exit_code"] = entry["exit_code"].clone();
     }
@@ -392,7 +393,6 @@ pub(crate) fn settle(
 }
 #[path = "reconcile_store_outcome.rs"]
 mod outcome;
-pub(crate) use outcome::guard_diagnostic;
 #[cfg(test)]
 #[path = "reconcile_store_tests.rs"]
 mod tests;
