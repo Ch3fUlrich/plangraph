@@ -2,7 +2,11 @@ use pg_worker_core::live_probe::*;
 use serde_json::json;
 
 fn spec() -> Spec {
-    serde_json::from_value(json!({"command":["/bin/echo","witness"],"expected":"witness\n"})).unwrap()
+    serde_json::from_value(json!({"command":child("witness"),"expected":"witness\n"})).unwrap()
+}
+
+fn child(mode: &str) -> Vec<String> {
+    vec![env!("CARGO_BIN_EXE_live_probe_child").into(), mode.into()]
 }
 
 #[test]
@@ -27,13 +31,14 @@ fn feature_requires_fresh_matching_latest_pass() {
 #[test]
 fn runner_checks_exit_output_and_timeout() {
     let mut s = spec();
+    assert!(std::path::Path::new(&s.command[0]).is_absolute());
     assert!(run("p:F", &s, 1).unwrap().passed);
     s.expected = "wrong".into();
     assert!(!run("p:F", &s, 1).unwrap().passed);
-    s.command = vec!["/bin/false".into()];
+    s.command = child("fail");
     s.expected.clear();
     assert!(!run("p:F", &s, 1).unwrap().passed);
-    s.command = vec!["/bin/sleep".into(), "2".into()];
+    s.command = child("sleep");
     s.timeout_secs = 1;
     assert!(!run("p:F", &s, 1).unwrap().passed);
 }
@@ -44,14 +49,25 @@ fn daily_runner_records_failure_and_gate_refuses_it() {
     let items = dir.path().join("items.json");
     let journal = dir.path().join("results.jsonl");
     let write_items = |expected: &str| {
-        std::fs::write(&items, serde_json::to_vec(&json!([{
-            "key":"p:F", "kind":"feature", "live_probe":{
-                "command":["/bin/echo","witness"], "expected":expected
-            }
-        }])).unwrap()).unwrap();
+        std::fs::write(
+            &items,
+            serde_json::to_vec(&json!([{
+                "key":"p:F", "kind":"feature", "live_probe":{
+                    "command":child("witness"), "expected":expected
+                }
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
     };
-    let invoke = |mode: &str| std::process::Command::new(env!("CARGO_BIN_EXE_pg-live-probe"))
-        .arg(mode).arg(&items).arg(&journal).output().unwrap();
+    let invoke = |mode: &str| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_pg-live-probe"))
+            .arg(mode)
+            .arg(&items)
+            .arg(&journal)
+            .output()
+            .unwrap()
+    };
     write_items("witness\n");
     assert!(invoke("run").status.success());
     assert!(invoke("gate").status.success());

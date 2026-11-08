@@ -7,6 +7,11 @@ description = "Engine-free core of a worker that runs coding-agent attempts for 
 [lib]
 name = "pg_worker_core"
 
+[[bin]]
+name = "live_probe_child"
+path = "tests/support/live_probe_child.rs"
+test = false
+
 [features]
 test-support = []
 
