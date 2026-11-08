@@ -1,6 +1,9 @@
 use super::*;
 use pg_worker_core::run::record::{RunRecord, Status};
 use serde_json::json;
+#[cfg(target_os = "linux")]
+#[path = "reconcile_store_identity_tests.rs"]
+mod identity_tests;
 
 struct StateDir(std::path::PathBuf);
 impl StateDir {

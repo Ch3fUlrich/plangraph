@@ -1,6 +1,8 @@
 //! Crash recovery with a real daemon and a shell launch adapter.
 #![cfg(target_os = "linux")]
 mod common;
+#[path = "../src/reconcile_store_lock.rs"]
+mod state_lock;
 use common::{ChildGuard, McpClient, TempDir};
 use pg_worker_core::{run::record::RunRecord, slots};
 use serde_json::{json, Value};
@@ -25,6 +27,8 @@ fn signal(pid: u32, signal: i32) {
 
 #[test]
 fn killed_daemon_exited_shell_reconciles_before_reclaim_exactly_once() {
+    // Keep this the only process-spawning test in this dedicated binary:
+    // subreaper is process-wide (common's other test only checks TempDir).
     // Adopt and reap the exited shell after killing its stopped parent, rather
     // than relying on the host's PID 1 to reap promptly (not true in containers).
     assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) }, 0);
@@ -34,7 +38,7 @@ fn killed_daemon_exited_shell_reconciles_before_reclaim_exactly_once() {
     let leg = json!({"id":"leg", "harness":"sh", "model":"fake", "family":"fake",
         "leg_key":"sh/fake", "route_key":"crash-test"});
     let spec = json!({"argv":["/bin/sh","-c",
-        "while [ ! -f release ]; do sleep 0.01; done; exit 0"],
+        "n=0; while [ ! -f release ] && [ $n -lt 1000 ]; do n=$((n+1)); sleep 0.01; done; exit 0"],
         "cwd":state,"env":{"PROMPT":"test"},"stdin":null,"prompt":"test"});
     for (name, body) in [
         (
@@ -136,29 +140,53 @@ fn killed_daemon_exited_shell_reconciles_before_reclaim_exactly_once() {
     let slots_count =
         || slots::with_table(state, Duration::from_secs(1), |t| t.active.len()).unwrap();
     assert_eq!(slots_count(), 1);
-    let lock = pg_worker_core::lockfile::try_lock(&state.join("reconcile.lock"))
+    let lock_path = state_lock::path(state);
+    let lock = pg_worker_core::lockfile::try_lock(&lock_path)
         .unwrap()
         .unwrap();
+    use std::os::fd::{FromRawFd, OwnedFd};
+    // Observe the actual production lock open, even though failed flock closes it.
+    let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+    assert!(fd >= 0);
+    let _watch = unsafe { OwnedFd::from_raw_fd(fd) };
+    let name = std::ffi::CString::new(lock_path.as_os_str().as_encoded_bytes()).unwrap();
+    assert!(unsafe { libc::inotify_add_watch(fd, name.as_ptr(), libc::IN_OPEN) } >= 0);
     std::fs::remove_file(&socket).unwrap();
     let mut blocked = start();
-    let deadline = Instant::now() + Duration::from_millis(200);
-    while Instant::now() < deadline {
+    // The daemon opens this inode only when it attempts the production lock.
+    until(|| {
         assert!(blocked.child.try_wait().unwrap().is_none());
-        assert!(!socket.exists());
-        assert_eq!(slots_count(), 1, "reclaim must wait for reconciliation");
-        assert_eq!(
-            RunRecord::read(state, id).unwrap().get("status"),
-            Some(&json!("running"))
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+        let mut event = [0u8; 4096];
+        let read = unsafe { libc::read(fd, event.as_mut_ptr().cast(), event.len()) };
+        if read < 0 {
+            assert_eq!(
+                std::io::Error::last_os_error().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        }
+        read > 0
+    });
+    assert!(!socket.exists());
+    assert_eq!(slots_count(), 1, "reclaim must wait for reconciliation");
+    assert_eq!(
+        RunRecord::read(state, id).unwrap().get("status"),
+        Some(&json!("running"))
+    );
+    drop(lock);
+    // Socket creation is ordered after reconciliation and reclaim in serve.
+    until(|| socket.exists());
+    drop(std::os::unix::net::UnixStream::connect(&socket).unwrap());
+    assert!(blocked.child.try_wait().unwrap().is_none());
+    assert_eq!(slots_count(), 0);
     blocked.child.kill().unwrap();
     until(|| blocked.child.try_wait().unwrap().is_some());
-    drop(lock);
+    std::fs::remove_file(&socket).unwrap();
     let mut settled = None;
     for _ in 0..2 {
         let mut restarted = start();
-        drop(common::wait_connect(&socket, Duration::from_secs(10)));
+        until(|| socket.exists());
+        drop(std::os::unix::net::UnixStream::connect(&socket).unwrap());
+        assert!(restarted.child.try_wait().unwrap().is_none());
         let record = RunRecord::read(state, id).unwrap();
         assert_eq!(record.get("status"), Some(&json!("orphaned")));
         let attempts = record.get("attempts").unwrap().as_array().unwrap();

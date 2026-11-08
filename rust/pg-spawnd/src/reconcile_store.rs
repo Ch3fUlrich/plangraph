@@ -21,6 +21,8 @@ pub(crate) struct Entry {
 }
 #[path = "reconcile_store_helpers.rs"]
 mod helpers;
+#[path = "reconcile_store_lock.rs"]
+pub(crate) mod state_lock;
 pub(crate) use helpers::lock;
 use helpers::{check, seconds};
 pub(crate) fn read(path: &Path) -> Result<Value, ReconcileError> {
@@ -62,9 +64,9 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
         .map(|e| e.map(|e| e.path()).map_err(|_| ReconcileError::Io))
         .collect::<Result<Vec<_>, _>>()?;
     paths.sort();
-    match std::fs::symlink_metadata(root.join("reconcile.lock")) {
+    match std::fs::symlink_metadata(state_lock::path(root)) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-        _ => check(&root.join("reconcile.lock"), false)?,
+        _ => check(&state_lock::path(root), false)?,
     }
     let mut result = Vec::new();
     for path in paths {
@@ -110,18 +112,23 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
                 if !attempt["leg"].is_object() {
                     return Err(ReconcileError::Invalid);
                 }
-                let started = seconds(attempt.get("started").unwrap_or(&record["started"]))?;
+                let started = attempt
+                    .get("started")
+                    .filter(|v| !v.is_null())
+                    .map(seconds)
+                    .transpose()?;
                 let max_s = attempt
                     .get("max_s")
                     .or_else(|| record.get("max_s"))
                     .filter(|v| !v.is_null())
                     .map(|v| v.as_u64().ok_or(ReconcileError::Invalid))
                     .transpose()?;
-                // In-flight attempts use the run-level launch identity.
+                // Only the sole first attempt can borrow the run identity: there
+                // is no older attempt to inherit. Retries without proc fail closed.
                 let identity_value = attempt
                     .get("proc")
                     .filter(|p| !p.is_null())
-                    .or_else(|| (index + 1 == attempts.len()).then_some(&record["proc"]))
+                    .or_else(|| (attempts.len() == 1).then_some(&record["proc"]))
                     .unwrap_or(&Value::Null);
                 let identity = if identity_value.is_null() {
                     None
@@ -142,7 +149,8 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
                     role: role.into(),
                     attempt: u32::try_from(index + 1).map_err(|_| ReconcileError::Invalid)?,
                     identity,
-                    deadline_ms: crate::reconcile_time::deadline(started, max_s),
+                    deadline_ms: started
+                        .and_then(|start| crate::reconcile_time::deadline(start, max_s)),
                 });
             }
             Ok(())
@@ -346,14 +354,11 @@ pub(crate) fn settle(
     }
     let role = serde_json::from_value(record.get("role").cloned().ok_or_else(invalid)?)
         .map_err(|_| invalid())?;
-    let duration = now_ms
-        .checked_sub(seconds(
-            entry
-                .get("started")
-                .unwrap_or_else(|| record.get("started").unwrap_or(&Value::Null)),
-        )?)
-        .ok_or_else(invalid)?
-        / 1000;
+    // Missing attempt timestamps have unknown duration, not the run's age.
+    let duration = match entry.get("started").filter(|v| !v.is_null()) {
+        Some(start) => now_ms.checked_sub(seconds(start)?).ok_or_else(invalid)? / 1000,
+        None => 0,
+    };
     match outcome::build(&entry["leg"], role, &run, attempt, now_ms, duration)? {
         Ok(row) => entry["outcome"] = row,
         Err(reason) => {

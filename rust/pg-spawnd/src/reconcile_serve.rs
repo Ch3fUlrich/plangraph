@@ -197,7 +197,7 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
     use pg_worker_core::{activity::Limits, run::record::RunRecord};
     let lock_deadline = std::time::Instant::now() + Duration::from_secs(10);
     let _lock = loop {
-        match crate::reconcile_store::lock(root, &root.join("reconcile.lock")) {
+        match crate::reconcile_store::lock(root, &crate::reconcile_store::state_lock::path(root)) {
             Ok(lock) => break lock,
             Err(ReconcileError::Unknown) if std::time::Instant::now() < lock_deadline => {
                 std::thread::sleep(Duration::from_millis(20));
