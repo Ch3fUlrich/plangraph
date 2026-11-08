@@ -1,4 +1,6 @@
 use super::*;
+#[path = "writer_file_size_tests.rs"]
+mod finalize_file_size;
 #[test]
 fn option_oid_ref_traversal_refused() {
     for value in ["--help", "../escape", "refs/heads/main", "HEAD"] {
