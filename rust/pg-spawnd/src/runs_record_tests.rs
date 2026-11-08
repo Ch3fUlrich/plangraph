@@ -137,9 +137,11 @@ fn gateway_attempt_reports_missing_call_log_integration() {
     let dir = std::env::temp_dir().join(new_run_id());
     for model in [
         "omniroute-agy-gemini-3.8-flash",
+        "omniroute-agy-x",
         "omniroute/agy/gemini-3.8-flash-high",
         "agy/gemini-3.8-flash-high",
         "native/model",
+        "mimo/mimo-v2.6-pro",
     ] {
         let leg = json!({"model":model,"family":"gemini"});
         let mut record = create(
@@ -158,10 +160,10 @@ fn gateway_attempt_reports_missing_call_log_integration() {
         assert_eq!(value["attempts"][0]["served_model"], "unwitnessed");
         assert_eq!(
             value["attempts"][0]["served_witness_reason"],
-            if model == "native/model" {
-                "no authenticated harness telemetry; skipped or unobserved leg"
-            } else {
+            if model == "omniroute/agy/gemini-3.8-flash-high" {
                 "pg-spawnd gateway call-log witness integration unavailable"
+            } else {
+                "no authenticated harness telemetry; skipped or unobserved leg"
             }
         );
     }

@@ -152,7 +152,7 @@ def render_gateway_providers(
             if isinstance(settings, dict):
                 for key in ("headerTimeout", "chunkTimeout"):
                     value = settings.get(key)
-                    settings[key] = min(value, 60000) if type(value) in (int, float) and value > 0 else 60000
+                    settings[key] = int(min(value, 60000)) if type(value) in (int, float) and value > 0 else 60000
 
     rendered = json.dumps(config)
     env["OPENCODE_CONFIG_CONTENT"] = rendered

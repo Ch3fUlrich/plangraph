@@ -10,7 +10,8 @@ CONFIG_PATH = ROOT / "opencode.jsonc"
 
 
 @pytest.mark.parametrize("settings", [{}, {"headerTimeout": False, "chunkTimeout": 900000},
-                                      {"headerTimeout": 1000, "chunkTimeout": 2000}])
+                                      {"headerTimeout": 1000, "chunkTimeout": 2000},
+                                      {"headerTimeout": 1234.75, "chunkTimeout": 900000.5}])
 def test_gateway_gemini_seat_bounds_silent_requests(settings):
     from plangraph.routing_support.opencode_render import render_gateway_providers
     env = {"OMNIROUTE_BASE_URL": "http://gateway.invalid",
@@ -23,9 +24,26 @@ def test_gateway_gemini_seat_bounds_silent_requests(settings):
     for key in ("headerTimeout", "chunkTimeout"):
         assert type(rendered[key]) is int
         assert 0 < rendered[key] <= 60000
+        value = settings.get(key)
+        expected = int(min(value, 60000)) if type(value) in (int, float) and value > 0 else 60000
+        assert rendered[key] == expected
         if type(settings.get(key)) is int and settings[key] > 0:
             assert rendered[key] <= settings[key]
     assert providers["other"]["settings"]["headerTimeout"] is False
+
+
+def test_gateway_gemini_exact_leg_model_sets_both_bounds():
+    from plangraph.routing_support.opencode_render import render_gateway_providers
+    config = load_config()
+    config["providers"]["omniroute"]["settings"] = {"baseURL": "test-endpoint"}
+    env = {"OPENCODE_CONFIG_CONTENT": json.dumps(config)}
+    # Isolate timeout rendering from endpoint validation.
+    from unittest.mock import patch
+    with patch("plangraph.routing_support.opencode_render._is_valid_url", return_value=True):
+        assert render_gateway_providers(env, "omniroute/agy/gemini-3.8-flash-high") is None
+    settings = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]["omniroute"]["settings"]
+    assert settings["headerTimeout"] == 60000
+    assert settings["chunkTimeout"] == 60000
 
 
 def strip_jsonc_comments(text: str) -> str:
