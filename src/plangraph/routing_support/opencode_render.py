@@ -142,6 +142,18 @@ def render_gateway_providers(
         # The /v1 rule applies to a root-supplied URL exactly as to an override.
         active_block["settings"]["baseURL"] = _normalize_gateway_url(existing)
 
+    # D-5066: a silent gateway must not consume the seat's 25-minute cap.
+    # Headers alone do not guarantee a first token: also bound silent SSE gaps.
+    # OpenCode applies these controls provider-wide and retries transport errors.
+    if provider_prefix == "omniroute" and model_clean.startswith("omniroute/agy/gemini-"):
+        block = providers.get(provider_prefix)
+        if isinstance(block, dict):
+            settings = block.setdefault("settings", {})
+            if isinstance(settings, dict):
+                for key in ("headerTimeout", "chunkTimeout"):
+                    value = settings.get(key)
+                    settings[key] = max(1, int(min(value, 60000))) if type(value) in (int, float) and value > 0 else 60000
+
     rendered = json.dumps(config)
     env["OPENCODE_CONFIG_CONTENT"] = rendered
     nt_check = _is_nt() if is_nt is None else is_nt

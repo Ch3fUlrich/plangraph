@@ -1,11 +1,49 @@
 import json
 import re
+import pytest
 from pathlib import Path
 
 from plangraph.spawner.mimo_policy import check_mimo_path
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "opencode.jsonc"
+
+
+@pytest.mark.parametrize("settings,expected", [
+    ({}, (60000, 60000)),
+    ({"headerTimeout": False, "chunkTimeout": 900000}, (60000, 60000)),
+    ({"headerTimeout": 1000, "chunkTimeout": 2000}, (1000, 2000)),
+    ({"headerTimeout": 1234.75, "chunkTimeout": 900000.5}, (1234, 60000)),
+    ({"headerTimeout": 0.5, "chunkTimeout": 0.25}, (1, 1)),
+    ({"headerTimeout": -5, "chunkTimeout": 0}, (60000, 60000)),
+])
+def test_gateway_gemini_seat_bounds_silent_requests(settings, expected):
+    from plangraph.routing_support.opencode_render import render_gateway_providers
+    env = {"OMNIROUTE_BASE_URL": "http://gateway.invalid",
+           "OPENCODE_CONFIG_CONTENT": json.dumps({"providers": {
+               "omniroute": {"settings": settings, "models": {"agy/gemini-3.8-flash-high": {}}},
+               "other": {"settings": {"headerTimeout": False}}}})}
+    assert render_gateway_providers(env, "omniroute/agy/gemini-3.8-flash-high") is None
+    providers = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]
+    rendered = providers["omniroute"]["settings"]
+    for key, want in zip(("headerTimeout", "chunkTimeout"), expected):
+        assert type(rendered[key]) is int
+        assert rendered[key] == want
+    assert providers["other"]["settings"]["headerTimeout"] is False
+
+
+def test_gateway_gemini_exact_leg_model_sets_both_bounds():
+    from plangraph.routing_support.opencode_render import render_gateway_providers
+    config = load_config()
+    config["providers"]["omniroute"]["settings"] = {"baseURL": "test-endpoint"}
+    env = {"OPENCODE_CONFIG_CONTENT": json.dumps(config)}
+    # Isolate timeout rendering from endpoint validation.
+    from unittest.mock import patch
+    with patch("plangraph.routing_support.opencode_render._is_valid_url", return_value=True):
+        assert render_gateway_providers(env, "omniroute/agy/gemini-3.8-flash-high") is None
+    settings = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]["omniroute"]["settings"]
+    assert settings["headerTimeout"] == 60000
+    assert settings["chunkTimeout"] == 60000
 
 
 def strip_jsonc_comments(text: str) -> str:
