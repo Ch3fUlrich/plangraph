@@ -241,7 +241,12 @@ Memory, disk, doctor, keeper reach, session and capacity remain independent chec
 For routerctl to grep (no private-repository change required), every failure is
 one stable line: `HOST-NOT-READY <host> <check> <reason>`. These lines go to stdout
 normally and stderr with `--json`, preserving machine-readable JSON stdout.
-Missing source uses check `src_missing`; lag uses `behind_main` and reason
+Source checks for routerctl's grep set are `src_missing` (absent path),
+`src_import` (import failed), `src_config` (invalid, unsupported or unreadable
+configuration, or unknown route/path), and `src` (probe failure or unexpected
+response). The spawner source is probed even if ps-hosts configuration is invalid.
+Pre-probe configuration errors use `config`, not `unreachable`.
+Lag uses `behind_main` and reason
 `N behind`; unreachable hosts report `unreachable`, leaving other values unknown.
 All-green hosts emit no such line. Reasons never include raw transport output.
 

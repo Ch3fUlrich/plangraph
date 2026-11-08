@@ -6,18 +6,19 @@ from .remote_ps import configured_hosts
 
 def check_sources(name, config, command, fail):
     sources = [(config['ssh'], config['spawner_src'], True)]
+    ok = True
     try:
         for host in configured_hosts():
             if host['name'] != name:
                 continue
             if host.get('invalid') or 'win_src' in host or 'wsl_distro' in host:
                 fail('src_config', 'unsupported_or_invalid')
-                return False
+                ok = False
+                continue
             sources.append((host['target'], host.get('src'), False))
     except (OSError, ValueError, KeyError, TypeError):
         fail('src_config', 'unreadable')
-        return False
-    ok = True
+        ok = False
     for target, source, checkout in dict.fromkeys(sources):
         if target != config['ssh'] or not source:
             fail('src_config', 'route_or_path_unknown')

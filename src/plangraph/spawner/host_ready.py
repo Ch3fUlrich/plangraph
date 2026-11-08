@@ -12,8 +12,8 @@ import sys
 import time
 
 from .doctor import clean
-from .private_io import atomic_write_private
 from .host_ready_source import check_sources
+from .private_io import atomic_write_private
 
 HOST_TIMEOUT = 120
 MAX_AGE = 600
@@ -36,6 +36,7 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                   spawner_session=None, live_runs=None, behind_main=None,
                   src_ok=None)
     deadline = time.monotonic() + timeout
+    reachability_failed = False
 
     def fail(check, reason):
         record['failures'].append(clean(f'{check}: {reason}'))
@@ -69,8 +70,9 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
         return None
 
     try:
-        if not config.get('ssh'):
+        if not config['ssh']:
             fail('reachable', 'no_route')
+            reachability_failed = True
         elif command('reachable', 'true') is not None:
             record['reachable'] = True
             record['src_ok'] = check_sources(name, config, command, fail)
@@ -141,10 +143,12 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                 fail('memory', 'below_floor')
             if record['disk_free_gb'] == 0:
                 fail('disk', 'full')
+        else:
+            reachability_failed = True
     except (KeyError, TypeError, ValueError, IndexError):
         fail('config', 'invalid_response_or_config')
     record['checked_at'] = datetime.now(timezone.utc).isoformat()
-    if not record['reachable']:
+    if reachability_failed:
         fail('unreachable', 'other_checks_unknown')
     record['ok'] = not record['failures']
     try:

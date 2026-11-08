@@ -150,6 +150,7 @@ def test_session_probe(tmp_path, session, probe, live):
     assert result['spawner_session'] is live
     assert result['ok'] is live
     assert ('session: command_failed' in result['failures']) is not live
+    assert result['failures'] == ([] if live else ['session: command_failed'])
     assert 'secret-value' not in (tmp_path / 'fiction.json').read_text()
 
 
@@ -162,6 +163,52 @@ def test_state_write_failure(tmp_path, monkeypatch):
     assert result['checked_at']
     assert result['failures'] == ['state: write_failed']
     assert 'secret-value' not in json.dumps(result)
+
+
+def test_session_not_configured(tmp_path):
+    config = dict(CONFIG)
+    del config['session_unit']
+    result = h.check_host('fiction', config, tmp_path, runner)
+    assert not result['ok']
+    assert result['spawner_session'] is None
+    assert result['failures'] == ['session: not_configured']
+
+
+def test_config_error_before_probe(tmp_path, monkeypatch, capsys):
+    config = dict(CONFIG)
+    del config['ssh']
+    path = tmp_path / 'hosts.json'
+    path.write_text(json.dumps({'hosts': {'fiction': config}}))
+    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(path))
+    monkeypatch.setattr(h.Path, 'home', lambda: tmp_path)
+    def never_contact(*args, **kwargs):
+        pytest.fail('host must not be contacted')
+    original = h.check_host
+    monkeypatch.setattr(h, 'check_host', lambda name, cfg, state:
+                        original(name, cfg, state, never_contact))
+    assert h.main(['--json']) == 1
+    output = capsys.readouterr()
+    assert output.err == 'HOST-NOT-READY fiction config invalid_response_or_config\n'
+    assert json.loads(output.out)[0]['reachable'] is False
+
+
+@pytest.mark.parametrize('ps_config', ['{', json.dumps({'hosts': [dict(
+    name='fiction', target='invented-alias', win_src='C:/source')]})])
+def test_deleted_spawner_with_invalid_ps_config(tmp_path, ps_config):
+    directory = tmp_path / 'plangraph'
+    directory.mkdir()
+    (directory / 'ps-hosts.json').write_text(ps_config)
+    probes = []
+    def fake(argv, **kwargs):
+        if 'echo src_missing' in argv[-1]:
+            probes.append(argv[-1])
+            return SimpleNamespace(returncode=0, stdout='src_missing')
+        return runner(argv, **kwargs)
+    result = h.check_host('fiction', CONFIG, tmp_path, fake)
+    assert not result['ok'] and result['src_ok'] is False
+    assert len(probes) == 1 and '/invented/source' in probes[0]
+    assert 'src_missing: failed' in result['failures']
+    assert any(f.startswith('src_config: ') for f in result['failures'])
 
 
 @pytest.mark.parametrize('unwritable', [False, True])
