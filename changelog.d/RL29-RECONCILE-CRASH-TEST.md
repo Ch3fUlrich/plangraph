@@ -50,3 +50,4 @@ even for an empty confinement. Missing records use the saved deadline or run
 directory mtime when no record anchor remains. The accepted post-grace legacy
 capacity-release risk remains unchanged. Fresh/expired Z-member and immediate
 memberless-Z settlement remain covered by every_running_identity_is_bounded_or_verified.
+Known gap: probe after unknown-identity grace and zombie-branch bound tracked in FU-RL29-SETTLE-PROBE.
