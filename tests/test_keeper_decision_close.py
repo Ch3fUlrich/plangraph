@@ -121,4 +121,79 @@ def test_cli_payload(monkeypatch):
     cli_verbs.cmd_close(SimpleNamespace(key="demo:A", batch=None,
                                         decision_ref="D-5024", epoch=3), None)
     assert seen == {"key": "demo:A", "batch_ref": None,
-                    "decision_ref": "D-5024", "epoch": 3}
+                     "decision_ref": "D-5024", "epoch": 3}
+
+
+def test_api_cli_missing_proof_same_refusal(world, capsys):
+    from plangraph.keeper.api_routes import _close_on_decision
+    from plangraph.keeper.cli import build_parser
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["close", "demo:A"])
+    with pytest.raises(Refused) as exc:
+        _close_on_decision(world.store, world.p("router"), {"key": "demo:A"},
+                           lambda body, key: body[key])
+    assert exc.value.code == "validation"
+    assert exc.value.msg == "one of the arguments --decision-ref --batch is required"
+    assert exc.value.msg in capsys.readouterr().err
+
+
+def test_git_once_outside_write(world, monkeypatch):
+    from plangraph.keeper import store_decision_close as module
+    run = subprocess.run
+    calls = []
+
+    def checked(args, **kwargs):
+        assert not world.conn.in_transaction
+        calls.append(args[3])
+        return run(args, **kwargs)
+
+    monkeypatch.setattr(module.subprocess, "run", checked)
+    close(world)
+    assert calls == ["fetch", "show"]
+
+
+def test_slow_git_timeout_allows_other_writes(world, tmp_path, monkeypatch):
+    import threading
+    from plangraph.keeper import store_decision_close as module, timing
+
+    stub = tmp_path / "git"
+    stub.write_text("#!/bin/sh\nexec /bin/sleep 10\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    run = subprocess.run
+    lock = threading.Lock()
+    started = threading.Event()
+    finished = threading.Event()
+    errors = []
+
+    def sleeping(args, **kwargs):
+        assert not world.conn.in_transaction
+        started.set()
+        return run(args, **{**kwargs, "timeout": 0.5})
+
+    def other_write():
+        try:
+            assert started.wait(2)
+            with lock:
+                with world.store._write():
+                    world.conn.execute("UPDATE items SET title='concurrent' WHERE key='demo:GOAL'")
+                finished.set()
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(module.subprocess, "run", sleeping)
+    worker = threading.Thread(target=other_write)
+    worker.start()
+    with timing.RequestTimer(lock, "write"):
+        with pytest.raises(Refused, match="fetch failed"):
+            close(world)
+        assert finished.is_set()
+    worker.join(2)
+    assert not worker.is_alive()
+    assert not errors
+
+
+def test_cli_batch_epoch_refused():
+    from plangraph.keeper.cli_verbs import cmd_close
+    with pytest.raises(ValueError, match="--epoch requires --decision-ref, not --batch"):
+        cmd_close(SimpleNamespace(key="demo:A", batch="proof@sha", epoch=1), None)

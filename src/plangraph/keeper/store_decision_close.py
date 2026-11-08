@@ -4,6 +4,7 @@ import re
 import subprocess
 
 from .errors import Refused
+from .timing import outside_request_lock
 
 LOG_PATH = "router/docs/decisions-log.md"
 
@@ -26,6 +27,11 @@ def _row(store, item, now, decision):
         repo = None
     if not repo:
         raise Refused("evidence_unverified", "decisions repository is not configured")
+    with outside_request_lock():
+        return _fetch_row(repo, decision)
+
+
+def _fetch_row(repo, decision):
     try:
         subprocess.run(["git", "-C", str(repo), "fetch", "origin", "main"],
                        check=True, capture_output=True, timeout=60)
@@ -43,13 +49,16 @@ def _row(store, item, now, decision):
     return rows[0]
 
 
-def _proof(store, key, item, now, decision):
+def _evidence(store, key, item, decision):
     rows = [e for e in store._evidence(key)
             if e["epoch"] == item["epoch"] and e["kind"] == "decision"
             and (e.get("ref") or {}).get("id") == decision]
     if not rows:
         raise Refused("evidence_missing", "item has no matching decision evidence")
-    row = _row(store, item, now, decision)
+
+
+def _proof(store, key, item, decision, row):
+    _evidence(store, key, item, decision)
     tokens = re.findall(r"(?<![\w])CLOSE ([A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+)(?![\w:.-])", row)
     if key not in tokens:
         raise Refused("evidence_unverified", f"decision row has no exact CLOSE {key} token")
@@ -63,7 +72,9 @@ def close_decision(store, principal, key, decision, epoch, batch_ref, now):
         raise Refused("validation", "decision_ref must be D-NNNN (no local or non-main ref)")
     item = store._get_or_refuse(key)
     _authorize(store, principal, item, epoch)
-    digest = _proof(store, key, item, now, decision)
+    _evidence(store, key, item, decision)
+    row = _row(store, item, now, decision)
+    digest = _proof(store, key, item, decision, row)
     with store._write():
         fresh = store._get_or_refuse(key)
         store._assert_unlocked(fresh)
@@ -75,7 +86,7 @@ def close_decision(store, principal, key, decision, epoch, batch_ref, now):
         if fresh.get("review_tier") != "none" and fresh.get("kind") not in (
                 "decision", "operator_task"):
             raise Refused("bad_state", "item kind/tier cannot close on a decision")
-        if _proof(store, key, fresh, now, decision) != digest:
+        if _proof(store, key, fresh, decision, row) != digest:
             raise Refused("conflict", "decision row changed during close")
         if "commit" in (fresh.get("evidence_kinds") or []):
             store._check_commit_evidence(key, fresh, now)

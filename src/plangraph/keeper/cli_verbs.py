@@ -386,6 +386,8 @@ def cmd_set_kind(args, session):
 
 
 def cmd_close(args, session):
+    if args.batch is not None and getattr(args, "epoch", None) is not None:
+        raise ValueError("--epoch requires --decision-ref, not --batch")
     return write(session, "close_on_decision",
                  {"key": args.key, "batch_ref": args.batch,
                   "decision_ref": getattr(args, "decision_ref", None),

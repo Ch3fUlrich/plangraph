@@ -138,6 +138,10 @@ def jev_write(store, principal, name, body):
 # Router-only verbs: ``(store, principal, body, need) -> result``.  ``need`` is
 # the handler's required-field reader.
 def _close_on_decision(store, principal, body, need):
+    if body.get("batch_ref") is None and body.get("decision_ref") is None:
+        raise Refused("validation", "one of the arguments --decision-ref --batch is required")
+    if body.get("batch_ref") is not None and body.get("epoch") is not None:
+        raise Refused("validation", "--epoch requires --decision-ref, not --batch")
     return store.close_on_decision(principal, need(body, "key"),
                                    body.get("batch_ref"),
                                    decision_ref=body.get("decision_ref"),
