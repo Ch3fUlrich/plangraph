@@ -209,14 +209,23 @@ def test_malformed_page_stream_raises(monkeypatch, stdout):
     ("marked", True), ("unmarked", False), ("red", False),
     ("off_target", False), ("direct", False), ("no_ci", False),
     ("string_flag", False),
+    ("wrong_ref", False), ("missing_ref", False), ("invalid_ref", False),
 ])
 def test_non_pr_merge_proof(topology, case, expected):
     git, lane, outer = topology
     repo = git.repo_path("routing")
     git._repos = {"routing": {"path": repo, "ref": "main",
                               "non_pr": "true" if case == "string_flag"
-                              else case != "unmarked"}}
+                               else case != "unmarked"}}
+    if case == "wrong_ref":
+        git.repo_ref = lambda project: "lane"
+    elif case == "missing_ref":
+        del git._repos["routing"]["ref"]
+    elif case == "invalid_ref":
+        git._repos["routing"]["ref"] = "--unsafe"
     sha = outer
+    if case == "wrong_ref":
+        sha = lane
     if case == "off_target":
         subprocess.run(["git", "-C", repo, "update-ref", "refs/heads/main",
                         outer + "^"], check=True)
@@ -232,3 +241,29 @@ def test_non_pr_merge_proof(topology, case, expected):
         ci.mode = lambda project: "none"
     result = verify("commit+ci", {"commit": sha}, make_ctx(git=git, ci=ci))
     assert result.ok is expected, result.detail
+
+
+@pytest.mark.parametrize("case,detail", [
+    ("trailer", "Plan-Item"), ("floor", "does not descend"),
+    ("principal", "merge principal"), ("ci", "not green"),
+])
+def test_non_pr_preserves_verifier_guards(topology, monkeypatch, case, detail):
+    git, lane, outer = topology
+    repo = git.repo_path("routing")
+    git._repos = {"routing": {"path": repo, "ref": "main", "non_pr": True}}
+    ci = FakeCI(runs=[{"name": "build", "head_sha": outer,
+                       "conclusion": "failure" if case == "ci" else "success"}])
+    ci.merged_pr_for = lambda *args: pytest.fail("non-PR proof must suffice")
+    ctx = make_ctx(git=git, ci=ci)
+    if case == "trailer":
+        monkeypatch.setattr(git, "trailers", lambda *args: {})
+    elif case == "floor":
+        ctx.bind_floor_required = True
+        ctx.bind_floor_sha = lane
+        ancestor = git.is_ancestor
+        monkeypatch.setattr(git, "is_ancestor", lambda repo, sha, ref:
+                            False if ref == outer else ancestor(repo, sha, ref))
+    elif case == "principal":
+        ctx.merge_principals = ("disallowed",)
+    result = verify("commit+ci", {"commit": outer}, ctx)
+    assert not result.ok and detail in result.detail

@@ -105,6 +105,9 @@ def non_pr_merge(ctx, project, merge_sha, target_ref):
         return False
     if not valid_commit_ref(merge_sha) or not valid_ref(target_ref):
         return False
+    configured_ref = entry.get("ref")
+    if not valid_ref(configured_ref) or target_ref != configured_ref:
+        return False
     # This exception proves only merge provenance, never a CI exemption.
     if ctx.ci.mode(project) in (None, "none", ""):
         return False
@@ -128,12 +131,13 @@ def validate_merge(ctx, project, merge_info, target_ref, ref):
             return Result(False,
                           f"merge commit committer {email!r} is not an allowed merge principal", ref)
     try:
-        if non_pr_merge(ctx, project, merge_sha, target_ref):
-            return None
+        proven = non_pr_merge(ctx, project, merge_sha, target_ref)
         lookup = getattr(ctx.ci, "merged_pr_for", None)
-        proven = valid_commit_ref(merge_sha) and callable(lookup) and lookup(
-            project, merge_sha, target_ref)
+        if not proven:
+            proven = valid_commit_ref(merge_sha) and callable(lookup) and lookup(
+                project, merge_sha, target_ref)
         if proven:
+            # Provenance only: the caller still enforces floor and CI guards.
             return None
     except Exception:  # Never expose sensitive text from adapter errors.
         pass
