@@ -8,7 +8,8 @@ pub(super) fn tolerate(error: io::Error, report: impl FnOnce(&[u8])) -> io::Resu
         report(DENIED);
         Ok(())
     } else {
-        Err(error)
+        report(b"{\"plangraph_oom\":{\"event\":\"oom_score_adj_failed\"}}\n");
+        Ok(())
     }
 }
 
@@ -63,13 +64,22 @@ mod tests {
         }
     }
     #[test]
+    fn other_errors_are_reported_without_blocking_spawn() {
+        for errno in [libc::EINVAL, libc::EIO, libc::ENOENT] {
+            let mut event = Vec::new();
+            tolerate(io::Error::from_raw_os_error(errno), |s| event.extend(s)).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&event).unwrap();
+            assert_eq!(value["plangraph_oom"]["event"], "oom_score_adj_failed");
+        }
+    }
+    #[test]
     fn injected_scores_never_lower_or_write_unknown_values() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("score");
         let cpath = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
         for (before, after) in [("100", "500"), ("800", "800"), ("", ""), ("bad", "bad")] {
             std::fs::write(&path, before).unwrap();
-            assert_eq!(adjust(&cpath).is_ok(), before.parse::<i32>().is_ok());
+            assert!(adjust(&cpath).is_ok());
             assert_eq!(std::fs::read_to_string(&path).unwrap(), after);
         }
     }

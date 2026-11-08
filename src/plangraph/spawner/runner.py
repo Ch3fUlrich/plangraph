@@ -702,16 +702,16 @@ class SpawnerRunner:
             exit_code = self.jobs[job_id].exit_code if (self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled')
                                                         or self.jobs[job_id].survivors
                                                         or getattr(self.jobs[job_id], 'refusal', None)) else proc.returncode
-
             job = self.jobs[job_id]
-            # Only the fork's exact stderr transport envelope is evidence.
             for line in stderr_text.splitlines():
                 try:
                     envelope = json.loads(line)
                 except (ValueError, TypeError):
                     continue
                 if not isinstance(envelope, dict) or set(envelope) != {'autoos_provider_response'}:
-                    job.events.extend([envelope['plangraph_oom']] if isinstance(envelope, dict) and 'plangraph_oom' in envelope else []); continue
+                    from .proc_kill import record_oom_envelope
+                    record_oom_envelope(job.events, envelope)
+                    continue
                 response = envelope['autoos_provider_response']
                 if not isinstance(response, dict) or response.get('nonce') != self._nonces.get(job_id) or not self._nonces.get(job_id):
                     job.events.append({'event': 'forged_envelope'})

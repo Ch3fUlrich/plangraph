@@ -2,10 +2,10 @@
 
 Templates only: nothing here installs configuration or changes live units.
 Not deployed by these templates or repository tests: applying daemon isolation
-requires an operator; this caveat does not revise the item's merged/deployed status.
+requires an operator; merged/deployed status is not established here.
 Use the contents of `earlyoom/prefer.regex` with earlyoom `--prefer` and
 `earlyoom/avoid.regex` with `--avoid`. These are process-name regexes;
-check the installed earlyoom version's comm-name truncation behaviour.
+Linux comm names are limited to 15 bytes: the keeper matches `plangraph-keepe`.
 Preference is not immunity and does not override cgroup memory limits.
 
 ## Detached daemon option
@@ -20,7 +20,7 @@ systemd-run --user --scope --unit=claude-bg \
 The user manager creates a sibling scope outside herdr-server's cgroup;
 verify `/proc/$PID/cgroup` before relying on isolation. A scope tracks its
 processes, not a daemon readiness protocol. For a persistent foreground
-daemon use the existing `systemd/claude-daemon.service` template instead:
+daemon use the repository's `deploy/systemd/claude-daemon.service` template instead:
 it has `OOMScoreAdjust=200`, `KillMode=process`, and no embedded secrets.
 Do not install or restart either option as part of repository tests.
 
@@ -30,6 +30,10 @@ an operator choice. On memory-constrained hosts use at most `-n 2`, including
 when auto would select four workers.
 
 ## Router-owned live probe script specification
+
+Verified wiring covers the SpawnerRunner default factory and Rust plain-group
+launch only. Shell writer/seat/review launchers remain unverified; the following
+steps are acceptance requirements, not claims of implemented launcher coverage.
 
 Run only in an approved disposable memory-pressure window, with a
 second authenticated session and an external timeout/cleanup watchdog. Do not run in CI.
@@ -44,4 +48,4 @@ second authenticated session and an external timeout/cleanup watchdog. Do not ru
 4. Assert the original herdr/keeper/daemon PID+start identities and health
    survive, and a subsequent writer can start. Kill/reap remaining probe
    descendants by recorded identity and retain timestamped evidence.
-Repository checks verify child/descendant scores, unchanged parent score, and template/regex contracts, not live earlyoom preference or `claude --bg` isolation; live-pressure survival evidence remains pending here (a cgroup-only test cannot prove global kernel-OOM survival). The item reports done/merged+deployed; this diff does not independently verify that operational status.
+Repository checks verify child/descendant scores, unchanged parent score, and template/regex contracts, not live earlyoom preference or `claude --bg` isolation; live-pressure survival evidence remains pending (a cgroup-only test cannot prove global kernel-OOM survival).

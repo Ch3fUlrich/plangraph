@@ -310,6 +310,19 @@ async def finish(root, ident, members, *, platform=None, command_factory=None,
                  live_pids=live_pids, reterminate=reterminate)
 
 
+def record_oom_envelope(events, envelope):
+    """Child transport is untrusted: retain at most one event of each known kind."""
+    if not isinstance(envelope, dict) or set(envelope) != {'plangraph_oom'}:
+        return
+    event = envelope['plangraph_oom']
+    if not isinstance(event, dict) or event.get('event') not in {
+            'oom_score_adj', 'oom_score_adj_denied', 'oom_score_adj_failed'}:
+        return
+    name = event['event']
+    if not any(isinstance(old, dict) and old.get('event') == name for old in events):
+        events.append({'event': name})
+
+
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         os.write(2, b'oom wrapper: expected score path and command\n')

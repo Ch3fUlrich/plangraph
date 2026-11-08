@@ -152,9 +152,10 @@ def test_oom_deploy_contract():
     assert 'second authenticated session' in docs
     assert 'min(4, CPUs, memory GiB)' in docs
     for name, matches in [('prefer', ['python3', 'pytest', 'opencode']),
-                          ('avoid', ['herdr', 'claude', 'plangraph-keeper'])]:
+                          ('avoid', ['herdr', 'claude', 'plangraph-keeper'[:15]])]:
         pattern = (root / f'deploy/earlyoom/{name}.regex').read_text().strip()
         assert all(re.search(pattern, value) for value in matches)
+        assert not re.search(pattern, 'x' + matches[0])
 
 
 def test_pytest_memory_policy(tmp_path):
@@ -189,19 +190,29 @@ def test_oom_worker_override(tmp_path, monkeypatch):
     assert conftest._oom_worker_count(16, tmp_path / 'missing') == 2
 
 
-def test_oom_serial_configure(monkeypatch):
+@pytest.mark.parametrize('platform', ['linux', 'darwin', 'win32'])
+def test_oom_serial_configure(monkeypatch, platform):
     conftest = _oom_config()
     from plangraph.spawner import proc_kill
     calls = []
+    monkeypatch.setattr(conftest.sys, 'platform', platform)
     monkeypatch.setattr(proc_kill, 'raise_oom_score', lambda: calls.append(1) or {'event': 'oom_score_adj'})
     conftest.pytest_oom_configure(SimpleNamespace())
-    assert calls == [1]
+    assert calls == ([1] if platform == 'linux' else [])
 
 
 def test_rust_oom_envelope_is_recorded(tmp_path, monkeypatch):
     event = {'event': 'oom_score_adj_denied'}
     job = _monitor(tmp_path, monkeypatch, '', stderr=json.dumps({'plangraph_oom': event}))
     assert event in job.events
+
+
+def test_oom_envelopes_are_bounded_and_validated(tmp_path, monkeypatch):
+    valid = json.dumps({'plangraph_oom': {'event': 'oom_score_adj_failed'}})
+    invalid = [json.dumps({'plangraph_oom': value}) for value in [None, [], 'bad', {'event': 'unknown'}]]
+    job = _monitor(tmp_path, monkeypatch, '', stderr='\n'.join([valid] * 1000 + invalid))
+    assert [e for e in job.events if e.get('event', '').startswith('oom_score_adj')] == [
+        {'event': 'oom_score_adj_failed'}]
 
 
 @pytest.mark.parametrize('override, expected', [('bad', 2), ('99', 2), ('0', 1)])
@@ -226,6 +237,12 @@ def test_oom_wrapper_diagnoses_failure(tmp_path, args):
 
 
 def test_linux_oom_call_is_guarded():
+    from plangraph.spawner import proc_kill
+    from unittest.mock import patch, AsyncMock
+    with patch.object(proc_kill.sys, 'platform', 'darwin'), patch.object(
+            proc_kill.asyncio, 'create_subprocess_exec', new_callable=AsyncMock) as spawn:
+        asyncio.run(proc_kill.oom_process_factory('true'))
+        assert spawn.call_args.args == ('true',)
     source = (Path(__file__).resolve().parents[1] / 'rust/worker-core/src/run/group_unix.rs').read_text()
     assert '#[cfg(target_os = "linux")]\n    unsafe {\n        cmd.pre_exec' in source
 
