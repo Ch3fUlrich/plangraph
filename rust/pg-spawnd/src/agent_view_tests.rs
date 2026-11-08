@@ -83,22 +83,150 @@ fn unreadable_is_not_zero() {
     fs::remove_dir_all(home).unwrap();
 }
 #[test]
-fn plain_entries_and_absent_lane_are_not_failures() {
+fn plain_entries_are_empty_but_absent_lane_is_unknown() {
     let home = fixture();
+    empty_sources(&home);
     put(&home, "state/runs/plain", json!({}));
     put(&home, ".claude/jobs/plain", json!({}));
+    let data = local(&home, &home.join("state"), "local", 0.0);
+    assert_eq!(data["readable"], true);
+    assert_eq!(data["agents"], json!([]));
     put(
         &home,
         ".config/autoos/oc-l1.json",
         json!({"lanes":[{"state_file":home.join("absent.json")}]}),
     );
     let data = local(&home, &home.join("state"), "local", 0.0);
-    assert_eq!(data["readable"], true);
+    assert_eq!(data["readable"], false);
+    assert_eq!(data["reason"], "source_unreadable");
     assert_eq!(data["agents"], json!([]));
     put(&home, "absent.json", json!([]));
     let data = local(&home, &home.join("state"), "local", 0.0);
     assert_eq!(data["readable"], false);
     assert_eq!(data["reason"], "source_unreadable");
+    fs::remove_dir_all(home).unwrap();
+}
+fn empty_sources(home: &Path) {
+    for path in ["state/runs", "state/sessions", ".claude/jobs"] {
+        fs::create_dir_all(home.join(path)).unwrap();
+    }
+}
+#[test]
+fn present_empty_sources_are_zero() {
+    let home = fixture();
+    empty_sources(&home);
+    let data = local(&home, &home.join("state"), "local", 0.0);
+    assert_eq!(data["readable"], true);
+    assert_eq!(data["reason"], Value::Null);
+    assert_eq!(data["agents"], json!([]));
+    fs::remove_dir_all(home).unwrap();
+}
+#[test]
+fn each_missing_source_directory_is_unknown() {
+    for path in ["state/runs", "state/sessions", ".claude/jobs", "state"] {
+        let home = fixture();
+        empty_sources(&home);
+        fs::remove_dir_all(home.join(path)).unwrap();
+        let data = local(&home, &home.join("state"), "local", 0.0);
+        assert_eq!(data["readable"], false, "{path}");
+        assert_eq!(data["reason"], "source_unreadable", "{path}");
+        assert_eq!(data["agents"], json!([]));
+        fs::remove_dir_all(home).unwrap();
+    }
+}
+#[cfg(unix)]
+#[test]
+fn permission_denied_sources_are_unknown() {
+    use std::os::unix::fs::PermissionsExt;
+    if Command::new("id").arg("-u").output().unwrap().stdout == b"0\n" {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "permission coverage requires non-root CI"
+        );
+        eprintln!("SKIP permission_denied_sources_are_unknown: root bypasses mode 000 permissions");
+        return;
+    }
+    for path in [
+        "state",
+        "state/runs",
+        "state/sessions",
+        ".claude/jobs",
+        "lane.json",
+        "overflow.json",
+        ".config/autoos/oc-l1.json",
+        "state/runs/one/record.json",
+        "state/sessions/one.json",
+        ".claude/jobs/one/state.json",
+    ] {
+        let home = fixture();
+        empty_sources(&home);
+        for record in [
+            "state/runs/one/record.json",
+            "state/sessions/one.json",
+            ".claude/jobs/one/state.json",
+        ] {
+            put(&home, record, json!({"name":"worker"}));
+        }
+        put(&home, "lane.json", json!({"name":"worker"}));
+        put(&home, "overflow.json", json!({"hosts":{}}));
+        put(
+            &home,
+            ".config/autoos/oc-l1.json",
+            json!({"lanes":[{"state_file":home.join("lane.json")}]}),
+        );
+        let target = home.join(path);
+        let permissions = fs::metadata(&target).unwrap().permissions();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o000)).unwrap();
+        let data = local(&home, &home.join("state"), "local", 0.0);
+        let overflow = configured_hosts(&home.join("overflow.json"));
+        fs::set_permissions(&target, permissions).unwrap();
+        if path == "overflow.json" {
+            assert_eq!(overflow[0]["readable"], false);
+            assert_eq!(overflow[0]["reason"], "source_unreadable");
+            fs::remove_dir_all(home).unwrap();
+            continue;
+        }
+        assert_eq!(data["readable"], false, "{path}");
+        assert_eq!(data["reason"], "source_unreadable", "{path}");
+        fs::remove_dir_all(home).unwrap();
+    }
+}
+#[test]
+fn empty_run_and_job_directories_are_absent() {
+    for path in ["state/runs/one", ".claude/jobs/one"] {
+        let home = fixture();
+        empty_sources(&home);
+        fs::create_dir_all(home.join(path)).unwrap();
+        let data = local(&home, &home.join("state"), "local", 0.0);
+        assert_eq!(data["readable"], true, "{path}");
+        assert_eq!(data["reason"], Value::Null, "{path}");
+        assert_eq!(data["agents"], json!([]));
+        fs::remove_dir_all(home).unwrap();
+    }
+}
+#[test]
+fn config_read_error_is_unknown() {
+    let home = fixture();
+    empty_sources(&home);
+    fs::create_dir_all(home.join(".config/autoos/oc-l1.json")).unwrap();
+    let data = local(&home, &home.join("state"), "local", 0.0);
+    assert_eq!(data["readable"], false);
+    assert_eq!(data["reason"], "source_unreadable");
+    assert_eq!(data["agents"], json!([]));
+    fs::remove_dir_all(home).unwrap();
+}
+#[test]
+fn overflow_config_missing_empty_and_unreadable() {
+    let home = fixture();
+    let config = home.join("overflow.json");
+    assert!(configured_hosts(&config).is_empty());
+    put(&home, "overflow.json", json!({"hosts":{}}));
+    assert!(configured_hosts(&config).is_empty());
+    fs::remove_file(&config).unwrap();
+    fs::create_dir(&config).unwrap();
+    let hosts = configured_hosts(&config);
+    assert_eq!(hosts[0]["readable"], false);
+    assert_eq!(hosts[0]["reason"], "source_unreadable");
     fs::remove_dir_all(home).unwrap();
 }
 #[test]
