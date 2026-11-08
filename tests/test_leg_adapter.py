@@ -95,6 +95,7 @@ def test_catalog_policy_is_not_mutated(tmp_path):
               if resolver.is_model_available(m, reader)]
     # New review seats extend the catalog, never reorder the existing entries.
     expected = MAIN_ORDER.copy()
+    expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'gpt-oss-120b-medium')
     expected.insert(expected.index('omniroute/deepseek-direct-flash'), 'omniroute/gc/grok-4.7')
     expected.insert(expected.index('omniroute/deepseek-direct-flash'),
                     'console-meta/muse-spark-1.3-contributor')
