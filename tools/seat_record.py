@@ -220,12 +220,11 @@ def writer_families(item, head, records_dir, git):
     if not models and records_dir is not None:
         for path, (r, _) in record_index(records_dir).items():
             try:
-                if r.get("role") == "implement" and r.get("item_key") == item["key"]:
+                if (r.get("role") == "implement" and r.get("item_key") == item["key"]
+                        and not any(p.is_symlink() for p in (path, *path.absolute().parents))):
                     models.append(r.get("served_model"))
             except (OSError, ValueError, AttributeError):
                 continue
-    if not models and item.get("writer_model"):
-        models.append(item["writer_model"])
     families = [model_family(m) for m in models]
     return sorted(set(families)) if families and None not in families else []
 
@@ -243,7 +242,19 @@ def snapshot_item(item, records_dir=None, git=None):
             rows.append((e, ref.lower()))
     head, reason = None, "no commit evidence"
     if rows:
-        newest, sha = max(rows, key=lambda row: str(row[0].get("at") or ""))
+        def order(row):
+            from datetime import datetime
+            at = row[0].get("at")
+            try:
+                stamp = float(at)
+            except (TypeError, ValueError):
+                try:
+                    stamp = datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
+                except ValueError:
+                    stamp = float("-inf")
+            epoch = row[0].get("epoch")
+            return stamp, epoch if type(epoch) is int else -1
+        newest, sha = max(rows, key=order)
         heads = {s for e, s in rows if e.get("epoch") == newest.get("epoch")}
         head = sha if len(heads) == 1 else None
         reason = None if head else "head mismatch: ambiguous verified commits at same epoch"
@@ -276,7 +287,7 @@ def eligible_records(item, records_dir):
                 continue
             if prs and item.get("pr_number") and prs != {item["pr_number"]}:
                 raise ValueError("PR number mismatch")
-            if (path.is_symlink() or path.parent.is_symlink()
+            if (any(p.is_symlink() for p in (path, *path.absolute().parents))
                     or not re.fullmatch(r"run-[0-9a-f]{32}", path.parent.name)
                     or not re.fullmatch(r"[0-9a-f]{64}", str(record.get("card_hash")))
                     or not isinstance(record.get("plan"), dict)
@@ -287,6 +298,8 @@ def eligible_records(item, records_dir):
                     or record["ended"] < record["started"]):
                 raise ValueError("spawner fields missing or invalid")
             evidence, text = evidence_from_record(path.parent, record=record)
+            if not isinstance(evidence.get("head_sha"), str) or not _HEAD_SHA.fullmatch(evidence["head_sha"]):
+                raise ValueError("record completion.head_sha missing or invalid")
             from seat_verdict import card_head_matches
             if evidence["head_sha"].lower() != head.lower() and not card_head_matches(
                     path.parent, evidence["head_sha"], head, item.get("repo_path")):
@@ -307,9 +320,10 @@ def eligible_records(item, records_dir):
             eligible.append(dict(run_id=path.parent.name, family=family, ok=ok,
                                  seat_dir=path.parent, head_sha=evidence["head_sha"]))
         except (OSError, ValueError) as exc:
+            completion = record.get("completion")
             reasons.append(f"{exc} [seat={path.parent.name} family="
                            f"{model_family(record.get('served_model'))} head="
-                           f"{(record.get('completion') or {}).get('head_sha')} expected={head}]")
+                           f"{completion.get('head_sha') if isinstance(completion, dict) else None} expected={head}]")
     return eligible, sorted(set(reasons)) or ([] if eligible else [
         f"no record [seat=review family=outside:{','.join(writers)} head={head} "
         f"item={item['key']} PR={item.get('pr_number') or 'unresolved'}]"])
@@ -353,8 +367,7 @@ def backfill(args, poster, pr_lookup=None):
     for raw in items:
         if raw.get("state") != "in_review":
             continue
-        item = raw if "head_sha" in raw and "writer_families" in raw else snapshot_item(
-            raw, index, git)
+        item = snapshot_item(raw, index, git)
         item = dict(item, pr_number=merged_pr(item, git, lookup))
         seats, reasons = eligible_records(item, index)
         total += 1

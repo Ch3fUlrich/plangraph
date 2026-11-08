@@ -1,0 +1,1 @@
+- Seat backfill refuses snapshot-declared writers and derived-head bypasses, orders evidence timestamps numerically/chronologically with epoch tie-breaking, tallies malformed completion heads, and rejects symlinked record ancestors for both writer and review discovery; preserves the poster's stop/end_turn PASS gate.
