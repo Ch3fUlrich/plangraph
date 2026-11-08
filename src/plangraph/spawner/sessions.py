@@ -48,6 +48,7 @@ from plangraph.spawner.sessions_config import (
 # from this module; the import sits below the sessions_config import for the
 # cross-import-order reason documented above.
 from plangraph.spawner.sessions_names import _NamesMixin
+from plangraph.spawner.sessions_guard import _RelaunchGuardMixin
 from plangraph.spawner.sessions_agents import (
     DETACHED, FINISHED_STATES, LAUNCH_TIMEOUT, SHORT_RE, STOP_TIMEOUT,
     TAIL_BYTES, USAGE_KEYS, UUID_RE, SID_RE, _ActionFailed, _AgentsMixin,
@@ -55,7 +56,7 @@ from plangraph.spawner.sessions_agents import (
 )
 
 
-class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
+class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin, _RelaunchGuardMixin):
     """Launch / stop / relaunch Claude Code sessions.
 
     One injectable runner carries every subprocess call (argv list, never a
@@ -289,22 +290,6 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
                                   "stopped_ts": self._now(), "session_id": sid})
         return sid
 
-    def _ensure_stopped(self, rec, name):
-        """The id behind a record, stopped and confirmed; returns the stopped
-        or confirmed-gone id (None when there is none). Not-recorded-stopped
-        goes through _stop_record; a stopped record's id may outlive its stop
-        - `claude agents` is the truth (D-3193): a listed live id is stopped
-        again, an unlisted or finished one is gone for good."""
-        if _state(rec) != "stopped":
-            return self._stop_record(rec, name)
-        sid = rec.get("session_id")
-        if sid:
-            row = next((r for r in self._agents_rows_strict()
-                        if r.get("sessionId") == sid), None)
-            if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
-                return self._stop_record(rec, name)
-        return sid
-
     def mark_ready(self, name, handoff, card=None):
         with self._name_lock(self._lock_key(name)):  # serializes with launch/relaunch
             return self._action("mark_ready", name, lambda: self._mark_ready_inner(name, handoff, card))
@@ -324,8 +309,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         return {"ok": True, "name": name, "handoff": str(handoff_path)}
 
     def relaunch(self, name, handoff=None):
-        with self._name_lock(self._lock_key(name)), self._counter_flock():
-            return self._action("relaunch", name, lambda: self._relaunch_inner(name, handoff))
+        return self._action("relaunch", name, lambda: self._guarded_relaunch(name, handoff))
 
     def _relaunch_inner(self, name, handoff):
         cfg = self._load_config()
@@ -335,6 +319,11 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
             raise _refuse(f"unknown session: {name}")
         old_sid = rec.get("session_id")
         handoff_path = self._relaunch_handoff(rec, cfg, name, handoff)
+        role_key = self._lock_key(name).casefold()
+        if any(self._lock_key(r["name"]).casefold() == role_key
+               and r.get("relaunch_handoff") == str(handoff_path)
+               for r in self._all_records()):
+            raise _refuse(f"session {name} already relaunched from this handoff")
         # The stored spec is re-validated BEFORE the stop: never lose the session.
         prompt_path = Path(rec.get("prompt_file") or "")
         if not str(rec.get("prompt_file") or "") or not prompt_path.is_file():
@@ -356,12 +345,15 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         # Stop + confirm the old session first (D-3193): failure refuses the relaunch.
         stopped_sid = self._ensure_stopped(rec, old_name)
         new_rec = self._relaunch_record(rec, name, handoff_path)
+        new_rec.pop("relaunch_handoff", None)  # Only completed relaunches consume a handoff.
         # The relaunch starts through _start (D-3193): its write-ahead record
         # and every outcome are _start's to write; failure leaves the old gone.
         sid, warning = self._start(name, new_rec, bg_argv, env, cwd_path, prompt_arg,
                                    exclude=stopped_sid or old_sid)
+        new_rec["relaunch_handoff"] = str(handoff_path)
         # The ready marker is unlinked only after _start returned (R-21).
         try:
+            self._write_record(name, new_rec)
             self._marker_path(old_name).unlink(missing_ok=True)
         except (OSError, ValueError) as exc:
             raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}",

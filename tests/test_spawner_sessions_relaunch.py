@@ -30,7 +30,11 @@ def test_relaunch_keeps_name_and_uses_handoff(site):
     actions = [json.loads(l)["action"] for l in
                (site.state / "sessions" / "audit.log").read_text().splitlines()]
     assert actions == ["launch", "mark_ready", "relaunch"]
-    res2 = s.relaunch("alpha", handoff=str(hf))  # a handoff argument works without a marker
+    with pytest.raises(ParameterRefused, match="already relaunched from this handoff"):
+        s.relaunch("alpha", handoff=str(hf))
+    fresh = site.tmp_path / "fresh-handoff.md"
+    fresh.write_text("next state")
+    res2 = s.relaunch("alpha", handoff=str(fresh))  # fresh handoff works without a marker
     assert res2["name"] == "alpha" and len(run.launch_calls()) == 3
 
 
