@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Plangraph router context watchdog periodically
+
+[Timer]
+OnStartupSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
