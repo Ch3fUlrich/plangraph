@@ -197,3 +197,40 @@ def test_prompt_empty():
         for prompt in (' \n\t', IMPLEMENT_HEADER + '\n\n'):
             with pytest.raises(SpawnRefused, match='prompt_empty'):
                 asyncio.run(SpawnerRunner().spawn(prompt, model_or_combo='omniroute/cx-gpt-6.1-sol', role=role))
+
+
+@pytest.mark.parametrize('tool,gate', [
+    ('check_file_size.py', 'file_size'), ('check_changelog_docs.py', 'changelog'),
+    ('ci_commit_gate.py', 'trailers'), ('scrub_check.py', 'scrub')])
+@pytest.mark.parametrize('infra', [False, True])
+def test_writer_gate_names(repo, monkeypatch, capsys, tool, gate, infra):
+    fake_runner(monkeypatch, tool, 'HTTP 503' if infra else 'rejected')
+    assert preflight.main(['--base', 'HEAD', '--writer-push', '--fail-fast'], repo)
+    output = capsys.readouterr().out
+    assert ('INFRA ' if infra else 'HOLD ') + gate in output
+    if infra:
+        assert 'HOLD ' not in output
+
+
+@pytest.mark.parametrize('role', ['implement', 'fix', 'future_writer'])
+@pytest.mark.parametrize('line', ['HOLD file_size', 'HOLD changelog', 'HOLD trailers',
+                                  'HOLD scrub', 'HOLD push_dry_run', 'HOLD held_commit',
+                                  'INFRA scrub', 'HOLD preflight_unavailable'])
+def test_completion_wiring(tmp_path, monkeypatch, role, line):
+    (tmp_path / 'tools').mkdir()
+    (tmp_path / 'tools/preflight.py').touch()
+    from types import SimpleNamespace
+    from plangraph.spawner import git_guard, notify
+    def run(command, **kwargs):
+        assert command[-1] == '--writer-completion'
+        assert kwargs['timeout'] == preflight.WRITER_TIMEOUT
+        return SimpleNamespace(returncode=1, stdout=line + '\n')
+    monkeypatch.setattr(git_guard.subprocess, 'run', run)
+    job = SimpleNamespace(role=role, status='completed', cwd=tmp_path, events=[])
+    git_guard.writer_completion(job)
+    assert job.status == 'hold' and job.exit_code == 1
+    assert job.stderr == line
+    assert job.events == [dict(event='writer_hold', reason=line)]
+    monkeypatch.setattr(notify.subprocess, 'check_output', lambda *a, **k: 'abc')
+    assert notify.completion_event(dict(run_id='run-test', status=job.status,
+                                        exit_code=1), tmp_path)['event'] == 'HOLD'

@@ -101,3 +101,45 @@ fn missing_backlink_target_is_rejected_on_every_platform() {
     fs::write(&pointer, cwd.join(".git").to_str().unwrap()).unwrap();
     assert!(capture(&cwd, run).unwrap());
 }
+#[test]
+fn writer_completion_protocol_table() {
+    use super::*;
+    let state = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+    let cwd = state.join("checkout");
+    fs::create_dir_all(cwd.join("tools")).unwrap();
+    for role in ["implement", "fix", "future_writer"] {
+        for line in [
+            "HOLD file_size",
+            "HOLD changelog",
+            "HOLD trailers",
+            "HOLD scrub",
+            "HOLD push_dry_run",
+            "HOLD held_commit",
+            "INFRA scrub",
+            "HOLD preflight_unavailable",
+        ] {
+            fs::write(
+                cwd.join("tools/preflight.py"),
+                format!("print({line:?})\nraise SystemExit(1)\n"),
+            )
+            .unwrap();
+            let mut record = RunRecord::create(
+                &state,
+                &pg_worker_core::run::record::new_run_id(),
+                "test",
+                json!({"role":role,"cwd":cwd}).as_object().unwrap().clone(),
+                Status::Running,
+                0.0,
+            )
+            .unwrap();
+            assert_eq!(
+                writer_completion(&mut record, Status::Completed),
+                Status::Hold
+            );
+            assert_eq!(record.get("status"), Some(&json!("hold")));
+            assert_eq!(record.get("stderr_tail"), Some(&json!(line)));
+            assert_eq!(record.get("events").unwrap()[0]["event"], "writer_hold");
+        }
+    }
+    fs::remove_dir_all(state).unwrap();
+}

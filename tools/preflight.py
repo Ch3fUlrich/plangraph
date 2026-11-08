@@ -12,16 +12,34 @@ import time
 import tomllib
 
 INFRA = re.compile(r"download|\b5\d\d\b|connection.?reset|failed to connect|"
-                   r"could not resolve|timed out", re.I)
+                    r"could not resolve|timed out", re.I)
+WRITER_TIMEOUT = 1800
+
+
+def completion():
+    """Wire protocol: exactly one canonical diagnostic line on stdout."""
+    import contextlib
+    import io
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        code = main(["--writer-push", "--fail-fast"])
+    if code:
+        lines = output.getvalue().splitlines()
+        print(next((line for line in lines if line.startswith(("HOLD ", "INFRA "))),
+                   "HOLD preflight_unavailable"))
+    return code
 
 
 def run(command, cwd, env):
     try:
         result = subprocess.run(command, cwd=cwd, env=env, text=True,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                timeout=WRITER_TIMEOUT)
         return result.returncode, result.stdout
     except OSError as exc:
         return 1, f"unable to start check: {type(exc).__name__}\n"
+    except subprocess.TimeoutExpired:
+        return 1, "check timed out\n"
 
 
 def rust_commands(root, base, head):
@@ -105,7 +123,13 @@ def main(argv=None, root=None):
                     status = "PASS" if not code else ("INFRA" if INFRA.search(output) else "FAIL")
                     if code:
                         if args.writer_push:
-                            print('HOLD ' + Path(command[1] if len(command) > 1 else command[0]).name)
+                            gate = {"check_file_size.py": "file_size",
+                                    "check_changelog_docs.py": "changelog",
+                                    "ci_commit_gate.py": "trailers",
+                                    "scrub_check.py": "scrub",
+                                    "preflight_private_scrub.py": "scrub"}.get(
+                                        Path(command[1]).name, family)
+                            print(('INFRA ' if status == 'INFRA' else 'HOLD ') + gate)
                         break
             except (OSError, subprocess.CalledProcessError, ValueError):
                 status = "FAIL"
@@ -153,4 +177,4 @@ def writer_push(root, env):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(completion() if sys.argv[1:] == ['--writer-completion'] else main())

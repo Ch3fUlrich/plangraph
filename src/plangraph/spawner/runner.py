@@ -345,6 +345,9 @@ class SpawnerRunner:
                 raise ValueError('invalid run timeout: PLANGRAPH_SPAWN_RUN_TIMEOUT') from None
         job_id = f"job-{uuid.uuid4().hex[:8]}"
         work_dir = cwd or self.default_cwd
+        if not dry_run:
+            from .git_guard import collect_brief_tests
+            await asyncio.to_thread(collect_brief_tests, prompt, role, work_dir)
 
         import secrets
         nonce = secrets.token_hex(32)

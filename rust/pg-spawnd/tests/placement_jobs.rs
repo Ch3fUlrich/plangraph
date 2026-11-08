@@ -144,6 +144,11 @@ fn completed_cancel_preserves_record() {
     let mut f = Fixture::new("echo done", Value::Null, &[]);
     let record = payload(f.spawn(2.0));
     assert_eq!(record["status"], "completed");
+    assert!(record["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["reason"] == "no_preflight_configured"));
     assert_eq!(
         payload(f.call("cancel", json!({"run_id":record["run_id"]}))),
         record

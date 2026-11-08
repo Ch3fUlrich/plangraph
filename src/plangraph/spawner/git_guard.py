@@ -105,7 +105,7 @@ def check_guard(guard, job):
 
 
 def writer_launch(prompt, role, model, run_id):
-    if role not in ('implement', 'fix'):
+    if role in ('review', 'research'):
         return prompt, {}
     name = model + ' (plangraph writer)'
     email = run_id + '@writer.plangraph.invalid'
@@ -119,22 +119,23 @@ def writer_launch(prompt, role, model, run_id):
 
 def writer_completion(job):
     """The runner, not its caller or child's prose, owns writer publication."""
-    if job.role not in ('implement', 'fix') or job.status != 'completed':
+    if job.role in ('review', 'research') or job.status != 'completed':
         return
     import sys
+    if not (Path(job.cwd or '.') / 'tools/preflight.py').exists():
+        job.events.append(dict(event='writer_preflight_skipped', reason='no_preflight_configured'))
+        return
     try:
         result = subprocess.run(
-            [sys.executable, 'tools/preflight.py', '--writer-push'],
+            [sys.executable, 'tools/preflight.py', '--writer-completion'],
             cwd=job.cwd, capture_output=True, text=True, timeout=1800)
         failed = result.returncode != 0
-        reasons = [line for line in result.stdout.splitlines()
-                   if line.startswith(('FAIL ', 'INFRA ', 'HOLD '))]
-        reason = '; '.join(reasons) or 'preflight'
+        reason = result.stdout.strip() or 'HOLD preflight_unavailable'
     except (OSError, subprocess.SubprocessError):
-        failed, reason = True, 'preflight_unavailable'
+        failed, reason = True, 'HOLD preflight_unavailable'
     if failed:
         job.status, job.exit_code = 'hold', 1
-        job.stderr = 'HOLD ' + reason
+        job.stderr = reason
         job.events.append(dict(event='writer_hold', reason=reason))
 
 
@@ -143,3 +144,23 @@ def admit_brief(prompt, role, header):
     if role in ('implement', 'review') and not brief.strip():
         from plangraph.routing_errors import SpawnRefused
         raise SpawnRefused('prompt_empty')
+
+
+def collect_brief_tests(prompt, role, cwd):
+    """Collect named tests in the launch worktree before admitting a writer."""
+    if role in ('review', 'research'):
+        return
+    import sys
+    tests = list(dict.fromkeys(re.findall(
+        r'(?<![\w/])((?:tests/)[\w./-]+\.py(?:::[\w-]+)*)', prompt)))
+    if not tests:
+        return
+    from plangraph.routing_errors import SpawnRefused
+    try:
+        result = subprocess.run(
+            [sys.executable, '-m', 'pytest', '--collect-only', '-q', *tests],
+            cwd=cwd, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SpawnRefused(f'test_env_unready: {exc}') from exc
+    if result.returncode:
+        raise SpawnRefused('test_env_unready: ' + result.stdout + result.stderr)

@@ -26,9 +26,12 @@ fn save(state: &Path, host: &str, base: Value, status: Status) -> Result<Value, 
 fn validate(args: &Args) -> Result<(), ToolError> {
     crate::leg_ref::check_review_role(args)?;
     if args
-        .get("prompt")
-        .and_then(Value::as_str)
-        .is_some_and(|s| s.trim().is_empty())
+        .get("role")
+        .is_none_or(|r| matches!(r.as_str(), Some("implement" | "review")))
+        && args
+            .get("prompt")
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.trim().is_empty())
     {
         return Err(parameter("prompt_empty"));
     }
@@ -159,6 +162,18 @@ pub(crate) fn spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn empty_prompt_scope() {
+        for role in ["implement", "review", "research", "fix"] {
+            let args = json!({"role":role,"prompt":" \n\t", "card":{}});
+            let error = validate(args.as_object().unwrap()).unwrap_err();
+            let message = error.into_error_data().message.to_string();
+            assert_eq!(
+                message.contains("prompt_empty"),
+                matches!(role, "implement" | "review")
+            );
+        }
+    }
     #[test]
     fn unexpected_validation_error_is_unrecorded() {
         let state = std::env::temp_dir().join(format!("pg-spawnd-validation-{}", new_run_id()));

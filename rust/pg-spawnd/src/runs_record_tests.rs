@@ -4,7 +4,7 @@ use super::*;
 fn launch_booking_carries_later_id_into_finish() {
     let dir = std::env::temp_dir().join(new_run_id());
     let prior = json!({"status":"failed","exit_code":7});
-    let mut base = json!({"attempts":[prior]});
+    let mut base = json!({"role":"review", "attempts":[prior]});
     let leg = json!({"model":"retry"});
     let id = book_attempt(&mut base, &leg);
     assert_eq!(id, 2);
@@ -192,8 +192,14 @@ fn orphan_settle_with_valid_attribution_preserves_prior_code() {
 #[test]
 fn finish_normalizes_legacy_unbooked_first_attempt_only() {
     let dir = std::env::temp_dir().join(new_run_id());
-    let record = create(&dir, "run-legacy", "fixture", json!({}), Status::Running)
-        .unwrap_or_else(|_| panic!("fixture record creation failed"));
+    let record = create(
+        &dir,
+        "run-legacy",
+        "fixture",
+        json!({"role":"review"}),
+        Status::Running,
+    )
+    .unwrap_or_else(|_| panic!("fixture record creation failed"));
     // create supplies []; only a persisted pre-upgrade record lacks the key.
     assert_eq!(record.get("attempts"), Some(&json!([])));
     let mut legacy = record.to_value();

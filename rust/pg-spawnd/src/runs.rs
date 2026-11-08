@@ -88,6 +88,19 @@ impl Runs {
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
         if !dry && crate::gitconfig_guard::writer_role(&role) {
+            let collection = crate::gitconfig_guard::writer_preflight::collect(
+                &launch.cwd,
+                args["prompt"].as_str().unwrap_or(""),
+            );
+            let error = match collection {
+                Ok(error) => error,
+                Err(error) => Some(error.to_string()),
+            };
+            if let Some(error) = error {
+                base["reason"] = json!("test_env_unready");
+                base["error"] = json!(error);
+                return Ok(create(state, &run_id, host, base, Status::Refused)?.to_value());
+            }
             let dir = crate::gitconfig_guard::run_dir(state, &run_id)
                 .map_err(|_| internal("invalid run id"))?;
             match crate::gitconfig_guard::capture(&launch.cwd, &dir) {
@@ -300,7 +313,6 @@ fn book_attempt(base: &mut Value, leg: &Value) -> u32 {
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
     let diagnostic = crate::gitconfig_guard::guard_diagnostic(record, status, leg, attempt_id);
     let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
-    let status = crate::gitconfig_guard::writer_completion(record, status);
     let mut attempts = match record.get("attempts") {
         None if attempt_id == 1 => vec![json!({"legacy_normalized":true})],
         None => Vec::new(),
@@ -319,6 +331,7 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         return;
     };
     let dry = status == Status::DryRun;
+    let status = crate::gitconfig_guard::writer_completion(record, status);
     let unwitnessed = json!("unwitnessed");
     let completion = json!({"leg":leg,"status":status.as_str(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },

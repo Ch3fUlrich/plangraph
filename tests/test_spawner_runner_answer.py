@@ -87,3 +87,46 @@ def test_denied_review_verdict_completion(tmp_path, monkeypatch, verdict, framin
         ('text', {'text': verdict}), ('step_finish', {'reason': framing}))
     job = _monitor(tmp_path, monkeypatch, output, denied=True, stderr='')
     assert job.status == ('failed' if framing == 'length' else 'completed')
+
+
+def test_monitor_writer_hold(tmp_path, monkeypatch):
+    (tmp_path / 'tools').mkdir()
+    (tmp_path / 'tools/preflight.py').touch()
+    from plangraph.spawner import git_guard, notify
+    runner = SpawnerRunner(default_cwd=str(tmp_path))
+    job = JobInfo('hold-job', 'running', 'task', 'test-model', role='fix',
+                  command=['opencode'], cwd=str(tmp_path))
+    runner.jobs[job.job_id] = job
+    async def collect(*args):
+        return stream(('text', {'text': 'Done'}), ('step_finish', {'reason': 'stop'})).encode(), b''
+    async def reap(*args):
+        pass
+    monkeypatch.setattr('plangraph.spawner.run_watchdog.collect', collect)
+    monkeypatch.setattr(runner, '_reap_process', reap)
+    monkeypatch.setattr(runner, '_check_git_config_guard', lambda *a: None)
+    monkeypatch.setattr(git_guard.subprocess, 'run', lambda *a, **k:
+                        SimpleNamespace(returncode=1, stdout='HOLD trailers\n'))
+    asyncio.run(runner._monitor_process(job.job_id, SimpleNamespace(returncode=0), 'test-model'))
+    assert job.status == 'hold' and job.exit_code == 1
+    assert job.stderr == 'HOLD trailers'
+    assert dict(event='writer_hold', reason='HOLD trailers') in job.events
+    monkeypatch.setattr(notify.subprocess, 'check_output', lambda *a, **k: 'abc')
+    assert notify.completion_event(dict(run_id='run-test', status=job.status,
+                                        exit_code=job.exit_code), tmp_path)['event'] == 'HOLD'
+def test_brief_collection_refuses_before_writer(monkeypatch, tmp_path):
+    from plangraph.spawner.git_guard import collect_brief_tests
+    from plangraph.routing_errors import SpawnRefused
+    from types import SimpleNamespace
+    import pytest
+    calls = []
+
+    def collect(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=2, stdout='collection failed: missing PG table', stderr='fcntl unavailable')
+
+    monkeypatch.setattr('plangraph.spawner.git_guard.subprocess.run', collect)
+    with pytest.raises(SpawnRefused, match='test_env_unready:.*missing PG table.*fcntl'):
+        collect_brief_tests('Run tests/test_host.py::test_schema', 'implement', tmp_path)
+    assert len(calls) == 1
+    assert calls[0][0][1:] == ['-m', 'pytest', '--collect-only', '-q', 'tests/test_host.py::test_schema']
+    assert calls[0][1]['cwd'] == tmp_path

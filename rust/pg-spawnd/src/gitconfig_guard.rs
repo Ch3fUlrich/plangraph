@@ -367,7 +367,7 @@ mod tests;
 
 pub(crate) fn writer_completion(record: &mut RunRecord, status: Status) -> Status {
     if status != Status::Completed
-        || record.get("role").and_then(serde_json::Value::as_str) != Some("implement")
+        || !writer_role(record.get("role").unwrap_or(&serde_json::Value::Null))
     {
         return status;
     }
@@ -375,26 +375,31 @@ pub(crate) fn writer_completion(record: &mut RunRecord, status: Status) -> Statu
         .get("cwd")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
-    let output = std::process::Command::new("python3")
-        .args(["tools/preflight.py", "--writer-push"])
-        .current_dir(cwd)
-        .output();
+    if !std::path::Path::new(cwd)
+        .join("tools/preflight.py")
+        .exists()
+    {
+        let _ = record.push_event(
+            json!({"event":"writer_preflight_skipped", "reason":"no_preflight_configured"}),
+        );
+        return status;
+    }
+    let output = writer_preflight::run(cwd);
     if output.as_ref().is_ok_and(|o| o.status.success()) {
         return status;
     }
     let reason = output
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|s| {
-                    s.starts_with("FAIL ") || s.starts_with("INFRA ") || s.starts_with("HOLD ")
-                })
-                .collect::<Vec<_>>()
-                .join("; ")
-        })
-        .unwrap_or_default();
-    record.set("reason", json!(format!("HOLD preflight: {reason}")));
-    record.set("status", json!("failed"));
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "HOLD preflight_unavailable".into());
+    record.set("reason", json!(reason));
+    record.set("stderr_tail", json!(reason));
+    let _ = record.push_event(json!({"event":"writer_hold", "reason":reason}));
+    record.set("status", json!("hold"));
     record.set("exit_code", json!(1));
-    Status::Failed
+    Status::Hold
 }
+
+#[path = "writer_preflight.rs"]
+pub(crate) mod writer_preflight;
