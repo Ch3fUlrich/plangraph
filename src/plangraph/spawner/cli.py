@@ -1,6 +1,5 @@
 """Card-only per-host agent CLI: python -m plangraph.spawner.cli."""
 from __future__ import annotations
-
 import argparse
 import asyncio
 import json
@@ -10,9 +9,7 @@ import os
 import subprocess
 import time
 import uuid
-
 _start_supervisor = subprocess.Popen
-
 from .runner import spawn_service as SpawnService, redact
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
 
@@ -99,6 +96,8 @@ def _supervise():
 
 def _card(value):
     return json.loads(Path(value[1:]).read_text(encoding='utf-8') if value.startswith('@') else value)
+
+
 def main(argv=None):
     if (argv if argv is not None else sys.argv[1:]) == ['--supervise']:
         return _supervise()
@@ -205,6 +204,7 @@ def main(argv=None):
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise
+            # Explicit model/leg overrides intentionally bypass routing, not admission.
             if not args.model and not args.leg:
                 # service.route saves the refusal record itself (one record per route error).
                 service.route(args.card, args.role, args.writer_family, args.review_of, **options)

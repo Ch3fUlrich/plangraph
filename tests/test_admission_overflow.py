@@ -112,6 +112,7 @@ def test_no_config_below_floor_refuses_spawn(setup, monkeypatch, capsys, entry):
     assert result['status'] == 'queued' and result['exit_code'] == 5
     assert result['reason'] == ('memory: free 4000 MB, floor 3000 MB, role 2048 MB'
                                 '; queue: repo is not public (absent or unknown allowlist)')
+    assert result['overflow_reason'] == result['reason']
     remote.assert_not_called()
     shared._save.assert_called_once_with(result)
 
@@ -137,6 +138,7 @@ def test_direct_cli_below_floor_attempts_overflow(setup, monkeypatch, capsys):
 ])
 def test_cli_validates_before_overflow(setup, monkeypatch, capsys, arguments, message):
     from plangraph.spawner import cli
+    monkeypatch.setattr(overflow, 'available_memory_mb', lambda: 4000)
     service, _, remote = setup
     service.save_refusal = Mock()
     service.route = Mock()
