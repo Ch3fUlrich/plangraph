@@ -28,10 +28,11 @@ def test_windows_native_command(tmp_path, monkeypatch, win_src):
     def run(argv, **kwargs):
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                         '--', 'target',
+                        f'if not exist "{win_src}\\" exit /b 44 & '
                         f'set "PYTHONPATH={win_src}"&& python -m plangraph.spawner.remote_ps']
         assert kwargs['stdin'] == subprocess.DEVNULL
         assert kwargs['stdout'] == subprocess.PIPE
-        assert kwargs['stderr'] == subprocess.DEVNULL
+        assert kwargs['stderr'] == subprocess.PIPE
         assert kwargs.get('shell', False) is False
         return original([sys.executable, '-c', 'print(\'{"runs": []}\', end="")'],
                         **kwargs)

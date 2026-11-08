@@ -19,37 +19,63 @@ FIELD_TYPES = dict(run_id=(str,), host=(str,), status=(str,), role=(str,),
                    pid=(int, type(None)), exit_code=(int, type(None)))
 
 
+class HostQueryError(ValueError):
+    """Only fixed public reasons cross the transport boundary."""
+
+
+SRC_MISSING = 44
+
+
+def source_check(host):
+    if 'win_src' in host:
+        return f'if not exist "{host["win_src"]}\\" exit /b {SRC_MISSING}'
+    return f'test -d {host["src"]} || exit {SRC_MISSING}'
+
+
 def query_host(host, timeout):
     command = 'python3 -m plangraph.spawner.remote_ps'
     if 'win_src' in host:
-        command = (f'set "PYTHONPATH={host["win_src"]}"&& '
+        command = (f'{source_check(host)} & set "PYTHONPATH={host["win_src"]}"&& '
                    'python -m plangraph.spawner.remote_ps')
     elif 'wsl_distro' in host:
-        command = (f"wsl -d {host['wsl_distro']} -- env PYTHONPATH={host['src']} "
-                   'python3 -m plangraph.spawner.remote_ps')
+        command = (f"wsl -d {host['wsl_distro']} -- sh -c "
+                   f"'{source_check(host)}; PYTHONPATH={host['src']} "
+                   "python3 -m plangraph.spawner.remote_ps'")
     elif 'src' in host:
-        command = f"PYTHONPATH={host['src']} {command}"
+        command = f"{source_check(host)}; PYTHONPATH={host['src']} {command}"
     with subprocess.Popen(
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
          '--', host['target'], command],
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         ) as process:
         deadline = time.monotonic() + timeout
         output = bytearray()
+        diagnostics = bytearray()
         try:
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
-                while True:
+                selector.register(process.stderr, selectors.EVENT_READ)
+                while selector.get_map():
                     remaining = deadline - time.monotonic()
-                    if remaining <= 0 or not selector.select(remaining):
+                    events = selector.select(max(0, remaining))
+                    if remaining <= 0 or not events:
                         raise TimeoutError('host query failed')
-                    chunk = os.read(process.stdout.fileno(), min(65536, MAX_OUTPUT + 1 - len(output)))
-                    output.extend(chunk)
-                    if len(output) > MAX_OUTPUT:
-                        raise ValueError('host query failed')
-                    if not chunk:
-                        break
-            if process.wait(timeout=max(0, deadline - time.monotonic())):
+                    for key, _ in events:
+                        buffer = output if key.fileobj is process.stdout else diagnostics
+                        chunk = os.read(key.fd, min(65536, MAX_OUTPUT + 1 - len(buffer)))
+                        buffer.extend(chunk)
+                        if len(buffer) > MAX_OUTPUT:
+                            raise ValueError('host query failed')
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+            code = process.wait(timeout=max(0, deadline - time.monotonic()))
+            if code == 255:
+                raise HostQueryError('host unreachable')
+            if code == SRC_MISSING or (code and (
+                    b"No module named 'plangraph" in diagnostics
+                    or b'No module named plangraph' in diagnostics)):
+                raise HostQueryError('host src missing')
+            if code:
                 raise ValueError('host query failed')
             return output.decode('utf-8', errors='replace')
         finally:
@@ -119,6 +145,9 @@ def _fetch(host, transport):
                 raise ValueError()
             clean.append({k: row[k] for k in FIELDS if k in row})
         return clean
+    except HostQueryError as exc:
+        reason = str(exc) if str(exc) in ('host src missing', 'host unreachable') else 'host query failed'
+        return [dict(host=host['name'], status='unknown', reason=reason)]
     except Exception:
         return [dict(host=host['name'], status='unknown', reason='host query failed')]
 

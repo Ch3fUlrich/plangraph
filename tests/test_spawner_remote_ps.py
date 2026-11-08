@@ -55,16 +55,17 @@ def test_transport_is_bounded_and_noninteractive(monkeypatch, src, distro):
     command = 'python3 -m plangraph.spawner.remote_ps'
     if src is not None:
         host['src'] = src
-        command = f'PYTHONPATH={src} {command}'
+        command = f'test -d {src} || exit 44; PYTHONPATH={src} {command}'
     if distro is not None:
         host['wsl_distro'] = distro
-        command = f'wsl -d {distro} -- env PYTHONPATH={src} python3 -m plangraph.spawner.remote_ps'
+        command = (f"wsl -d {distro} -- sh -c 'test -d {src} || exit 44; "
+                   f"PYTHONPATH={src} python3 -m plangraph.spawner.remote_ps'")
     def run(argv, **kwargs):
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                         '--', 'private-target', command]
         assert kwargs['stdin'] == subprocess.DEVNULL
         assert kwargs['stdout'] == subprocess.PIPE
-        assert kwargs['stderr'] == subprocess.DEVNULL
+        assert kwargs['stderr'] == subprocess.PIPE
         assert kwargs.get('shell', False) is False
         return original(['python3', '-c', 'print(\'{"runs": []}\', end="")'], **kwargs)
     monkeypatch.setattr(subprocess, 'Popen', run)
