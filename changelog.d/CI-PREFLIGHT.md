@@ -1,1 +1,2 @@
 - Add blocking local CI preflight with ordered scrub/policy/Rust/affected-test families, one infrastructure retry, timed summaries and existing pre-push hook integration.
+- Size Rust/affected-test deadlines for slower runs, remove the hook's competing overall deadline, and clarify HTTP 5xx infrastructure inference.

@@ -227,6 +227,40 @@ def test_timeout_is_failure(monkeypatch, repo):
     assert preflight.run(["hung"], repo, {}) == (1, "check exceeded 60 second timeout\n")
 
 
+@pytest.mark.parametrize("command,family", [
+    (["cargo", "clippy"], "rust"), (["cargo", "test"], "rust"),
+    (["python3", "affected_tests.py"], "tests")])
+def test_slow_passing_check(repo, monkeypatch, capsys, command, family):
+    (repo / "rust").mkdir()
+    # Scale seconds by 1/1000: the fake command outlives the old 60 s limit.
+    monkeypatch.setattr(preflight, "CHECK_TIMEOUT", 0.06)
+    monkeypatch.setattr(preflight, "RUST_TIMEOUT", 0.6)
+    monkeypatch.setattr(preflight, "TEST_TIMEOUT", 0.9)
+    real_subprocess = subprocess.run
+    original = preflight.run
+
+    def sleeping_check(argv, **kwargs):
+        import sys
+        assert kwargs["timeout"] == (0.6 if family == "rust" else 0.9)
+        # Rust checks run from repo/rust, so a relative interpreter path breaks.
+        return real_subprocess([str(Path(sys.executable).resolve()), "-c",
+                                "import time; time.sleep(0.12)"],
+                               **kwargs)
+
+    def run(argv, cwd, env):
+        if argv[:2] == command or (family == "tests" and
+                                  Path(argv[1]).name == "affected_tests.py"):
+            return original(command, cwd, env)
+        return 0, ""
+
+    monkeypatch.setattr(preflight.subprocess, "run", sleeping_check)
+    monkeypatch.setattr(preflight, "run", run)
+    monkeypatch.setattr(preflight, "rust_commands",
+                        lambda *args: [command] if family == "rust" else [])
+    assert preflight.main(["--base", "HEAD"], repo) == 0
+    assert f"PASS {family} " in capsys.readouterr().out
+
+
 def test_missing_rust_baseline(repo, monkeypatch, capsys):
     fake_runner(monkeypatch)
     assert preflight.main(["--base", "missing", "--fast"], repo) == 0

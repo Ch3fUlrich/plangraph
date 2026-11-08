@@ -12,6 +12,18 @@ import time
 import tomllib
 
 CHECK_TIMEOUT = 60
+# Measured on dell: pg-spawnd clippy 17.8 s, shim/windows_pipe tests 48.4 s.
+# Leave ample room for slower hosts, multiple affected crates and test suites.
+RUST_TIMEOUT = 600
+TEST_TIMEOUT = 900
+
+
+def check_timeout(command):
+    if command[:2] in (["cargo", "clippy"], ["cargo", "test"]):
+        return RUST_TIMEOUT
+    if len(command) > 1 and Path(command[1]).name == "affected_tests.py":
+        return TEST_TIMEOUT
+    return CHECK_TIMEOUT
 
 
 class SkipFamily(ValueError):
@@ -19,13 +31,14 @@ class SkipFamily(ValueError):
 
 
 def run(command, cwd, env):
+    timeout = check_timeout(command)
     try:
         result = subprocess.run(command, cwd=cwd, env=env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                timeout=CHECK_TIMEOUT)
+                                timeout=timeout)
         return result.returncode, result.stdout
     except subprocess.TimeoutExpired:
-        return 1, "check exceeded 60 second timeout\n"
+        return 1, f"check exceeded {timeout} second timeout\n"
     except OSError as exc:
         return 1, f"unable to start check: {type(exc).__name__}\n"
 

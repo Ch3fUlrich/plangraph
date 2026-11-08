@@ -252,7 +252,8 @@ def push_main():
                        "--base", base_commit(remote_sha, local_sha), "--head", local_sha]
             if os.environ.get("PREFLIGHT_FAST") == "1":
                 command.append("--fast")
-            result = subprocess.run(command, timeout=300)
+            # Per-check deadlines govern, including the possible INFRA retry.
+            result = subprocess.run(command)
             if result.returncode:
                 return result.returncode
     elif os.environ.get("PREFLIGHT_SKIP") == "1":
