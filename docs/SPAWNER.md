@@ -1,6 +1,6 @@
 # Plangraph Spawner & Model Routing Architecture
 ### Writer result finalization
-
+Terminal saves dispatch review verdicts to the keeper; `verdict.json` audits delivery/skip reasons and `verdict.delivered` stops replay. Missing keys, invalid evidence, unwitnessed families and unparseable verdicts skip; transport/import/lock failures retry at most three attempts, then skip with the reason retained. Remove the verdict journal and marker explicitly to requeue after repair; completed delivery markers also stop retries when the completion field is absent.
 `worker-core::writer_result::check_result` runs the mandatory Rust file-size
 gate before returning a checked result; export rechecks it before content gates,
 bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
