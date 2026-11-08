@@ -155,6 +155,8 @@ fn finish_normalizes_legacy_unbooked_first_attempt_only() {
     let mut legacy = record.to_value();
     legacy.as_object_mut().unwrap().remove("attempts");
     std::fs::write(record.path(), serde_json::to_vec(&legacy).unwrap()).unwrap();
+    // Compare against the persisted bytes: f64 fields need not round-trip exactly.
+    legacy = serde_json::from_slice(&std::fs::read(record.path()).unwrap()).unwrap();
     let mut record = RunRecord::read(&dir, "run-legacy").unwrap();
     finish(&mut record, Status::Completed, &json!({}), 2);
     assert_eq!(record.get("attempts"), None);
