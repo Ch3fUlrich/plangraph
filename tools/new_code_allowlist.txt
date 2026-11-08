@@ -6,3 +6,4 @@ tests/**/test_*.py | Regression tests at any depth (D-4691: tests allowed)
 src/plangraph/web/*.js | browser UI glue (D-4808, D-4811)
 configuration/opencode/plugins/**/*.mjs | OpenCode plugin byte copy from AutoOS (interim, D-4844)
 tests/**/_*.py | test-only helper modules imported by tests/**/test_*.py (D-4821, D-4870)
+tools/preflight.py | CI/tool helper (D-5062, rule 9.14), tools exception
