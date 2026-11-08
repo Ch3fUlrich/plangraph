@@ -162,6 +162,7 @@ fn switch_off_still_artifacts() {
         &mut record,
         pg_worker_core::run::record::Status::Completed,
         &json!({}),
+        1,
     );
     assert!(!state.join("evidence").exists());
     assert_eq!(record.to_value()["evidence_unclassified_attempts"], 1);

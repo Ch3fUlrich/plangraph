@@ -11,7 +11,7 @@ fn finish_reports_malformed_attempts_without_dropping_them() {
         Status::Running,
     )
     .unwrap_or_else(|_| panic!("fixture record creation failed"));
-    finish(&mut record, Status::Failed, &json!({}));
+    finish(&mut record, Status::Failed, &json!({}), 1);
     assert_eq!(record.get("attempts"), Some(&json!({"invalid":true})));
     assert_eq!(
         record.get("attempts_error"),
@@ -41,6 +41,7 @@ fn finish_preserves_proc_and_outcome() {
         &mut record,
         Status::Failed,
         &json!({"model":"fixture","family":"fixture"}),
+        2,
     );
     let attempts = record.get("attempts").unwrap().as_array().unwrap();
     assert_eq!(attempts.len(), 2);
@@ -51,6 +52,36 @@ fn finish_preserves_proc_and_outcome() {
     assert_eq!(attempts[1]["outcome"], outcome);
     assert_eq!(attempts[1]["custom"], true);
     assert_eq!(attempts[1]["status"], "failed");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn finish_settles_non_last_attempt_and_rejects_unknown_ids() {
+    let dir = std::env::temp_dir().join(new_run_id());
+    let first = json!({"status":"running","exit_code":7,"custom":"first"});
+    let last = json!({"status":"running","exit_code":19,"custom":"last"});
+    let mut record = create(
+        &dir,
+        "run-orphan",
+        "fixture",
+        json!({"attempts":[first,last]}),
+        Status::Running,
+    )
+    .unwrap_or_else(|_| panic!("fixture record creation failed"));
+    finish(&mut record, Status::Orphaned, &json!({"exit_code":7}), 1);
+    let attempts = record.get("attempts").unwrap().clone();
+    assert_eq!(attempts[0]["status"], "orphaned");
+    assert_eq!(attempts[0]["exit_code"], 7);
+    assert_eq!(attempts[0]["custom"], "first");
+    assert_eq!(attempts[1], last);
+    for id in [0, 3] {
+        finish(&mut record, Status::Failed, &json!({}), id);
+        assert_eq!(record.get("attempts"), Some(&attempts));
+        assert_eq!(
+            record.get("attempts_error"),
+            Some(&json!("unknown or invalid attempt id"))
+        );
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 

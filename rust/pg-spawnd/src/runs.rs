@@ -151,7 +151,7 @@ impl Runs {
             base["served_model"] = leg["model"].clone();
             base["served_family"] = leg["family"].clone();
             let mut record = create(state, &run_id, host, base, Status::DryRun)?;
-            finish(&mut record, Status::DryRun, &leg);
+            finish(&mut record, Status::DryRun, &leg, 1);
             record
                 .save()
                 .map_err(|_| internal("could not save run record"))?;
@@ -171,7 +171,9 @@ impl Runs {
                 stdin: launch.stdin.map(String::into_bytes),
                 base: base.as_object().unwrap().clone(),
                 events,
-                finish: Some(Box::new(move |record, status| finish(record, status, &leg))),
+                finish: Some(Box::new(move |record, status| {
+                    finish(record, status, &leg, 1)
+                })),
             };
             match self.supervisor.start(spec) {
                 Ok(()) => {}
@@ -292,7 +294,7 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
         std::thread::sleep(Duration::from_millis(20));
     }
 }
-pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
+pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
     let diagnostic = json!({"reason":leg.get("reason"), "exit_code":leg.get("exit_code")});
     let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
     let dry = status == Status::DryRun;
@@ -305,10 +307,18 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
             return;
         }
     };
-    let mut attempt = attempts
-        .pop()
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}));
+    // Launch currently books only the first leg; recovery uses the same one-based ids.
+    if attempts.is_empty() && attempt_id == 1 {
+        attempts.push(json!({}));
+    }
+    let Some(attempt) = attempt_id
+        .checked_sub(1)
+        .and_then(|index| attempts.get_mut(index as usize))
+        .filter(|entry| entry.is_object())
+    else {
+        record.set("attempts_error", json!("unknown or invalid attempt id"));
+        return;
+    };
     let completion = json!({"leg":leg,"status":status.as_str(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },
         "served_family":if dry { &leg["family"] } else { &unwitnessed },
@@ -320,7 +330,6 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         .as_object_mut()
         .unwrap()
         .extend(completion.as_object().unwrap().clone());
-    attempts.push(attempt);
     record.set("attempts", json!(attempts));
     record.set(
         "chosen_leg",
