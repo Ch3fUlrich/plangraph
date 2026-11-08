@@ -48,7 +48,6 @@ USAGE = ("usage: md_sync.py --questions P --answers P --decisions P "
 
 SLEEP = time.sleep
 
-
 def _is_pin_mismatch(log):
     """True only for apply_batch's pre-call source-pin refusal line."""
     mark = getattr(apply_batch, "PIN_MISMATCH_MARK", "sha256 mismatch")
@@ -87,6 +86,8 @@ def fill_status(status, plan):
     status["refused"] = len(plan.refused)
     status["gone"] = len(plan.gone)
     status["redactions"] = plan.redactions
+    if any(reason != "not in graph" for _, _, _, reason in plan.dclose_skipped):
+        raise ValueError("unsupported skipped-close reason")
     status["close_skipped"] = [
         {"id": name, "decision": dec, "key": key,
          "reason": "Closes does not list the key"}
@@ -95,6 +96,14 @@ def fill_status(status, plan):
         {"id": ident, "decision": dec, "key": key, "reason": reason}
         for ident, dec, key, reason in plan.dclose_skipped
     ]
+    for row in status["close_skipped"]:
+        row["owner"] = "router"
+        row["action"] = {
+            "Closes does not list the key":
+                "reconcile D-row Closes with the item key; never reopen a done item",
+            "not in graph":
+                "reconcile the item key with the graph before retrying the close",
+        }[row["reason"]]
     status["choices_skipped"] = [
         {"key": key, "state": st} for key, st in plan.choices_skipped
     ]
