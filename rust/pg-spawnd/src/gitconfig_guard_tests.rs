@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::json;
-struct TempDir(PathBuf);
+pub(super) struct TempDir(PathBuf);
 impl TempDir {
     fn new() -> Self {
         let path = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
@@ -16,7 +16,7 @@ impl Drop for TempDir {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
-fn fixture(linked: bool) -> (TempDir, PathBuf, PathBuf, RunRecord) {
+pub(super) fn fixture(linked: bool) -> (TempDir, PathBuf, PathBuf, RunRecord) {
     let temp = TempDir::new();
     let cwd = temp.path().join("checkout");
     fs::create_dir_all(&cwd).unwrap();

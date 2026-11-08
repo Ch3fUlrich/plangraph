@@ -328,5 +328,8 @@ fn restore(snapshots: &[Snapshot]) -> bool {
 }
 
 #[cfg(test)]
+#[path = "gitconfig_guard_layout_tests.rs"]
+mod layout_tests;
+#[cfg(test)]
 #[path = "gitconfig_guard_tests.rs"]
 mod tests;

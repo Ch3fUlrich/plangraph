@@ -6,3 +6,4 @@ Fail closed on unresolved backlinks, preserve path anchors and Windows case sema
 
 Round 3: reject extended UNC backlinks, require bilateral Windows case folding, retain layout-error save markers, and cover accepted backlinks and production orphan settlement.
 Round 4: restore drive/WSL anchor and traversal coverage, preserve id-selected orphan exit diagnostics, and share Windows-safe file and Unix-only directory syncing.
+- Restore the layout-error test that keeps the record and run directory (D-4888).
