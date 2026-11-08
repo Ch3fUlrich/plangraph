@@ -214,6 +214,28 @@ def send(url, token, payload):
         return exc.code, exc.read(65536).decode("utf-8", "replace")
 
 
+def card_head_matches(run_dir, completion, merge, repo):
+    """Require a card-bound diff head and base, both ancestors of the merge."""
+    import subprocess
+    if not repo:
+        return False
+    try:
+        card = json.loads((run_dir / "card.json").read_text())
+        diff = card["diff_ref"]
+        def resolve(ref):
+            if not re.fullmatch(r"[0-9a-fA-F]{7,40}", str(ref)):
+                raise ValueError("invalid card ref")
+            return subprocess.check_output(["git", "rev-parse", "--verify", ref + "^{commit}"],
+                                           cwd=repo, text=True, stderr=subprocess.DEVNULL).strip()
+        base, head = resolve(diff["base"]), resolve(diff["head"])
+        return head == completion.lower() and all(subprocess.run(
+            ["git", "merge-base", "--is-ancestor", a, b], cwd=repo,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+            for a, b in ((base, head), (head, merge)))
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        return False
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--key", help="item key to review")
@@ -225,6 +247,9 @@ def main(argv=None):
     mode.add_argument("--backfill-apply", action="store_true")
     ap.add_argument("--snapshot", type=Path, default=Path("plan.snapshot.json"))
     ap.add_argument("--records-dir", type=Path)
+    ap.add_argument("--pr-cache", type=Path, help="JSON object mapping evidenced SHA to merged PR number")
+    ap.add_argument("--pr-lookup-gh", action="store_true", help="resolve merged PRs using gh (network)")
+    ap.add_argument("--format", choices=("tsv", "json"), default="tsv")
     ap.add_argument("--url", default=os.environ.get("PG_URL"))
     ap.add_argument("--head", help="expected record completion.head_sha "
                                   "(record-derived evidence only); binds the "

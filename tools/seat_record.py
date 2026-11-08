@@ -40,7 +40,7 @@ def _canon_family(name):
     return candidate
 
 
-def evidence_from_record(run_dir: Path, cli_writer_families=None) -> tuple[dict, str]:
+def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None) -> tuple[dict, str]:
     """Return (evidence, review_text) for a record.json-only seat run dir.
 
     Writer coverage comes only from the CLI --writer-family list (enforced in
@@ -52,7 +52,8 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None) -> tuple[dict,
     run_dir = Path(run_dir)
     record_path = run_dir / "record.json"
     try:
-        record = json.loads(record_path.read_text("utf-8"))
+        if record is None:
+            record = json.loads(record_path.read_text("utf-8"))
     except OSError as exc:
         raise ValueError(f"record.json unreadable: {type(exc).__name__}") from exc
     except ValueError as exc:
@@ -154,6 +155,48 @@ def record_paths(records_dir):
     return sorted(Path(records_dir).glob("**/run-*/record.json"))
 
 
+def record_index(records_dir):
+    """Read each record and prompt once, shared by writer and review discovery."""
+    if isinstance(records_dir, dict):
+        return records_dir
+    rows = {}
+    for path in record_paths(records_dir):
+        try:
+            record = json.loads(path.read_text("utf-8"))
+            if not isinstance(record, dict):
+                continue
+            try:
+                prompt = (path.parent / "prompt.txt").read_text("utf-8")
+            except OSError:
+                prompt = ""
+            rows[path] = (record, prompt)
+        except (OSError, ValueError):
+            continue
+    return rows
+
+
+def merged_pr(item, git, lookup=None):
+    """Resolve only an evidenced commit; injected lookup may use a JSON cache."""
+    import subprocess
+    from types import SimpleNamespace
+    from plangraph.keeper.evidence_repo import repo_key
+    head = item.get("head_sha")
+    if not head:
+        return None
+    if lookup is not None:
+        return lookup(head)
+    key = repo_key(item, SimpleNamespace(git=git), head)
+    repo = git.repo_path(key)
+    item["repo_path"] = repo
+    if repo:
+        result = subprocess.run(["git", "show", "-s", "--format=%s", head],
+                                cwd=repo, capture_output=True, text=True)
+        match = re.search(r"Merge PR #(\d+)\b", result.stdout)
+        if result.returncode == 0 and match:
+            return int(match[1])
+    return None
+
+
 def writer_families(item, head, records_dir, git):
     """Prefer evidenced git writers; fall back to matching implement records."""
     from types import SimpleNamespace
@@ -175,9 +218,8 @@ def writer_families(item, head, records_dir, git):
                         models.extend(v.split()[0] for v in
                                       (value if isinstance(value, list) else [value]) if v.split())
     if not models and records_dir is not None:
-        for path in record_paths(records_dir):
+        for path, (r, _) in record_index(records_dir).items():
             try:
-                r = json.loads(path.read_text("utf-8"))
                 if r.get("role") == "implement" and r.get("item_key") == item["key"]:
                     models.append(r.get("served_model"))
             except (OSError, ValueError, AttributeError):
@@ -223,13 +265,17 @@ def eligible_records(item, records_dir):
     if not writers or any(w not in KNOWN_FAMILIES for w in writers):
         return [], ["unknown writer"]
     eligible, reasons = [], []
-    for path in record_paths(records_dir):
+    for path, (record, prompt) in record_index(records_dir).items():
         try:
-            record = json.loads(path.read_text("utf-8"))
-            if not isinstance(record, dict) or record.get("item_key") != item["key"]:
-                continue
             if record.get("role") != "review":
                 continue
+            prs = {int(n) for n in re.findall(r"\bPR\s+#(\d+)\b", prompt, re.I)}
+            named = bool(re.search(r"(?<![\w:])" + re.escape(item["key"]) + r"(?![\w-])", prompt))
+            same_pr = item.get("pr_number") in prs
+            if record.get("item_key") != item["key"] and not (named or same_pr):
+                continue
+            if prs and item.get("pr_number") and prs != {item["pr_number"]}:
+                raise ValueError("PR number mismatch")
             if (path.is_symlink() or path.parent.is_symlink()
                     or not re.fullmatch(r"run-[0-9a-f]{32}", path.parent.name)
                     or not re.fullmatch(r"[0-9a-f]{64}", str(record.get("card_hash")))
@@ -240,8 +286,10 @@ def eligible_records(item, records_dir):
                     or any(type(record.get(k)) not in (int, float) for k in ("started", "ended"))
                     or record["ended"] < record["started"]):
                 raise ValueError("spawner fields missing or invalid")
-            evidence, text = evidence_from_record(path.parent)
-            if evidence["head_sha"].lower() != head.lower():
+            evidence, text = evidence_from_record(path.parent, record=record)
+            from seat_verdict import card_head_matches
+            if evidence["head_sha"].lower() != head.lower() and not card_head_matches(
+                    path.parent, evidence["head_sha"], head, item.get("repo_path")):
                 raise ValueError("head mismatch")
             family = model_family(record.get("served_model"))
             if family is None:
@@ -257,13 +305,17 @@ def eligible_records(item, records_dir):
             if (path.parent / "evidence.json").exists():
                 raise ValueError("spawner record shadowed by evidence.json")
             eligible.append(dict(run_id=path.parent.name, family=family, ok=ok,
-                                 seat_dir=path.parent))
+                                 seat_dir=path.parent, head_sha=evidence["head_sha"]))
         except (OSError, ValueError) as exc:
-            reasons.append(str(exc))
-    return eligible, sorted(set(reasons)) or ([] if eligible else ["no record"])
+            reasons.append(f"{exc} [seat={path.parent.name} family="
+                           f"{model_family(record.get('served_model'))} head="
+                           f"{(record.get('completion') or {}).get('head_sha')} expected={head}]")
+    return eligible, sorted(set(reasons)) or ([] if eligible else [
+        f"no record [seat=review family=outside:{','.join(writers)} head={head} "
+        f"item={item['key']} PR={item.get('pr_number') or 'unresolved'}]"])
 
 
-def backfill(args, poster):
+def backfill(args, poster, pr_lookup=None):
     """Print TSV discovery and optionally invoke the existing single-seat CLI."""
     import sys
     from collections import Counter
@@ -283,28 +335,49 @@ def backfill(args, poster):
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f"seat_verdict: snapshot: {exc}", file=sys.stderr)
         return 1
+    index = record_index(args.records_dir)
+    cache_path = getattr(args, "pr_cache", None)
+    cache = json.loads(cache_path.read_text()) if cache_path else None
+    lookup = pr_lookup or ((lambda sha: cache.get(sha)) if cache is not None else None)
+    if getattr(args, "pr_lookup_gh", False) and lookup is None:
+        import subprocess
+        def lookup(sha):
+            result = subprocess.run(["gh", "pr", "list", "--search", sha, "--state", "merged",
+                                     "-R", "Ch3fUlrich/plangraph", "--json", "number"],
+                                    capture_output=True, text=True, timeout=30)
+            rows = json.loads(result.stdout) if result.returncode == 0 else []
+            return rows[0]["number"] if len(rows) == 1 else None
+    output = []
     total = missing = failed = 0
     tallies = Counter()
     for raw in items:
         if raw.get("state") != "in_review":
             continue
         item = raw if "head_sha" in raw and "writer_families" in raw else snapshot_item(
-            raw, args.records_dir, git)
-        seats, reasons = eligible_records(item, args.records_dir)
+            raw, index, git)
+        item = dict(item, pr_number=merged_pr(item, git, lookup))
+        seats, reasons = eligible_records(item, index)
         total += 1
         missing += not bool(seats)
         if not seats:
-            tallies.update(reasons)
+            tallies.update({r.split(" [seat=", 1)[0] for r in reasons})
         detail = "ELIGIBLE " + "; ".join(f"{s['run_id']}:{s['family']}:{'PASS' if s['ok'] else 'FIX'}"
                            for s in seats) if seats else "MISSING " + "; ".join(reasons)
-        print(f"{item['key']}\t{detail.replace(chr(9), ' ').replace(chr(10), ' ')}")
+        output.append(dict(key=item['key'], status="ELIGIBLE" if seats else "MISSING",
+                           head_sha=item.get("head_sha"), pr_number=item.get("pr_number"),
+                           seats=[dict(s, seat_dir=str(s['seat_dir'])) for s in seats], reasons=reasons))
+        if getattr(args, "format", "tsv") == "tsv":
+            print(f"{item['key']}\t{detail.replace(chr(9), ' ').replace(chr(10), ' ')}")
         if args.backfill_apply and seats:
             # One deterministic record per item; never silently post all runs.
             seat = seats[0]
             failed += bool(poster(["--key", item["key"], "--seat-dir", str(seat["seat_dir"]),
-                                   "--head", item["head_sha"], "--writer-family",
+                                    "--head", seat["head_sha"], "--writer-family",
                                    ",".join(item["writer_families"]), "--token-dir",
                                    str(args.token_dir), "--url", args.url]))
+    if getattr(args, "format", "tsv") == "json":
+        print(json.dumps(output))
+        return int(bool(failed))
     print(f"counts\titems={total}\teligible={total - missing}\tmissing={missing}\tfailed={failed}")
     for reason, count in sorted(tallies.items()):
         print(f"reason\t{reason}\t{count}")
