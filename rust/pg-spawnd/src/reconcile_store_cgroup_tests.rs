@@ -135,7 +135,7 @@ fn reconcile_removed_scope_requires_recorded_group_gone() {
     );
     child.stop();
     // Existing directory with missing events, and an EISDIR read error,
-    // remain Unknown even though the recorded PGID now returns ESRCH.
+    // probe Unknown, but settle after grace without a matching live leader.
     std::fs::write(record.path(), &before).unwrap();
     std::fs::create_dir(&scope).unwrap();
     for events_directory in [false, true] {
@@ -149,11 +149,12 @@ fn reconcile_removed_scope_requires_recorded_group_gone() {
             ),
             Err(ReconcileError::Unknown)
         ));
-        assert!(matches!(
-            crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
-            Err(ReconcileError::Unknown)
-        ));
-        assert_eq!(before, std::fs::read(record.path()).unwrap());
+        std::fs::write(record.path(), &before).unwrap();
+        crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
+        assert_eq!(
+            RunRecord::read(&dir.0, "run-test").unwrap().status(),
+            Some(Status::Orphaned)
+        );
     }
     std::fs::remove_dir(scope.join("cgroup.events")).unwrap();
     std::fs::remove_dir(&scope).unwrap();
@@ -203,7 +204,7 @@ fn reconcile_on_live_group_unknown_untouched_shadow_writes_nothing() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn reconcile_on_pid_reuse_with_live_group_is_not_gone() {
+fn reconcile_on_pid_reuse_with_live_group_settles_after_grace() {
     let dir = StateDir::new();
     let mut record = dir.record();
     let mut child = GroupChild::new();
@@ -211,14 +212,11 @@ fn reconcile_on_pid_reuse_with_live_group_is_not_gone() {
     identity["start_time"] = json!(identity["start_time"].as_u64().unwrap() + 1);
     record.set("proc", identity);
     record.save().unwrap();
-    assert!(matches!(
-        crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
-        Err(ReconcileError::Unknown)
-    ));
+    crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
     assert!(child.0.try_wait().unwrap().is_none());
     assert_eq!(
         RunRecord::read(&dir.0, "run-test").unwrap().status(),
-        Some(Status::Running)
+        Some(Status::Orphaned)
     );
 }
 
@@ -291,7 +289,6 @@ fn reconcile_nonleader_live_pid_group_esrch_is_not_settled() {
     legacy.as_object_mut().unwrap().remove("pgid");
     record.set("proc", legacy);
     record.save().unwrap();
-    let before = std::fs::read(record.path()).unwrap();
     child.stop();
     assert!(!std::path::Path::new(&format!("/proc/{}", child.0.id())).exists());
     assert!(!gone("run-test", Some(&recorded)).unwrap());
@@ -300,11 +297,11 @@ fn reconcile_nonleader_live_pid_group_esrch_is_not_settled() {
         gone("run-test", Some(&legacy)),
         Err(ReconcileError::Unknown)
     ));
-    assert!(matches!(
-        crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
-        Err(ReconcileError::Unknown)
-    ));
-    assert_eq!(before, std::fs::read(record.path()).unwrap());
+    crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
+    assert_eq!(
+        RunRecord::read(&dir.0, "run-test").unwrap().status(),
+        Some(Status::Orphaned)
+    );
 }
 
 #[cfg(target_os = "linux")]

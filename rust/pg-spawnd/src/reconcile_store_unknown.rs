@@ -3,7 +3,35 @@ use super::*;
 
 pub(super) const UNKNOWN_IDENTITY_GRACE_MS: u64 = 10_000;
 
+pub(super) fn unverified_not_gone(row: &Entry) -> bool {
+    needs_grace(row) && !matches!(gone(&row.run_id, row.identity.as_ref()), Ok(true))
+}
+
 pub(super) fn needs_grace(row: &Entry) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        // A scope name or a live process group is not a verified leader identity.
+        row.identity.as_ref().is_none_or(|p| {
+            let Some(expected) = p.start_time else {
+                return true;
+            };
+            let leader = if p.pid == 0 {
+                p.pgid.unwrap_or(0)
+            } else {
+                p.pid
+            };
+            std::fs::read_to_string(format!("/proc/{leader}/stat"))
+                .ok()
+                .and_then(|stat| {
+                    let (_, rest) = stat.rsplit_once(')')?;
+                    let fields: Vec<_> = rest.split_whitespace().collect();
+                    (!matches!(*fields.first()?, "Z" | "X"))
+                        .then(|| fields.get(19)?.parse::<u64>().ok())?
+                })
+                != Some(expected)
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
     row.identity
         .as_ref()
         .is_none_or(|p| p.pid == 0 && p.group.is_none() && p.start_time.is_none())

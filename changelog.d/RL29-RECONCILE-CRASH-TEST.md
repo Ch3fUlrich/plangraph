@@ -12,3 +12,11 @@ the same persisted ten-second unknown-identity grace (deadline/started/mtime);
 this deliberately accepts the same capacity-release risk for unverifiable groups.
 The dedicated Linux subreaper test uses bounded waits, a capped shell, production
 lock observation, retrying socket connections, and kill/reap/unlink per restart.
+Linux grace eligibility now requires a matching recorded start time on a live,
+non-zombie leader to retain capacity indefinitely; a confinement scope name alone
+is not identity proof. This also bounds live-pid/no-start, dead-pid/live-pgid,
+mismatched-start, and populated-scope legacy rows. The 54-row identity table
+(3 pid x 3 pgid x 2 group x 3 start-time states) proves 46 rows orphan and reclaim
+their slot by the first reconciliation after the persisted ten-second grace;
+only eight rows with matching live leaders remain held. Existing deadline,
+started, and mtime anchors and the accepted unidentified-child risk are unchanged.

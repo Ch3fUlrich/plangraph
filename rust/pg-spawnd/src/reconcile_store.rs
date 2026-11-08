@@ -256,7 +256,7 @@ pub(crate) fn orphan_with(
     {
         return Err(ReconcileError::Unknown);
     }
-    if unknown::needs_grace(row) && !matches!(gone(&row.run_id, row.identity.as_ref()), Ok(true)) {
+    if current.is_some() && unknown::unverified_not_gone(row) {
         return unknown::settle_unknown(root, row);
     }
     #[cfg(windows)]

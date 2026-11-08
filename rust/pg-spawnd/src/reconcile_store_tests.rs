@@ -283,7 +283,7 @@ fn terminal_or_absent_row_requires_settled_probe() {
             .unwrap();
             std::fs::write(scope.join("cgroup.procs"), "").unwrap();
             let result = orphan_with(&dir.0, &row, &mut None);
-            if settled && status != "invalid" {
+            if (settled || status == "running") && status != "invalid" {
                 assert!(result.unwrap(), "{status}");
             } else {
                 assert!(matches!(result, Err(ReconcileError::Unknown)), "{status}");
