@@ -1157,7 +1157,7 @@ def spawn_service(*args, **kwargs):
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                             served_family=job.served_family, served_witness_reason=job.served_witness_reason,
                             request_side_model=job.request_side_model, witness_kind=job.witness_kind,
-                            served_model_mismatch=job.to_dict()['served_model_mismatch'],
+                            served_model_mismatch=any(e.get('event') == 'served_model_mismatch' for e in (getattr(job, 'events', None) or [])),
                             writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                             stdout_tail=record.get('stdout_tail', '') + job.stdout,
                             stderr_tail=record.get('stderr_tail', '') + job.stderr,
