@@ -208,3 +208,53 @@ fn gone_run_id_mismatch_is_unknown() {
         Err(crate::reconcile::ReconcileError::Unknown)
     ));
 }
+
+#[cfg(windows)]
+struct ApiFake {
+    member: bool,
+    active: bool,
+    terminated: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+#[cfg(windows)]
+impl job_api::JobApi for ApiFake {
+    fn member(&mut self, _pid: u32, _start: u64) -> io::Result<bool> {
+        Ok(self.member)
+    }
+    fn active(&mut self) -> io::Result<bool> {
+        Ok(self.active)
+    }
+    fn terminate(&mut self) -> io::Result<()> {
+        self.terminated
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+    fn times(&mut self) -> io::Result<(i64, i64)> {
+        Ok((0, 0))
+    }
+}
+
+// judge V6: acquisition with an exited leader goes through acquire_verified, not only acquire_decision.
+#[cfg(windows)]
+#[test]
+fn acquire_verified_exited_leader() {
+    let fake = |member, active| {
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        (
+            ApiFake {
+                member,
+                active,
+                terminated: flag.clone(),
+            },
+            flag,
+        )
+    };
+    let (api, terminated) = fake(false, false);
+    let mut job = acquire_verified(api, 42, 99).unwrap();
+    assert!(job.is_gone().unwrap());
+    assert!(!terminated.load(std::sync::atomic::Ordering::SeqCst));
+    let (api, terminated) = fake(false, true);
+    assert!(acquire_verified(api, 42, 99).is_err());
+    assert!(!terminated.load(std::sync::atomic::Ordering::SeqCst));
+    let (api, _) = fake(true, true);
+    assert!(!acquire_verified(api, 42, 99).unwrap().is_gone().unwrap());
+}
