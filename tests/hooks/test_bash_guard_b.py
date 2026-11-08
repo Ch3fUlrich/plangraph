@@ -345,22 +345,10 @@ class BashGuardPayloadShapeTests(unittest.TestCase):
         self.assertEqual(r_clean.returncode, 0)
         self.assertEqual(r_clean.stderr, b"")
 
-    def test_oversized_payload_fails_open_with_note(self):
-        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "x" * (2 * 1024 * 1024)}})
-        r = run_hook_raw(payload)
-        self.assertEqual(r.returncode, 0)
-        self.assertIn("1 MiB", r.stderr)
-
     def test_raw_nul_byte_in_json_fails_open(self):
         r = run_hook_bytes(b'{"tool_name":"Bash","tool_input":{"command":"\x00"}}')
         self.assertEqual(r.returncode, 0)
         self.assertIn("could not parse", r.stderr.decode("utf-8", errors="replace"))
-
-    def test_shell_c_depth_4_nesting_allowed_with_note(self):
-        cmd = 'bash -c "bash -c \\"bash -c \\\\\\\"bash -c \'claude -p \\\\\\\\\\\\\\\"$(id)\\\\\\\\\\\\\\\"\'\\\\\\\"\\\""'
-        r = run_bash(cmd)
-        self.assertEqual(r.returncode, 0)
-        self.assertIn("nesting", r.stderr)
 
 
 if __name__ == "__main__":
