@@ -126,6 +126,56 @@ def plan_tail():
     return Path(plangraph.review.__file__).with_name('tail_plan.md').read_text(encoding='utf-8')
 
 
+@pytest.mark.parametrize('prompt', ['', ' \n\t'])
+def test_blank_inline_refused(service, prompt):
+    assert cli.main(spawn_args(prompt, '--dry-run')) == 2
+    assert not service.payloads
+    assert isinstance(service.refusals[0][0], SpawnRefused)
+
+
+def test_missing_card_input_refused(tmp_path, service):
+    missing = tmp_path / 'required.txt'
+    args = spawn_args('Read the required input', '--dry-run')
+    args[2] = json.dumps({'input_files': [str(missing)]})
+    assert cli.main(args) == 2
+    assert not service.payloads
+    assert isinstance(service.refusals[0][0], SpawnRefused)
+
+
+@pytest.mark.parametrize('kind', ['blank', 'missing_prompt', 'missing_input', 'valid'])
+def test_mcp_prompt_admission(tmp_path, kind):
+    import asyncio
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    path = tmp_path / 'prompt.txt'
+    text = 'Read the supplied material\n'
+    args = {'card': {'estimate_tokens': 10}, 'prompt': ' \n'}
+    if kind in ('missing_prompt', 'valid'):
+        args.pop('prompt')
+        args['prompt_file'] = str(path)
+    if kind == 'valid':
+        path.write_text(text)
+    if kind == 'missing_input':
+        args.update(prompt='Read required input', card={'input_files': [str(path)]})
+    payloads = []
+    async def spawn(**payload):
+        payloads.append(payload)
+        return {'status': 'dry_run'}
+    server = object.__new__(MCPSpawnerServer)
+    server.service = SimpleNamespace(spawn=spawn)
+    import time
+    start = time.monotonic()
+    if kind == 'valid':
+        asyncio.run(server.call_tool('plangraph_agent_spawn', args))
+        assert payloads[0]['prompt'] == text
+    else:
+        with pytest.raises(SpawnRefused) as exc:
+            asyncio.run(server.call_tool('plangraph_agent_spawn', args))
+        if kind != 'blank':
+            assert str(path) in str(exc.value)
+        assert not payloads
+    assert time.monotonic() - start < 1
+
+
 def test_tail_hygiene():
     text = plan_tail()
     assert text.startswith('\n=== END OF MATERIAL.')

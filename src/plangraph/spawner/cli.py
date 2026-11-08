@@ -188,9 +188,9 @@ def main(argv=None):
                 exc = SpawnRefused('spawn by card; card required')
                 service.save_refusal(exc, args.role)
                 raise exc
-            from .prompt_input import resolve_prompt
+            from .prompt_input import admit_spawn
             try:
-                prompt = resolve_prompt(args.prompt, args.prompt_file)
+                prompt = admit_spawn(vars(args))
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise

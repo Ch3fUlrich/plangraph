@@ -182,6 +182,7 @@ class SpawnService(SeatSpawnMixin):
 
     def save_refusal(self, exc, role='implement', *, card=None, **extra):
         """Persist pre-service refusals using the same record contract (``extra``: seat fields)."""
+        if getattr(exc, 'preflight', False): return None
         from plangraph.planner.routing import SpawnRefused, BenchmarkError, BenchRequired
         record = dict(run_id='run-' + uuid.uuid4().hex, role=role,
                       started=time.time(), ended=time.time(),
@@ -198,7 +199,6 @@ class SpawnService(SeatSpawnMixin):
             logging.getLogger(__name__).warning('refusal_save_failed: %s', type(storage_error).__name__)
             exc.add_note('Refusal record could not be persisted: ' + type(storage_error).__name__)
         return record
-
     async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                     review_of=None, model=None, leg=None, override_reason=None,
                     dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,

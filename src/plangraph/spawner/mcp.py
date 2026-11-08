@@ -123,9 +123,9 @@ for _tool in TOOLS_METADATA:
         _tool['inputSchema']['properties']['run_id'] = {'type': 'string'}
         _tool['inputSchema'].pop('required', None)
     if _tool['name'] == 'plangraph_agent_spawn':
-        _tool['inputSchema']['required'] = ['prompt', 'card']
+        _tool['inputSchema']['required'] = ['card']
         _tool['inputSchema']['properties'].update({
-            'card': copy.deepcopy(CARD_SCHEMA), 'override_reason': {'type': 'string'},
+            'card': copy.deepcopy(CARD_SCHEMA), 'prompt_file': {'type': 'string'}, 'override_reason': {'type': 'string'},
             'writer_families': {'type': 'array', 'items': {'type': 'string'}},
             'review_scope': {'type': 'string', 'enum': ['per-fixer', 'batch']},
             'review_of': {'type': 'string'}, 'no_fallthrough': {'type': 'boolean'},
@@ -177,6 +177,9 @@ class MCPSpawnerServer:
         if isinstance(name, str) and name.startswith('plangraph_session_'):
             return await self._session_tool(name, arguments)
         from .bench_entry import benchmark_options
+        if name == 'plangraph_agent_spawn':
+            from .prompt_input import admit_spawn
+            arguments = dict(arguments, prompt=admit_spawn(arguments))
         if name == 'plangraph_agent_probe':
             from .leg_probe import probe_many
             try:
@@ -201,10 +204,6 @@ class MCPSpawnerServer:
         if name == 'plangraph_agent_cancel' and 'run_id' in arguments:
             return await self.service.cancel(arguments['run_id'])
         if name == "plangraph_agent_spawn":
-            if 'prompt' not in arguments:
-                exc = KeyError('prompt')
-                self.service.save_refusal(exc, arguments.get('role', 'implement'))
-                raise exc
             if not arguments.get('card'):
                 from plangraph.planner.routing import SpawnRefused
                 exc = ParameterRefused('spawn by card; card required')

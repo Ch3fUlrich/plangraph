@@ -44,6 +44,9 @@ class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``save_refusal`` and ``state`` from the service."""
 
     async def spawn(self, *args, **kwargs):
+        from .prompt_input import validate_inputs
+        validate_inputs(kwargs.get('prompt', args[1] if len(args) > 1 else ''),
+                        kwargs.get('card', args[0] if args else None))
         try:
             import inspect
             bound = inspect.signature(self._spawn).bind(*args, **kwargs)

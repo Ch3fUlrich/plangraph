@@ -124,6 +124,8 @@ pub(crate) fn spawn(
     host: &str,
     runs: &crate::runs::Runs,
 ) -> Result<Value, ToolError> {
+    let args = prompt_inputs(args)?;
+    let args = &args;
     let role = args.get("role").cloned().unwrap_or(json!("implement"));
     let admitted = crate::leg_ref::admit(&crate::leg_ref::AdapterCatalog::new(state), args)
         .and_then(|a| validate(&a).map(|()| a));
@@ -149,9 +151,54 @@ pub(crate) fn spawn(
     runs.spawn(state, args, host, role, plan)
 }
 
+fn prompt_inputs(args: &Args) -> Result<Args, ToolError> {
+    let mut args = args.clone();
+    if let Some(path) = args.get("prompt_file") {
+        let path = path.as_str().ok_or_else(|| parameter("prompt_file must be a path"))?;
+        if args.contains_key("prompt") {
+            return Err(parameter(format!("prompt_input_conflict: {path}")));
+        }
+        let text = std::fs::read_to_string(path)
+            .map_err(|_| parameter(format!("prompt_file_not_readable: {path}")))?;
+        args.insert("prompt".into(), json!(text.trim_start_matches('\u{feff}')));
+    }
+    if args.get("prompt").and_then(Value::as_str).is_some_and(|s| s.trim().is_empty()) {
+        return Err(parameter("prompt must not be blank"));
+    }
+    if let Some(paths) = args.get("card").and_then(|c| c.get("input_files")) {
+        let paths = paths.as_array().ok_or_else(|| parameter("card.input_files must be a list"))?;
+        for path in paths {
+            if !path.as_str().is_some_and(|p| Path::new(p).is_file()) {
+                return Err(parameter(format!("input_file_not_regular: {path}")));
+            }
+        }
+    }
+    Ok(args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn prompt_input_refusals_and_inline() {
+        let dir = std::env::temp_dir().join(new_run_id());
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("input.txt");
+        for args in [
+            json!({"prompt":" \n"}),
+            json!({"prompt_file":path}),
+            json!({"prompt":"Read input", "card":{"input_files":[path]}}),
+        ] {
+            let start = std::time::Instant::now();
+            assert!(prompt_inputs(args.as_object().unwrap()).is_err());
+            assert!(start.elapsed().as_secs_f64() < 1.0);
+        }
+        std::fs::write(&path, "Read supplied material\n").unwrap();
+        let args = prompt_inputs(json!({"prompt_file":path}).as_object().unwrap()).ok().unwrap();
+        assert_eq!(args["prompt"], "Read supplied material\n");
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
     #[test]
     fn unexpected_validation_error_is_unrecorded() {
         let state = std::env::temp_dir().join(format!("pg-spawnd-validation-{}", new_run_id()));
