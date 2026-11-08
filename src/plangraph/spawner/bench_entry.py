@@ -13,6 +13,7 @@ LEG_BENCHMARK_MODEL = {
     "agy-sonnet-5.5": "agy/claude-sonnet-5-5-medium",
     "mimo-v2.6-pro": "mimo/mimo-v2.6-pro",
     "mimo-v2.6-flash": "mimo/mimo-v2.6-flash",
+    "agy-opus-5.5": "agy/claude-opus-5-5-high",
 }
 
 
