@@ -48,7 +48,8 @@ fn closes(s: &Snapshot) -> bool {
     s.closes_recent < s.closes_previous
 }
 fn findings(s: &Snapshot) -> Vec<&'static str> {
-    let checks: [(&str, fn(&Snapshot) -> bool); 8] = [
+    type Check = (&'static str, fn(&Snapshot) -> bool);
+    let checks: [Check; 8] = [
         ("claude-pace", pace),
         ("ci-fail-rate", ci),
         ("review-age", age),
@@ -182,7 +183,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         // Remove pending first: interruption can repeat delivery, never lose it.
         fs::remove_file(&pending)?;
-        if queue.first().is_some_and(|v| v.to_string() == event) {
+        if queue.first().is_some_and(|v| *v == event) {
             queue.remove(0);
             atomic(&queue_path, &serde_json::to_string(&queue)?)?;
         }
