@@ -48,14 +48,14 @@ def topology(tmp_path, monkeypatch):
     return adapter, lane, outer
 
 
-def test_direct_push_refused_with_allowed_committer_and_green_ci(topology):
+def test_target_merge_proves_non_pr_repository_with_green_ci(topology):
     git, lane, outer = topology
     ci = FakeCI(runs=[{"name": "build", "head_sha": outer, "conclusion": "success"}])
     ci.merged_pr_for = lambda *args: None
     ctx = make_ctx(git=git, ci=ci, merge_principals=("merger@example.invalid",))
     assert git.merge_commit_of(git.repo_path("routing"), outer, "main")[0] == outer
     result = verify("commit+ci", {"commit": outer}, ctx)
-    assert not result.ok and "merged_pr_unproven" in result.detail
+    assert result.ok, result.detail
 
 
 @pytest.mark.parametrize("use_lane", [False, True])

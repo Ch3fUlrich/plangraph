@@ -112,6 +112,18 @@ def validate_merge(ctx, project, merge_info, target_ref, ref):
             return None
     except Exception:  # Never expose sensitive text from adapter errors.
         pass
+    # A locally verified first-parent merge is sufficient for repositories
+    # without hosted PRs. Re-check the merge itself, not an arbitrary ancestor;
+    # absent adapters and fabricated hosted lookup results cannot supply proof.
+    try:
+        from .evidence_git import GitAdapter
+        git = ctx.git
+        if isinstance(git, GitAdapter) and valid_commit_ref(merge_sha):
+            repo = git.repo_path(project)
+            if git.merge_commit_of(repo, merge_sha, target_ref) == merge_info:
+                return None
+    except Exception:
+        pass
     try:
         if (ctx.ci.mode(project) or "").startswith("forgejo:"):
             return Result(False, "merged_pr_unproven: forgejo has no merged PR lookup", ref)

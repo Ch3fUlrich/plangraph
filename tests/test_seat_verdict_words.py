@@ -9,6 +9,13 @@ from pathlib import Path
 
 import pytest
 
+# Reconstructed judge result shape from run-e855aab3 (not a live record).
+@pytest.mark.parametrize("text", ["VERDICT ACCEPT\nRULING B", "VERDICT: ACCEPT\nRULING B"])
+def test_judge_result_shape(text):
+    from plangraph.review.verdict import parse_verdict
+    assert parse_verdict(text) == "pass"
+    assert sv.parse_verdict(text)[0] is True
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import seat_verdict as sv  # noqa: E402
