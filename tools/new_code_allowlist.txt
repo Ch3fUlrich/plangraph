@@ -8,3 +8,5 @@ configuration/opencode/plugins/**/*.mjs | OpenCode plugin byte copy from AutoOS 
 tests/**/_*.py | test-only helper modules imported by tests/**/test_*.py (D-4821, D-4870)
 tools/preflight.py | CI/tool helper (D-5062, rule 9.14), tools exception
 tools/preflight_private_scrub.py | CI/tool helper (D-5062, rule 9.14), tools exception
+src/plangraph/keeper/cli_output_verbs.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
+src/plangraph/keeper/store_decision_close.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
