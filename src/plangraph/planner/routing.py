@@ -1,13 +1,4 @@
-"""Keeper-side routing (design 4.3, 5; D25): pick a window class and an ordered leg plan.
-
-``route_card`` turns a card into a :class:`Route`: the window class (the card's own, or
-the smallest class that holds the effective estimate at 55% of the window), the eligible
-legs (tier order, then ``legs.py`` order) and the review level.  ``next_after_failure``
-walks the plan after a failed attempt (design 4.5): rotate inside a tier on a provider
-problem, retry on the same leg while the tier budget lasts, then promote to the next
-tier, else park.  The window class only grows on a context overflow.  Pure functions,
-no I/O.
-"""
+"""Keeper routing and spawner boundary (design 4.3, 5; D25)."""
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
@@ -36,11 +27,7 @@ __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
 
 
 def read_run_records(state: Path):
-    """Read existing spawner records through the keeper's spawner boundary.
-
-    An absent run directory is unknown, not an authoritative empty fleet.
-    Dry-run reading must not repair or otherwise mutate persisted records.
-    """
+    """Read without repairs; absent run directories mean unknown, not empty."""
     from plangraph.spawner.stall_watchdog import read_runs
 
     return read_runs(state, dry_run=True) if (state / "runs").is_dir() else None
