@@ -207,6 +207,7 @@ pub(super) fn monitor(
         }
     }
     drop(permit);
+    #[cfg(windows)]
     if let Some(g) = &grouped {
         g.group.terminate();
     }

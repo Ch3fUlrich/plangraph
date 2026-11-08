@@ -254,7 +254,19 @@ fn owner_process() {
     let Ok(path) = std::env::var("PG_OWNER_RECORD") else {
         return;
     };
-    let (g, _dir) = launch_bounded("pg-win-restart", "sleep", false, false, Some(10)).unwrap();
+    let expiry = std::env::var_os("PG_OWNER_EXPIRY").is_some();
+    let (g, _dir) = launch_bounded(
+        if expiry {
+            "pg-win-expiry"
+        } else {
+            "pg-win-restart"
+        },
+        "sleep",
+        false,
+        false,
+        Some(if expiry { 1 } else { 10 }),
+    )
+    .unwrap();
     std::fs::write(
         path,
         format!("{} {}", g.child.id(), creation_time(g.child.id()).unwrap()),
@@ -313,5 +325,28 @@ fn killed_owner_adopted_by_fresh_process() {
         .status()
         .unwrap()
         .success());
+    until(|| gone(pid));
+}
+
+#[test]
+fn killed_owner_without_adopter_expires() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("owner");
+    let mut owner = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "run::group_windows_tests::owner_process",
+            "--nocapture",
+        ])
+        .env("PG_OWNER_RECORD", &path)
+        .env("PG_OWNER_EXPIRY", "1")
+        .spawn()
+        .unwrap();
+    until(|| path.exists());
+    let ticket = std::fs::read_to_string(path).unwrap();
+    let pid = ticket.split_once(' ').unwrap().0.parse().unwrap();
+    assert!(!gone(pid));
+    owner.kill().unwrap();
+    owner.wait().unwrap();
     until(|| gone(pid));
 }

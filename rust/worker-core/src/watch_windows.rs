@@ -75,7 +75,7 @@ mod native {
             Threading::*,
         },
     };
-    pub struct NativeJob(OwnedHandle, OwnedHandle, OwnedHandle);
+    pub struct NativeJob(OwnedHandle, String);
     impl NativeJob {
         pub fn open(name: &str) -> io::Result<Option<Self>> {
             let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
@@ -94,9 +94,7 @@ mod native {
             // SAFETY: successful open transfers an owned handle.
             let job = unsafe { OwnedHandle::from_raw_handle(raw) };
             let name = String::from_utf16_lossy(&name[..name.len() - 1]);
-            let event = crate::run::job_holder_windows::adoption_event(&name, false, false)?;
-            let closing = crate::run::job_holder_windows::adoption_event(&name, true, false)?;
-            Ok(Some(Self(job, event, closing)))
+            Ok(Some(Self(job, name)))
         }
 
         fn accounting(&self) -> io::Result<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION> {
@@ -119,15 +117,24 @@ mod native {
     }
     impl JobApi for NativeJob {
         fn adopted(&mut self) -> io::Result<()> {
-            // Holder closes admission six seconds before expiry (one second poll slack).
-            if unsafe { WaitForSingleObject(self.2.as_raw_handle(), 0) } != WAIT_TIMEOUT {
+            use crate::run::job_holder_windows::{adoption_event, outcome_event};
+            let event = adoption_event(&self.1, false, false)?;
+            let closing = adoption_event(&self.1, true, false)?;
+            let outcome = outcome_event(&self.1, false)?;
+            if unsafe { WaitForSingleObject(closing.as_raw_handle(), 0) } != WAIT_TIMEOUT {
                 return Err(io::Error::other("holder deadline within adoption margin"));
             }
             // SAFETY: verified Job remains owned; manual-reset event stays signaled.
-            if unsafe { SetEvent(self.1.as_raw_handle()) } == 0 {
+            if unsafe { SetEvent(event.as_raw_handle()) } == 0 {
                 return Err(io::Error::last_os_error());
             }
-            Ok(())
+            // Only the holder can acknowledge admission; a stalled requester cannot
+            // report success after the holder has committed to expiry.
+            if unsafe { WaitForSingleObject(outcome.as_raw_handle(), 5000) } == WAIT_OBJECT_0 {
+                Ok(())
+            } else {
+                Err(io::Error::other("holder did not acknowledge adoption"))
+            }
         }
         fn member(&mut self, pid: u32, start: u64) -> io::Result<bool> {
             // SAFETY: query-only process handle; retained through identity/membership checks.

@@ -39,7 +39,7 @@ mod platform {
             process::CommandExt,
         },
         process::{Command, Stdio},
-        time::{Duration, SystemTime, UNIX_EPOCH},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
     use windows_sys::Win32::{
         Foundation::*,
@@ -149,6 +149,9 @@ mod platform {
         }
         Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
     }
+    pub fn outcome_event(name: &str, create: bool) -> io::Result<OwnedHandle> {
+        adoption_event(&format!("{name}-outcome"), false, create)
+    }
     #[rustfmt::skip]
     pub fn launch(holder: &std::path::Path, job: &OwnedHandle, seconds: u64, name: &str) -> io::Result<()> {
         #[cfg(test)]
@@ -233,6 +236,8 @@ mod platform {
                 .ok_or_else(|| io::Error::other("missing Job name"))?;
             let event = adoption_event(name, false, true)?;
             let closing = adoption_event(name, true, true)?;
+            let outcome = outcome_event(name, true)?;
+            let mut acknowledged = false;
             let mut deadline = None;
             let job = unsafe { OwnedHandle::from_raw_handle(raw as _) };
             std::io::stdout().write_all(&[1])?;
@@ -240,38 +245,27 @@ mod platform {
                 if deadline.is_none()
                     && unsafe { WaitForSingleObject(owner.as_raw_handle(), 0) } == WAIT_OBJECT_0
                 {
-                    let (mut created, mut exit, mut kernel, mut user) = Default::default();
-                    if unsafe {
-                        GetProcessTimes(
-                            owner.as_raw_handle(),
-                            &mut created,
-                            &mut exit,
-                            &mut kernel,
-                            &mut user,
-                        )
-                    } == 0
-                    {
-                        return Err(io::Error::last_os_error());
-                    }
-                    let exited = ((u64::from(exit.dwHighDateTime) << 32
-                        | u64::from(exit.dwLowDateTime))
-                        / 10_000)
-                        .saturating_sub(11644473600000);
-                    deadline = deadline_ms(exited, seconds);
+                    deadline = Some(Instant::now() + Duration::from_secs(seconds));
                 }
-                if deadline.is_some_and(|d| now_ms().saturating_add(6000) >= d) {
+                let closing_now =
+                    deadline.is_some_and(|d| Instant::now() + Duration::from_secs(6) >= d);
+                if closing_now {
                     unsafe {
                         SetEvent(closing.as_raw_handle());
                     }
                 }
-                if deadline.is_some_and(|d| now_ms() >= d) {
-                    let adopted = match unsafe { WaitForSingleObject(event.as_raw_handle(), 0) } {
-                        WAIT_OBJECT_0 => true,
-                        WAIT_TIMEOUT => false,
-                        _ => return Err(io::Error::last_os_error()),
-                    };
-                    if terminate_at_expiry(adopted)
-                        && unsafe { WaitForSingleObject(event.as_raw_handle(), 0) } == WAIT_TIMEOUT
+                // Admission and expiry are serialized here, not in the requester.
+                if !closing_now
+                    && !acknowledged
+                    && unsafe { WaitForSingleObject(event.as_raw_handle(), 0) } == WAIT_OBJECT_0
+                {
+                    if unsafe { SetEvent(outcome.as_raw_handle()) } == 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    acknowledged = true;
+                }
+                if deadline.is_some_and(|d| Instant::now() >= d) {
+                    if terminate_at_expiry(acknowledged)
                         && unsafe { TerminateJobObject(job.as_raw_handle(), 1) } == 0
                     {
                         return Err(io::Error::last_os_error());
