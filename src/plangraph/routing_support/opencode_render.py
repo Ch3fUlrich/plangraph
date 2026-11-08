@@ -155,8 +155,8 @@ def render_gateway_providers(
                     settings[key] = max(1, int(min(value, 60000))) if type(value) in (int, float) and value > 0 else 60000
 
     rendered = json.dumps(config)
-    env["OPENCODE_CONFIG_CONTENT"] = rendered
     nt_check = _is_nt() if is_nt is None else is_nt
     if nt_check and len(rendered) > 30000:
         return REFUSAL_TOO_LARGE
+    env["OPENCODE_CONFIG_CONTENT"] = rendered
     return None

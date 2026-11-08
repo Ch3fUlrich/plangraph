@@ -106,7 +106,7 @@ def test_envelope_nonce(tmp_path, nonce_kind):
         runner.provider_response = lambda *a, **kw: calls.append((a, kw))
         class Process:
             returncode = 0
-            async def communicate(self):
+            async def communicate(self, input=None):
                 response = dict(leg='cx', status=429, body='quota', headers={})
                 if nonce_kind != 'missing':
                     response['nonce'] = next(iter(runner._nonces.values())) if nonce_kind == 'valid' else 'wrong'
