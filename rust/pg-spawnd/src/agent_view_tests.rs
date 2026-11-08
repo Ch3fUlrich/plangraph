@@ -139,7 +139,8 @@ fn each_missing_source_directory_is_unknown() {
 fn permission_denied_sources_are_unknown() {
     use std::os::unix::fs::PermissionsExt;
     if Command::new("id").arg("-u").output().unwrap().stdout == b"0\n" {
-        return; // Root bypasses mode 000 permissions.
+        eprintln!("SKIP permission_denied_sources_are_unknown: root bypasses mode 000 permissions");
+        return;
     }
     for path in [
         "state",
@@ -147,9 +148,20 @@ fn permission_denied_sources_are_unknown() {
         "state/sessions",
         ".claude/jobs",
         "lane.json",
+        ".config/autoos/oc-l1.json",
+        "state/runs/one/record.json",
+        "state/sessions/one.json",
+        ".claude/jobs/one/state.json",
     ] {
         let home = fixture();
         empty_sources(&home);
+        for record in [
+            "state/runs/one/record.json",
+            "state/sessions/one.json",
+            ".claude/jobs/one/state.json",
+        ] {
+            put(&home, record, json!({"name":"worker"}));
+        }
         put(&home, "lane.json", json!({"name":"worker"}));
         put(
             &home,
@@ -165,6 +177,30 @@ fn permission_denied_sources_are_unknown() {
         assert_eq!(data["reason"], "source_unreadable", "{path}");
         fs::remove_dir_all(home).unwrap();
     }
+}
+#[test]
+fn missing_record_files_are_unknown() {
+    for path in ["state/runs/one", ".claude/jobs/one"] {
+        let home = fixture();
+        empty_sources(&home);
+        fs::create_dir_all(home.join(path)).unwrap();
+        let data = local(&home, &home.join("state"), "local", 0.0);
+        assert_eq!(data["readable"], false, "{path}");
+        assert_eq!(data["reason"], "source_unreadable", "{path}");
+        assert_eq!(data["agents"], json!([]));
+        fs::remove_dir_all(home).unwrap();
+    }
+}
+#[test]
+fn config_read_error_is_unknown() {
+    let home = fixture();
+    empty_sources(&home);
+    fs::create_dir_all(home.join(".config/autoos/oc-l1.json")).unwrap();
+    let data = local(&home, &home.join("state"), "local", 0.0);
+    assert_eq!(data["readable"], false);
+    assert_eq!(data["reason"], "source_unreadable");
+    assert_eq!(data["agents"], json!([]));
+    fs::remove_dir_all(home).unwrap();
 }
 #[test]
 fn collector_units_are_local_and_ordered() {

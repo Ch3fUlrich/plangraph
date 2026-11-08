@@ -20,8 +20,9 @@
     var table = el("table"), head = el("tr"), body = el("tbody");
     fields.forEach(function (key) { head.appendChild(el("th", key === "age_s" ? "age" : key)); });
     table.appendChild(head);
-    function row(agent) {
+    function row(agent, reason) {
       var tr = el("tr");
+      if (reason) tr.title = reason;
       fields.forEach(function (key) {
         var value = agent[key];
         tr.appendChild(el("td", value === null || value === undefined || value === "" ? "unknown" : String(value)));
@@ -30,7 +31,7 @@
     }
     if (!data || !Array.isArray(data.hosts) || !data.hosts.length) row({});
     else data.hosts.forEach(function (host) {
-      if (!host || host.readable !== true || !Array.isArray(host.agents)) row({host: host && host.host});
+      if (!host || host.readable !== true || !Array.isArray(host.agents)) row({host: host && host.host}, host && host.reason);
       else host.agents.forEach(function (agent) { row(agent || {}); });
     });
     table.appendChild(body); box.appendChild(table);

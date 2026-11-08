@@ -73,10 +73,7 @@ fn local(home: &Path, state: &Path, host: &str, now: f64) -> Value {
         if fs::metadata(&path).is_ok_and(|m| !m.is_dir()) {
             continue;
         }
-        let record = path.join("record.json");
-        if record.try_exists().unwrap_or(true) {
-            ingest(record, "spawner-run");
-        }
+        ingest(path.join("record.json"), "spawner-run");
     }
     for path in list(&state.join("sessions")) {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -88,10 +85,7 @@ fn local(home: &Path, state: &Path, host: &str, now: f64) -> Value {
         if fs::metadata(&path).is_ok_and(|m| !m.is_dir()) {
             continue;
         }
-        let record = path.join("state.json");
-        if record.try_exists().unwrap_or(true) {
-            ingest(record, "claude");
-        }
+        ingest(path.join("state.json"), "claude");
     }
     let scan = || -> Result<(), String> {
         let config = home.join(".config/autoos/oc-l1.json");
@@ -270,7 +264,7 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
     let config = std::env::var_os("PLANGRAPH_OVERFLOW_HOSTS")
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".config/plangraph/overflow-hosts.json"));
-    if !seen.contains("--local") && config.exists() {
+    if !seen.contains("--local") && config.try_exists().unwrap_or(true) {
         match read(&config)
             .ok()
             .and_then(|v| v["hosts"].as_object().cloned())
