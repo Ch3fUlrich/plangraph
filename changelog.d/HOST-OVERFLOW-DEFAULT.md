@@ -1,1 +1,1 @@
-- Public-repository spawns at the local run cap or memory floor can overflow over SSH to a fresh, healthy configured host; private and unknown repositories queue locally (D-4227).
+- Default CLI and MCP spawn now overflow to a configured healthy host at the local run cap or memory floor; otherwise, report the "overflow unconfigured" reason.

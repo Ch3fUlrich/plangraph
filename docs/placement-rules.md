@@ -1,5 +1,28 @@
 # Placement rule loader (R8B A)
 
+## Default Python spawn overflow
+
+CLI spawn and MCP `plangraph_agent_spawn` share admission. Local room stays
+local; dry runs do not overflow. At the run cap or below the MemAvailable floor,
+admission uses `PLANGRAPH_OVERFLOW_HOSTS`, defaulting to
+`~/.config/plangraph/overflow-hosts.json`. No file preserves local behavior with
+`overflow unconfigured` in the receipt/refusal. Configured hosts that all refuse
+produce a queued record with every refusal. Remote receipts are saved locally
+with the selected `host` and `overflow_remote: true`.
+
+```json
+{"local_run_cap":4,"local_floor_mb":3000,"public_repos":["/repos/project"],
+ "hosts":{"host-a":{"ssh":"host-a","repo":"/repos/project",
+ "spawner_src":"/repos/project/src","run_cap":4,"floor_mb":3000}}}
+```
+
+Only `public_repos` allowlisted repositories may overflow. Hosts may also set
+`env_file` for remote shell initialization. Readiness records at
+`~/.local/state/plangraph/host-ready/<host>.json` need matching `host`, ISO
+`checked_at` no older than 600 seconds, `ok`, `live_runs`, and `mem_available_mb`.
+Each candidate needs an SSH route, capacity and memory room. A failed remote
+attempt is not retried on the same host. Local benchmark DB paths are not copied.
+
 ## C2 existing-keeper SQLite storage (D5)
 
 Schema v17 installs revision, override and immutable audit tables in the existing

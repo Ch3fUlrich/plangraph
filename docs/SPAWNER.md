@@ -724,3 +724,5 @@ Runs sample file signatures/git HEAD (edits), non-header output (activity), and 
 ### Refused dispatch (D-3605 a)
 
 A refused dispatch (rate limit, quota, credits out, auth: HTTP 401/402/403/429 or a 429/402 provider envelope in the first output lines, first 30 s and 40 lines) ends the run at once instead of `running` until a stall rule fires: `run_watchdog.collect` marks the job failed (exit 7, event `dispatch_refused`) and reaps the process tree, `fallthrough_reason` books the leg down (`unavailable_until`, `PLANGRAPH_LEG_DOWN_S`, default 1800 s for credit/auth lines without a reset time), and one `LEG_REFUSED` line (run id, leg, reason) goes to the parent inbox and `PLANGRAPH_SPAWN_NOTIFY_CMD`. Process CPU accounting lives in `spawner/run_cpu.py`.
+CLI and MCP spawn share default overflow admission in `spawner/admission_overflow.py`;
+see [placement rules](placement-rules.md#default-python-spawn-overflow) for configuration and queue reasons.
