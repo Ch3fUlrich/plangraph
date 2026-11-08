@@ -16,7 +16,6 @@ import json
 import os
 import re
 from pathlib import Path
-
 _HEAD_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 # F8: both spellings count (review/tail.md uses TEST-GAMING).
 _TEST_GAMING = re.compile(r"^TEST[_-]GAMING:[ \t]*(.*)$", re.I | re.M)
@@ -178,8 +177,13 @@ def merged_pr(item, git, lookup=None):
     if not head:
         return None
     if lookup is not None:
-        value = lookup(head)
-        return int(value) if value is not None else None
+        try:
+            value = lookup(head)
+            if type(value) is int or isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+                return int(value) if int(value) > 0 else None
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
+        return None
     key = repo_key(item, SimpleNamespace(git=git), head)
     repo = git.repo_path(key)
     if repo:
@@ -274,7 +278,7 @@ def eligible_records(item, records_dir):
             prs = {int(n) for n in re.findall(r"\bPR\s+#(\d+)\b", prompt, re.I)}
             named = bool(re.search(r"(?<![\w:])" + re.escape(item["key"]) + r"(?![\w-])", prompt))
             same_pr = item.get("pr_number") in prs
-            keys = set(re.findall(r"(?<![\w:])[\w-]+:[\w-]+", prompt))
+            keys = set(re.findall(r"(?<![\w:])[\w-]+:[A-Z][A-Z0-9-]*(?![\w-])", prompt))
             if record.get("item_key") not in (None, item["key"]) or keys - {item["key"]}:
                 raise ValueError("item key mismatch")
             if record.get("item_key") != item["key"] and not (named or same_pr):
@@ -323,7 +327,6 @@ def eligible_records(item, records_dir):
 def backfill(args, poster, pr_lookup=None):
     """Print TSV discovery and optionally invoke the existing single-seat CLI."""
     import sys
-    from subprocess import SubprocessError
     from collections import Counter
     from plangraph.keeper.evidence_git import GitAdapter
     try:
@@ -331,7 +334,6 @@ def backfill(args, poster, pr_lookup=None):
     except (OSError, ValueError):
         config = {}
     git = GitAdapter(config.get("repos", {}), fetch_interval=float("inf"))
-    # Discovery must never fetch or mutate repositories.
     git._maybe_fetch = lambda repo: False
     try:
         snapshot = json.loads(args.snapshot.read_text("utf-8"))
@@ -343,12 +345,14 @@ def backfill(args, poster, pr_lookup=None):
         return 1
     index = record_index(args.records_dir)
     cache_path = getattr(args, "pr_cache", None)
-    def cached(sha):
-        cache = json.loads(cache_path.read_text())
-        if not isinstance(cache, dict):
-            raise ValueError("PR cache must be an object")
-        return cache.get(sha)
-    lookup = pr_lookup or (cached if cache_path else None)
+    cache = {}
+    if cache_path:
+        try:
+            cache = json.loads(cache_path.read_text())
+        except (OSError, ValueError):
+            pass
+    lookup = pr_lookup or ((cache.get if isinstance(cache, dict) else lambda _: None)
+                           if cache_path else None)
     if getattr(args, "pr_lookup_gh", False) and args.backfill_apply and lookup is None:
         import subprocess
         def lookup(sha):
@@ -356,20 +360,19 @@ def backfill(args, poster, pr_lookup=None):
                                      "--json", "number"],
                                     capture_output=True, text=True, timeout=30)
             rows = json.loads(result.stdout) if result.returncode == 0 else []
-            return rows[0]["number"] if len(rows) == 1 else None
-    output = []
-    total = missing = failed = 0
+            return rows[0].get("number") if isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict) else None
+    output, total, missing, failed = [], 0, 0, 0
     tallies = Counter()
     for raw in items:
         if raw.get("state") != "in_review":
             continue
-        try:
+        if not isinstance(raw.get("key"), str) or not raw["key"]:
+            item = dict(raw, key="<missing>")
+            seats, reasons = [], ["snapshot item missing key"]
+        else:
             item = snapshot_item(raw, index, git)
             item = dict(item, pr_number=merged_pr(item, git, lookup))
             seats, reasons = eligible_records(item, index)
-        except (OSError, ValueError, SubprocessError, KeyError, TypeError, AttributeError) as exc:
-            item = dict(raw, key=raw.get("key") or "<missing>")
-            seats, reasons = [], [f"discovery: {type(exc).__name__}: {exc}"]
         total += 1
         missing += not bool(seats)
         if not seats:
@@ -382,7 +385,6 @@ def backfill(args, poster, pr_lookup=None):
         if getattr(args, "format", "tsv") == "tsv":
             print(f"{item['key']}\t{detail.replace(chr(9), ' ').replace(chr(10), ' ')}")
         if args.backfill_apply and seats:
-            # One deterministic record per item; never silently post all runs.
             seat = seats[0]
             failed += bool(poster(["--key", item["key"], "--seat-dir", str(seat["seat_dir"]),
                                     "--head", seat["head_sha"], "--writer-family",
