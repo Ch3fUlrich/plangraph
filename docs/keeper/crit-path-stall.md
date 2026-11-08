@@ -9,9 +9,12 @@ positive increasing durations). Alerts go to the owner (falling back to
 the check never mutates keeper state.
 
 `crit-path-stall.json` beside the configured keeper database deduplicates each
-threshold/recipient within an episode keyed by target, state, last activity and
+alert level (first/second) and recipient within an episode keyed by target, state, last activity and
 epoch. New activity or state resets the episode; successful deliveries are
 saved individually with atomic replacement, and a local flock serializes runs.
+Changing threshold durations does not resend a delivered level. Episode history
+is retained when an item leaves the candidate set, so unchanged activity cannot
+replay on re-entry. Timestamps without a timezone are interpreted as UTC.
 A crash between delivery and saving can replay a message. The optional
 `plangraph-crit-path-stall.timer` runs its matching service every 30 minutes
 (`Persistent=true`). `--dry-run` prints pending alerts without sending messages

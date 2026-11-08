@@ -10,7 +10,7 @@ import fcntl
 import json
 import os
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .cli_verbs import Session, parse_duration
@@ -69,7 +69,6 @@ def _save(path, state):
 
 def _scan(session, candidates, path, send, target, thresholds, routing, dry, now):
     state = json.loads(path.read_text()) if path.exists() else {}
-    current = {}
     lines = []
     for item in candidates:
         if item.get("state") not in ("claimed", "in_review"):
@@ -80,25 +79,34 @@ def _scan(session, candidates, path, send, target, thresholds, routing, dry, now
         if not activity or not activity.get("at"):
             raise ValueError(f"missing keeper activity: {key}")
         at = activity["at"]
-        stamp = datetime.fromisoformat(at).timestamp()
+        parsed = datetime.fromisoformat(at)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        stamp = parsed.timestamp()
         episode = [target, item["state"], at, activity.get("type"),
                    activity.get("actor"), item.get("epoch")]
         old = state.get(key, {})
         entry = old if old.get("episode") == episode else {
-            "episode": episode, "sent": []}
-        current[key] = entry
+            "episode": episode, "sent_levels": []}
+        if "sent_levels" not in entry:
+            # Upgrade the original default-threshold delivery records. Preserve
+            # their level rather than coupling future dedupe to duration values.
+            entry["sent_levels"] = [
+                [0 if seconds <= 43200 else 1, recipient]
+                for seconds, recipient in entry.get("sent", [])]
+        state[key] = entry
         owner = info.get("owner") or info.get("claimed_by")
         if not owner:
             raise ValueError(f"missing owner: {key}")
         recipients = list(dict.fromkeys((owner, routing)))
-        for threshold in thresholds:
+        for level, threshold in enumerate(thresholds):
             if now - stamp <= threshold:
                 continue
             line = (f"critical-path-stall target={target} item={key} "
                     f"state={item['state']} idle>{threshold / 3600:g}h "
                     f"owner={owner} routing={routing}")
             pending = [r for r in recipients
-                       if [threshold, r] not in entry["sent"]]
+                       if [level, r] not in entry["sent_levels"]]
             if not pending:
                 continue
             print(line)
@@ -107,11 +115,11 @@ def _scan(session, candidates, path, send, target, thresholds, routing, dry, now
                 continue
             for recipient in pending:
                 send(recipient, line)
-                entry["sent"].append([threshold, recipient])
+                entry["sent_levels"].append([level, recipient])
                 state[key] = entry
                 _save(path, state)
     if not dry:
-        _save(path, current)
+        _save(path, state)
     return lines
 
 

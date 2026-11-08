@@ -1,4 +1,5 @@
 """Hermetic keeper-backed stall alert checks (no HTTP or fleet endpoints)."""
+import time
 from datetime import UTC, datetime
 
 from keeper_util import defn
@@ -97,4 +98,58 @@ def test_exact_threshold_is_not_over(w, tmp_path):
         return result
     session.call = call
     assert run(session, tmp_path / "state", lambda *a: None,
-               target="demo:target", now=w.clock()) == []
+                target="demo:target", now=w.clock()) == []
+
+
+def test_naive_activity_is_utc_in_non_utc_host(w, tmp_path, monkeypatch):
+    session = fixture(w)
+    original = session.call
+    at = datetime.fromtimestamp(w.clock() - 13 * 3600, UTC)
+    def call(method, verb, params=None):
+        result = original(method, verb, params)
+        if verb == "show":
+            result["last_activity"]["at"] = at.replace(tzinfo=None).isoformat()
+        return result
+    session.call = call
+    try:
+        with monkeypatch.context() as patch:
+            patch.setenv("TZ", "EST5")
+            time.tzset()
+            lines = run(session, tmp_path / "state", lambda *a: None,
+                        target="demo:other", now=w.clock())
+            assert len(lines) == 1
+    finally:
+        time.tzset()
+
+
+def test_threshold_changes_do_not_replay_levels(w, tmp_path):
+    session = fixture(w)
+    sent = []
+    def invoke(thresholds):
+        return run(session, tmp_path / "state", lambda *a: sent.append(a),
+                   target="demo:other", thresholds=thresholds, now=w.clock())
+    assert len(invoke((12 * 3600, 24 * 3600))) == 2
+    assert invoke((10 * 3600, 20 * 3600)) == []
+    assert len(sent) == 4
+
+
+def test_candidate_reentry_does_not_replay_episode(w, tmp_path):
+    session = fixture(w)
+    original = session.call
+    visible = True
+    def call(method, verb, params=None):
+        result = original(method, verb, params)
+        if verb == "snapshot" and not visible:
+            for item in result["items"]:
+                if item["key"] == "demo:other":
+                    item["depends_on"] = []
+        return result
+    session.call = call
+    def invoke():
+        return run(session, tmp_path / "state", lambda *a: None,
+                   target="demo:other", now=w.clock())
+    assert len(invoke()) == 2
+    visible = False
+    assert invoke() == []
+    visible = True
+    assert invoke() == []
