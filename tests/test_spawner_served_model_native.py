@@ -5,6 +5,9 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.spawner.served_telemetry import native_models, record_native
+from go_credential_fake import go_credential  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures('go_credential')
 
 
 def stream(*events):
