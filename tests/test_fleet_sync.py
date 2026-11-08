@@ -124,6 +124,7 @@ def test_fleet_sync_configs(tmp_path, monkeypatch):
                           'repos': {'plangraph': {'live_dir': '/srv/live'}},
                           'caps': {'max_runs': 4, 'mem_floor_mb': 3000}}]}
     assert genconfig.sync(registry, True) == 0
+    (genconfig.config_dir() / 'hosts.json').write_text(json.dumps(registry))
     hosts = remote_ps.configured_hosts()
     assert hosts == [{'name': 'host-a', 'target': 'host-a', 'src': '/srv/live/src'}]
     config = json.loads((genconfig.config_dir() / 'overflow-hosts.json').read_text())

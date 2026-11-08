@@ -25,6 +25,16 @@ exit, invalid JSON/non-list response, timeout or other invocation error instead
 reports `host query failed`. Any failed check makes doctor exit 1.
 
 ## Spawn by card
+Overflow admission reads `caps.max_runs` and `caps.mem_floor_mb` for each host
+from the worker-core hosts registry (`$XDG_CONFIG_HOME/plangraph/hosts.json`,
+or `~/.config/plangraph/hosts.json`), the same location used by fleet-sync.
+Local identity is `PLANGRAPH_HOST_NAME` when set, otherwise registry `self`;
+IDs and aliases resolve case-insensitively. Routing and the public-repository
+allowlist still come from `overflow-hosts.json`, but its legacy run/floor caps
+and local limit overrides are ignored. Missing/unreadable registry or missing,
+malformed caps exclude that host from overflow. Local admission instead uses
+conservative defaults of 4 runs / 3000 MB, with a logged reason.
+
 SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel
 lines around the remote spawn JSON. Only the single bracketed JSON receipt is
 accepted; shell-init banners, env-file echoes and JSON after the end are ignored.
