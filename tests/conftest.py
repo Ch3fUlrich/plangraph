@@ -14,6 +14,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import pytest
 from pathlib import Path
 from pgtest_shm import _sweep_dead_pgtest_dirs
@@ -23,6 +24,51 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 _TOOLS = Path(__file__).resolve().parents[1] / "tools"
+
+
+@pytest.fixture(autouse=True)
+def bounded_shutdown_cleanup(request, monkeypatch):
+    """A mocked process exit must finish cleanup before run closes its DB.
+
+    Keep this teardown here: test_keeper_pg_reconnect.py is already over the
+    400-line file limit, so extending that module would violate D-4691.
+    """
+    if request.node.name != "test_s2_shutdown_bounded":
+        yield
+        return
+    from plangraph.keeper import daemon
+    real_run = daemon.run
+
+    def run(*args, **kwargs):
+        record_exit = os._exit  # the test has installed its recorder by now
+
+        def exit_and_join(code):
+            record_exit(code)
+            # Real _exit never returns. In this in-process test the blocked
+            # close has a two-second backstop; finish it before conn.close().
+            cleaners = [t for t in threading.enumerate()
+                        if t.name == "keeper-shutdown"]
+            for thread in cleaners:
+                thread.join(timeout=5)
+                assert not thread.is_alive(), "keeper shutdown did not finish"
+
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "_exit", exit_and_join)
+            return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(daemon, "run", run)
+    yield
+
+
+@pytest.fixture(autouse=True, scope="module")
+def no_leaked_keeper_threads():
+    """Attribute keeper workers to their module, including daemon reapers."""
+    before = set(threading.enumerate())
+    yield
+    leaked = [thread for thread in threading.enumerate()
+              if thread not in before and thread.name.startswith("keeper-")]
+    assert not leaked, "Leaked keeper threads: " + ", ".join(
+        f"{thread.name} (daemon={thread.daemon})" for thread in leaked)
 
 
 @pytest.fixture
