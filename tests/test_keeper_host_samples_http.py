@@ -82,3 +82,12 @@ def test_http_payload_refused_and_not_stored(world, srv):
                          body=dict(sample(), paths=["fixture-path"]), token=minted["token"])
     assert status == 400
     assert world.conn.execute("SELECT count(*) FROM host_samples_raw").fetchone()[0] == 0
+
+
+def test_http_valid_minted_oversight_cannot_ingest(world, srv, monkeypatch):
+    from test_keeper_oversight_scope import live
+    token, principal = live(world, monkeypatch)
+    assert principal.role == 'oversight'
+    assert call(srv, '/v1/ingest_host_sample', method='POST', body=sample(),
+                token=token)[0] == 403
+    assert world.conn.execute('SELECT count(*) FROM host_samples_raw').fetchone()[0] == 0

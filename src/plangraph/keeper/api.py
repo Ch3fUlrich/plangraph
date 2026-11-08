@@ -53,7 +53,6 @@ from .api_routes import (READ_CALLS, ROLE_CHECKED_VERBS, ROUTER_VERBS,
                          TEXT_DEFAULT as _TEXT_DEFAULT)
 from .api_routes import WRITE_VERBS as _WRITE_VERBS
 _READ_VERBS.add("hosts")
-
 log = logging.getLogger("plangraph.keeper")
 
 
@@ -156,7 +155,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
                     audit = getattr(server.store, "audit_auth_failure", None)
                     with suppress(Exception):  # absent or broken: still a 401
                         audit and audit(exc.msg or exc.code)
-                    self._json(401, {"error": exc.code, "msg": exc.msg})
+                    self._json(403 if name == 'ingest_host_sample' else 401, {"error": exc.code, "msg": exc.msg})
                     return
                 api_routes.run_gate(principal, name)
                 if method == "GET":
@@ -283,6 +282,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
         return values[0] if values else default
 
     def _read(self, name, extra, query, principal):
+        if name in ("host_samples", "host_samples_range"): return __import__("plangraph.keeper.store_host_samples", fromlist=["http_read"]).http_read(self.server.store, principal, name, query), False
         if name == "hosts":
             registry = getattr(self.server, "bus_registry", getattr(self.server.store, "bus_registry", None))
             hosts_data = []
@@ -371,8 +371,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
             text = getattr(fmt, name + "_text")
             return (text(data), True) if as_text else (data, False)
         raise Refused("not_found", f"no read verb {name!r}")
-    # --------------------------------------------------------------- writes
     def _write(self, name, body, principal, extra=""):
+        if name in ("ingest_host_sample", "mint_host_token", "revoke_host_token"): return __import__("plangraph.keeper.store_host_samples", fromlist=["http_write"]).http_write(self.server.store, principal, name, body)
         if name == "post_message":
             if not isinstance(body, dict):
                 raise Refused("validation", "body must be a JSON object")
