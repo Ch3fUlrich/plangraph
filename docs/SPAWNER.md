@@ -4,8 +4,11 @@
 
 Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
 argv guard (32,000 characters, or 8,000 for batch shims). This uses the existing
-per-job stdin payload path, not a temporary prompt file. Agy retains explicit
-long-command refusal until its stream input and final-result format are verified.
+per-job stdin payload path, not a temporary prompt file. Oversized Windows agy
+commands use `--input-format stream-json --output-format stream-json -p ""`, with
+one UTF-8 NDJSON user event on stdin followed by EOF. The last result's
+`response` supplies the answer and verdict; an ERROR or missing result fails
+explicitly. Short agy prompts and Linux launches retain their existing argv form.
 Rejected stdin input or an unavailable/closed input pipe fails the run explicitly;
 the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.

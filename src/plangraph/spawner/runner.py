@@ -725,8 +725,8 @@ class SpawnerRunner:
                                            nonce=self._nonces[job_id])
             from .env_redact import redact_env_values
             env = self._child_envs.get(job_id, os.environ)
-            from .opencode_answer import answer_text, final_answer, terminated_after_answer
-            decoded = answer_text(stdout_text) if is_opencode(job) else stdout_text
+            from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer
+            decoded, stderr_text, exit_code = native_answer(job, answer_text(stdout_text) if is_opencode(job) else stdout_text, stderr_text, exit_code)
             job.stdout = redact(redact_env_values(decoded, env))
             job.stderr = redact(redact_env_values(stderr_text, env))
             job.exit_code = exit_code

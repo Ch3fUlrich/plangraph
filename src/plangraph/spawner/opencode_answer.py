@@ -4,6 +4,28 @@ import json
 from .env_redact import normalize
 
 
+def native_answer(job, stdout, stderr, exit_code):
+    """Decode only agy's explicitly selected stream transport, failing closed."""
+    if not (job.command and job.command[0] == 'agy' and '--input-format' in job.command
+            and job.command[job.command.index('--input-format') + 1] == 'stream-json'):
+        return stdout, stderr, exit_code
+    result = None
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get('event') == 'result':
+            result = event.get('result')
+    if not isinstance(result, dict):
+        return '', stderr + '\nagy_stream_missing_result', exit_code or 1
+    response = result.get('response')
+    if result.get('status') != 'SUCCESS' or not isinstance(response, str):
+        error = result.get('error') or 'invalid or unsuccessful result'
+        return response if isinstance(response, str) else '', stderr + '\nagy_stream_error: ' + str(error), exit_code or 1
+    return response, stderr, exit_code
+
+
 def final_answer(stdout, *, allow_unfinished=False):
     """Keep the last stop-completed text, never a length/tool-call partial.
 

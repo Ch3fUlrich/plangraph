@@ -1,5 +1,6 @@
 """Hermetic stdin-delivery and Windows parity follow-up regressions."""
 import asyncio
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -7,6 +8,59 @@ import pytest
 from plangraph.spawner.runner import SpawnerRunner, _resolve_launch
 from plangraph.routing_support.clients import build_standalone_fallback_command, launch_stdin_payload
 from plangraph.routing_support.opencode_render import REFUSAL_TOO_LARGE, REFUSAL_UNRESOLVED, render_gateway_providers
+
+
+@pytest.mark.parametrize('exe,size', [('agy.exe', 40000), ('agy.cmd', 9000), ('agy.bat', 9000)])
+def test_agy_long_stream_payload(exe, size):
+    prompt = 'é\n"' * size
+    cmd = build_standalone_fallback_command('agy', prompt, 'test')
+    payload = launch_stdin_payload(cmd, prompt, exe, is_nt=True)
+    assert prompt not in cmd
+    assert cmd[cmd.index('-p') + 1] == ''
+    assert cmd[-4:] == ['--input-format', 'stream-json', '--output-format', 'stream-json']
+    assert len(payload.splitlines()) == 1
+    assert payload.endswith(b'\n')
+    assert json.loads(payload) == {'event': 'user', 'message': {'role': 'user', 'content': prompt}}
+    assert _resolve_launch(exe, cmd[1:], is_nt=True)[1] is None
+
+
+@pytest.mark.parametrize('is_nt,prompt', [(True, 'short'), (False, 'x' * 40000)])
+def test_agy_argv_unchanged(is_nt, prompt):
+    cmd = build_standalone_fallback_command('agy', prompt, 'test')
+    before = list(cmd)
+    assert launch_stdin_payload(cmd, prompt, 'agy.exe', is_nt=is_nt) is None
+    assert cmd == before == ['agy', '--dangerously-skip-permissions', '--model', 'test', '-p', prompt]
+
+
+@pytest.mark.parametrize('status,error', [('SUCCESS', ''), ('ERROR', 'recorded failure'), (None, 'agy_stream_missing_result')])
+def test_runner_agy_stream_result(monkeypatch, status, error):
+    async def run():
+        events = [{'event': 'init'}, {'event': 'system'},
+                  {'event': 'step_update', 'step_update': {'step_type': 'agent_response', 'text_delta': 'partial'}}]
+        if status:
+            events.extend([{'event': 'result', 'result': {'status': 'SUCCESS', 'response': 'old'}},
+                           {'event': 'result', 'result': {'status': status, 'response': 'VERDICT: ACCEPT', 'error': error}}])
+        proc = AsyncMock()
+        proc.pid = None
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=('\n'.join(map(json.dumps, events)).encode(), b''))
+        factory = AsyncMock(return_value=proc)
+        monkeypatch.setattr('plangraph.spawner.runner._is_nt', lambda: True)
+        monkeypatch.setattr('plangraph.spawner.target.resolve_target', lambda model: (model, None))
+        monkeypatch.setattr('plangraph.planner.routing.validate_model', lambda model: None)
+        monkeypatch.setattr('plangraph.spawner.resolver.host_skip_reason_async', AsyncMock(return_value=None))
+        prompt = 'x' * 40000
+        job = await SpawnerRunner(process_factory=factory).spawn(
+            prompt, 'gemini-3.8-flash', client='agy', role='review', wait_seconds=2)
+        assert job.status == ('completed' if status == 'SUCCESS' else 'failed')
+        assert job.stdout == ('VERDICT: ACCEPT' if status else '')
+        assert error in job.stderr
+        assert (job.exit_code == 0) == (status == 'SUCCESS')
+        assert prompt not in factory.call_args.args
+        assert factory.call_args.kwargs['stdin'] == asyncio.subprocess.PIPE
+        payload = proc.communicate.call_args.kwargs['input']
+        assert json.loads(payload)['message']['content'] == prompt
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize('exe', ['qodercli.exe', 'qodercli.cmd'])

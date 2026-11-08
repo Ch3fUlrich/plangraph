@@ -340,11 +340,15 @@ def build_standalone_fallback_command(
 
 
 def launch_stdin_payload(cmd, prompt, exe, *, is_nt=False):
-    """Move oversized Qoder text input off Windows argv; never use a prompt file."""
+    """Move oversized native prompts off Windows argv; never use a prompt file."""
     import subprocess
     limit = 8000 if exe.lower().endswith(('.cmd', '.bat')) else 32000
-    if (is_nt and cmd[0] == 'qodercli'
+    if (is_nt and cmd[0] in ('qodercli', 'agy')
             and len(subprocess.list2cmdline([exe, *cmd[1:]])) > limit):
+        if cmd[0] == 'agy':
+            cmd[cmd.index('-p') + 1] = ''
+            cmd.extend(['--input-format', 'stream-json', '--output-format', 'stream-json'])
+            return (json.dumps({'event': 'user', 'message': {'role': 'user', 'content': prompt}}, ensure_ascii=False) + '\n').encode('utf-8')
         del cmd[cmd.index('-p') + 1]
         cmd.extend(['--input-format', 'text'])
         return prompt.encode('utf-8')

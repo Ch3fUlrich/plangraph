@@ -1,5 +1,7 @@
 # Changelog
 
+- **SPAWN-WIN-PARITY-FOLLOWUP (D-5135, D-5122):** oversized Windows agy prompts now use stream-json stdin instead of argv refusal; the last result supplies answer/verdict text, and ERROR or missing results fail closed. Short prompts and Linux argv delivery are unchanged.
+
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
