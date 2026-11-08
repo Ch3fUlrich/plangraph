@@ -22,7 +22,7 @@ def native_answer(job, stdout, stderr, exit_code):
     response = result.get('response')
     if result.get('status') != 'SUCCESS' or not isinstance(response, str):
         error = result.get('error') or 'invalid or unsuccessful result'
-        return response if isinstance(response, str) else '', stderr + '\nagy_stream_error: ' + str(error), exit_code or 1
+        return '', stderr + '\nagy_stream_error: ' + str(error), exit_code or 1
     return response, stderr, exit_code
 
 

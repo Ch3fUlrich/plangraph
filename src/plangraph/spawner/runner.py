@@ -83,7 +83,8 @@ def _resolve_launch(
 
     is_opencode = exe_path.stem.lower() == "opencode"
     if not is_opencode:
-        limit = 8000 if is_batch else 32000
+        from plangraph.routing_support.clients import WINDOWS_ARGV_LIMIT, WINDOWS_BATCH_ARGV_LIMIT
+        limit = WINDOWS_BATCH_ARGV_LIMIT if is_batch else WINDOWS_ARGV_LIMIT
         cmdline = subprocess.list2cmdline([exe, *argv])
         if len(cmdline) > limit:
             return exe, f"command_line_too_long: {len(cmdline)} chars"

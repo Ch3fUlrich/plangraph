@@ -278,6 +278,7 @@ async def collect(runner, job_id, proc):
                         proc.stdin.write(payload)
                         await proc.stdin.drain()
                     except (BrokenPipeError, ConnectionResetError):
+                        job.status, job.exit_code = 'failed', 1
                         job.stderr = 'stdin_delivery_failed: pipe unavailable or closed'
                         job.events.append({'event': 'stdin_delivery_failed'})
                         raise RuntimeError(job.stderr) from None

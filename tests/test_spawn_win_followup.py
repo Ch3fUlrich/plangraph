@@ -53,7 +53,7 @@ def test_runner_agy_stream_result(monkeypatch, status, error):
         job = await SpawnerRunner(process_factory=factory).spawn(
             prompt, 'gemini-3.8-flash', client='agy', role='review', wait_seconds=2)
         assert job.status == ('completed' if status == 'SUCCESS' else 'failed')
-        assert job.stdout == ('VERDICT: ACCEPT' if status else '')
+        assert job.stdout == ('VERDICT: ACCEPT' if status == 'SUCCESS' else '')
         assert error in job.stderr
         assert (job.exit_code == 0) == (status == 'SUCCESS')
         assert prompt not in factory.call_args.args
@@ -71,6 +71,8 @@ def test_long_qoder_stdin(exe):
     assert payload == prompt.encode('utf-8')
     assert prompt not in cmd
     assert cmd[-2:] == ['--input-format', 'text']
+    assert cmd[cmd.index('-p') + 1] == ''
+    assert cmd == ['qodercli', '-p', '', '--model', 'qoder/test', '--input-format', 'text']
     assert _resolve_launch(exe, cmd[1:], is_nt=True)[1] is None
 
 
@@ -125,6 +127,40 @@ def test_rejected_stdin_never_retries_empty(monkeypatch):
         assert job.exit_code != 0
         assert 'stdin_delivery_failed' in job.stderr
         assert proc.empty_calls == 0
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('harness', ['agy', 'qodercli'])
+@pytest.mark.parametrize('tail', [[], ['-p'], ['-p', '--model']])
+def test_long_prompt_missing_flag_fails_named(harness, tail):
+    with pytest.raises(RuntimeError, match='stdin_prompt_flag_missing'):
+        launch_stdin_payload([harness, 'x' * 40000, *tail], 'prompt', harness + '.exe', is_nt=True)
+
+
+@pytest.mark.parametrize('closed', [False, True])
+def test_unavailable_stdin_records_failure(closed):
+    from types import SimpleNamespace
+    import time
+    from plangraph.spawner.run_watchdog import collect
+
+    async def run():
+        class ClosedPipe:
+            def write(self, payload):
+                raise BrokenPipeError()
+
+            def close(self):
+                pass
+
+        job = SimpleNamespace(role='review', start_time=time.time(), status='running',
+                              exit_code=None, events=[], stderr='', stdout='')
+        runner = SimpleNamespace(jobs={'test': job}, _child_envs={}, _stdin_payloads={'test': b'prompt'})
+        proc = SimpleNamespace(stdin=ClosedPipe() if closed else None,
+                               stdout=asyncio.StreamReader(), stderr=asyncio.StreamReader())
+        with pytest.raises(RuntimeError, match='stdin_delivery_failed'):
+            await collect(runner, 'test', proc)
+        assert (job.status, job.exit_code) == ('failed', 1)
+        assert 'stdin_delivery_failed' in job.stderr
+        assert job.events == [{'event': 'stdin_delivery_failed'}]
     asyncio.run(run())
 
 
