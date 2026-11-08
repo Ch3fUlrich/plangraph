@@ -29,25 +29,36 @@ def build_fleet(registry, samples=None, runs=None):
     binary = Path(__file__).resolve().parents[2] / 'rust/target/release/pg-spawnd'
     binary = str(binary) if binary.is_file() else (shutil.which('pg-spawnd') or 'pg-spawnd')
     try:
+        # Opaque class/caps metadata stays in Python, with its original types.
+        registry = list(registry)
+        projected = [{key: value for key, value in row.items()
+                      if key in ('id', 'host_id', 'host', 'aliases')}
+                     for row in registry]
         result = subprocess.run([binary, 'fleet-snapshot'], check=False,
-            input=json.dumps(finite(dict(registry=registry,
+            input=json.dumps(finite(dict(registry=projected,
                 samples=list((samples or {}).items()), runs=runs))),
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
         if result.returncode:
-            reason = result.stderr.strip()
-            if reason not in ('ambiguous registry alias',
-                    'registry aliases must be a list or tuple of strings',
-                    'registry alias needs a nonempty string',
-                    'registry host needs an id', 'duplicate registry host'):
-                reason = 'fleet projection failed'
-            raise ValueError(reason)
+            raise ValueError('fleet projection failed')
         data = json.loads(result.stdout)
+        error = data.get('error')
+        if error is not None:
+            # Fixed validation errors belong to the private protocol, not stderr.
+            if not isinstance(error, str):
+                raise TypeError()
+            raise ValueError(error)
         rows = [{key: row[key] for key in ('host_id', 'class', 'caps', 'sample',
                  'samples', 'running_agents')} for row in data['hosts']]
         for row in rows:
             row['sample'] = {key: row['sample'][key] for key in METRICS}
+        metadata = {row.get('id') or row.get('host_id') or row.get('host'): row
+                    for row in registry}
+        for row in rows:
+            original = metadata[row['host_id']]
+            row.update({key: original.get(key) for key in ('class', 'caps')})
         return dict(hosts=rows, running_agents=data['running_agents'])
-    except (OSError, subprocess.TimeoutExpired, KeyError, TypeError) as exc:
+    except (OSError, subprocess.TimeoutExpired, KeyError, TypeError,
+            AttributeError, json.JSONDecodeError, UnicodeError):
         raise RuntimeError('fleet projection failed') from None
 
 

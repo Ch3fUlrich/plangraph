@@ -1,4 +1,11 @@
 use super::*;
+#[test]
+fn zero_ids_fall_back() {
+    for id in [json!(0), json!(0.0), json!(-0.0), json!(false), json!("")] {
+        let result = build(&json!({"registry":[{"id":id,"host_id":"a"}]})).unwrap();
+        assert_eq!(result["hosts"][0]["host_id"], "a");
+    }
+}
 fn project(samples: Value, runs: Value) -> Value {
     build(
         &json!({"registry":[{"id":"a","aliases":["alias"],"class":"worker",

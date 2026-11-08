@@ -28,7 +28,9 @@ pub(crate) fn build(data: &Value) -> Result<Value, String> {
         let host = ["id", "host_id", "host"]
             .iter()
             .map(|k| &row[k])
-            .find(|v| !v.is_null() && **v != json!("") && **v != json!(false) && **v != json!(0))
+            .find(|v| {
+                !v.is_null() && **v != json!("") && **v != json!(false) && v.as_f64() != Some(0.0)
+            })
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .ok_or("registry host needs an id")?;
@@ -106,7 +108,10 @@ pub(crate) fn build(data: &Value) -> Result<Value, String> {
 pub(crate) fn run() -> Result<Value, String> {
     let data: Value =
         serde_json::from_reader(std::io::stdin()).map_err(|_| "invalid fleet input")?;
-    build(&data)
+    Ok(match build(&data) {
+        Ok(value) => value,
+        Err(reason) => json!({"error": reason}),
+    })
 }
 #[cfg(test)]
 #[path = "fleet_snapshot_tests.rs"]

@@ -37,3 +37,7 @@ Old snapshots without `fleet` retain the unavailable message. The SQLite-to-
 snapshot-to-page integration test exercises this path. Registry aliases shared
 by different hosts (including canonical ids) are refused, never last-wins.
 Aliases must be a list or tuple of nonempty strings; other containers are refused.
+The pytest CI lanes build the release `pg-spawnd` helper using the shared Cargo
+cache; projection tests never skip when it is missing. The private protocol
+returns fixed registry validation errors in JSON, not subprocess stderr. Opaque
+registry class/caps metadata remains in Python without JSON coercion.

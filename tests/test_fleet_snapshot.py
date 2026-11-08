@@ -138,3 +138,34 @@ def test_alias_containers_supported(aliases):
     result = fleet.build_fleet([{"id": "a", "aliases": aliases}],
                               {"alias": {"cpu_percent": 12.5}}, [])
     assert result["hosts"][0]["sample"]["cpu_percent"] == 12.5
+
+
+def test_opaque_metadata_and_zero_id():
+    caps = {"tuple": (1, 2), "nan": float("nan"), "opaque": object()}
+    cls = object()
+    row = fleet.build_fleet([{"id": 0.0, "host_id": "a", "class": cls,
+                              "caps": caps}])["hosts"][0]
+    assert row["host_id"] == "a"
+    assert row["caps"] is caps and row["class"] is cls
+
+
+@pytest.mark.parametrize("failure", ["missing", "timeout", "keys", "json"])
+def test_bridge_failure_snapshot_fallback(tmp_path, monkeypatch, caplog, failure):
+    import subprocess
+    def fail(*args, **kwargs):
+        if failure == "missing":
+            raise FileNotFoundError("private")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired("private", 10)
+        return subprocess.CompletedProcess(args, 0, "{}" if failure == "keys" else "usage: private", "")
+    monkeypatch.setattr(subprocess, "run", fail)
+    with pytest.raises(RuntimeError, match="^fleet projection failed$"):
+        fleet.build_fleet([])
+    monkeypatch.setattr(fleet, "load_fleet", lambda store: fleet.build_fleet([]))
+    path = tmp_path / "snapshot.json"
+    server = SimpleNamespace(config=SimpleNamespace(snapshot=path),
+                             store=SimpleNamespace(snapshot=lambda who: {"items": []}))
+    write_snapshot(server, object())
+    body = json.loads(path.read_text())
+    assert body["fleet"] is None and body["fleet_error"] == "projection_failed"
+    assert "private" not in caplog.text
