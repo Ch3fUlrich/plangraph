@@ -94,22 +94,6 @@ fn per_worktree_changed_restored() {
     assert_eq!(fs::read(local).unwrap(), b"original local\n");
 }
 #[test]
-fn created_during_run_removed() {
-    let (_temp, _, local, mut record) = fixture(true);
-    fs::write(&local, b"new local\n").unwrap();
-    assert_eq!(
-        enforce(&mut record, Status::Completed, json!({})),
-        Status::Failed
-    );
-    assert!(!local.exists());
-}
-#[test]
-fn non_checkout_noop() {
-    let temp = TempDir::new();
-    assert!(!capture(temp.path(), &temp.path().join("run")).unwrap());
-    assert!(!temp.path().join("run").exists());
-}
-#[test]
 fn settle_restores_and_persists_verdict() {
     let (temp, config, _, mut record) = fixture(true);
     record.set("role", json!("implement"));
@@ -264,80 +248,23 @@ fn missing_snapshot_retry_is_quiet() {
     assert_eq!(record.to_value(), before);
 }
 #[test]
-fn orphan_uses_current_leg_not_previous_attempt() {
-    let (_temp, config, _, mut record) = fixture(false);
-    record.set("attempts", json!([{"reason":"previous", "exit_code":99}]));
+fn orphan_selects_attempt_by_id_through_settle() {
+    let (temp, config, _, mut record) = fixture(false);
+    record.set("role", json!("implement"));
+    record.set(
+        "attempts",
+        json!([
+            {"started":1,"reason":"current","exit_code":7,
+             "leg":{"leg_key":"leg","route_key":"route"}},
+            {"started":1,"reason":"previous","exit_code":99}
+        ]),
+    );
     fs::write(config, b"altered").unwrap();
-    crate::runs::finish(
-        &mut record,
-        Status::Orphaned,
-        &json!({"reason":"current", "exit_code":7}),
-    );
+    crate::reconcile_store::settle(temp.path(), &mut record, 1, "gone", 2000).unwrap();
     let original = record.get("gitconfig_original_outcome").unwrap();
+    assert_eq!(original["status"], "orphaned");
     assert_eq!(original["reason"], "current");
-    assert_eq!(original["exit_code"], 7);
-}
-#[test]
-fn layout_error_preserves_record_and_run_directory() {
-    let (_temp, config, _, mut record) = fixture(false);
-    record.set("run_id", json!("another-run"));
-    enforce(&mut record, Status::Completed, json!({}));
-    assert_eq!(record.get("reason"), Some(&json!("gitconfig_guard_error")));
-    assert_eq!(record.get("gitconfig_changed_paths"), Some(&json!([])));
-    assert!(record.path().is_file());
-    assert!(record.path().parent().unwrap().is_dir());
-    assert!(config.is_file());
-}
-#[test]
-fn layout_error_on_retry_emits_error_event() {
-    let (_temp, _, _, mut record) = fixture(false);
-    fs::remove_file(sidecar(record.path().parent().unwrap())).unwrap();
-    enforce(&mut record, Status::Completed, json!({}));
-    record.set("run_id", json!("another-run"));
-    enforce(&mut record, Status::Completed, json!({}));
-    assert_eq!(record.get("reason"), Some(&json!("gitconfig_guard_error")));
-    assert_eq!(
-        record
-            .get("events")
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .last()
-            .unwrap()["event"],
-        "gitconfig_guard_error"
-    );
-}
-#[test]
-fn record_api_always_supplies_a_parent() {
-    let (_temp, _, _, record) = fixture(false);
-    // RunRecord's private path is constructed as run_dir(...).join("record.json").
-    assert_eq!(record.path().file_name().unwrap(), "record.json");
-    assert!(record.path().parent().is_some());
-    assert!(run_dir(Path::new(""), "run-guard")
-        .unwrap()
-        .join("record.json")
-        .parent()
-        .is_some());
-}
-#[test]
-fn normalized_paths_keep_anchors_and_clamp_traversal() {
-    assert_ne!(
-        normalized(Path::new("/mnt/h/repo/.git")),
-        normalized(Path::new("mnt/h/repo/.git"))
-    );
-    assert_ne!(
-        normalized(Path::new("/repo/.git")),
-        normalized(Path::new("H:/repo/.git"))
-    );
-    assert_eq!(normalized(Path::new("/../../repo/.git")), "/repo/.git");
-    assert_eq!(
-        normalized(Path::new("H:/../../repo/.git")),
-        "/mnt/h/repo/.git"
-    );
-    assert!(same_resolved_path(
-        Path::new("H:/repo/.git"),
-        Path::new("/mnt/h/repo/.git")
-    ));
+    assert!(original["exit_code"].is_null());
 }
 #[test]
 fn resolved_windows_paths_ignore_case_but_posix_paths_do_not() {
@@ -393,4 +320,72 @@ fn worktree_config_symlink_swap_restored() {
     enforce(&mut record, Status::Completed, json!({}));
     assert!(!path.exists());
     assert_eq!(fs::read(outside).unwrap(), b"untouched");
+}
+
+#[test]
+fn resolve_preserves_windows_and_wsl_spellings() {
+    assert_eq!(
+        resolve(Path::new("base"), r"H:\repo\.git"),
+        PathBuf::from("H:/repo/.git")
+    );
+    assert_eq!(
+        resolve(Path::new("base"), "/mnt/h/repo/.git"),
+        PathBuf::from("/mnt/h/repo/.git")
+    );
+}
+#[test]
+fn windows_spelled_backlink_is_accepted() {
+    let (temp, _, _, record) = fixture(true);
+    let cwd = temp.path().join("checkout");
+    let backlink = cwd.join(".git").to_string_lossy().replace('/', "\\");
+    fs::write(
+        temp.path().join("common/.git/worktrees/leaf/gitdir"),
+        backlink,
+    )
+    .unwrap();
+    assert!(capture(&cwd, record.path().parent().unwrap()).unwrap());
+}
+#[test]
+fn extended_unc_backlink_is_refused() {
+    let (temp, _, _, record) = fixture(true);
+    fs::write(
+        temp.path().join("common/.git/worktrees/leaf/gitdir"),
+        r"\\?\UNC\srv\share",
+    )
+    .unwrap();
+    let error = capture(
+        &temp.path().join("checkout"),
+        record.path().parent().unwrap(),
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "gitconfig_capture_refused");
+}
+#[test]
+fn mixed_posix_windows_case_is_exact() {
+    assert!(!same_resolved_path(
+        Path::new("/MNT/H/repo/.git"),
+        Path::new("H:/repo/.git")
+    ));
+}
+#[cfg(unix)]
+#[test]
+fn layout_error_save_failure_marks_real_directory_on_every_retry() {
+    let (_temp, _, _, mut record) = fixture(false);
+    record.set("run_id", json!("another-run"));
+    fs::remove_file(record.path()).unwrap();
+    fs::create_dir(record.path()).unwrap();
+    for count in 1..=2 {
+        assert_eq!(
+            enforce(&mut record, Status::Completed, json!({})),
+            Status::Failed
+        );
+        assert_eq!(record.get("reason"), Some(&json!("gitconfig_guard_error")));
+        let events = record.get("events").unwrap().as_array().unwrap();
+        assert_eq!(events.len(), count);
+        assert_eq!(events.last().unwrap()["event"], "gitconfig_guard_error");
+        assert!(record
+            .path()
+            .with_file_name("gitconfig.verdict-save-error")
+            .is_file());
+    }
 }

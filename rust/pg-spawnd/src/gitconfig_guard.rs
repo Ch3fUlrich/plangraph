@@ -77,7 +77,7 @@ fn same_resolved_path(left: &Path, right: &Path) -> bool {
             b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b'/'
         })
     };
-    if windows(&left) || windows(&right) {
+    if windows(&left) && windows(&right) {
         left.eq_ignore_ascii_case(&right)
     } else {
         left == right
@@ -113,6 +113,14 @@ pub(crate) fn capture(cwd: &Path, run_dir: &Path) -> io::Result<bool> {
                 }
                 // Git's backlink binds this administrative directory to this checkout.
                 let backlink = fs::read_to_string(gitdir.join("gitdir"))?;
+                if backlink
+                    .trim()
+                    .replace('\\', "/")
+                    .to_ascii_lowercase()
+                    .starts_with("//?/unc/")
+                {
+                    return Err(io::Error::other("gitconfig_capture_refused"));
+                }
                 let backlink = fs::canonicalize(resolve(&gitdir, &backlink))?;
                 let dot = fs::canonicalize(&dot)?;
                 if !same_resolved_path(&backlink, &dot) {
@@ -193,7 +201,8 @@ pub(crate) fn enforce(
     if record.get("gitconfig_guard") != Some(&json!(true)) {
         return outcome;
     }
-    let parent = record.path().parent();
+    let parent_path = record.path().parent().map(Path::to_owned);
+    let parent = parent_path.as_deref();
     let dir = parent
         .and_then(Path::parent)
         .and_then(Path::parent)
@@ -255,11 +264,13 @@ pub(crate) fn enforce(
     record.set("gitconfig_restore_error", json!(error));
     if !persisted || !save_verdict(record) {
         record.set("gitconfig_verdict_save_error", json!(true));
-        if !save_verdict(record) && !layout_error {
-            let _ = durable(
-                &dir.unwrap().join("gitconfig.verdict-save-error"),
-                b"gitconfig_verdict_save_error\n",
-            );
+        if !save_verdict(record) {
+            if let Some(dir) = dir.as_deref().filter(|_| !layout_error).or(parent) {
+                let _ = durable(
+                    &dir.join("gitconfig.verdict-save-error"),
+                    b"gitconfig_verdict_save_error\n",
+                );
+            }
         }
     }
     Status::Failed
