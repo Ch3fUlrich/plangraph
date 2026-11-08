@@ -147,3 +147,165 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None) -> tuple[dict,
     if gaming and "|" not in gaming:
         evidence["test_gaming"] = gaming.split()[0].lower()
     return evidence, review_text
+
+
+def record_paths(records_dir):
+    """Include host-partitioned spawner records as well as local runs."""
+    return sorted(Path(records_dir).glob("**/run-*/record.json"))
+
+
+def writer_families(item, head, records_dir, git):
+    """Prefer evidenced git writers; fall back to matching implement records."""
+    from types import SimpleNamespace
+    from subprocess import SubprocessError
+    from plangraph.keeper.evidence_repo import repo_key
+    from seat_verdict import model_family
+    models = []
+    if git is not None and head:
+        key = repo_key(item, SimpleNamespace(git=git), head)
+        repo = git.repo_path(key)
+        if repo:
+            try:
+                rows = git.writer_trailers(repo, head, git.repo_ref(key))
+            except (OSError, SubprocessError):
+                rows = []
+            for trailers in rows:
+                for name, value in trailers.items():
+                    if name.lower() == "writer":
+                        models.extend(v.split()[0] for v in
+                                      (value if isinstance(value, list) else [value]) if v.split())
+    if not models and records_dir is not None:
+        for path in record_paths(records_dir):
+            try:
+                r = json.loads(path.read_text("utf-8"))
+                if r.get("role") == "implement" and r.get("item_key") == item["key"]:
+                    models.append(r.get("served_model"))
+            except (OSError, ValueError, AttributeError):
+                continue
+    if not models and item.get("writer_model"):
+        models.append(item["writer_model"])
+    families = [model_family(m) for m in models]
+    return sorted(set(families)) if families and None not in families else []
+
+
+def snapshot_item(item, records_dir=None, git=None):
+    """Choose newest verified evidence; conflicting SHAs in its epoch refuse."""
+    rows = []
+    for e in item.get("evidence", []):
+        if e.get("kind") not in ("commit", "commit+ci") or e.get("verified") is not True:
+            continue
+        ref = e.get("ref")
+        if isinstance(ref, dict):
+            ref = ref.get("sha") or ref.get("commit")
+        if isinstance(ref, str) and _HEAD_SHA.fullmatch(ref):
+            rows.append((e, ref.lower()))
+    head, reason = None, "no commit evidence"
+    if rows:
+        newest, sha = max(rows, key=lambda row: str(row[0].get("at") or ""))
+        heads = {s for e, s in rows if e.get("epoch") == newest.get("epoch")}
+        head = sha if len(heads) == 1 else None
+        reason = None if head else "head mismatch: ambiguous verified commits at same epoch"
+    return dict(item, head_sha=head, missing_reason=reason,
+                writer_families=writer_families(item, head, records_dir, git))
+
+
+def eligible_records(item, records_dir):
+    """Pure local discovery: return (eligible records, rejection reasons).
+
+    Spawner schema/ownership checks are structural, not cryptographic proof:
+    a malicious same-uid writer can fabricate a complete spawner record.
+    No tokens, network, filesystem writes, or keeper mutations occur here.
+    """
+    from seat_verdict import KNOWN_FAMILIES, model_family, parse_verdict
+    head, writers = item.get("head_sha"), item.get("writer_families")
+    if not isinstance(head, str) or not _HEAD_SHA.fullmatch(head):
+        return [], [item.get("missing_reason") or "head mismatch: missing or ambiguous evidenced commit"]
+    if not writers or any(w not in KNOWN_FAMILIES for w in writers):
+        return [], ["unknown writer"]
+    eligible, reasons = [], []
+    for path in record_paths(records_dir):
+        try:
+            record = json.loads(path.read_text("utf-8"))
+            if not isinstance(record, dict) or record.get("item_key") != item["key"]:
+                continue
+            if record.get("role") != "review":
+                continue
+            if (path.is_symlink() or path.parent.is_symlink()
+                    or not re.fullmatch(r"run-[0-9a-f]{32}", path.parent.name)
+                    or not re.fullmatch(r"[0-9a-f]{64}", str(record.get("card_hash")))
+                    or not isinstance(record.get("plan"), dict)
+                    or not isinstance(record.get("attempts"), list)
+                    or not record["attempts"]
+                    or not isinstance(record.get("cwd"), str)
+                    or any(type(record.get(k)) not in (int, float) for k in ("started", "ended"))
+                    or record["ended"] < record["started"]):
+                raise ValueError("spawner fields missing or invalid")
+            evidence, text = evidence_from_record(path.parent)
+            if evidence["head_sha"].lower() != head.lower():
+                raise ValueError("head mismatch")
+            family = model_family(record.get("served_model"))
+            if family is None:
+                raise ValueError("served family unknown")
+            if family in writers:
+                raise ValueError("family same as writer")
+            ok, _ = parse_verdict(text)
+            if ok is None:
+                raise ValueError("no VERDICT")
+            if ok and (evidence.get("finish_reason") not in ("stop", "end_turn")
+                       or str(evidence.get("test_gaming")).lower() != "no"):
+                raise ValueError("PASS safety evidence missing")
+            if (path.parent / "evidence.json").exists():
+                raise ValueError("spawner record shadowed by evidence.json")
+            eligible.append(dict(run_id=path.parent.name, family=family, ok=ok,
+                                 seat_dir=path.parent))
+        except (OSError, ValueError) as exc:
+            reasons.append(str(exc))
+    return eligible, sorted(set(reasons)) or ([] if eligible else ["no record"])
+
+
+def backfill(args, poster):
+    """Print TSV discovery and optionally invoke the existing single-seat CLI."""
+    import sys
+    from collections import Counter
+    from plangraph.keeper.evidence_git import GitAdapter
+    try:
+        config = json.loads((Path.home() / ".local/share/plangraph/keeper.json").read_text())
+    except (OSError, ValueError):
+        config = {}
+    git = GitAdapter(config.get("repos", {}), fetch_interval=float("inf"))
+    # Discovery must never fetch or mutate repositories.
+    git._maybe_fetch = lambda repo: False
+    try:
+        snapshot = json.loads(args.snapshot.read_text("utf-8"))
+        items = snapshot["items"]
+        if not isinstance(items, list):
+            raise ValueError("snapshot items must be a list")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"seat_verdict: snapshot: {exc}", file=sys.stderr)
+        return 1
+    total = missing = failed = 0
+    tallies = Counter()
+    for raw in items:
+        if raw.get("state") != "in_review":
+            continue
+        item = raw if "head_sha" in raw and "writer_families" in raw else snapshot_item(
+            raw, args.records_dir, git)
+        seats, reasons = eligible_records(item, args.records_dir)
+        total += 1
+        missing += not bool(seats)
+        if not seats:
+            tallies.update(reasons)
+        detail = "ELIGIBLE " + "; ".join(f"{s['run_id']}:{s['family']}:{'PASS' if s['ok'] else 'FIX'}"
+                           for s in seats) if seats else "MISSING " + "; ".join(reasons)
+        print(f"{item['key']}\t{detail.replace(chr(9), ' ').replace(chr(10), ' ')}")
+        if args.backfill_apply and seats:
+            # One deterministic record per item; never silently post all runs.
+            seat = seats[0]
+            failed += bool(poster(["--key", item["key"], "--seat-dir", str(seat["seat_dir"]),
+                                   "--head", item["head_sha"], "--writer-family",
+                                   ",".join(item["writer_families"]), "--token-dir",
+                                   str(args.token_dir), "--url", args.url]))
+    print(f"counts\titems={total}\teligible={total - missing}\tmissing={missing}\tfailed={failed}")
+    for reason, count in sorted(tallies.items()):
+        print(f"reason\t{reason}\t{count}")
+    return int(bool(failed))
