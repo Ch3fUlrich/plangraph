@@ -12,8 +12,6 @@ import seat_verdict as sv
 
 SHA = "a" * 40
 ITEM = {"key": "demo:A", "head_sha": SHA, "writer_families": ["openai"]}
-
-
 @pytest.mark.parametrize("case,accepted", [
     ("prompt", True), ("pr", False), ("head", False),
     ("family", False), ("comment", False)])
@@ -30,8 +28,6 @@ def test_seat_prompt_link(tmp_path, case, accepted):
     item = dict(ITEM, pr_number=7, comments="PR #7 VERDICT: PASS")
     seats, reasons = sr.eligible_records(item, tmp_path)
     assert bool(seats) is accepted, reasons
-
-
 def test_seat_index_reads_records_once(tmp_path, monkeypatch):
     run = record(tmp_path)
     original = Path.read_text
@@ -45,8 +41,6 @@ def test_seat_index_reads_records_once(tmp_path, monkeypatch):
     for _ in range(3):
         assert sr.eligible_records(ITEM, index)[0]
     assert reads == [run / "record.json"]
-
-
 def test_seat_backfill_cached_pr_json(tmp_path, capsys, snapshot_shape):
     run = record(tmp_path, item_key=None)
     (run / "prompt.txt").write_text("Review PR #7")
@@ -65,8 +59,6 @@ def test_seat_backfill_cached_pr_json(tmp_path, capsys, snapshot_shape):
     rows = json.loads(capsys.readouterr().out)
     assert rows[0]["status"] == "ELIGIBLE"
     assert rows[0]["pr_number"] == 7
-
-
 def test_seat_card_head_requires_diff_and_ancestry(tmp_path):
     import subprocess
     def git(*args):
@@ -83,12 +75,9 @@ def test_seat_card_head_requires_diff_and_ancestry(tmp_path):
     assert not sv.card_head_matches(tmp_path, base, merge, tmp_path)
     card.unlink()
     assert not sv.card_head_matches(tmp_path, head, merge, tmp_path)
-
-
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
 
 def record(tmp_path, **changes):
     run = tmp_path / ("run-" + "b" * 32)
@@ -105,8 +94,6 @@ def record(tmp_path, **changes):
     (run / "record.json").chmod(0o600)
     (run / "live.log").write_text("VERDICT: PASS\nTEST_GAMING: no\n")
     return run
-
-
 @pytest.mark.parametrize("case,reason", [
     ("family", "family same as writer"), ("head", "head mismatch"),
     ("verdict", "no VERDICT"), ("forged", "spawner fields")])
@@ -122,15 +109,11 @@ def test_seat_backfill_refusals(tmp_path, case, reason):
     eligible, reasons = sr.eligible_records(ITEM, tmp_path)
     assert eligible == []
     assert reason in " ".join(reasons)
-
-
 def test_seat_backfill_eligible(tmp_path):
     run = record(tmp_path)
     seats, _ = sr.eligible_records(ITEM, tmp_path)
     assert [(s["run_id"], s["family"], s["ok"]) for s in seats] == [
         (run.name, "deepseek", True)]
-
-
 def test_seat_backfill_dry_run_no_network_missing(tmp_path, capsys, snapshot_shape):
     snapshot = tmp_path / "plan.snapshot.json"
     record(tmp_path, role="implement", served_model="gpt-5")
@@ -140,8 +123,6 @@ def test_seat_backfill_dry_run_no_network_missing(tmp_path, capsys, snapshot_sha
         assert sv.main(["--backfill-dry-run", "--snapshot", str(snapshot),
                         "--records-dir", str(tmp_path)]) == 0
     assert "demo:A\tMISSING no record" in capsys.readouterr().out
-
-
 def test_seat_backfill_snapshot_apply_reuses_poster(tmp_path, capsys):
     from types import SimpleNamespace
     from unittest.mock import Mock
@@ -164,8 +145,6 @@ def test_seat_backfill_snapshot_apply_reuses_poster(tmp_path, capsys):
     assert sr.backfill(args, poster) == 0
     assert poster.call_count == 1
     assert poster.call_args.args[0][:2] == ["--key", ITEM["key"]]
-
-
 @pytest.fixture
 def snapshot_shape():
     def make(rows):
@@ -174,8 +153,6 @@ def snapshot_shape():
                         dict(kind=k, verified=v, epoch=ep, at=at,
                              ref={"commit": sha}) for k, v, ep, at, sha in rows])
     return make
-
-
 @pytest.mark.parametrize("rows,head,reason", [
     ([("commit+ci", True, 1, "a", SHA), ("commit+ci", False, 9, "b", "b"*40)], SHA, None),
     ([("commit", True, 1, "a", SHA), ("commit+ci", False, 9, "b", "b"*40)], SHA, None),
@@ -189,8 +166,6 @@ def test_seat_snapshot_shapes(snapshot_shape, rows, head, reason):
     assert item["head_sha"] == head
     if reason:
         assert reason in item["missing_reason"]
-
-
 @pytest.mark.parametrize("source", ["trailer", "record"])
 def test_seat_snapshot_writer_sources(tmp_path, snapshot_shape, source):
     item = snapshot_shape([("commit+ci", True, 1, "a", SHA)])
@@ -198,22 +173,18 @@ def test_seat_snapshot_writer_sources(tmp_path, snapshot_shape, source):
     from unittest.mock import Mock
     git = Mock()
     git.repo_path.return_value = str(tmp_path)
-    git.writer_trailers.return_value = ([{"Writer": "omniroute/gpt-5 run-abc"}]
+    git.writer_trailers.return_value = ([{"Writer": "openai/gpt-5 run-abc"}]
                                         if source == "trailer" else [])
     if source == "trailer":
         (run / "record.json").unlink()
     normalized = sr.snapshot_item(item, records_dir=tmp_path, git=git)
     assert normalized["writer_families"] == ["openai"]
-
-
 def test_seat_nested_records(tmp_path):
     host = tmp_path / "host"
     host.mkdir()
     run = record(host)
     seats, _ = sr.eligible_records(ITEM, tmp_path)
     assert seats[0]["run_id"] == run.name
-
-
 def test_seat_trailer_real_git(tmp_path, snapshot_shape):
     import subprocess
     from plangraph.keeper.evidence_git import GitAdapter
@@ -221,7 +192,7 @@ def test_seat_trailer_real_git(tmp_path, snapshot_shape):
         return subprocess.check_output(["git", *args], cwd=tmp_path, text=True).strip()
     git("init", "-q")
     git("-c", "user.name=Test", "-c", "user.email=test@example.test", "commit",
-        "--allow-empty", "-qm", "fixture\n\nWriter: omniroute/gpt-5 run-fixture")
+        "--allow-empty", "-qm", "fixture\n\nWriter: openai/gpt-5 run-fixture")
     sha = git("rev-parse", "HEAD")
     item = snapshot_shape([("commit+ci", True, 1, "a", sha)])
     primary = tmp_path / "primary"
@@ -230,8 +201,6 @@ def test_seat_trailer_real_git(tmp_path, snapshot_shape):
     adapter = GitAdapter({"demo": str(primary), "demo/lane": str(tmp_path)})
     adapter._maybe_fetch = lambda repo: False
     assert sr.snapshot_item(item, git=adapter)["writer_families"] == ["openai"]
-
-
 def test_seat_backfill_reason_tally(tmp_path, snapshot_shape, capsys):
     item = snapshot_shape([("decision", True, 9, "a", SHA)])
     snapshot = tmp_path / "snapshot.json"
@@ -242,25 +211,17 @@ def test_seat_backfill_reason_tally(tmp_path, snapshot_shape, capsys):
     assert "demo:A\tMISSING no commit evidence" in output
     assert "counts\titems=1\teligible=0\tmissing=1\tfailed=0" in output
     assert "reason\tno commit evidence\t1" in output
-
-
 def test_snapshot_writer_model_is_not_evidence():
     assert sr.writer_families(dict(ITEM, writer_model="gpt-5"), SHA, None, None) == []
-
-
 @pytest.mark.parametrize("at", [None, "same", 10])
 def test_newest_evidence_epoch_breaks_timestamp_ties(snapshot_shape, at):
     item = snapshot_shape([("commit", True, 2, at, SHA),
                            ("commit", True, 10, at, "b" * 40)])
     assert sr.snapshot_item(item)["head_sha"] == "b" * 40
-
-
 def test_numeric_evidence_times_are_not_lexicographic(snapshot_shape):
     item = snapshot_shape([("commit", True, 1, 9, SHA),
                            ("commit", True, 2, 10, "b" * 40)])
     assert sr.snapshot_item(item)["head_sha"] == "b" * 40
-
-
 def test_raw_derived_fields_cannot_bypass_ambiguity(tmp_path, capsys):
     from types import SimpleNamespace
     from unittest.mock import Mock
@@ -274,8 +235,6 @@ def test_raw_derived_fields_cannot_bypass_ambiguity(tmp_path, capsys):
     assert sr.backfill(args, poster) == 0
     assert "ambiguous verified commits" in capsys.readouterr().out
     poster.assert_not_called()
-
-
 @pytest.mark.parametrize("returned_missing", [False, True])
 def test_missing_completion_head_is_rejection(tmp_path, returned_missing):
     record(tmp_path, completion={})
@@ -286,15 +245,11 @@ def test_missing_completion_head_is_rejection(tmp_path, returned_missing):
         seats, reasons = sr.eligible_records(ITEM, tmp_path)
     assert not seats
     assert "head" in " ".join(reasons)
-
-
 @pytest.mark.parametrize("finish,accepted", [("stop", True), ("end_turn", True),
                                              ("END_TURN", False), ("length", False)])
 def test_discovery_preserves_poster_finish_set(tmp_path, finish, accepted):
     record(tmp_path, finish_reason=finish)
     assert bool(sr.eligible_records(ITEM, tmp_path)[0]) is accepted
-
-
 def test_symlinked_host_partition_rejected(tmp_path):
     host = tmp_path / "host"
     host.mkdir()
@@ -306,8 +261,6 @@ def test_symlinked_host_partition_rejected(tmp_path):
     seats, reasons = sr.eligible_records(ITEM, index)
     assert not seats
     assert "spawner fields" in " ".join(reasons)
-
-
 def test_symlinked_writer_partition_is_not_evidence(tmp_path):
     host = tmp_path / "host"
     host.mkdir()
@@ -317,8 +270,6 @@ def test_symlinked_writer_partition_is_not_evidence(tmp_path):
     path = alias / run.name / "record.json"
     index = {path: (json.loads(path.read_text()), "")}
     assert sr.writer_families(ITEM, SHA, index, None) == []
-
-
 @pytest.mark.parametrize("completion", [{}, "malformed"])
 def test_missing_head_backfill_tallied(tmp_path, snapshot_shape, capsys, completion):
     record(tmp_path, completion=completion)
@@ -332,3 +283,49 @@ def test_missing_head_backfill_tallied(tmp_path, snapshot_shape, capsys, complet
                     "--records-dir", str(tmp_path)]) == 0
     output = capsys.readouterr().out
     assert "reason\trecord completion.head_sha missing or not 40 hex chars\t1" in output
+@pytest.mark.parametrize("case", ["ancestor", "record-key", "prompt-key", "reason", "namespace"])
+def test_round_two_binding(tmp_path, case):
+    run = record(tmp_path, **({"item_key": "demo:B"} if case == "record-key" else {}))
+    (run / "prompt.txt").write_text("Review PR #7 item " + ("demo:B" if case == "prompt-key" else "demo:A"))
+    if case == "namespace":
+        assert "omni" + "route/" not in Path(__file__).read_text()
+        return
+    evidence = {"head_sha": "d" * 40} if case == "ancestor" else {}
+    if case in ("ancestor", "reason"):
+        with patch.object(sr, "evidence_from_record", return_value=(evidence, "VERDICT: FIX")), patch.object(sv, "card_head_matches", return_value=True):
+            seats, reasons = sr.eligible_records(dict(ITEM, pr_number=7), tmp_path)
+    else:
+        seats, reasons = sr.eligible_records(dict(ITEM, pr_number=7), tmp_path)
+    assert not seats
+    if case == "reason":
+        assert "missing or not 40 hex chars" in " ".join(reasons)
+@pytest.mark.parametrize("case", ["dry-gh", "bad-cache", "missing-cache", "timeout", "string-pr", "missing-key"])
+def test_round_two_backfill(tmp_path, capsys, snapshot_shape, case):
+    import subprocess
+    from types import SimpleNamespace
+    record(tmp_path, item_key=None)
+    run = next(tmp_path.glob("run-*"))
+    (run / "prompt.txt").write_text("Review PR #7")
+    writer = tmp_path / "writer"
+    writer.mkdir()
+    record(writer, role="implement", served_model="gpt-5")
+    item = dict(snapshot_shape([("commit", True, 1, None, SHA)]), state="in_review")
+    if case == "missing-key":
+        del item["key"]
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text(json.dumps({"items": [item, dict(item, key="demo:C")]}))
+    cache = tmp_path / "cache.json"
+    cache.write_text("{" if case == "bad-cache" else json.dumps({SHA: "7"}))
+    if case == "missing-cache":
+        cache.unlink()
+    args = SimpleNamespace(snapshot=snapshot, records_dir=tmp_path, backfill_apply=False,
+                           backfill_dry_run=True, pr_lookup_gh=case == "dry-gh",
+                           pr_cache=cache if "cache" in case or case == "string-pr" else None)
+    lookup = (lambda sha: (_ for _ in ()).throw(subprocess.TimeoutExpired("fixture", 1))) if case == "timeout" else None
+    with patch("subprocess.run", side_effect=AssertionError("network")):
+        assert sr.backfill(args, lambda _: pytest.fail("poster"), lookup) == 0
+    out = capsys.readouterr().out
+    if case == "string-pr":
+        assert "demo:A\tELIGIBLE" in out
+    else:
+        assert "counts\titems=2" in out

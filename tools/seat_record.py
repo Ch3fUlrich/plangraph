@@ -21,12 +21,10 @@ _HEAD_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 # F8: both spellings count (review/tail.md uses TEST-GAMING).
 _TEST_GAMING = re.compile(r"^TEST[_-]GAMING:[ \t]*(.*)$", re.I | re.M)
 
-
 def _verdict_line():
     """seat_verdict's authoritative VERDICT-line grammar (lazy: circular import)."""
     from seat_verdict import _VERDICT_LINE
     return _VERDICT_LINE
-
 
 def _canon_family(name):
     """Canonical family of a model or family name via seat_verdict's alias table."""
@@ -38,7 +36,6 @@ def _canon_family(name):
     if candidate not in KNOWN_FAMILIES:
         raise ValueError(f"unknown model family {name!r}")
     return candidate
-
 
 def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None) -> tuple[dict, str]:
     """Return (evidence, review_text) for a record.json-only seat run dir.
@@ -149,11 +146,9 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         evidence["test_gaming"] = gaming.split()[0].lower()
     return evidence, review_text
 
-
 def record_paths(records_dir):
     """Include host-partitioned spawner records as well as local runs."""
     return sorted(Path(records_dir).glob("**/run-*/record.json"))
-
 
 def record_index(records_dir):
     """Read each record and prompt once, shared by writer and review discovery."""
@@ -174,7 +169,6 @@ def record_index(records_dir):
             continue
     return rows
 
-
 def merged_pr(item, git, lookup=None):
     """Resolve only an evidenced commit; injected lookup may use a JSON cache."""
     import subprocess
@@ -184,10 +178,10 @@ def merged_pr(item, git, lookup=None):
     if not head:
         return None
     if lookup is not None:
-        return lookup(head)
+        value = lookup(head)
+        return int(value) if value is not None else None
     key = repo_key(item, SimpleNamespace(git=git), head)
     repo = git.repo_path(key)
-    item["repo_path"] = repo
     if repo:
         result = subprocess.run(["git", "show", "-s", "--format=%s", head],
                                 cwd=repo, capture_output=True, text=True)
@@ -195,7 +189,6 @@ def merged_pr(item, git, lookup=None):
         if result.returncode == 0 and match:
             return int(match[1])
     return None
-
 
 def writer_families(item, head, records_dir, git):
     """Prefer evidenced git writers; fall back to matching implement records."""
@@ -228,9 +221,10 @@ def writer_families(item, head, records_dir, git):
     families = [model_family(m) for m in models]
     return sorted(set(families)) if families and None not in families else []
 
-
 def snapshot_item(item, records_dir=None, git=None):
     """Choose newest verified evidence; conflicting SHAs in its epoch refuse."""
+    if not isinstance(item.get("key"), str) or not item["key"]:
+        raise ValueError("snapshot item missing key")
     rows = []
     for e in item.get("evidence", []):
         if e.get("kind") not in ("commit", "commit+ci") or e.get("verified") is not True:
@@ -261,13 +255,10 @@ def snapshot_item(item, records_dir=None, git=None):
     return dict(item, head_sha=head, missing_reason=reason,
                 writer_families=writer_families(item, head, records_dir, git))
 
-
 def eligible_records(item, records_dir):
     """Pure local discovery: return (eligible records, rejection reasons).
-
-    Spawner schema/ownership checks are structural, not cryptographic proof:
-    a malicious same-uid writer can fabricate a complete spawner record.
-    No tokens, network, filesystem writes, or keeper mutations occur here.
+    Schema/ownership checks cannot exclude fabrication by a malicious same-uid writer.
+    No network, writes, tokens, or keeper mutations occur here.
     """
     from seat_verdict import KNOWN_FAMILIES, model_family, parse_verdict
     head, writers = item.get("head_sha"), item.get("writer_families")
@@ -283,6 +274,9 @@ def eligible_records(item, records_dir):
             prs = {int(n) for n in re.findall(r"\bPR\s+#(\d+)\b", prompt, re.I)}
             named = bool(re.search(r"(?<![\w:])" + re.escape(item["key"]) + r"(?![\w-])", prompt))
             same_pr = item.get("pr_number") in prs
+            keys = set(re.findall(r"(?<![\w:])[\w-]+:[\w-]+", prompt))
+            if record.get("item_key") not in (None, item["key"]) or keys - {item["key"]}:
+                raise ValueError("item key mismatch")
             if record.get("item_key") != item["key"] and not (named or same_pr):
                 continue
             if prs and item.get("pr_number") and prs != {item["pr_number"]}:
@@ -299,10 +293,8 @@ def eligible_records(item, records_dir):
                 raise ValueError("spawner fields missing or invalid")
             evidence, text = evidence_from_record(path.parent, record=record)
             if not isinstance(evidence.get("head_sha"), str) or not _HEAD_SHA.fullmatch(evidence["head_sha"]):
-                raise ValueError("record completion.head_sha missing or invalid")
-            from seat_verdict import card_head_matches
-            if evidence["head_sha"].lower() != head.lower() and not card_head_matches(
-                    path.parent, evidence["head_sha"], head, item.get("repo_path")):
+                raise ValueError("record completion.head_sha missing or not 40 hex chars")
+            if evidence["head_sha"].lower() != head.lower():
                 raise ValueError("head mismatch")
             family = model_family(record.get("served_model"))
             if family is None:
@@ -328,10 +320,10 @@ def eligible_records(item, records_dir):
         f"no record [seat=review family=outside:{','.join(writers)} head={head} "
         f"item={item['key']} PR={item.get('pr_number') or 'unresolved'}]"])
 
-
 def backfill(args, poster, pr_lookup=None):
     """Print TSV discovery and optionally invoke the existing single-seat CLI."""
     import sys
+    from subprocess import SubprocessError
     from collections import Counter
     from plangraph.keeper.evidence_git import GitAdapter
     try:
@@ -351,9 +343,13 @@ def backfill(args, poster, pr_lookup=None):
         return 1
     index = record_index(args.records_dir)
     cache_path = getattr(args, "pr_cache", None)
-    cache = json.loads(cache_path.read_text()) if cache_path else None
-    lookup = pr_lookup or ((lambda sha: cache.get(sha)) if cache is not None else None)
-    if getattr(args, "pr_lookup_gh", False) and lookup is None:
+    def cached(sha):
+        cache = json.loads(cache_path.read_text())
+        if not isinstance(cache, dict):
+            raise ValueError("PR cache must be an object")
+        return cache.get(sha)
+    lookup = pr_lookup or (cached if cache_path else None)
+    if getattr(args, "pr_lookup_gh", False) and args.backfill_apply and lookup is None:
         import subprocess
         def lookup(sha):
             result = subprocess.run(["gh", "pr", "list", "--search", sha, "--state", "merged",
@@ -367,9 +363,13 @@ def backfill(args, poster, pr_lookup=None):
     for raw in items:
         if raw.get("state") != "in_review":
             continue
-        item = snapshot_item(raw, index, git)
-        item = dict(item, pr_number=merged_pr(item, git, lookup))
-        seats, reasons = eligible_records(item, index)
+        try:
+            item = snapshot_item(raw, index, git)
+            item = dict(item, pr_number=merged_pr(item, git, lookup))
+            seats, reasons = eligible_records(item, index)
+        except (OSError, ValueError, SubprocessError, KeyError, TypeError, AttributeError) as exc:
+            item = dict(raw, key=raw.get("key") or "<missing>")
+            seats, reasons = [], [f"discovery: {type(exc).__name__}: {exc}"]
         total += 1
         missing += not bool(seats)
         if not seats:
