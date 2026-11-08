@@ -14,6 +14,73 @@ SHA = "a" * 40
 ITEM = {"key": "demo:A", "head_sha": SHA, "writer_families": ["openai"]}
 
 
+@pytest.mark.parametrize("case,accepted", [
+    ("prompt", True), ("pr", False), ("head", False),
+    ("family", False), ("comment", False)])
+def test_seat_prompt_link(tmp_path, case, accepted):
+    changes = {"item_key": None}
+    if case == "head":
+        changes["completion"] = {"head_sha": "d" * 40}
+    if case == "family":
+        changes["served_model"] = "gpt-5"
+    run = record(tmp_path, **changes)
+    prompt = "Review PR #8, item demo:A" if case == "pr" else "Review PR #7, item demo:A"
+    if case != "comment":
+        (run / "prompt.txt").write_text(prompt)
+    item = dict(ITEM, pr_number=7, comments="PR #7 VERDICT: PASS")
+    seats, reasons = sr.eligible_records(item, tmp_path)
+    assert bool(seats) is accepted, reasons
+
+
+def test_seat_index_reads_records_once(tmp_path, monkeypatch):
+    run = record(tmp_path)
+    original = Path.read_text
+    reads = []
+    def read(path, *args, **kwargs):
+        if path.name == "record.json":
+            reads.append(path)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", read)
+    index = sr.record_index(tmp_path)
+    for _ in range(3):
+        assert sr.eligible_records(ITEM, index)[0]
+    assert reads == [run / "record.json"]
+
+
+def test_seat_backfill_cached_pr_json(tmp_path, capsys):
+    run = record(tmp_path, item_key=None)
+    (run / "prompt.txt").write_text("Review PR #7")
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text(json.dumps({"items": [dict(ITEM, state="in_review")]}))
+    cache = tmp_path / "prs.json"
+    cache.write_text(json.dumps({SHA: 7}))
+    with patch("urllib.request.urlopen", side_effect=AssertionError("network")):
+        assert sv.main(["--backfill-dry-run", "--snapshot", str(snapshot),
+                        "--records-dir", str(tmp_path), "--pr-cache", str(cache),
+                        "--format", "json"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert rows[0]["status"] == "ELIGIBLE"
+    assert rows[0]["pr_number"] == 7
+
+
+def test_seat_card_head_requires_diff_and_ancestry(tmp_path):
+    import subprocess
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True).strip()
+    git("init", "-q")
+    def commit():
+        git("-c", "user.name=Test", "-c", "user.email=test@example.test",
+            "commit", "--allow-empty", "-qm", "fixture")
+        return git("rev-parse", "HEAD")
+    base, head, merge = commit(), commit(), commit()
+    card = tmp_path / "card.json"
+    card.write_text(json.dumps({"diff_ref": {"base": base[:8], "head": head[:8]}}))
+    assert sv.card_head_matches(tmp_path, head, merge, tmp_path)
+    assert not sv.card_head_matches(tmp_path, base, merge, tmp_path)
+    card.unlink()
+    assert not sv.card_head_matches(tmp_path, head, merge, tmp_path)
+
+
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
