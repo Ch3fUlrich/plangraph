@@ -41,10 +41,6 @@ class SpawnService(SeatSpawnMixin):
             raise ValueError('unknown run id') from None
 
     def _save(self, record):
-        if getattr(self, '_overflow_reason', None):
-            record.setdefault('overflow_reason', self._overflow_reason)
-            if record.get('status') in ('queued', 'refused', 'limited'):
-                record['reason'] = (record.get('reason', '') + '; ' + self._overflow_reason).lstrip('; ')
         from .private_io import atomic_write_private
         from .runner import redact
         from .seat_artifact import publish

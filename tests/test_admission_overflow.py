@@ -47,8 +47,69 @@ def test_unconfigured_preserves_local(setup):
     service, path, remote = setup
     path.unlink()
     assert a.admit(service, {}) is None
-    assert service._overflow_reason == 'overflow unconfigured'
+    assert not hasattr(service, '_overflow_reason')
     remote.assert_not_called()
+
+
+def test_reason_is_per_spawn(setup, monkeypatch):
+    service, path, _ = setup
+    path.unlink()
+    assert a.admit(service, {}) is None
+    monkeypatch.setattr(a, 'resources', lambda service: (0, 6000))
+    assert a.admit(service, {}) is None
+    assert not hasattr(service, '_overflow_reason')
+
+
+def test_unrelated_failure_exact_reason(setup, tmp_path):
+    from plangraph.spawner.service import SpawnService
+    _, path, _ = setup
+    service = SpawnService(state=str(tmp_path / 'state'))
+    path.unlink()
+    a.admit(service, {})
+    record = service.save_refusal(ValueError('dispatch refused'), 'implement')
+    assert record['reason'] == 'dispatch refused'
+    assert 'overflow_reason' not in record
+
+
+def test_no_config_golden_records(setup, tmp_path, monkeypatch):
+    from plangraph.spawner.service import SpawnService
+    _, path, _ = setup
+    path.unlink()
+    service = SpawnService(state=str(tmp_path / 'state'))
+    for status in ('running', 'queued', 'refused', 'limited'):
+        golden = {'run_id': 'run-golden', 'status': status, 'reason': 'original'}
+        baseline = dict(golden)
+        service._save(baseline)
+        assert a.admit(service, {}) is None
+        actual = dict(golden)
+        service._save(actual)
+        assert actual == baseline
+
+
+def test_each_failure_reason(setup, monkeypatch):
+    service, _, remote = setup
+    row = {'ssh': 'alias', 'ok': True, 'fresh': True, 'live_runs': 0, 'mem_available_mb': 6000}
+    monkeypatch.setattr(overflow, 'ready_records', lambda config: {
+        'host-a': dict(row), 'host-b': dict(row)})
+    remote.side_effect = [overflow.RemoteRefusal('remote copy failed'),
+                          overflow.RemoteRefusal('remote command failed')]
+    result = a.admit(service, {})
+    assert result['reason'] == 'queue: host-a: remote copy failed; host-b: remote command failed'
+
+
+def test_benchmark_local_refusal(setup):
+    service, _, remote = setup
+    assert a.admit(service, {'benchmark': object()})['reason'] == 'local benchmark database cannot be forwarded'
+    remote.assert_not_called()
+
+
+def test_remote_id_required(setup):
+    service, _, remote = setup
+    assert a.admit(service, {})['run_id'] == 'run-abc'
+    remote.return_value = {'status': 'running'}
+    result = a.admit(service, {})
+    assert result['status'] == 'queued'
+    assert 'remote receipt missing run id' in result['reason']
 
 
 def test_all_refusals_queue(setup, monkeypatch):

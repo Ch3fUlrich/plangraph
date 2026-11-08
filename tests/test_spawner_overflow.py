@@ -1,4 +1,5 @@
 import json
+import re
 import shlex
 import subprocess
 from datetime import datetime, timezone, timedelta
@@ -7,6 +8,44 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.spawner import overflow as o
+
+
+def framed(command, payload):
+    token = re.search(r'PLANGRAPH_RECEIPT_BEGIN_([a-f0-9]+)', command)[1]
+    return ('{"status":"secret-before"}\nPLANGRAPH_RECEIPT_BEGIN_' + token + '\n' +
+            payload + '\nPLANGRAPH_RECEIPT_END_' + token + '\n{"status":"secret-after"}')
+
+
+@pytest.mark.parametrize('payload,reason', [
+    ('{"status":"running"}', 'remote receipt missing run id'),
+    ('not json', 'remote receipt invalid'),
+])
+def test_framed_receipt_refusal(monkeypatch, payload, reason):
+    def run(argv, **kwargs):
+        stdout = '/stage'
+        if 'plangraph.spawner.cli' in argv[-1]:
+            stdout = framed(argv[-1], payload)
+        return SimpleNamespace(returncode=0, stdout=stdout)
+    monkeypatch.setattr(o.subprocess, 'run', run)
+    with pytest.raises(o.RemoteRefusal, match=reason):
+        o.remote_spawn('host', dict(ssh='stub', repo='/repo', spawner_src='/src'), {}, '', [])
+
+
+def test_only_sentinel_receipt_printed(inputs, monkeypatch, capsys):
+    root, path, args = inputs
+    host = dict(ssh='stub', repo='/repo', spawner_src='/src', env_file='/env')
+    path.write_text(json.dumps({'public_repos': [str(root)], 'hosts': {'ash': host}}))
+    monkeypatch.setattr(o, 'ready_records', lambda config: {'ash': healthy()})
+    def run(argv, **kwargs):
+        stdout = '/stage'
+        if 'plangraph.spawner.cli' in argv[-1]:
+            stdout = framed(argv[-1], '{"run_id":"run-real","status":"running"}')
+        return SimpleNamespace(returncode=0, stdout=stdout)
+    monkeypatch.setattr(o.subprocess, 'run', run)
+    assert o.main(args) == 0
+    output = capsys.readouterr()
+    assert 'secret' not in output.out + output.err
+    assert json.loads(output.out)['run_id'] == 'run-real'
 
 
 def healthy(**changes):
@@ -47,15 +86,16 @@ def test_negative_readiness_is_malformed(field):
     ('{"status":"running","card":{"a":1}}', {'status': 'running', 'card': {'a': 1}}),
     ('{"env":"secret"}\n{"status":"running","card":{"a":1}}\nnoise',
      {'status': 'running', 'card': {'a': 1}}),
-    ('{"env":"secret"}\nunreadable receipt',
-     {'warning': 'remote spawn succeeded; receipt unavailable'}),
 ])
 def test_remote_outer_receipt(monkeypatch, stdout, expected):
     def run(argv, **kwargs):
-        return SimpleNamespace(returncode=0, stdout='/invented-stage' if argv[-1] == 'mktemp -d' else stdout)
+        output = '/invented-stage'
+        if 'plangraph.spawner.cli' in argv[-1]:
+            output = framed(argv[-1], json.dumps(dict(expected, run_id='run-remote')))
+        return SimpleNamespace(returncode=0, stdout=output)
     monkeypatch.setattr(o.subprocess, 'run', run)
     host = dict(ssh='invented-alias', repo='/invented', spawner_src='/invented/src', env_file='/invented/env')
-    assert o.remote_spawn('invented', host, {}, 'prompt', []) == expected
+    assert o.remote_spawn('invented', host, {}, 'prompt', []) == dict(expected, run_id='run-remote')
 
 
 @pytest.fixture
@@ -138,7 +178,6 @@ def test_local_before_card_parsing(inputs, monkeypatch, card):
 @pytest.mark.parametrize('receipt', [
     'hi\n{"status":"running"}\necho-trailing',
     'hi\n{\n  "status": "running"\n}\necho-trailing',
-    'unreadable receipt',
 ])
 def test_remote_env_echo_does_not_retry(inputs, monkeypatch, capsys, receipt):
     root, path, args = inputs
@@ -153,7 +192,7 @@ def test_remote_env_echo_does_not_retry(inputs, monkeypatch, capsys, receipt):
         if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
             spawns.append(argv)
             assert '. ' + str(root / 'env') in argv[-1]
-            stdout = receipt
+            stdout = framed(argv[-1], '{"status":"running","run_id":"run-remote"}')
         return SimpleNamespace(returncode=0, stdout=stdout)
     monkeypatch.setattr(o.subprocess, 'run', run)
     assert o.main(args) == 0
@@ -207,7 +246,9 @@ def test_remote_rewrite_and_quoting(monkeypatch):
         calls.append(argv)
         if argv[0] == 'scp':
             cards.append(json.loads(o.Path(argv[2]).read_text()))
-        stdout = '/invented-stage\n' if argv[-1] == 'mktemp -d' else '{"status":"running"}'
+        stdout = '/invented-stage\n'
+        if 'plangraph.spawner.cli' in argv[-1]:
+            stdout = framed(argv[-1], '{"status":"running","run_id":"run-remote"}')
         return SimpleNamespace(returncode=0, stdout=stdout)
     monkeypatch.setattr(o.subprocess, 'run', run)
     host = dict(ssh='invented-alias', repo='/invented checkout', spawner_src='/invented source', env_file='/invented env')
@@ -266,9 +307,10 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
                                                   'import sys; print(repr(sys.argv[3]))']))
             result = real_run(['sh', '-c', command], capture_output=True, text=True)
             assert result.returncode == 0, result.stderr
-            received.append(result.stdout.strip())
-        return SimpleNamespace(returncode=0, stdout=str(stage) if argv[-1] == 'mktemp -d' else '{}')
+            received.append(result.stdout.splitlines()[1])
+            return SimpleNamespace(returncode=0, stdout=framed(argv[-1], '{"run_id":"run-remote"}'))
+        return SimpleNamespace(returncode=0, stdout=str(stage))
     monkeypatch.setattr(o.subprocess, 'run', run)
     host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src='src')
-    assert o.remote_spawn('invented', host, {}, prompt, []) == {}
+    assert o.remote_spawn('invented', host, {}, prompt, []) == {'run_id': 'run-remote'}
     assert received == [repr(prompt)]

@@ -9,6 +9,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import tempfile
+import uuid
 from typing import NamedTuple
 
 from . import cli
@@ -18,6 +19,10 @@ from .private_io import atomic_write_private
 class Decision(NamedTuple):
     host: str | None
     reason: str
+
+
+class RemoteRefusal(ValueError):
+    """Safe, value-free remote failure reason."""
 
 
 def decide(local_live, local_mem_mb, run_cap, floor_mb, ready_records, public):
@@ -92,10 +97,10 @@ def remote_spawn(name, host, card, prompt, options):
                               encoding='utf-8', errors='replace')
     staging = ssh('mktemp -d')
     if staging.returncode:
-        return None
+        raise RemoteRefusal('remote staging failed')
     directory = staging.stdout.strip()
     if not directory.startswith('/') or '\n' in directory:
-        return None
+        raise RemoteRefusal('remote staging path invalid')
     q = shlex.quote
     try:
         with tempfile.TemporaryDirectory() as local:
@@ -109,7 +114,7 @@ def remote_spawn(name, host, card, prompt, options):
                                      str(Path(local) / 'prompt.txt'), alias + ':' + q(directory + '/')],
                                     capture_output=True, text=True, encoding='utf-8', errors='replace')
             if copied.returncode:
-                return None
+                raise RemoteRefusal('remote copy failed')
         commands = []
         if host.get('env_file'):
             commands.append('set -a && . ' + q(host['env_file']) + ' && set +a')
@@ -122,25 +127,26 @@ def remote_spawn(name, host, card, prompt, options):
         # A sentinel prevents command substitution from stripping trailing newlines.
         commands.append('prompt=$(cat ' + q(directory + '/prompt.txt') + ' && printf .)')
         spawn = shlex.join(command) + ' "${prompt%.}" ' + shlex.join(options)
+        token = uuid.uuid4().hex
+        begin, end = 'PLANGRAPH_RECEIPT_BEGIN_' + token, 'PLANGRAPH_RECEIPT_END_' + token
+        commands.append("printf '%s\\n' " + q(begin))
         commands.append('PLANGRAPH_HOST_NAME=' + q(name) + ' PYTHONPATH=' + q(host['spawner_src']) + ' ' + spawn)
+        commands.append("printf '\\n%s\\n' " + q(end))
         result = ssh(' && '.join(commands))
         if result.returncode:
-            return None
-        # Decode objects amid shell noise, including pretty-printed JSON. Never
-        # retry an acknowledged spawn merely because its receipt is unreadable.
-        decoder = json.JSONDecoder()
-        receipt, furthest = None, -1
-        for index in [i for i, char in enumerate(result.stdout) if char == '{']:
-            try:
-                payload, end = decoder.raw_decode(result.stdout[index:])
-                if isinstance(payload, dict) and index + end > furthest:
-                    receipt, furthest = payload, index + end
-            except ValueError:
-                pass
-        # Shell initialization may echo JSON; only expose a spawn receipt.
-        if receipt is not None and ('status' in receipt or receipt == {}):
-            return receipt
-        return {'warning': 'remote spawn succeeded; receipt unavailable'}
+            raise RemoteRefusal('remote command failed')
+        try:
+            framed = result.stdout.split(begin + '\n', 1)[1].split('\n' + end, 1)
+            if len(framed) != 2:
+                raise ValueError
+            receipt = json.loads(framed[0])
+        except (IndexError, ValueError):
+            raise RemoteRefusal('remote receipt invalid') from None
+        if not isinstance(receipt, dict):
+            raise RemoteRefusal('remote receipt invalid')
+        if not isinstance(receipt.get('run_id'), str) or not receipt['run_id'].strip():
+            raise RemoteRefusal('remote receipt missing run id')
+        return receipt
     finally:
         ssh('rm -f -- ' + q(directory + '/card.json') + ' ' + q(directory + '/prompt.txt') +
             '; rmdir -- ' + q(directory))
@@ -191,13 +197,16 @@ def main(argv=None):
             attempts += 1
             try:
                 result = remote_spawn(name, config['hosts'][name], card, prompt, options)
-            except (OSError, ValueError, KeyError):
-                result = None
+                refusal = 'remote spawn failed'
+            except RemoteRefusal as exc:
+                result, refusal = None, str(exc)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                result, refusal = None, 'remote spawn ' + type(exc).__name__
             if result is not None:
                 result.update(host=name, overflow_reason=decision.reason)
                 print(json.dumps(result))
                 return 0
-            records[name]['refusal'] = 'remote spawn failed'
+            records[name]['refusal'] = refusal
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         print('overflow input or resource check failed', file=__import__('sys').stderr)
         return 1

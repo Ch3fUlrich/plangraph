@@ -5,8 +5,8 @@
 CLI spawn and MCP `plangraph_agent_spawn` share admission. Local room stays
 local; dry runs do not overflow. At the run cap or below the MemAvailable floor,
 admission uses `PLANGRAPH_OVERFLOW_HOSTS`, defaulting to
-`~/.config/plangraph/overflow-hosts.json`. No file preserves local behavior with
-`overflow unconfigured` in the receipt/refusal. Configured hosts that all refuse
+`~/.config/plangraph/overflow-hosts.json`. No file preserves local behavior and
+records unchanged, without overflow annotations. Configured hosts that all refuse
 produce a queued record with every refusal. Remote receipts are saved locally
 with the selected `host` and `overflow_remote: true`.
 
@@ -22,6 +22,9 @@ Only `public_repos` allowlisted repositories may overflow. Hosts may also set
 `checked_at` no older than 600 seconds, `ok`, `live_runs`, and `mem_available_mb`.
 Each candidate needs an SSH route, capacity and memory room. A failed remote
 attempt is not retried on the same host. Local benchmark DB paths are not copied.
+Benchmark forwarding is refused locally without attempting hosts. Remote receipts
+are parsed only inside per-call sentinel markers; shell initialization output is
+ignored. A successful receipt must name the remote run ID; missing IDs are refused.
 
 ## C2 existing-keeper SQLite storage (D5)
 

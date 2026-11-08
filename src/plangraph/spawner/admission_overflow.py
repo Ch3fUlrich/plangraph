@@ -36,7 +36,6 @@ def admit(service, options):
     if live < cap and memory >= floor:
         return None
     if not configured:
-        service._overflow_reason = 'overflow unconfigured'
         return None
     card = options.get('card') or {}
     repo = Path((card.get('diff_ref') or {}).get('repo') or
@@ -54,22 +53,27 @@ def admit(service, options):
             flags.append('--' + key.replace('_', '-'))
     while True:
         decision = overflow.decide(live, memory, cap, floor, rows, public)
+        if options.get('benchmark') is not None and decision.host is not None:
+            decision = overflow.Decision(None, 'local benchmark database cannot be forwarded')
         if decision.host is None:
             record = {'run_id': 'run-' + uuid.uuid4().hex, 'status': 'queued',
                           'reason': decision.reason, 'overflow_reason': decision.reason, 'exit_code': 5}
             break
         name = decision.host
         try:
-            if options.get('benchmark') is not None:
-                raise ValueError('local benchmark database cannot be forwarded')
             result = overflow.remote_spawn(name, config['hosts'][name], card,
-                                           options.get('prompt', ''), flags)
-        except (OSError, ValueError, KeyError, TypeError):
+                                            options.get('prompt', ''), flags)
+            refusal = 'remote spawn failed'
+        except overflow.RemoteRefusal as exc:
+            result, refusal = None, str(exc)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
             result = None
+            refusal = 'remote spawn ' + type(exc).__name__
+        if result is not None and not (isinstance(result.get('run_id'), str) and result['run_id'].strip()):
+            result, refusal = None, 'remote receipt missing run id'
         if result is not None:
             record = dict(result, host=name, overflow_reason=decision.reason, overflow_remote=True)
-            record.setdefault('run_id', 'run-' + uuid.uuid4().hex)
             break
-        rows[name]['refusal'] = 'remote spawn failed'
+        rows[name]['refusal'] = refusal
     service._save(record)
     return record
