@@ -81,7 +81,11 @@ pub fn check_result(
     checkout: &Path,
     workspace: &Workspace,
 ) -> Result<CheckedResult, WriterError> {
-    let base = workspace.base_sha.as_deref().ok_or(WriterError::Invalid)?;
+    let base = workspace
+        .base_sha
+        .as_deref()
+        .filter(|base| !base.is_empty())
+        .ok_or_else(|| WriterError::FileSize("no base".into()))?;
     if !oid(base) {
         return Err(WriterError::Invalid);
     }

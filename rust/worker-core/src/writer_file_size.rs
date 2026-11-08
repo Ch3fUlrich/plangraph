@@ -70,6 +70,18 @@ fn baseline(text: &str) -> Result<BTreeMap<String, i64>, String> {
 }
 
 pub(super) fn check(root: &Path, base: &str, head: &str) -> Result<(), String> {
+    if base.is_empty() {
+        return Err("no base".into());
+    }
+    // The recorded run base maps to Python's FILESIZE_REQUIRE_BASE, not its
+    // optional local origin/main -> HEAD fallback. Resolve only that commit.
+    let resolved = git(
+        root,
+        &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
+    )?;
+    if resolved == git(root, &["rev-parse", "HEAD"])? {
+        return Err("base is HEAD itself".into());
+    }
     let allow = config(root, ".filesize-allow")?;
     let mut allowed = std::collections::BTreeSet::new();
     for line in lines(&allow).into_iter().map(str::trim) {
@@ -86,26 +98,49 @@ pub(super) fn check(root: &Path, base: &str, head: &str) -> Result<(), String> {
         }
     }
     let counts = baseline(&config(root, ".filesize-baseline")?)?;
-    for reference in ["origin/main", "HEAD"] {
-        if let Ok(bytes) = git(root, &["show", &format!("{reference}:.filesize-baseline")]) {
+    match git(root, &["show", &format!("{base}:.filesize-baseline")]) {
+        Ok(bytes) => {
             let previous = baseline(&String::from_utf8_lossy(&bytes))?;
             for (path, count) in &counts {
                 if previous.get(path).is_none_or(|old| count > old) {
                     return Err(format!(".filesize-baseline: {path} added or raised"));
                 }
             }
-            break;
         }
+        Err(_) if !counts.is_empty() => {
+            return Err(".filesize-baseline: no baseline at base".into())
+        }
+        Err(_) => {}
     }
-    let changed = git(root, &["diff", "--name-only", "-z", base, head, "--"])?;
+    let changed = git(
+        root,
+        &[
+            "diff",
+            "--name-only",
+            "--diff-filter=d",
+            "-z",
+            base,
+            head,
+            "--",
+        ],
+    )?;
     let changed: std::collections::BTreeSet<_> = changed.split(|b| *b == 0).collect();
     // Never use quoted ls-files output: non-ASCII names must name real files.
-    let tracked = git(root, &["ls-files", "-z"])?;
+    let tracked = git(root, &["ls-tree", "-r", "--name-only", "-z", head])?;
     for raw in tracked.split(|b| *b == 0).filter(|p| !p.is_empty()) {
         if !changed.contains(raw) {
             continue;
         }
         let path = String::from_utf8_lossy(raw);
+        // Python decodes git output and content with errors="replace". Invalid
+        // names therefore refer to the replacement-character path, not raw bytes.
+        let full = root.join(path.as_ref());
+        if !full.is_file() {
+            return Err(format!("{path}: missing changed path at head"));
+        }
+        if git(root, &["rev-parse", "HEAD"])? != git(root, &["rev-parse", head])? {
+            return Err(format!("{path}: checkout is not at head"));
+        }
         let name = path.rsplit('/').next().unwrap();
         if allowed.contains(path.as_ref())
             || path
@@ -114,16 +149,6 @@ pub(super) fn check(root: &Path, base: &str, head: &str) -> Result<(), String> {
             || [".lock", ".json", ".svg"].iter().any(|s| name.ends_with(s))
             || name.contains(".min.")
         {
-            continue;
-        }
-        #[cfg(unix)]
-        let full = {
-            use std::os::unix::ffi::OsStrExt;
-            root.join(std::ffi::OsStr::from_bytes(raw))
-        };
-        #[cfg(not(unix))]
-        let full = root.join(path.as_ref());
-        if !full.is_file() {
             continue;
         }
         let bytes = std::fs::read(full).map_err(|e| format!("{path}: {e}"))?;
