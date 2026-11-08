@@ -18,13 +18,8 @@ fn valid(h: &Value) -> bool {
     matches(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,62}\z", &h["name"])
         && matches(r"\A[A-Za-z0-9_@.:-]+\z", &h["target"])
         && !h["target"].as_str().unwrap().starts_with('-')
-        && (!h.get("win_src").is_some() ||
-            (matches(r"\A[A-Za-z]:[/\\][A-Za-z0-9_ ./\\-]*\z", &h["win_src"])
-             && h.get("src").is_none() && h.get("wsl_distro").is_none()))
-        && (h.get("src").is_none() || matches(r"\A(?:/|~/)[A-Za-z0-9_ ./-]*\z", &h["src"]))
-        && (h.get("wsl_distro").is_none() ||
-            (matches(r"\A[A-Za-z0-9_.][A-Za-z0-9_.-]*\z", &h["wsl_distro"])
-             && matches(r"\A/[A-Za-z0-9_ ./-]*\z", &h["src"])))
+        && !h["invalid"].as_bool().unwrap_or(false)
+        && (h.get("src").is_some() || h.get("win_src").is_some())
 }
 
 fn quote(s: &str) -> String { format!("'{}'", s.replace('\'', "'\"'\"'")) }
@@ -83,7 +78,7 @@ fn source_checks(data: io::Result<String>, run: &(impl Fn(&str, &str) -> io::Res
     let Some(hosts) = data.as_ref().and_then(|d| d["hosts"].as_array()) else {
         return vec![row("ps_hosts", "invalid configuration")];
     };
-    let hosts: Vec<_> = hosts.iter().filter(|h| valid(h) && (h.get("src").is_some() || h.get("win_src").is_some())).collect();
+    let hosts: Vec<_> = hosts.iter().filter(|h| valid(h)).collect();
     if hosts.is_empty() { return vec![]; }
     let next = std::sync::atomic::AtomicUsize::new(0);
     let results: std::sync::Mutex<Vec<(usize, Value)>> = Default::default();

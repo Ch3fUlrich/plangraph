@@ -30,6 +30,38 @@ fn config_and_filtering() {
 }
 
 #[test]
+fn both_source_fields_are_eligible() {
+    let h = json!({"name":"a", "target":"a", "src":"/src", "win_src":"C:/src"});
+    assert!(valid(&h));
+    assert_eq!(source_checks(Ok(json!({"hosts":[h]}).to_string()), &|_, cmd| {
+        assert_eq!(cmd, "if not exist \"C:/src\\\" exit /b 44");
+        Ok(Some(0))
+    }), vec![row("ps_host_a", "ok")]);
+}
+
+#[test]
+fn wsl_home_source_is_eligible() {
+    let h = json!({"name":"a", "target":"a", "src":"~/src", "wsl_distro":"Ubuntu"});
+    assert!(valid(&h));
+    assert_eq!(source_checks(Ok(json!({"hosts":[h]}).to_string()), &|_, cmd| {
+        assert!(cmd.starts_with("wsl -d Ubuntu -- sh -c "));
+        assert!(cmd.contains("$HOME"));
+        Ok(Some(0))
+    }), vec![row("ps_host_a", "ok")]);
+}
+
+#[test]
+fn eligible_invalid_command_reports_failure() {
+    let h = json!({"name":"a", "target":"a", "win_src":"bad"});
+    assert!(valid(&h));
+    assert_eq!(source_checks(Ok(json!({"hosts":[h]}).to_string()), &|_, _| panic!()),
+        vec![row("ps_host_a", "invalid configuration")]);
+    let mut h = host();
+    h["invalid"] = json!(true);
+    assert!(!valid(&h));
+}
+
+#[test]
 fn parallel_bounded_and_ordered() {
     let barrier = std::sync::Barrier::new(MAX_WORKERS);
     let active = std::sync::atomic::AtomicUsize::new(0);

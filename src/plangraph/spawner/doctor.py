@@ -160,7 +160,11 @@ async def diagnose(probe=False):
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, timeout=TIMEOUT)
             rows = json.loads(result.stdout)
-            if result.returncode == 0 and isinstance(rows, list):
+            if (result.returncode == 0 and isinstance(rows, list)
+                    and all(isinstance(row, dict)
+                            and set(row) == {'name', 'status', 'detail'}
+                            and all(isinstance(value, str) for value in row.values())
+                            for row in rows)):
                 return rows
         except FileNotFoundError:
             detail = 'unavailable'

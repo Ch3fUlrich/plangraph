@@ -56,10 +56,19 @@ def test_remote_ps_source_prefix_executes(ssh):
 
 @pytest.mark.parametrize('mode,detail', [('ok', 'ok'), ('exit', 'host query failed'),
     ('json', 'host query failed'), ('shape', 'host query failed'),
-    ('timeout', 'host query failed'), ('missing', 'unavailable')])
+    ('timeout', 'host query failed'), ('missing', 'unavailable'),
+    *[(rows, 'host query failed') for rows in [
+        ['x'], [None], [3], [[]], [{}],
+        [dict(name='a', status='pass')],
+        [dict(name='a', status='pass', detail=3)],
+        [dict(name='a', status='pass', detail='ok', extra='x')],
+        [dict(name='a', status='pass', detail='ok'), 'x'],
+    ]]])
 def test_doctor_rust_sources(monkeypatch, mode, detail):
     import asyncio
     rows = [dict(name='ps_host_a', status='pass', detail='ok')]
+    if isinstance(mode, list):
+        rows = mode
     def run(command, **kwargs):
         assert command[1:] == ['doctor-sources']
         assert kwargs['stdin'] == kwargs['stderr'] == subprocess.DEVNULL
