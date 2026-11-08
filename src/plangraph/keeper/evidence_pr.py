@@ -58,16 +58,27 @@ def merged_pr_for(adapter, project, merge_sha, target_ref):
     path = "repos/{}/{}/commits/{}/pulls".format(
         quote(owner, safe=""), quote(repo, safe=""), quote(merge_sha, safe=""))
     proc = subprocess.run(
-        [adapter._gh, "api", "--paginate", "--slurp", path],
+        [adapter._gh, "api", "--paginate", path],
         capture_output=True, text=True, timeout=adapter._timeout, check=False,
     )
     if proc.returncode != 0:
         raise RuntimeError("PR lookup failed")
-    pages = json.loads(proc.stdout)
-    if not isinstance(pages, list) or any(
-        not isinstance(page, list) or any(not isinstance(p, Mapping) for p in page)
-        for page in pages
-    ):
+    # gh emits one array per page, without an enclosing array (even on older gh).
+    decoder = json.JSONDecoder()
+    pages = []
+    offset = 0
+    while offset < len(proc.stdout):
+        if proc.stdout[offset] in " \t\r\n":
+            offset += 1
+            continue
+        try:
+            page, offset = decoder.raw_decode(proc.stdout, offset)
+        except json.JSONDecodeError as exc:
+            raise ValueError("malformed PR pages") from exc
+        if not isinstance(page, list) or any(not isinstance(p, Mapping) for p in page):
+            raise ValueError("malformed PR pages")
+        pages.append(page)
+    if not pages:
         raise ValueError("malformed PR pages")
     for page in pages:
         for pr in page:

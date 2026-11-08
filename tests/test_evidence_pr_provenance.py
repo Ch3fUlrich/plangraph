@@ -16,6 +16,11 @@ def pr(sha=MERGE_SHA, repository="owner/repo", branch="main", merged="now"):
             "base": {"repo": {"full_name": repository}, "ref": branch}}
 
 
+def page_stdout(pages):
+    return ("\n".join(json.dumps(page) for page in pages)
+            if isinstance(pages, list) else json.dumps(pages))
+
+
 @pytest.fixture
 def topology(tmp_path, monkeypatch):
     git, init = git_cli(tmp_path, monkeypatch)
@@ -76,17 +81,17 @@ def test_matching_outer_pr_passes(topology, use_lane):
 def test_unproven_pages_refuse(monkeypatch, pages):
     adapter = CIAdapter({"routing": "owner/repo"})
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw:
-                        subprocess.CompletedProcess(a, 0, json.dumps(pages), ""))
+                        subprocess.CompletedProcess(a, 0, page_stdout(pages), ""))
     result = verify("commit+ci", {"commit": SHA}, make_ctx(ci=adapter))
     assert not result.ok and "merged_pr_unproven" in result.detail
 
 
-@pytest.mark.parametrize("pages", [[], [[]], {}, [None], [[None]], [[pr()], {}]])
+@pytest.mark.parametrize("pages", [[[]], {}, [None], [[None]], [[pr()], {}]])
 def test_empty_pages_return_none_but_malformed_pages_raise(monkeypatch, pages):
     adapter = CIAdapter({"routing": "owner/repo"})
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw:
-                        subprocess.CompletedProcess(a, 0, json.dumps(pages), ""))
-    if pages in ([], [[]]):
+                        subprocess.CompletedProcess(a, 0, page_stdout(pages), ""))
+    if pages == [[]]:
         assert adapter.merged_pr_for("routing", MERGE_SHA, "main") is None
     else:
         with pytest.raises(ValueError, match="malformed PR pages"):
@@ -123,16 +128,17 @@ def test_missing_adapter_method_refuses():
         assert not result.ok and "merged_pr_unproven" in result.detail
 
 
-def test_pagination_exact_match_safe_command_and_timeout(monkeypatch):
+@pytest.mark.parametrize("separator", ["\n", ""])
+def test_pagination_exact_match_safe_command_and_timeout(monkeypatch, separator):
     calls = []
     def run(args, **kwargs):
         calls.append((args, kwargs))
-        return subprocess.CompletedProcess(args, 0, json.dumps([
-            [pr(sha=SHA), pr(merged=None)], [pr()]]), "")
+        return subprocess.CompletedProcess(args, 0, separator.join(map(json.dumps, [
+            [pr(sha=SHA), pr(merged=None)], [pr()]])), "")
     monkeypatch.setattr(subprocess, "run", run)
     adapter = CIAdapter({"routing": "owner/repo"}, timeout=7)
     assert adapter.merged_pr_for("routing", MERGE_SHA, "origin/main") == pr()
-    assert calls == [(["gh", "api", "--paginate", "--slurp",
+    assert calls == [(["gh", "api", "--paginate",
                       f"repos/owner/repo/commits/{MERGE_SHA}/pulls"],
                      {"capture_output": True, "text": True, "timeout": 7, "check": False})]
     with pytest.raises(ValueError):
@@ -150,7 +156,7 @@ def test_checkout_origin_identity_and_remote_branch(topology, monkeypatch):
     real_run = subprocess.run
     def run(args, **kwargs):
         if args[0] == "gh":
-            return subprocess.CompletedProcess(args, 0, json.dumps([[pr(outer)]]), "")
+            return subprocess.CompletedProcess(args, 0, json.dumps([pr(outer)]), "")
         return real_run(args, **kwargs)
     monkeypatch.setattr(subprocess, "run", run)
     adapter = CIAdapter({"routing": repo})
@@ -183,3 +189,17 @@ def test_routing_data_commit_evidence_d3999(topology):
     # Router-only commit evidence makes no PR claim and requires no CI adapter.
     result = verify("commit", {"commit": outer}, make_ctx(git=git, ci=None), item)
     assert result.ok, result.detail
+
+
+@pytest.mark.parametrize("stdout", [
+    "", " \n\t", json.dumps([pr()]) + "garbage",
+    json.dumps({}), json.dumps([pr()]) + "\n{}",
+    json.dumps([pr()]) + "[42]", json.dumps([[pr()]]),
+    "null", "42",
+])
+def test_malformed_page_stream_raises(monkeypatch, stdout):
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw:
+                        subprocess.CompletedProcess(a, 0, stdout, ""))
+    adapter = CIAdapter({"routing": "owner/repo"})
+    with pytest.raises(ValueError, match="^malformed PR pages$"):
+        adapter.merged_pr_for("routing", MERGE_SHA, "main")
