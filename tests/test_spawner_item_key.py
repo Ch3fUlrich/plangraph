@@ -3,8 +3,26 @@ import pytest
 from plangraph.planner.routing import SpawnRefused
 from registry_route_util import _Runner, _service
 from plangraph.spawner.runner import spawn_service
-
-
+@pytest.mark.parametrize('pattern', ['sys.path.insert', 'keeper.json', '._maybe_fetch'])
+def test_autopost_runtime_is_isolated(pattern):
+    from pathlib import Path
+    assert pattern not in Path('src/plangraph/spawner/item_key.py').read_text()
+def test_autopost_is_scheduled():
+    from plangraph.spawner import item_key
+    assert callable(item_key.schedule_autopost)
+def test_poster_failure_diagnostics(monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import item_key
+    monkeypatch.setattr(item_key.subprocess, 'run', lambda *a, **kw:
+                        SimpleNamespace(returncode=1, stderr='Traceback: crash'))
+    with pytest.raises(RuntimeError, match='poster crashed'):
+        item_key._post_verdict([])
+def test_prompt_regex_cached():
+    from pathlib import Path
+    assert 'LazyLock' in Path('rust/pg-spawnd/src/runs.rs').read_text()
+def test_backfill_claim_matches_delivery():
+    from pathlib import Path
+    assert 'Add local TSV seat-record backfill discovery' not in Path('CHANGELOG.md').read_text()
 def test_seat_card_key_and_missing_warning(monkeypatch):
     from plangraph.spawner.item_key import annotate_item
     monkeypatch.delenv('PLANGRAPH_SPAWN_ITEM', raising=False)
@@ -14,16 +32,12 @@ def test_seat_card_key_and_missing_warning(monkeypatch):
     missing = {'role': 'judge'}
     annotate_item(missing, {})
     assert missing['events'][0]['event'] == 'seat_item_missing'
-
-
 def test_seat_prompt_identity(monkeypatch):
     from plangraph.spawner.item_key import annotate_item
     monkeypatch.delenv('PLANGRAPH_SPAWN_ITEM', raising=False)
     record = {'role': 'review', 'prompt': 'Review plangraph:D-5047 now'}
     annotate_item(record, {})
     assert record['item_key'] == 'plangraph:D-5047'
-
-
 @pytest.mark.parametrize('enabled,code', [(False, 0), (True, 0), (True, 2)])
 def test_seat_autopost(tmp_path, monkeypatch, enabled, code):
     import json
@@ -36,7 +50,9 @@ def test_seat_autopost(tmp_path, monkeypatch, enabled, code):
     path = tmp_path / 'runs/run-test/record.json'
     path.parent.mkdir(parents=True)
     snapshot = tmp_path / 'snapshot.json'
-    snapshot.write_text(json.dumps({'items': [{'key': record['item_key'], 'writer_model': 'gemini'}]}))
+    snapshot.write_text(json.dumps({'items': [{'key': record['item_key'], 'writer_model': 'gemini',
+        'writer_evidence': [{'verified': True, 'head_sha': 'a' * 40,
+                             'role': 'implement', 'family': 'google'}]}]}))
     monkeypatch.setenv('PLANGRAPH_SEAT_SNAPSHOT', str(snapshot))
     calls = []
     monkeypatch.setattr(item_key, '_post_verdict', lambda args: calls.append(args) or code)
@@ -51,8 +67,6 @@ def test_seat_autopost(tmp_path, monkeypatch, enabled, code):
                         '--url', 'http://keeper.invalid']
         assert record['events'][-1]['exit_code'] == code
         assert record['status'] == 'completed'
-
-
 @pytest.mark.parametrize('positional', [False, True])
 def test_refusal_item_key(tmp_path, monkeypatch, positional):
     service = _service(tmp_path, monkeypatch)
@@ -66,8 +80,6 @@ def test_refusal_item_key(tmp_path, monkeypatch, positional):
         asyncio.run(service.spawn(card) if positional else service.spawn(card=card))
     assert len(saved) == 1 and saved[0]['status'] == 'refused'
     assert saved[0]['item_key'] == 'p:x'
-
-
 @pytest.mark.parametrize('dispatch', [False, True])
 def test_item_card_intake(tmp_path, monkeypatch, dispatch):
     service = _service(tmp_path, monkeypatch)
@@ -78,8 +90,6 @@ def test_item_card_intake(tmp_path, monkeypatch, dispatch):
     assert service.route(card).legs
     result = asyncio.run(service.spawn(card=card, prompt='', dry_run=True))
     assert result['item_key'] == 'p:card'
-
-
 @pytest.mark.parametrize('dispatch', [False, True])
 @pytest.mark.parametrize('item,env,expected', [
     ('p:card', None, 'p:card'), (None, 'p:env', 'p:env'),
@@ -107,8 +117,6 @@ def test_spawn_item_key(tmp_path, monkeypatch, dispatch, item, env, expected):
     assert result['item_key'] == expected
     if item == 'bad/item' or env == 'bad/item':
         assert any('invalid item_key' in w for w in result['warnings'])
-
-
 @pytest.mark.parametrize('item', ['p:parent', None, 'bad/item'])
 def test_continuation_identity(tmp_path, monkeypatch, item):
     service = _service(tmp_path, monkeypatch)
@@ -118,8 +126,6 @@ def test_continuation_identity(tmp_path, monkeypatch, item):
     asyncio.run(service._continue_writer(parent, 'Remaining gaps: fix alpha'))
     child = service.result(parent['continuation_run_id'])
     assert child['item_key'] == ('p:parent' if item == 'p:parent' else None)
-
-
 def test_seat_refusal_identity(tmp_path, monkeypatch):
     from plangraph.planner.legs import DEFAULT_LEGS
     service = _service(tmp_path, monkeypatch)
@@ -135,8 +141,6 @@ def test_seat_refusal_identity(tmp_path, monkeypatch):
     out = asyncio.run(service._spawn_seats(card={'item': 'p:seat'}, prompt='', role='review',
         writer_families=(), review_of=None, model=None, leg=None, benchmark=None, require_bench=False))
     assert out['seats'][0]['item_key'] == 'p:seat'
-
-
 @pytest.mark.parametrize('item,expected', [('p:good', 'p:good'), ('bad/item', None)])
 def test_listing_identity(tmp_path, item, expected):
     import json

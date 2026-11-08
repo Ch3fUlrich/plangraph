@@ -932,7 +932,7 @@ def spawn_service(*args, **kwargs):
                     changed = True
             if changed: super()._save(record)
             if terminal:
-                from .item_key import autopost; autopost(record, self._path(record['run_id'])) and super()._save(record)
+                from .item_key import schedule_autopost; schedule_autopost(record, self._path(record['run_id']))
                 for recipient, sink in (('parent', self.completion_sink), ('keeper', self.keeper_sink)):
                     marker = self._path(record['run_id']).parent / (recipient + '.delivered')
                     if marker.exists():

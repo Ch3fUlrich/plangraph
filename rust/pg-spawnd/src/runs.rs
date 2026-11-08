@@ -110,8 +110,8 @@ impl Runs {
             })
             .or_else(|| {
                 let prompt = args["prompt"].as_str().unwrap_or("");
-                let re = regex::Regex::new(r"\bplangraph:[A-Za-z0-9._:-]+").unwrap();
-                let keys: std::collections::BTreeSet<_> = re.find_iter(prompt).map(|m| m.as_str()).collect();
+                static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\bplangraph:[A-Za-z0-9._:-]+").unwrap());
+                let keys: std::collections::BTreeSet<_> = RE.find_iter(prompt).map(|m| m.as_str()).collect();
                 (keys.len() == 1).then(|| keys.first().unwrap().to_string())
             });
         base["item_key"] = match item {
