@@ -47,10 +47,10 @@ def main(argv=None):
             print(str(error), file=sys.stderr)
             return 2
         print('fleet sync input or query failed', file=sys.stderr)
-        return 0 if args.command == 'drift' else 1
+        return 1
     except (OSError, KeyError, TypeError, subprocess.SubprocessError):
         print('fleet sync input or query failed', file=sys.stderr)
-        return 0 if args.command == 'drift' else 1
+        return 1
 
 
 if __name__ == '__main__':
