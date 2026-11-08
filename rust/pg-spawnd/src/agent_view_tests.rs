@@ -83,6 +83,48 @@ fn unreadable_is_not_zero() {
     fs::remove_dir_all(home).unwrap();
 }
 #[test]
+fn plain_entries_and_absent_lane_are_not_failures() {
+    let home = fixture();
+    put(&home, "state/runs/plain", json!({}));
+    put(&home, ".claude/jobs/plain", json!({}));
+    put(
+        &home,
+        ".config/autoos/oc-l1.json",
+        json!({"lanes":[{"state_file":home.join("absent.json")}]}),
+    );
+    let data = local(&home, &home.join("state"), "local", 0.0);
+    assert_eq!(data["readable"], true);
+    assert_eq!(data["agents"], json!([]));
+    put(&home, "absent.json", json!([]));
+    let data = local(&home, &home.join("state"), "local", 0.0);
+    assert_eq!(data["readable"], false);
+    assert_eq!(data["reason"], "source_unreadable");
+    fs::remove_dir_all(home).unwrap();
+}
+#[test]
+fn collector_units_are_local_and_ordered() {
+    let service = include_str!("../../../deploy/systemd/plangraph-agents-view.service");
+    for line in [
+        "Type=oneshot",
+        "Before=plangraph-render.service",
+        "ExecStart=%h/.local/bin/pg-spawnd agents-view --write --local",
+        "Nice=10",
+        "NoNewPrivileges=true",
+        "IPAddressDeny=any",
+    ] {
+        assert!(service.lines().any(|actual| actual == line));
+    }
+    let timer = include_str!("../../../deploy/systemd/plangraph-agents-view.timer");
+    for line in [
+        "OnBootSec=1min",
+        "OnUnitActiveSec=5min",
+        "AccuracySec=15s",
+        "WantedBy=timers.target",
+    ] {
+        assert!(timer.lines().any(|actual| actual == line));
+    }
+}
+#[test]
 fn missing_run_ids_keep_distinct_source_files() {
     let home = fixture();
     for (id, name) in [

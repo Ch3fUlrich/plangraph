@@ -1,5 +1,86 @@
 //! Public scalar-only projection for the independent agent inventory.
+use regex::RegexBuilder;
 use serde_json::{json, Value};
+use std::path::Path;
+
+// Never expose private patterns or source strings in diagnostics.
+pub(super) fn mask_words(data: &mut Value, path: &Path) {
+    let patterns = std::fs::read_to_string(path).ok().and_then(|text| {
+        text.lines()
+            .filter_map(|line| {
+                let word = line.trim();
+                if word.is_empty() || word.starts_with('#') {
+                    return None;
+                }
+                let (pattern, token) = match word.strip_prefix("re:") {
+                    Some(pattern) => (pattern.to_owned(), false),
+                    None => (regex::escape(word), true),
+                };
+                Some(
+                    RegexBuilder::new(&pattern)
+                        .case_insensitive(true)
+                        .build()
+                        .map(|regex| (regex, token)),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .ok()
+    });
+    let mask = |text: &str| {
+        let mut spans = Vec::new();
+        for (regex, token) in patterns.as_ref().into_iter().flatten() {
+            for hit in regex.find_iter(text) {
+                if *token
+                    && (text[..hit.start()]
+                        .chars()
+                        .next_back()
+                        .is_some_and(char::is_alphanumeric)
+                        || text[hit.end()..]
+                            .chars()
+                            .next()
+                            .is_some_and(char::is_alphanumeric))
+                {
+                    continue;
+                }
+                spans.push((hit.start(), hit.end()));
+            }
+        }
+        spans.sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for (start, end) in spans {
+            if let Some(last) = merged.last_mut().filter(|last| start < last.1) {
+                last.1 = last.1.max(end);
+            } else {
+                merged.push((start, end));
+            }
+        }
+        let mut result = text.to_owned();
+        for (start, end) in merged.into_iter().rev() {
+            result.replace_range(start..end, "[redacted]");
+        }
+        result
+    };
+    for host in data["hosts"].as_array_mut().into_iter().flatten() {
+        if patterns.is_none() {
+            *host = unavailable("[redacted]", "scrub_words_unavailable");
+            continue;
+        }
+        if let Some(name) = host["host"].as_str() {
+            host["host"] = json!(mask(name));
+        }
+        for row in host["agents"].as_array_mut().into_iter().flatten() {
+            for value in row
+                .as_object_mut()
+                .into_iter()
+                .flat_map(|row| row.values_mut())
+            {
+                if let Some(text) = value.as_str() {
+                    *value = json!(mask(text));
+                }
+            }
+        }
+    }
+}
 pub(super) fn unavailable(host: &str, reason: &str) -> Value {
     json!({"host":host,"readable":false,"reason":reason,"agents":[]})
 }
