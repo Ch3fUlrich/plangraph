@@ -66,6 +66,7 @@ impl Fixture {
             }
             RepoEntry {
                 live_dir: None,
+                health_checks: None,
                 root: root.join(name).to_str().unwrap().into(),
                 remote,
                 worktrees_root: String::new(),

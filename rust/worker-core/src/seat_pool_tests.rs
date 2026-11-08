@@ -127,6 +127,7 @@ fn rejects_injection_and_missing_grants() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = RepoEntry {
         live_dir: None,
+        health_checks: None,
         root: tmp.path().to_string_lossy().into(),
         worktrees_root: tmp.path().to_string_lossy().into(),
         remote: "unused".into(),

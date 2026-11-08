@@ -26,6 +26,11 @@
         "plangraph": {
           "root": "/srv/fleet/code/repos/plangraph",
           "live_dir": "/srv/fleet/live/plangraph",
+          "health_checks": {
+            "doctor": ["python3", "-m", "plangraph.spawner", "doctor"],
+            "whoami": ["pg", "keeper", "whoami"],
+            "spawn": ["python3", "-m", "plangraph.spawner", "spawn", "--dry-run"]
+          },
           "worktrees_root": "/srv/fleet/code/worktrees/plangraph",
           "remote": "git@placeholder.invalid:fleet/plangraph.git",
           "python": "/srv/fleet/venvs/plangraph/bin/python",

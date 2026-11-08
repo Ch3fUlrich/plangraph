@@ -41,6 +41,7 @@ impl Fixture {
         Self {
             repo: RepoEntry {
                 live_dir: None,
+                health_checks: None,
                 root: checkout.to_str().unwrap().into(),
                 remote: origin,
                 worktrees_root: String::new(),
@@ -189,6 +190,7 @@ fn resolver_child() {
     };
     let repo = RepoEntry {
         live_dir: None,
+        health_checks: None,
         root: root.to_str().unwrap().into(),
         remote: "must-not-fetch".into(),
         worktrees_root: String::new(),

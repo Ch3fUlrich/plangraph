@@ -69,6 +69,7 @@ impl Fixture {
         );
         let repo = RepoEntry {
             live_dir: None,
+            health_checks: None,
             root: receiver.path().to_str().unwrap().into(),
             worktrees_root: String::new(),
             remote: String::new(),
