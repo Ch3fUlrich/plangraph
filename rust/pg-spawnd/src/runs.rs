@@ -1,5 +1,5 @@
 //! Local runs only. Not ported: served-model witnesses, harness-limit leg booking,
-//! writer no-change checks, git config guards, second-leg fall-through, writer
+//! writer no-change checks, second-leg fall-through, writer
 //! continuation, completion events/delivery markers, dispatch-refusal gate, or
 //! SPAWNER-LIVENESS-D3622 watchdog. Context packs and writer env
 //! belong to the Python launch adapter.
@@ -93,6 +93,17 @@ impl Runs {
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
+        if !dry {
+            let dir = crate::gitconfig_guard::run_dir(state, &run_id)
+                .map_err(|_| internal("invalid run id"))?;
+            match crate::gitconfig_guard::capture(&launch.cwd, &dir) {
+                Ok(armed) => base["gitconfig_guard"] = json!(armed),
+                Err(_) => {
+                    base["reason"] = json!("gitconfig_capture_refused");
+                    return Ok(create(state, &run_id, host, base, Status::Refused)?.to_value());
+                }
+            }
+        }
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
         }
@@ -282,6 +293,9 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
     }
 }
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
+    let diagnostic = json!({"reason":leg.get("reason").or_else(|| record.get("reason")),
+        "exit_code":leg.get("exit_code").or_else(|| record.get("exit_code"))});
+    let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
     let dry = status == Status::DryRun;
     let unwitnessed = json!("unwitnessed");
     let mut attempts = match record.get("attempts") {

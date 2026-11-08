@@ -383,6 +383,7 @@ pub(crate) fn settle(
         entry["reason"] = json!("reattached_group_exited");
     }
     entry["exit_code"] = Value::Null;
+    let diagnostic = entry.clone();
     record
         .transition(Status::Orphaned, now_ms as f64 / 1000.0)
         .map_err(|_| invalid())?;
@@ -391,9 +392,9 @@ pub(crate) fn settle(
         .push_event(json!({"event":"RUN_ORPHANED", "attempt":attempt,"how":how,
         "idempotency_key":[run,attempt,"RUN_ORPHANED"]}))
         .map_err(|_| invalid())?;
+    crate::gitconfig_guard::enforce(record, Status::Orphaned, diagnostic);
     record.save().map_err(|_| ReconcileError::Io)
 }
-
 #[cfg(test)]
 #[path = "reconcile_store_tests.rs"]
 mod tests;
