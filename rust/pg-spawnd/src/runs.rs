@@ -393,8 +393,8 @@ mod record_tests;
 #[path = "runs_tests.rs"]
 mod tests;
 fn wait_duration(value: Option<&Value>) -> Duration {
-    #[allow(clippy::manual_clamp)]
     let seconds = value.and_then(Value::as_f64).unwrap_or(0.0);
+    #[allow(clippy::manual_clamp)]
     let seconds = seconds.max(0.0).min(3600.0);
     Duration::from_secs_f64(seconds)
 }
