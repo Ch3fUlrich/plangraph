@@ -27,3 +27,4 @@ authenticated handshake and restart tests; that protocol does not fit this round
 300-line production budget safely. Adoption still protects only the first loss.
 The base workflow has no rust-windows job, so no filter line was added.
 After merging the rust-windows job, CI now includes run::job_holder_windows with the per-filter zero-test guard.
+Flush binary holder readiness before waiting for payloads; isolate pipe-test Job identities from asynchronous holder cleanup.

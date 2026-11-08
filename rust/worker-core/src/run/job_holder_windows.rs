@@ -248,6 +248,9 @@ mod platform {
             let mut deadline = None;
             let job = unsafe { OwnedHandle::from_raw_handle(raw as _) };
             std::io::stdout().write_all(&[1])?;
+            // Readiness is binary, without a newline: flush before waiting for the
+            // still-suspended payload, including when hosted by the test harness.
+            std::io::stdout().flush()?;
             loop {
                 if deadline.is_none()
                     && unsafe { WaitForSingleObject(owner.as_raw_handle(), 0) } == WAIT_OBJECT_0

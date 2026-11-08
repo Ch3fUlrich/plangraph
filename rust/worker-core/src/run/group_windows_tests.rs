@@ -194,7 +194,10 @@ fn pipes_exit_and_assignment() {
         ("injob", "injob=1"),
         ("exit3", ""),
     ] {
-        let (mut g, _dir) = launch("pg-win-pipes", mode, false, true).unwrap();
+        // A completed payload does not synchronously release the holder's Job
+        // handle. Each independent case needs its own run identity.
+        let unit = format!("pg-win-pipes-{}-{mode}", std::process::id());
+        let (mut g, _dir) = launch(&unit, mode, false, true).unwrap();
         if mode == "injob" {
             assert!(g.group.members().unwrap().contains(&g.child.id()));
         }
