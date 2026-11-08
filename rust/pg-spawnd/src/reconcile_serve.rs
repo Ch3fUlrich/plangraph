@@ -245,6 +245,8 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
         }
         let leader = Group::open(&row.run_id, row.identity.ok_or(ReconcileError::Unknown)?)
             .map_err(|_| ReconcileError::Unknown)?;
+        #[cfg(windows)]
+        let leader = leader.adopt().map_err(|_| ReconcileError::Unknown)?;
         let dir = root.join("runs").join(&row.run_id);
         let _record_lock = crate::reconcile_store::lock(&dir, &dir.join("record.lock"))?;
         let mut record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;

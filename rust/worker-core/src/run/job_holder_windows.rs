@@ -50,6 +50,19 @@ mod platform {
             Threading::*,
         },
     };
+    static HOLDER: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    /// Embedders must register a binary dispatching `__job-holder` before launching.
+    pub fn set_holder_path(path: std::path::PathBuf) {
+        let _ = HOLDER.set(path);
+    }
+    pub fn holder_path() -> io::Result<std::path::PathBuf> {
+        #[cfg(test)]
+        return std::env::current_exe();
+        #[cfg(not(test))]
+        HOLDER.get().cloned().ok_or_else(|| {
+            io::Error::other("JobUnavailable: register a holder binary dispatching __job-holder")
+        })
+    }
     #[link(name = "advapi32")]
     extern "system" {
         fn ConvertSidToStringSidW(sid: PSID, text: *mut *mut u16) -> i32;
@@ -67,7 +80,9 @@ mod platform {
             .as_millis() as u64
     }
     #[rustfmt::skip]
-    pub fn secure_job(name: *const u16) -> io::Result<OwnedHandle> {
+    pub fn secure_job(name: *const u16) -> io::Result<OwnedHandle> { secure_object(name, false) }
+    #[rustfmt::skip]
+    fn secure_object(name: *const u16, event: bool) -> io::Result<OwnedHandle> {
         // SAFETY: token/descriptor buffers are aligned and live through each call;
         // LocalAlloc results are freed and kernel handles transferred to RAII.
         unsafe {
@@ -101,7 +116,7 @@ mod platform {
             let attributes = SECURITY_ATTRIBUTES { nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
                 lpSecurityDescriptor: descriptor, bInheritHandle: 0 };
             super::super::group_windows::SetLastError(0);
-            let raw = CreateJobObjectW(&attributes, name);
+            let raw = if event { CreateEventW(&attributes, 1, 0, name) } else { CreateJobObjectW(&attributes, name) };
             let error = GetLastError();
             LocalFree(descriptor);
             if raw.is_null() {
@@ -114,26 +129,33 @@ mod platform {
             Ok(job)
         }
     }
-    pub fn adoption_event(name: &str) -> io::Result<OwnedHandle> {
-        let name: Vec<u16> = format!("{name}-holder-adopted")
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
-        // SAFETY: terminated name; manual-reset, initially unsignaled, non-inheritable.
-        let raw = unsafe { CreateEventW(std::ptr::null(), 1, 0, name.as_ptr()) };
+    pub fn adoption_event(name: &str, closing: bool, create: bool) -> io::Result<OwnedHandle> {
+        // The name is scoped to the opaque run identity. Even a guessed/precreated
+        // name cannot grant adoption: the holder rejects existing objects outright.
+        let name: Vec<u16> = format!(
+            "{name}-holder-{}",
+            if closing { "closing" } else { "adopted" }
+        )
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+        if create {
+            return secure_object(name.as_ptr(), true);
+        }
+        // Never create while observing: a missing or inaccessible event fails closed.
+        let raw = unsafe { OpenEventW(0x00100002, 0, name.as_ptr()) };
         if raw.is_null() {
             return Err(io::Error::last_os_error());
         }
         Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
     }
     #[rustfmt::skip]
-    pub fn launch(job: &OwnedHandle, deadline: u64, name: &str) -> io::Result<()> {
+    pub fn launch(holder: &std::path::Path, job: &OwnedHandle, seconds: u64, name: &str) -> io::Result<()> {
         #[cfg(test)]
         if FAIL_LAUNCH.get() {
             return Err(io::Error::other("injected holder launch failure"));
         }
-        let event = adoption_event(name)?;
-        let mut command = Command::new(std::env::current_exe()?);
+        let mut command = Command::new(holder);
         #[cfg(not(test))]
         command.arg("__job-holder");
         #[cfg(test)]
@@ -147,7 +169,7 @@ mod platform {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .creation_flags(CREATE_SUSPENDED | CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW)
-            .spawn()?;
+            .spawn().map_err(|e| io::Error::other(format!("JobUnavailable: holder launch/breakaway refused: {e}")))?;
         let setup = (|| {
             let mut duplicate = std::ptr::null_mut();
             // Only the trusted suspended helper receives QUERY/TERMINATE, never inheritance.
@@ -156,11 +178,11 @@ mod platform {
                 return Err(io::Error::last_os_error());
             }
             let mut adopted = std::ptr::null_mut();
-            if unsafe { DuplicateHandle(GetCurrentProcess(), event.as_raw_handle(), child.as_raw_handle(),
-                &mut adopted, 0x00100000, 0, 0) } == 0 {
+            if unsafe { DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), child.as_raw_handle(),
+                &mut adopted, PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, 0) } == 0 {
                 return Err(io::Error::last_os_error());
             }
-            let ticket = format!("{} {deadline}\n{}\n", duplicate as usize, adopted as usize);
+            let ticket = format!("{} {seconds}\n{}\n{name}\n", duplicate as usize, adopted as usize);
             child.stdin.take().unwrap().write_all(ticket.as_bytes())?;
             super::super::group_windows::resume(child.id())?;
             let mut ready = [0];
@@ -193,26 +215,63 @@ mod platform {
                 return Err(io::Error::other("invalid holder arguments"));
             }
             let mut ticket = String::new();
-            std::io::stdin().take(128).read_to_string(&mut ticket)?;
+            std::io::stdin().take(1024).read_to_string(&mut ticket)?;
             let mut lines = ticket.lines();
-            let (raw, deadline) = parse_ticket(lines.next().unwrap_or_default())
+            let (raw, seconds) = parse_ticket(lines.next().unwrap_or_default())
                 .ok_or_else(|| io::Error::other("invalid holder ticket"))?;
             let event = lines
                 .next()
                 .and_then(|s| s.parse::<usize>().ok())
                 .filter(|&h| h != 0)
                 .ok_or_else(|| io::Error::other("invalid adoption handle"))?;
-            let event = unsafe { OwnedHandle::from_raw_handle(event as _) };
+            // Ticket handles come only from the launching same-user daemon over its
+            // private stdin pipe, via DuplicateHandle into this suspended helper.
+            // The single-user Job DACL is the trust boundary, not the usize encoding.
+            let owner = unsafe { OwnedHandle::from_raw_handle(event as _) };
+            let name = lines
+                .next()
+                .ok_or_else(|| io::Error::other("missing Job name"))?;
+            let event = adoption_event(name, false, true)?;
+            let closing = adoption_event(name, true, true)?;
+            let mut deadline = None;
             let job = unsafe { OwnedHandle::from_raw_handle(raw as _) };
             std::io::stdout().write_all(&[1])?;
             loop {
-                if now_ms() >= deadline {
+                if deadline.is_none()
+                    && unsafe { WaitForSingleObject(owner.as_raw_handle(), 0) } == WAIT_OBJECT_0
+                {
+                    let (mut created, mut exit, mut kernel, mut user) = Default::default();
+                    if unsafe {
+                        GetProcessTimes(
+                            owner.as_raw_handle(),
+                            &mut created,
+                            &mut exit,
+                            &mut kernel,
+                            &mut user,
+                        )
+                    } == 0
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                    let exited = ((u64::from(exit.dwHighDateTime) << 32
+                        | u64::from(exit.dwLowDateTime))
+                        / 10_000)
+                        .saturating_sub(11644473600000);
+                    deadline = deadline_ms(exited, seconds);
+                }
+                if deadline.is_some_and(|d| now_ms().saturating_add(6000) >= d) {
+                    unsafe {
+                        SetEvent(closing.as_raw_handle());
+                    }
+                }
+                if deadline.is_some_and(|d| now_ms() >= d) {
                     let adopted = match unsafe { WaitForSingleObject(event.as_raw_handle(), 0) } {
                         WAIT_OBJECT_0 => true,
                         WAIT_TIMEOUT => false,
                         _ => return Err(io::Error::last_os_error()),
                     };
                     if terminate_at_expiry(adopted)
+                        && unsafe { WaitForSingleObject(event.as_raw_handle(), 0) } == WAIT_TIMEOUT
                         && unsafe { TerminateJobObject(job.as_raw_handle(), 1) } == 0
                     {
                         return Err(io::Error::last_os_error());
@@ -235,10 +294,7 @@ mod platform {
                 if info.ActiveProcesses == 0 {
                     return Ok(());
                 }
-                std::thread::sleep(
-                    Duration::from_millis(100)
-                        .min(Duration::from_millis(deadline.saturating_sub(now_ms()))),
-                );
+                std::thread::sleep(Duration::from_millis(100));
             }
         };
         if run().is_ok() {

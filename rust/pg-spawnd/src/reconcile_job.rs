@@ -47,6 +47,10 @@ fn validate<'a>(run: &str, identity: &'a Proc) -> io::Result<(&'a str, u64)> {
 }
 #[cfg(windows)]
 impl Group {
+    pub(crate) fn adopt(mut self) -> io::Result<Self> {
+        self.0.adopt()?;
+        Ok(self)
+    }
     pub(crate) fn orphan_empty(run: &str, identity: &Proc) -> io::Result<bool> {
         let copy = Proc {
             pid: identity.pid,

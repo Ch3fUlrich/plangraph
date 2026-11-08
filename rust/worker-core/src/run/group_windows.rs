@@ -60,12 +60,8 @@ pub fn spawn_grouped(
             LaunchError::JobUnavailable
         }
     })?;
-    let holder_deadline_ms = super::job_holder_windows::deadline_ms(
-        super::job_holder_windows::now_ms(),
-        limits.windows_holder_max_s.unwrap_or(28800),
-    )
-    .ok_or(LaunchError::JobUnavailable)?;
-    // SAFETY: all-zero limit information is valid before setting the sole flag.
+    let holder_deadline_ms = 0; // Determined by owner exit, never by launch.
+                                // SAFETY: all-zero limit information is valid before setting the sole flag.
     let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { mem::zeroed() };
     // The independent holder retains this kill-on-close Job across daemon death.
     info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -104,13 +100,19 @@ pub fn spawn_grouped(
         if unsafe { AssignProcessToJobObject(job.as_raw_handle(), process.as_raw_handle()) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        super::job_holder_windows::launch(&job, holder_deadline_ms, &name)?;
+        let holder = super::job_holder_windows::holder_path()?;
+        super::job_holder_windows::launch(
+            &holder,
+            &job,
+            limits.windows_holder_max_s.unwrap_or(28800),
+            &name,
+        )?;
         resume(pid)
     })();
     if setup.is_err() {
         let _ = child.kill();
         let _ = child.wait();
-        return Err(LaunchError::JobUnavailable);
+        return Err(LaunchError::Io(setup.unwrap_err()));
     }
     let identity = Identity {
         pid,
@@ -189,7 +191,7 @@ pub(super) fn resume(pid: u32) -> io::Result<()> {
 }
 impl RunGroup for JobGroup {
     fn holder_deadline_ms(&self) -> Option<u64> {
-        Some(self.holder_deadline_ms)
+        (self.holder_deadline_ms != 0).then_some(self.holder_deadline_ms)
     }
     fn identity(&self) -> &Identity {
         &self.identity
@@ -296,6 +298,13 @@ impl RunGroup for JobGroup {
         }
     }
     fn kill(&self) {
+        self.terminate();
+    }
+}
+
+impl Drop for JobGroup {
+    fn drop(&mut self) {
+        // Normal teardown is not daemon death: explicitly end remaining payloads.
         self.terminate();
     }
 }

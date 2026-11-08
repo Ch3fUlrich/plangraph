@@ -21,12 +21,13 @@ impl<A: JobApi> AdoptedJob<A> {
             Some(api) => !api.member(pid, start)?,
             None => true,
         };
-        if !gone {
-            if let Some(api) = api.as_mut() {
-                api.adopted()?;
-            }
-        }
         Ok(Self { api, gone })
+    }
+    pub fn adopt(&mut self) -> io::Result<()> {
+        if !self.is_gone()? {
+            self.api.as_mut().unwrap().adopted()?;
+        }
+        Ok(())
     }
     pub fn cpu(&mut self) -> io::Result<CpuSample> {
         if self.empty()? {
@@ -74,7 +75,7 @@ mod native {
             Threading::*,
         },
     };
-    pub struct NativeJob(OwnedHandle, OwnedHandle);
+    pub struct NativeJob(OwnedHandle, OwnedHandle, OwnedHandle);
     impl NativeJob {
         pub fn open(name: &str) -> io::Result<Option<Self>> {
             let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
@@ -92,11 +93,12 @@ mod native {
             }
             // SAFETY: successful open transfers an owned handle.
             let job = unsafe { OwnedHandle::from_raw_handle(raw) };
-            let event = crate::run::job_holder_windows::adoption_event(&String::from_utf16_lossy(
-                &name[..name.len() - 1],
-            ))?;
-            Ok(Some(Self(job, event)))
+            let name = String::from_utf16_lossy(&name[..name.len() - 1]);
+            let event = crate::run::job_holder_windows::adoption_event(&name, false, false)?;
+            let closing = crate::run::job_holder_windows::adoption_event(&name, true, false)?;
+            Ok(Some(Self(job, event, closing)))
         }
+
         fn accounting(&self) -> io::Result<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION> {
             // SAFETY: zero-initialized output and exact buffer size.
             let mut info = unsafe { mem::zeroed::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() };
@@ -117,6 +119,10 @@ mod native {
     }
     impl JobApi for NativeJob {
         fn adopted(&mut self) -> io::Result<()> {
+            // Holder closes admission six seconds before expiry (one second poll slack).
+            if unsafe { WaitForSingleObject(self.2.as_raw_handle(), 0) } != WAIT_TIMEOUT {
+                return Err(io::Error::other("holder deadline within adoption margin"));
+            }
             // SAFETY: verified Job remains owned; manual-reset event stays signaled.
             if unsafe { SetEvent(self.1.as_raw_handle()) } == 0 {
                 return Err(io::Error::last_os_error());

@@ -207,6 +207,9 @@ pub(super) fn monitor(
         }
     }
     drop(permit);
+    if let Some(g) = &grouped {
+        g.group.terminate();
+    }
     drop(grouped);
 }
 fn record_dir_cancelled(rt: &Runtime, id: &str) -> bool {

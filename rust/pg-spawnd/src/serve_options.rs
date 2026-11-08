@@ -62,10 +62,13 @@ impl Options {
             host,
             ..Config::default()
         });
-        cfg.run.limits.windows_holder_max_s =
-            Some(pg_worker_core::run::job_holder_windows::validate_max_s(
-                env("PG_SPAWND_WINDOWS_HOLDER_MAX_S").as_deref(),
-            )?);
+        #[cfg(windows)]
+        {
+            cfg.run.limits.windows_holder_max_s =
+                Some(pg_worker_core::run::job_holder_windows::validate_max_s(
+                    env("PG_SPAWND_WINDOWS_HOLDER_MAX_S").as_deref(),
+                )?);
+        }
         if self.no_scope {
             cfg.run.confinement = Confinement::Plain;
         }
@@ -82,7 +85,18 @@ impl Options {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(windows))]
     #[test]
+    fn linux_ignores_windows_holder_setting() {
+        assert!(Options::default()
+            .resolve_with(|key| {
+                assert_ne!(key, "PG_SPAWND_WINDOWS_HOLDER_MAX_S");
+                None
+            })
+            .is_ok());
+    }
+    #[test]
+    #[cfg(windows)]
     fn windows_holder_daemon_setting() {
         for (value, valid) in [
             ("600", true),

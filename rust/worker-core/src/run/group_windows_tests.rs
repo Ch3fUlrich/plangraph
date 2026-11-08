@@ -169,7 +169,6 @@ fn name_lifetime_collision_and_drop() {
         Err(LaunchError::JobExists)
     ));
     let pid = g.child.id();
-    g.group.kill();
     drop(g.group);
     until(|| gone(pid));
     g.child.wait().unwrap();
@@ -233,16 +232,12 @@ fn invalid_and_missing_program() {
 }
 
 #[test]
-fn daemon_close_survives_then_fixed_holder_expiry_kills() {
-    let (mut g, _dir) =
-        launch_bounded("pg-win-holder-expiry", "sleep", false, false, Some(1)).unwrap();
-    let pid = g.child.id();
-    assert!(g.group.holder_deadline_ms().is_some());
+fn live_owner_outlives_window() {
+    let (mut g, _dir) = launch_bounded("pg-win-live", "sleep", false, false, Some(1)).unwrap();
+    thread::sleep(Duration::from_millis(1300));
+    assert!(!gone(g.child.id()));
     drop(g.group);
-    assert!(!gone(pid), "closing daemon handle must not kill payload");
-    until(|| gone(pid));
     g.child.wait().unwrap();
-    until(|| !named("pg-win-holder-expiry"));
 }
 
 #[test]
@@ -250,33 +245,73 @@ fn holder_launch_failure_is_closed() {
     super::job_holder_windows::FAIL_LAUNCH.set(true);
     let result = launch("pg-win-holder-fail", "sleep", false, false);
     super::job_holder_windows::FAIL_LAUNCH.set(false);
-    assert!(matches!(result, Err(LaunchError::JobUnavailable)));
+    assert!(matches!(result, Err(LaunchError::Io(_))));
     assert!(!named("pg-win-holder-fail"));
 }
 
 #[test]
-fn adopted_run_survives_holder_expiry() {
-    use crate::watch::windows::{AdoptedJob, NativeJob};
-    let unit = "pg-win-holder-adopted";
-    let (mut g, _dir) = launch_bounded(unit, "sleep", false, false, Some(1)).unwrap();
-    let pid = g.child.id();
-    let deadline = g.group.holder_deadline_ms().unwrap();
-    drop(g.group);
-    let mut adopted = AdoptedJob::verify(
-        NativeJob::open(&job_name(unit)).unwrap(),
-        pid,
-        creation_time(pid).unwrap(),
+fn owner_process() {
+    let Ok(path) = std::env::var("PG_OWNER_RECORD") else {
+        return;
+    };
+    let (g, _dir) = launch_bounded("pg-win-restart", "sleep", false, false, Some(10)).unwrap();
+    std::fs::write(
+        path,
+        format!("{} {}", g.child.id(), creation_time(g.child.id()).unwrap()),
     )
     .unwrap();
-    while super::job_holder_windows::now_ms() <= deadline + 300 {
-        thread::sleep(Duration::from_millis(10));
-    }
-    assert!(
-        !gone(pid),
-        "adopted payload must survive the orphan deadline"
-    );
-    assert!(!adopted.is_gone().unwrap());
-    adopted.terminate().unwrap();
+    thread::sleep(Duration::from_secs(30));
+    drop(g);
+}
+
+#[test]
+fn adopter_process() {
+    use crate::watch::windows::{AdoptedJob, NativeJob};
+    let Ok(ticket) = std::env::var("PG_ADOPT_TICKET") else {
+        return;
+    };
+    let (pid, start) = ticket.split_once(' ').unwrap();
+    let mut job = AdoptedJob::verify(
+        NativeJob::open(&job_name("pg-win-restart")).unwrap(),
+        pid.parse().unwrap(),
+        start.parse().unwrap(),
+    )
+    .unwrap();
+    assert!(!job.is_gone().unwrap());
+    job.adopt().unwrap();
+    thread::sleep(Duration::from_secs(11));
+    assert!(!job.is_gone().unwrap());
+    job.terminate().unwrap();
+}
+
+#[test]
+fn killed_owner_adopted_by_fresh_process() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("owner");
+    let mut owner = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "run::group_windows_tests::owner_process",
+            "--nocapture",
+        ])
+        .env("PG_OWNER_RECORD", &path)
+        .spawn()
+        .unwrap();
+    until(|| path.exists());
+    let ticket = std::fs::read_to_string(path).unwrap();
+    let pid = ticket.split_once(' ').unwrap().0.parse().unwrap();
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    assert!(!gone(pid));
+    assert!(Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "run::group_windows_tests::adopter_process",
+            "--nocapture"
+        ])
+        .env("PG_ADOPT_TICKET", ticket)
+        .status()
+        .unwrap()
+        .success());
     until(|| gone(pid));
-    g.child.wait().unwrap();
 }
