@@ -5,6 +5,54 @@ from registry_route_util import _Runner, _service
 from plangraph.spawner.runner import spawn_service
 
 
+def test_seat_card_key_and_missing_warning(monkeypatch):
+    from plangraph.spawner.item_key import annotate_item
+    monkeypatch.delenv('PLANGRAPH_SPAWN_ITEM', raising=False)
+    record = {'role': 'review'}
+    annotate_item(record, {'item_key': 'plangraph:D-5047'})
+    assert record['item_key'] == 'plangraph:D-5047'
+    missing = {'role': 'judge'}
+    annotate_item(missing, {})
+    assert missing['events'][0]['event'] == 'seat_item_missing'
+
+
+def test_seat_prompt_identity(monkeypatch):
+    from plangraph.spawner.item_key import annotate_item
+    monkeypatch.delenv('PLANGRAPH_SPAWN_ITEM', raising=False)
+    record = {'role': 'review', 'prompt': 'Review plangraph:D-5047 now'}
+    annotate_item(record, {})
+    assert record['item_key'] == 'plangraph:D-5047'
+
+
+@pytest.mark.parametrize('enabled,code', [(False, 0), (True, 0), (True, 2)])
+def test_seat_autopost(tmp_path, monkeypatch, enabled, code):
+    import json
+    from plangraph.spawner import item_key
+    monkeypatch.setenv('PLANGRAPH_SEAT_AUTOPOST', '1' if enabled else '0')
+    monkeypatch.setenv('PG_URL', 'http://keeper.invalid')
+    record = dict(run_id='run-test', role='review', status='completed',
+                  item_key='plangraph:D-5047', served_model='gpt-5',
+                  completion={'head_sha': 'a' * 40})
+    path = tmp_path / 'runs/run-test/record.json'
+    path.parent.mkdir(parents=True)
+    snapshot = tmp_path / 'snapshot.json'
+    snapshot.write_text(json.dumps({'items': [{'key': record['item_key'], 'writer_model': 'gemini'}]}))
+    monkeypatch.setenv('PLANGRAPH_SEAT_SNAPSHOT', str(snapshot))
+    calls = []
+    monkeypatch.setattr(item_key, '_post_verdict', lambda args: calls.append(args) or code)
+    item_key.autopost(record, path)
+    item_key.autopost(record, path)
+    assert len(calls) == int(enabled)
+    if enabled:
+        args = calls[0]
+        assert args == ['--seat-dir', str(path.parent), '--head', 'a' * 40,
+                        '--key', record['item_key'], '--writer-family', 'google',
+                        '--token-dir', str(item_key.Path.home() / '.config/plangraph/tokens'),
+                        '--url', 'http://keeper.invalid']
+        assert record['events'][-1]['exit_code'] == code
+        assert record['status'] == 'completed'
+
+
 @pytest.mark.parametrize('positional', [False, True])
 def test_refusal_item_key(tmp_path, monkeypatch, positional):
     service = _service(tmp_path, monkeypatch)
