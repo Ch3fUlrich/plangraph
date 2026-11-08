@@ -230,6 +230,11 @@ def main():
         print(f"pre-push: {len(hits)} scrub hit(s): push refused "
               "(rule ids above; matched values are never shown)", file=sys.stderr)
         return 1
+    if os.environ.get("PREFLIGHT_SKIP") != "1":
+        command = [sys.executable, str(TOOLS / "preflight.py")]
+        if os.environ.get("PREFLIGHT_FAST") == "1":
+            command.append("--fast")
+        return subprocess.run(command, cwd=TOOLS.parent).returncode
     return 0
 
 

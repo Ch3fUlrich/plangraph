@@ -3,6 +3,7 @@
 import argparse
 import ast
 import json
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -187,8 +188,10 @@ def main(root=None):
         return 0
     if args.run and plan["tests"]:
         start = time.monotonic()
-        result = subprocess.run([sys.executable, "-m", "pytest", "-n", args.workers,
-                                 "--dist", "loadgroup", *plan["tests"]], cwd=root)
+        parallel = (["-n", args.workers, "--dist", "loadgroup"]
+                    if importlib.util.find_spec("xdist") is not None else [])
+        result = subprocess.run([sys.executable, "-m", "pytest", *parallel,
+                                 *plan["tests"]], cwd=root)
         print(f"affected wall seconds: {time.monotonic() - start:.3f}")
         return result.returncode
     return 0
