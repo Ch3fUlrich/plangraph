@@ -1,7 +1,4 @@
 //! Private Windows Job keeper; the fixed deadline bounds only the orphan window.
-pub fn terminate_at_expiry(adopted: bool) -> bool {
-    !adopted
-}
 pub fn validate_max_s(value: Option<&str>) -> Result<u64, String> {
     let seconds = value.unwrap_or("28800").parse::<u64>().ok();
     seconds
@@ -51,7 +48,6 @@ mod platform {
         },
     };
     static HOLDER: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-    /// Embedders must register a binary dispatching `__job-holder` before launching.
     pub fn set_holder_path(path: std::path::PathBuf) {
         let _ = HOLDER.set(path);
     }
@@ -156,7 +152,6 @@ mod platform {
         adoption_event(&format!("{name}-rejected"), false, create)
     }
     // A same-user, non-inheritable mapping carries the requesting daemon PID.
-    // The Job and event DACLs remain the admission boundary.
     #[link(name = "kernel32")]
     #[rustfmt::skip]
     extern "system" {
@@ -314,28 +309,34 @@ mod platform {
                 let closing_now =
                     deadline.is_some_and(|d| Instant::now() + Duration::from_secs(6) >= d);
                 if closing_now {
-                    unsafe {
-                        SetEvent(closing.as_raw_handle());
+                    if unsafe { SetEvent(closing.as_raw_handle()) } == 0 {
+                        return Err(io::Error::last_os_error());
                     }
                 }
                 // Admission and expiry are serialized here, not in the requester.
                 if !closing_now
-                    && deadline.is_some()
                     && unsafe { WaitForSingleObject(event.as_raw_handle(), 0) } == WAIT_OBJECT_0
                     && unsafe { WaitForSingleObject(rejected.as_raw_handle(), 0) } == WAIT_TIMEOUT
                 {
                     let pid = request.pid().load(std::sync::atomic::Ordering::SeqCst);
-                    let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
-                    if raw.is_null() {
-                        return Err(io::Error::last_os_error());
-                    }
-                    let next = unsafe { OwnedHandle::from_raw_handle(raw) };
-                    if !crate::watch::windows::claim_adoption(request.pid(), pid) {
+                    if pid == 0
+                        || pid >= u32::MAX - 1
+                        || !crate::watch::windows::claim_adoption(request.pid(), pid)
+                    {
                         continue;
                     }
+                    let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+                    if raw.is_null() {
+                        if unsafe { ResetEvent(event.as_raw_handle()) } == 0 {
+                            return Err(io::Error::last_os_error());
+                        }
+                        request.pid().store(0, std::sync::atomic::Ordering::SeqCst);
+                        continue;
+                    }
+                    let next = unsafe { OwnedHandle::from_raw_handle(raw) };
                     owner = next;
-                    unsafe {
-                        ResetEvent(event.as_raw_handle());
+                    if unsafe { ResetEvent(event.as_raw_handle()) } == 0 {
+                        return Err(io::Error::last_os_error());
                     }
                     if unsafe { SetEvent(outcome.as_raw_handle()) } == 0 {
                         return Err(io::Error::last_os_error());
@@ -379,8 +380,6 @@ mod platform {
 #[rustfmt::skip]
 mod tests {
     use super::*;
-    #[test]
-    fn adoption_prevents_expiry_termination() { assert!(terminate_at_expiry(false)); assert!(!terminate_at_expiry(true)); }
     #[test] fn bounds() {
         assert_eq!(validate_max_s(None), Ok(28800));
         for s in ["600", "172800"] { assert!(validate_max_s(Some(s)).is_ok()); }

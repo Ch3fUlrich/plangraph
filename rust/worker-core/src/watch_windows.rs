@@ -148,11 +148,11 @@ mod native {
                 )
                 .map_err(|_| io::Error::other("holder adoption already requested"))?;
             // SAFETY: verified Job remains owned; manual-reset event stays signaled.
-            unsafe {
-                ResetEvent(outcome.as_raw_handle());
-                ResetEvent(rejected.as_raw_handle());
-            }
-            if unsafe { SetEvent(event.as_raw_handle()) } == 0 {
+            if unsafe { ResetEvent(outcome.as_raw_handle()) } == 0
+                || unsafe { ResetEvent(rejected.as_raw_handle()) } == 0
+                || unsafe { SetEvent(event.as_raw_handle()) } == 0
+            {
+                request.pid().store(0, std::sync::atomic::Ordering::SeqCst);
                 return Err(io::Error::last_os_error());
             }
             // Only the holder can acknowledge admission; a stalled requester cannot
@@ -160,13 +160,15 @@ mod native {
             if unsafe { WaitForSingleObject(outcome.as_raw_handle(), 5000) } == WAIT_OBJECT_0 {
                 Ok(())
             } else {
-                unsafe {
-                    SetEvent(rejected.as_raw_handle());
+                if unsafe { SetEvent(rejected.as_raw_handle()) } == 0 {
+                    return Err(io::Error::last_os_error());
                 }
-                let committed = request
-                    .pid()
-                    .swap(u32::MAX - 1, std::sync::atomic::Ordering::SeqCst)
-                    == u32::MAX;
+                let committed = request.pid().compare_exchange(
+                    unsafe { GetCurrentProcessId() },
+                    u32::MAX - 1,
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                ) == Err(u32::MAX);
                 // A concurrently committed acknowledgement wins; otherwise rejection
                 // remains latched so a delayed holder cannot admit this requester.
                 if unsafe { WaitForSingleObject(outcome.as_raw_handle(), 1000) } == WAIT_OBJECT_0
@@ -174,6 +176,12 @@ mod native {
                 {
                     Ok(())
                 } else {
+                    if unsafe { ResetEvent(event.as_raw_handle()) } == 0
+                        || unsafe { ResetEvent(rejected.as_raw_handle()) } == 0
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                    request.pid().store(0, std::sync::atomic::Ordering::SeqCst);
                     Err(io::Error::other("holder did not acknowledge adoption"))
                 }
             }

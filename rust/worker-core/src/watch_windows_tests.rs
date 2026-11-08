@@ -1,6 +1,42 @@
 use super::*;
 #[cfg(windows)]
 #[test]
+fn timeout_then_adopt() {
+    use crate::run::job_holder_windows::*;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Threading::*;
+    let name = format!("Local\\pg-timeout-{}", std::process::id());
+    let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+    let _job = secure_job(wide.as_ptr()).unwrap();
+    let _event = adoption_event(&name, false, true).unwrap();
+    let _closing = adoption_event(&name, true, true).unwrap();
+    let _outcome = outcome_event(&name, true).unwrap();
+    let rejected = rejected_event(&name, true).unwrap();
+    let slot = RequestSlot::open(&name, true).unwrap();
+    let mut api = NativeJob::open(&name).unwrap().unwrap();
+    assert!(api.adopted().is_err());
+    assert_eq!(slot.pid().load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        unsafe { WaitForSingleObject(rejected.as_raw_handle(), 0) },
+        258
+    );
+    let helper = std::thread::spawn(move || {
+        let event = adoption_event(&name, false, false).unwrap();
+        let outcome = outcome_event(&name, false).unwrap();
+        let slot = RequestSlot::open(&name, false).unwrap();
+        assert_eq!(
+            unsafe { WaitForSingleObject(event.as_raw_handle(), 2000) },
+            0
+        );
+        let pid = slot.pid().load(std::sync::atomic::Ordering::SeqCst);
+        assert!(claim_adoption(slot.pid(), pid));
+        assert_ne!(unsafe { SetEvent(outcome.as_raw_handle()) }, 0);
+    });
+    api.adopted().unwrap();
+    helper.join().unwrap();
+}
+#[cfg(windows)]
+#[test]
 fn watch_recorder_start_matches_creation_filetime() {
     use crate::run::{record::RunRecord, supervise::*};
     use std::{os::windows::io::FromRawHandle, time::Duration};

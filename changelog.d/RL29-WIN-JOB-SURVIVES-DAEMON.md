@@ -21,10 +21,8 @@ the holder's explicit acknowledgement before reporting success; admission and
 expiry are serialized in the holder. A native test kills an owner without an
 adopter and verifies termination after a one-second orphan window.
 
-V7 remains unfixed: repeat-daemon-loss survival requires transferring the current
-owner process handle and configured bound to the retained holder, with a repeatable
-authenticated handshake and restart tests; that protocol does not fit this round's
-300-line production budget safely. Adoption still protects only the first loss.
+RL29-WIN-HOLDER-REARM transfers the current owner process handle to the holder;
+each subsequent owner loss starts a fresh bounded orphan window.
 The base workflow has no rust-windows job, so no filter line was added.
 After merging the rust-windows job, CI now includes run::job_holder_windows with the per-filter zero-test guard.
 Flush binary holder readiness before waiting for payloads; isolate pipe-test Job identities from asynchronous holder cleanup.
