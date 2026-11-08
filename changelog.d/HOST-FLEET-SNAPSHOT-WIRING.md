@@ -1,0 +1,1 @@
+- Persist fleet registry rows and run-record counts in keeper snapshots, with unknown metrics until HOST-SAMPLES-API is wired and a failure-isolated loader outside keeper.

@@ -28,6 +28,11 @@ def write_snapshot(server, principal) -> None:
     from .auth import RunPrincipal
     who = server.system if isinstance(principal, RunPrincipal) else principal
     snapshot = timing.measured(part="build_ms")(server.store.snapshot)(who)
+    try:
+        from ..fleet_snapshot import load_fleet
+        snapshot["fleet"] = load_fleet(server.store)
+    except Exception:  # noqa: BLE001 - optional fleet must never fail a snapshot
+        snapshot["fleet"] = None
     body = timing.measured(part="encode_ms")(lambda: json.dumps(snapshot).encode("utf-8"))()
     path.parent.mkdir(parents=True, exist_ok=True)
     key = getattr(server.config, "signing_key", None)
