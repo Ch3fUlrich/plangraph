@@ -15,8 +15,19 @@ the maximum age of an in_review item; `review_rounds` is the maximum per PR;
 `critical_idle_hours` is the #690 critical-path idle measurement; `coding_vm_runs`
 and `dell_idle` describe placement; `host_drift` compares expected host code refs;
 `closes_recent` and `closes_previous` count equal-length daily windows.
-All fields are required; budget must be positive. Missing data alerts routing without writing state.
+The fields above are required; budget must be positive. Missing data alerts routing without writing state.
 The seven condition groups produce eight rule names: placement and host drift are separate.
+
+Collectors may also supply `hosts` (an omitted list defaults to empty for compatibility).
+Each entry requires `host`, `tmp_used_percent`, `root_used_percent`, `checkout_head`,
+`origin_main_head`, `behind_commits`, and `age_hours`. `host-disk` alerts strictly
+above 85% used on either `/tmp` or `/`. `host-code` alerts when the spawner checkout
+is behind origin/main by more than 10 commits **or** 24 hours. The collector must
+provide the ancestry-based behind count and age in hours since the first missing
+origin/main commit, not the checkout commit's timestamp. Equal heads or a zero
+behind count do not alert merely because the checkout is old. These two additional
+conditions emit per-host lines including diagnostic values; no Git or host access
+is performed by the checker. Collectors must refresh origin/main before measuring.
 
 Routing uses the existing `PLANGRAPH_WATCHDOG_DELIVERY` JSON argv bridge contract
 (see stall-watchdog.md): one JSON alert on stdin with recipient `routing` and one

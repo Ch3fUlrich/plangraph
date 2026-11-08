@@ -1,3 +1,5 @@
+#[path = "flow_watchdog_hosts/mod.rs"]
+mod hosts;
 #[path = "flow_watchdog_stuck/mod.rs"]
 mod stuck;
 include!("flow_watchdog_stuck/legacy_tests.rs");
@@ -11,6 +13,8 @@ use std::{
 };
 #[derive(Deserialize)]
 struct Snapshot {
+    #[serde(default)]
+    hosts: Vec<hosts::Host>,
     #[serde(flatten)]
     stuck: stuck::Snapshot,
     pace: f64,
@@ -127,6 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pending = dir.join("pending.json");
     let legacy = findings(&s).join(",");
     let mut messages = s.stuck.messages();
+    messages.extend(hosts::messages(&s.hosts));
     if !legacy.is_empty() {
         messages.insert(0, legacy);
     }

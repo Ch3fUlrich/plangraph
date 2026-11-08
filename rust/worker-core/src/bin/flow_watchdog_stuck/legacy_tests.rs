@@ -4,6 +4,7 @@ mod tests {
     #[test]
     fn each_rule_has_below_boundary_above() {
         let mut s = Snapshot {
+            hosts: Vec::new(),
             stuck: Default::default(),
             pace: 65.0,
             budget: 66.0,

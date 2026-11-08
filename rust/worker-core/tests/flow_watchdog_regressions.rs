@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use std::{fs, path::Path, process::Command};
 fn safe() -> serde_json::Value {
     serde_json::json!({"pace":66,"budget":66,"ci_failed":1,"ci_total":10,
