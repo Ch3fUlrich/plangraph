@@ -12,6 +12,8 @@ from typing import Any
 
 from plangraph.mimo_policy import ACCEPTED_MIMO_IDS
 
+ACCEPTED_GEMINI_IDS = frozenset({'omniroute/agy/gemini-3.8-flash-high'})
+
 REFUSAL_UNRESOLVED = (
     "not_served_on_host: gateway_base_url_unresolved "
     "(set OMNIROUTE_BASE_URL or PLANGRAPH_GATEWAY_URL)"
@@ -103,6 +105,21 @@ def render_gateway_providers(
 
     if "mimo" not in providers and model_clean in ACCEPTED_MIMO_IDS:
         providers["mimo"] = _mimo_template()
+    if model_clean in ACCEPTED_GEMINI_IDS:
+        block = providers.setdefault("omniroute", {
+            "package": "@opencode/ai/providers/openai-compatible",
+            "name": "OmniRoute gateway",
+            "env": [GATEWAY_KEY_NAME],
+            "settings": {},
+            "models": {},
+        })
+        if isinstance(block, dict):
+            models = block.setdefault("models", {})
+            if isinstance(models, dict):
+                models.setdefault("agy/gemini-3.8-flash-high", {
+                    "modelID": "agy/gemini-3.8-flash-high",
+                    "name": "Gemini 3.8 Flash High",
+                })
 
     # Step 4: Resolve base URL in I4 order
     resolved_url = None

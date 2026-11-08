@@ -18,7 +18,7 @@ route_card = functools.partial(route_card, legs=DEFAULT_LEGS)
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
     "openrouter-free", "cx-gpt-6.1-sol", "cx-gpt-6-luna",
-    "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5",
+    "omniroute-agy-gemini-3.8-flash", "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5",
     # D-3552 opencode-go review legs
     "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
     "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark", "opencode-go-deepseek-v4-flash", "omniroute-gemini-3.8-flash", "deepseek",
@@ -338,14 +338,14 @@ def test_writer_order_d2683_review_order_unchanged():
     # D-4196: without a diff, disabled Zen and inline-only Go cannot lead.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="review", writer_families=("claude",))
-    assert plan.first_leg.id == "agy-gemini-3.8-flash"
+    assert plan.first_leg.id == "omniroute-agy-gemini-3.8-flash"
 
 
 def test_writer_order_d2683_writer_family_exclusion():
     # D-3745: Sol leads implement; family exclusions still apply for both roles.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
-    assert plan_rev.first_leg.id == "agy-gemini-3.8-flash"
+    assert plan_rev.first_leg.id == "omniroute-agy-gemini-3.8-flash"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
     assert plan_imp.first_leg.id == "cx-gpt-6.1-sol" and "gemini" not in {l.family for l in plan_imp.legs}
     # F2: writer_families does not exclude implement legs
