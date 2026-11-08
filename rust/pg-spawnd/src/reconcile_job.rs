@@ -7,7 +7,7 @@ use crate::reconcile_store::Proc;
 use pg_worker_core::{
     cpu::CpuSample,
     watch::{
-        windows::{AdoptedJob, NativeJob},
+        windows::{AdoptedJob, JobApi, NativeJob},
         Child,
     },
 };
@@ -15,7 +15,79 @@ use std::io;
 #[cfg(windows)]
 use std::process::ExitStatus;
 #[cfg(windows)]
-pub(crate) struct Group(AdoptedJob<NativeJob>);
+pub(crate) struct Group(AdoptedJob<LocalJob>);
+#[cfg(windows)]
+struct LocalJob {
+    job: NativeJob,
+    _process: Option<std::os::windows::io::OwnedHandle>,
+}
+#[cfg(windows)]
+fn process(pid: u32) -> io::Result<Option<(std::os::windows::io::OwnedHandle, u64, bool)>> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::{Foundation::*, System::Threading::*};
+    // SAFETY: query-only handle; successful opens transfer ownership.
+    let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if raw.is_null() {
+        let error = io::Error::last_os_error();
+        return if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
+            Ok(None)
+        } else {
+            Err(error)
+        };
+    }
+    let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let (mut created, mut exit, mut kernel, mut user) = (
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+    );
+    // SAFETY: owned process handle and writable output buffers.
+    if unsafe {
+        GetProcessTimes(
+            handle.as_raw_handle(),
+            &mut created,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(Some((
+        handle,
+        u64::from(created.dwHighDateTime) << 32 | u64::from(created.dwLowDateTime),
+        exit.dwHighDateTime == 0 && exit.dwLowDateTime == 0,
+    )))
+}
+#[cfg(windows)]
+pub(crate) fn absent(pid: u32) -> Result<bool, crate::reconcile::ReconcileError> {
+    match process(pid) {
+        Ok(None) | Ok(Some((_, _, false))) => Ok(true),
+        _ => Err(crate::reconcile::ReconcileError::Unknown),
+    }
+}
+#[cfg(windows)]
+impl JobApi for LocalJob {
+    fn member(&mut self, pid: u32, start: u64) -> io::Result<bool> {
+        let Some((handle, actual, live)) = process(pid)? else {
+            return Ok(false);
+        };
+        let member = live && (start == 0 || start == actual) && self.job.member(pid, actual)?;
+        self._process = Some(handle);
+        Ok(member)
+    }
+    fn active(&mut self) -> io::Result<bool> {
+        self.job.active()
+    }
+    fn terminate(&mut self) -> io::Result<()> {
+        self.job.terminate()
+    }
+    fn times(&mut self) -> io::Result<(i64, i64)> {
+        self.job.times()
+    }
+}
 pub(crate) fn scope(run: &str, recorded: &str) -> io::Result<()> {
     if !pg_worker_core::run::record::valid_run_id(run) || recorded != format!("Local\\pg-{run}") {
         return Err(io::ErrorKind::PermissionDenied.into());
@@ -46,12 +118,21 @@ impl Group {
         orphan_empty(&mut self.0)
     }
     pub(crate) fn open(run: &str, identity: Proc) -> io::Result<Self> {
+        Self::acquire(run, identity)?.ok_or_else(|| io::ErrorKind::NotFound.into())
+    }
+    pub(crate) fn acquire(run: &str, identity: Proc) -> io::Result<Option<Self>> {
         let (name, start) = validate(run, &identity)?;
-        Ok(Self(AdoptedJob::verify(
-            NativeJob::open(name)?,
+        let Some(job) = NativeJob::open(name)? else {
+            return Ok(None);
+        };
+        Ok(Some(Self(AdoptedJob::verify(
+            Some(LocalJob {
+                job,
+                _process: None,
+            }),
             identity.pid,
             start,
-        )?))
+        )?)))
     }
     pub(crate) fn cpu(&mut self) -> io::Result<CpuSample> {
         self.0.cpu()
@@ -84,7 +165,7 @@ trait OrphanJob {
     fn terminate(&mut self) -> io::Result<()>;
 }
 #[cfg(windows)]
-impl OrphanJob for AdoptedJob<NativeJob> {
+impl OrphanJob for AdoptedJob<LocalJob> {
     fn gone(&mut self) -> io::Result<bool> {
         self.is_gone()
     }
@@ -124,25 +205,32 @@ fn orphan_empty(job: &mut impl OrphanJob) -> io::Result<bool> {
 #[cfg(windows)]
 pub(crate) fn settle_probe(
     row: &crate::reconcile_store::Entry,
+    authority: &mut Option<Option<Group>>,
 ) -> Result<bool, crate::reconcile::ReconcileError> {
     let unknown = || crate::reconcile::ReconcileError::Unknown;
     let p = row.identity.as_ref().ok_or_else(unknown)?;
-    let job = map_open(Group::open(
-        &row.run_id,
-        Proc {
-            pid: p.pid,
-            start_time: p.start_time,
-            group: p.group.clone(),
-            pgid: p.pgid,
-        },
-    ))?;
-    match job {
-        Some(mut job) => map_probe(job.orphan_empty()),
-        None => Ok(true),
+    if authority.is_none() {
+        *authority = Some(
+            Group::acquire(
+                &row.run_id,
+                Proc {
+                    pid: p.pid,
+                    start_time: p.start_time,
+                    group: p.group.clone(),
+                    pgid: p.pgid,
+                },
+            )
+            .map_err(|_| unknown())?,
+        );
+    }
+    match authority.as_mut().unwrap() {
+        Some(job) => map_probe(job.orphan_empty()),
+        None => absent(p.pid),
     }
 }
 
 // Only opening a scoped name may interpret NotFound as an absent group.
+#[cfg(test)]
 pub(crate) fn map_open<T>(
     result: io::Result<T>,
 ) -> Result<Option<T>, crate::reconcile::ReconcileError> {
@@ -152,6 +240,7 @@ pub(crate) fn map_open<T>(
         Err(_) => Err(crate::reconcile::ReconcileError::Unknown),
     }
 }
+#[cfg(any(windows, test))]
 pub(crate) fn map_probe(
     result: io::Result<bool>,
 ) -> Result<bool, crate::reconcile::ReconcileError> {

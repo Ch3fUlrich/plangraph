@@ -370,6 +370,11 @@ fn grouped_probe_distinguishes_alive_gone_and_unknown() {
         gone("run-test", Some(&identity)),
         Err(ReconcileError::Unknown)
     ));
+    std::fs::remove_file(scope.join("cgroup.events")).unwrap();
+    assert!(matches!(
+        gone("run-test", Some(&identity)),
+        Err(ReconcileError::Unknown)
+    ));
     std::fs::write(scope.join("cgroup.events"), "populated 0\n").unwrap();
     assert!(gone("run-test", Some(&identity)).unwrap());
 }

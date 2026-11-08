@@ -42,7 +42,7 @@ fn reconcile_inventory_legacy_missing_proc_and_limits() {
     assert!(rows[0].identity.is_none());
     record.set("max_s", json!(-1));
     record.save().unwrap();
-    assert!(inventory(&dir.0).is_err());
+    assert!(inventory(&dir.0).unwrap().is_empty());
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn reconcile_inventory_ignores_terminal_and_refuses_mismatch() {
     let mut record = dir.record();
     record.set("run_id", json!("run-other"));
     record.save().unwrap();
-    assert!(inventory(&dir.0).is_err());
+    assert!(inventory(&dir.0).unwrap().is_empty());
     record.set("run_id", json!("run-test"));
     record.transition(Status::Orphaned, 2.0).unwrap();
     record.save().unwrap();
@@ -108,7 +108,7 @@ fn reconcile_inventory_refuses_symlink_record() {
     let moved = dir.0.join("saved.json");
     std::fs::rename(record.path(), &moved).unwrap();
     std::os::unix::fs::symlink(moved, record.path()).unwrap();
-    assert!(inventory(&dir.0).is_err());
+    assert!(inventory(&dir.0).unwrap().is_empty());
 }
 
 #[cfg(target_os = "linux")]

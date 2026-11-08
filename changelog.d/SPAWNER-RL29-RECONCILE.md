@@ -4,3 +4,4 @@
 - Separate pure tri-state adoption probes from verified-handle orphan cleanup, wait boundedly for Job teardown, and skip unverifiable startup rows.
 
 - Complete unknown-start membership adoption, absent-Job tri-state mapping, row-local scan skips, and settlement-based reclamation without reopening Jobs.
+- Move recovery-only Windows membership policy into spawnd, share settlement/adoption authority within a scan, and isolate invalid rows and scoped unknown-start reclaim keys.

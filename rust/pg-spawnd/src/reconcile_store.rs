@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{io::Read, path::Path};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Proc {
     pub pid: u32,
@@ -20,27 +20,9 @@ pub(crate) struct Entry {
     pub identity: Option<Proc>,
     pub deadline_ms: Option<u64>,
 }
-fn check(path: &Path, directory: bool) -> Result<(), ReconcileError> {
-    let meta = std::fs::symlink_metadata(path).map_err(|_| ReconcileError::Io)?;
-    if meta.file_type().is_symlink()
-        || (directory && !meta.is_dir())
-        || (!directory && !meta.is_file())
-    {
-        return Err(ReconcileError::Invalid);
-    }
-    Ok(())
-}
-fn seconds(value: &Value) -> Result<u64, ReconcileError> {
-    let n = value
-        .as_f64()
-        .filter(|n| n.is_finite() && *n >= 0.0)
-        .ok_or(ReconcileError::Invalid)?
-        * 1000.0;
-    if !n.is_finite() || n >= u64::MAX as f64 {
-        return Err(ReconcileError::Invalid);
-    }
-    Ok(n as u64)
-}
+#[path = "reconcile_store_helpers.rs"]
+mod helpers;
+use helpers::{check, seconds};
 pub(crate) fn read(path: &Path) -> Result<Value, ReconcileError> {
     check(path, false)?;
     let mut options = std::fs::OpenOptions::new();
@@ -80,75 +62,87 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
         .map(|e| e.map(|e| e.path()).map_err(|_| ReconcileError::Io))
         .collect::<Result<Vec<_>, _>>()?;
     paths.sort();
+    match std::fs::symlink_metadata(root.join("reconcile.lock")) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        _ => check(&root.join("reconcile.lock"), false)?,
+    }
     let mut result = Vec::new();
     for path in paths {
-        if !path.join("record.json").is_file() {
-            continue;
-        }
-        let id = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .filter(|s| valid_run_id(s))
-            .ok_or(ReconcileError::Invalid)?;
-        check(&path, true)?;
-        for lock in [root.join("reconcile.lock"), path.join("record.lock")] {
-            match std::fs::symlink_metadata(&lock) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-                _ => check(&lock, false)?,
+        let mut rows = Vec::new();
+        let parsed = (|| -> Result<(), ReconcileError> {
+            if !path.join("record.json").is_file() {
+                return Ok(());
             }
-        }
-        let record = read(&path.join("record.json"))?;
-        if record["run_id"].as_str() != Some(id) {
-            return Err(ReconcileError::Invalid);
-        }
-        if record["status"] != "running" || !record["ended"].is_null() {
-            continue;
-        }
-        let role = record["role"].as_str().ok_or(ReconcileError::Invalid)?;
-        crate::reconcile::mode(None, &Value::Null, role)?;
-        let mut attempts = record["attempts"]
-            .as_array()
-            .ok_or(ReconcileError::Invalid)?
-            .clone();
-        if attempts.is_empty() {
-            attempts.push(json!({"status":"running", "proc":record["proc"],
-                "started":record["started"], "leg":record["plan"]["first_leg"]}));
-        }
-        for (index, attempt) in attempts.iter().enumerate() {
-            if attempt["status"] != "running" {
-                continue;
+            let id = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .filter(|s| valid_run_id(s))
+                .ok_or(ReconcileError::Invalid)?;
+            check(&path, true)?;
+            {
+                let lock = path.join("record.lock");
+                match std::fs::symlink_metadata(&lock) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                    _ => check(&lock, false)?,
+                }
             }
-            if !attempt["leg"].is_object() {
+            let record = read(&path.join("record.json"))?;
+            if record["run_id"].as_str() != Some(id) {
                 return Err(ReconcileError::Invalid);
             }
-            let started = seconds(attempt.get("started").unwrap_or(&record["started"]))?;
-            let max_s = attempt
-                .get("max_s")
-                .or_else(|| record.get("max_s"))
-                .filter(|v| !v.is_null())
-                .map(|v| v.as_u64().ok_or(ReconcileError::Invalid))
-                .transpose()?;
-            let identity = if attempt["proc"].is_null() {
-                None
-            } else {
-                let proc: Proc = serde_json::from_value(attempt["proc"].clone())
-                    .map_err(|_| ReconcileError::Invalid)?;
-                if proc.pid == 0
-                    || proc.start_time == Some(0)
-                    || proc.pgid.is_some_and(|id| id == 0 || id > i32::MAX as u32)
-                    || proc.group.as_ref().is_some_and(|g| g.is_empty())
-                {
+            if record["status"] != "running" || !record["ended"].is_null() {
+                return Ok(());
+            }
+            let role = record["role"].as_str().ok_or(ReconcileError::Invalid)?;
+            crate::reconcile::mode(None, &Value::Null, role)?;
+            let mut attempts = record["attempts"]
+                .as_array()
+                .ok_or(ReconcileError::Invalid)?
+                .clone();
+            if attempts.is_empty() {
+                attempts.push(json!({"status":"running", "proc":record["proc"],
+                "started":record["started"], "leg":record["plan"]["first_leg"]}));
+            }
+            for (index, attempt) in attempts.iter().enumerate() {
+                if attempt["status"] != "running" {
+                    continue;
+                }
+                if !attempt["leg"].is_object() {
                     return Err(ReconcileError::Invalid);
                 }
-                Some(proc)
-            };
-            result.push(Entry {
-                run_id: id.into(),
-                role: role.into(),
-                attempt: u32::try_from(index + 1).map_err(|_| ReconcileError::Invalid)?,
-                identity,
-                deadline_ms: crate::reconcile_time::deadline(started, max_s),
-            });
+                let started = seconds(attempt.get("started").unwrap_or(&record["started"]))?;
+                let max_s = attempt
+                    .get("max_s")
+                    .or_else(|| record.get("max_s"))
+                    .filter(|v| !v.is_null())
+                    .map(|v| v.as_u64().ok_or(ReconcileError::Invalid))
+                    .transpose()?;
+                let identity = if attempt["proc"].is_null() {
+                    None
+                } else {
+                    let proc: Proc = serde_json::from_value(attempt["proc"].clone())
+                        .map_err(|_| ReconcileError::Invalid)?;
+                    if proc.pid == 0
+                        || proc.start_time == Some(0)
+                        || proc.pgid.is_some_and(|id| id == 0 || id > i32::MAX as u32)
+                        || proc.group.as_ref().is_some_and(|g| g.is_empty())
+                    {
+                        return Err(ReconcileError::Invalid);
+                    }
+                    Some(proc)
+                };
+                rows.push(Entry {
+                    run_id: id.into(),
+                    role: role.into(),
+                    attempt: u32::try_from(index + 1).map_err(|_| ReconcileError::Invalid)?,
+                    identity,
+                    deadline_ms: crate::reconcile_time::deadline(started, max_s),
+                });
+            }
+            Ok(())
+        })();
+        if parsed.is_ok() {
+            result.extend(rows);
         }
     }
     Ok(result)
@@ -239,9 +233,11 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
             group: identity.group.clone(),
             pgid: identity.pgid,
         };
-        match crate::reconcile::job::map_open(crate::reconcile::job::Group::open(run_id, copy))? {
+        match crate::reconcile::job::Group::acquire(run_id, copy)
+            .map_err(|_| ReconcileError::Unknown)?
+        {
             Some(mut job) => crate::reconcile::job::map_probe(job.probe()),
-            None => Ok(true),
+            None => crate::reconcile::job::absent(identity.pid),
         }
     }
     #[cfg(not(any(target_os = "linux", windows)))]
@@ -253,6 +249,14 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
 
 /// Caller holds the state lock; re-read under the record lock before proving gone.
 pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileError> {
+    orphan_with(root, row, &mut None)
+}
+pub(crate) fn orphan_with(
+    root: &Path,
+    row: &Entry,
+    #[cfg(windows)] authority: &mut Option<Option<crate::reconcile::job::Group>>,
+    #[cfg(not(windows))] _authority: &mut Option<()>,
+) -> Result<bool, ReconcileError> {
     use pg_worker_core::run::record::{RunRecord, Status};
     let dir = root.join("runs").join(&row.run_id);
     let _lock = lock(&dir, &dir.join("record.lock"))?;
@@ -260,10 +264,13 @@ pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileErr
         .into_iter()
         .find(|entry| entry.run_id == row.run_id && entry.attempt == row.attempt)
     else {
-        return Ok(true);
+        return Err(ReconcileError::Unknown);
     };
+    if current.identity != row.identity || current.role != row.role {
+        return Err(ReconcileError::Unknown);
+    }
     #[cfg(windows)]
-    let settled = crate::reconcile::job::settle_probe(&current)?;
+    let settled = crate::reconcile::job::settle_probe(&current, authority)?;
     #[cfg(not(windows))]
     let settled = gone(&current.run_id, current.identity.as_ref())?;
     if !settled {
@@ -271,7 +278,7 @@ pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileErr
     }
     let mut record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;
     if record.status() != Some(Status::Running) {
-        return Ok(true);
+        return Err(ReconcileError::Unknown);
     }
     if record
         .get("attempts")
