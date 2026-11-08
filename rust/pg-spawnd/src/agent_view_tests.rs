@@ -1,16 +1,32 @@
 use super::*;
 
 fn fixture() -> PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "pg-agent-view-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&path).unwrap();
-    path
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    loop {
+        let path = std::env::temp_dir().join(format!(
+            "pg-agent-view-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        match fs::create_dir(&path) {
+            Ok(()) => return path,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => panic!("create fixture: {e}"),
+        }
+    }
+}
+
+#[test]
+fn fixtures_are_isolated_without_clock_progress() {
+    let first = fixture();
+    let second = fixture();
+    assert_ne!(first, second);
+    put(&first, "only-first.json", json!({}));
+    assert!(!second.join("only-first.json").exists());
+    cleanup(&first);
+    assert!(second.is_dir());
+    cleanup(&second);
 }
 
 /// Temp-dir cleanup: Windows may still hold a handle on a file the view just
