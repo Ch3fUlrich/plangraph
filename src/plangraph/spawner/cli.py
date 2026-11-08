@@ -199,6 +199,9 @@ def main(argv=None):
                 review_scope=args.review_scope,
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
                 no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
+            if not args.dry_run:
+                from .overflow import require_local_memory
+                require_local_memory(service, args.role)
             # Validate before detaching so refusals are reported synchronously.
             from plangraph.settings import admit_review_scope
             try:

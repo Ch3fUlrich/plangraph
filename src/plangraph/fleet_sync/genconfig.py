@@ -34,7 +34,6 @@ def generate(registry):
             'win_src' if host['os'] == 'windows' else 'src': src}))
         if host['os'] == 'linux':
             overflow[name] = {'ssh': name, 'repo': live, 'spawner_src': src,
-                              'run_cap': host['caps']['max_runs'],
                               'floor_mb': host['caps']['mem_floor_mb']}
     return {'ps-hosts.json': {'hosts': ps},
             'overflow-hosts.json': {'hosts': overflow, 'public_repos': []}}

@@ -34,7 +34,12 @@ exit, invalid JSON/non-list response, timeout or other invocation error instead
 reports `host query failed`. Any failed check makes doctor exit 1.
 
 ## Spawn by card
-Overflow admission reads `caps.max_runs` and `caps.mem_floor_mb` for each host
+CLI and overflow admission use the worker-core memory rule:
+`effective_free_mb - reservation_mb >= mem_floor_mb`, with MemAvailable as
+free memory and `warmup.ramp_mb[role]` as the reservation (an unknown role
+uses that host's largest positive ramp). Live run/writer counts never limit
+admission. Overflow ranks hosts by free RAM above their floor.
+Admission reads `caps.mem_floor_mb` and `warmup.ramp_mb` for each host
 from the worker-core hosts registry (`$XDG_CONFIG_HOME/plangraph/hosts.json`,
 or `~/.config/plangraph/hosts.json`), the same location used by fleet-sync.
 Local identity is `PLANGRAPH_HOST_NAME` when set, otherwise registry `self`;
@@ -42,7 +47,8 @@ IDs and aliases resolve case-insensitively. Routing and the public-repository
 allowlist still come from `overflow-hosts.json`, but its legacy run/floor caps
 and local limit overrides are ignored. Missing/unreadable registry or missing,
 malformed caps exclude that host from overflow. Local admission instead uses
-conservative defaults of 4 runs / 3000 MB, with a logged reason.
+conservative defaults of floor 3000 MB and role 2048 MB, with a logged reason.
+The independent OOM guard (D-5057/D-5075) remains unchanged.
 
 SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel
 lines around the remote spawn JSON. Only the single bracketed JSON receipt is

@@ -33,11 +33,11 @@ def registry_caps():
             raise ValueError('hosts must be a list')
         return registry
     except (OSError, ValueError, KeyError, TypeError):
-        logging.warning('hosts registry missing or malformed; overflow disabled, local defaults 4/3000')
+        logging.warning('hosts registry missing or malformed; overflow disabled, local RAM defaults 3000/2048 MB')
         return {'hosts': [], 'self': None}
 
 
-def host_caps(registry, name):
+def host_caps(registry, name, role='implement'):
     for host in registry['hosts']:
         if not isinstance(host, dict):
             continue
@@ -47,27 +47,56 @@ def host_caps(registry, name):
                 isinstance(alias, str) and alias.lower() == name.lower() for alias in names):
             continue
         caps = host.get('caps')
-        if isinstance(caps, dict) and all(type(caps.get(key)) is int and caps[key] >= minimum
-                                         for key, minimum in (('max_runs', 1), ('mem_floor_mb', 0))):
-            return caps['max_runs'], caps['mem_floor_mb']
+        warmup = host.get('warmup')
+        ramp = warmup.get('ramp_mb') if isinstance(warmup, dict) else None
+        if (isinstance(caps, dict) and type(caps.get('mem_floor_mb')) is int
+                and caps['mem_floor_mb'] >= 0 and isinstance(ramp, dict) and ramp
+                and all(type(value) is int and value > 0 for value in ramp.values())):
+            return ramp.get(role, max(ramp.values())), caps['mem_floor_mb']
         break
     logging.warning('host %r: missing or malformed registry caps; not an overflow target', name)
     return None
 
 
-def local_limits(registry):
-    caps = host_caps(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry.get('self'))
+def local_limits(registry, role='implement'):
+    caps = host_caps(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry.get('self'), role)
     if caps is None:
-        logging.warning('local admission using conservative defaults: 4 runs / 3000 MB')
-    return caps or (4, 3000)
+        logging.warning('local admission using conservative RAM defaults: floor 3000 MB, role 2048 MB')
+    return caps or (2048, 3000)
 
 
-def decide(local_live, local_mem_mb, run_cap, floor_mb, ready_records, public):
+def memory_refusal(free_mb, reservation_mb, floor_mb):
+    """Worker-core mem_fit: effective_free_mb - reservation_mb >= mem_floor_mb.
+
+    These callers supply MemAvailable without unmaterialized slot reservations.
+    The independent OOM guard remains in force.
+    """
+    if free_mb - reservation_mb >= floor_mb:
+        return None
+    return f'memory: free {free_mb} MB, floor {floor_mb} MB, role {reservation_mb} MB'
+
+
+def admit_local(role):
+    reservation_mb, floor_mb = local_limits(registry_caps(), role)
+    free_mb = available_memory_mb()
+    return memory_refusal(free_mb, reservation_mb, floor_mb)
+
+
+def require_local_memory(service, role):
+    reason = admit_local(role)
+    if reason:
+        exc = cli.SpawnRefused(reason)
+        service.save_refusal(exc, role)
+        raise exc
+
+
+def decide(local_live, local_mem_mb, role_mb, floor_mb, ready_records, public):
     """Select from config-enriched readiness records; age is computed on read."""
-    if local_live < run_cap and local_mem_mb >= floor_mb:
+    local_reason = memory_refusal(local_mem_mb, role_mb, floor_mb)
+    if not local_reason:
         return Decision(None, 'local room')
     if not public:
-        return Decision(None, 'queue: repo is not public (absent or unknown allowlist)')
+        return Decision(None, local_reason + '; queue: repo is not public (absent or unknown allowlist)')
     candidates, refused = [], []
     for name, row in sorted(ready_records.items()):
         reason = row.get('refusal')
@@ -82,22 +111,20 @@ def decide(local_live, local_mem_mb, run_cap, floor_mb, ready_records, public):
                      for key in ('live_runs', 'mem_available_mb')):
                 reason = 'malformed readiness'
             elif any(type(row.get(key)) is not int or row[key] < minimum
-                     for key, minimum in (('run_cap', 1), ('floor_mb', 0))):
+                     for key, minimum in (('role_mb', 1), ('floor_mb', 0))):
                 reason = 'missing or malformed registry caps'
-            elif row['live_runs'] >= row['run_cap']:
-                reason = 'run cap'
-            elif row['mem_available_mb'] < row['floor_mb']:
-                reason = 'memory floor'
+            else:
+                reason = memory_refusal(row['mem_available_mb'], row['role_mb'], row['floor_mb'])
         if reason:
             refused.append(f'{name}: {reason}')
         else:
-            candidates.append((-(row['run_cap'] - row['live_runs']), -row['mem_available_mb'], name))
+            candidates.append((-(row['mem_available_mb'] - row['floor_mb']), name))
     if candidates:
-        return Decision(min(candidates)[2], 'local run cap or memory floor')
-    return Decision(None, 'queue: ' + ('; '.join(refused) or 'no overflow hosts configured'))
+        return Decision(min(candidates)[1], local_reason)
+    return Decision(None, local_reason + '; queue: ' + ('; '.join(refused) or 'no overflow hosts configured'))
 
 
-def ready_records(config):
+def ready_records(config, role='implement'):
     records = {}
     registry = registry_caps()
     for name, host in config.get('hosts', {}).items():
@@ -116,23 +143,27 @@ def ready_records(config):
             row['fresh'] = 0 <= age <= 600
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             row['refusal'] = 'missing or malformed readiness'
-        caps = host_caps(registry, name)
+        caps = host_caps(registry, name, role)
         if caps is None:
             row.setdefault('refusal', 'missing or malformed registry caps')
         else:
-            row.update(run_cap=caps[0], floor_mb=caps[1])
+            row.update(role_mb=caps[0], floor_mb=caps[1])
         records[name] = row
     return records
 
 
 def local_resources():
     runs = cli.SpawnService().ps()['runs']
+    return sum(row.get('status') == 'running' for row in runs), available_memory_mb()
+
+
+def available_memory_mb():
     try:
         memory = next(int(line.split()[1]) // 1024 for line in Path('/proc/meminfo').read_text().splitlines()
                       if line.startswith('MemAvailable:'))
     except StopIteration as exc:
         raise ValueError('MemAvailable missing') from exc
-    return sum(row.get('status') == 'running' for row in runs), memory
+    return memory
 
 
 def remote_spawn(name, host, card, prompt, options):
@@ -206,16 +237,19 @@ def main(argv=None):
     parser.add_argument('--repo', required=True)
     parser.add_argument('--card', required=True)
     parser.add_argument('--prompt', required=True)
+    parser.add_argument('--role', default='implement')
     args, options = parser.parse_known_args(argv)
+    if args.role != 'implement':
+        options.extend(['--role', args.role])
     try:
         path = Path(os.environ.get('PLANGRAPH_OVERFLOW_HOSTS', '~/.config/plangraph/overflow-hosts.json')).expanduser()
         try:
             config = json.loads(path.read_text())
         except (OSError, ValueError):
             config = {}
-        run_cap, floor_mb = local_limits(registry_caps())
+        role_mb, floor_mb = local_limits(registry_caps(), args.role)
         live, memory = local_resources()
-        if decide(live, memory, run_cap, floor_mb, {}, False).reason == 'local room':
+        if decide(live, memory, role_mb, floor_mb, {}, False).reason == 'local room':
             return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
         public = str(Path(args.repo).resolve()) in [str(Path(p).expanduser().resolve())
                                                   for p in config.get('public_repos', [])]
@@ -224,10 +258,10 @@ def main(argv=None):
         if diff and Path(diff['repo']).resolve() != Path(args.repo).resolve():
             public = False
         prompt = Path(args.prompt).read_text()
-        records = ready_records(config)
+        records = ready_records(config) if args.role == 'implement' else ready_records(config, args.role)
         attempts = 0
         while True:
-            decision = decide(live, memory, run_cap, floor_mb, records, public)
+            decision = decide(live, memory, role_mb, floor_mb, records, public)
             if decision.host is None:
                 print(json.dumps({'overflow_reason': decision.reason}))
                 return 5
