@@ -107,51 +107,47 @@ fn scan_chunks(reader: &mut impl Read, mut size: usize, blob: bool) -> Result<()
         position += count;
         size -= count;
     }
+    if blob && scanner.finish() {
+        return Err(Refusal::SecretInHistory);
+    }
     Ok(())
 }
 
-/// Keep every possible start, not a fixed number of bytes. All policy matches
-/// start with an ASCII word character or a PEM dash. Before the first such
-/// character, only one character of boundary context is necessary. Once a
-/// candidate exists we deliberately retain it through EOF: the shared policy
-/// includes unbounded names, whitespace, quoted values and PEM headers.
-/// This conservative strategy avoids duplicating the policy regexes here.
+/// Retain raw bytes without dropping starts or boundary context. Use the shared
+/// policy, including all four UTF-16 lanes, rather than duplicating its rules.
+/// Scan only after the carry doubles and at EOF: total input to the policy is
+/// O(blob size), not O(blob size squared / CHUNK). The carry costs O(blob size)
+/// memory (plus the shared scanner's linear temporary allocations); it is not
+/// a bounded window. No size cap introduces additional secret refusals.
 #[derive(Default)]
 struct BlobScanner {
-    text: [String; 5],
-    started: [bool; 5],
-    previous: Option<u8>,
+    bytes: Vec<u8>,
+    scanned: usize,
+    #[cfg(test)]
+    scanned_bytes: usize,
 }
 
 impl BlobScanner {
-    fn character(&mut self, lane: usize, c: u8) {
-        if c.is_ascii_alphanumeric() || c == b'_' || c == b'-' {
-            self.started[lane] = true;
+    fn scan(&mut self) -> bool {
+        self.scanned = self.bytes.len();
+        #[cfg(test)]
+        {
+            self.scanned_bytes += self.scanned;
         }
-        if !self.started[lane] {
-            self.text[lane].clear();
-        }
-        self.text[lane].push(char::from(c));
+        crate::writer_secret::scan_bytes(&self.bytes)
     }
 
-    fn push(&mut self, bytes: &[u8], position: usize) -> bool {
-        for (i, &byte) in bytes.iter().enumerate() {
-            self.character(0, if byte < 128 { byte } else { b' ' });
-            if let Some(previous) = self.previous {
-                let alignment = (position + i - 1) % 2;
-                for (endian, pair) in [[previous, byte], [byte, previous]].into_iter().enumerate() {
-                    let value = u16::from_le_bytes(pair);
-                    self.character(
-                        1 + alignment * 2 + endian,
-                        if value < 128 { value as u8 } else { b' ' },
-                    );
-                }
-            }
-            self.previous = Some(byte);
+    fn push(&mut self, bytes: &[u8], _position: usize) -> bool {
+        self.bytes.extend_from_slice(bytes);
+        if self.bytes.len() >= self.scanned.max(CHUNK).saturating_mul(2) {
+            self.scan()
+        } else {
+            false
         }
-        self.text
-            .iter()
-            .any(|text| crate::redact::redact(text) != *text)
+    }
+
+    fn finish(&mut self) -> bool {
+        self.bytes.len() != self.scanned && self.scan()
     }
 }
 #[cfg(test)]
