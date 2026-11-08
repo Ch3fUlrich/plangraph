@@ -1,5 +1,6 @@
 """Origin-main decision proof for keeper closes; no router batch required."""
 import hashlib
+import json
 import re
 import subprocess
 
@@ -65,18 +66,25 @@ def _proof(store, key, item, decision, row):
     return hashlib.sha256(row.encode("utf-8")).hexdigest()
 
 
+def _item_digest(item):
+    return hashlib.sha256(json.dumps(dict(item), sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def close_decision(store, principal, key, decision, epoch, batch_ref, now):
     if batch_ref is not None:
         raise Refused("validation", "choose decision_ref or batch_ref, not both")
     if not isinstance(decision, str) or not re.fullmatch(r"D-[0-9]{4,}", decision):
         raise Refused("validation", "decision_ref must be D-NNNN (no local or non-main ref)")
     item = store._get_or_refuse(key)
+    item_digest = _item_digest(item)
     _authorize(store, principal, item, epoch)
     _evidence(store, key, item, decision)
     row = _row(store, item, now, decision)
     digest = _proof(store, key, item, decision, row)
     with store._write():
         fresh = store._get_or_refuse(key)
+        if _item_digest(fresh) != item_digest:
+            raise Refused("conflict", "item row changed during close")
         store._assert_unlocked(fresh)
         _authorize(store, principal, fresh, epoch)
         if fresh["epoch"] != item["epoch"]:
@@ -86,8 +94,7 @@ def close_decision(store, principal, key, decision, epoch, batch_ref, now):
         if fresh.get("review_tier") != "none" and fresh.get("kind") not in (
                 "decision", "operator_task"):
             raise Refused("bad_state", "item kind/tier cannot close on a decision")
-        if _proof(store, key, fresh, decision, row) != digest:
-            raise Refused("conflict", "decision row changed during close")
+        _proof(store, key, fresh, decision, row)
         if "commit" in (fresh.get("evidence_kinds") or []):
             store._check_commit_evidence(key, fresh, now)
         cursor = store.conn.execute(

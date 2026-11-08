@@ -193,7 +193,61 @@ def test_slow_git_timeout_allows_other_writes(world, tmp_path, monkeypatch):
     assert not errors
 
 
-def test_cli_batch_epoch_refused():
-    from plangraph.keeper.cli_verbs import cmd_close
-    with pytest.raises(ValueError, match="--epoch requires --decision-ref, not --batch"):
-        cmd_close(SimpleNamespace(key="demo:A", batch="proof@sha", epoch=1), None)
+def test_cli_batch_epoch_refused(world, capsys):
+    from plangraph.keeper.api_routes import _close_on_decision
+    from plangraph.keeper.cli import main
+    with pytest.raises(Refused) as exc:
+        _close_on_decision(world.store, world.p("router"),
+                           {"key": "demo:A", "batch_ref": "proof@sha", "epoch": 1},
+                           lambda body, key: body[key])
+    assert main(["close", "demo:A", "--batch", "proof@sha", "--epoch", "1"]) == 2
+    output = capsys.readouterr()
+    assert output.err == f"{exc.value.code}: {exc.value.msg}\n"
+    assert not output.out
+
+
+@pytest.mark.parametrize("decision", ["D-abc", "other:D-5024"])
+def test_invalid_decision_ref_refused(world, decision):
+    with pytest.raises(Refused, match="decision_ref must be D-NNNN") as exc:
+        world.store.close_on_decision(world.p("router"), "demo:A", decision_ref=decision)
+    assert exc.value.code == "validation"
+
+
+def test_both_refs_refused(world):
+    with pytest.raises(Refused, match="choose decision_ref or batch_ref, not both") as exc:
+        close(world, batch_ref="proof@sha")
+    assert exc.value.code == "validation"
+
+
+def test_item_digest_rechecked_inside_write(world, monkeypatch):
+    from plangraph.keeper import store_decision_close as module
+    digest = module._item_digest
+    phases = []
+
+    def checked(item):
+        phases.append(world.conn.in_transaction)
+        return digest(item)
+
+    monkeypatch.setattr(module, "_item_digest", checked)
+    close(world)
+    assert phases == [False, True]
+
+
+def test_item_changed_between_proof_and_lock_refused(world, monkeypatch):
+    from plangraph.keeper import store_decision_close as module
+    proof = module._proof
+
+    def changed(*args):
+        result = proof(*args)
+        assert not world.conn.in_transaction
+        with world.store._write():
+            world.conn.execute("UPDATE items SET title='changed' WHERE key='demo:A'")
+        return result
+
+    monkeypatch.setattr(module, "_proof", changed)
+    with pytest.raises(Refused, match="item row changed during close") as exc:
+        close(world)
+    assert exc.value.code == "conflict"
+    assert world.store._get_or_refuse("demo:A")["state"] == "claimed"
+    assert not world.conn.execute(
+        "SELECT 1 FROM events WHERE type='closed_on_decision'").fetchone()
