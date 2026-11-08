@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from plangraph.routing_support.claude_seat import claude_access_args
-from plangraph.routing_support.review_mode import leg_tool_mode, prompt_only_command
+from plangraph.routing_support.review_mode import leg_tool_mode, prompt_only_command, review_prompt
 
 #: Environment variable naming the model gateway base URL (see ``gateway_url``).
 GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
@@ -372,8 +372,8 @@ def build_command(
 ) -> list[str]:
     """Explicit harness is authoritative; else gateway-first. Unknown pairs use tools."""
     from plangraph.mimo_policy import check_mimo_path
-    if tool_mode is None:
-        tool_mode = leg_tool_mode(client, model_or_combo)
+    tool_mode = tool_mode if tool_mode is not None else leg_tool_mode(client, model_or_combo)
+    prompt = review_prompt(prompt, tool_mode, client) if role == "review" else prompt
     check_mimo_path(model_or_combo)
     if client is not None:
         if client not in (*CLIENTS, "qodercli"):

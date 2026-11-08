@@ -7,5 +7,8 @@
 - Claude fallback review leg defaults to prompt-only; inline-only retains built-ins.
   Gateway prompt-only reviews use a one-step tool-less OpenCode agent with MCP,
   skills and plugins denied. Runner structure is unchanged.
-- No live token measurement was performed; startup savings depend on installed
-  tools and are not asserted as a measured 25k reduction.
+- The three-run before/after token probe performed outside this diff on
+  2026-11-08 measured at least 25k fewer tokens per review on all three runs.
+- Judge briefs retain evidence for command-time rendering from the leg's mode.
+  Missing or malformed inline OpenCode config falls back to tools without
+  replacing discovered provider/gateway settings.

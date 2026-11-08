@@ -20,6 +20,13 @@ def cited_paths(findings: str) -> list[str]:
                              and ".." not in p.split("/")))
 
 
+class JudgePrompt(str):
+    """String-compatible brief retaining evidence for seat-derived rendering."""
+
+    def with_tool_mode(self, mode: str) -> str:
+        return build_judge_prompt(**self.evidence, tool_mode=mode)
+
+
 def build_judge_prompt(
     findings: str, diff: str, files: Mapping[str, str | None],
     ci: Mapping[str, str], *, byte_budget: int = 100_000,
@@ -58,7 +65,10 @@ def build_judge_prompt(
             remaining -= len(text.encode("utf-8"))
             parts.append(f"## File: {path}\n{text}")
     parts.append("## Cut files\n" + ("\n".join(cut) if cut else "None"))
-    return "\n\n".join(parts) + "\n"
+    result = JudgePrompt("\n\n".join(parts) + "\n")
+    result.evidence = {"findings": findings, "diff": diff, "files": dict(files), "ci": dict(ci),
+                       "byte_budget": byte_budget, "revision_range": revision_range}
+    return result
 
 
 def collect_files(root: Path, paths: list[str]) -> dict[str, str | None]:
