@@ -210,10 +210,10 @@ class HostSamplesMixin:
         if cap is not None and end - start > cap:
             invalid()
         rows = self.conn.execute(f'SELECT * FROM host_samples_{resolution} WHERE host_id=? '
-                                 'AND received_at>=? AND received_at<? ORDER BY received_at,seq LIMIT 10000',
+                                 'AND received_at>=? AND received_at<? ORDER BY received_at,seq LIMIT 10001',
                                  (host_id, start, end)).fetchall()
-        result = [self._host_row(row) for row in rows]
-        return dict(rows=result, truncated=True) if len(result) == 10000 else result
+        result = [self._host_row(row) for row in rows[:10000]]
+        return dict(rows=result, truncated=True) if len(rows) > 10000 else result
 
     def maintain_host_samples(self):
         self._host_pg()

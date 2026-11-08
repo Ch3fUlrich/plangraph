@@ -11,8 +11,7 @@ from plangraph.keeper.errors import Refused
 pytestmark = pytest.mark.skipif(not DSN, reason="needs Postgres")
 
 
-@pytest.mark.parametrize("body", [[], "fixture", pytest.param(None, marks=pytest.mark.xfail(
-    strict=True, reason="api.py treats JSON null as its 413 sentinel before dispatch")), 1])
+@pytest.mark.parametrize("body", [[], "fixture", None, 1])
 def test_non_object_http(world, srv, body):
     _, minted = host_principal(world)
     status, _, _ = call(srv, "/v1/ingest_host_sample", method="POST",
@@ -46,6 +45,19 @@ def test_range_row_cap(world, resolution):
     assert result["truncated"] is True
     assert len(result["rows"]) == 10000
     assert result["rows"][0]["received_at"] == start + 1
+
+
+def test_range_exactly_cap_not_truncated(world):
+    who, _ = host_principal(world)
+    world.store.ingest_host_sample(who, sample())  # creates the current raw partition
+    start = world.clock()
+    world.conn.execute(
+        "INSERT INTO host_samples_raw (host_id,received_at,seq,sample,sample_count) "
+        "SELECT 'host-a', ? + n, n, ?, 1 FROM generate_series(1,10000) n",
+        (start, json.dumps(sample())))
+    result = world.store.host_samples_range(world.p("reader"), "host-a",
+                                            start + 1, start + 10001, "raw")
+    assert isinstance(result, list) and len(result) == 10000
 
 
 def test_revoke_unknown_and_repeat(world):
