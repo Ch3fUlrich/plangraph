@@ -17,6 +17,18 @@ pub(super) fn build(
     now_ms: u64,
     duration: u64,
 ) -> Result<Result<Value, &'static str>, ReconcileError> {
+    // Attribution errors must never prevent durable process settlement.
+    Ok(build_checked(leg, role, run, attempt, now_ms, duration)
+        .unwrap_or(Err("invalid attribution")))
+}
+fn build_checked(
+    leg: &Value,
+    role: pg_worker_core::hosts::Role,
+    run: &str,
+    attempt: u32,
+    now_ms: u64,
+    duration: u64,
+) -> Result<Result<Value, &'static str>, ReconcileError> {
     if !leg.is_object() {
         return Err(ReconcileError::Invalid);
     }
@@ -83,6 +95,10 @@ mod tests {
         for leg in [
             json!({"leg_key":"","route_key":"route"}),
             json!({"leg_key":"leg","route_key":""}),
+            json!({"leg_key":42}),
+            json!({"leg_key":"leg","route_key":[]}),
+            json!(null),
+            json!({}),
         ] {
             assert!(build(
                 &leg,
@@ -94,6 +110,26 @@ mod tests {
             )
             .unwrap()
             .is_err());
+            let dir = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+            let mut record = crate::runs::create(
+                &dir,
+                "run-invalid",
+                "fixture",
+                json!({"role":"implement","attempts":[{"started":1,"leg":leg}]}),
+                pg_worker_core::run::record::Status::Running,
+            )
+            .unwrap_or_else(|_| panic!("fixture creation failed"));
+            super::super::settle(&dir, &mut record, 1, "gone", 2000).unwrap();
+            let saved = pg_worker_core::run::record::RunRecord::read(&dir, "run-invalid").unwrap();
+            assert_eq!(
+                saved.status(),
+                Some(pg_worker_core::run::record::Status::Orphaned)
+            );
+            let attempt = &saved.get("attempts").unwrap()[0];
+            assert!(attempt["outcome"].is_null());
+            assert!(attempt["outcome_skip_reason"].as_str().is_some());
+            assert!(crate::evidence_row::adapted(&saved.to_value()).0.is_empty());
+            std::fs::remove_dir_all(dir).unwrap();
         }
     }
 }

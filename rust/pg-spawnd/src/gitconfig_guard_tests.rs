@@ -1,4 +1,5 @@
-use {super::*, serde_json::json};
+use super::*;
+use serde_json::json;
 pub(super) struct TempDir(PathBuf);
 impl TempDir {
     pub(super) fn new() -> Self {
@@ -37,7 +38,7 @@ pub(super) fn fixture(linked: bool) -> (TempDir, PathBuf, PathBuf, RunRecord) {
         temp.path(),
         "run-guard",
         "local",
-        json!({"attempts":[{}]}).as_object().unwrap().clone(),
+        json!({}).as_object().unwrap().clone(),
         Status::Running,
         1.0,
     )
@@ -55,7 +56,10 @@ fn changed_common_worktree_restored_and_failed_after_restart() {
     fs::write(&config, b"[core]\n\tworktree = intruder\n").unwrap();
     drop(record);
     let mut record = RunRecord::read(temp.path(), "run-guard").unwrap();
+    let attempts = record.get("attempts").cloned();
     crate::runs::finish(&mut record, Status::Completed, &json!({}), 1);
+    assert_eq!(record.get("attempts").cloned(), attempts);
+    assert!(record.get("attempts_error").is_some());
     assert_eq!(fs::read(config).unwrap(), before);
     assert_eq!(record.status(), Some(Status::Failed));
     assert_eq!(record.get("reason"), Some(&json!("gitconfig_tampered")));
