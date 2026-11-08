@@ -9,3 +9,4 @@ tests/**/_*.py | test-only helper modules imported by tests/**/test_*.py (D-4821
 src/plangraph/fleet_snapshot.py | snapshot-only fleet projection (D-5062), retired by SPAWNER-RUST-PORT
 src/plangraph/keeper/cli_output_verbs.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
 src/plangraph/keeper/store_decision_close.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
+src/plangraph/keeper/run_records.py | Python area unblock (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER

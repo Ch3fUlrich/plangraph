@@ -21,6 +21,13 @@ def test_invalid_record_is_unknown_without_repairs(tmp_path, content):
         "runs", "runs/run-bad", "runs/run-bad/record.json"]
 
 
+def test_missing_record_is_one_unknown_run_without_repairs(tmp_path):
+    directory = tmp_path / "runs/run-missing"
+    directory.mkdir(parents=True)
+    assert read_run_records(tmp_path) == [{"run_id": "run-missing"}]
+    assert list(directory.iterdir()) == []
+
+
 def test_valid_record_is_read(tmp_path):
     path = tmp_path / "runs/run-live/record.json"
     path.parent.mkdir(parents=True)

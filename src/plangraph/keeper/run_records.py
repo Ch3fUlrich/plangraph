@@ -11,7 +11,10 @@ def read_run_records(state: Path):
     if not directory.is_dir():
         return None
     runs = []
-    for path in sorted(directory.glob("run-*/record.json")):
+    for run_directory in sorted(directory.glob("run-*")):
+        if not run_directory.is_dir():
+            continue
+        path = run_directory / "record.json"
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(record, dict) or not isinstance(record.get("run_id"), str):
