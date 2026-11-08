@@ -34,7 +34,6 @@ fn fixture() -> (std::path::PathBuf, RepoEntry, DiffRef) {
         python: None,
         import_roots: vec![],
         cache_env: Default::default(),
-        live_dir: None,
     };
     let diff = DiffRef {
         repo_id: "repo".into(),
@@ -180,7 +179,6 @@ fn ref_option_path_traversal_refused() {
         python: None,
         import_roots: vec![],
         cache_env: Default::default(),
-        live_dir: None,
     };
     for sha in ["--output=elsewhere", "../HEAD", "HEAD", "ABC"] {
         let diff = DiffRef {
