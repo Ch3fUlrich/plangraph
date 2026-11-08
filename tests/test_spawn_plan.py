@@ -70,7 +70,7 @@ def test_operator_order_and_roles_roundtrip(tmp_path):
         "cx-gpt-6.1-sol"]
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
-        "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
+        "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "omniroute-agy-gemini-3.8-flash", "agy-gemini-3.8-flash",
         "mimo-v2.6-flash", "mimo-v2.6-pro", "opencode-go-gemini-4-argon",
         "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
         "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark",

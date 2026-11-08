@@ -6,6 +6,7 @@ spawner catalog and the review gateway. Imports nothing from plangraph.spawner.
 
 from typing import Any
 from plangraph.registry_columns import tag_seed_rows
+from plangraph.catalog_gateway_seats import gateway_seats
 
 # Canonical 22 Models from Artificial Analysis v4.3.2
 SEED_MODELS: list[dict[str, Any]] = tag_seed_rows([
@@ -553,3 +554,4 @@ SEED_MODELS: list[dict[str, Any]] = tag_seed_rows([
         "trains_on_prompts": 1,  # D-4193 upstream route not verified, conservative
     },
 ])
+SEED_MODELS.extend(gateway_seats(SEED_MODELS))
