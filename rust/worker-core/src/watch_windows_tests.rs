@@ -34,6 +34,11 @@ fn timeout_then_adopt() {
     });
     api.adopted().unwrap();
     helper.join().unwrap();
+    assert_eq!(slot.pid().load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        unsafe { WaitForSingleObject(rejected.as_raw_handle(), 0) },
+        258
+    );
 }
 #[cfg(windows)]
 #[test]

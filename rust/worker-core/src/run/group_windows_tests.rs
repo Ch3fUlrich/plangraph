@@ -70,7 +70,7 @@ fn launch(
 ) -> Result<(Grouped, tempfile::TempDir), LaunchError> {
     launch_bounded(unit, mode, missing, piped, None)
 }
-fn launch_bounded(
+pub(super) fn launch_bounded(
     unit: &str,
     mode: &str,
     missing: bool,
@@ -135,14 +135,10 @@ fn named(unit: &str) -> bool {
         true
     }
 }
-fn until(mut predicate: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while !predicate() {
-        assert!(Instant::now() < deadline);
-        thread::sleep(Duration::from_millis(10));
-    }
+pub(super) fn until(mut predicate: impl FnMut() -> bool) {
+    until_deadline(Instant::now() + Duration::from_secs(10), &mut predicate);
 }
-fn gone(pid: u32) -> bool {
+pub(super) fn gone(pid: u32) -> bool {
     // SAFETY: numeric pid; RAII is simulated by immediate close after the query.
     let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
     if handle.is_null() {
@@ -278,6 +274,7 @@ fn owner_process() {
             );
         }
         tx.send(()).unwrap();
+        let _ = std::io::copy(&mut output, &mut std::io::sink());
     });
     rx.recv_timeout(Duration::from_secs(2)).unwrap();
     std::fs::write(path, format!("{} {}", g.child.id(), creation_time(g.child.id()).unwrap())).unwrap();
@@ -390,8 +387,11 @@ fn assert_member(unit: &str, ticket: &str) {
     assert!(NativeJob::open(&job_name(unit)).unwrap().unwrap().member(pid.parse().unwrap(), start.parse().unwrap()).unwrap());
 }
 fn until_deadline(deadline: Instant, mut predicate: impl FnMut() -> bool) {
-    while !predicate() {
+    loop {
         assert!(Instant::now() < deadline);
+        if predicate() {
+            break;
+        }
         thread::sleep(Duration::from_millis(10));
     }
 }

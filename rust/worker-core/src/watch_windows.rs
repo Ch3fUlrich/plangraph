@@ -147,43 +147,42 @@ mod native {
                     std::sync::atomic::Ordering::SeqCst,
                 )
                 .map_err(|_| io::Error::other("holder adoption already requested"))?;
-            // SAFETY: verified Job remains owned; manual-reset event stays signaled.
-            if unsafe { ResetEvent(outcome.as_raw_handle()) } == 0
+            let result = if unsafe { ResetEvent(outcome.as_raw_handle()) } == 0
                 || unsafe { ResetEvent(rejected.as_raw_handle()) } == 0
                 || unsafe { SetEvent(event.as_raw_handle()) } == 0
             {
-                request.pid().store(0, std::sync::atomic::Ordering::SeqCst);
-                return Err(io::Error::last_os_error());
-            }
-            // Only the holder can acknowledge admission; a stalled requester cannot
-            // report success after the holder has committed to expiry.
-            if unsafe { WaitForSingleObject(outcome.as_raw_handle(), 5000) } == WAIT_OBJECT_0 {
+                Err(io::Error::last_os_error())
+            } else if unsafe { WaitForSingleObject(outcome.as_raw_handle(), 5000) } == WAIT_OBJECT_0
+            {
                 Ok(())
             } else {
-                if unsafe { SetEvent(rejected.as_raw_handle()) } == 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                let committed = request.pid().compare_exchange(
-                    unsafe { GetCurrentProcessId() },
-                    u32::MAX - 1,
-                    std::sync::atomic::Ordering::SeqCst,
-                    std::sync::atomic::Ordering::SeqCst,
-                ) == Err(u32::MAX);
-                // A concurrently committed acknowledgement wins; otherwise rejection
-                // remains latched so a delayed holder cannot admit this requester.
-                if unsafe { WaitForSingleObject(outcome.as_raw_handle(), 1000) } == WAIT_OBJECT_0
-                    || committed
+                Err(io::Error::other("holder did not acknowledge adoption"))
+            };
+            // Latch cancellation even when event operations failed. Once claimed,
+            // wait for acknowledgement before releasing the slot for the next exchange.
+            let committed = request.pid().compare_exchange(
+                unsafe { GetCurrentProcessId() },
+                u32::MAX - 1,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            ) == Err(u32::MAX);
+            if committed {
+                while unsafe { WaitForSingleObject(outcome.as_raw_handle(), 1000) } != WAIT_OBJECT_0
                 {
-                    Ok(())
-                } else {
-                    if unsafe { ResetEvent(event.as_raw_handle()) } == 0
-                        || unsafe { ResetEvent(rejected.as_raw_handle()) } == 0
-                    {
-                        return Err(io::Error::last_os_error());
-                    }
-                    request.pid().store(0, std::sync::atomic::Ordering::SeqCst);
-                    Err(io::Error::other("holder did not acknowledge adoption"))
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
+            }
+            let mut cleanup_error = None;
+            for handle in [&event, &rejected] {
+                if unsafe { ResetEvent(handle.as_raw_handle()) } == 0 {
+                    cleanup_error = Some(io::Error::last_os_error());
+                }
+            }
+            request.pid().store(0, std::sync::atomic::Ordering::SeqCst);
+            if committed {
+                Ok(())
+            } else {
+                cleanup_error.map_or(result, Err)
             }
         }
         fn member(&mut self, pid: u32, start: u64) -> io::Result<bool> {

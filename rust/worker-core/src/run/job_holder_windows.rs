@@ -8,6 +8,10 @@ pub fn validate_max_s(value: Option<&str>) -> Result<u64, String> {
 pub fn deadline_ms(now: u64, seconds: u64) -> Option<u64> {
     now.checked_add(seconds.checked_mul(1000)?)
 }
+#[cfg(any(windows, test))]
+fn expired<T: PartialOrd>(deadline: Option<T>, now: T) -> bool {
+    deadline.is_some_and(|d| now >= d)
+}
 pub fn parse_ticket(value: &str) -> Option<(usize, u64)> {
     let mut fields = value.split_whitespace();
     let handle = fields.next()?.parse().ok()?;
@@ -48,6 +52,7 @@ mod platform {
         },
     };
     static HOLDER: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    /// The embedder must register a binary dispatching `__job-holder` before launch.
     pub fn set_holder_path(path: std::path::PathBuf) {
         let _ = HOLDER.set(path);
     }
@@ -151,6 +156,7 @@ mod platform {
     pub fn rejected_event(name: &str, create: bool) -> io::Result<OwnedHandle> {
         adoption_event(&format!("{name}-rejected"), false, create)
     }
+    // The same-user Job/event DACL is the admission boundary, not the PID slot.
     // A same-user, non-inheritable mapping carries the requesting daemon PID.
     #[link(name = "kernel32")]
     #[rustfmt::skip]
@@ -297,56 +303,57 @@ mod platform {
             // still-suspended payload, including when hosted by the test harness.
             std::io::stdout().flush()?;
             loop {
+                if admitted {
+                    if unsafe { ResetEvent(event.as_raw_handle()) } == 0
+                        || unsafe { SetEvent(outcome.as_raw_handle()) } == 0
+                    {
+                        eprintln!("holder acknowledgement: {}", io::Error::last_os_error());
+                        std::thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                    admitted = false;
+                }
                 if deadline.is_none()
                     && unsafe { WaitForSingleObject(owner.as_raw_handle(), 0) } == WAIT_OBJECT_0
                 {
-                    if admitted {
-                        request.pid().store(0, std::sync::atomic::Ordering::SeqCst);
-                        admitted = false;
-                    }
                     deadline = Some(Instant::now() + Duration::from_secs(seconds));
                 }
                 let closing_now =
                     deadline.is_some_and(|d| Instant::now() + Duration::from_secs(6) >= d);
                 if closing_now {
                     if unsafe { SetEvent(closing.as_raw_handle()) } == 0 {
-                        return Err(io::Error::last_os_error());
+                        eprintln!("holder closing event: {}", io::Error::last_os_error());
                     }
                 }
                 // Admission and expiry are serialized here, not in the requester.
+                // Live handover is allowed by the same-user DACL; only the current
+                // owner's retained handle controls loss detection and a fresh window.
                 if !closing_now
                     && unsafe { WaitForSingleObject(event.as_raw_handle(), 0) } == WAIT_OBJECT_0
                     && unsafe { WaitForSingleObject(rejected.as_raw_handle(), 0) } == WAIT_TIMEOUT
                 {
                     let pid = request.pid().load(std::sync::atomic::Ordering::SeqCst);
-                    if pid == 0
-                        || pid >= u32::MAX - 1
-                        || !crate::watch::windows::claim_adoption(request.pid(), pid)
-                    {
-                        continue;
-                    }
-                    let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
-                    if raw.is_null() {
-                        if unsafe { ResetEvent(event.as_raw_handle()) } == 0 {
-                            return Err(io::Error::last_os_error());
+                    if pid != 0 && pid < u32::MAX - 1 {
+                        // Open failure is a lost race. Residual PID reuse can select
+                        // another same-user process; the DACL remains the trust boundary.
+                        let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+                        if raw.is_null() {
+                            eprintln!("holder requester lost: {}", io::Error::last_os_error());
+                        } else {
+                            let next = unsafe { OwnedHandle::from_raw_handle(raw) };
+                            if crate::watch::windows::claim_adoption(request.pid(), pid) {
+                                owner = next;
+                                deadline = None;
+                                admitted = true;
+                            }
                         }
-                        request.pid().store(0, std::sync::atomic::Ordering::SeqCst);
-                        continue;
                     }
-                    let next = unsafe { OwnedHandle::from_raw_handle(raw) };
-                    owner = next;
-                    if unsafe { ResetEvent(event.as_raw_handle()) } == 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                    if unsafe { SetEvent(outcome.as_raw_handle()) } == 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                    deadline = None;
-                    admitted = true;
                 }
-                if deadline.is_some_and(|d| Instant::now() >= d) {
+                if expired(deadline, Instant::now()) {
                     if unsafe { TerminateJobObject(job.as_raw_handle(), 1) } == 0 {
-                        return Err(io::Error::last_os_error());
+                        eprintln!("holder terminate: {}", io::Error::last_os_error());
+                        std::thread::sleep(Duration::from_millis(100));
+                        continue;
                     }
                     return Ok(());
                 }
@@ -361,7 +368,9 @@ mod platform {
                     )
                 } == 0
                 {
-                    return Err(io::Error::last_os_error());
+                    eprintln!("holder accounting: {}", io::Error::last_os_error());
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
                 }
                 if info.ActiveProcesses == 0 {
                     return Ok(());
@@ -377,23 +386,5 @@ mod platform {
     }
 }
 #[cfg(test)]
-#[rustfmt::skip]
-mod tests {
-    use super::*;
-    #[test] fn bounds() {
-        assert_eq!(validate_max_s(None), Ok(28800));
-        for s in ["600", "172800"] { assert!(validate_max_s(Some(s)).is_ok()); }
-        for s in ["599", "172801", "NaN", "inf", "-1", ""] { assert!(validate_max_s(Some(s)).is_err()); }
-    }
-    #[test] fn deadlines_and_tickets() {
-        assert_eq!(deadline_ms(10, 600), Some(600010));
-        assert_eq!(deadline_ms(u64::MAX, 1), None);
-        assert_eq!(deadline_ms(1, u64::MAX), None);
-        assert_eq!(parse_ticket("42 600010\n"), Some((42, 600010)));
-        for s in ["", "0 1", "1 0", "1 2 3", "-1 2"] { assert!(parse_ticket(s).is_none()); }
-    }
-    #[test] fn restrictive_dacl() {
-        assert_eq!(job_dacl("S-1-5-21-123"), Some("D:P(A;;GA;;;SY)(A;;GA;;;S-1-5-21-123)".into()));
-        for s in ["", "S-1-5-", "S-1-5-21)(A;;GA;;;WD)"] { assert!(job_dacl(s).is_none()); }
-    }
-}
+#[path = "job_holder_windows_tests.rs"]
+mod tests;
