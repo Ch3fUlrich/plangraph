@@ -88,7 +88,7 @@ impl Runs {
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
-        if !dry {
+        if !dry && crate::gitconfig_guard::writer_role(&role) {
             let dir = crate::gitconfig_guard::run_dir(state, &run_id)
                 .map_err(|_| internal("invalid run id"))?;
             match crate::gitconfig_guard::capture(&launch.cwd, &dir) {

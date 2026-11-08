@@ -16,6 +16,11 @@ struct Snapshot {
     bytes: Option<Vec<u8>>,
 }
 
+pub(crate) fn writer_role(role: &serde_json::Value) -> bool {
+    serde_json::from_value::<pg_worker_core::hosts::Role>(role.clone()).ok()
+        == Some(pg_worker_core::hosts::Role::Implement)
+}
+
 pub(crate) fn guard_diagnostic(
     record: &RunRecord,
     status: Status,
