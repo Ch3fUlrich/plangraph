@@ -240,7 +240,9 @@ fn schema_fields_required_and_patterns_match_rust() {
             .collect();
         let expected: std::collections::BTreeSet<&str> = keys
             .into_iter()
-            .filter(|key| name != "repoEntry" || !["python", "live_dir"].contains(key))
+            .filter(|key| {
+                name != "repoEntry" || !["python", "live_dir", "health_checks"].contains(key)
+            })
             .filter(|key| name != "hostEntry" || *key != "class")
             .collect();
         assert_eq!(required, expected, "required fields for {name}");

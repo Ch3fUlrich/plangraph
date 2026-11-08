@@ -33,6 +33,7 @@ pub(super) fn validate_fields(value: &serde_json::Value) -> Result<(), HostsErro
             "repo" => &[
                 "root",
                 "live_dir",
+                "health_checks",
                 "worktrees_root",
                 "remote",
                 "python",

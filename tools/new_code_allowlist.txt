@@ -9,6 +9,7 @@ tests/**/_*.py | test-only helper modules imported by tests/**/test_*.py (D-4821
 src/plangraph/fleet_snapshot.py | snapshot-only fleet projection (D-5062), retired by SPAWNER-RUST-PORT
 src/plangraph/fleet_sync/__init__.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
 src/plangraph/fleet_sync/__main__.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
+src/plangraph/fleet_sync/advance.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
 src/plangraph/fleet_sync/drift.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
 src/plangraph/fleet_sync/genconfig.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
 src/plangraph/fleet_sync/release.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST

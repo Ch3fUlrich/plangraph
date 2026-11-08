@@ -1,4 +1,4 @@
-# Fleet code sync: slice 1
+# Fleet code sync
 
 Run `python3 -m plangraph.fleet_sync release record` after fetching origin/main.
 The newest of the last 50 locally known main commits with successful required branch checks is
@@ -24,6 +24,45 @@ are ps-only. Overflow retains a deny-by-default empty public_repos allowlist.
 `drift --json` emits an array. Missing objects or unreachable transports produce
 `unknown`, never a fabricated zero; drift always exits 0. Counts use local Git
 objects, so fetch the release and host commits first.
+Routerctl calls `python3 -m plangraph.fleet_sync drift`; its integration lives in
+the private data repository.
 
-Later slices add advance, canary health checks, automatic rollback and routerctl
-integration. This slice never invokes deployment, keeper or model endpoints.
+## Advance and rollback (slice 2)
+
+`advance --sha SHA --hosts host-a host-b --go D-NNNN [--dry-run]`
+uses the same optional `--registry PATH`. The first host is the canary; hosts
+are processed serially and the first failure stops the rollout (exit 1).
+SHA must exactly match release.json. D-825 requires a router GO reference for
+each SHA; retain that requirement until 10 clean live runs. This command records
+the supplied decision reference, not an independent verification of router approval.
+
+Set `repos.plangraph.live_dir` to an absolute `<live_root>/current`, outside
+an absolute `worktrees_root`; local paths are resolved to reject symlink overlaps.
+Generated consumer configs continue to use that path. Releases
+are detached clones at `<live_root>/releases/<sha>`, independent of worktree cleanup.
+Configure `health_checks` with three argv arrays: `doctor` (spawner doctor),
+`whoami` (keeper whoami), and `spawn` (one dry-run spawn). These commands run from
+the candidate checkout before switching and from current after switching; spawn
+runs only once, after switching. Commands
+are injected configuration: advance refuses spawn argv without `--dry-run`.
+No shell expansion occurs for health commands; output is suppressed.
+
+POSIX current is atomically replaced as a symlink. Windows uses an atomically
+replaced `current.pointer` file containing the absolute release path; Windows
+launchers must resolve that pointer (ordinary path consumers need an adapter).
+Any prepare/health/switch/prune failure restores the previous target and marks the
+host FAILED. Earlier successful hosts are not reverted. Transport loss is FAILED;
+inspect the host before retrying because acknowledgement may have been lost.
+For an intentional rollback, record the previously approved release and obtain
+a fresh GO, then advance to it. Do not hand-edit generated host configs.
+
+Pruning retains three releases, always including current and previous.
+`--dry-run` validates inputs and prints each host plan without contacting hosts,
+writing logs, or changing files. Actual runs append JSON step/status records to
+`~/.local/state/plangraph/fleet-sync.log`, excluding commands, env and error text.
+An exclusive controller lock prevents concurrent advances from the same controller;
+an exclusive live-root lock also prevents different controllers interleaving on a host.
+After a crash, inspect the rollout before manually removing a stale lock
+(`~/.local/state/plangraph/fleet-sync.lock` or `<live_root>/.advance.lock`).
+Selected ps-only hosts, missing health checks, and unknown host ids are refused
+before contacting any host (exit 2, one diagnostic line per problem).
