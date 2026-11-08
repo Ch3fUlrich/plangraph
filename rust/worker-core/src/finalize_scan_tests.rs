@@ -106,7 +106,7 @@ fn finalize_scan_multi_mib_letters_have_linear_carry_and_scan_work() {
     let mut scanner = BlobScanner::default();
     for position in (0..size).step_by(CHUNK) {
         let count = CHUNK.min(size - position);
-        assert!(!scanner.push(&vec![b'q'; count], position));
+        assert!(!scanner.push(&vec![b'q'; count]));
         assert_eq!(scanner.bytes.len(), position + count);
         assert!(scanner.bytes.capacity() <= 2 * size);
     }
@@ -149,15 +149,15 @@ fn encode(text: &str, encoding: usize) -> Vec<u8> {
     if encoding == 0 {
         return text.as_bytes().to_vec();
     }
-    text.encode_utf16()
-        .flat_map(|unit| {
-            if encoding.is_multiple_of(2) {
-                unit.to_be_bytes()
-            } else {
-                unit.to_le_bytes()
-            }
-        })
-        .collect()
+    let mut bytes = vec![b' '; usize::from(encoding > 2)];
+    bytes.extend(text.encode_utf16().flat_map(|unit| {
+        if encoding.is_multiple_of(2) {
+            unit.to_be_bytes()
+        } else {
+            unit.to_le_bytes()
+        }
+    }));
+    bytes
 }
 
 #[test]
@@ -180,7 +180,10 @@ fn policy_starts_and_context_survive_every_lane_edge() {
             for encoding in 0usize..5 {
                 let encoded = encode(&format!("{context}{secret}\nclean"), encoding);
                 assert!(crate::writer_secret::scan_bytes(&encoded));
-                for edge in CHUNK - 2..=CHUNK + 2 {
+                for edge in [CHUNK, 2 * CHUNK, 4 * CHUNK]
+                    .into_iter()
+                    .flat_map(|checkpoint| checkpoint - 2..=checkpoint + 2)
+                {
                     // Place both the start and end around each exact byte edge.
                     for padding in [
                         edge - encode(context, encoding).len(),
@@ -197,5 +200,24 @@ fn policy_starts_and_context_survive_every_lane_edge() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn eof_last_byte_completes_secret_in_every_encoding() {
+    let secret = ["API_", "KEY=x"].concat();
+    for encoding in 0..5 {
+        let mut bytes = vec![b' '; CHUNK];
+        bytes.extend(encode(&secret, encoding));
+        let mut scanner = BlobScanner::default();
+        for chunk in bytes.chunks(CHUNK) {
+            assert!(!scanner.push(chunk));
+        }
+        assert_eq!(scanner.scanned, 0, "must exercise EOF, not a checkpoint");
+        assert!(scanner.finish(), "encoding={encoding}");
+        assert_eq!(
+            scan_chunks(&mut bytes.as_slice(), bytes.len(), true),
+            Err(Refusal::SecretInHistory)
+        );
     }
 }

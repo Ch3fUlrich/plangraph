@@ -95,16 +95,14 @@ fn batch(reader: &mut impl BufRead, input: &[u8]) -> Result<(), Refusal> {
 fn scan_chunks(reader: &mut impl Read, mut size: usize, blob: bool) -> Result<(), Refusal> {
     let mut buffer = [0; CHUNK];
     let mut scanner = BlobScanner::default();
-    let mut position = 0;
     while size > 0 {
         let count = size.min(CHUNK);
         reader
             .read_exact(&mut buffer[..count])
             .map_err(|_| Refusal::BadBundle)?;
-        if blob && scanner.push(&buffer[..count], position) {
+        if blob && scanner.push(&buffer[..count]) {
             return Err(Refusal::SecretInHistory);
         }
-        position += count;
         size -= count;
     }
     if blob && scanner.finish() {
@@ -117,8 +115,11 @@ fn scan_chunks(reader: &mut impl Read, mut size: usize, blob: bool) -> Result<()
 /// policy, including all four UTF-16 lanes, rather than duplicating its rules.
 /// Scan only after the carry doubles and at EOF: total input to the policy is
 /// O(blob size), not O(blob size squared / CHUNK). The carry costs O(blob size)
-/// memory (plus the shared scanner's linear temporary allocations); it is not
-/// a bounded window. No size cap introduces additional secret refusals.
+/// memory; Vec capacity can approach 2N for N retained bytes. The shared scanner
+/// decodes five lanes totaling at most 3N bytes (N ASCII + four N/2 UTF-16),
+/// sequentially, not simultaneously: at most N ASCII plus N/2 UTF-16 text is
+/// live, in addition to redaction's linear temporary strings. Thus peak memory
+/// is O(N), not a bounded window. No size cap adds secret refusals.
 #[derive(Default)]
 struct BlobScanner {
     bytes: Vec<u8>,
@@ -137,7 +138,7 @@ impl BlobScanner {
         crate::writer_secret::scan_bytes(&self.bytes)
     }
 
-    fn push(&mut self, bytes: &[u8], _position: usize) -> bool {
+    fn push(&mut self, bytes: &[u8]) -> bool {
         self.bytes.extend_from_slice(bytes);
         if self.bytes.len() >= self.scanned.max(CHUNK).saturating_mul(2) {
             self.scan()
