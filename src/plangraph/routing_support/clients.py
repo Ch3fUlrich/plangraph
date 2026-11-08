@@ -158,13 +158,6 @@ def build_child_env(
     ``gateway_url`` key).  When no source names one, no ``baseURL`` key is
     written at all -- this module ships no default endpoint.
 
-    On Windows (os.name == 'nt'), ALWAYS preserves:
-      - SystemRoot / SYSTEMROOT
-      - COMSPEC
-      - PATHEXT
-      - TEMP (and TMP)
-    preventing the Windows opencode serve port-in-use crash (D-2090 BUG-B).
-
     An ``extra_env`` value of ``None`` *removes* the inherited variable instead
     of setting it (D-3465): the probe must be able to strip caller git
     redirection (GIT_DIR and kin) that a plain update cannot express.
@@ -253,17 +246,7 @@ def build_routing_envelope_headers(
     author_model: str | None = None,
     nonce: str | None = None,
 ) -> dict[str, str]:
-    """Build structured routing envelope headers for OmniRoute ACP/Gateway.
-
-    Headers:
-      - X-OmniRoute-Task-Role: 'implement' | 'review' | 'orchestrate' | 'drive'
-      - X-OmniRoute-Risk: 'low' | 'normal' | 'high' | 'critical'
-      - X-OmniRoute-Min-Intelligence: str(min_intelligence)
-      - X-OmniRoute-Required-Context: str(required_context)
-      - X-OmniRoute-Exclude-Family: ','.join(exclude_families) (when non-empty)
-      - X-OmniRoute-Effort: effort ('low' | 'medium' | 'high' | 'xhigh')
-      - X-OmniRoute-Author-Model: author_model (when set)
-    """
+    """Build structured routing envelope headers for OmniRoute ACP/Gateway."""
     headers: dict[str, str] = {
         "X-OmniRoute-Task-Role": str(role),
         "X-OmniRoute-Risk": str(risk),
@@ -354,6 +337,18 @@ def build_standalone_fallback_command(
     if model:
         cmd.extend(["--model", model])
     return cmd
+
+
+def launch_stdin_payload(cmd, prompt, exe, *, is_nt=False):
+    """Move oversized Qoder text input off Windows argv; never use a prompt file."""
+    import subprocess
+    limit = 8000 if exe.lower().endswith(('.cmd', '.bat')) else 32000
+    if (is_nt and cmd[0] == 'qodercli'
+            and len(subprocess.list2cmdline([exe, *cmd[1:]])) > limit):
+        del cmd[cmd.index('-p') + 1]
+        cmd.extend(['--input-format', 'text'])
+        return prompt.encode('utf-8')
+    return prompt.encode('utf-8') if cmd[0] in STDIN_PROMPT_HARNESSES else None
 
 
 def build_command(

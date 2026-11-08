@@ -271,14 +271,19 @@ async def collect(runner, job_id, proc):
         if all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
             readers = [asyncio.create_task(reader(getattr(proc, n), n)) for n in ('stdout', 'stderr')]
             try:
-                if payload is not None and proc.stdin is not None:
+                if payload is not None:
                     try:
+                        if proc.stdin is None:
+                            raise BrokenPipeError('stdin unavailable')
                         proc.stdin.write(payload)
                         await proc.stdin.drain()
                     except (BrokenPipeError, ConnectionResetError):
-                        pass
+                        job.stderr = 'stdin_delivery_failed: pipe unavailable or closed'
+                        job.events.append({'event': 'stdin_delivery_failed'})
+                        raise RuntimeError(job.stderr) from None
                     finally:
-                        proc.stdin.close()
+                        if proc.stdin is not None:
+                            proc.stdin.close()
                 drain = asyncio.ensure_future(asyncio.gather(*readers, return_exceptions=True))
                 gone = asyncio.ensure_future(run_gone(proc))
                 await asyncio.wait([drain, gone], return_when=asyncio.FIRST_COMPLETED)
@@ -309,7 +314,10 @@ async def collect(runner, job_id, proc):
             try:
                 return await proc.communicate(input=payload)
             except TypeError:
-                pass
+                job.status, job.exit_code = 'failed', 1
+                job.stderr = 'stdin_delivery_failed: communicate rejected input'
+                job.events.append({'event': 'stdin_delivery_failed'})
+                raise RuntimeError('stdin_delivery_failed: communicate rejected input') from None
         return await proc.communicate()
     task = asyncio.create_task(output())
     refusal_wait = asyncio.ensure_future(refused.wait())

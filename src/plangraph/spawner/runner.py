@@ -544,6 +544,8 @@ class SpawnerRunner:
 
             import shutil
             resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
+            from plangraph.routing_support.clients import launch_stdin_payload
+            payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
             resolved_exe, launch_refusal = _resolve_launch(resolved_exe, cmd[1:], is_nt=_is_nt())
             if launch_refusal:
                 job.status = 'failed'
@@ -552,8 +554,8 @@ class SpawnerRunner:
                 job.end_time = time.time()
                 return job
 
-            if cmd[0] in STDIN_PROMPT_HARNESSES:
-                self._stdin_payloads[job_id] = prompt.encode("utf-8")
+            if payload is not None:
+                self._stdin_payloads[job_id] = payload
             self._adapter_tokens[job_id] = object()
             if role in ("implement", "fix"):
                 guard = self._init_git_config_guard(work_dir)
@@ -569,11 +571,7 @@ class SpawnerRunner:
                     env=child_env,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    stdin=(
-                        asyncio.subprocess.PIPE
-                        if cmd[0] in STDIN_PROMPT_HARNESSES
-                        else asyncio.subprocess.DEVNULL
-                    ),
+                    stdin=asyncio.subprocess.PIPE if payload is not None else asyncio.subprocess.DEVNULL,
                     **({"start_new_session": True} if os.name != "nt" else {}),
                 )
             except Exception as exc:

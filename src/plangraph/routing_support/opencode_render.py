@@ -143,8 +143,8 @@ def render_gateway_providers(
         active_block["settings"]["baseURL"] = _normalize_gateway_url(existing)
 
     rendered = json.dumps(config)
-    env["OPENCODE_CONFIG_CONTENT"] = rendered
     nt_check = _is_nt() if is_nt is None else is_nt
     if nt_check and len(rendered) > 30000:
         return REFUSAL_TOO_LARGE
+    env["OPENCODE_CONFIG_CONTENT"] = rendered
     return None

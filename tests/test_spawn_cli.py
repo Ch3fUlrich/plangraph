@@ -321,7 +321,7 @@ def test_windows_killer():
     async def run():
         calls = []
         class Process:
-            async def communicate(self): return b'', b''
+            async def communicate(self, input=None): return b'', b''
         async def factory(*args, **kwargs):
             calls.append(args)
             return Process()

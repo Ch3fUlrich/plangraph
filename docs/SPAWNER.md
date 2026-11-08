@@ -1,4 +1,15 @@
 # Plangraph Spawner & Model Routing Architecture
+
+### Windows prompt delivery
+
+Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
+argv guard (32,000 characters, or 8,000 for batch shims). This uses the existing
+per-job stdin payload path, not a temporary prompt file. Agy retains explicit
+long-command refusal until its stream input and final-result format are verified.
+Rejected stdin input or an unavailable/closed input pipe fails the run explicitly;
+the watchdog never retries a rejected payload as an empty prompt. Gateway config
+size refusal leaves the caller's environment unchanged.
+
 ### Writer result finalization
 
 `worker-core::writer_result::check_result` runs the mandatory Rust file-size

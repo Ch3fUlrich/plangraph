@@ -52,7 +52,7 @@ def test_review_provider_only(tmp_path, monkeypatch, caplog, present, model):
         assert path.stat().st_mode & 0o777 == 0o600
         with sqlite3.connect(path) as db:
             assert db.execute('SELECT integration_id FROM credential').fetchall() == [('opencode-go',)]
-        async def communicate():
+        async def communicate(input=None):
             return b'done', b''
         return SimpleNamespace(pid=FAKE_PID, returncode=0, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
