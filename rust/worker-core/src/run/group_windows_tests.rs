@@ -257,13 +257,10 @@ fn owner_process() {
     let Ok(path) = std::env::var("PG_OWNER_RECORD") else {
         return;
     };
-    let expiry = std::env::var_os("PG_OWNER_EXPIRY").is_some();
+    let expiry = std::env::var("PG_OWNER_EXPIRY").unwrap() == "1";
+    let unit = std::env::var("PG_OWNER_UNIT").unwrap();
     let (g, _dir) = launch_bounded(
-        if expiry {
-            "pg-win-expiry"
-        } else {
-            "pg-win-restart"
-        },
+        &unit,
         "sleep",
         false,
         false,
@@ -281,17 +278,22 @@ fn owner_process() {
 
 #[test]
 fn adopter_process() {
-    use crate::watch::windows::{AdoptedJob, NativeJob};
+    use crate::watch::windows::{AdoptedJob, JobApi, NativeJob};
     let Ok(ticket) = std::env::var("PG_ADOPT_TICKET") else {
         return;
     };
     let (pid, start) = ticket.split_once(' ').unwrap();
-    let mut job = AdoptedJob::verify(
-        NativeJob::open(&job_name("pg-win-restart")).unwrap(),
-        pid.parse().unwrap(),
-        start.parse().unwrap(),
-    )
-    .unwrap();
+    let (pid, start) = (pid.parse().unwrap(), start.parse().unwrap());
+    let name = job_name(&std::env::var("PG_OWNER_UNIT").unwrap());
+    let mut api = NativeJob::open(&name)
+        .unwrap()
+        .expect("holder retained Job");
+    assert!(
+        api.member(pid, start).unwrap(),
+        "recorded payload in {name}"
+    );
+    assert!(api.active().unwrap(), "holder retained active payload");
+    let mut job = AdoptedJob::verify(Some(api), pid, start).unwrap();
     assert!(!job.is_gone().unwrap());
     job.adopt().unwrap();
     thread::sleep(Duration::from_secs(11));
@@ -302,6 +304,8 @@ fn adopter_process() {
 #[test]
 fn killed_owner_adopted_by_fresh_process() {
     let dir = tempfile::tempdir().unwrap();
+    // Helpers must share this invocation's identity, never a previous run's Job.
+    let unit = format!("pg-win-restart-{}", std::process::id());
     let path = dir.path().join("owner");
     let mut owner = Command::new(std::env::current_exe().unwrap())
         .args([
@@ -310,6 +314,8 @@ fn killed_owner_adopted_by_fresh_process() {
             "--nocapture",
         ])
         .env("PG_OWNER_RECORD", &path)
+        .env("PG_OWNER_UNIT", &unit)
+        .env("PG_OWNER_EXPIRY", "0")
         .spawn()
         .unwrap();
     until(|| path.exists());
@@ -325,6 +331,7 @@ fn killed_owner_adopted_by_fresh_process() {
             "--nocapture"
         ])
         .env("PG_ADOPT_TICKET", ticket)
+        .env("PG_OWNER_UNIT", &unit)
         .status()
         .unwrap()
         .success());
@@ -334,6 +341,7 @@ fn killed_owner_adopted_by_fresh_process() {
 #[test]
 fn killed_owner_without_adopter_expires() {
     let dir = tempfile::tempdir().unwrap();
+    let unit = format!("pg-win-expiry-{}", std::process::id());
     let path = dir.path().join("owner");
     let mut owner = Command::new(std::env::current_exe().unwrap())
         .args([
@@ -342,6 +350,7 @@ fn killed_owner_without_adopter_expires() {
             "--nocapture",
         ])
         .env("PG_OWNER_RECORD", &path)
+        .env("PG_OWNER_UNIT", &unit)
         .env("PG_OWNER_EXPIRY", "1")
         .spawn()
         .unwrap();
