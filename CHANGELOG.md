@@ -304,3 +304,4 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 - Known gap: merge-conflict-only authorship detection is not implemented by the
   merge writer traversal (which enumerates branch leaves). A Hand-Edit merge that
   reaches the resolver is counted as anthropic, never CHANGELOG-exempt.
+# D-5050: Add Rust flow-health checker, deduplicated routing/push hook delivery and systemd user timer.
