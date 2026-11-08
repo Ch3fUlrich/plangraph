@@ -11,12 +11,11 @@ from __future__ import annotations
 import re
 
 from . import views_graph as _g
-from .keeper.brief import missing_why_how
+
 __all__ = [
     "index",
     "validate",
     "warnings",
-    "missing_why_how",
     "ready",
     "blocked",
     "waves",
@@ -36,6 +35,7 @@ TERMINAL = frozenset(("done", "cancelled"))
 _ACTIVE = ("open", "claimed")
 
 
+# ---------------------------------------------------------------- helpers
 
 def _est(it):
     value = it.get("estimate_h", 0)
