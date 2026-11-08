@@ -309,7 +309,7 @@ fn terminal_or_missing_unverified_row_holds_grace_and_probes_confinement() {
                 },
             )
             .unwrap();
-            std::fs::write(scope.join("cgroup.procs"), "").unwrap();
+            std::fs::write(scope.join("cgroup.procs"), std::process::id().to_string()).unwrap();
             assert_eq!(
                 matches!(gone(&row.run_id, row.identity.as_ref()), Ok(true)),
                 settled
@@ -319,10 +319,7 @@ fn terminal_or_missing_unverified_row_holds_grace_and_probes_confinement() {
             row.deadline_ms = Some(1);
             let result = orphan_with(&dir.0, &row, &mut None);
             if status != "invalid" {
-                assert!(
-                    matches!(result, Ok(true)),
-                    "{status} settled={settled}: {result:?}"
-                );
+                assert_eq!(matches!(result, Ok(true)), settled, "{status}: {result:?}");
             } else {
                 assert!(matches!(result, Err(ReconcileError::Unknown)), "{status}");
             }

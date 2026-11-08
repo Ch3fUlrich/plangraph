@@ -1,4 +1,7 @@
 use super::*;
+#[cfg(target_os = "linux")]
+#[path = "reconcile_store_settle_probe_tests.rs"]
+mod settle_probe_tests;
 pub(super) struct ScopeRoot;
 impl ScopeRoot {
     pub(super) fn new(root: &std::path::Path) -> (Self, std::path::PathBuf) {

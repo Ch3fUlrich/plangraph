@@ -1,3 +1,25 @@
+FU-RL29-SETTLE-PROBE (replan-0387, D-5048): absent inventory no longer
+discards the saved confinement probe after the persisted 10-second grace.
+Missing records, terminal records, and terminal attempts require gone() proof;
+running unknown identities retain the existing bounded reclaim path.
+
+Invariant regression report:
+- P1: unverified_absent_live_group_requires_gone_after_grace covers missing,
+  terminal record, and terminal attempt cases with no saved start time.
+- P2: the same test writes this live test process into cgroup.procs, asserts
+  unsettled after grace, then empties the fixture and proves settlement.
+- P3: zombie_live_member_holds_grace_then_reclaims proves needs_grace for a
+  real unreaped zombie with a live group member, hold before the persisted
+  10-second bound, and reclaim afterward (children are killed/reaped by RAII).
+- P4: verified_absent_inventory_requires_gone (I1),
+  terminal_or_missing_unverified_row_holds_grace_and_probes_confinement (I2),
+  reclaim_failure_keeps_running_record_retryable (I4), and
+  reconcile_memberless_zombie_leader_is_gone retain their checks.
+- P5: dead_leader_populated_saved_group_reclaims_after_grace uses a reaped
+  leader and a populated saved group containing this live test process;
+  the running record holds before grace and uses existing reclaim afterward.
+  Missing/terminal records intentionally cannot use that running-record path.
+
 Crash recovery now records each launched attempt's process identity, never borrows
 identity for explicit legacy attempts, and retains pid-zero rows as unknown.
 Legacy unknown identities settle with reason unknown_identity after their deadline

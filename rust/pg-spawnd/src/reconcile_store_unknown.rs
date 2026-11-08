@@ -33,7 +33,7 @@ pub(super) const UNKNOWN_IDENTITY_GRACE_MS: u64 = 10_000;
 
 pub(super) fn unverified_not_gone(row: &Entry) -> bool {
     if let Some(identity) = &row.identity {
-        if zombie(identity) {
+        if needs_grace(row) && zombie(identity) {
             return !matches!(live_members(identity), Ok(false));
         }
     }
@@ -237,11 +237,23 @@ pub(super) fn settle_absent(root: &Path, row: &Entry) -> Result<bool, ReconcileE
         return Err(ReconcileError::Unknown);
     }
     if !exists {
-        return Ok(true);
+        return probe;
     }
     let record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;
     if record.status() != Some(Status::Running) {
-        return helpers::terminal(record.status());
+        return helpers::terminal(record.status()).and_then(|terminal| {
+            if terminal {
+                probe
+            } else {
+                Ok(false)
+            }
+        });
+    }
+    if attempts(&read(record.path())?)?
+        .get(row.attempt as usize - 1)
+        .is_some_and(|attempt| attempt["status"] != "running")
+    {
+        return probe;
     }
     settle_unknown(root, row)
 }

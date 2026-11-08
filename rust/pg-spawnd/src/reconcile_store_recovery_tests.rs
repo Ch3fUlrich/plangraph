@@ -148,7 +148,7 @@ fn pid_zero_with_recorded_live_pgid_is_not_settled() {
 }
 
 #[test]
-fn orphan_gone_current_none_uses_grace_without_probing_stale_identity() {
+fn orphan_gone_current_none_requires_confinement_proof_after_grace() {
     let dir = StateDir::new();
     let mut record = dir.record();
     let row = Entry {
@@ -173,9 +173,12 @@ fn orphan_gone_current_none_uses_grace_without_probing_stale_identity() {
         deadline_ms: Some(1),
         ..row
     };
-    assert!(orphan_gone(&dir.0, &row).unwrap());
+    assert!(matches!(
+        orphan_gone(&dir.0, &row),
+        Err(ReconcileError::Unknown)
+    ));
     assert_eq!(
         RunRecord::read(&dir.0, "run-test").unwrap().status(),
-        Some(Status::Orphaned)
+        Some(Status::Running)
     );
 }
