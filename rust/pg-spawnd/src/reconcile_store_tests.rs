@@ -82,7 +82,7 @@ fn reconcile_settle_outcome_row_meets_evidence_contract() {
     assert_eq!(row.unwrap()["route_key"], "route");
     for leg in [leg, json!({"harness": "agy", "model": "m"})] {
         let bad = outcome::build(&leg, role, "bad run id", 1, 2000, 1);
-        assert!(matches!(bad, Err(ReconcileError::Invalid)));
+        assert!(bad.unwrap().is_err());
     }
 }
 
@@ -293,7 +293,7 @@ fn python_leg(harness: &str, model: &str) -> Value {
 }
 
 #[test]
-fn reconcile_settle_rejects_malformed_leg_and_keys() {
+fn reconcile_settle_skips_malformed_leg_and_keys() {
     for leg in [
         Value::Null,
         json!(3),
@@ -308,11 +308,9 @@ fn reconcile_settle_rejects_malformed_leg_and_keys() {
             "attempts",
             json!([{"status":"running","started":1,"leg":leg}]),
         );
-        assert!(matches!(
-            settle(&dir.0, &mut record, 1, "gone", 2000),
-            Err(ReconcileError::Invalid)
-        ));
-        assert_eq!(record.status(), Some(Status::Running));
+        settle(&dir.0, &mut record, 1, "gone", 2000).unwrap();
+        assert_eq!(record.status(), Some(Status::Orphaned));
+        assert!(record.get("attempts").unwrap()[0]["outcome"].is_null());
     }
 }
 

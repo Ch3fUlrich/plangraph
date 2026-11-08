@@ -51,7 +51,7 @@ from .git_guard import writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
-from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry  # re-export: tests import and patch these on runner
+from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry, mismatch_flag, witness_native  # re-export: tests import and patch these on runner
 
 
 def _is_nt() -> bool:
@@ -125,7 +125,7 @@ class JobInfo:
     survivors: list = field(default_factory=list)   # pids that outlived the kill (kill_incomplete)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return mismatch_flag(asdict(self))
 
 
 #: Every tool key the opencode 2.1.0 config schema knows ('*' exists only in
@@ -753,8 +753,8 @@ class SpawnerRunner:
             if not question_exit(job, {}):
                 await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
 
-            # D-2905 (2): the child-writable session store is request-side only ('request-side-opencode-store',
-            # never 'served'); read only for a review leg's own store, all tools denied, exit 0 (D-2905 (1)).
+            # D-2905: the child-writable store is request-side only, for an
+            # exit-0 review's own store with all tools denied.
             if job.command and job.command[0] == 'opencode' and job.role == 'review':
                 oc_dir = self._ocdata_dirs.get(job_id) if exit_code == 0 else None
                 denied = _opencode_tools_denied(
@@ -788,6 +788,7 @@ class SpawnerRunner:
                 await asyncio.to_thread(render_review_output, job, stdout_text,
                                         lambda text: redact(redact_env_values(text, env)))
 
+            await witness_native(self, job_id, job, stdout_text, requested_model)
             # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
             job.served_model = job.served_model or 'unwitnessed'
             job.served_family = job.served_family or 'unwitnessed'
@@ -1156,6 +1157,7 @@ def spawn_service(*args, **kwargs):
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                             served_family=job.served_family, served_witness_reason=job.served_witness_reason,
                             request_side_model=job.request_side_model, witness_kind=job.witness_kind,
+                            served_model_mismatch=any(e.get('event') == 'served_model_mismatch' for e in (getattr(job, 'events', None) or [])),
                             writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                             stdout_tail=record.get('stdout_tail', '') + job.stdout,
                             stderr_tail=record.get('stderr_tail', '') + job.stderr,

@@ -1,20 +1,6 @@
-use {super::*, serde_json::json};
-pub(super) struct TempDir(PathBuf);
-impl TempDir {
-    pub(super) fn new() -> Self {
-        let path = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
-        fs::create_dir(&path).unwrap();
-        Self(path)
-    }
-    pub(super) fn path(&self) -> &Path {
-        &self.0
-    }
-}
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
+use super::layout_tests::TempDir;
+use super::*;
+use serde_json::json;
 pub(super) fn fixture(linked: bool) -> (TempDir, PathBuf, PathBuf, RunRecord) {
     let temp = TempDir::new();
     let cwd = temp.path().join("checkout");
@@ -37,7 +23,7 @@ pub(super) fn fixture(linked: bool) -> (TempDir, PathBuf, PathBuf, RunRecord) {
         temp.path(),
         "run-guard",
         "local",
-        json!({"attempts":[{}]}).as_object().unwrap().clone(),
+        json!({}).as_object().unwrap().clone(),
         Status::Running,
         1.0,
     )
@@ -55,7 +41,10 @@ fn changed_common_worktree_restored_and_failed_after_restart() {
     fs::write(&config, b"[core]\n\tworktree = intruder\n").unwrap();
     drop(record);
     let mut record = RunRecord::read(temp.path(), "run-guard").unwrap();
-    crate::runs::finish(&mut record, Status::Completed, &json!({}), 1);
+    let attempts = record.get("attempts").cloned();
+    crate::runs::finish(&mut record, Status::Completed, &json!({}), 2);
+    assert_eq!(record.get("attempts").cloned(), attempts);
+    assert!(record.get("attempts_error").is_some());
     assert_eq!(fs::read(config).unwrap(), before);
     assert_eq!(record.status(), Some(Status::Failed));
     assert_eq!(record.get("reason"), Some(&json!("gitconfig_tampered")));
@@ -138,6 +127,7 @@ fn missing_snapshot_is_explicit() {
 #[test]
 fn verdict_survives_retry_and_preserves_diagnostic() {
     let (temp, config, _, mut record) = fixture(false);
+    record.set("attempts", json!([{"status":"running","leg":{}}]));
     fs::write(config, b"altered").unwrap();
     crate::runs::finish(
         &mut record,

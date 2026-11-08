@@ -318,13 +318,10 @@ pub(crate) fn settle(
 ) -> Result<(), ReconcileError> {
     use pg_worker_core::run::record::Status;
     let invalid = || ReconcileError::Invalid;
-    let allowed = [
-        "gone",
-        "ended_unobserved",
-        "killed_max_s",
-        "reattach_timeout",
-    ];
-    if !allowed.contains(&how) {
+    if !matches!(
+        how,
+        "gone" | "ended_unobserved" | "killed_max_s" | "reattach_timeout"
+    ) {
         return Err(invalid());
     }
     let run = record
@@ -378,7 +375,12 @@ pub(crate) fn settle(
     if how == "ended_unobserved" {
         entry["reason"] = json!("reattached_group_exited");
     }
-    let diagnostic = entry.clone();
+    // Unlike the spawn hook, recovery did not observe this exit: keep it null
+    // and retain any earlier code separately (docs/spawner-reliability.md:11).
+    if !entry["exit_code"].is_null() {
+        entry["prior_exit_code"] = entry["exit_code"].clone();
+    }
+    let leg = entry["leg"].clone();
     entry["exit_code"] = Value::Null;
     record
         .transition(Status::Orphaned, now_ms as f64 / 1000.0)
@@ -388,7 +390,7 @@ pub(crate) fn settle(
         .push_event(json!({"event":"RUN_ORPHANED", "attempt":attempt,"how":how,
         "idempotency_key":[run,attempt,"RUN_ORPHANED"]}))
         .map_err(|_| invalid())?;
-    crate::gitconfig_guard::enforce(record, Status::Orphaned, diagnostic);
+    crate::runs::finish(record, Status::Orphaned, &leg, attempt);
     record.save().map_err(|_| ReconcileError::Io)
 }
 #[path = "reconcile_store_outcome.rs"]

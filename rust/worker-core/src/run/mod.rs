@@ -12,6 +12,7 @@ pub mod group_unix;
 pub mod group_windows;
 #[cfg(all(test, windows))]
 mod group_windows_tests;
+pub mod job_holder_windows;
 pub mod livelog;
 mod monitor;
 #[cfg(all(test, unix))]

@@ -1,6 +1,22 @@
-use super::tests::{fixture, TempDir};
+use super::tests::fixture;
 use super::*;
 use serde_json::json;
+pub(super) struct TempDir(PathBuf);
+impl TempDir {
+    pub(super) fn new() -> Self {
+        let path = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+        fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+    pub(super) fn path(&self) -> &Path {
+        &self.0
+    }
+}
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
 
 #[test]
 fn layout_error_preserves_record_and_run_directory() {

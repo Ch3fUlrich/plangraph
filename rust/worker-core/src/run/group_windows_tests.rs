@@ -16,6 +16,13 @@ use windows_sys::Win32::{
 };
 
 #[test]
+fn holder_helper() {
+    if std::env::args().any(|s| s == "--exact") {
+        std::process::exit(super::job_holder_windows::helper());
+    }
+}
+
+#[test]
 fn fake_child() {
     let Ok(mode) = std::env::var("PG_FAKE_CHILD") else {
         return;
@@ -34,7 +41,10 @@ fn fake_child() {
             thread::sleep(Duration::from_secs(30));
             let _ = child.wait();
         }
-        "sleep" => thread::sleep(Duration::from_secs(30)),
+        "sleep" => {
+            println!("payload-ready");
+            thread::sleep(Duration::from_secs(30));
+        }
         "echo" => println!("{}", std::env::var("FOO").unwrap()),
         "exit3" => std::process::exit(3),
         "injob" => {
@@ -57,6 +67,15 @@ fn launch(
     mode: &str,
     missing: bool,
     piped: bool,
+) -> Result<(Grouped, tempfile::TempDir), LaunchError> {
+    launch_bounded(unit, mode, missing, piped, None)
+}
+pub(super) fn launch_bounded(
+    unit: &str,
+    mode: &str,
+    missing: bool,
+    piped: bool,
+    seconds: Option<u64>,
 ) -> Result<(Grouped, tempfile::TempDir), LaunchError> {
     let dir = tempfile::tempdir().unwrap();
     let program = if missing {
@@ -88,6 +107,7 @@ fn launch(
         },
         &Confinement::default(),
         &RunLimits {
+            windows_holder_max_s: seconds,
             memory_max: Some("1".into()),
             tasks_max: Some(1),
         },
@@ -115,14 +135,10 @@ fn named(unit: &str) -> bool {
         true
     }
 }
-fn until(mut predicate: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while !predicate() {
-        assert!(Instant::now() < deadline);
-        thread::sleep(Duration::from_millis(10));
-    }
+pub(super) fn until(mut predicate: impl FnMut() -> bool) {
+    until_deadline(Instant::now() + Duration::from_secs(10), &mut predicate);
 }
-fn gone(pid: u32) -> bool {
+pub(super) fn gone(pid: u32) -> bool {
     // SAFETY: numeric pid; RAII is simulated by immediate close after the query.
     let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
     if handle.is_null() {
@@ -177,7 +193,10 @@ fn pipes_exit_and_assignment() {
         ("injob", "injob=1"),
         ("exit3", ""),
     ] {
-        let (mut g, _dir) = launch("pg-win-pipes", mode, false, true).unwrap();
+        // A completed payload does not synchronously release the holder's Job
+        // handle. Each independent case needs its own run identity.
+        let unit = format!("pg-win-pipes-{}-{mode}", std::process::id());
+        let (mut g, _dir) = launch(&unit, mode, false, true).unwrap();
         if mode == "injob" {
             assert!(g.group.members().unwrap().contains(&g.child.id()));
         }
@@ -212,4 +231,167 @@ fn invalid_and_missing_program() {
         Err(LaunchError::Io(_))
     ));
     assert!(!named("pg-win-missing"));
+}
+
+#[test]
+fn live_owner_outlives_window() {
+    let (mut g, _dir) = launch_bounded("pg-win-live", "sleep", false, false, Some(1)).unwrap();
+    thread::sleep(Duration::from_millis(1300));
+    assert!(!gone(g.child.id()));
+    drop(g.group);
+    g.child.wait().unwrap();
+}
+
+#[test]
+fn holder_launch_failure_is_closed() {
+    super::job_holder_windows::FAIL_LAUNCH.set(true);
+    let result = launch("pg-win-holder-fail", "sleep", false, false);
+    super::job_holder_windows::FAIL_LAUNCH.set(false);
+    assert!(matches!(result, Err(LaunchError::Io(_))));
+    assert!(!named("pg-win-holder-fail"));
+}
+
+#[test]
+#[rustfmt::skip]
+fn owner_process() {
+    let Ok(path) = std::env::var("PG_OWNER_RECORD") else {
+        return;
+    };
+    let expiry = std::env::var("PG_OWNER_EXPIRY").unwrap() == "1";
+    let unit = std::env::var("PG_OWNER_UNIT").unwrap();
+    let (mut g, _dir) = launch_bounded(&unit, "sleep", false, true, Some(if expiry { 1 } else { 10 })).unwrap();
+    // libtest writes startup output. Killing its pipe reader before startup
+    // completes makes the payload panic on Windows (broken pipe), not leave a Job.
+    let mut output = std::io::BufReader::new(g.child.stdout.take().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut line = String::new();
+        while !line.contains("payload-ready") {
+            line.clear();
+            assert_ne!(
+                std::io::BufRead::read_line(&mut output, &mut line).unwrap(),
+                0
+            );
+        }
+        tx.send(()).unwrap();
+        let _ = std::io::copy(&mut output, &mut std::io::sink());
+    });
+    rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    std::fs::write(path, format!("{} {}", g.child.id(), creation_time(g.child.id()).unwrap())).unwrap();
+    thread::sleep(Duration::from_secs(30));
+    drop(g);
+}
+
+#[test]
+#[rustfmt::skip]
+fn adopter_process() {
+    use crate::watch::windows::{AdoptedJob, JobApi, NativeJob};
+    let Ok(ticket) = std::env::var("PG_ADOPT_TICKET") else {
+        return;
+    };
+    let (pid, start) = ticket.split_once(' ').unwrap();
+    let (pid, start) = (pid.parse().unwrap(), start.parse().unwrap());
+    let name = job_name(&std::env::var("PG_OWNER_UNIT").unwrap());
+    let mut api = NativeJob::open(&name).unwrap().expect("holder retained Job");
+    assert!(api.member(pid, start).unwrap(), "recorded payload in {name}");
+    assert!(api.active().unwrap(), "holder retained active payload");
+    let mut job = AdoptedJob::verify(Some(api), pid, start).unwrap();
+    assert!(!job.is_gone().unwrap());
+    until(|| job.adopt().is_ok());
+    if let Ok(path) = std::env::var("PG_ADOPT_READY") {
+        std::fs::write(path, "ready").unwrap();
+        thread::sleep(Duration::from_secs(30));
+        return;
+    }
+    thread::sleep(Duration::from_secs(11));
+    assert!(!job.is_gone().unwrap());
+    job.terminate().unwrap();
+}
+
+#[test]
+#[rustfmt::skip]
+fn killed_owner_adopted_by_fresh_process() {
+    let dir = tempfile::tempdir().unwrap();
+    // Helpers must share this invocation's identity, never a previous run's Job.
+    let unit = format!("pg-win-restart-{}", std::process::id());
+    let path = dir.path().join("owner");
+    let mut owner = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "run::group_windows_tests::owner_process",
+            "--nocapture",
+        ])
+        .env("PG_OWNER_RECORD", &path)
+        .env("PG_OWNER_UNIT", &unit)
+        .env("PG_OWNER_EXPIRY", "0")
+        .spawn()
+        .unwrap();
+    until(|| path.exists());
+    let ticket = std::fs::read_to_string(path).unwrap();
+    let pid = ticket.split_once(' ').unwrap().0.parse().unwrap();
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    assert!(!gone(pid));
+    assert_member(&unit, &ticket);
+    let ready = dir.path().join("adopted");
+    let mut adopter = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "run::group_windows_tests::adopter_process", "--nocapture"])
+        .env("PG_ADOPT_TICKET", &ticket)
+        .env("PG_OWNER_UNIT", &unit)
+        .env("PG_ADOPT_READY", &ready)
+        .spawn()
+        .unwrap();
+    until(|| ready.exists());
+    adopter.kill().unwrap();
+    adopter.wait().unwrap();
+    assert!(!gone(pid));
+    assert_member(&unit, &ticket);
+    let mut final_adopter = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "run::group_windows_tests::adopter_process", "--nocapture"])
+        .env("PG_ADOPT_TICKET", ticket)
+        .env("PG_OWNER_UNIT", &unit)
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    until_deadline(deadline, || final_adopter.try_wait().unwrap().map(|s| { assert!(s.success()); true }).unwrap_or(false));
+    until(|| gone(pid));
+}
+
+#[test]
+#[rustfmt::skip]
+fn killed_owner_without_adopter_expires() {
+    let dir = tempfile::tempdir().unwrap();
+    let unit = format!("pg-win-expiry-{}", std::process::id());
+    let path = dir.path().join("owner");
+    let mut owner = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "run::group_windows_tests::owner_process", "--nocapture"])
+        .env("PG_OWNER_RECORD", &path)
+        .env("PG_OWNER_UNIT", &unit)
+        .env("PG_OWNER_EXPIRY", "1")
+        .spawn()
+        .unwrap();
+    until(|| path.exists());
+    let ticket = std::fs::read_to_string(path).unwrap();
+    let pid = ticket.split_once(' ').unwrap().0.parse().unwrap();
+    assert!(!gone(pid));
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    assert_member(&unit, &ticket);
+    until(|| gone(pid));
+}
+
+#[rustfmt::skip]
+fn assert_member(unit: &str, ticket: &str) {
+    use crate::watch::windows::{JobApi, NativeJob};
+    let (pid, start) = ticket.split_once(' ').unwrap();
+    assert!(NativeJob::open(&job_name(unit)).unwrap().unwrap().member(pid.parse().unwrap(), start.parse().unwrap()).unwrap());
+}
+fn until_deadline(deadline: Instant, mut predicate: impl FnMut() -> bool) {
+    loop {
+        assert!(Instant::now() < deadline);
+        if predicate() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }

@@ -311,22 +311,8 @@ jobs:
           key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
       - name: cargo test -p pg-spawnd
         run: cargo test -p pg-spawnd
-      # The remaining 83 worker-core Windows failures (worktree_add, run-id Invalid,
-      # locking target, remote) are tracked by plangraph:WORKER-CORE-WINDOWS-TESTS,
-      # which adds all of worker-core back.
-      # PR #666 adds the run::job_holder_windows filter.
-      - name: cargo test worker-core Windows Job/group/holder/watch
-        run: |
-          $filters = @('run::group_windows_tests::', 'watch::windows::tests::')
-          foreach ($filter in $filters) {
-            $selected = @(cargo test -p pg-worker-core --lib -- $filter --list)
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            $count = @($selected | Select-String ': test$').Count
-            Write-Host "Selected worker-core Windows tests for ${filter}: $count"
-            if ($count -eq 0) { throw "No worker-core Windows tests selected for $filter" }
-          }
-          cargo test -p pg-worker-core --lib -- @filters
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: cargo test -p pg-worker-core
+        run: cargo test -p pg-worker-core
 
   rust-worker:
     needs: select
