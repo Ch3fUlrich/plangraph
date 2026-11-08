@@ -63,7 +63,13 @@ def _sha_matches(tok: str, full_sha: str) -> bool:
 class CloseMixin:
     """The router-only ``close_on_decision`` verb."""
 
-    def close_on_decision(self, principal, key, batch_ref):
+    def close_on_decision(self, principal, key, batch_ref=None, *, decision_ref=None,
+                          epoch=None):
+        if decision_ref is not None:
+            from .store_decision_close import close_decision
+            return self._run(principal, "close_on_decision", key,
+                             lambda now: close_decision(
+                                 self, principal, key, decision_ref, epoch, batch_ref, now))
         return self._run(principal, "close_on_decision", key,
                          lambda now: self._close_on_decision(principal, key,
                                                              batch_ref, now))
