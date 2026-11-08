@@ -84,10 +84,10 @@ def load_fleet(store, samples=None):
     Slice 2 supplies the samples API's host->metrics mapping here. The current
     bus registry has no class/caps columns, so those remain unknown as well.
     """
-    from .spawner.stall_watchdog import read_runs
+    from .planner.routing import read_run_records
 
     state = Path(os.environ.get("PLANGRAPH_SPAWN_STATE") or
                  Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
                  / "plangraph")
-    runs = read_runs(state, dry_run=True) if (state / "runs").is_dir() else None
+    runs = read_run_records(state)
     return build_fleet(store.list_bus_hosts(), samples=samples, runs=runs)

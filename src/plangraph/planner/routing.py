@@ -31,7 +31,19 @@ from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
            "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
             "SpawnRefused", "SpawnPlan", "plan_spawn",
-             "hand_picked", "next_leg_after_provider_stop", "benchmark_rows_from_db"]
+              "hand_picked", "next_leg_after_provider_stop", "benchmark_rows_from_db",
+              "read_run_records"]
+
+
+def read_run_records(state: Path):
+    """Read existing spawner records through the keeper's spawner boundary.
+
+    An absent run directory is unknown, not an authoritative empty fleet.
+    Dry-run reading must not repair or otherwise mutate persisted records.
+    """
+    from plangraph.spawner.stall_watchdog import read_runs
+
+    return read_runs(state, dry_run=True) if (state / "runs").is_dir() else None
 
 #: Window sizes in tokens.
 WINDOW_TOKENS = {"128k": 131072, "256k": 262144, "1m": 1048576}
