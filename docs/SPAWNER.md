@@ -66,6 +66,30 @@ Runtime path: `src/plangraph/planner/routing.py` is the only module allowed to
 import `plangraph.spawner` at runtime; the boundary is enforced by
 `tests/test_spawner_import_guard.py`. Selection runs without a feature flag.
 
+### Writer completion gates (D-5050)
+
+After a completed `implement` or `fix` run, the runner invokes
+`tools/preflight.py --writer-push` before publishing completion:
+
+| Gate | Checks | HOLD reason on failure |
+|---|---|---|
+| Scrub | Public scrub rules and, when configured, private-word diff scrub | `HOLD scrub_check.py` or `HOLD preflight_private_scrub.py` |
+| Policy | File size, new-code language (rule 9.14), changelog/docs-map, commit policy | `HOLD check_file_size.py`, `HOLD check_new_code_lang.py`, `HOLD check_changelog_docs.py`, or `HOLD ci_commit_gate.py` |
+| Rust (when affected and Cargo is available) | Format, affected-package Clippy and tests | `HOLD fmt`, `HOLD clippy`, or `HOLD test` |
+| Python tests | Affected tests | `HOLD affected_tests.py` |
+| Lane admission | Named `lane/` branch, available base, no reused merged lane | `HOLD held_commit` |
+| Publication | Push dry-run, then normal push | `HOLD push_dry_run`, then `HOLD push` respectively |
+
+Failed check families also report `FAIL` or `INFRA`; infrastructure failures
+retry once. Publication runs only after preflight passes. The runner records
+failure as status `hold`, exit code 1, a `writer_hold` event, and a `HOLD`
+completion notification; inability to run preflight yields `preflight_unavailable`
+(or `preflight` when no specific failure line is available).
+
+Before launch, `implement` and `review` requests with no nonblank brief after
+removing the implementation header and writer-trailer instruction refuse with
+`SpawnRefused('prompt_empty')`; generated boilerplate is not a task brief.
+
 ### Card-driven routing core
 
 `planner.routing.plan_spawn(card, role="implement"|"review")` applies the
