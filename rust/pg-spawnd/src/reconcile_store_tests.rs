@@ -72,6 +72,18 @@ fn reconcile_settle_derives_python_leg_key() {
 }
 
 #[test]
+fn reconcile_settle_outcome_row_meets_evidence_contract() {
+    let role = pg_worker_core::hosts::Role::Implement;
+    let leg = json!({"harness": "agy", "model": "m", "route_key": "route"});
+    let row = outcome::build(&leg, role, "run-test", 1, 2000, 1).unwrap();
+    assert_eq!(row.unwrap()["route_key"], "route");
+    for leg in [leg, json!({"harness": "agy", "model": "m"})] {
+        let bad = outcome::build(&leg, role, "bad run id", 1, 2000, 1);
+        assert!(matches!(bad, Err(ReconcileError::Invalid)));
+    }
+}
+
+#[test]
 fn reconcile_settle_no_attempts_still_invalid() {
     let dir = StateDir::new();
     let mut record = dir.record();

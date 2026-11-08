@@ -9,3 +9,4 @@
   Missing leg identity records its skip reason through the shared private LiveLog
   with run/attempt context. Shared full-Leg fixtures check Python/Rust key parity
   without requiring Python in cargo tests.
+- Re-check the settled outcome row against the evidence-row contract; a null route_key is checked under a stand-in and written as null (D-4895).

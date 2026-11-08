@@ -40,7 +40,7 @@ pub(super) fn build(
     if leg_key.is_empty() || route_key.as_ref().is_some_and(|key| key.is_empty()) {
         return Err(ReconcileError::Invalid);
     }
-    Ok(Ok(json!({
+    let row = json!({
         "leg_key": leg_key,
         "route_key": route_key,
         "ts": i64::try_from(now_ms / 1000).map_err(|_| ReconcileError::Invalid)?,
@@ -55,5 +55,21 @@ pub(super) fn build(
         "open_tools_at_kill": null,
         "s_eff_s": null,
         "line": "reconciled group ended"
-    })))
+    });
+    contract(&row)?;
+    Ok(Ok(row))
+}
+
+/// The evidence-row contract for the written row. A null route_key (Python
+/// writes no route identity) is checked under a non-empty stand-in so every
+/// other field still meets the contract; the row itself keeps the null.
+fn contract(row: &Value) -> Result<(), ReconcileError> {
+    let mut checked = row.clone();
+    if checked["route_key"].is_null() {
+        checked["route_key"] = json!("unattributed");
+    }
+    let row: crate::evidence_row::OutcomeRow =
+        serde_json::from_value(checked).map_err(|_| ReconcileError::Invalid)?;
+    crate::evidence_row::validate(&crate::evidence_row::EvidenceRow::Outcome(row))
+        .map_err(|_| ReconcileError::Invalid)
 }
