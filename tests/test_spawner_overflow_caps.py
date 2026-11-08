@@ -96,9 +96,7 @@ def test_cli_shared_ram_refusal(registry, monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(o.cli, 'SpawnService', lambda **kw: service)
     reason = o.admit_local('implement')
     assert reason == 'memory: free 5047 MB, floor 3000 MB, role 2048 MB'
-    calls = []
-    real = o.admit_local
-    monkeypatch.setattr(o, 'admit_local', lambda role: calls.append(role) or real(role))
-    assert o.cli.main(['--state', str(tmp_path / 'state'), 'spawn', '--card', '{"task":"test"}', 'prompt']) != 0
-    assert calls == ['implement']
-    assert reason in capsys.readouterr().err
+    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(tmp_path / 'absent.json'))
+    assert o.cli.main(['--state', str(tmp_path / 'state'), 'spawn', '--card', '{"task":"test"}', 'prompt']) == 5
+    result = json.loads(capsys.readouterr().out)
+    assert reason in result['reason'] and result['status'] == 'queued'

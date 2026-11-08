@@ -7,8 +7,10 @@ defaults. The existing OOM guard is unchanged.
 Fold HOST-OVERFLOW-DEFAULT (#693): default CLI/MCP spawns whose local RAM
 admission refuses try healthy SSH hosts only for `public_repos`-allowlisted
 repositories. Private/unknown repositories queue without copying; exhausted
-targets queue with safe per-host reasons. No overflow config preserves ordinary
-local admission without overflow annotations. Dry runs stay local and local
+targets queue with safe per-host reasons. Missing overflow configuration still
+enforces the RAM floor on CLI, MCP and seat spawns; below-floor runs queue
+without launching locally. Admission lives in the existing seat spawn module.
+Dry runs stay local and local
 benchmark databases are not forwarded. Missing/unreadable remote receipt IDs
 are saved as acknowledged_unknown/status=unknown on the selected host, never
 retried. Legacy local limit overrides do not affect RAM admission.

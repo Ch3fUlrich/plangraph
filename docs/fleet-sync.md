@@ -21,7 +21,9 @@ excluded from remote configs; keeper entries fail closed. Windows SSH hosts
 are ps-only. Overflow retains a deny-by-default empty public_repos allowlist.
 
 Generated Linux overflow host entries include `floor_mb`, copied from the
-registry's `caps.mem_floor_mb`, as the free-RAM floor used for admission.
+registry's `caps.mem_floor_mb`, for `host_ready.check_host`. Overflow admission
+reads the floor and role reservation directly from the registry, overwrites the
+generated floor, and fails closed when registry caps are missing or malformed.
 Regenerate the configs after changing that registry value; generated ps-host
 entries do not include RAM admission fields.
 

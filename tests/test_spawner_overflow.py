@@ -330,7 +330,7 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
 @pytest.mark.parametrize('receipt', ['unreadable', '{}', '[]', '{"status":"running"}'])
 @pytest.mark.parametrize('entry', ['main', 'admit'])
 def test_acknowledged_unknown_never_retries(inputs, monkeypatch, capsys, receipt, entry):
-    from plangraph.spawner import admission_overflow as admission
+    from plangraph.spawner import seat_spawn as admission
     from plangraph.spawner.service import SpawnService
     root, path, args = inputs
     host = dict(ssh='invented', repo='/invented', spawner_src='/invented/src')

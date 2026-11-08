@@ -200,9 +200,11 @@ def main(argv=None):
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
                 no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
             if not args.dry_run:
-                from .overflow import require_local_memory
-                require_local_memory(service, args.role)
-            # Validate before detaching so refusals are reported synchronously.
+                from .seat_spawn import admit
+                admitted = admit(service, payload, card=args.card)
+                if admitted is not None:
+                    print(json.dumps(admitted, indent=2))
+                    return admitted.get('exit_code', 0)
             from plangraph.settings import admit_review_scope
             try:
                 admit_review_scope(args.card, args.role, args.review_scope)
@@ -210,8 +212,6 @@ def main(argv=None):
                 service.save_refusal(exc, args.role)
                 raise
             if not args.model and not args.leg:
-                if not args.card:
-                    raise ValueError('spawn by card; card required')
                 # service.route saves the refusal record itself (one record per route error).
                 service.route(args.card, args.role, args.writer_family, args.review_of, **options)
             if args.dry_run:

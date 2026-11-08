@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from plangraph.spawner import admission_overflow as a, overflow
+from plangraph.spawner import seat_spawn as a, overflow
 from plangraph.spawner.seat_spawn import SeatSpawnMixin
 
 
@@ -35,11 +35,9 @@ def test_local_room_ignores_counts(setup, monkeypatch, memory):
     remote.assert_not_called()
 
 
-def test_no_config_or_dry_run_preserves_local(setup):
+def test_dry_run_preserves_local(setup):
     service, path, remote = setup
     assert a.admit(service, {'dry_run': True}) is None
-    path.unlink()
-    assert a.admit(service, {}) is None
     remote.assert_not_called()
     service._save.assert_not_called()
 
@@ -57,7 +55,7 @@ def test_forward_options_and_save(setup):
 
 @pytest.mark.parametrize('failure,reason', [
     (overflow.RemoteRefusal('remote copy failed'), 'remote copy failed'),
-    (OSError(2, 'private /secret/path'), 'No such file or directory'),
+    (OSError(2, 'private /secret/path'), 'remote spawn OS operation failed:'),
     (ValueError('/secret/path'), 'invalid value'),
     (KeyError('/secret/path'), 'required field'),
     (TypeError('/secret/path'), 'invalid type'),
@@ -87,6 +85,44 @@ def test_benchmark_not_forwarded(setup):
 class SharedService(SeatSpawnMixin):
     async def _spawn(self, card=None, prompt='', **kwargs):
         raise AssertionError('local spawn')
+
+
+@pytest.mark.parametrize('entry', ['seat', 'mcp', 'cli'])
+def test_no_config_below_floor_refuses_spawn(setup, monkeypatch, capsys, entry):
+    service, path, remote = setup
+    path.unlink()
+    monkeypatch.setattr(overflow, 'ready_records', lambda config, role: {})
+    shared = SharedService()
+    shared.runner, shared._save = service.runner, service._save
+    if entry == 'seat':
+        result = asyncio.run(shared.spawn(prompt='Implement the requested change.'))
+    elif entry == 'mcp':
+        from plangraph.spawner.mcp import MCPSpawnerServer
+        server = object.__new__(MCPSpawnerServer)
+        server.service = shared
+        result = asyncio.run(server.call_tool('plangraph_agent_spawn', {
+            'card': {'task': 'test'}, 'prompt': 'Implement the requested change.'}))
+    else:
+        from plangraph.spawner import cli
+        monkeypatch.setattr(cli, 'SpawnService', lambda **kw: shared)
+        assert cli.main(['spawn', '--card', '{"task":"test"}',
+                         'Implement the requested change.']) == 5
+        result = json.loads(capsys.readouterr().out)
+    assert result['status'] == 'queued' and result['exit_code'] == 5
+    assert 'memory:' in result['reason']
+    remote.assert_not_called()
+    shared._save.assert_called_once_with(result)
+
+
+def test_direct_cli_below_floor_attempts_overflow(setup, monkeypatch, capsys):
+    from plangraph.spawner import cli
+    service, _, remote = setup
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: service)
+    monkeypatch.setattr(cli, '_start_supervisor', Mock(side_effect=AssertionError('local supervisor')))
+    assert cli.main(['spawn', '--card', '{"task":"test"}',
+                     'Implement the requested change.']) == 0
+    assert json.loads(capsys.readouterr().out)['host'] == 'ash'
+    remote.assert_called_once()
 
 
 @pytest.mark.parametrize('entry', ['cli', 'mcp'])
