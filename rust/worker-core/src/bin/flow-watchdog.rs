@@ -1,4 +1,7 @@
-//! Deterministic flow checks; host collectors supply a single JSON snapshot.
+#[path = "flow_watchdog_stuck/mod.rs"]
+mod stuck;
+include!("flow_watchdog_stuck/legacy_tests.rs");
+// Deterministic flow checks; host collectors supply a single JSON snapshot.
 use serde::Deserialize;
 use std::{
     fs,
@@ -8,6 +11,8 @@ use std::{
 };
 #[derive(Deserialize)]
 struct Snapshot {
+    #[serde(flatten)]
+    stuck: stuck::Snapshot,
     pace: f64,
     budget: f64,
     ci_failed: u64,
@@ -120,7 +125,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = Path::new(&args[2]);
     fs::create_dir_all(dir)?;
     let pending = dir.join("pending.json");
-    let active = findings(&s).join(",");
+    let legacy = findings(&s).join(",");
+    let mut messages = s.stuck.messages();
+    if !legacy.is_empty() {
+        messages.insert(0, legacy);
+    }
+    let active = messages.join("\n");
     let queue_path = dir.join("queue.json");
     let mut queue: Vec<serde_json::Value> = match fs::read(&queue_path) {
         Ok(bytes) => serde_json::from_slice(&bytes)?,
@@ -129,9 +139,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let previous = fs::read_to_string(dir.join("active")).unwrap_or_default();
     if active != previous {
-        if !active.is_empty() {
+        for message in &messages {
+            if previous.lines().any(|line| line == message) {
+                continue;
+            }
             queue.push(serde_json::json!({"kind":"alert", "recipient":"routing",
-                "message":format!("FLOW-WATCHDOG: {active}"), "active":active}));
+                "message":format!("FLOW-WATCHDOG: {message}"), "active":message}));
             atomic(&queue_path, &serde_json::to_string(&queue)?)?;
         }
         atomic(&dir.join("active"), &active)?;
@@ -183,57 +196,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         // Remove pending first: interruption can repeat delivery, never lose it.
         fs::remove_file(&pending)?;
-        if queue.first().is_some_and(|v| *v == event) {
+        let delivered: serde_json::Value = serde_json::from_str(&event)?;
+        if queue.first().is_some_and(|v| *v == delivered) {
             queue.remove(0);
             atomic(&queue_path, &serde_json::to_string(&queue)?)?;
         }
     }
     Ok(())
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn each_rule_has_below_boundary_above() {
-        let mut s = Snapshot {
-            pace: 65.0,
-            budget: 66.0,
-            ci_failed: 0,
-            ci_total: 10,
-            infra_failed: 0,
-            review_age_hours: 23.0,
-            review_rounds: 2,
-            critical_idle_hours: 11.0,
-            coding_vm_runs: 0,
-            dell_idle: true,
-            host_drift: false,
-            closes_recent: 5,
-            closes_previous: 4,
-        };
-        assert!(findings(&s).is_empty());
-        s.pace = 66.0;
-        s.ci_failed = 1;
-        s.review_age_hours = 24.0;
-        s.review_rounds = 3;
-        s.critical_idle_hours = 12.0;
-        s.closes_recent = 4;
-        assert!(findings(&s).is_empty());
-        s.pace = 242.0;
-        s.ci_failed = 2;
-        s.review_age_hours = 25.0;
-        s.review_rounds = 4;
-        s.critical_idle_hours = 13.0;
-        s.coding_vm_runs = 1;
-        s.host_drift = true;
-        s.closes_recent = 3;
-        assert_eq!(findings(&s).len(), 8);
-        s.infra_failed = 2;
-        assert!(!ci(&s));
-        s.dell_idle = false;
-        assert!(!placement(&s));
-        s.ci_total = 0;
-        s.ci_failed = 0;
-        s.infra_failed = 0;
-        assert!(!ci(&s));
-    }
 }
