@@ -1,4 +1,4 @@
-//! Changelog-entry rule only; docs-map enforcement remains a separate CI rule.
+//! Changelog-entry rule for S1b; docs-map enforcement moves into Rust in S1c.
 use crate::workspace_resolver::git_command;
 use regex::Regex;
 use std::{collections::HashMap, path::Path};
@@ -33,13 +33,14 @@ fn lines(text: &str) -> impl Iterator<Item = &str> {
 
 fn entries(text: &str, unreleased_only: bool) -> HashMap<String, usize> {
     let heading = Regex::new(r"(?i)^##\s+\[?unreleased\]?\s*$").unwrap();
+    let section = Regex::new(r"^##\s+").unwrap();
     let mut inside = !unreleased_only;
     let mut found = HashMap::new();
     for raw in lines(text) {
         let line = raw.trim();
         if unreleased_only && heading.is_match(line) {
             inside = true;
-        } else if unreleased_only && raw.starts_with("## ") {
+        } else if unreleased_only && section.is_match(line) {
             inside = false;
         } else if inside && !line.is_empty() && !line.starts_with('#') {
             *found.entry(line.to_owned()).or_default() += 1;
@@ -82,6 +83,7 @@ pub(super) fn check(root: &Path, base: &str, head: &str) -> Result<(), String> {
             &["log", "-1", "--format=%(trailers:only,unfold)", sha],
         )?;
         let mut reason = false;
+        let mut empty_reason = false;
         for line in lines(&trailers) {
             if let Some(capture) = skip.captures(line) {
                 if capture
@@ -90,7 +92,7 @@ pub(super) fn check(root: &Path, base: &str, head: &str) -> Result<(), String> {
                 {
                     reason = true;
                 } else {
-                    return Err(format!("commit {} has skip with empty reason", &sha[..8]));
+                    empty_reason = true;
                 }
             }
         }
@@ -112,6 +114,9 @@ pub(super) fn check(root: &Path, base: &str, head: &str) -> Result<(), String> {
             .filter(|p| !p.is_empty())
             .any(|p| !is_doc_path(p))
         {
+            if empty_reason {
+                return Err(format!("commit {} has skip with empty reason", &sha[..8]));
+            }
             skipped |= reason;
             uncovered |= !reason;
         }

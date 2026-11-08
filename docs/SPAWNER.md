@@ -7,7 +7,7 @@ bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
 and no publish/push is attempted. Changed tracked files use the Python CI gate's
 400-line rule, exemptions, binary detection, splitlines counting and baseline
 ratchet. CI still runs unchanged `tools/check_file_size.py` over all tracked files.
-The adjacent Rust changelog gate uses the run-base merge-base and the CI entry/skip-trailer rule (not `.docs-map`), returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required.
+The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI entry/skip-trailer rule, returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. The `.docs-map` gate moves into Rust in slice S1c. Doc-only and empty commits do not require skip reasons; section boundaries include indented headings in both Rust and CI.
 
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.

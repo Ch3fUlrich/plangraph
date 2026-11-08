@@ -1,5 +1,99 @@
 use super::*;
 
+fn assert_python_parity(f: &Fixture, passes: bool) {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/check_changelog_docs.py");
+    let python = std::process::Command::new("python3")
+        .arg(script)
+        .args(["--cwd", f.tree.to_str().unwrap(), "--base"])
+        .arg(f.ws.base_sha.as_ref().unwrap())
+        .args(["--head", "HEAD"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        python.status.success(),
+        passes,
+        "{}{}",
+        String::from_utf8_lossy(&python.stdout),
+        String::from_utf8_lossy(&python.stderr)
+    );
+    let rust = check_result(&f.repo, &f.tree, &f.ws);
+    if passes {
+        assert!(rust.is_ok(), "{rust:?}");
+    } else {
+        assert!(matches!(rust, Err(WriterError::Changelog(_))), "{rust:?}");
+    }
+}
+
+#[test]
+fn parity_doc_only_and_empty_commit_skip_without_reason_pass() {
+    for files in [vec![("README.md", "docs")], vec![]] {
+        let f = Fixture::new();
+        record(&f, &files, "Changelog: skip");
+        assert_python_parity(&f, true);
+    }
+}
+
+#[test]
+fn parity_indented_and_irregular_section_heading_hold() {
+    for heading in ["  ## Released", "##\tReleased", "  ##\tReleased"] {
+        let mut f = Fixture::new();
+        record(
+            &f,
+            &[(
+                "CHANGELOG.md",
+                &format!("## Unreleased\n{heading}\n- Old\n"),
+            )],
+            "",
+        );
+        f.ws.base_sha = Some(git(&f.tree, &["rev-parse", "HEAD"]).unwrap());
+        f.ws.revision_sha = f.ws.base_sha.clone();
+        record(
+            &f,
+            &[
+                ("code.rs", "x"),
+                (
+                    "CHANGELOG.md",
+                    &format!("## Unreleased\n{heading}\n- Old\n- Old\n"),
+                ),
+            ],
+            "",
+        );
+        assert_python_parity(&f, false);
+    }
+}
+
+#[test]
+fn parity_heading_only_fragment_and_dated_unreleased_hold() {
+    for (path, text) in [
+        ("changelog.d/entry.md", "# Title\n### Heading\n"),
+        ("CHANGELOG.md", "## Unreleased - 2026-11-08\n- Entry\n"),
+    ] {
+        let f = Fixture::new();
+        record(&f, &[("code.rs", "x"), (path, text)], "");
+        assert_python_parity(&f, false);
+    }
+}
+
+#[test]
+fn parity_skip_reason_forms() {
+    for (trailer, passes) in [
+        ("Changelog: skip", false),
+        ("Changelog: skip ()", false),
+        ("Changelog: skip ( )", false),
+        ("Changelog: skip reason", false),
+        ("Changelog: skip (reason)", true),
+        ("Changelog: skip (reason with ) inside)", true),
+        ("Changelog: skip ((nested))", true),
+        ("Changelog: skip (reason) trailing", false),
+        ("cHaNgElOg: SKIP ( reason )", true),
+        ("Changelog: skip (valid)\nChangelog: skip", false),
+    ] {
+        let f = Fixture::new();
+        record(&f, &[("code.rs", "x")], trailer);
+        assert_python_parity(&f, passes);
+    }
+}
+
 fn record(f: &Fixture, files: &[(&str, &str)], trailer: &str) {
     for (path, text) in files {
         let full = f.tree.join(path);
