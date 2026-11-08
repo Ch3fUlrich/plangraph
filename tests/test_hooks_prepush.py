@@ -31,10 +31,10 @@ def test_timeout_is_labelled(monkeypatch, capsys):
     assert capsys.readouterr().err == "pre-push: subprocess timeout: push refused\n"
 
 
-def test_delete_only_push_skips_gates(tmp_path):
+def test_delete_only_push_refused_before_scans(tmp_path):
     result = run_hook(tmp_path, [f"(delete) {ZERO} refs/heads/old {'1' * 40}"])
-    assert result.returncode == 0
-    assert result.stderr == ""
+    assert result.returncode == 1
+    assert result.stderr == "pre-push: refused delete of refs/heads/old\n"
 
 
 def fake_ip():

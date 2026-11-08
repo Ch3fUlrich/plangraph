@@ -154,7 +154,6 @@ def main():
 
 def push_main():
     refs = [rec.split(maxsplit=3) for rec in sys.stdin.read().splitlines()]
-    refs = [rec for rec in refs if not (len(rec) == 4 and is_zero(rec[1]))]
     if not refs:
         return 0
     for rec in refs:
@@ -165,6 +164,9 @@ def push_main():
             print("pre-push: malformed push record: push refused", file=sys.stderr)
             return 1
         _, local_sha, remote_ref, remote_sha = rec
+        if is_zero(local_sha):
+            print(f"pre-push: refused delete of {remote_ref}", file=sys.stderr)
+            return 1
         if is_zero(remote_sha):
             continue
         if git("cat-file", "-e", remote_sha).returncode != 0:
@@ -183,6 +185,9 @@ def push_main():
             print(f"pre-push: refused non-fast-forward update of {remote_ref}",
                   file=sys.stderr)
             return 1
+    refs = [rec for rec in refs if not is_zero(rec[1])]
+    if not refs:
+        return 0
     if file_size_gate():
         return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
