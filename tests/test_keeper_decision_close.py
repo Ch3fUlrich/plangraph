@@ -124,11 +124,13 @@ def test_cli_payload(monkeypatch):
                      "decision_ref": "D-5024", "epoch": 3}
 
 
-def test_api_cli_missing_proof_same_refusal(world, capsys):
+def test_api_cli_missing_proof_same_refusal(world, capsys, tmp_path):
     from plangraph.keeper.api_routes import _close_on_decision
-    from plangraph.keeper.cli import build_parser
-    with pytest.raises(SystemExit):
-        build_parser().parse_args(["close", "demo:A"])
+    from plangraph.keeper.cli import main
+    from test_keeper_api import make_cfg
+    cfg = make_cfg(tmp_path, world)
+    assert main(["--config", str(tmp_path / "keeper.json"), "close", "demo:A"]) == 2
+    assert cfg is not None
     with pytest.raises(Refused) as exc:
         _close_on_decision(world.store, world.p("router"), {"key": "demo:A"},
                            lambda body, key: body[key])
@@ -149,7 +151,7 @@ def test_git_once_outside_write(world, monkeypatch):
 
     monkeypatch.setattr(module.subprocess, "run", checked)
     close(world)
-    assert calls == ["fetch", "show"]
+    assert calls == ["fetch", "rev-parse", "show"]
 
 
 def test_slow_git_timeout_allows_other_writes(world, tmp_path, monkeypatch):
@@ -193,14 +195,17 @@ def test_slow_git_timeout_allows_other_writes(world, tmp_path, monkeypatch):
     assert not errors
 
 
-def test_cli_batch_epoch_refused(world, capsys):
+def test_cli_batch_epoch_refused(world, capsys, tmp_path):
     from plangraph.keeper.api_routes import _close_on_decision
     from plangraph.keeper.cli import main
     with pytest.raises(Refused) as exc:
         _close_on_decision(world.store, world.p("router"),
                            {"key": "demo:A", "batch_ref": "proof@sha", "epoch": 1},
                            lambda body, key: body[key])
-    assert main(["close", "demo:A", "--batch", "proof@sha", "--epoch", "1"]) == 2
+    from test_keeper_api import make_cfg
+    make_cfg(tmp_path, world)
+    assert main(["--config", str(tmp_path / "keeper.json"), "close", "demo:A",
+                 "--batch", "proof@sha", "--epoch", "1"]) == 2
     output = capsys.readouterr()
     assert output.err == f"{exc.value.code}: {exc.value.msg}\n"
     assert not output.out
@@ -251,3 +256,103 @@ def test_item_changed_between_proof_and_lock_refused(world, monkeypatch):
     assert world.store._get_or_refuse("demo:A")["state"] == "claimed"
     assert not world.conn.execute(
         "SELECT 1 FROM events WHERE type='closed_on_decision'").fetchone()
+
+
+@pytest.mark.parametrize("replacement", ["| D-5024 | edited |\n", ""])
+def test_origin_drift_binds_fetched_sha(world, monkeypatch, replacement):
+    from plangraph.keeper import store_decision_close as module
+    proof = module._proof
+    sha = git(world.repo, "rev-parse", "origin/main").stdout.decode().strip()
+
+    def changed(*args):
+        digest = proof(*args)
+        world.log.write_text(replacement)
+        git(world.repo, "commit", "-am", "drift")
+        git(world.repo, "push", "origin", "main")
+        return digest
+
+    monkeypatch.setattr(module, "_proof", changed)
+    result = close(world)
+    assert result["decision_commit_sha"] == sha
+    assert result["row_sha256"] == hashlib.sha256(world.row.encode()).hexdigest()
+    assert sha in world.conn.execute(
+        "SELECT payload FROM events WHERE type='closed_on_decision'").fetchone()[0]
+
+
+def test_fake_sha_refused(world):
+    git(world.repo, "checkout", "-b", "unpublished")
+    world.log.write_text("| D-5024 | CLOSE demo:A | forged local proof\n")
+    git(world.repo, "commit", "-am", "not on origin main")
+    fake = git(world.repo, "rev-parse", "HEAD").stdout.decode().strip()
+    with pytest.raises(Refused, match="decision_ref must"):
+        world.store.close_on_decision(world.p("router"), "demo:A", decision_ref=fake)
+    assert close(world)["decision_commit_sha"] != fake
+
+
+def test_sentence_end_close(world):
+    world.log.write_text("| D-5024 | CLOSE demo:A. |\n")
+    git(world.repo, "commit", "-am", "punctuation")
+    git(world.repo, "push", "origin", "main")
+    assert close(world)["state"] == "done"
+
+
+@pytest.mark.parametrize("role", ["workerA", "workerB", "l1main", "l1other",
+                                     "reviewer", "reader", "system"])
+def test_batch_router_only(world, role):
+    with pytest.raises(Refused) as exc:
+        world.store.close_on_decision(world.p(role), "demo:A", batch_ref="proof@sha")
+    assert exc.value.code == "forbidden"
+
+
+@pytest.mark.parametrize("kind,role,allowed", [("operator_task", "workerA", False),
+                                             ("operator_task", "router", True),
+                                             ("decision", "workerA", True)])
+def test_claimant_kind_scope(world, kind, role, allowed):
+    world.conn.execute("UPDATE items SET kind=? WHERE key='demo:A'", (kind,))
+    if allowed:
+        assert world.store.close_on_decision(world.p(role), "demo:A",
+            decision_ref="D-5024", epoch=world.epoch)["state"] == "done"
+    else:
+        with pytest.raises(Refused, match="operator_task"):
+            close(world)
+
+
+def test_claimant_without_proof(world):
+    with pytest.raises(Refused):
+        world.store.close_on_decision(world.p("workerA"), "demo:A", epoch=world.epoch)
+
+
+def test_epoch_drift_specific_conflict(world, monkeypatch):
+    from plangraph.keeper import store_decision_close as module
+    proof = module._proof
+
+    def changed(*args):
+        digest = proof(*args)
+        with world.store._write():
+            world.conn.execute("UPDATE items SET epoch=epoch+1 WHERE key='demo:A'")
+        return digest
+
+    monkeypatch.setattr(module, "_proof", changed)
+    with pytest.raises(Refused, match="claim epoch changed during close") as exc:
+        close(world)
+    assert exc.value.code == "conflict"
+
+
+def test_claimant_api_client(world, tmp_path):
+    import threading
+    from plangraph.keeper import api
+    from plangraph.keeper.cli_verbs import Session
+    from test_keeper_api import make_cfg
+    server = api.make_server(world.store, make_cfg(tmp_path, world), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = Session(url=f"http://127.0.0.1:{server.server_address[1]}")
+        client._token = world.tok("workerA")
+        result = client.call("POST", "close_on_decision", body={
+            "key": "demo:A", "decision_ref": "D-5024", "epoch": world.epoch})
+        assert result["state"] == "done"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)

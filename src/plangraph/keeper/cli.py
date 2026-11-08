@@ -168,7 +168,7 @@ def _add_writes(sub):
 
     close = _p(sub, "close", help="claimant/router: close tier-none or decision/operator_task items on proof")
     close.add_argument("key")
-    proof = close.add_mutually_exclusive_group(required=True)
+    proof = close.add_mutually_exclusive_group()
     close.add_argument("--epoch", type=int,
                        help="current claim epoch (claimants require it with --decision-ref; not --batch)")
     proof.add_argument("--decision-ref", metavar="D-NNNN")

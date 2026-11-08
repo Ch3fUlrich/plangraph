@@ -386,6 +386,8 @@ def cmd_set_kind(args, session):
 
 
 def cmd_close(args, session):
+    if args.batch is None and getattr(args, "decision_ref", None) is None:
+        return _refuse(RefusedCli("validation", "one of the arguments --decision-ref --batch is required"))
     if args.batch is not None and getattr(args, "epoch", None) is not None:
         return _refuse(RefusedCli("validation", "--epoch requires --decision-ref, not --batch"))
     return write(session, "close_on_decision",

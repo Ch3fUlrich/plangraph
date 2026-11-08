@@ -13,6 +13,8 @@ LOG_PATH = "router/docs/decisions-log.md"
 def _authorize(store, principal, item, epoch):
     if principal.role == "router":
         return
+    if item.get("kind") == "operator_task":
+        raise Refused("forbidden", "operator_task requires router or operator answer")
     if item.get("claimed_by") != principal.name:
         raise Refused("forbidden", "only the current claimant or router may close")
     if epoch is None:
@@ -39,15 +41,20 @@ def _fetch_row(repo, decision):
     except (OSError, subprocess.SubprocessError):
         raise Refused("evidence_unverified", "decisions origin/main fetch failed") from None
     try:
+        sha = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "origin/main^{commit}"],
+            check=True, capture_output=True, timeout=30).stdout.decode("ascii").strip()
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise ValueError("invalid origin/main sha")
         text = subprocess.run(
-            ["git", "-C", str(repo), "show", f"origin/main:{LOG_PATH}"],
+            ["git", "-C", str(repo), "show", f"{sha}:{LOG_PATH}"],
             check=True, capture_output=True, timeout=30).stdout.decode("utf-8")
-    except (OSError, UnicodeError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError):
         raise Refused("evidence_unverified", "decisions origin/main log is unreadable") from None
     rows = [line for line in text.splitlines() if line.startswith(f"| {decision} |")]
     if len(rows) != 1:
         raise Refused("evidence_unverified", "decision row missing or duplicated on origin/main")
-    return rows[0]
+    return sha, rows[0]
 
 
 def _evidence(store, key, item, decision):
@@ -60,7 +67,8 @@ def _evidence(store, key, item, decision):
 
 def _proof(store, key, item, decision, row):
     _evidence(store, key, item, decision)
-    tokens = re.findall(r"(?<![\w])CLOSE ([A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+)(?![\w:.-])", row)
+    tokens = [token.rstrip(".") for token in re.findall(
+        r"(?<![\w])CLOSE ([A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+)(?![\w:.-])", row)]
     if key not in tokens:
         raise Refused("evidence_unverified", f"decision row has no exact CLOSE {key} token")
     return hashlib.sha256(row.encode("utf-8")).hexdigest()
@@ -79,28 +87,28 @@ def close_decision(store, principal, key, decision, epoch, batch_ref, now):
     item_digest = _item_digest(item)
     _authorize(store, principal, item, epoch)
     _evidence(store, key, item, decision)
-    row = _row(store, item, now, decision)
+    sha, row = _row(store, item, now, decision)
     digest = _proof(store, key, item, decision, row)
     with store._write():
         fresh = store._get_or_refuse(key)
+        if fresh["epoch"] != item["epoch"]:
+            raise Refused("conflict", "claim epoch changed during close")
         if _item_digest(fresh) != item_digest:
             raise Refused("conflict", "item row changed during close")
         store._assert_unlocked(fresh)
         _authorize(store, principal, fresh, epoch)
-        if fresh["epoch"] != item["epoch"]:
-            raise Refused("conflict", "claim epoch changed during close")
         if fresh["state"] not in ("claimed", "in_review"):
             raise Refused("bad_state", "decision close requires an active item")
         if fresh.get("review_tier") != "none" and fresh.get("kind") not in (
                 "decision", "operator_task"):
             raise Refused("bad_state", "item kind/tier cannot close on a decision")
-        _proof(store, key, fresh, decision, row)
         if "commit" in (fresh.get("evidence_kinds") or []):
             store._check_commit_evidence(key, fresh, now)
         cursor = store.conn.execute(
             "UPDATE items SET state='done', reviewer=?, updated_at=? WHERE key=? AND epoch=?",
             (principal.name, store._iso(now), key, fresh["epoch"]))
         store._race_guard(cursor, key, fresh["state"], fresh["epoch"])
-        payload = {"decision_ref": decision, "decision_ids": [decision], "row_sha256": digest}
+        payload = {"decision_ref": decision, "decision_ids": [decision],
+                   "row_sha256": digest, "decision_commit_sha": sha}
         store._append(principal, key, "closed_on_decision", payload, now)
         return {"key": key, "state": "done", **payload}
