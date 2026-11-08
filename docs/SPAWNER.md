@@ -6,8 +6,12 @@ Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pendin
 `python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust
 `pg-spawnd doctor-sources` subcommand. `doctor.py` prefers the checkout's
 `rust/target/release/pg-spawnd`, otherwise resolves `pg-spawnd` on `PATH`, and
-reads its JSON check rows with a ten-second subprocess timeout. There is no
-Python fallback for these checks.
+reads its JSON check rows with a derived subprocess timeout: ten seconds plus
+three seconds per batch of up to 16 configured hosts (at least ten seconds).
+There is no Python fallback for these checks. Fleet snapshots likewise delegate
+the read-only JSON projection to `pg-spawnd fleet-snapshot`; the Python loader
+supplies persisted registry and run records without probing, and projection
+failures preserve the existing `fleet: null` fallback.
 
 The Rust command reads `plangraph/ps-hosts.json` under `XDG_CONFIG_HOME` (or
 `~/.config`), checking valid entries with `src` or `win_src` in parallel with

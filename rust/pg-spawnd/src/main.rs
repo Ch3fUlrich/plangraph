@@ -3,12 +3,12 @@ mod agent_view;
 mod agent_view_projection;
 mod cli;
 mod doctor_sources;
-mod fleet_snapshot;
 #[cfg(test)]
 mod error_tests;
 mod errors;
 mod evidence;
 mod evidence_row;
+mod fleet_snapshot;
 mod gitconfig_guard;
 mod health_cli;
 mod health_report;

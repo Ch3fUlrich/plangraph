@@ -1,12 +1,23 @@
 //! Read-only fleet projection; fixed public errors only.
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
-const METRICS: [&str; 6] = ["cpu_percent", "ram_available_bytes", "gpu_percent",
-    "network_rx_bytes_per_s", "network_tx_bytes_per_s", "disk_free_bytes"];
+const METRICS: [&str; 6] = [
+    "cpu_percent",
+    "ram_available_bytes",
+    "gpu_percent",
+    "network_rx_bytes_per_s",
+    "network_tx_bytes_per_s",
+    "disk_free_bytes",
+];
 fn metric(v: &Value, key: &str) -> Value {
     match v.as_f64() {
-        Some(n) if n.is_finite() && n >= 0.0
-            && (!(key == "cpu_percent" || key == "gpu_percent") || n <= 100.0) => v.clone(),
+        Some(n)
+            if n.is_finite()
+                && n >= 0.0
+                && (!(key == "cpu_percent" || key == "gpu_percent") || n <= 100.0) =>
+        {
+            v.clone()
+        }
         _ => Value::Null,
     }
 }
@@ -14,16 +25,27 @@ pub(crate) fn build(data: &Value) -> Result<Value, String> {
     let mut hosts = BTreeMap::new();
     let mut aliases = HashMap::new();
     for row in data["registry"].as_array().ok_or("invalid registry")? {
-        let host = ["id", "host_id", "host"].iter().map(|k| &row[k])
+        let host = ["id", "host_id", "host"]
+            .iter()
+            .map(|k| &row[k])
             .find(|v| !v.is_null() && **v != json!("") && **v != json!(false) && **v != json!(0))
-            .and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or("registry host needs an id")?;
-        if hosts.insert(host, row).is_some() { return Err("duplicate registry host".into()); }
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or("registry host needs an id")?;
+        if hosts.insert(host, row).is_some() {
+            return Err("duplicate registry host".into());
+        }
         let extra = match row.get("aliases") {
             None => &[][..],
-            Some(v) => v.as_array().ok_or("registry aliases must be a list or tuple of strings")?.as_slice(),
+            Some(v) => v
+                .as_array()
+                .ok_or("registry aliases must be a list or tuple of strings")?
+                .as_slice(),
         };
         for alias in std::iter::once(host).chain(extra.iter().map(|v| v.as_str().unwrap_or(""))) {
-            if alias.is_empty() { return Err("registry alias needs a nonempty string".into()); }
+            if alias.is_empty() {
+                return Err("registry alias needs a nonempty string".into());
+            }
             if aliases.insert(alias, host).is_some_and(|old| old != host) {
                 return Err("ambiguous registry alias".into());
             }
@@ -34,17 +56,40 @@ pub(crate) fn build(data: &Value) -> Result<Value, String> {
     for run in data["runs"].as_array().into_iter().flatten() {
         let host = run["host"].as_str().and_then(|h| aliases.get(h));
         let id = run["run_id"].as_str().filter(|s| !s.is_empty());
-        let status = run["status"].as_str().filter(|s| ["running", "completed", "failed",
-            "cancelled", "queued", "dry_run", "refused"].contains(s));
+        let status = run["status"].as_str().filter(|s| {
+            [
+                "running",
+                "completed",
+                "failed",
+                "cancelled",
+                "queued",
+                "dry_run",
+                "refused",
+            ]
+            .contains(s)
+        });
         if let (Some(host), Some(id), Some(status)) = (host, id, status) {
-            if seen.insert((*host, id), status).is_some_and(|old| old != status) { known = false; }
-        } else { known = false; }
+            if seen
+                .insert((*host, id), status)
+                .is_some_and(|old| old != status)
+            {
+                known = false;
+            }
+        } else {
+            known = false;
+        }
     }
     let mut counts: HashMap<&str, usize> = HashMap::new();
-    for ((host, _), status) in seen { if status == "running" { *counts.entry(host).or_default() += 1; } }
+    for ((host, _), status) in seen {
+        if status == "running" {
+            *counts.entry(host).or_default() += 1;
+        }
+    }
     let mut samples = HashMap::new();
     for pair in data["samples"].as_array().into_iter().flatten() {
-        if let Some(host) = pair[0].as_str().and_then(|k| aliases.get(k)) { samples.insert(*host, &pair[1]); }
+        if let Some(host) = pair[0].as_str().and_then(|k| aliases.get(k)) {
+            samples.insert(*host, &pair[1]);
+        }
     }
     let rows: Vec<_> = hosts.into_iter().map(|(host, row)| {
         let sample = samples.get(host).copied().unwrap_or(&Value::Null);
@@ -54,10 +99,13 @@ pub(crate) fn build(data: &Value) -> Result<Value, String> {
             "samples":if sample.is_object() {"available"} else {"unavailable"},
             "running_agents":if known {json!(counts.get(host).copied().unwrap_or(0))} else {Value::Null}})
     }).collect();
-    Ok(json!({"hosts":rows, "running_agents":if known {json!(counts.values().sum::<usize>())} else {Value::Null}}))
+    Ok(
+        json!({"hosts":rows, "running_agents":if known {json!(counts.values().sum::<usize>())} else {Value::Null}}),
+    )
 }
 pub(crate) fn run() -> Result<Value, String> {
-    let data: Value = serde_json::from_reader(std::io::stdin()).map_err(|_| "invalid fleet input")?;
+    let data: Value =
+        serde_json::from_reader(std::io::stdin()).map_err(|_| "invalid fleet input")?;
     build(&data)
 }
 #[cfg(test)]
