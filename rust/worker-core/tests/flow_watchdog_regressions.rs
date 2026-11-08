@@ -59,8 +59,14 @@ fn zero_negative_and_missing_budget_are_not_healthy() {
         let mut s = safe();
         s["budget"] = budget.into();
         assert!(!run(&s, d.path(), true).status.success());
-        assert_eq!(fs::read_to_string(d.path().join("active")).unwrap(), "invalid snapshot");
-        assert_eq!(fs::read_to_string(d.path().join("queue.json")).unwrap(), "[]");
+        assert_eq!(
+            fs::read_to_string(d.path().join("active")).unwrap(),
+            "invalid snapshot"
+        );
+        assert_eq!(
+            fs::read_to_string(d.path().join("queue.json")).unwrap(),
+            "[]"
+        );
         assert!(!d.path().join("pending.json").exists());
     }
     let d = tempfile::tempdir().unwrap();
@@ -69,7 +75,10 @@ fn zero_negative_and_missing_budget_are_not_healthy() {
     let out = run(&s, d.path(), true);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("FLOW-WATCHDOG: invalid snapshot"));
-    assert_eq!(fs::read_to_string(d.path().join("active")).unwrap(), "invalid snapshot");
+    assert_eq!(
+        fs::read_to_string(d.path().join("active")).unwrap(),
+        "invalid snapshot"
+    );
 }
 #[test]
 fn inconsistent_counts_are_rejected_without_state() {
@@ -82,7 +91,10 @@ fn inconsistent_counts_are_rejected_without_state() {
         assert!(!out.status.success());
         assert!(String::from_utf8_lossy(&out.stderr).contains("inconsistent CI counts"));
         assert!(String::from_utf8_lossy(&out.stderr).contains("FLOW-WATCHDOG: invalid snapshot"));
-        assert_eq!(fs::read_to_string(d.path().join("active")).unwrap(), "invalid snapshot");
+        assert_eq!(
+            fs::read_to_string(d.path().join("active")).unwrap(),
+            "invalid snapshot"
+        );
     }
 }
 #[test]
@@ -99,7 +111,9 @@ fn routing_continues_and_backlog_is_bounded_when_push_fails() {
         let queue: Vec<serde_json::Value> =
             serde_json::from_str(&fs::read_to_string(d.path().join("queue.json")).unwrap())
                 .unwrap();
-        assert!(queue.last().unwrap()["routing_done"].as_bool().unwrap_or(false));
+        assert!(queue.last().unwrap()["routing_done"]
+            .as_bool()
+            .unwrap_or(false));
         assert!(queue.len() <= 256);
     }
 }
@@ -107,12 +121,23 @@ fn routing_continues_and_backlog_is_bounded_when_push_fails() {
 fn documented_rule_count_matches_checker() {
     let d = tempfile::tempdir().unwrap();
     let mut s = safe();
-    for (key, value) in [("pace", 67), ("ci_failed", 2), ("review_age_hours", 25),
-        ("review_rounds", 4), ("critical_idle_hours", 13), ("coding_vm_runs", 1),
-        ("closes_previous", 5)] { s[key] = value.into(); }
+    for (key, value) in [
+        ("pace", 67),
+        ("ci_failed", 2),
+        ("review_age_hours", 25),
+        ("review_rounds", 4),
+        ("critical_idle_hours", 13),
+        ("coding_vm_runs", 1),
+        ("closes_previous", 5),
+    ] {
+        s[key] = value.into();
+    }
     s["host_drift"] = true.into();
     assert!(run(&s, d.path(), false).status.success());
-    let count = fs::read_to_string(d.path().join("active")).unwrap().split(',').count();
+    let count = fs::read_to_string(d.path().join("active"))
+        .unwrap()
+        .split(',')
+        .count();
     assert!(include_str!("../../../docs/flow-watchdog.md").contains(&format!("{count} rule names")));
 }
 #[test]
@@ -122,7 +147,11 @@ fn every_rule_fires_in_isolation_and_retries_failed_hook() {
         ("ci_failed", serde_json::json!(2), "ci-fail-rate"),
         ("review_age_hours", serde_json::json!(25), "review-age"),
         ("review_rounds", serde_json::json!(4), "review-rounds"),
-        ("critical_idle_hours", serde_json::json!(13), "critical-path-idle"),
+        (
+            "critical_idle_hours",
+            serde_json::json!(13),
+            "critical-path-idle",
+        ),
         ("coding_vm_runs", serde_json::json!(1), "placement"),
         ("host_drift", serde_json::json!(true), "host-drift"),
         ("closes_recent", serde_json::json!(3), "closes-trend"),
@@ -140,6 +169,9 @@ fn every_rule_fires_in_isolation_and_retries_failed_hook() {
         fs::write(d.path().join("routing.ok"), "checkpoint retained").unwrap();
         assert!(run(&s, d.path(), true).status.success());
         assert!(!d.path().join("pending.json").exists());
-        assert_eq!(fs::read_to_string(d.path().join("routing.ok")).unwrap(), "checkpoint retained");
+        assert_eq!(
+            fs::read_to_string(d.path().join("routing.ok")).unwrap(),
+            "checkpoint retained"
+        );
     }
 }

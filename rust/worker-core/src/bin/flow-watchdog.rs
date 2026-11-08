@@ -115,7 +115,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Ok(s)
     })();
-    if let Err(e) = &validated { eprintln!("FLOW-WATCHDOG: invalid snapshot: {e}"); }
+    if let Err(e) = &validated {
+        eprintln!("FLOW-WATCHDOG: invalid snapshot: {e}");
+    }
     let dir = Path::new(&args[2]);
     fs::create_dir_all(dir)?;
     let pending = dir.join("pending.json");
@@ -124,7 +126,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut messages = s.stuck.messages();
             messages.extend(hosts::messages(&s.hosts));
             let legacy = findings(s).join(",");
-            if !legacy.is_empty() { messages.insert(0, legacy); }
+            if !legacy.is_empty() {
+                messages.insert(0, legacy);
+            }
             messages
         }
         Err(_) => vec!["invalid snapshot".to_owned()],
