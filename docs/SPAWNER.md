@@ -384,17 +384,17 @@ The SQLite catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py
 - **DeepSeek Flash v1017**:
   The updated DeepSeek Flash v1017 snapshot reaches an Artificial Analysis Intelligence Index of `45.0` at `$0.26/task` cost and `231 tok/s` verified throughput. Available in both `opencode-go` subscription (`opencode-go/deepseek-v4.1-flash`, $U_{\text{core}} = 0.90$) and direct paid PAYG (`deepseek/deepseek-v4-flash-max`, $U_{\text{core}} = -2.60$). Subscription DeepSeek Flash beats Qwen Max ($U_{\text{core}} = -0.60$) on cost efficiency while providing strong code reasoning.
 
----
-
+### Lean review harness
+Claude reviews preserve permissions; `--tools` is Read/Grep/Glob/Bash (empty for inline-only/prompt-only).
+`--strict-mcp-config` uses packaged empty MCP; `--disable-slash-commands` disables slash commands.
+Clients infer mode by harness/model leg (unknown: tools). Non-review argv is unchanged.
+`tools/judge_prompt.py` assembles offline review evidence with explicit budget cuts.
 Continue with [review protocol, interfaces, and operations](spawner-operations.md).
 See [spawner prompt rules](operations/spawner-prompt-rules.md) for fixer reports and retry bounds.
-The served-model probe cache has a five-minute freshness bound,
-not a five-minute completion or delivery SLA; see the operations guide for details.
-
+The served-model probe cache has a five-minute freshness bound, not a completion or delivery SLA; see the operations guide.
 Cross-host ps: see [site configuration and transport](spawner-ps.md).
 # Remote ps protocol
-
-The SSH ps endpoint serializes only running and queued records. Terminal history
-does not consume the 1 MiB transport budget; malformed terminal fields do not
+The SSH ps endpoint serializes only running and queued records. Terminal history does
+not consume the 1 MiB transport budget; malformed terminal fields do not
 hide live runs. Malformed live replies and oversized replies name the queried
 host as unknown rather than silently omitting it.

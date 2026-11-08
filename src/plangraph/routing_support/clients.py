@@ -26,7 +26,6 @@ OMNIROUTE_BASE_URL_ENV_VAR = "OMNIROUTE_BASE_URL"
 #: Harnesses whose prompts are delivered via stdin instead of argv (I9).
 STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode", "claude")   # D-3605
 
-
 def gateway_url(env: Mapping[str, str] | None = None,
                 config: Mapping[str, Any] | None = None) -> str | None:
     """Base URL of the model gateway, or ``None`` when no source names one.
@@ -42,7 +41,6 @@ def gateway_url(env: Mapping[str, str] | None = None,
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
     return None
-
 
 def effective_gateway_base_url(env: Mapping[str, str] | None = None,
                                config: Mapping[str, Any] | None = None) -> str | None:
@@ -63,7 +61,6 @@ def effective_gateway_base_url(env: Mapping[str, str] | None = None,
 #: No child-side ``settings`` node exists to honour: no ``OPENCODE_CONFIG_CONTENT``,
 #: unparsable content, or a provider block ``build_child_env`` builds from scratch.
 _ABSENT = object()
-
 
 def _child_settings(env: Mapping[str, str]) -> Any:
     """The ``providers.omniroute.settings`` node the child's config already holds.
@@ -329,6 +326,7 @@ def build_standalone_fallback_command(
     prompt: str,
     model: str | None = None,
     role: str = "implement",
+    tool_mode: str = "tools",
 ) -> list[str]:
     """Build direct CLI command as offline emergency fallback when gateway is offline."""
     cname = client_name.lower()
@@ -347,7 +345,7 @@ def build_standalone_fallback_command(
         return ["codex", "exec", *(["--model", model] if model else []), prompt]
     if cname in ("claude", "gemini", "qwen"):   # D-3605: claude takes its prompt on stdin, plan mode
         cmd = [cname, "-p", *([] if cname == "claude" else [prompt]), *(["--model", model] if model else [])]
-        return cmd + (["--output-format", "stream-json", "--verbose", *claude_access_args(role)] if cname == "claude" else [])
+        return cmd + (["--output-format", "stream-json", "--verbose", *claude_access_args(role, tool_mode)] if cname == "claude" else [])
     # Legacy callers may pass a gateway name. Explicit harnesses are validated
     # by build_command, while this offline helper retains its OpenCode default.
     cmd = ["opencode", "run", "--standalone"]
@@ -367,20 +365,21 @@ def build_command(
     headers: Mapping[str, str] | None = None,
     serve_port: int | None = None,
     extra_flags: Sequence[str] = (),
+    tool_mode: str | None = None,
 ) -> list[str]:
-    """Build executable command for an agent task.
-
-    An explicit registered harness is authoritative. Calls without a harness
-    retain the legacy gateway-first transport policy.
-    """
+    """Build argv; explicit harness wins, absent tool mode uses harness/model leg or tools."""
     from plangraph.mimo_policy import check_mimo_path
+    from plangraph.planner.legs import DEFAULT_LEGS
+    if tool_mode is None:
+        tool_mode = next((leg.tool_mode for leg in DEFAULT_LEGS
+                          if leg.harness == (client or detect_client_for_model(model_or_combo))
+                          and leg.model == model_or_combo), "tools")
     check_mimo_path(model_or_combo)
     if client is not None:
         if client not in (*CLIENTS, "qodercli"):
             raise ValueError(f"unknown harness: {client}")
         if client != "opencode":
-            return build_standalone_fallback_command(client, prompt, model_or_combo, role=role)
-    # 1. Gateway route (first priority)
+            return build_standalone_fallback_command(client, prompt, model_or_combo, role=role, tool_mode=tool_mode)
     if gateway and gateway_online:
         return build_opencode_command(
             prompt=prompt,
@@ -397,4 +396,5 @@ def build_command(
         prompt=prompt,
         model=model_or_combo,
         role=role,
+        tool_mode=tool_mode,
     )
