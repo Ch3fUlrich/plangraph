@@ -48,13 +48,25 @@ with open(os.environ['CALLS'], 'a') as f:
     f.write(name + ' ' + ' '.join(args) + '\\n')
 if name == 'git':
     assert os.environ.get('GIT_TERMINAL_PROMPT') == '0' or 'checkout' in args
-    if os.environ.get('FETCH_FAIL') and ('clone' in args or 'fetch' in args): sys.exit(1)
+    if os.environ.get('FETCH_FAIL') and ('clone' in args or 'fetch' in args):
+        print('first diagnostic', file=sys.stderr)
+        print('fatal: denied https://user:pass@example.org/router', file=sys.stderr)
+        sys.exit(1)
+    if 'rev-parse' in args: sys.exit(0 if (Path(args[1]) / '.git').exists() else 1)
+    if os.environ.get('CHECKOUT_FAIL') and 'checkout' in args: sys.exit(1)
     if 'clone' in args:
+        (Path(args[-1]) / '.git').mkdir(parents=True)
         exe = Path(args[-1]) / 'router/bin/ctx-watchdog'
         exe.parent.mkdir(parents=True)
         exe.write_text('#!' + sys.executable + '\\nimport os,sys\\nsys.exit(int(os.environ.get("HEALTH_FAIL", "0")))\\n')
         exe.chmod(0o755)
 if name == 'systemctl' and os.environ.get('DISABLED') and 'is-enabled' in args: sys.exit(1)
+if name == 'systemctl' and 'show' in args:
+    if os.environ.get('WRONG_EXEC'): print('/wrong/ctx-watchdog')
+    else:
+        base = Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config')))
+        service = (base / 'systemd/user/ctx-watchdog.service').read_text()
+        print(next(line[10:] for line in service.splitlines() if line.startswith('ExecStart=')))
 '''
     for name in ('git', 'systemctl'):
         path = bins / name
@@ -84,21 +96,57 @@ def test_install_pinned_host_neutral(host, monkeypatch, override):
     for setting in ('OnStartupSec=3min', 'OnUnitActiveSec=5min', 'AccuracySec=30s', 'WantedBy=timers.target'):
         assert setting in timer
     config = json.loads((home / '.config/plangraph/ctx-watchdog.json').read_text())
-    assert f'checkout --detach {config["router_sha"]}' in log.read_text()
+    assert f'checkout --detach {config["router_sha"]} --' in log.read_text()
     assert 'systemctl --user enable --now ctx-watchdog.timer' in log.read_text()
     assert run().returncode == 0
-    assert f'fetch --quiet {config["router_repo"]} {config["router_sha"]}' in log.read_text()
+    assert f'fetch --quiet -- {config["router_repo"]} {config["router_sha"]}' in log.read_text()
 
 
 @pytest.mark.parametrize('existing', [False, True])
 def test_remote_failure(host, monkeypatch, existing):
     home, _, run = host
     if existing:
-        (home / 'custom/router').mkdir(parents=True)
+        (home / 'custom/router/.git').mkdir(parents=True)
     monkeypatch.setenv('FETCH_FAIL', '1')
     result = run()
     assert result.returncode != 0
     assert 'ctx-watchdog: cannot fetch the router repo on this host; this host needs an operator access step' in result.stderr
+    assert 'fatal: denied https://example.org/router' in result.stderr
+    assert 'user:pass@' not in result.stderr
+    assert 'first diagnostic' not in result.stderr
+
+
+@pytest.mark.parametrize('failure', ['CHECKOUT_FAIL', 'WRONG_EXEC', 'missing_git', 'not_repo'])
+def test_install_diagnostics(host, monkeypatch, failure):
+    home, log, run = host
+    directory = home / 'custom/router'
+    if failure == 'missing_git':
+        (log.parent / 'bin/git').unlink()
+        expected = 'ctx-watchdog: git not found'
+    elif failure == 'not_repo':
+        directory.mkdir(parents=True)
+        expected = f'ctx-watchdog: {directory} exists but is not a git checkout'
+    else:
+        monkeypatch.setenv(failure, '1')
+        expected = (f'ctx-watchdog: cannot check out the pinned commit in {directory}'
+                    if failure == 'CHECKOUT_FAIL' else
+                    'ctx-watchdog: unhealthy (unit ExecStart does not point at the checkout)')
+    result = run()
+    assert result.returncode == 1
+    assert expected in result.stderr
+
+
+@pytest.mark.parametrize('field', ['router_repo', 'router_dir'])
+def test_reject_git_options(host, field):
+    home, log, run = host
+    config = home / '.config/plangraph/ctx-watchdog.json'
+    values = json.loads(config.read_text())
+    values[field] = '--upload-pack=unexpected'
+    config.write_text(json.dumps(values))
+    result = run()
+    assert result.returncode == 1
+    assert f'ctx-watchdog: {field} must not start with -' in result.stderr
+    assert not log.exists() or 'git ' not in log.read_text()
 
 
 @pytest.mark.parametrize('failure', ['HEALTH_FAIL', 'DISABLED'])

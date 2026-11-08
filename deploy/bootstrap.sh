@@ -110,7 +110,7 @@ install_ctx_watchdog() {
   [[ "$SKIP_CTX_WATCHDOG" -eq 0 ]] || { echo "ctx-watchdog: skipped by request"; return; }
   [[ "$(uname -s)" == Linux ]] || { echo "ctx-watchdog: skipped on non-Linux host"; return; }
   local config="${CTX_WATCHDOG_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/plangraph/ctx-watchdog.json}"
-  local values repo sha router_dir unit_dir
+  local values repo sha router_dir unit_dir git_error exec_start
   if ! values="$("$PYTHON_CMD" -c '
 import json, os, re, sys
 try:
@@ -129,6 +129,9 @@ except (OSError, ValueError, KeyError, TypeError):
     [[ "$DRY_RUN" -eq 1 ]] && return 0
     return 1
   fi
+  { IFS= read -r repo; IFS= read -r sha; IFS= read -r router_dir; } <<< "$values"
+  [[ "$repo" != -* ]] || { echo "ctx-watchdog: router_repo must not start with -" >&2; exit 1; }
+  [[ "$router_dir" != -* ]] || { echo "ctx-watchdog: router_dir must not start with -" >&2; exit 1; }
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "[DRY-RUN] ctx-watchdog: would read config, clone/fetch pinned router, render units, daemon-reload, enable --now ctx-watchdog.timer and verify health"
     return
@@ -137,21 +140,26 @@ except (OSError, ValueError, KeyError, TypeError):
     echo "ctx-watchdog: Linux host requires working systemd --user" >&2
     exit 1
   fi
-  { IFS= read -r repo; IFS= read -r sha; IFS= read -r router_dir; } <<< "$values"
+  command -v git >/dev/null || { echo "ctx-watchdog: git not found" >&2; exit 1; }
   [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "ctx-watchdog: invalid pinned sha" >&2; exit 1; }
   [[ "$router_dir" == /* ]] || router_dir="$HOME/$router_dir"
-  if [[ -d "$router_dir" ]]; then
-    if ! GIT_TERMINAL_PROMPT=0 git -C "$router_dir" fetch --quiet "$repo" "$sha" >/dev/null 2>&1; then
-      echo "ctx-watchdog: cannot fetch the router repo on this host; this host needs an operator access step" >&2
+  if [[ -e "$router_dir" ]]; then
+    if ! GIT_TERMINAL_PROMPT=0 git -C "$router_dir" rev-parse --git-dir >/dev/null 2>&1; then
+      echo "ctx-watchdog: $router_dir exists but is not a git checkout" >&2
       exit 1
     fi
+    git_error="$(GIT_TERMINAL_PROMPT=0 git -C "$router_dir" fetch --quiet -- "$repo" "$sha" 2>&1 >/dev/null)" || {
+      ctx_git_failure "$git_error"; exit 1;
+    }
   else
-    if ! GIT_TERMINAL_PROMPT=0 git clone --quiet --no-checkout "$repo" "$router_dir" >/dev/null 2>&1; then
-      echo "ctx-watchdog: cannot fetch the router repo on this host; this host needs an operator access step" >&2
-      exit 1
-    fi
+    git_error="$(GIT_TERMINAL_PROMPT=0 git clone --quiet --no-checkout -- "$repo" "$router_dir" 2>&1 >/dev/null)" || {
+      ctx_git_failure "$git_error"; exit 1;
+    }
   fi
-  git -C "$router_dir" checkout --detach "$sha" >/dev/null 2>&1
+  if ! git -C "$router_dir" checkout --detach "$sha" -- >/dev/null 2>&1; then
+    echo "ctx-watchdog: cannot check out the pinned commit in $router_dir" >&2
+    exit 1
+  fi
   [[ -x "$router_dir/router/bin/ctx-watchdog" ]] || { echo "ctx-watchdog: missing executable at pinned sha" >&2; exit 1; }
   unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
   "$PYTHON_CMD" -c '
@@ -174,10 +182,28 @@ for name in ("ctx-watchdog.service", "ctx-watchdog.timer"):
     echo "ctx-watchdog: unhealthy" >&2
     exit 1
   fi
+  exec_start="$(systemctl --user show ctx-watchdog.service -p ExecStart --value)" || exec_start=""
+  if ! "$PYTHON_CMD" -c '
+import os, pathlib, sys
+binary = pathlib.Path(sys.argv[1]).resolve() / "router/bin/ctx-watchdog"
+value = sys.argv[2].replace("%h", str(pathlib.Path.home())).replace("%%", "%")
+sys.exit(0 if str(binary) in value and os.access(binary, os.X_OK) else 1)
+' "$router_dir" "$exec_start"; then
+    echo "ctx-watchdog: unhealthy (unit ExecStart does not point at the checkout)" >&2
+    exit 1
+  fi
   if ! timeout --signal=KILL 60s "$router_dir/router/bin/ctx-watchdog" >/dev/null 2>&1 || ! systemctl --user is-enabled ctx-watchdog.timer >/dev/null 2>&1; then
     echo "ctx-watchdog: unhealthy" >&2
     exit 1
   fi
+}
+ctx_git_failure() {
+  "$PYTHON_CMD" -c '
+import re, sys
+lines = sys.argv[1].splitlines()
+detail = re.sub(r"[^\s/:@]+:[^\s/@]*@", "", lines[-1] if lines else "git failed")
+print("ctx-watchdog: cannot fetch the router repo on this host; this host needs an operator access step: " + detail, file=sys.stderr)
+' "$1"
 }
 install_ctx_watchdog
 
