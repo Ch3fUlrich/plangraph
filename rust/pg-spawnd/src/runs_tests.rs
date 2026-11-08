@@ -1,6 +1,119 @@
 use super::*;
 
 #[test]
+fn gitconfig_guard_only_arms_writers() {
+    for role in [
+        json!("review"),
+        json!("research"),
+        json!("implement"),
+        json!("orchestrate"),
+        json!("session"),
+        json!("judge"),
+        json!("unknown"),
+        Value::Null,
+        json!({"malformed": true}),
+    ] {
+        let dir = Dir(std::env::temp_dir().join(new_run_id()));
+        std::fs::create_dir_all(dir.0.join(".git")).unwrap();
+        let config = dir.0.join(".git/config");
+        std::fs::write(&config, b"original\n").unwrap();
+        let runs = Runs::new(Arc::new(
+            Supervisor::new(SupervisorCfg::new(Config {
+                state_dir: dir.0.clone(),
+                confinement: Confinement::Plain,
+                ..Config::default()
+            }))
+            .unwrap(),
+        ));
+        let args = json!({"prompt":"unique-input","card":{},"wait_seconds":5});
+        let result = runs
+            .spawn_using(
+                &dir.0,
+                args.as_object().unwrap(),
+                "local",
+                json!(role),
+                json!({"first_leg":{"family":"f"}}),
+                |_, _| {
+                    Ok(crate::launch::LaunchSpec {
+                        argv: vec![
+                            "/bin/sh".into(),
+                            "-c".into(),
+                            "cat >/dev/null; printf 'changed\\n' >.git/config".into(),
+                        ],
+                        cwd: dir.0.clone(),
+                        env: BTreeMap::new(),
+                        stdin: Some("unique-input".into()),
+                        prompt: Some("unique-input".into()),
+                        warnings: None,
+                        events: None,
+                    })
+                },
+            )
+            .unwrap_or_else(|_| panic!("spawn failed"));
+        let writer = role != "review" && role != "research";
+        assert_eq!(
+            result.get("gitconfig_guard"),
+            writer.then_some(&json!(true))
+        );
+        let run_dir =
+            crate::gitconfig_guard::run_dir(&dir.0, result["run_id"].as_str().unwrap()).unwrap();
+        assert_eq!(run_dir.join("gitconfig.snapshot").exists(), writer);
+        assert_eq!(
+            result["status"],
+            if writer { "failed" } else { "completed" }
+        );
+        // The failed verdict is persisted before restoration; wait for the hook.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while writer && std::fs::read(&config).unwrap() != b"original\n" {
+            assert!(
+                Instant::now() < deadline,
+                "completion did not restore config"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            std::fs::read(&config).unwrap(),
+            if writer {
+                b"original\n".as_slice()
+            } else {
+                b"changed\n".as_slice()
+            }
+        );
+        std::fs::write(&config, b"restart mutation\n").unwrap();
+        let mut record = RunRecord::read(&dir.0, result["run_id"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            crate::gitconfig_guard::enforce(&mut record, Status::Orphaned, json!({})),
+            if writer {
+                Status::Failed
+            } else {
+                Status::Orphaned
+            }
+        );
+        assert_eq!(
+            std::fs::read(&config).unwrap(),
+            if writer {
+                b"original\n".as_slice()
+            } else {
+                b"restart mutation\n".as_slice()
+            }
+        );
+        // Recovery calls the same finish hook as completion, with an on-disk record.
+        std::fs::write(&config, b"recovery mutation\n").unwrap();
+        let mut record = RunRecord::read(&dir.0, result["run_id"].as_str().unwrap()).unwrap();
+        finish(&mut record, Status::Orphaned, &json!({}), 1);
+        assert_eq!(
+            std::fs::read(&config).unwrap(),
+            if writer {
+                b"original\n".as_slice()
+            } else {
+                b"recovery mutation\n".as_slice()
+            }
+        );
+        assert_eq!(record.get("gitconfig_original_outcome").is_some(), writer);
+    }
+}
+
+#[test]
 fn embedded_prompt_and_distinct_stdin() {
     let dir = std::env::temp_dir().join(new_run_id());
     let raw = format!("{}{}", "sk-", "a".repeat(24));

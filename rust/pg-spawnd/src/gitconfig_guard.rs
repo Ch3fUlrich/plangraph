@@ -16,6 +16,15 @@ struct Snapshot {
     bytes: Option<Vec<u8>>,
 }
 
+pub(crate) fn writer_role(role: &serde_json::Value) -> bool {
+    use pg_worker_core::hosts::Role;
+    // Only known read-only roles may opt out; new or malformed roles fail closed.
+    !matches!(
+        serde_json::from_value::<Role>(role.clone()),
+        Ok(Role::Review | Role::Research)
+    )
+}
+
 pub(crate) fn guard_diagnostic(
     record: &RunRecord,
     status: Status,
