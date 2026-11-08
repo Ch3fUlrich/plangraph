@@ -343,7 +343,7 @@ def backfill(args, poster, pr_lookup=None):
         import subprocess
         def lookup(sha):
             result = subprocess.run(["gh", "pr", "list", "--search", sha, "--state", "merged",
-                                     "-R", "Ch3fUlrich/plangraph", "--json", "number"],
+                                     "--json", "number"],
                                     capture_output=True, text=True, timeout=30)
             rows = json.loads(result.stdout) if result.returncode == 0 else []
             return rows[0]["number"] if len(rows) == 1 else None
