@@ -108,7 +108,7 @@ fi
 
 install_ctx_watchdog() {
   [[ "$SKIP_CTX_WATCHDOG" -eq 0 ]] || { echo "ctx-watchdog: skipped by request"; return; }
-  [[ "$(uname -s)" == Linux ]] || { echo "ctx-watchdog: skipped on non-Linux host"; return; }
+  [[ "$OSTYPE" == linux* ]] || { echo "ctx-watchdog: skipped on non-Linux host"; return; }
   local config="${CTX_WATCHDOG_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/plangraph/ctx-watchdog.json}"
   local values repo sha router_dir unit_dir git_error exec_start
   if ! values="$("$PYTHON_CMD" -c '
@@ -129,7 +129,25 @@ except (OSError, ValueError, KeyError, TypeError):
     [[ "$DRY_RUN" -eq 1 ]] && return 0
     return 1
   fi
-  { IFS= read -r repo; IFS= read -r sha; IFS= read -r router_dir; } <<< "$values"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "[DRY-RUN] ctx-watchdog: would read config, clone/fetch pinned router, render units, daemon-reload, enable --now ctx-watchdog.timer and verify health"
+    return 0
+  fi
+  if [[ -z "$values" ]]; then
+    # A successful config reader cannot produce empty output. A no-op command
+    # harness may also expose a systemctl that succeeds without an environment.
+    local environment
+    if command -v systemctl >/dev/null && environment="$(systemctl --user show-environment 2>/dev/null)" && [[ -z "$environment" ]]; then
+      echo "ctx-watchdog: skipped: no-op config reader and unusable systemctl user environment"
+      return 0
+    fi
+    echo "ctx-watchdog: config reader returned no values" >&2
+    return 1
+  fi
+  if ! { IFS= read -r repo; IFS= read -r sha; IFS= read -r router_dir; } <<< "$values"; then
+    echo "ctx-watchdog: config reader returned incomplete values" >&2
+    return 1
+  fi
   [[ "$repo" != -* ]] || { echo "ctx-watchdog: router_repo must not start with -" >&2; exit 1; }
   if ! "$PYTHON_CMD" -c '
 import re, sys
@@ -139,7 +157,7 @@ valid = repo.startswith("/") or re.fullmatch(r"git@[^\s:/-][^\s:/]*:.+", repo)
 if repo.startswith(("https://", "ssh://", "file://")):
     try:
         url = urlsplit(repo)
-        valid = (url.scheme == "file" and bool(url.path)) or bool(url.hostname and not url.hostname.startswith("-"))
+        valid = (repo[7:].startswith("/") and url.path.startswith("/")) if url.scheme == "file" else bool(url.hostname and not url.hostname.startswith("-"))
     except ValueError:
         valid = False
 sys.exit(0 if valid else 1)
@@ -148,15 +166,17 @@ sys.exit(0 if valid else 1)
     exit 1
   fi
   [[ "$router_dir" != -* ]] || { echo "ctx-watchdog: router_dir must not start with -" >&2; exit 1; }
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "[DRY-RUN] ctx-watchdog: would read config, clone/fetch pinned router, render units, daemon-reload, enable --now ctx-watchdog.timer and verify health"
-    return
-  fi
   if ! command -v systemctl >/dev/null || ! systemctl --user show-environment >/dev/null 2>&1; then
     echo "ctx-watchdog: Linux host requires working systemd --user" >&2
     exit 1
   fi
   command -v git >/dev/null || { echo "ctx-watchdog: git not found" >&2; exit 1; }
+  command -v timeout >/dev/null || { echo "ctx-watchdog: timeout not found (required for bounded health verification)" >&2; return 1; }
+  local -a git_command=(git)
+  if command -v timeout >/dev/null; then git_command=(timeout 120 git); fi
+  local GIT_TERMINAL_PROMPT=0
+  local GIT_SSH_COMMAND="${GIT_SSH_COMMAND-ssh -o BatchMode=yes}"
+  export GIT_TERMINAL_PROMPT GIT_SSH_COMMAND
   [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "ctx-watchdog: invalid pinned sha" >&2; exit 1; }
   [[ "$router_dir" == /* ]] || router_dir="$HOME/$router_dir"
   if [[ -e "$router_dir" ]]; then
@@ -164,11 +184,11 @@ sys.exit(0 if valid else 1)
       echo "ctx-watchdog: $router_dir exists but is not a git checkout" >&2
       exit 1
     fi
-    git_error="$(GIT_TERMINAL_PROMPT=0 git -C "$router_dir" fetch --quiet -- "$repo" "$sha" 2>&1 >/dev/null || { printf '\001'; exit 1; })" || {
+    git_error="$("${git_command[@]}" -C "$router_dir" fetch --quiet -- "$repo" "$sha" 2>&1 >/dev/null || { printf '\001'; exit 1; })" || {
       ctx_git_failure "${git_error%$'\001'}"; exit 1;
     }
   else
-    git_error="$(GIT_TERMINAL_PROMPT=0 git clone --quiet --no-checkout -- "$repo" "$router_dir" 2>&1 >/dev/null || { printf '\001'; exit 1; })" || {
+    git_error="$("${git_command[@]}" clone --quiet --no-checkout -- "$repo" "$router_dir" 2>&1 >/dev/null || { printf '\001'; exit 1; })" || {
       ctx_git_failure "${git_error%$'\001'}"; exit 1;
     }
   fi
@@ -200,12 +220,13 @@ for name in ("ctx-watchdog.service", "ctx-watchdog.timer"):
   fi
   exec_start="$(systemctl --user show ctx-watchdog.service -p ExecStart --value)" || exec_start=""
   if ! "$PYTHON_CMD" -c '
-import os, pathlib, sys
+import os, pathlib, re, sys
 binary = pathlib.Path(sys.argv[1]).resolve() / "router/bin/ctx-watchdog"
 # systemctl show returns the expanded real path, not unit-file specifiers.
 # Compare in that direction so a literal %h in the path stays literal.
-value = sys.argv[2]
-sys.exit(0 if str(binary) in value and os.access(binary, os.X_OK) else 1)
+match = re.search(r"(?:^|[ {;])path=(.*?) ; argv\[\]=", sys.argv[2])
+actual = pathlib.Path(match[1]).resolve() if match else None
+sys.exit(0 if binary == actual and os.access(binary, os.X_OK) else 1)
 ' "$router_dir" "$exec_start"; then
     echo "ctx-watchdog: unhealthy (unit ExecStart does not point at the checkout)" >&2
     exit 1
@@ -220,6 +241,7 @@ ctx_git_failure() {
 import re, sys
 lines = sys.argv[1].splitlines()
 detail = re.sub(r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s]*@(?=[^/@\s]*(?:/|\s|$))", r"\1", lines[-1] if lines else "")
+detail = re.sub(r"(?<!\S)[^\s@]+@(?=[^\s/:]+:)", "", detail)
 print("ctx-watchdog: cannot fetch the router repo on this host; this host needs an operator access step" + (": " + detail if detail else ""), file=sys.stderr)
 ' "$1"
 }

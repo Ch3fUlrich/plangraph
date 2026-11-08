@@ -244,3 +244,62 @@ def test_site_config_location(host, monkeypatch, location):
     else:
         monkeypatch.setenv('XDG_CONFIG_HOME', str(home / 'site'))
     assert run().returncode == 0
+
+
+@pytest.mark.parametrize('directory', ['.', 'linked'])
+def test_resolved_exec_start(host, monkeypatch, directory):
+    home, _, run = host
+    if directory == 'linked':
+        alias = home.parent / 'home-link'
+        alias.symlink_to(home, target_is_directory=True)
+        monkeypatch.setenv('HOME', str(alias))
+    else:
+        (home / '.git').mkdir()
+        executable = home / 'router/bin/ctx-watchdog'
+        executable.parent.mkdir(parents=True)
+        executable.write_text('#!/bin/bash\nexit 0\n')
+        executable.chmod(0o755)
+        monkeypatch.setenv('CTX_WATCHDOG_ROUTER_DIR', str(home))
+    result = run()
+    assert result.returncode == 0, result.stderr
+
+
+def test_file_option_rejected(host):
+    home, _, run = host
+    config = home / '.config/plangraph/ctx-watchdog.json'
+    values = json.loads(config.read_text())
+    values['router_repo'] = 'file://-oProxyCommand=x/p'
+    config.write_text(json.dumps(values))
+    assert run().returncode == 1
+
+
+def test_scp_redaction(host, monkeypatch):
+    monkeypatch.setenv('FETCH_FAIL', '1')
+    monkeypatch.setenv('GIT_ERROR', 'fatal: TOKEN@example.org:router')
+    result = host[2]()
+    assert 'TOKEN' not in result.stderr
+    assert 'example.org:router' in result.stderr
+
+
+@pytest.mark.parametrize('override', [None, 'custom-ssh'])
+def test_git_noninteractive_and_bounded(host, monkeypatch, override):
+    _, log, run = host
+    git = log.parent / 'bin/git'
+    text = git.read_text().replace("if name == 'git':", "if name == 'git':\n    assert os.environ.get('GIT_SSH_COMMAND') == " + repr(override or 'ssh -o BatchMode=yes'))
+    git.write_text(text)
+    if override:
+        monkeypatch.setenv('GIT_SSH_COMMAND', override)
+    else:
+        monkeypatch.delenv('GIT_SSH_COMMAND', raising=False)
+    timeout = log.parent / 'bin/timeout'
+    timeout.unlink()
+    timeout.write_text(f'#!{sys.executable}\nimport os, sys\n'
+                       'with open(os.environ["CALLS"], "a") as f: f.write("timeout " + " ".join(sys.argv[1:]) + "\\n")\n'
+                       'args = sys.argv[2:] if sys.argv[1] == "120" else sys.argv[3:]\n'
+                       'os.execvp(args[0], args)\n')
+    timeout.chmod(0o755)
+    result = run()
+    assert result.returncode == 0, result.stderr
+    assert 'timeout 120 git clone' in log.read_text()
+    assert run().returncode == 0
+    assert 'timeout 120 git -C' in log.read_text()
