@@ -1,5 +1,6 @@
 """Best-effort, payload-free keeper timings; clocks are replaceable in tests."""
 from contextvars import ContextVar
+from contextlib import contextmanager
 from functools import wraps
 import sys
 import time
@@ -7,6 +8,20 @@ import time
 clock = time.monotonic
 THRESHOLD_MS = 250
 _parts = ContextVar("keeper_timing_parts", default=None)
+_request_lock = ContextVar("keeper_request_lock", default=None)
+
+
+@contextmanager
+def outside_request_lock():
+    """Suspend the HTTP request lock for IO that never accesses the store."""
+    lock = _request_lock.get()
+    if lock is not None:
+        lock.release()
+    try:
+        yield
+    finally:
+        if lock is not None:
+            lock.acquire()
 _fields = ("build_ms", "encode_ms", "sign_ms", "write_ms", "tick_ms", "record_ms", "submit_ms")
 _events = {"request_timing", "writer_timing", "reaper_timing", "snapshot_timing",
            "changelog_timing"}
@@ -82,6 +97,7 @@ class RequestTimer:
     def __enter__(self):
         self.start = _sample()
         self.lock.acquire()
+        self.lock_token = _request_lock.set(self.lock)
         self.held = _sample()
         self.parts = _Parts()
         self.parts.pending = []
@@ -89,6 +105,7 @@ class RequestTimer:
         return self
 
     def __exit__(self, *exc):
+        _request_lock.reset(self.lock_token)
         end = _sample()
         try:
             self.lock.release()
