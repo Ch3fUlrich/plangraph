@@ -103,6 +103,7 @@ impl StepLog for LocalFileStepLog {
         record.push(b'\n');
         file.write_all(&record)?;
         file.sync_all()?;
+        #[cfg(unix)]
         fs::File::open(&self.dir)?.sync_all()?;
         Ok(())
     }
@@ -163,6 +164,13 @@ fn git_with_env(
         .output()?)
 }
 fn valid_remote(name: &str) -> bool {
+    #[cfg(windows)]
+    if Path::new(name).is_absolute()
+        && !name.chars().any(|c| c.is_control())
+        && !name.contains("::")
+    {
+        return true;
+    }
     if name.is_empty()
         || name.contains("::")
         || !name
