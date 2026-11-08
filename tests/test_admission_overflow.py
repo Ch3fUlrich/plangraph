@@ -37,9 +37,24 @@ def test_local_room_never_overflows(setup, monkeypatch):
 def test_cap_or_floor_remote_once(setup, monkeypatch, resources):
     service, _, remote = setup
     monkeypatch.setattr(a, 'resources', lambda service: resources)
-    result = a.admit(service, {'card': {}, 'prompt': 'task'})
+    card = {'diff_ref': {'repo': service.runner.default_cwd}, 'task': 'payload'}
+    options = {'prompt': 'task', 'role': 'review', 'model': 'test-model', 'leg': 'test-leg',
+               'override_reason': 'test override', 'review_of': 'run-parent',
+               'review_scope': 'diff', 'writer_families': ['family-a', 'family-b'],
+               'seats': True, 'no_fallthrough': True, 'require_bench': True}
+    result = a.admit(service, options, card=card)
     assert result['host'] == 'host-a'
     remote.assert_called_once()
+    host, config, sent_card, prompt, flags = remote.call_args.args
+    assert host == 'host-a'
+    assert config == {}
+    assert sent_card is card
+    assert prompt == 'task'
+    assert flags == ['--role', 'review', '--model', 'test-model', '--leg', 'test-leg',
+                     '--override-reason', 'test override', '--review-of', 'run-parent',
+                     '--review-scope', 'diff', '--writer-family', 'family-a',
+                     '--writer-family', 'family-b', '--seats', '--no-fallthrough',
+                     '--require-bench']
     service._save.assert_called_once_with(result)
 
 
@@ -51,12 +66,28 @@ def test_unconfigured_preserves_local(setup):
     remote.assert_not_called()
 
 
-def test_reason_is_per_spawn(setup, monkeypatch):
-    service, path, _ = setup
-    path.unlink()
-    assert a.admit(service, {}) is None
+def test_reason_is_per_spawn(setup, monkeypatch, tmp_path):
+    from plangraph.spawner.service import SpawnService
+    _, _, remote = setup
+    service = SpawnService(state=str(tmp_path / 'state'))
+    service.runner.default_cwd = str(tmp_path)
+    async def local_spawn(card=None, prompt=''):
+        record = {'run_id': 'run-local', 'status': 'running'}
+        service._save(record)
+        return record
+    monkeypatch.setattr(service, '_spawn', local_spawn)
+    decide = Mock(wraps=overflow.decide)
+    monkeypatch.setattr(overflow, 'decide', decide)
+    remote.side_effect = overflow.RemoteRefusal('host refused')
+    first = asyncio.run(service.spawn(prompt='Implement the requested change.'))
+    assert 'host refused' in first['overflow_reason']
+    assert decide.call_count == 2
     monkeypatch.setattr(a, 'resources', lambda service: (0, 6000))
-    assert a.admit(service, {}) is None
+    second = asyncio.run(service.spawn(prompt='Implement the requested change.'))
+    assert service.result(second['run_id']) == second
+    assert 'reason' not in second
+    assert 'overflow_reason' not in second
+    assert decide.call_count == 2
     assert not hasattr(service, '_overflow_reason')
 
 
@@ -78,11 +109,10 @@ def test_no_config_golden_records(setup, tmp_path, monkeypatch):
     service = SpawnService(state=str(tmp_path / 'state'))
     for status in ('running', 'queued', 'refused', 'limited'):
         golden = {'run_id': 'run-golden', 'status': status, 'reason': 'original'}
-        baseline = dict(golden)
-        service._save(baseline)
+        service._save(golden)
+        baseline = service.result('run-golden')
         assert a.admit(service, {}) is None
-        actual = dict(golden)
-        service._save(actual)
+        actual = service.result('run-golden')
         assert actual == baseline
 
 
@@ -126,6 +156,31 @@ def test_all_refusals_queue(setup, monkeypatch):
 class SharedService(SeatSpawnMixin):
     async def _spawn(self, card=None, prompt='', **kwargs):
         raise AssertionError('local spawn')
+
+
+@pytest.mark.parametrize('public_card', [True, False])
+def test_spawn_card_controls_public_repo(setup, monkeypatch, tmp_path, public_card):
+    service, path, remote = setup
+    shared = SharedService()
+    shared.runner, shared._save = service.runner, service._save
+    card_repo = tmp_path / 'card-repo'
+    card = {'diff_ref': {'repo': str(card_repo)}}
+    config = json.loads(path.read_text())
+    config['public_repos'] = [str(card_repo if public_card else tmp_path)]
+    path.write_text(json.dumps(config))
+    original = a.admit
+    def admit(service, options, *, card):
+        assert card is options['card']
+        # Admission must use the explicit spawn card even without an options copy.
+        return original(service, {k: v for k, v in options.items() if k != 'card'}, card=card)
+    monkeypatch.setattr(a, 'admit', admit)
+    result = asyncio.run(shared.spawn(card, 'Implement the requested change.'))
+    if public_card:
+        assert result['host'] == 'host-a'
+        assert remote.call_args.args[2] is card
+    else:
+        assert result['status'] == 'queued'
+        remote.assert_not_called()
 
 
 def test_cli_spawn_shared_admission(setup, monkeypatch):

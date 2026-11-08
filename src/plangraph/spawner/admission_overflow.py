@@ -13,7 +13,7 @@ def resources(service):
     return live, memory
 
 
-def admit(service, options):
+def admit(service, options, *, card=None):
     if options.get('dry_run'):
         return None
     from . import overflow
@@ -37,8 +37,7 @@ def admit(service, options):
         return None
     if not configured:
         return None
-    card = options.get('card') or {}
-    repo = Path((card.get('diff_ref') or {}).get('repo') or
+    repo = Path(((card or {}).get('diff_ref') or {}).get('repo') or
                 getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
     public = str(repo) in [str(Path(p).expanduser().resolve()) for p in config.get('public_repos', [])]
     rows = overflow.ready_records(config)

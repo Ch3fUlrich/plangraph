@@ -44,7 +44,7 @@ class SeatSpawnMixin:
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
             from .admission_overflow import admit
-            admitted = admit(self, options)
+            admitted = admit(self, options, card=card)
             if admitted is not None:
                 return admitted
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
