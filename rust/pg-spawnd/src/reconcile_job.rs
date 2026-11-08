@@ -15,11 +15,14 @@ use std::io;
 #[cfg(windows)]
 use std::process::ExitStatus;
 #[cfg(windows)]
-pub(crate) struct Group(AdoptedJob<LocalJob>);
+pub(crate) struct Group(
+    AdoptedJob<LocalJob>,
+    Option<std::os::windows::io::OwnedHandle>,
+);
 #[cfg(windows)]
 struct LocalJob {
     job: NativeJob,
-    _process: Option<std::os::windows::io::OwnedHandle>,
+    process: Option<std::os::windows::io::OwnedHandle>,
 }
 #[cfg(windows)]
 fn process(pid: u32) -> io::Result<Option<(std::os::windows::io::OwnedHandle, u64, bool)>> {
@@ -63,19 +66,26 @@ fn process(pid: u32) -> io::Result<Option<(std::os::windows::io::OwnedHandle, u6
 }
 #[cfg(windows)]
 pub(crate) fn absent(pid: u32) -> Result<bool, crate::reconcile::ReconcileError> {
-    match process(pid) {
-        Ok(None) | Ok(Some((_, _, false))) => Ok(true),
+    absent_result(process(pid).map(|p| p.is_some_and(|(_, _, live)| live)))
+}
+#[cfg(any(windows, test))]
+fn absent_result(live: io::Result<bool>) -> Result<bool, crate::reconcile::ReconcileError> {
+    match live {
+        Ok(false) => Ok(true),
         _ => Err(crate::reconcile::ReconcileError::Unknown),
     }
 }
 #[cfg(windows)]
 impl JobApi for LocalJob {
     fn member(&mut self, pid: u32, start: u64) -> io::Result<bool> {
+        if let Some(handle) = &self.process {
+            return process_live(handle);
+        }
         let Some((handle, actual, live)) = process(pid)? else {
             return Ok(false);
         };
         let member = live && (start == 0 || start == actual) && self.job.member(pid, actual)?;
-        self._process = Some(handle);
+        self.process = Some(handle);
         Ok(member)
     }
     fn active(&mut self) -> io::Result<bool> {
@@ -87,6 +97,17 @@ impl JobApi for LocalJob {
     fn times(&mut self) -> io::Result<(i64, i64)> {
         self.job.times()
     }
+}
+#[cfg(windows)]
+fn process_live(handle: &std::os::windows::io::OwnedHandle) -> io::Result<bool> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Threading::GetExitCodeProcess;
+    let mut code = 0;
+    // SAFETY: retained query handle and writable output buffer.
+    if unsafe { GetExitCodeProcess(handle.as_raw_handle(), &mut code) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(code == 259)
 }
 pub(crate) fn scope(run: &str, recorded: &str) -> io::Result<()> {
     if !pg_worker_core::run::record::valid_run_id(run) || recorded != format!("Local\\pg-{run}") {
@@ -112,10 +133,21 @@ fn validate<'a>(run: &str, identity: &'a Proc) -> io::Result<(&'a str, u64)> {
 #[cfg(windows)]
 impl Group {
     pub(crate) fn probe(&mut self) -> io::Result<bool> {
+        if self.1.as_ref().map(process_live).transpose()? == Some(false) {
+            return if self.0.empty()? {
+                Ok(true)
+            } else {
+                Err(io::ErrorKind::WouldBlock.into())
+            };
+        }
         probe(&mut self.0)
     }
     pub(crate) fn orphan_empty(&mut self) -> io::Result<bool> {
-        orphan_empty(&mut self.0)
+        if !self.probe()? {
+            return Ok(false);
+        }
+        self.0.terminate()?;
+        Ok(true)
     }
     pub(crate) fn open(run: &str, identity: Proc) -> io::Result<Self> {
         Self::acquire(run, identity)?.ok_or_else(|| io::ErrorKind::NotFound.into())
@@ -125,14 +157,21 @@ impl Group {
         let Some(job) = NativeJob::open(name)? else {
             return Ok(None);
         };
-        Ok(Some(Self(AdoptedJob::verify(
-            Some(LocalJob {
-                job,
-                _process: None,
-            }),
-            identity.pid,
-            start,
-        )?)))
+        let mut api = LocalJob { job, process: None };
+        // Verify membership once, then retain that exact process for liveness.
+        let member = api.member(identity.pid, start)?;
+        if !member && api.process.as_ref().map(process_live).transpose()? == Some(true) {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        let retained = api
+            .process
+            .as_ref()
+            .map(|handle| handle.try_clone())
+            .transpose()?;
+        Ok(Some(Self(
+            AdoptedJob::verify(Some(api), identity.pid, start)?,
+            retained,
+        )))
     }
     pub(crate) fn cpu(&mut self) -> io::Result<CpuSample> {
         self.0.cpu()
@@ -162,6 +201,7 @@ impl Child for Group {
 trait OrphanJob {
     fn gone(&mut self) -> io::Result<bool>;
     fn empty(&mut self) -> io::Result<bool>;
+    #[cfg(test)]
     fn terminate(&mut self) -> io::Result<()>;
 }
 #[cfg(windows)]
@@ -172,6 +212,7 @@ impl OrphanJob for AdoptedJob<LocalJob> {
     fn empty(&mut self) -> io::Result<bool> {
         self.empty()
     }
+    #[cfg(test)]
     fn terminate(&mut self) -> io::Result<()> {
         self.terminate()
     }
@@ -186,7 +227,7 @@ fn probe(job: &mut impl OrphanJob) -> io::Result<bool> {
     }
     Ok(true)
 }
-#[cfg(any(windows, test))]
+#[cfg(test)]
 fn orphan_empty(job: &mut impl OrphanJob) -> io::Result<bool> {
     if !probe(job)? {
         return Ok(false);

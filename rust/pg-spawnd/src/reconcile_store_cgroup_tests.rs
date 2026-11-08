@@ -366,6 +366,8 @@ fn grouped_probe_distinguishes_alive_gone_and_unknown() {
     std::fs::write(scope.join("cgroup.procs"), child.0.id().to_string()).unwrap();
     assert!(!gone("run-test", Some(&identity)).unwrap());
     child.stop();
+    // The leader is reaped: neither nonempty nor unreadable confinement is gone.
+    assert!(!std::path::Path::new(&format!("/proc/{}", identity.pid)).exists());
     assert!(matches!(
         gone("run-test", Some(&identity)),
         Err(ReconcileError::Unknown)

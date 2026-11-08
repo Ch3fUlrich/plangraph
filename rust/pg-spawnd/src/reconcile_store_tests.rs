@@ -166,3 +166,12 @@ fn reconcile_missing_identity_is_unknown_and_not_settled() {
 #[path = "reconcile_store_cgroup_tests.rs"]
 #[cfg(unix)]
 mod cgroup_tests;
+
+#[test]
+fn terminal_or_absent_row_requires_settled_probe() {
+    for _running in [false, true] {
+        assert!(settled_result(Ok(true)).unwrap());
+        assert!(!settled_result(Ok(false)).unwrap());
+        assert!(settled_result(Err(ReconcileError::Unknown)).is_err());
+    }
+}

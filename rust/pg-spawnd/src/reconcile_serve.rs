@@ -17,7 +17,6 @@ use std::{
     },
     time::Duration,
 };
-
 pub(crate) struct Guard {
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -68,7 +67,7 @@ fn reclaim_after(root: &Path, proof: Reconciled, now: u64) -> Result<(), Reconci
                 && proof.gone.iter().any(|(run, pid, start, group)| {
                     run == &slot.run_id
                         && *pid == slot.pid
-                        && start.map_or(group.is_some(), |start| start == slot.start_time)
+                        && start_matches(*start, slot.start_time)
                         && group == &slot.group
                 })
             {
@@ -101,7 +100,6 @@ fn now() -> Result<u64, ReconcileError> {
         .and_then(|d| u64::try_from(d.as_millis()).ok())
         .ok_or(ReconcileError::Invalid)
 }
-
 #[cfg(any(target_os = "linux", windows))]
 fn replay(root: &Path, store: &crate::evidence::EvidenceStore) -> Result<(), ReconcileError> {
     let runs = root.join("runs");
@@ -110,27 +108,34 @@ fn replay(root: &Path, store: &crate::evidence::EvidenceStore) -> Result<(), Rec
     }
     let mut skipped = false;
     for dir in std::fs::read_dir(runs).map_err(|_| ReconcileError::Io)? {
-        let Ok(dir) = dir else { continue };
+        let Ok(dir) = dir else {
+            skipped = true;
+            continue;
+        };
         let path = dir.path().join("record.json");
         if !path.is_file() {
             skipped = true;
             continue;
         }
-        let Some(dir) = path.parent() else { continue };
+        let Some(dir) = path.parent() else {
+            skipped = true;
+            continue;
+        };
         let Ok(_record_lock) = crate::reconcile_store::lock(dir, &dir.join("record.lock")) else {
+            skipped = true;
             continue;
         };
         let Ok(value) = crate::reconcile_store::read(&path) else {
+            skipped = true;
             continue;
         };
         store.backfill(&[value]).map_err(|_| ReconcileError::Io)?;
     }
     if skipped {
-        eprintln!("reconciliation replay skipped entries without record files");
+        eprintln!("reconciliation replay incomplete: unreadable or locked records");
     }
     Ok(())
 }
-
 pub(crate) fn configured(root: &Path) -> Result<Guard, String> {
     let mut guard = Guard {
         stop: Arc::new(AtomicBool::new(false)),
@@ -167,7 +172,6 @@ pub(crate) fn configured(root: &Path) -> Result<Guard, String> {
     start(root, &mut guard).map_err(|e| e.to_string())?;
     Ok(guard)
 }
-
 #[cfg(any(target_os = "linux", windows))]
 fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
     #[cfg(windows)]
@@ -200,9 +204,7 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
                     continue;
                 };
                 if identity.pid != slot.pid
-                    || identity
-                        .start_time
-                        .map_or(identity.group.is_none(), |start| start != slot.start_time)
+                    || !start_matches(identity.start_time, slot.start_time)
                     || identity.group != slot.group
                     || serde_json::to_value(slot.role).ok().as_ref()
                         != Some(&serde_json::json!(row.role))
@@ -279,9 +281,11 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
         let Ok(mut record) = RunRecord::read(root, &row.run_id) else {
             continue;
         };
-        let Ok(role) = serde_json::from_value(serde_json::json!(row.role)) else {
+        let role = serde_json::from_value(serde_json::json!(row.role));
+        if skip_row(true, role.is_ok()) {
             continue;
-        };
+        }
+        let role = role.map_err(|_| ReconcileError::Invalid)?;
         let watch = Watch::new(
             role,
             Limits::default(),
@@ -348,7 +352,6 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
 fn start(_: &Path, _: &mut Guard) -> Result<(), ReconcileError> {
     Err(ReconcileError::Unknown)
 }
-
 #[cfg(any(target_os = "linux", windows))]
 fn scan_probe(result: Result<bool, ReconcileError>) -> Result<Option<bool>, ReconcileError> {
     match result {
@@ -372,4 +375,24 @@ fn unknown_scan_row_does_not_abort_later_rows() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(decisions, vec![None, None, None, Some(false), Some(true)]);
+}
+fn start_matches(recorded: Option<u64>, slot: u64) -> bool {
+    recorded.is_none_or(|start| start == slot)
+}
+#[cfg(test)]
+#[test]
+fn settled_unknown_start_reclaim_key() {
+    assert!(start_matches(None, 123));
+    assert!(start_matches(Some(123), 123));
+    assert!(!start_matches(Some(124), 123));
+}
+fn skip_row(lock_ok: bool, role_ok: bool) -> bool {
+    !lock_ok || !role_ok
+}
+#[cfg(test)]
+#[test]
+fn lock_or_role_failure_skips_row() {
+    assert!(skip_row(false, true));
+    assert!(skip_row(true, false));
+    assert!(!skip_row(true, true));
 }

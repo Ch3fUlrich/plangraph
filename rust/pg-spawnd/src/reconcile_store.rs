@@ -4,7 +4,6 @@ use pg_worker_core::run::record::valid_run_id;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{io::Read, path::Path};
-
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Proc {
@@ -147,7 +146,6 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
     }
     Ok(result)
 }
-
 pub(crate) fn lock(
     root: &Path,
     path: &Path,
@@ -161,7 +159,6 @@ pub(crate) fn lock(
         .map_err(|_| ReconcileError::Io)?
         .ok_or(ReconcileError::Unknown)
 }
-
 /// Pure tri-state: true = gone, false = verified alive, Unknown = unverifiable.
 pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, ReconcileError> {
     let Some(identity) = identity else {
@@ -246,7 +243,6 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
         Err(ReconcileError::Unknown)
     }
 }
-
 /// Caller holds the state lock; re-read under the record lock before proving gone.
 pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileError> {
     orphan_with(root, row, &mut None)
@@ -260,25 +256,28 @@ pub(crate) fn orphan_with(
     use pg_worker_core::run::record::{RunRecord, Status};
     let dir = root.join("runs").join(&row.run_id);
     let _lock = lock(&dir, &dir.join("record.lock"))?;
-    let Some(current) = inventory(root)?
+    let current = inventory(root)?
         .into_iter()
-        .find(|entry| entry.run_id == row.run_id && entry.attempt == row.attempt)
-    else {
-        return Err(ReconcileError::Unknown);
-    };
-    if current.identity != row.identity || current.role != row.role {
+        .find(|entry| entry.run_id == row.run_id && entry.attempt == row.attempt);
+    if current
+        .as_ref()
+        .is_some_and(|current| current.identity != row.identity || current.role != row.role)
+    {
         return Err(ReconcileError::Unknown);
     }
     #[cfg(windows)]
-    let settled = crate::reconcile::job::settle_probe(&current, authority)?;
+    let result = crate::reconcile::job::settle_probe(row, authority);
     #[cfg(not(windows))]
-    let settled = gone(&current.run_id, current.identity.as_ref())?;
-    if !settled {
+    let result = gone(&row.run_id, row.identity.as_ref());
+    if !settled_result(result)? {
         return Ok(false);
+    }
+    if current.is_none() {
+        return Ok(true);
     }
     let mut record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;
     if record.status() != Some(Status::Running) {
-        return Err(ReconcileError::Unknown);
+        return Ok(true);
     }
     if record
         .get("attempts")
@@ -304,7 +303,6 @@ pub(crate) fn orphan_with(
     )?;
     Ok(true)
 }
-
 /// Durable record-only settlement bridge, under state and record locks.
 pub(crate) fn settle(
     state: &Path,
@@ -393,7 +391,10 @@ pub(crate) fn settle(
         .map_err(|_| invalid())?;
     record.save().map_err(|_| ReconcileError::Io)
 }
-
 #[cfg(test)]
 #[path = "reconcile_store_tests.rs"]
 mod tests;
+// Record advancement cannot turn an inconclusive process probe into proof.
+fn settled_result(probe: Result<bool, ReconcileError>) -> Result<bool, ReconcileError> {
+    probe
+}

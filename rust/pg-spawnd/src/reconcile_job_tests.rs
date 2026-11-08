@@ -173,3 +173,22 @@ fn shared_mapping_distinguishes_absent_from_unverifiable() {
     assert!(job.terminated);
     assert!(!map_probe(Ok(false)).unwrap());
 }
+
+#[test]
+fn absent_with_live_leader_is_unknown() {
+    assert!(absent_result(Ok(false)).unwrap());
+    assert!(matches!(
+        absent_result(Ok(true)),
+        Err(crate::reconcile::ReconcileError::Unknown)
+    ));
+    assert!(absent_result(Err(io::ErrorKind::PermissionDenied.into())).is_err());
+}
+#[test]
+fn exited_leader_empty_job_settles() {
+    let mut job = JobFake {
+        gone: true,
+        active: Ok(false),
+        terminated: false,
+    };
+    assert!(map_probe(orphan_empty(&mut job)).unwrap());
+}
