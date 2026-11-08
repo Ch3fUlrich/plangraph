@@ -322,7 +322,7 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
     let completion = json!({"leg":leg,"status":status.as_str(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },
         "served_family":if dry { &leg["family"] } else { &unwitnessed },
-        "served_witness_reason":if leg["model"].as_str().is_some_and(|m| m.starts_with("omniroute/")) {
+        "served_witness_reason":if leg["model"].as_str().is_some_and(|m| m.starts_with("omniroute/") || m.starts_with("agy/")) {
             "pg-spawnd gateway call-log witness integration unavailable"
         } else { "no authenticated harness telemetry; skipped or unobserved leg" },
         "request_side_model":null,"witness_kind":null,
