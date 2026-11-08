@@ -1,0 +1,1 @@
+Keeper: router-owned `repos` entries may opt into `non_pr: true` for merge-commit-on-target provenance instead of a hosted PR association. Green CI and all existing evidence guards remain required; unmarked repositories retain PR-only proof. See docs/KEEPER.md.

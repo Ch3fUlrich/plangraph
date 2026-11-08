@@ -275,7 +275,7 @@ Origin-main `decision_ref` closes need no batch file; see [decision-close proof,
 `Authorization: Bearer <token>` (health is open). Errors: `{"error": code, "msg": …}` with 4xx. Compact text responses where the verb is
 meant for agents (`ready`, `show`, `alerts`) via `?fmt=text` (default text for CLI). The server also runs the reaper every 60 s and rewrites
 `plan.snapshot.json` (path from config) after every committed write. Config file (JSON, mode 600 checked): db path, snapshot path, repos
-{project: path}, runs_dir, decisions_file, ci per project (plus `forgejo_url` + `forgejo_token_file`
+{project: path} or {project: {path, ref, non_pr: true}}: router-owned `non_pr` opts into merge-commit-on-target-ref proof instead of a hosted PR association (for non-PR repositories); direct pushes remain refused, green CI is required (`ci: none` cannot use this proof), and principal, trailer, time and floor guards remain. Also runs_dir, decisions_file, ci per project (plus `forgejo_url` + `forgejo_token_file`
 for `forgejo:` values), bind, lease defaults. No config value that is a secret is ever printed.
 
 ## CLI `pg`

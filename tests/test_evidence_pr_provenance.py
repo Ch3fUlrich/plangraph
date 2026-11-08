@@ -203,3 +203,32 @@ def test_malformed_page_stream_raises(monkeypatch, stdout):
     adapter = CIAdapter({"routing": "owner/repo"})
     with pytest.raises(ValueError, match="^malformed PR pages$"):
         adapter.merged_pr_for("routing", MERGE_SHA, "main")
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("marked", True), ("unmarked", False), ("red", False),
+    ("off_target", False), ("direct", False), ("no_ci", False),
+    ("string_flag", False),
+])
+def test_non_pr_merge_proof(topology, case, expected):
+    git, lane, outer = topology
+    repo = git.repo_path("routing")
+    git._repos = {"routing": {"path": repo, "ref": "main",
+                              "non_pr": "true" if case == "string_flag"
+                              else case != "unmarked"}}
+    sha = outer
+    if case == "off_target":
+        subprocess.run(["git", "-C", repo, "update-ref", "refs/heads/main",
+                        outer + "^"], check=True)
+    elif case == "direct":
+        subprocess.run(["git", "-C", repo, "commit", "--allow-empty", "-m",
+                        "direct\n\nPlan-Item: " + ITEM["key"]], check=True)
+        sha = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"],
+                                      text=True).strip()
+    ci = FakeCI(runs=[{"name": "build", "head_sha": sha,
+                       "conclusion": "failure" if case == "red" else "success"}])
+    ci.merged_pr_for = lambda *args: None
+    if case == "no_ci":
+        ci.mode = lambda project: "none"
+    result = verify("commit+ci", {"commit": sha}, make_ctx(git=git, ci=ci))
+    assert result.ok is expected, result.detail
