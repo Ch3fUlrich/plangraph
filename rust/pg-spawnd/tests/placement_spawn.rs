@@ -23,13 +23,16 @@ fn real_run_and_failure() {
         assert_eq!(r["status"], status);
         assert!(r["job_id"].is_string());
         assert!(r["proc"].is_object());
+        assert!(r["attempts"][0]["proc"]["pid"].as_u64().unwrap() > 0);
+        assert_eq!(r["attempts"][0]["proc"]["pid"], r["proc"]["pid"]);
         assert_eq!(r["writer_family"], "f");
         assert_eq!(r["warnings"], json!(["warning"]));
         assert_eq!(r["events"][0]["event"], "adapter");
         assert_eq!(
             r["attempts"][0],
             json!({
-                "leg":r["plan"]["first_leg"], "status":status,
+                "leg":r["plan"]["first_leg"], "status":status, "proc":r["proc"],
+                "started":r["attempts"][0]["started"],
                 "served_model":"unwitnessed", "served_family":"unwitnessed",
                 "served_witness_reason":"no authenticated harness telemetry; skipped or unobserved leg",
                 "request_side_model":null, "witness_kind":null, "provider_response":null,
