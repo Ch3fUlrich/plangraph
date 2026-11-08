@@ -25,6 +25,7 @@
       "repos": {
         "plangraph": {
           "root": "/srv/fleet/code/repos/plangraph",
+          "live_dir": "/srv/fleet/live/plangraph",
           "worktrees_root": "/srv/fleet/code/worktrees/plangraph",
           "remote": "git@placeholder.invalid:fleet/plangraph.git",
           "python": "/srv/fleet/venvs/plangraph/bin/python",
