@@ -2,6 +2,13 @@
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.
 ## Spawn by card
+SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel
+lines around the remote spawn JSON. Only the single bracketed JSON receipt is
+accepted; shell-init banners, env-file echoes and JSON after the end are ignored.
+Missing, repeated or reversed sentinel pairs report `receipt_unbracketed` without
+retrying an already acknowledged spawn. Remote stderr stays private, and the
+existing credential-shape masking helper masks receipts before stdout exposure.
+
 Install the package on each host, then use `python -m plangraph.spawner.cli`
 (or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
 or Temporal service is required for this slice. **Grok and manual-only Muse:** `omniroute-grok-4.7` uses `omniroute/gc/grok-4.7` for review only (catalog `grok`, seat `xai`). `opencode-console-muse-spark` uses `console-meta/muse-spark-1.3-contributor`; like `opencode-go-muse-spark`, its catalog family is `muse` (seat `meta`). Neither Muse leg routes automatically, even with a review policy lift. Use `--leg` with an audited `--override-reason` of at least ten characters, for scrubbed or public material only; host checks still apply. Runtime rows derive from `DEFAULT_LEGS`, not AA seeds. Policy `review_allowed_families` lifts bans, not an allowlist; Grok needs no JSON exemption.

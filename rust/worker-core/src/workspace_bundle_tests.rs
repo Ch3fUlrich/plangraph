@@ -65,6 +65,7 @@ impl Fixture {
                 assert_eq!(normalize(Path::new(&remote)), expected);
             }
             RepoEntry {
+                live_dir: None,
                 root: root.join(name).to_str().unwrap().into(),
                 remote,
                 worktrees_root: String::new(),

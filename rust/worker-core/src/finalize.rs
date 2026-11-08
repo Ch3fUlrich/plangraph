@@ -313,6 +313,7 @@ mod tests;
 #[test]
 fn finalize_refuses_unsupported_platform() {
     let repo = RepoEntry {
+        live_dir: None,
         root: String::new(),
         worktrees_root: String::new(),
         remote: String::new(),

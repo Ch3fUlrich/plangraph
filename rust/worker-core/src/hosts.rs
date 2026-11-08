@@ -66,6 +66,8 @@ pub struct Warmup {
 #[serde(deny_unknown_fields)]
 pub struct RepoEntry {
     pub root: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live_dir: Option<String>,
     pub worktrees_root: String,
     pub remote: String,
     #[serde(skip_serializing_if = "Option::is_none")]
