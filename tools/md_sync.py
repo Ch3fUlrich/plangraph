@@ -95,6 +95,9 @@ def fill_status(status, plan):
         {"id": ident, "decision": dec, "key": key, "reason": reason}
         for ident, dec, key, reason in plan.dclose_skipped
     ]
+    for row in status["close_skipped"]:
+        row["owner"] = "routing-00"
+        row["action"] = "reconcile D-row Closes with the item key; never reopen a done item"
     status["choices_skipped"] = [
         {"key": key, "state": st} for key, st in plan.choices_skipped
     ]
