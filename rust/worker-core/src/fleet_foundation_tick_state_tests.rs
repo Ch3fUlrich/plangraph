@@ -149,23 +149,14 @@ fn fleet_foundation_corrupt_state() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 #[serial_test::serial(fleet_relative_state_parent)]
 fn fleet_foundation_lock() {
-    use std::os::fd::AsRawFd;
     let d = tempfile::tempdir().unwrap();
     let state = d.path().join("state");
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(d.path().join("state.lock"))
-        .unwrap();
-    assert_eq!(
-        unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-        0
-    );
+    let _lock = crate::lockfile::try_lock(&d.path().join("state.lock"))
+        .unwrap()
+        .expect("exclusive lock acquired");
     let c = Config {
         schema_version: 1,
         enabled: true,
@@ -180,6 +171,9 @@ fn fleet_foundation_lock() {
         wall_jump_tolerance_s: Some(2),
         pairs: None,
     };
+    assert!(crate::lockfile::try_lock(&d.path().join("state.lock"))
+        .unwrap()
+        .is_none());
     assert_eq!(run(c, 0, 0).unwrap(), json!({"skipped":"locked"}));
     assert!(!state.exists());
 }

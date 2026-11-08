@@ -39,13 +39,39 @@ impl Fixture {
         g(&source, &["commit", "--allow-empty", "-m", "unpushed base"]);
         g(&source, &["commit", "--allow-empty", "-m", "unpushed head"]);
         let head = g(&source, &["rev-parse", "HEAD"]);
-        let entry = |name: &str| RepoEntry {
-            root: root.join(name).to_str().unwrap().into(),
-            remote: root.join("origin").to_str().unwrap().into(),
-            worktrees_root: String::new(),
-            python: None,
-            import_roots: vec![],
-            cache_env: BTreeMap::new(),
+        let entry = |name: &str| {
+            // g trims Git's line terminator; reject multiple URLs independently.
+            let remote = g(&root.join(name), &["remote", "get-url", "--all", "origin"]);
+            assert_eq!(remote.lines().count(), 1);
+            #[cfg(not(windows))]
+            assert_eq!(remote, root.join("origin").to_str().unwrap());
+            #[cfg(windows)]
+            {
+                let normalize = |path: &Path| {
+                    fs::canonicalize(path).ok().map(|canonical| {
+                        crate::workspace_launch::git_worktree_path(&canonical)
+                            .to_string_lossy()
+                            .replace('\\', "/")
+                            .to_ascii_lowercase()
+                    })
+                };
+                // URL-form remotes are not filesystem paths; never canonicalize them.
+                assert!(
+                    Path::new(&remote).is_absolute(),
+                    "non-path remote: {remote}"
+                );
+                let expected = normalize(&root.join("origin"));
+                assert!(expected.is_some());
+                assert_eq!(normalize(Path::new(&remote)), expected);
+            }
+            RepoEntry {
+                root: root.join(name).to_str().unwrap().into(),
+                remote,
+                worktrees_root: String::new(),
+                python: None,
+                import_roots: vec![],
+                cache_env: BTreeMap::new(),
+            }
         };
         let (source, receiver) = (entry("source"), entry("receiver"));
         Self {

@@ -138,6 +138,8 @@ impl Runs {
             .into_iter()
             .map(Value::Object)
             .collect();
+        let attempt_id = 1;
+        base["attempts"] = json!([{"leg":leg,"status":"running"}]);
         if dry {
             let mut tail = format!("[dry-run] Planned command: {}", launch.argv.join(" "));
             if let Some(stdin) = &launch.stdin {
@@ -151,7 +153,7 @@ impl Runs {
             base["served_model"] = leg["model"].clone();
             base["served_family"] = leg["family"].clone();
             let mut record = create(state, &run_id, host, base, Status::DryRun)?;
-            finish(&mut record, Status::DryRun, &leg);
+            finish(&mut record, Status::DryRun, &leg, attempt_id);
             record
                 .save()
                 .map_err(|_| internal("could not save run record"))?;
@@ -171,7 +173,9 @@ impl Runs {
                 stdin: launch.stdin.map(String::into_bytes),
                 base: base.as_object().unwrap().clone(),
                 events,
-                finish: Some(Box::new(move |record, status| finish(record, status, &leg))),
+                finish: Some(Box::new(move |record, status| {
+                    finish(record, status, &leg, attempt_id)
+                })),
             };
             match self.supervisor.start(spec) {
                 Ok(()) => {}
@@ -292,12 +296,9 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
         std::thread::sleep(Duration::from_millis(20));
     }
 }
-pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
-    let diagnostic = json!({"reason":leg.get("reason"), "exit_code":leg.get("exit_code")});
-    let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
-    let dry = status == Status::DryRun;
-    let unwitnessed = json!("unwitnessed");
+pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
     let mut attempts = match record.get("attempts") {
+        None if attempt_id == 1 => vec![json!({"legacy_normalized":true})],
         None => Vec::new(),
         Some(Value::Array(attempts)) => attempts.clone(),
         Some(_) => {
@@ -305,10 +306,18 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
             return;
         }
     };
-    let mut attempt = attempts
-        .pop()
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}));
+    let Some(attempt) = attempt_id
+        .checked_sub(1)
+        .and_then(|index| attempts.get_mut(index as usize))
+        .filter(|entry| entry.is_object())
+    else {
+        record.set("attempts_error", json!("unknown or invalid attempt id"));
+        return;
+    };
+    let diagnostic = json!({"reason":leg.get("reason"), "exit_code":leg.get("exit_code")});
+    let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
+    let dry = status == Status::DryRun;
+    let unwitnessed = json!("unwitnessed");
     let completion = json!({"leg":leg,"status":status.as_str(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },
         "served_family":if dry { &leg["family"] } else { &unwitnessed },
@@ -320,8 +329,10 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         .as_object_mut()
         .unwrap()
         .extend(completion.as_object().unwrap().clone());
-    attempts.push(attempt);
     record.set("attempts", json!(attempts));
+    if record.get("attempts_error").is_some() {
+        record.set("attempts_error", Value::Null);
+    }
     record.set(
         "chosen_leg",
         if status == Status::Completed || dry {
@@ -371,14 +382,12 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         }
     }
 }
-
 #[cfg(all(test, unix))]
 #[path = "runs_record_tests.rs"]
 mod record_tests;
 #[cfg(all(test, unix))]
 #[path = "runs_tests.rs"]
 mod tests;
-
 fn wait_duration(value: Option<&Value>) -> Duration {
     #[allow(clippy::manual_clamp)]
     let seconds = value

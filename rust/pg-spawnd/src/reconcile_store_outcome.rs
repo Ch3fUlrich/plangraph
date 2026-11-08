@@ -38,7 +38,7 @@ pub(super) fn build(
         return Ok(Err("leg_key unavailable"));
     };
     if leg_key.is_empty() || route_key.as_ref().is_some_and(|key| key.is_empty()) {
-        return Err(ReconcileError::Invalid);
+        return Ok(Err("leg_key or route_key unavailable"));
     }
     let row = json!({
         "leg_key": leg_key,
@@ -72,4 +72,28 @@ fn contract(row: &Value) -> Result<(), ReconcileError> {
         serde_json::from_value(checked).map_err(|_| ReconcileError::Invalid)?;
     crate::evidence_row::validate(&crate::evidence_row::EvidenceRow::Outcome(row))
         .map_err(|_| ReconcileError::Invalid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_attribution_skips_row_instead_of_blocking_settlement() {
+        for leg in [
+            json!({"leg_key":"","route_key":"route"}),
+            json!({"leg_key":"leg","route_key":""}),
+        ] {
+            assert!(build(
+                &leg,
+                pg_worker_core::hosts::Role::Implement,
+                "run",
+                1,
+                2000,
+                1
+            )
+            .unwrap()
+            .is_err());
+        }
+    }
 }

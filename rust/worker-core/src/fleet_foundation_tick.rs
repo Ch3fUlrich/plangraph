@@ -163,26 +163,13 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
             delivery::Delivery::new(format!("stale-pair:{}", g.group), 0, &p.config)?;
         }
     }
-    #[cfg(not(unix))]
-    Err::<(), _>("unsupported locking target")?;
-    #[cfg(unix)]
     let _lock = {
-        use std::os::fd::AsRawFd;
         let mut name = state_path.as_os_str().to_os_string();
         name.push(".lock");
-        let f = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(name)
-            .map_err(|_| "lock open failed")?;
-        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock {
-                return Ok(json!({"skipped":"locked"}));
-            }
-            return Err("lock failed".into());
+        match crate::lockfile::try_lock(Path::new(&name)).map_err(|_| "lock failed")? {
+            Some(guard) => guard,
+            None => return Ok(json!({"skipped":"locked"})),
         }
-        f
     };
     let mut s: State = match fs::read(state_path) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| "invalid state")?,

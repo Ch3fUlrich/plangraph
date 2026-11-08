@@ -112,6 +112,8 @@ pub fn create_writer(
         .ok_or(ResolveError::Invalid("base"))?;
     ensure_commit(repo, base, Duration::from_secs(30))?;
     let trees = Path::new(&repo.worktrees_root).canonicalize()?;
+    // safe_id admits only ASCII alphanumerics, '-' and '_': exactly one leaf,
+    // with no traversal, trailing dot/space or drive-relative Windows syntax.
     let dest = trees.join(run_id);
     require(
         fs::symlink_metadata(&dest).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound),
@@ -160,7 +162,7 @@ pub fn create_writer(
             branch,
             "--",
         ])
-        .arg(&dest)
+        .arg(git_worktree_path(&dest))
         .arg(base)
         .output()?;
     require(out.status.success(), "worktree_add")?;
@@ -181,6 +183,41 @@ pub fn create_writer(
         .open(admin.join("spawner-owned"))?;
     marker.write_all(&binding(repo, &checkout)?)?;
     Ok(checkout)
+}
+
+// Git for Windows does not accept Rust's canonical \\?\ worktree arguments.
+pub(crate) fn git_worktree_path(path: &Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut components = path.components();
+        let prefix = match components.next() {
+            Some(Component::Prefix(prefix)) => prefix,
+            _ => return path.to_path_buf(),
+        };
+        if components.next() != Some(Component::RootDir) {
+            return path.to_path_buf();
+        }
+        let mut native = std::ffi::OsString::new();
+        match prefix.kind() {
+            Prefix::VerbatimDisk(drive) => native.push(format!("{}:", char::from(drive))),
+            Prefix::VerbatimUNC(server, share) => {
+                native.push("\\\\");
+                native.push(server);
+                native.push("\\");
+                native.push(share);
+            }
+            _ => return path.to_path_buf(),
+        }
+        native.push("\\");
+        let mut result = std::path::PathBuf::from(native);
+        for component in components {
+            result.push(component.as_os_str());
+        }
+        result
+    }
+    #[cfg(not(windows))]
+    path.to_path_buf()
 }
 
 fn strip_git(cmd: &mut Command) {
@@ -346,3 +383,7 @@ mod tests;
 #[cfg(test)]
 #[path = "workspace_launch_env_tests.rs"]
 mod env_tests;
+
+#[cfg(test)]
+#[path = "workspace_launch_path_tests.rs"]
+mod path_tests;

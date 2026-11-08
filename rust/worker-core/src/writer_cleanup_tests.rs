@@ -93,6 +93,7 @@ impl Fixture {
             .unwrap(),
         )
         .unwrap();
+        let checkout = checkout.canonicalize().unwrap();
         let mut store = LocalBlobStore::open(&state.join("blobs")).unwrap();
         let blob = store.seal(b"fixture result").unwrap();
         store
