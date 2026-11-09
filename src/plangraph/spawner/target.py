@@ -12,7 +12,8 @@ def admit_leg(leg):
 
 def resolve_target(target, *, chosen=None):
     """Resolve and admit a target; override cannot enable a disabled leg."""
-    from plangraph.planner.legs import SPAWNABLE_LEGS
+    from plangraph.planner.legs import spawnable_legs
+    SPAWNABLE_LEGS = spawnable_legs()   # call time: callers rebind DEFAULT_LEGS
     if chosen is not None and target != chosen.model:
         raise SpawnRefused('model and leg disagree')
     admit_leg(chosen)

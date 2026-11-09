@@ -22,7 +22,7 @@ from plangraph.keeper.schema import WINDOW_CLASSES
 from plangraph.mimo_policy import MimoPathError, check_mimo_path
 
 __all__ = ["TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "leg_active",
-           "load_legs", "with_measured", "EXPLICIT_LEGS", "EXPLICIT_WRITERS", "SPAWNABLE_LEGS",
+           "load_legs", "with_measured", "EXPLICIT_LEGS", "EXPLICIT_WRITERS", "spawnable_legs",
            "CX_EFFORTS"]
 
 #: Cost tiers, cheapest first.
@@ -191,9 +191,20 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
     leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)
-#: Every leg an explicit pick may name: the routed legs first, so a shared model
-#: resolves to its DEFAULT_LEGS leg.
-SPAWNABLE_LEGS: tuple[Leg, ...] = DEFAULT_LEGS + EXPLICIT_LEGS
+
+
+def spawnable_legs() -> tuple[Leg, ...]:
+    """Every leg an explicit pick may name: the routed legs first, so a shared model
+    resolves to its DEFAULT_LEGS leg.  Read at call time (callers and tests rebind
+    DEFAULT_LEGS)."""
+    return (*DEFAULT_LEGS, *EXPLICIT_LEGS)
+
+
+def explicit_only_skips(role: str) -> tuple[dict, ...]:
+    """`route` output rows for the explicit legs serving ``role``: listed, never routed."""
+    return tuple({"leg": leg.id, "reason": "explicit_only", "evidence": {
+        "kind": "explicit_only", "reason": "spawn with --leg " + leg.id}}
+        for leg in EXPLICIT_LEGS if role in leg.roles)
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",

@@ -14,7 +14,7 @@ from plangraph.routing_errors import RouteError, SpawnRefused
 
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
                          BenchRequired, benchmark_rows_from_db)
-from .legs import DEFAULT_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active
+from .legs import DEFAULT_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
 from .provider_stop import next_leg_after_provider_stop
 from .review_order import review_key
 from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts  # noqa: F401
@@ -250,7 +250,6 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
     """
-    routed_defaults = legs is DEFAULT_LEGS   # before `legs` is rebound below
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
         raise SpawnRefused("card required" + (": missing estimate_tokens" if isinstance(card, Mapping) and card else ""))
     for field in ('paths', 'write_set', 'risk_tags'):
@@ -331,11 +330,6 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
                        "evidence": {"kind": "leg_disabled", "reason": l.disabled}}
                for l in legs if role in l.roles and l.disabled]
-    if routed_defaults:   # listed, never routed: spawn them with --leg (legs.EXPLICIT_LEGS)
-        from .legs import EXPLICIT_LEGS
-        disabled_skips += [{"leg": l.id, "reason": "explicit_only", "evidence": {
-            "kind": "explicit_only", "reason": "spawn with --leg " + l.id}}
-            for l in EXPLICIT_LEGS if role in l.roles]
     skipped = []
     from plangraph.routing_support.resolver import score_model
     candidate_details = []

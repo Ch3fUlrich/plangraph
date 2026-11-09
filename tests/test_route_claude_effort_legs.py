@@ -13,12 +13,12 @@ import json
 import pytest
 
 from plangraph.planner.legs import (DEFAULT_LEGS, EXPLICIT_LEGS, EXPLICIT_WRITERS, LEAD_WRITER,
-                                    SPAWNABLE_LEGS)
+                                    spawnable_legs)
 from plangraph.planner.route_policy import RoutePolicy
 from plangraph.planner.routing import SpawnRefused, plan_spawn
 from plangraph.routing_support import leg_state
 
-BY_ID = {leg.id: leg for leg in SPAWNABLE_LEGS}
+BY_ID = {leg.id: leg for leg in spawnable_legs()}
 CLAUDE = {f"agy-claude-{m}-5-5-{e}": f"claude-{m}-5-5-{e}"
           for m in ("sonnet", "opus") for e in ("low", "medium", "high")}
 SOL = {f"cx-gpt-6.1-sol-{e}": f"omniroute/cx-gpt-6.1-sol-{e}"
@@ -64,7 +64,7 @@ def test_leg_data():
         leg = BY_ID[leg_id]
         assert (leg.harness, leg.model, leg.family, leg.roles) == (
             'agy', model, 'gemini', ('review',)), leg_id
-    ids = [leg.id for leg in SPAWNABLE_LEGS]
+    ids = [leg.id for leg in spawnable_legs()]
     assert len(ids) == len(set(ids))
 
 
@@ -73,24 +73,39 @@ def test_explicit_legs_stay_out_of_every_route():
     the keeper and plan_spawn route over DEFAULT_LEGS, which holds none of them."""
     assert {leg.id for leg in EXPLICIT_LEGS} == set(NEW)
     assert not {leg.id for leg in DEFAULT_LEGS} & set(NEW)
-    assert SPAWNABLE_LEGS == DEFAULT_LEGS + EXPLICIT_LEGS
+    assert spawnable_legs() == DEFAULT_LEGS + EXPLICIT_LEGS
+
+
+def test_spawnable_legs_follow_a_rebound_default_table(monkeypatch):
+    """Tests and callers rebind legs.DEFAULT_LEGS; explicit lookups must see it."""
+    from dataclasses import replace
+    from plangraph.planner import legs
+    fake = (replace(DEFAULT_LEGS[0], id='zz-test', model='test/zz', disabled=None),)
+    monkeypatch.setattr(legs, 'DEFAULT_LEGS', fake)
+    assert spawnable_legs() == fake + EXPLICIT_LEGS
+    from plangraph.spawner.target import resolve_target
+    assert resolve_target('zz-test')[1].id == 'zz-test'
     assert EXPLICIT_WRITERS == frozenset(CLAUDE) | frozenset(SOL)
 
 
 @pytest.mark.parametrize('role,listed', [('review', {**CLAUDE, **GEMINI, **LUNA}),
                                          ('implement', {**CLAUDE, **SOL})])
-def test_route_lists_them_as_explicit_only(store, role, listed):
-    result = plan(store, role=role, writers=('xiaomi',) if role == 'review' else ())
-    assert not {leg.id for leg in result.legs} & set(NEW)
-    explicit = {s['leg'] for s in result.skipped if s['reason'] == 'explicit_only'}
+def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
+    writers = ('xiaomi',) if role == 'review' else ()
+    routed = _svc(tmp_path).route({'estimate_tokens': 1000}, role=role, writer_families=writers)
+    assert not {leg.id for leg in routed.legs} & set(NEW)
+    explicit = {s['leg'] for s in routed.skipped if s['reason'] == 'explicit_only'}
     assert explicit == set(listed)
     if role == 'implement':
-        assert result.legs[0].id == LEAD_WRITER
+        assert routed.legs[0].id == LEAD_WRITER
 
 
-def test_custom_leg_lists_get_no_explicit_skips(store):
-    assert not any(s['reason'] == 'explicit_only'
-                   for s in plan(store, legs=DEFAULT_LEGS[:5]).skipped)
+@pytest.mark.parametrize('role', ['review', 'implement'])
+def test_plan_spawn_skip_accounting_unchanged(store, role):
+    """Only `route` output lists them; plan_spawn (spawn plans, keeper) stays as on main."""
+    result = plan(store, role=role, writers=('xiaomi',) if role == 'review' else ())
+    assert not any(s['reason'] == 'explicit_only' for s in result.skipped)
+    assert not {leg.id for leg in result.legs} & set(NEW)
 
 
 def _svc(tmp_path):

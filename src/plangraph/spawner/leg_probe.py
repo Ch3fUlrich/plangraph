@@ -276,7 +276,8 @@ async def before_launch(runner, leg, role, dry_run):
 
 
 async def probe_many(runner, legs=(), all_writers=False, timeout=None):
-    from plangraph.planner.legs import DEFAULT_LEGS, SPAWNABLE_LEGS, leg_active
+    from plangraph.planner.legs import DEFAULT_LEGS, leg_active, spawnable_legs
+    SPAWNABLE_LEGS = spawnable_legs()
     ids = {legs} if isinstance(legs, str) else set(legs or ())
     if not (ids or all_writers):
         raise ValueError('select --leg ID or --all-writers')
