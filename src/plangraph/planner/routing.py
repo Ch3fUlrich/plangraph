@@ -250,6 +250,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
     """
+    routed_defaults = legs is DEFAULT_LEGS   # before `legs` is rebound below
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
         raise SpawnRefused("card required" + (": missing estimate_tokens" if isinstance(card, Mapping) and card else ""))
     for field in ('paths', 'write_set', 'risk_tags'):
@@ -330,6 +331,11 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
                        "evidence": {"kind": "leg_disabled", "reason": l.disabled}}
                for l in legs if role in l.roles and l.disabled]
+    if routed_defaults:   # listed, never routed: spawn them with --leg (legs.EXPLICIT_LEGS)
+        from .legs import EXPLICIT_LEGS
+        disabled_skips += [{"leg": l.id, "reason": "explicit_only", "evidence": {
+            "kind": "explicit_only", "reason": "spawn with --leg " + l.id}}
+            for l in EXPLICIT_LEGS if role in l.roles]
     skipped = []
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
@@ -434,14 +440,15 @@ def validate_model(model, *, allow_inactive=False):
     from plangraph.routing_support.resolver import (get_catalog_models, catalog_row_admitted,
                                            OPERATOR_REMOVED_MODELS)
     from plangraph.mimo_policy import check_mimo_path
-    from .legs import DEFAULT_LEGS
+    from . import legs as _legs   # read at call time: explicit legs are registered too
     if not isinstance(model, str) or not model:
         raise SpawnRefused('model must be a nonempty string')
     check_mimo_path(model)
     rows = get_catalog_models()
     inactive = {row['id'] for row in rows if not catalog_row_admitted(row)} if not allow_inactive else set()
     allowed = ({row['id'] for row in rows if catalog_row_admitted(row)} |
-               {leg.model for leg in DEFAULT_LEGS}) - inactive - OPERATOR_REMOVED_MODELS
+               {leg.model for leg in (*_legs.DEFAULT_LEGS, *_legs.EXPLICIT_LEGS)}
+               ) - inactive - OPERATOR_REMOVED_MODELS
     if model not in allowed:
         raise SpawnRefused('unknown model: ' + str(model))
     return model

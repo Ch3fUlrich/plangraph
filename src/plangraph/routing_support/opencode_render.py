@@ -76,6 +76,34 @@ def _mimo_template() -> dict[str, Any]:
     }
 
 
+#: Limit for a cx effort variant whose base model the root config does not declare.
+_CX_DEFAULT_LIMIT = {"context": 400000, "output": 128000}
+
+
+def _declare_cx_effort_model(providers: dict[str, Any], model: str) -> None:
+    """Declare ``omniroute/cx-<m>-<effort>`` for this run as OmniRoute ``cx/<m>-<effort>``.
+
+    Spawned opencode runs see only OPENCODE_CONFIG_CONTENT (opencode_isolation
+    closes the global layer), and the AutoOS root config declares only the base
+    cx models (``cx-gpt-6.1-sol`` -> ``cx/gpt-6.1-sol``).  opencode refuses an
+    undeclared model ("provider.no-route", measured 2026-11-09).  The variant
+    takes its base model's limit; an existing entry is kept as is.
+    """
+    from plangraph.planner.legs import CX_EFFORTS
+    base, _, effort = model.rpartition("-")
+    if not model.startswith("omniroute/cx-") or effort not in CX_EFFORTS:
+        return
+    omniroute = providers.setdefault("omniroute", {})
+    models = omniroute.setdefault("models", {}) if isinstance(omniroute, dict) else None
+    key, base_key = model[len("omniroute/"):], base[len("omniroute/"):]
+    if not isinstance(models, dict) or key in models:
+        return
+    base_entry = models.get(base_key)
+    limit = base_entry.get("limit") if isinstance(base_entry, dict) else None
+    models[key] = {"modelID": "cx/" + key[len("cx-"):], "name": key,
+                   "limit": dict(limit) if isinstance(limit, dict) else dict(_CX_DEFAULT_LIMIT)}
+
+
 def render_gateway_providers(
     env: dict[str, str], model: str, *, is_nt: bool | None = None
 ) -> str | None:
@@ -154,6 +182,7 @@ def render_gateway_providers(
                     value = settings.get(key)
                     settings[key] = max(1, int(min(value, 60000))) if type(value) in (int, float) and value > 0 else 60000
 
+    _declare_cx_effort_model(providers, model_clean)
     rendered = json.dumps(config)
     nt_check = _is_nt() if is_nt is None else is_nt
     if nt_check and len(rendered) > 30000:

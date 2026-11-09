@@ -1,0 +1,181 @@
+"""Claude Sonnet/Opus 5.5 legs and effort-variant legs (operator 2026-11-09).
+
+Pins: the leg data (harness, served model id, family, roles), the family fence
+(a claude leg never reviews claude-written work), the D-3828 writer rule (the
+new writers are hand-picked only, never a routed fallback), the ``agy/`` model
+spelling the MCP override passes, and the per-run opencode model entry an
+effort variant needs to be routable at all.
+"""
+import asyncio
+import json
+
+import pytest
+
+from plangraph.planner.legs import (DEFAULT_LEGS, EXPLICIT_LEGS, EXPLICIT_WRITERS, LEAD_WRITER,
+                                    SPAWNABLE_LEGS)
+from plangraph.planner.route_policy import RoutePolicy
+from plangraph.planner.routing import SpawnRefused, plan_spawn
+from plangraph.routing_support import leg_state
+
+BY_ID = {leg.id: leg for leg in SPAWNABLE_LEGS}
+CLAUDE = {f"agy-claude-{m}-5-5-{e}": f"claude-{m}-5-5-{e}"
+          for m in ("sonnet", "opus") for e in ("low", "medium", "high")}
+SOL = {f"cx-gpt-6.1-sol-{e}": f"omniroute/cx-gpt-6.1-sol-{e}"
+       for e in ("low", "medium", "high", "xhigh", "max")}
+LUNA = {f"cx-gpt-6-luna-{e}": f"omniroute/cx-gpt-6-luna-{e}"
+        for e in ("low", "medium", "high", "xhigh", "max")}
+GEMINI = {f"agy-gemini-3.8-flash-{e}": f"gemini-3.8-flash-{e}"
+          for e in ("low", "medium", "high")}
+NEW = {**CLAUDE, **SOL, **LUNA, **GEMINI}
+
+
+@pytest.fixture
+def store(tmp_path, monkeypatch):
+    from plangraph.routing_support import resolver
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [])
+    st = leg_state.LegStateStore(tmp_path / 'leg-state.sqlite')
+    monkeypatch.setattr(leg_state, '_default_store', lambda: st)
+    return st
+
+
+def plan(store, role='review', writers=('xiaomi',), legs=DEFAULT_LEGS):
+    # No diff_ref: inline-only legs (luna) skip with inline_only_needs_diff.
+    return plan_spawn(dict(estimate_tokens=1000), role=role, writer_families=writers, leg_reader=store, now=100,
+                      policy=RoutePolicy(), legs=legs)
+
+
+def test_leg_data():
+    for leg_id, model in CLAUDE.items():
+        leg = BY_ID[leg_id]
+        assert (leg.harness, leg.model, leg.family, leg.claude_family, leg.tier) == (
+            'agy', model, 'claude', True, 'subscription'), leg_id
+        assert leg.roles == ('review', 'implement') and leg.disabled is None, leg_id
+        assert leg.windows == ('128k', '256k', '1m')
+    for leg_id, model in SOL.items():
+        leg = BY_ID[leg_id]
+        assert (leg.harness, leg.model, leg.family, leg.roles, leg.disabled) == (
+            'opencode', model, 'gpt', ('implement',), None), leg_id
+    for leg_id, model in LUNA.items():
+        leg = BY_ID[leg_id]
+        assert (leg.harness, leg.model, leg.family, leg.roles, leg.tool_mode) == (
+            'opencode', model, 'gpt', ('review',), 'inline-only'), leg_id
+    for leg_id, model in GEMINI.items():
+        leg = BY_ID[leg_id]
+        assert (leg.harness, leg.model, leg.family, leg.roles) == (
+            'agy', model, 'gemini', ('review',)), leg_id
+    ids = [leg.id for leg in SPAWNABLE_LEGS]
+    assert len(ids) == len(set(ids))
+
+
+def test_explicit_legs_stay_out_of_every_route():
+    """D-3605 (Claude no default seat/writer) and D-3828 (no writer fallback) hold:
+    the keeper and plan_spawn route over DEFAULT_LEGS, which holds none of them."""
+    assert {leg.id for leg in EXPLICIT_LEGS} == set(NEW)
+    assert not {leg.id for leg in DEFAULT_LEGS} & set(NEW)
+    assert SPAWNABLE_LEGS == DEFAULT_LEGS + EXPLICIT_LEGS
+    assert EXPLICIT_WRITERS == frozenset(CLAUDE) | frozenset(SOL)
+
+
+@pytest.mark.parametrize('role,listed', [('review', {**CLAUDE, **GEMINI, **LUNA}),
+                                         ('implement', {**CLAUDE, **SOL})])
+def test_route_lists_them_as_explicit_only(store, role, listed):
+    result = plan(store, role=role, writers=('xiaomi',) if role == 'review' else ())
+    assert not {leg.id for leg in result.legs} & set(NEW)
+    explicit = {s['leg'] for s in result.skipped if s['reason'] == 'explicit_only'}
+    assert explicit == set(listed)
+    if role == 'implement':
+        assert result.legs[0].id == LEAD_WRITER
+
+
+def test_custom_leg_lists_get_no_explicit_skips(store):
+    assert not any(s['reason'] == 'explicit_only'
+                   for s in plan(store, legs=DEFAULT_LEGS[:5]).skipped)
+
+
+def _svc(tmp_path):
+    from plangraph.spawner.runner import SpawnerRunner
+    from plangraph.spawner.service import SpawnService
+    return SpawnService(SpawnerRunner(), state=tmp_path)
+
+
+@pytest.mark.parametrize('leg_id', ['agy-claude-sonnet-5-5-high', 'agy-claude-opus-5-5-high'])
+def test_explicit_claude_review_seat(tmp_path, leg_id):
+    result = asyncio.run(_svc(tmp_path).spawn(
+        card={'estimate_tokens': 20000}, prompt='Review public code', role='review',
+        writer_families=('gpt',), leg=leg_id, dry_run=True,
+        override_reason='operator 2026-11-09 claude seats'))
+    assert result['chosen_leg']['id'] == leg_id
+    with pytest.raises(SpawnRefused, match='excluded writer family'):
+        asyncio.run(_svc(tmp_path).spawn(
+            card={'estimate_tokens': 20000}, prompt='Review public code', role='review',
+            writer_families=('claude',), leg=leg_id, dry_run=True,
+            override_reason='operator 2026-11-09 claude seats'))
+
+
+@pytest.mark.parametrize('leg_id', ['agy-claude-opus-5-5-high', 'cx-gpt-6.1-sol-xhigh'])
+def test_explicit_writer_implement_allowed(tmp_path, leg_id):
+    result = asyncio.run(_svc(tmp_path).spawn(
+        card={'estimate_tokens': 20000}, prompt='Implement public code', role='implement',
+        leg=leg_id, dry_run=True, override_reason='operator 2026-11-09 explicit writer'))
+    assert result['chosen_leg']['id'] == leg_id
+
+
+def test_other_writers_still_refused(tmp_path):
+    with pytest.raises(SpawnRefused, match='D-3828'):
+        asyncio.run(_svc(tmp_path).spawn(
+            card={'estimate_tokens': 20000}, prompt='Implement public code', role='implement',
+            leg='agy-gemini-3.8-flash', dry_run=True,
+            override_reason='operator 2026-11-09 explicit writer'))
+
+
+@pytest.mark.parametrize('leg_id', sorted(CLAUDE))
+def test_agy_prefixed_model_resolves_to_its_leg(leg_id):
+    from plangraph.spawner.target import resolve_target
+    target, leg = resolve_target('agy/' + CLAUDE[leg_id])
+    assert (target, leg.id) == (CLAUDE[leg_id], leg_id)
+
+
+def test_agy_command_passes_the_served_model():
+    from plangraph.routing_support.clients import build_command
+    cmd = build_command('hi', 'claude-opus-5-5-high', role='review', client='agy')
+    assert cmd == ['agy', '--dangerously-skip-permissions', '--model',
+                   'claude-opus-5-5-high', '-p', 'hi']
+
+
+def _render(model, models=None):
+    """Render as a spawned run does: the root overlay's ``providers`` block, no global layer."""
+    from plangraph.routing_support.opencode_render import render_gateway_providers
+    root = {'providers': {'omniroute': {'env': ['AUTOOS_OMNIROUTE_KEY'],
+                                        'models': dict(models or {})}}}
+    env = {'OMNIROUTE_BASE_URL': 'http://gateway.invalid',
+           'OPENCODE_CONFIG_CONTENT': json.dumps(root)}
+    assert render_gateway_providers(env, model) is None
+    return json.loads(env['OPENCODE_CONFIG_CONTENT'])['providers']['omniroute']['models']
+
+
+@pytest.mark.parametrize('model', sorted(SOL.values()) + sorted(LUNA.values()))
+def test_effort_variant_gets_a_per_run_opencode_model(model):
+    key = model.split('/', 1)[1]
+    entry = _render(model)[key]
+    assert entry['modelID'] == 'cx/' + key[len('cx-'):]
+    assert entry['limit'] == {'context': 400000, 'output': 128000}
+
+
+def test_effort_variant_takes_its_base_model_limit():
+    base = {'modelID': 'cx/gpt-6.1-sol', 'limit': {'context': 475000, 'output': 128000}}
+    models = _render('omniroute/cx-gpt-6.1-sol-xhigh', {'cx-gpt-6.1-sol': base})
+    assert models['cx-gpt-6.1-sol-xhigh']['limit'] == base['limit']
+    assert models['cx-gpt-6.1-sol'] == base
+
+
+@pytest.mark.parametrize('model', ['omniroute/cx-gpt-6.1-sol', 'omniroute/cx-gpt-6-luna',
+                                   'omniroute/agy/gemini-3.8-flash-high',
+                                   'omniroute/cx-gpt-6.1-sol-ultra'])
+def test_base_and_unknown_models_get_no_entry(model):
+    assert _render(model) == {}
+
+
+def test_declared_entry_is_kept():
+    mine = {'modelID': 'cx/gpt-6.1-sol-high', 'limit': {'context': 1, 'output': 1}}
+    models = _render('omniroute/cx-gpt-6.1-sol-high', {'cx-gpt-6.1-sol-high': mine})
+    assert models['cx-gpt-6.1-sol-high'] == mine
