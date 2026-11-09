@@ -165,8 +165,9 @@ OmniRoute `/v1/models` served that day; agy serves no Sonnet xhigh and cx serves
 They live in `EXPLICIT_LEGS`, not `DEFAULT_LEGS`: an explicit `--leg` pick (or the model
 override) spawns them, and no route, keeper plan or role order changes (D-3605: Claude is no
 default writer or seat; D-3828: no writer fallback). `plan_spawn` lists them as
-`explicit_only` skips, so `route` shows them. A Claude leg is claude-family, so the D-2511
-fence keeps it off claude-written work. The Claude and sol-effort writers are
+`explicit_only` skips, so `route` shows them. A Claude leg is claude-family: the fence refuses
+it for a claude writer, given or via `review_of`; with mixed writers the D-3084 per-part rule
+admits a seat that covers another writer part. The Claude and sol-effort writers are
 `EXPLICIT_WRITERS`, which the spawn service admits for `implement`. The catalog spelling
 `agy/<model>` (MCP `model_or_combo`) resolves to the agy leg that holds the bare model. A cx
 effort model is not declared in the AutoOS root opencode config, so `render_gateway_providers`

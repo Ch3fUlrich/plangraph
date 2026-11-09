@@ -1,7 +1,8 @@
 """Claude Sonnet/Opus 5.5 legs and effort-variant legs (operator 2026-11-09).
 
 Pins: the leg data (harness, served model id, family, roles), the family fence
-(a claude leg never reviews claude-written work), the D-3828 writer rule (the
+(a claude seat is refused for a claude writer, given or via review_of; with mixed
+writers D-3084 admits a seat that covers another writer part), the D-3828 writer rule (the
 new writers are hand-picked only, never a routed fallback), the ``agy/`` model
 spelling the MCP override passes, and the per-run opencode model entry an
 effort variant needs to be routable at all.
@@ -133,6 +134,34 @@ def test_agy_prefixed_model_resolves_to_its_leg(leg_id):
     from plangraph.spawner.target import resolve_target
     target, leg = resolve_target('agy/' + CLAUDE[leg_id])
     assert (target, leg.id) == (CLAUDE[leg_id], leg_id)
+
+
+@pytest.mark.parametrize('model,leg_id', [
+    ('agy/gemini-3.8-flash-high', 'agy-gemini-3.8-flash-high'),
+    # agy-sonnet-5.5 (orchestrate only) shares this model; the seat leg wins.
+    ('agy/claude-sonnet-5-5-medium', 'agy-claude-sonnet-5-5-medium')])
+def test_agy_prefixed_model_prefers_the_seat_leg(model, leg_id):
+    from plangraph.spawner.target import resolve_target
+    assert resolve_target(model)[1].id == leg_id
+
+
+def test_claude_seat_refused_for_a_claude_run_named_by_review_of(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(svc, 'result', lambda *a, **k: {'given_writer_families': ['claude'],
+                                                        'writer_family': 'claude'})
+    with pytest.raises(SpawnRefused, match='excluded writer family'):
+        asyncio.run(svc.spawn(card={'estimate_tokens': 20000}, prompt='Review public code',
+                              role='review', review_of='run-' + '0' * 32,
+                              leg='agy-claude-opus-5-5-high', dry_run=True,
+                              override_reason='operator 2026-11-09 claude seats'))
+
+
+def test_service_route_lists_explicit_legs(tmp_path):
+    """The real `route` entry point (not only plan_spawn called directly)."""
+    plan = _svc(tmp_path).route({'estimate_tokens': 20000}, role='review',
+                                writer_families=('gpt',))
+    skipped = plan['skipped'] if isinstance(plan, dict) else plan.skipped
+    assert {s['leg'] for s in skipped if s['reason'] == 'explicit_only'} >= set(CLAUDE)
 
 
 def test_agy_command_passes_the_served_model():
