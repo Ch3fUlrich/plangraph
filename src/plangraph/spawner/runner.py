@@ -35,7 +35,7 @@ from plangraph.spawner.claude_env import claude_child_env
 from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
 from plangraph.spawner.resolver import MODEL_FAMILIES, detect_model_family
 from plangraph.spawner.mimo_policy import check_mimo_path
-from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
 from plangraph.spawner.winjob import WinJobApi  # re-export: tests patch runner.WinJobApi
 
 _KEEPER_UNCONFIGURED_WARN_S = 600
@@ -460,7 +460,7 @@ class SpawnerRunner:
             if dry_run:
                 served_model = model_or_combo
                 served_family = detect_model_family(model_or_combo)
-                if "/" not in model_or_combo and not any(l.model == model_or_combo for l in DEFAULT_LEGS):
+                if "/" not in model_or_combo and not any(l.model == model_or_combo for l in (*DEFAULT_LEGS, *EXPLICIT_LEGS)):
                     from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
                     combo_legs = [
                         m for m in get_catalog_models()

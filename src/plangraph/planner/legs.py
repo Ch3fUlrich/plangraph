@@ -22,7 +22,8 @@ from plangraph.keeper.schema import WINDOW_CLASSES
 from plangraph.mimo_policy import MimoPathError, check_mimo_path
 
 __all__ = ["TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "leg_active",
-           "load_legs", "with_measured"]
+           "load_legs", "with_measured", "EXPLICIT_LEGS", "EXPLICIT_WRITERS", "spawnable_legs",
+           "CX_EFFORTS"]
 
 #: Cost tiers, cheapest first.
 TIERS = ("trial", "free", "subscription", "paid")
@@ -37,6 +38,8 @@ TOOL_MODES = ("tools", "inline-only")
 NO_VERDICT_SEATS = frozenset({"opencode-go/qwen3.8-flash"})
 # Advisory only: these models remain routable, but explicit reviews warn.
 REVIEW_UNFIT_SEATS = frozenset({"mimo/mimo-v2.6-flash"})
+#: Reasoning-effort suffixes OmniRoute's cx provider serves (/v1/models, 2026-11-09).
+CX_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
 @dataclass(frozen=True)
@@ -160,6 +163,48 @@ WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
 )
 LEAD_WRITER = "cx-gpt-6.1-sol"
+
+#: Operator 2026-11-09: Claude 5.5 seats and effort variants, spawnable by an
+#: explicit ``--leg`` pick (or the model override) only.  They are NOT in
+#: DEFAULT_LEGS, so no route, keeper plan or role order changes (D-3605: Claude is
+#: no default writer or seat; D-3828: no writer fallback); ``plan_spawn`` lists them
+#: as ``explicit_only`` skips.  Model ids are what ``agy models`` and OmniRoute
+#: /v1/models served that day (agy serves no Sonnet xhigh, cx no -ultra).  Claude
+#: legs are claude-family, so the D-2511 fence keeps them off claude-written work.
+#: A cx effort model needs a per-run opencode entry (``opencode_render``).
+EXPLICIT_LEGS: tuple[Leg, ...] = (
+    *(Leg(f"agy-claude-{m}-5-5-{e}", "subscription", "agy", f"claude-{m}-5-5-{e}",
+          "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
+          roles=("review", "implement"), note="operator 2026-11-09: Antigravity quota")
+      for m in ("sonnet", "opus") for e in ("low", "medium", "high")),
+    *(Leg(f"agy-gemini-3.8-flash-{e}", "subscription", "agy", f"gemini-3.8-flash-{e}",
+          "gemini", ("128k", "256k", "1m"), 900000, False, roles=("review",))
+      for e in ("low", "medium", "high")),
+    *(Leg(f"cx-gpt-6.1-sol-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6.1-sol-{e}",
+          "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",))
+      for e in CX_EFFORTS),
+    *(Leg(f"cx-gpt-6-luna-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6-luna-{e}",
+          "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
+          tool_mode="inline-only")
+      for e in CX_EFFORTS),
+)
+#: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
+EXPLICIT_WRITERS: frozenset[str] = frozenset(
+    leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)
+
+
+def spawnable_legs() -> tuple[Leg, ...]:
+    """Every leg an explicit pick may name: the routed legs first, so a shared model
+    resolves to its DEFAULT_LEGS leg.  Read at call time (callers and tests rebind
+    DEFAULT_LEGS)."""
+    return (*DEFAULT_LEGS, *EXPLICIT_LEGS)
+
+
+def explicit_only_skips(role: str) -> tuple[dict, ...]:
+    """`route` output rows for the explicit legs serving ``role``: listed, never routed."""
+    return tuple({"leg": leg.id, "reason": "explicit_only", "evidence": {
+        "kind": "explicit_only", "reason": "spawn with --leg " + leg.id}}
+        for leg in EXPLICIT_LEGS if role in leg.roles)
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",

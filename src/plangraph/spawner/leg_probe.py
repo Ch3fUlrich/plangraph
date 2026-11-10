@@ -276,16 +276,18 @@ async def before_launch(runner, leg, role, dry_run):
 
 
 async def probe_many(runner, legs=(), all_writers=False, timeout=None):
-    from plangraph.planner.legs import DEFAULT_LEGS, leg_active
+    from plangraph.planner.legs import DEFAULT_LEGS, leg_active, spawnable_legs
+    SPAWNABLE_LEGS = spawnable_legs()
     ids = {legs} if isinstance(legs, str) else set(legs or ())
     if not (ids or all_writers):
         raise ValueError('select --leg ID or --all-writers')
-    unknown = ids - {leg.id for leg in DEFAULT_LEGS}
+    unknown = ids - {leg.id for leg in SPAWNABLE_LEGS}
     if unknown:
         raise ValueError('unknown legs: ' + ', '.join(sorted(unknown)))
-    selected = [leg for leg in DEFAULT_LEGS if leg_active(leg) and
-                (leg.id in ids or
-                 (all_writers and any(role in leg.roles for role in ('implement', 'fix'))))]
+    # --all-writers means the routed writers; an explicit leg is probed only by name.
+    selected = [leg for leg in SPAWNABLE_LEGS if leg_active(leg) and
+                (leg.id in ids or (all_writers and leg in DEFAULT_LEGS and
+                                   any(role in leg.roles for role in ('implement', 'fix'))))]
     results = []
     state = _store_for(runner)
     state = state.store if getattr(state, 'enabled', False) else state

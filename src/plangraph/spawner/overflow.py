@@ -173,7 +173,26 @@ def local_resources():
     return sum(row.get('status') == 'running' for row in runs), available_memory_mb()
 
 
+def _windows_available_memory_mb():
+    """MemAvailable's Windows twin: GlobalMemoryStatusEx ullAvailPhys."""
+    import ctypes
+
+    class MemoryStatus(ctypes.Structure):
+        _fields_ = [('dwLength', ctypes.c_ulong), ('dwMemoryLoad', ctypes.c_ulong),
+                    *((name, ctypes.c_ulonglong) for name in (
+                        'ullTotalPhys', 'ullAvailPhys', 'ullTotalPageFile', 'ullAvailPageFile',
+                        'ullTotalVirtual', 'ullAvailVirtual', 'ullAvailExtendedVirtual'))]
+    status = MemoryStatus()
+    status.dwLength = ctypes.sizeof(status)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+        raise OSError('GlobalMemoryStatusEx failed')
+    return status.ullAvailPhys // (1024 * 1024)
+
+
 def available_memory_mb():
+    # Windows has no /proc: every local spawn died with ENOENT before launch (2026-11-09).
+    if os.name == 'nt':
+        return _windows_available_memory_mb()
     try:
         memory = next(int(line.split()[1]) // 1024 for line in Path('/proc/meminfo').read_text().splitlines()
                       if line.startswith('MemAvailable:'))
