@@ -77,6 +77,16 @@ def rust_commands(root, base, head):
             ["cargo", "test", *packages]]
 
 
+def test_environment(root, env):
+    """A pre-push caller's Git context must not select a fixture's repository."""
+    local = set(subprocess.check_output(
+        ["git", "rev-parse", "--local-env-vars"], cwd=root, env=env,
+        text=True, stderr=subprocess.DEVNULL, timeout=CHECK_TIMEOUT).splitlines())
+    return {key: value for key, value in env.items()
+            if key not in local
+            and not key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
+
+
 def main(argv=None, root=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="origin/main")
@@ -88,8 +98,13 @@ def main(argv=None, root=None):
     args = parser.parse_args(argv)
     root = Path(root or Path(__file__).resolve().parent.parent)
     tools = Path(os.environ.get("PREFLIGHT_TOOLS_DIR", Path(__file__).resolve().parent))
-    env = dict(os.environ, FILESIZE_REQUIRE_BASE=args.base, NEWCODE_BASE=args.base,
-               CHANGELOG_BASE=args.base, CARGO_BUILD_JOBS="4")
+    policy_bases = dict(FILESIZE_REQUIRE_BASE=args.base, NEWCODE_BASE=args.base,
+                        CHANGELOG_BASE=args.base)
+    env = dict(os.environ, CARGO_BUILD_JOBS="4")
+    # Nested test repositories own their revision history, not this checkout's base.
+    for key in policy_bases:
+        env.pop(key, None)
+    policy_env = dict(env, **policy_bases)
 
     def python(name, *extra):
         return [sys.executable, str(tools / name), *extra]
@@ -124,14 +139,17 @@ def main(argv=None, root=None):
             try:
                 if commands is None:
                     commands = rust_commands(root, args.base, args.head)
+                family_env = policy_env if family == "policy" else env
+                if family == "tests" and commands:
+                    family_env = test_environment(root, env)
                 for command in commands:
                     cwd = root / "rust" if family == "rust" else root
-                    code, output = run(command, cwd, env)
+                    code, output = run(command, cwd, family_env)
                     print(output, end="", flush=True)
                     infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     if infra:
                         print(f"{family}: INFRA HTTP 5xx; rerun once", flush=True)
-                        code, output = run(command, cwd, env)
+                        code, output = run(command, cwd, family_env)
                         print(output, end="", flush=True)
                         infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     status = "PASS" if not code else ("INFRA" if infra else "FAIL")

@@ -9,6 +9,7 @@ import asyncio
 from dataclasses import replace
 import json
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -148,15 +149,30 @@ class SeatSpawnMixin:
             annotate_review_warning(record)
         return pack
 
-    def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):
+    async def _prepare_leg_prompt(self, prompt, card, role, leg, pack=None,
+                                  document_review=False, deadline=None):
+        """Keep Git/context packaging off the RPC loop and inside the review budget."""
+        from .inline_diff import InlineDiffError
+        remaining = None if deadline is None else deadline - time.time()
+        if remaining is not None and remaining <= 0:
+            raise InlineDiffError('review prompt packaging deadline exceeded')
+        work = asyncio.to_thread(self._leg_prompt, prompt, card, role, leg, pack,
+                                 document_review=document_review,
+                                 diff_timeout=60 if remaining is None else min(60, remaining))
+        try:
+            return await asyncio.wait_for(work, timeout=remaining)
+        except asyncio.TimeoutError:
+            raise InlineDiffError('review prompt packaging deadline exceeded') from None
+
+    def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
         """Assemble one leg's payload, then apply opt-in whole-prompt admission."""
         from . import context_pack
-        prompt = self._unbounded_leg_prompt(prompt, card, role, leg, pack, document_review)
+        prompt = self._unbounded_leg_prompt(prompt, card, role, leg, pack, document_review, diff_timeout)
         if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1':
             return context_pack.bound_prompt(prompt, leg.max_request_tokens)
         return prompt
 
-    def _unbounded_leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):
+    def _unbounded_leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
         """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff.
 
         ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
@@ -170,7 +186,7 @@ class SeatSpawnMixin:
             from .inline_diff import InlineDiffError, inline_diff_prompt
             try:
                 prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
-                                            allow_document=document_review)
+                                            allow_document=document_review, timeout=diff_timeout)
             except InlineDiffError as exc:
                 _refuse_oversized_diff(exc, leg)
                 raise

@@ -318,7 +318,7 @@ def build_standalone_fallback_command(
     if cname == "agy":
         cmd = ["agy", "--dangerously-skip-permissions"]
         if model:
-            cmd.extend(["--model", model])
+            cmd.extend(["--model", {"gemini-3.8-flash": "gemini-3.8-flash-high"}.get(model, model)])
         cmd.extend(["-p", prompt])
         return cmd
     if cname in ("qoder", "qodercli"):

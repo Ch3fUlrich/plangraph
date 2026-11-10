@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -78,6 +79,52 @@ def test_fast_summary_and_ci_env(repo, monkeypatch, capsys):
     assert calls[1][2]["NEWCODE_BASE"] == "HEAD"
     assert calls[1][2]["CHANGELOG_BASE"] == "HEAD"
     assert calls[-1][0][-2:] == ["--exempt", str(Path(preflight.__file__).with_name("ci_commit_exempt.txt"))]
+
+
+@pytest.mark.parametrize("base,expected", [("HEAD~1", 0), ("HEAD", 1)])
+def test_policy_base_stays_enforced_without_leaking_into_test_repos(
+        repo, monkeypatch, capsys, base, expected):
+    subprocess.run(["git", "-c", "user.name=Test", "-c",
+                    "user.email=test@example.invalid", "commit", "-q",
+                    "--allow-empty", "-m", "change"], cwd=repo, check=True)
+    nested = repo / "nested-checkout"
+    subprocess.run(["git", "init", "-q", str(nested)], check=True)
+    subprocess.run(["git", "-c", "user.name=Test", "-c",
+                    "user.email=test@example.invalid", "commit", "-q",
+                    "--allow-empty", "-m", "fixture"], cwd=nested, check=True)
+    controls = ("FILESIZE_REQUIRE_BASE", "NEWCODE_BASE", "CHANGELOG_BASE")
+    for key in controls:
+        monkeypatch.setenv(key, "ambient-policy-only-ref")
+    original = preflight.run
+    nested_results, seen = [], []
+    policy_tools = {"check_file_size.py", "check_new_code_lang.py",
+                    "check_changelog_docs.py", "ci_commit_gate.py"}
+    checker = Path(preflight.__file__).with_name("check_file_size.py")
+
+    def run(command, cwd, env):
+        name = Path(command[1]).name
+        seen.append((name, dict(env)))
+        if name in policy_tools:
+            assert all(env[key] == base for key in controls)
+        if name == "check_file_size.py":
+            return original(command, cwd, env)
+        if name == "affected_tests.py":
+            result = original([sys.executable, str(checker)], nested, env)
+            nested_results.append(result)
+            return result
+        return 0, ""
+
+    monkeypatch.setattr(preflight, "run", run)
+    monkeypatch.setattr(preflight, "rust_commands", lambda *a: [["cargo", "fmt", "--check"]])
+    assert preflight.main(["--base", base, "--head", "HEAD"], repo) == expected
+    assert nested_results and nested_results[0][0] == 0, nested_results
+    assert all(not any(key in env for key in controls)
+               for name, env in seen if name not in policy_tools)
+    output = capsys.readouterr().out
+    assert f"{'FAIL' if expected else 'PASS'} policy " in output
+    assert "PASS tests " in output
+    if expected:
+        assert "FILESIZE_REQUIRE_BASE=HEAD is HEAD itself" in output
 
 
 def test_all_families_after_scrub_failure(repo, monkeypatch, capsys):
@@ -287,6 +334,7 @@ def test_slow_passing_check(repo, monkeypatch, capsys, command, family):
 
     monkeypatch.setattr(preflight.subprocess, "run", sleeping_check)
     monkeypatch.setattr(preflight, "run", run)
+    monkeypatch.setattr(preflight, "test_environment", lambda root, env: env)
     monkeypatch.setattr(preflight, "rust_commands",
                         lambda *args: [command] if family == "rust" else [])
     assert preflight.main(["--base", "HEAD"], repo) == 0
