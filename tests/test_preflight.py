@@ -334,6 +334,7 @@ def test_slow_passing_check(repo, monkeypatch, capsys, command, family):
 
     monkeypatch.setattr(preflight.subprocess, "run", sleeping_check)
     monkeypatch.setattr(preflight, "run", run)
+    monkeypatch.setattr(preflight, "test_environment", lambda root, env: env)
     monkeypatch.setattr(preflight, "rust_commands",
                         lambda *args: [command] if family == "rust" else [])
     assert preflight.main(["--base", "HEAD"], repo) == 0

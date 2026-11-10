@@ -11,3 +11,5 @@ Keep native harness dispatch regressions aligned with the effort-qualified
 Gemini SKU while preserving executable and prompt delivery assertions.
 Scope preflight revision controls to policy checks so affected tests can create
 independent Git fixtures without inheriting the publication checkout's base.
+Clear repository-local Git hook context from affected tests while preserving
+caller configuration for policy gates and fixture-local hook enforcement.
