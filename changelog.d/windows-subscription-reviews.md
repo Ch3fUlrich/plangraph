@@ -5,3 +5,5 @@ review deadline. Preserve invalid/oversized diff refusals. Map the canonical
 Gemini Flash route to the effort-qualified SKU served by the native AGY CLI.
 Keep context-pack case IDs below Windows' environment-variable limit and assert
 the child interpreter's native newline in the watchdog output fixture.
+Wait for asynchronous packaging in the real-launch warning regression rather
+than closing its event loop before the mocked launch boundary is reached.
