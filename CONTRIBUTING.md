@@ -14,6 +14,9 @@ invocation (not the existing scrub/ref/file-size gates or direct CLI runs). Priv
 scrub words come from `PLANGRAPH_SCRUB_WORDS` or `~/.config/plangraph/scrub-words.txt`;
 when neither is present, public rules still run but scrub reports SKIP with a reason.
 `PREFLIGHT_TOOLS_DIR` overrides tool paths for tests.
+The revision controls `FILESIZE_REQUIRE_BASE`, `NEWCODE_BASE` and `CHANGELOG_BASE`
+are scoped to policy checks. Other families receive none of these controls,
+including inherited values, so nested Git test fixtures own their revision bases.
 
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 

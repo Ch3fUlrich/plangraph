@@ -9,3 +9,5 @@ Wait for asynchronous packaging in the real-launch warning regression rather
 than closing its event loop before the mocked launch boundary is reached.
 Keep native harness dispatch regressions aligned with the effort-qualified
 Gemini SKU while preserving executable and prompt delivery assertions.
+Scope preflight revision controls to policy checks so affected tests can create
+independent Git fixtures without inheriting the publication checkout's base.
