@@ -453,13 +453,14 @@ def served_models(config, *, env=None, clock=time.monotonic):
 
 def _probe_served_models(config, *, env=None):
     import logging
+    from . import background_process_options
     logger = logging.getLogger(__name__)
     env = dict(env or _probe_child_env.get() or host_probe_env())
     env['OPENCODE_CONFIG_CONTENT'] = config
     try:
         executable = shutil.which('opencode', path=env.get('PATH')) or 'opencode'
-        result = subprocess.run([executable, 'models', '--standalone'], env=env, capture_output=True,
-                                text=True, timeout=10)
+        result = subprocess.run([executable, 'models', '--standalone'], env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                                text=True, encoding='utf-8', errors='replace', timeout=10, **background_process_options())
         if result.returncode == 0:
             import re
             parsed = frozenset(line.strip() for line in result.stdout.splitlines()

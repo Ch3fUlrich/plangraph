@@ -11,7 +11,7 @@ commands use `--input-format stream-json --output-format stream-json -p ""`, wit
 one UTF-8 NDJSON user event on stdin followed by EOF. The last result's
 `response` supplies the answer and verdict; an ERROR or missing result fails
 explicitly, without publishing an unsuccessful response as an answer.
-Short agy prompts and Linux launches retain their existing argv form.
+Short agy prompts and Linux launches retain their existing argv form; see [background review launches and deadlines](spawner-operations.md) for Windows console suppression and bounded prompt packaging.
 Rejected stdin input or an unavailable/closed input pipe fails the run explicitly;
 the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.
