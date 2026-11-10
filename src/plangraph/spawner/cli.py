@@ -15,6 +15,7 @@ _start_supervisor = subprocess.Popen
 
 from .runner import spawn_service as SpawnService, redact
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
+from plangraph.routing_support.process_launch import background_process_options
 
 
 def _drain_chunks(chunks, write, observe=lambda size: None):
@@ -318,8 +319,8 @@ raise SystemExit(code)
                 with os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
                     child = _start_supervisor([sys.executable, '-c', bootstrap, str(log_path)],
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
-                        env=env, text=True, encoding="utf-8", errors="replace", **({'start_new_session': True} if os.name != 'nt' else
-                                      {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}))
+                        env=env, text=True, encoding="utf-8", errors="replace",
+                        **background_process_options(new_session=True, platform=os.name))
                     try:
                         child.stdin.write(json.dumps(dict(payload, state=str(service.state))) + '\n')
                         child.stdin.close()

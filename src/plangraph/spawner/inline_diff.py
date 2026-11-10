@@ -11,6 +11,7 @@ import subprocess
 
 from plangraph.planner.seats import _check_diff_ref
 from plangraph.routing_errors import SpawnRefused
+from plangraph.routing_support.process_launch import background_process_options
 
 HEADER = "\n\n=== INLINE DIFF (base {base}, head {head}; this leg reads the change only from here) ===\n"
 FOOTER = "\n=== END INLINE DIFF ===\n"
@@ -42,7 +43,9 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
         proc = subprocess.run(
             ["git", "-C", diff_ref["repo"], "diff", "--no-ext-diff", "--no-color",
              "--no-textconv", f"{base}...{head}", "--"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False)
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout, check=False,
+            **background_process_options())
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise InlineDiffError(f"git diff failed: {type(exc).__name__}") from None
     if proc.stdout is None or proc.stderr is None:

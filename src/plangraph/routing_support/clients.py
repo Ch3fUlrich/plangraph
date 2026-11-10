@@ -335,7 +335,11 @@ def build_standalone_fallback_command(
     if cname == "agy":
         cmd = ["agy", "--dangerously-skip-permissions"]
         if model:
-            cmd.extend(["--model", model])
+            # Policy/benchmark ids omit the effort suffix; `agy models` serves
+            # this Flash model as an explicit effort variant. Keep an already
+            # explicit native id unchanged, and never change its model family.
+            native_model = {"gemini-3.8-flash": "gemini-3.8-flash-high"}.get(model, model)
+            cmd.extend(["--model", native_model])
         cmd.extend(["-p", prompt])
         return cmd
     if cname in ("qoder", "qodercli"):

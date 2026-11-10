@@ -321,7 +321,7 @@ async def collect(runner, job_id, proc):
             delay = min(limits['interval'], max(.001, job.start_time + w.budget() - time.time()))
             if limits.get('hard_first_edit') and w.writer and not w.edited and w.edit_baseline_known and w.edit is not None:
                 delay = min(delay, max(.001, job.start_time + limits['first_edit_s'] - time.time()))
-            if w.edit is None:
+            if w.writer and w.edit is None:
                 delay = min(delay, EDIT_RETRY_S)   # Q7: keep retrying a lost baseline
             done, _ = await asyncio.wait(waiters, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
             if refused.is_set() and not task.done() and job.status in ('cancelled', 'stalled', 'timeout'):
@@ -348,10 +348,11 @@ async def collect(runner, job_id, proc):
                 break
             if task in done:
                 break
-            edit = await asyncio.to_thread(edit_signature, job.cwd or runner.default_cwd)
+            edit = (await asyncio.to_thread(edit_signature, job.cwd or runner.default_cwd)
+                    if w.writer else None)
             now = time.time()
             cpu = (await cpu_seconds(runner, job_id, getattr(proc, 'pid', None), int(now / limits['interval']))
-                   if now - job.start_time < limits['max_s'] else None)
+                   if w.writer and now - job.start_time < limits['max_s'] else None)
             event = w.decide(now, edit, job.last_activity_ts, cpu); gate.progress(w.progress['edit'])   # REMOVE-AT-R10 (D-3769)
             try:
                 callback = getattr(runner, 'on_sample', None)

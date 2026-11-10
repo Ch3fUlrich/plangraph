@@ -1,0 +1,5 @@
+Keep Windows subscription reviews responsive: launch background Git, probes,
+agents and supervisors without a console; skip writer-only repository/CPU scans
+for read-only reviews; package prompts off the RPC loop within the remaining
+review deadline. Preserve invalid/oversized diff refusals. Map the canonical
+Gemini Flash route to the effort-qualified SKU served by the native AGY CLI.

@@ -37,6 +37,7 @@ from plangraph.spawner.resolver import MODEL_FAMILIES, detect_model_family
 from plangraph.spawner.mimo_policy import check_mimo_path
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.spawner.winjob import WinJobApi  # re-export: tests patch runner.WinJobApi
+from plangraph.routing_support.process_launch import background_process_options
 
 _KEEPER_UNCONFIGURED_WARN_S = 600
 # D-2966: writers commit in their clone; AutoOS leaf-agent profiles they may read must not fence that.
@@ -518,7 +519,10 @@ class SpawnerRunner:
             from .run_watchdog import thresholds, edit_signature
             job._watchdog_limits = watchdog or thresholds(role=role)
             job._live_log = live_log
-            job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir)
+            # Read-only reviews have only a wall-clock deadline; walking a large
+            # worktree adds launch latency and cannot provide relevant progress.
+            job._watchdog_baseline = (await asyncio.to_thread(edit_signature, work_dir)
+                                      if role in ('implement', 'fix') else None)
             if tools_event:
                 job.events.append(tools_event)
 
@@ -574,7 +578,8 @@ class SpawnerRunner:
                         if cmd[0] in STDIN_PROMPT_HARNESSES
                         else asyncio.subprocess.DEVNULL
                     ),
-                    **({"start_new_session": True} if os.name != "nt" else {}),
+                    **background_process_options(new_session=True,
+                        platform='nt' if self._nt() else 'posix'),
                 )
             except Exception as exc:
                 self._adapter_tokens.pop(job_id, None)
@@ -1089,7 +1094,9 @@ def spawn_service(*args, **kwargs):
                             continue
                         from .inline_diff import InlineDiffError
                         try:
-                            leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run)
+                            leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack,
+                                document_review=leg is not None or dry_run,
+                                deadline=record['started'] + limits['max_s'] if role == 'review' else None)
                         except InlineDiffError as exc:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
