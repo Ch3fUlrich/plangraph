@@ -27,8 +27,8 @@ plangraph is public; the plans it tracks usually are not. Keep that difference c
 
 Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so there is no
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
-New Python tests still need a path-specific `tools/new_code_allowlist.txt` entry
-with `(D-5062), retired by <leaf>`; the MCP snapshot guard retires with MCP-RUST.
+The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
+with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
 
 ```bash
 python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4

@@ -11,9 +11,18 @@ Every `tools/call` returns an MCP result with `isError: true` and text
 `not_implemented: tools/call`, including mutating and fleet-bus tools.
 
 The Python snapshot test checks the fixture against the unmodified
-`keeper.mcp.TOOLS`, and checks recorded replies against `handle()` serialized
-exactly as Python `serve()` does. Rust tests compare the schema and response
-bytes (numeric/string ids, default/echoed/invalid versions, Unicode and escaping).
+`keeper.mcp.TOOLS`, and captures recorded reply bytes by calling the production
+`serve()` with in-memory streams and a keeper client that refuses all calls.
+It also checks decoded responses against `handle()` and exercises a mixed
+stream, including blank lines, checking both output bytes and reply flushes.
+Rust tests compare the schema and response bytes (numeric/string ids,
+default/echoed/invalid versions, Unicode and escaping, ping, invalid requests,
+unknown/non-string methods, missing/null ids and explicit notifications).
+An empty fixture response means zero bytes from Python and `None` from Rust,
+not a serialized JSON null. Error responses include exactly one trailing LF.
+Non-string methods use Python's string/repr spelling in method-not-found errors.
+`tools/call` reply contents deliberately differ from Python in this local slice;
+the Rust tests check every advertised tool's `not_implemented` result instead.
 Neither test regenerates fixtures. After reviewing an intentional contract
 change, explicitly regenerate once from the repository root:
 

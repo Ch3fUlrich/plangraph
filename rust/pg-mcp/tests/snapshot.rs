@@ -17,11 +17,18 @@ fn replies_equal_python_bytes() {
     ))
     .unwrap();
     for record in records.as_array().unwrap() {
-        let actual = handle(&record["request"]).unwrap();
-        assert_eq!(
-            actual.as_bytes(),
-            record["response"].as_str().unwrap().as_bytes()
-        );
+        let actual = handle(&record["request"]);
+        let expected = record["response"].as_str().unwrap();
+        if expected.is_empty() {
+            assert_eq!(actual, None, "request: {}", record["request"]);
+        } else {
+            assert_eq!(
+                actual.unwrap().as_bytes(),
+                expected.as_bytes(),
+                "request: {}",
+                record["request"]
+            );
+        }
     }
 }
 

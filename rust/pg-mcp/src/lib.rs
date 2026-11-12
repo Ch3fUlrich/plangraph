@@ -1,4 +1,6 @@
 //! Keeper MCP schema snapshot and local JSON-RPC replies (no HTTP client).
+mod python_text;
+use python_text::{python_float, python_str};
 use serde::Serialize;
 use serde_json::{json, ser::Formatter, Value};
 use std::io::{self, Write};
@@ -34,6 +36,9 @@ impl Formatter for PythonFormatter {
     fn begin_object_value<W: ?Sized + Write>(&mut self, w: &mut W) -> io::Result<()> {
         w.write_all(b": ")
     }
+    fn write_f64<W: ?Sized + Write>(&mut self, w: &mut W, value: f64) -> io::Result<()> {
+        w.write_all(python_float(value).as_bytes())
+    }
 }
 
 fn wire(value: Value) -> String {
@@ -59,13 +64,13 @@ pub fn handle(message: &Value) -> Option<String> {
     if !message.is_object() || message.get("method").is_none() {
         return Some(error(&Value::Null, -32600, "invalid request"));
     }
-    let method = message["method"].as_str().unwrap_or("");
+    let method = message["method"].as_str();
     let id = &message["id"];
-    if method.starts_with("notifications/") || id.is_null() {
+    if method.is_some_and(|method| method.starts_with("notifications/")) || id.is_null() {
         return None;
     }
     let result = match method {
-        "initialize" => {
+        Some("initialize") => {
             let version = message["params"]
                 .get("protocolVersion")
                 .and_then(Value::as_str)
@@ -74,13 +79,19 @@ pub fn handle(message: &Value) -> Option<String> {
             json!({"protocolVersion": version, "capabilities": {"tools": {}},
                 "serverInfo": {"name": "plangraph-keeper", "version": "0.1"}})
         }
-        "tools/list" => json!({"tools": tools_list()}),
-        "tools/call" => {
+        Some("tools/list") => json!({"tools": tools_list()}),
+        Some("tools/call") => {
             json!({"content": [{"type": "text", "text": "not_implemented: tools/call"}],
             "isError": true})
         }
-        "ping" => json!({}),
-        _ => return Some(error(id, -32601, &format!("method not found: {method}"))),
+        Some("ping") => json!({}),
+        _ => {
+            return Some(error(
+                id,
+                -32601,
+                &format!("method not found: {}", python_str(&message["method"])),
+            ))
+        }
     };
     Some(wire(json!({"jsonrpc": "2.0", "id": id, "result": result})))
 }
