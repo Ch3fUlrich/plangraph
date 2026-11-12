@@ -1,0 +1,1 @@
+- Add Rust `pg-ctx::mirror`: configured bare Git fetches with atomic monotonic watermarks, force-push/failure refusal, and five-minute freshness helpers; hermetic bare-origin tests cover advancement and refusal.

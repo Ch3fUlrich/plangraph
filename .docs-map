@@ -4,3 +4,5 @@ tools/** -> CONTRIBUTING.md
 src/plangraph/fleet_sync/** -> docs/fleet-sync.md
 src/plangraph/spawner/** -> docs/SPAWNER.md
 src/plangraph/keeper/** -> docs/KEEPER.md
+rust/pg-ctx/** -> docs/repo-mirror.md
+rust/Cargo.* -> docs/repo-mirror.md
