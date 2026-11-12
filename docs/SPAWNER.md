@@ -41,6 +41,7 @@ then base64/url-safe blobs (40+, mixing letters and digits), before tail truncat
 These broad rules never run on prompts or record structures: commit SHAs and hashes
 must stay readable there, including run IDs, card hashes and prompt SHA-256 fields.
 Stored stdout/stderr tails have already passed the output scrubber at collection.
+A tail therefore masks commit SHAs and long slash paths: take SHAs from git or the run record, never from a tail.
 
 ### Windows prompt delivery
 
