@@ -3,12 +3,29 @@
 use super::{redact, redact_source};
 
 #[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum Text {
+    Plain(String),
+    Parts(Vec<String>),
+}
+
+impl Text {
+    fn joined(&self) -> String {
+        match self {
+            Self::Plain(text) => text.clone(),
+            Self::Parts(parts) => parts.concat(),
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
 struct Row {
     input: Option<String>,
     #[serde(default)]
     input_parts: Vec<String>,
-    expected: Option<String>,
-    source: Option<String>,
+    expected: Option<Text>,
+    source: Option<Text>,
+    output: Option<Text>,
 }
 
 #[test]
@@ -26,10 +43,13 @@ fn redact_shared_parity_table() {
                 .clone()
                 .unwrap_or_else(|| row.input_parts.concat());
             for (expected, actual) in [
-                (row.expected.as_ref(), redact(&input)),
+                (
+                    row.output.as_ref().or(row.expected.as_ref()),
+                    redact(&input),
+                ),
                 (row.source.as_ref(), redact_source(&input)),
             ] {
-                if expected.is_some_and(|expected| *expected != actual) {
+                if let Some(expected) = expected.map(Text::joined).filter(|s| *s != actual) {
                     return Some(format!(
                         "input {input:?}: expected {expected:?}, got {actual:?}"
                     ));

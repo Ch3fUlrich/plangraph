@@ -22,7 +22,7 @@ impl Fixture {
             ),
             (
                 "launch",
-                json!({"argv":["/bin/sh","-c","exit 0"],"cwd":state.path(),"env":{"PROMPT":"p"},"stdin":null,"prompt":"p","warnings":[],"events":events}),
+                json!({"argv":["/bin/sh","-c","exit 0"],"cwd":state.path(),"env":{},"stdin":"p","prompt":"p","warnings":[],"events":events}),
             ),
         ] {
             let path = state.path().join(name);

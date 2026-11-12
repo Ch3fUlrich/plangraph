@@ -75,13 +75,13 @@ def test_claude_seat_pause_and_reset(tmp_path, monkeypatch, state_attr):
         setattr(service, state_attr, tmp_path)
     else:
         monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
-    leg = SimpleNamespace(id='claude-test', model='claude-test', tool_mode='tools')
+    leg = SimpleNamespace(id='claude-test', model='claude-test', tool_mode='tools', max_request_tokens=100)
     flag = tmp_path / 'quota-pause'
     flag.touch()
     with pytest.raises(SpawnRefused, match='quota pause'):
         service._leg_prompt('test', {}, 'review', leg)
     assert service._leg_prompt('test', {}, 'basic-analysis', leg) == 'test'
-    other = SimpleNamespace(id='other-test', model='other-test', tool_mode='tools')
+    other = SimpleNamespace(id='other-test', model='other-test', tool_mode='tools', max_request_tokens=100)
     assert service._leg_prompt('test', {}, 'review', other) == 'test'
     flag.unlink()
     assert service._leg_prompt('test', {}, 'review', leg) == 'test'

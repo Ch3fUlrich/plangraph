@@ -50,8 +50,7 @@ impl Runs {
         plan: Value,
         launch: impl FnOnce(&Path, &Value) -> Result<crate::launch::LaunchSpec, ToolError>,
     ) -> Result<Value, ToolError> {
-        let run_id = new_run_id();
-        let job_id = new_job_id();
+        let (run_id, job_id) = (new_run_id(), new_job_id());
         let dry = args.get("dry_run") == Some(&json!(true));
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;
@@ -175,33 +174,35 @@ pub(crate) fn store_prompt(
     dry: bool,
 ) -> Result<(), ToolError> {
     use sha2::{Digest, Sha256};
-    let raw = launch
-        .prompt
-        .as_ref()
-        .ok_or_else(|| internal("launch prompt missing"))?;
-    let mut carriers = launch
-        .stdin
-        .iter()
-        .chain(launch.argv.iter())
-        .chain(launch.env.values())
-        .filter(|s| !raw.is_empty() && s.contains(raw));
-    let channel = if raw.is_empty() {
-        String::new()
-    } else {
-        carriers
-            .next()
-            .ok_or_else(|| internal("launch prompt carrier missing"))?
-            .clone()
-    };
-    if carriers.any(|s| s != &channel) {
-        return Err(internal("launch prompt carriers differ"));
+    let missing = || internal("launch prompt missing");
+    let raw = launch.prompt.as_ref().ok_or_else(missing)?;
+    let argv = &launch.argv;
+    // Short substrings of flags/model names are not evidence of a task carrier.
+    let mut carriers = argv.iter().chain(launch.env.values());
+    let exposed = carriers.any(|s| s == raw || (raw.len() >= 16 && s.contains(raw)));
+    if !raw.is_empty() && exposed {
+        return Err(internal("launch prompt must not be in argv or env"));
     }
-    let redacted = pg_worker_core::redact::redact(raw);
-    for arg in launch.argv.iter_mut().chain(launch.env.values_mut()) {
-        *arg = arg.replace(raw, &redacted);
-    }
-    if let Some(stdin) = &mut launch.stdin {
-        *stdin = stdin.replace(raw, &redacted);
+    let prompt = pg_worker_core::redact::redact(raw);
+    match launch.stdin.as_mut() {
+        Some(stdin) if stdin == raw => *stdin = prompt.clone(),
+        Some(stdin) => {
+            let mut event: Value =
+                serde_json::from_str(stdin).map_err(|_| internal("invalid prompt stream"))?;
+            let stream = argv
+                .windows(2)
+                .any(|w| w == ["--input-format", "stream-json"]);
+            if !stream
+                || event["event"] != "user"
+                || event["message"]["content"].as_str() != Some(raw)
+            {
+                return Err(internal("launch prompt carriers differ"));
+            }
+            event["message"]["content"] = json!(prompt);
+            *stdin = event.to_string() + "\n";
+        }
+        None if !raw.is_empty() => return Err(internal("launch prompt carrier missing")),
+        None => {}
     }
     if let Some(warnings) = &mut launch.warnings {
         for warning in warnings {
@@ -215,7 +216,6 @@ pub(crate) fn store_prompt(
                 .map_err(|_| internal("could not redact launch event"))?;
         }
     }
-    let prompt = channel.replace(raw, &redacted);
     let path = pg_worker_core::run::record::run_dir(state, id)
         .map_err(|_| internal("invalid run id"))?
         .join("prompt.txt");
