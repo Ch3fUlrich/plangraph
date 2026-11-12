@@ -1,4 +1,4 @@
-//! Changelog-entry rule for S1b; docs-map enforcement moves into Rust in S1c.
+//! Changelog-entry rule for S1b; the adjacent writer_docs_map module owns S1c.
 use crate::workspace_resolver::git_command;
 use regex::Regex;
 use std::{collections::HashMap, path::Path};

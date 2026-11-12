@@ -39,6 +39,8 @@ pub enum WriterError {
     FileSize(String),
     #[error("HOLD gate changelog: {0}")]
     Changelog(String),
+    #[error("HOLD gate docs-map: {0}")]
+    DocsMap(String),
 }
 impl From<std::io::Error> for WriterError {
     fn from(_: std::io::Error) -> Self {
@@ -145,6 +147,7 @@ pub fn check_result(
     }
     file_size::check(checkout, base, &head).map_err(WriterError::FileSize)?;
     changelog::check(checkout, base, &head).map_err(WriterError::Changelog)?;
+    docs_map::check(checkout, base, &head).map_err(WriterError::DocsMap)?;
     Ok(CheckedResult {
         repo_id: workspace.repo_id.clone(),
         base_sha: base.into(),
@@ -217,3 +220,6 @@ mod file_size;
 
 #[path = "writer_changelog.rs"]
 mod changelog;
+
+#[path = "writer_docs_map.rs"]
+mod docs_map;
