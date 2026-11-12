@@ -1,7 +1,8 @@
 # Plangraph Spawner & Model Routing Architecture
 
-### Windows prompt delivery
+Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
 
+### Windows prompt delivery
 Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
 argv guard (32,000 characters, or 8,000 for batch shims). This uses the existing
 per-job stdin payload path, not a temporary prompt file. Qoder retains an explicit
@@ -17,7 +18,6 @@ the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.
 
 ### MiMo seat timeouts and verdict packaging (MIMO-VERDICT-TIMEOUTS)
-
 For MiMo seats and all other `review` runs, `run_watchdog_limits.thresholds` sets
 `hard_max=True`, including default caps: reviews never wait for a writer's first
 edit and ignore a valid `hard_first_edit` opt-in. Card limits must be positive,

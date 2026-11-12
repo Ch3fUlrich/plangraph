@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from plangraph.spawner.runner import redact
+from plangraph.spawner import env_redact
+from plangraph.spawner.env_redact import redact
 
 
 TABLE = json.loads(
@@ -13,6 +14,11 @@ TABLE = json.loads(
 )
 
 
-@pytest.mark.parametrize("row", TABLE, ids=lambda row: row["input"])
+@pytest.mark.parametrize("row", [r for r in TABLE if "expected" in r])
 def test_redact_parity(row):
     assert redact(row["input"]) == row["expected"]
+
+
+@pytest.mark.parametrize("row", [r for r in TABLE if "source" in r])
+def test_redact_source_parity(row):
+    assert env_redact.redact_source(''.join(row['input_parts'])) == row['source']

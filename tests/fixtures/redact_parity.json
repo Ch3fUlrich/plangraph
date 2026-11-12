@@ -14,5 +14,10 @@
   {"input": "sk- xsk-", "expected": "sk- xsk-"},
   {"input": "ask-abc axsk-abc", "expected": "ask-abc axsk-abc"},
   {"input": "Bearer fake.value.123", "expected": "Bearer [REDACTED]"},
-  {"input": "API_KEY=fake123", "expected": "API_KEY=[REDACTED]"}
+  {"input": "API_KEY=fake123", "expected": "API_KEY=[REDACTED]"},
+  {"input_parts": ["    pair_", "key = tuple(sorted((left, right)))\n    lookup_", "key = (scope, name)\n"], "source": "    pair_key = tuple(sorted((left, right)))\n    lookup_key = (scope, name)\n"},
+  {"input_parts": ["API_", "KEY=ordinary_expression()"], "source": "API_KEY=ordinary_expression()"},
+  {"input_parts": ["sk", "-synthetic123 xsk", "-synthetic456"], "source": "[REDACTED] [REDACTED]"},
+  {"input_parts": ["Bear", "er synthetic789"], "source": "Bearer [REDACTED]"},
+  {"input_parts": ["db", "://u:synthetic-pass@example.invalid/x"], "source": "db://u:[REDACTED]@example.invalid/x"}
 ]
