@@ -1,8 +1,10 @@
 # enforce-after: 2026-11-08
 # Docs mapping for plangraph (rule D-653)
-tools/** -> CONTRIBUTING.md
-src/plangraph/fleet_sync/** -> docs/fleet-sync.md
-src/plangraph/spawner/** -> docs/SPAWNER.md
-src/plangraph/keeper/** -> docs/KEEPER.md
-rust/pg-probe/** -> docs/context-probes.md
 rust/Cargo.toml -> docs/context-probes.md
+rust/pg-probe/** -> docs/context-probes.md
+src/plangraph/fleet_sync/** -> docs/fleet-sync.md
+src/plangraph/keeper/** -> docs/KEEPER.md
+src/plangraph/routing_support/clients.py -> docs/lean-review-harness.md
+src/plangraph/routing_support/review_mode.py -> docs/lean-review-harness.md
+src/plangraph/spawner/** -> docs/SPAWNER.md
+tools/** -> CONTRIBUTING.md
