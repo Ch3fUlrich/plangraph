@@ -1,0 +1,1 @@
+- MCP-RUST slice 1: add `pg-mcp` with embedded keeper tool schemas, Python byte-parity fixtures for initialize/tools/list, and a local `not_implemented` tools/call result; the Python MCP server and keeper remain unchanged.

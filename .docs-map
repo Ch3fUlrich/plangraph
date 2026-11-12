@@ -4,3 +4,6 @@ tools/** -> CONTRIBUTING.md
 src/plangraph/fleet_sync/** -> docs/fleet-sync.md
 src/plangraph/spawner/** -> docs/SPAWNER.md
 src/plangraph/keeper/** -> docs/KEEPER.md
+rust/pg-mcp/** -> docs/keeper/mcp-rust.md
+tests/test_keeper_mcp_snapshot.py -> docs/keeper/mcp-rust.md
+tests/fixtures/keeper_mcp_*.json -> docs/keeper/mcp-rust.md
