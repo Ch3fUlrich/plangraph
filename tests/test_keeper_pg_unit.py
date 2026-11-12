@@ -7,6 +7,7 @@ import pytest
 
 from plangraph.keeper import config as config_mod, db as kdb, db_pg, schema, schema_pg
 from plangraph.keeper import schema_pg_spawner
+from plangraph.keeper import store_host_samples
 from plangraph.projector import ddl as projector_ddl
 
 
@@ -174,7 +175,7 @@ def test_pg_ddl_has_the_same_tables_columns_indexes_and_triggers():
         assert dict(cols) == dict(pg_tables[name]), name
         assert [c for c, _ in cols if c in floating] == [
             c for c, _ in pg_tables[name] if c in floating], name
-    assert set(pg_tables) == set(tables) | set(schema_pg_spawner.TABLES)
+    assert set(pg_tables) == set(tables) | set(schema_pg_spawner.TABLES) | set(store_host_samples.TABLES)
     for name in indexes:
         assert re.search(rf"\b{name}\b", ddl), f"missing index {name}"
     for name in triggers:
