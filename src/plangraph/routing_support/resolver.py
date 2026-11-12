@@ -583,7 +583,7 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     reader = leg_state_reader or leg_status
     if enabled:
         return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] == "ok"
-    return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] != "limited"
+    return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] not in ("limited", "down", "off")
 
 def clamp_effort(model_id: str, requested_effort: str) -> str:
     """Clamp reasoning effort for models with vendor-specific constraints.
@@ -708,7 +708,7 @@ def rank_candidates(
 
         remaining = out_band
 
-    return ranked
+    return sorted(ranked, key=lambda m: (TIER_RUNG.get(m.get('tier'), 99), 'deepseek-direct' in str(m.get('id', ''))))
 
 
 def select_top_candidate(

@@ -18,7 +18,7 @@ REPROBE_MINUTES = 10
 
 #: D-3685: a booked reset never parks a leg for days: every reset is capped at
 #: now + 24 h, so the leg is checked once after the cap and re-booked if the
-#: provider still reports it limited.
+#: provider still reports it limited; readers expire evidence after six hours.
 RESET_CAP_S = 86400
 
 #: Probe/harness evidence is leg-level: a probe session cannot attribute its
@@ -242,6 +242,7 @@ class LegStateStore:
                     return {"state": "ok", "evidence": None}
                 evidence = {k: row[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                 evidence["event_id"] = row["id"]
+                if now >= row['ts'] + 21600: return {'state': 'reprobe', 'evidence': evidence}
                 if row['source'] == 'liveness-probe':
                     # Two consecutive probe failures before down (M11): one
                     # failure is a reprobe hint, never proof the leg is gone.
@@ -249,7 +250,7 @@ class LegStateStore:
                     behind = None
                     for older in rows:
                         if older['source'] == 'liveness-probe' and older['status'] == 503:
-                            streak += 1
+                            streak += int(now < min(older['ts'] + 21600, older['reset_at'] or older['ts']))
                         else:
                             behind = older
                             break
@@ -257,7 +258,7 @@ class LegStateStore:
                     # whose reset is still ahead. Skip the leading probe-fail
                     # rows; if the next row is such a limit, it is the evidence.
                     if (behind is not None and behind['source'] in ('harness-stderr', 'provider-response')
-                            and behind['reset_at'] is not None and now < behind['reset_at']):
+                            and behind['reset_at'] is not None and now < min(behind['reset_at'], behind['ts'] + 21600)):
                         evidence = {k: behind[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                         evidence["event_id"] = behind["id"]
                         return {"state": "limited", "evidence": evidence}
@@ -285,8 +286,6 @@ class LegStateStore:
             return None
         ok = row['source'] == 'provider-probe'
         return dict(ok=ok, reason='' if ok else (row['body_excerpt'] or 'probe failed'), ts=row['ts'])
-
-
 def _default_store():
     return LegStateStore(Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "plangraph" / "leg-state.sqlite")
 

@@ -16,7 +16,7 @@ from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # n
                          BenchRequired, benchmark_rows_from_db)
 from .legs import DEFAULT_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
 from .provider_stop import next_leg_after_provider_stop
-from .review_order import review_key
+from .review_order import review_key, catalog_tiers
 from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts  # noqa: F401
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
@@ -296,8 +296,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         raise SpawnRefused('zero reviewers requires low/normal review_exempt')
     from plangraph.routing_support.leg_state import leg_status
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
-    from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS
-    legs = tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS)
+    from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS, get_catalog_models
+    legs = catalog_tiers(tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS), get_catalog_models())
     for candidate in legs:
         validate_model(candidate.model, allow_inactive=not leg_active(candidate))
     candidates = tuple(l for l in legs if role in l.roles and leg_active(l))

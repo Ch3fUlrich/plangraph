@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import time
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,7 +61,7 @@ class Leg:
     roles: tuple[str, ...] = ("orchestrate",)
     tool_mode: str = "tools"
     disabled: str | None = None
-
+    expires: float | None = None
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
          note=""):
@@ -67,7 +69,6 @@ def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=Fals
                claude, note)
 
 
-#: D25 order.  Position is the preference inside a tier.
 DEFAULT_LEGS: tuple[Leg, ...] = (
     _leg("qodercli-qwen3.8-flash", "free", "qodercli", "Qwen3.8-Flash", "qwen",
          ("128k", "256k"), 100000, False,
@@ -92,12 +93,11 @@ DEFAULT_LEGS = (
              disabled="D-4744 operator disabled, not a route option"),
     Leg("opencode-deepseek-v4.1-flash-free", "free", "opencode",
         "opencode/deepseek-v4.1-flash-free", "deepseek", ("128k",), 100000, True,
-        roles=("review", "implement"),
-        disabled="D-4196 opencode zen never worked, use opencode go; never remove (D-3828)"),
+        roles=("review", "implement")),
     Leg("opencode-glm-5.3-flash-free", "free", "opencode",
         "opencode/glm-5.3-flash-free", "glm", ("128k",), 100000, True,
         roles=("review", "implement"),
-        disabled="D-4196 opencode zen never worked, use opencode go; never remove (D-3828)"),
+        disabled="D-3605 operator: glm not acceptable"),
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
@@ -109,13 +109,15 @@ DEFAULT_LEGS = (
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
     Leg("agy-gpt-oss-120b", "subscription", "agy", "gpt-oss-120b-medium",
         "openai", ("128k",), 100000, False, roles=("review",)),
+    Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-high",
+        "gemini", ("128k", "256k", "1m"), 900000, False, roles=("implement", "review")),
+    Leg("opencode-big-pickle", "free", "opencode", "opencode/big-pickle",
+        "pickle", ("128k",), 100000, True, roles=("implement", "review")),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False,
         roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
     _legacy["agy-sonnet-5.5"],
-    # D-3552: opencode-go review seats, placed before the paid deepseek
-    # leg so existing order is unchanged; deepseek/glm lifted for review only (route_policy).
     Leg("opencode-go-gemini-4-argon", "subscription", "opencode",
         "opencode-go/gemini-4-argon", "gemini", ("128k",), 100000,
         False, roles=("review",)),
@@ -138,22 +140,19 @@ DEFAULT_LEGS = (
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
         False, roles=("review",)),
-    # D-4193: one gateway review leg, placed after the opencode-go review
-    # legs as the fallback seat; its upstream route is not verified.
     Leg("omniroute-gemini-3.8-flash", "subscription", "opencode",
         "omniroute/gemini-3.8-flash", "gemini", ("128k",), 100000, True,
         roles=("review",),
         disabled="D-4193 upstream route not verified",
         note="D-4193 upstream route not verified, conservative"),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
-    # D-3605 Haiku leg: last, so it sorts after every non-claude review leg.
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
         tool_mode="tools",
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# D-3828: retain every leg and its review order, but never fall back writers.
+# Retain the designated writer; review legs remain available for parallel work.
 DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
                              disabled=leg.disabled or (
                                  'D-3828: writer disabled; no retained review or orchestrate role'
@@ -212,9 +211,10 @@ _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",
 _STR_FIELDS = ("id", "tier", "harness", "model", "family", "note", "tool_mode")
 
 
-def leg_active(leg: Leg) -> bool:
-    """Local policy may disable a leg; OmniRoute owns temporal availability."""
-    return leg.disabled is None
+def leg_active(leg: Leg, now=None) -> bool:
+    """Temporary operator stops expire; permanent safety exclusions do not."""
+    return leg.disabled is None or (leg.expires is not None and
+                                   (time.time() if now is None else now) >= leg.expires)
 
 
 def _is_int(value) -> bool:
@@ -252,6 +252,9 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         problems.append(f"{where}.tool_mode: {raw['tool_mode']!r} not in {TOOL_MODES}")
     windows = raw.get("windows")
     disabled = raw.get("disabled")
+    expiry = raw.get('expires')
+    if expiry is not None and (isinstance(expiry, bool) or not isinstance(expiry, (int, float)) or not math.isfinite(expiry)):
+        problems.append(f"{where}.expires: must be a finite epoch timestamp")
     if disabled is not None and (not isinstance(disabled, str) or not disabled.strip()):
         problems.append(f"{where}.disabled: must be a non-empty reason string")
     roles = raw.get("roles", ("orchestrate",))
@@ -276,7 +279,6 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     if len(problems) > start:
         return None
     data = dict(raw)
-    data.pop("expires", None)  # Old operator rows remain loadable, without local expiry.
     data["windows"] = tuple(windows)
     data["roles"] = tuple(roles)
     return Leg(**data)
