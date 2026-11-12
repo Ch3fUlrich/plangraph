@@ -11,7 +11,7 @@ from plangraph.spawner.clients import build_command
 def test_agy_harness_dispatch():
     assert build_command('hello', 'gemini-3.8-flash', client='agy') == [
         'agy', '--dangerously-skip-permissions', '--model',
-        'gemini-3.8-flash-high', '-p', 'hello']
+        'gemini-3.8-flash-high', '-p', '', '--input-format', 'stream-json', '--output-format', 'stream-json']
 
 
 def test_opencode_harness_dispatch():
@@ -26,7 +26,7 @@ def test_unknown_harness_rejected():
 
 def test_qodercli_harness_dispatch():
     assert build_command('hello', 'Qwen3.8-Flash', client='qodercli') == [
-        'qodercli', '-p', 'hello', '--model', 'Qwen3.8-Flash']
+        'qodercli', '-p', '', '--input-format', 'text', '--model', 'Qwen3.8-Flash']
 
 
 @pytest.mark.parametrize('harness,model,native_model', [

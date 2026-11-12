@@ -21,7 +21,8 @@ impl Fixture {
         let plan =
             json!({"legs":[],"first_leg":{"id":"leg","harness":"h","model":"m","family":"f"}});
         let secret = ["private", "-", "credential"].concat();
-        let spec = json!({"argv":["/bin/sh","-c",command],"cwd":state.path(),"env":{"API_TOKEN":secret,"PROMPT":stdin.as_str().unwrap_or("fixture prompt")},"prompt":stdin.as_str().unwrap_or("fixture prompt"),"stdin":stdin,"warnings":["warning"],"events":[{"event":"adapter"}]});
+        let stdin = stdin.as_str().unwrap_or("fixture prompt");
+        let spec = json!({"argv":["/bin/sh","-c",command],"cwd":state.path(),"env":{"API_TOKEN":secret},"prompt":stdin,"stdin":stdin,"warnings":["warning"],"events":[{"event":"adapter"}]});
         for (path, body) in [
             (&route, format!("printf '%s' '{plan}'")),
             (

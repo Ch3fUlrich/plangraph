@@ -1,6 +1,8 @@
 import json
+import hashlib
 import shlex
 import subprocess
+import sys
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 
@@ -302,29 +304,53 @@ def test_local_limits_coerce_or_default(inputs, monkeypatch, key, value):
     assert o.main(args) == 3
 
 
-@pytest.mark.parametrize('prompt', ['trailing\n', 'trailing\n\n', 'literal $(false) .\n'])
+@pytest.mark.parametrize('prompt', ['trailing\n', 'trailing\n\n', 'literal $(false) .\n', 'x' * (300 * 1024)],
+                         ids=['newline', 'blank-line', 'shell-literal', '300KiB'])
 def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
     stage = tmp_path / 'stage with spaces'
     stage.mkdir()
+    binary_dir = tmp_path / 'bin'
+    binary_dir.mkdir()
+    policy = tmp_path / 'route-policy.json'
+    policy.write_text('{"banned_families": [], "off_families": [], "paused_harnesses": {}}')
+    env = dict(PATH=str(binary_dir), HOME=str(tmp_path), AUTOOS_ROOT=str(tmp_path),
+               XDG_STATE_HOME=str(tmp_path / 'state'), PLANGRAPH_OMNIROUTE_LEG_STATE='0',
+               PLANGRAPH_ROUTE_POLICY=str(policy))
     real_run = subprocess.run
+    source = o.Path(__file__).resolve().parents[1] / 'src'
+    # A source-only interpreter cannot fall back to an ambient site installation.
+    (binary_dir / 'python3').write_text(
+        f'#!{sys.executable} -S\n'
+        'import os, runpy, sys\n'
+        f'assert os.environ["PYTHONPATH"] == {str(source)!r}\n'
+        'import plangraph.spawner.overflow as module\n'
+        f'assert module.__file__ == {str(source / "plangraph/spawner/overflow.py")!r}\n'
+        'assert sys.argv[1:3] == ["-m", "plangraph.spawner.cli"]\n'
+        'sys.argv = sys.argv[2:]\n'
+        'runpy.run_module("plangraph.spawner.cli", run_name="__main__")\n')
+    (binary_dir / 'python3').chmod(0o700)
     received = []
     def run(argv, **kwargs):
         if argv[0] == 'scp':
+            (stage / 'card.json').write_bytes(o.Path(argv[2]).read_bytes())
             (stage / 'prompt.txt').write_bytes(o.Path(argv[3]).read_bytes())
         if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
-            # Execute the actual generated shell, replacing only its spawn command.
-            command = argv[-1].replace('python3 -m plangraph.spawner.cli spawn',
-                                      shlex.join(['python3', '-c',
-                                                  'import sys; print(repr(sys.argv[3]))']))
-            result = real_run(['sh', '-c', command], capture_output=True, text=True)
+            # Only SSH/SCP are faked: the unchanged shell runs the real CLI parser,
+            # prompt-file reader, and dry-run launch path in an isolated environment.
+            result = real_run(['/bin/sh', '-c', argv[-1]], capture_output=True, text=True,
+                              env=env, timeout=30)
             assert result.returncode == 0, result.stderr
-            received.append(result.stdout.splitlines()[1])
-            return SimpleNamespace(returncode=0, stdout=bracket(argv[-1], '{"run_id":"run-r"}'))
+            received.append(json.loads('\n'.join(result.stdout.splitlines()[1:-1])))
+            return result
         return SimpleNamespace(returncode=0, stdout=str(stage) if argv[-1] == 'mktemp -d' else '{}')
     monkeypatch.setattr(o.subprocess, 'run', run)
-    host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src='src')
-    assert o.remote_spawn('invented', host, {}, prompt, []) == {'run_id': 'run-r'}
-    assert received == [repr(prompt)]
+    host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src=str(source))
+    options = ['--role', 'review', '--leg', 'agy-gemini-3.8-flash', '--writer-family', 'gpt',
+               '--override-reason', 'hermetic prompt transport regression', '--dry-run', '--json']
+    record = o.remote_spawn('invented', host, {'estimate_tokens': 1000}, prompt, options)
+    assert received == [record]
+    assert record['status'] == 'dry_run'
+    assert record['prompt_sha256'] == hashlib.sha256(prompt.encode('utf-8')).hexdigest()
 
 
 @pytest.mark.parametrize('receipt', ['unreadable', '{}', '[]', '{"status":"running"}'])
