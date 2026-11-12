@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.spawner import host_ready as h
+from plangraph.spawner import host_ready_source as source
 
 CONFIG = dict(ssh='invented-alias', repo='/invented/repo', spawner_src='/invented/source',
               env_file='/invented/env', run_cap=4, floor_mb=3000, session_unit='worker')
@@ -15,6 +16,11 @@ CONFIG = dict(ssh='invented-alias', repo='/invented/repo', spawner_src='/invente
 @pytest.fixture(autouse=True)
 def isolated_config(tmp_path, monkeypatch):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    directory = tmp_path / 'plangraph'
+    directory.mkdir()
+    (directory / 'ps-hosts.json').write_text(json.dumps({'hosts': [
+        dict(name=name, target=CONFIG['ssh'], src='/invented/source')
+        for name in ('fiction', 'other', 'slowfiction', 'fastfiction')]}))
 
 
 def runner(argv, **kwargs):
@@ -49,7 +55,7 @@ def test_green_atomic(tmp_path):
     assert result['spawner_session'] is True
     assert json.loads((tmp_path / 'fiction.json').read_text()) == result
     assert (tmp_path / 'fiction.json').stat().st_mode & 0o777 == 0o600
-    assert list(tmp_path.iterdir()) == [tmp_path / 'fiction.json']
+    assert set(tmp_path.iterdir()) == {tmp_path / 'fiction.json', tmp_path / 'plangraph'}
     assert h.fresh(result)
     assert not h.fresh(result, datetime.now(timezone.utc) + timedelta(minutes=11))
 
@@ -154,9 +160,10 @@ def test_session_probe(tmp_path, session, probe, live):
     assert 'secret-value' not in (tmp_path / 'fiction.json').read_text()
 
 
-def test_state_write_failure(tmp_path, monkeypatch):
+@pytest.mark.parametrize('error', [OSError, UnicodeError, RuntimeError])
+def test_state_write_failure(tmp_path, monkeypatch, error):
     def broken(*args):
-        raise OSError('secret-value')
+        raise error('secret-value')
     monkeypatch.setattr(h, 'atomic_write_private', broken)
     result = h.check_host('fiction', CONFIG, tmp_path, runner)
     assert not result['ok']
@@ -196,7 +203,7 @@ def test_config_error_before_probe(tmp_path, monkeypatch, capsys):
     name='fiction', target='invented-alias', win_src='C:/source')]})])
 def test_deleted_spawner_with_invalid_ps_config(tmp_path, ps_config):
     directory = tmp_path / 'plangraph'
-    directory.mkdir()
+    directory.mkdir(exist_ok=True)
     (directory / 'ps-hosts.json').write_text(ps_config)
     probes = []
     def fake(argv, **kwargs):
@@ -232,3 +239,36 @@ def test_main_state_directory(tmp_path, monkeypatch, capsys, unwritable):
     assert all(r['ok'] is not unwritable for r in records)
     if unwritable:
         assert all(r['failures'] == ['state: write_failed'] for r in records)
+
+
+@pytest.mark.parametrize('src', [123, True, 1.5, ['/source'], {'path': '/source'}, None, ''])
+def test_invalid_source_type(tmp_path, monkeypatch, src):
+    monkeypatch.setattr(source, 'configured_hosts', lambda: [
+        dict(name='fiction', target=CONFIG['ssh'], src=src)])
+    result = h.check_host('fiction', CONFIG, tmp_path, runner)
+    assert not result['ok'] and result['src_ok'] is False
+    assert any(f.startswith('src_config: ') for f in result['failures'])
+    assert result['doctor_ok'] and result['live_runs'] == 1
+
+
+@pytest.mark.parametrize('error', [AttributeError, OverflowError, RuntimeError, RecursionError])
+def test_main_unexpected_host_errors(tmp_path, monkeypatch, capsys, error):
+    path = tmp_path / 'hosts.json'
+    path.write_text(json.dumps({'hosts': {'fiction': CONFIG, 'other': CONFIG}}))
+    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(path))
+    monkeypatch.setattr(h.Path, 'home', lambda: tmp_path)
+    def broken(*args, **kwargs):
+        raise error('secret-value')
+    original = h.check_host
+    monkeypatch.setattr(h, 'check_host', lambda name, cfg, state:
+                        original(name, cfg, state, broken))
+    assert h.main(['--json']) == 1
+    output = capsys.readouterr()
+    records = json.loads(output.out)
+    assert len(records) == 2 and all(not r['ok'] for r in records)
+    assert 'secret-value' not in output.out + output.err
+    for record in records:
+        assert (f"HOST-NOT-READY {record['host']} config invalid_response_or_config\n"
+                in output.err)
+        state = tmp_path / '.local/state/plangraph/host-ready' / (record['host'] + '.json')
+        assert json.loads(state.read_text()) == record

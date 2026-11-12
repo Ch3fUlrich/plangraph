@@ -145,7 +145,8 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                 fail('disk', 'full')
         else:
             reachability_failed = True
-    except (KeyError, TypeError, ValueError, IndexError):
+    except Exception:
+        # A malformed host or unexpected probe error must not hide any host's lines.
         fail('config', 'invalid_response_or_config')
     record['checked_at'] = datetime.now(timezone.utc).isoformat()
     if reachability_failed:
@@ -153,7 +154,8 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
     record['ok'] = not record['failures']
     try:
         atomic_write_private(Path(state) / (name + '.json'), json.dumps(record))
-    except OSError:
+    except Exception:
+        # Persistence errors also leave a reportable failure, never abort the fan-out.
         fail('state', 'write_failed')
         record['ok'] = False
     return record

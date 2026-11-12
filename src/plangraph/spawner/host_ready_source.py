@@ -7,10 +7,12 @@ from .remote_ps import configured_hosts
 def check_sources(name, config, command, fail):
     sources = [(config['ssh'], config['spawner_src'], True)]
     ok = True
+    matched = False
     try:
         for host in configured_hosts():
             if host['name'] != name:
                 continue
+            matched = True
             if host.get('invalid') or 'win_src' in host or 'wsl_distro' in host:
                 fail('src_config', 'unsupported_or_invalid')
                 ok = False
@@ -19,11 +21,24 @@ def check_sources(name, config, command, fail):
     except (OSError, ValueError, KeyError, TypeError):
         fail('src_config', 'unreadable')
         ok = False
-    for target, source, checkout in dict.fromkeys(sources):
-        if target != config['ssh'] or not source:
+    if not matched:
+        fail('src_config', 'missing_ps_host')
+        ok = False
+    seen = set()
+    for target, source, checkout in sources:
+        if not isinstance(source, str) or not source or not isinstance(target, str):
             fail('src_config', 'route_or_path_unknown')
             ok = False
             continue
+        if target != config['ssh']:
+            fail('src_config', f"ps target={target!r} and overflow ssh={config['ssh']!r} "
+                 'must be the same string')
+            ok = False
+            continue
+        key = (target, source, checkout)
+        if key in seen:
+            continue
+        seen.add(key)
         # Expand only the conventional home prefix, never shell syntax from config.
         path = ('"$HOME"/' + shlex.quote(source[2:]) if source.startswith('~/')
                 else shlex.quote(source))

@@ -229,9 +229,15 @@ must pass before merge; C3 storage alone does not close the item.
 # Host readiness consumer contract
 
 `python3 -m plangraph.spawner.host_ready` checks each overflow host, including
-its configured spawner source and matching `ps-hosts.json` source. Source paths
-must exist and import `plangraph` with that path as `PYTHONPATH`. Unsupported
-source transports fail closed. A session probe must be configured.
+its configured spawner source and matching `ps-hosts.json` source. Every overflow
+host requires a matching ps entry; an absent entry (including a missing ps config)
+fails with `src_config missing_ps_host`, never readiness success. Source paths
+must be nonempty strings, exist and import `plangraph` with that path as
+`PYTHONPATH`; non-string paths fail with `src_config`, not a traceback. The ps
+entry's `target` and overflow `ssh` must be the same string: different aliases for
+the same machine are still rejected. The `src_config` mismatch line names both
+values and says they must be the same string. Unsupported source transports fail
+closed. A session probe must be configured.
 
 After fetching origin/main, `behind_main` reports the number of commits in
 `HEAD..origin/main`; unreadable or unreachable means JSON `null`, never zero.
@@ -246,8 +252,12 @@ Source checks for routerctl's grep set are `src_missing` (absent path),
 configuration, or unknown route/path), and `src` (probe failure or unexpected
 response). The spawner source is probed even if ps-hosts configuration is invalid.
 Pre-probe configuration errors use `config`, not `unreachable`.
+Unexpected per-host configuration/probe exceptions and state-write failures also
+produce failure lines without aborting other hosts' reports; exception text is
+not exposed.
 Lag uses `behind_main` and reason
-`N behind`; unreachable hosts report `unreachable`, leaving other values unknown.
+`N behind`; unreadable lag emits a `behind_main` failure line. Unreachable hosts
+report `unreachable`, leaving other values unknown.
 All-green hosts emit no such line. Reasons never include raw transport output.
 
 Live acceptance remains a deployment obligation: demonstrate both hosts green,

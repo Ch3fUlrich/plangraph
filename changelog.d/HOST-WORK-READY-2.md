@@ -1,0 +1,1 @@
+Host readiness rejects non-string source paths and missing remote-ps routes, explains exact-string SSH alias mismatches, and preserves per-host failure lines on unexpected probe or state-write errors; regression coverage asserts unreadable-lag diagnostics.
