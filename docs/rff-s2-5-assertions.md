@@ -6,7 +6,37 @@ The existing test names remain, including historical names. No test was removed
 or newly skipped. Main's safety exclusions, review-family fences, scoped provider
 evidence, explicit effort variants, and generic utility/epsilon algorithm remain.
 
-## Fix round s763split11b664 (authoritative)
+## Merge round replan-0438 (authoritative)
+
+Main's reviewed S1 tier propagation, free-first ordering and placement are retained:
+provider-qualified catalog identities beat unrelated bare names; partial review
+measurements stay ahead of missing rows inside their own tier; Haiku cannot cross
+a cheaper tier; writer preferences break only unmeasured same-tier ties. No new
+preference table or benchmark row is introduced. The `placement` JSON field and
+dell-first placement path remain unchanged.
+
+Main's free Gemini Flash tier, GLM family for Big Pickle, automatic Muse admission,
+`agy-claude-opus` registration and explicit effort aliases remain intact. S2-S5
+adds the high/medium Opus and personal Argon registrations, finite operator-stop
+expiry, qualified benchmark lookup, measured implementation utility and exhausted
+provider fallthrough. Permanent Zen disables retain their exact reasons.
+
+All tests from both parents remain by name. Exact lists now include main's free
+Gemini and admitted Muse; GLM policy also excludes Big Pickle. Review-seat checks
+retain main's exact Gemini/MiMo with diff and Gemini/Sonnet without diff at every
+tested estimate. Historical Haiku-across-tier and bare-catalog assertions now pin
+main's stricter cost and provider-identity boundaries. Legacy resolver availability
+keeps main's disabled-reader behavior; live-authority readers still admit only ok.
+Failure evidence retains main's six-hour expiry, including unknown failure sources.
+A probe predecessor must still be fresh when a new failure books down, but its
+later expiry does not erase a valid down streak before the newest failure expires.
+
+The line-set files match main byte-for-byte: this lane has no independent added
+lines. Deleted Cargo mappings and retired Python waivers remain deleted. Repeated
+test imports and duplicate helper assertions were consolidated without losing any
+assertion coverage or test name to satisfy existing file-size limits.
+
+## Fix round s763split11b664 (historical; superseded above)
 
 The merge from `origin/main` completed without conflicts. Both retained Zen free
 legs now keep main's exact permanent reason:

@@ -76,7 +76,7 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
          note="free while qoder credits remain, until its rate limit"),
     _leg("mimo-v2.6-flash", "subscription", "opencode",
          "mimo/mimo-v2.6-flash", "mimo", ("128k", "256k", "1m"), 200000, False),
-    _leg("agy-gemini-3.8-flash", "subscription", "agy", "gemini-3.8-flash", "gemini",
+    _leg("agy-gemini-3.8-flash", "free", "agy", "gemini-3.8-flash", "gemini",
          ("128k", "256k", "1m"), 900000, False,
          note="gemini after its Friday-evening reset"),
     _leg("agy-sonnet-5.5", "subscription", "agy", "claude-sonnet-5-5-medium", "claude",
@@ -109,17 +109,19 @@ DEFAULT_LEGS = (
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
-    Leg("agy-gpt-oss-120b", "subscription", "agy", "gpt-oss-120b-medium",
-        "openai", ("128k",), 100000, False, roles=("review",)),
     Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-high",
         "gemini", ("128k", "256k", "1m"), 900000, False, roles=("implement", "review")),
     Leg("opencode-big-pickle", "free", "opencode", "opencode/big-pickle",
-        "pickle", ("128k",), 100000, True, roles=("implement", "review")),
+        "glm", ("128k",), 100000, True, roles=("implement", "review")),
+    Leg("agy-gpt-oss-120b", "subscription", "agy", "gpt-oss-120b-medium",
+        "openai", ("128k",), 100000, False, roles=("review",)),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False,
         roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
-    _replace(_legacy["agy-sonnet-5.5"], roles=("review", "orchestrate")),
+    _replace(_legacy["agy-sonnet-5.5"], roles=("orchestrate", "review")),
+    Leg("agy-claude-opus", "subscription", "agy", "claude-opus-4-6-thinking",
+        "claude", ("128k", "256k"), 180000, False, claude_family=True, roles=("review",)),
     Leg("agy-opus-5.5", "subscription", "agy", "claude-opus-5-5-high",
         "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
         roles=("review",)),
@@ -168,7 +170,7 @@ DEFAULT_LEGS = (
 
 # Catalog roles are eligibility inputs, not a single-writer pin.
 WRITER_ORDER: tuple[str, ...] = (
-    "cx-gpt-6.1-sol",   # Legacy compatibility, not a routing preference (D-5092).
+    "cx-gpt-6.1-sol",   # Main's unmeasured same-tier tie-breaker; never a cross-tier pin.
 )
 LEAD_WRITER = "cx-gpt-6.1-sol"
 

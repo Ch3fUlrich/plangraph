@@ -1,10 +1,11 @@
-"""D-5092: utility-selected writers/reviewers, retained eligibility policy."""
+"""D-5092: cost-tier ordering, without pinned review or writer leads."""
 from __future__ import annotations
 
 import json
 import dataclasses
-import pytest
 from pathlib import Path
+
+import pytest
 
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import plan_spawn
@@ -20,9 +21,9 @@ DISABLED_FREE = {"opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-fr
 # D-4196: both retained Zen rows stay permanently disabled as on main.
 ACTIVE_FREE = ["openrouter-free"]
 SUBS = ["cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]   # D-3667: Sol heads the subscription tier
-WRITERS = ["openrouter-free", "opencode-big-pickle", SUBS[0],
-           "agy-gemini-3.8-flash", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
-           "omniroute-deepseek-flash", "deepseek"]
+WRITERS = ["openrouter-free", "agy-gemini-3.8-flash", "opencode-big-pickle", SUBS[0],
+           "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
+           "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
 
 
 def test_main_zen_disables_retained_exactly():
@@ -82,6 +83,12 @@ def isolated_utility_inputs(tmp_path, monkeypatch):
     from plangraph.routing_support import catalog_db
     monkeypatch.setattr(catalog_db, "DEFAULT_DB_PATH", tmp_path / "absent.db")
     monkeypatch.setenv("PLANGRAPH_CATALOG_DB", str(tmp_path / "absent.db"))
+
+
+@pytest.fixture(autouse=True)
+def fixed_catalog(monkeypatch):
+    """Exact-order probes use declared tiers, never the host's catalog snapshot."""
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, "catalog_rows", ())
 
 
 def test_default_qwen_disabled_and_gpt_review_families():
@@ -145,7 +152,8 @@ def test_route_and_refusal(tmp_path, capsys):
     assert main(['--state', str(tmp_path), 'route', '--card', '{"estimate_tokens":1000}', '--role', 'implement', '--json']) == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan['first_leg']['model'] == 'openrouter/free'  # D-5092, retaining D-4196
-    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates'}
+    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates', 'placement'}
+    assert plan['placement'] == {'host': None, 'reason': 'placement_not_evaluated', 'free_mb': None}
     assert main(['--state', str(tmp_path), 'spawn', 'task']) == 2
     assert 'spawn by card' in capsys.readouterr().err
 
@@ -153,7 +161,7 @@ def test_route_and_refusal(tmp_path, capsys):
 def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
-    assert ids[:3] == ["opencode-gemini-4-argon", "opencode-big-pickle", "agy-gemini-3.8-flash"]
+    assert ids[:4] == ["agy-gemini-3.8-flash", "opencode-big-pickle", "opencode-gemini-4-argon", "mimo-v2.6-flash"]
     assert DISABLED_FREE.isdisjoint(ids)
     assert ACTIVE_FREE == [leg.id for leg in DEFAULT_LEGS if leg.id in FREE and not leg.disabled]
 
@@ -163,13 +171,14 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     path.write_text(json.dumps({"banned_families": ["deepseek"], "off_families": ["glm"]}))
     monkeypatch.setenv("PLANGRAPH_ROUTE_POLICY", str(path))
     imp = plan_spawn(CARD, role="implement")
-    assert [leg.id for leg in imp.legs] == [id for id in WRITERS if id not in (FREE[0], "deepseek", "omniroute-deepseek-flash")]
+    assert [leg.id for leg in imp.legs] == [id for id in WRITERS if id not in (FREE[0], "deepseek", "omniroute-deepseek-flash", "opencode-big-pickle")]
     rev = plan_spawn(CARD, role="review", writer_families=("claude",))
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
     assert reasons[FREE[0]].startswith("disabled: D-4196 ")
     assert reasons[FREE[1]].startswith("disabled: D-4196 ")
     assert reasons["omniroute-deepseek-flash"] == "banned_family"
-    assert [leg.id for leg in rev.legs][:2] == ["opencode-gemini-4-argon", "opencode-big-pickle"]
+    assert [leg.id for leg in rev.legs][:3] == ["agy-gemini-3.8-flash", "opencode-gemini-4-argon", "mimo-v2.6-flash"]
+    assert reasons["opencode-big-pickle"] == "off_family"
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
     assert reasons["opencode-go-glm-5.2"].startswith("disabled:")
@@ -196,9 +205,9 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    assert ids[:3] == ["opencode-gemini-4-argon", "opencode-big-pickle", "agy-gemini-3.8-flash"]
+    assert ids[:4] == ["agy-gemini-3.8-flash", "opencode-big-pickle", "opencode-gemini-4-argon", "mimo-v2.6-flash"]
     assert DISABLED_FREE.isdisjoint(ids)
-    assert ids.index("agy-gemini-3.8-flash") == 2
+    assert ids.index("agy-gemini-3.8-flash") == 0
 
 
 def test_route_sol_unavailable_keeps_tier_writer_order():
@@ -221,8 +230,8 @@ def test_fixed_review_order():
     legs = tuple(replace(table[id], roles=("review",), disabled=None) for id in ids)
     plan = plan_spawn(CARD, role="review", writer_families=("gpt",), legs=legs,
                       policy=RoutePolicy(), leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
-    assert [leg.id for leg in plan.legs] == ["qodercli-qwen3.8-flash", *FREE,
-        "agy-gemini-3.8-flash", "mimo-v2.6-flash", "deepseek", "claude-haiku-5.5"]
+    assert [leg.id for leg in plan.legs] == ["agy-gemini-3.8-flash",
+        "qodercli-qwen3.8-flash", *FREE, "mimo-v2.6-flash", "claude-haiku-5.5", "deepseek"]
 
 
 def test_no_anthropic_implement_leg_removes_sonnet():
@@ -230,7 +239,7 @@ def test_no_anthropic_implement_leg_removes_sonnet():
     assert all(leg.id != "opencode-console-sonnet-5.5" for leg in DEFAULT_LEGS)
     assert {leg.id for leg in DEFAULT_LEGS if "implement" in leg.roles
             and (leg.claude_family or leg.family in ("claude", "anthropic"))} == set()
-    assert next(leg for leg in DEFAULT_LEGS if leg.id == "agy-sonnet-5.5").roles == ("review", "orchestrate")
+    assert next(leg for leg in DEFAULT_LEGS if leg.id == "agy-sonnet-5.5").roles == ("orchestrate", "review")
     assert next(leg for leg in DEFAULT_LEGS if leg.id == "agy-opus-5.5").roles == ("review",)
 
 
@@ -264,7 +273,14 @@ def test_haiku_last_across_tiers_and_measurements(monkeypatch, benchmark):
                         writer_families=("gpt",), policy=RoutePolicy(),
                         leg_reader=lambda *a, **k: {"state": "ok", "evidence": None})
     assert {leg.id for leg in result.legs} == {leg.id for leg in legs}
-    assert result.legs[-1].id == "claude-haiku-5.5"
+    # Main's reviewed tier boundary wins even for a catalog-repriced Haiku;
+    # it remains last within a shared tier when no measurements supersede it.
+    assert [leg.id for leg in result.legs] == ["claude-haiku-5.5", "agy-opus-5.5", "agy-gemini-3.8-flash"]
+    same_tier = tuple(dataclasses.replace(leg, tier="subscription") for leg in legs)
+    fallback = plan_spawn(CARD, role="review", legs=same_tier,
+                          writer_families=("gpt",), policy=RoutePolicy(),
+                          leg_reader=lambda *a, **k: {"state": "ok", "evidence": None})
+    assert fallback.legs[-1].id == "claude-haiku-5.5"
 
 
 @pytest.mark.parametrize("family,flag", [("claude", False), ("anthropic", False), ("other", True)])
@@ -291,7 +307,7 @@ def test_fixed_implement_sol_across_tiers():
                 replace(table[FREE[0]], disabled=None), table[SUBS[2]])
         # route_card is a low-level ordering probe; plan_spawn filters roles.
         expected = {"trial": [SUBS[0], FREE[2], FREE[0], SUBS[2]],
-                    "free": [FREE[2], SUBS[0], FREE[0], SUBS[2]],
+                    "free": [SUBS[0], FREE[2], FREE[0], SUBS[2]],
                     "subscription": [FREE[2], FREE[0], SUBS[0], SUBS[2]],
                     "paid": [FREE[2], FREE[0], SUBS[2], SUBS[0]]}[tier]
         assert [leg.id for leg in route_card(CARD, legs=legs, role="implement").legs] == expected
@@ -311,7 +327,7 @@ def test_implement_lead_independent_of_writer_order(monkeypatch):
 def test_writer_order_d2683_implement_first_seven(monkeypatch):
     from mechanics_legs import install_fallthrough_legs
     install_fallthrough_legs(monkeypatch)
-    # D-3745: eligible Sol leads; remaining writers retain tier/WRITER_ORDER.
+    # D-5092: cost tier precedes advisory writer order.
     # Explicit mechanics table tests all eight ordering slots; production
     # disabled-leg eligibility is independently asserted above and in Go tests.
     c = {"estimate_tokens": 20000, "risk_tags": []}
@@ -326,14 +342,14 @@ def test_main_policy_gpt_first_and_retained_routes():
     clear = lambda *a, **k: {"state": "ok", "evidence": None}
     implement = plan_spawn(CARD, role="implement", policy=policy, leg_reader=clear)
     assert implement.first_leg.id == "openrouter-free"
-    assert [leg.id for leg in implement.legs] == [id for id in WRITERS if id not in (FREE[0], "deepseek", "omniroute-deepseek-flash")]
+    assert [leg.id for leg in implement.legs] == [id for id in WRITERS if id not in (FREE[0], "deepseek", "omniroute-deepseek-flash", "opencode-big-pickle")]
     for writers in (("mimo",), ("gpt",), ("claude",), ("gpt", "mimo")):
         review = plan_spawn(CARD, role="review", writer_families=writers,
                             policy=policy, leg_reader=clear)
         assert not {leg.family for leg in review.legs} & set(writers)
         assert not {leg.family for leg in review.review_seats} & set(writers)
         # D-4196: the Zen deepseek leg is disabled, so mimo writers fall to the next family.
-        assert review.first_leg.id == "opencode-gemini-4-argon"
+        assert review.first_leg.id == "agy-gemini-3.8-flash"
         assert "deepseek" in {leg.family for leg in review.legs}
         assert "glm" not in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {
@@ -342,4 +358,5 @@ def test_main_policy_gpt_first_and_retained_routes():
         "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
         "omniroute-grok-4.7", "opencode-console-muse-spark",
         "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek", "claude-haiku-5.5", "omniroute-gemini-3.8-flash",
-        "agy-gpt-oss-120b"}
+        "agy-gemini-4-argon", "opencode-big-pickle", "agy-claude-opus",
+        "omniroute-deepseek-flash", "omniroute-muse-spark", "agy-gpt-oss-120b"}

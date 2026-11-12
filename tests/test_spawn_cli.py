@@ -133,11 +133,9 @@ def test_harness_quota_falls_through(tmp_path, monkeypatch):
 
 
 def test_replan_and_all_limited(tmp_path, monkeypatch):
+    from plangraph.planner.routing import plan_spawn
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, 'catalog_rows', ())
     install_fallthrough_legs(monkeypatch)
-    from plangraph.spawner import resolver
-    rows = resolver.get_catalog_models()
-    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
-        dict(row, available=1, active=True) for row in rows])
     async def run():
         store = LegStateStore(tmp_path / 'legs.sqlite')
         runner = SpawnerRunner()
@@ -153,12 +151,14 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         models = [a['leg']['model'] for a in record['attempts'] if isinstance(a['leg'], dict)]
         assert 'error' not in record, record.get('error')
-        assert len(models) == 11, record  # Non-Claude utility inputs; Muse remains manual-only.
+        assert len(models) == 12, record  # Non-Claude utility inputs, including main's admitted Muse.
         assert len(runner.jobs) == 3
+        assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
         assert next(a for a in record['attempts'] if isinstance(a['leg'], dict)
                     and a['leg']['model'] == 'opencode/big-pickle')['skip_reason'] == 'earlier_leg_succeeded'
         assert models[:4] == ['opencode/deepseek-v4.1-flash-free',
-                              'opencode/glm-5.3-flash-free', 'openrouter/free', 'opencode/big-pickle']
+                              'opencode/glm-5.3-flash-free', 'openrouter/free', 'gemini-3.8-flash']
+        attempted_ids = {a['leg']['id'] for a in record['attempts']}
         for leg in service.route({'estimate_tokens': 1000}).legs:
                 store.record_provider_response(leg.model if '/' in leg.model else 'agy/' + leg.model,
                     429, 'provider quota exhausted', {}, 'test')
@@ -167,8 +167,9 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         assert record['exit_code'] == 4
         assert record['evidence']
         assert len(record["attempts"]) == 12
-        assert all(a['status'] == 'skipped' and a['skip_reason'] == ('off_family'
-                   if a['leg'] == 'omniroute-muse-spark' else 'limited') for a in record['attempts'])
+        assert {a['leg'] for a in record['attempts']} == attempted_ids
+        assert all(a['status'] == 'skipped' and a['skip_reason'] == 'limited'
+                   for a in record['attempts'])
         assert len(runner.jobs) == count
     asyncio.run(run())
 
@@ -278,8 +279,8 @@ def test_transport_only_fallthrough(tmp_path, provider_stop, monkeypatch):
         launched = [a for a in record['attempts'] if a['status'] != 'skipped']
         assert (len(launched), len(runner.jobs)) == ((2, 2) if provider_stop else (1, 1))
         spares = [a for a in record['attempts'] if a['status'] == 'skipped']
-        assert [a['leg'] for a in spares if not isinstance(a['leg'], dict)] == ['omniroute-muse-spark']
-        assert all(a['skip_reason'] == ('off_family' if a['leg'] == 'omniroute-muse-spark' else 'earlier_leg_succeeded') for a in spares)
+        assert all(isinstance(a['leg'], dict) for a in spares)
+        assert all(a['skip_reason'] == 'earlier_leg_succeeded' for a in spares)
         first_model = list(runner.jobs.values())[0].model_or_combo
         assert store.leg_status(first_model if '/' in first_model else 'agy/' + first_model)['state'] == ('limited' if provider_stop else 'ok')
         if provider_stop:

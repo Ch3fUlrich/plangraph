@@ -82,9 +82,12 @@ def route_json(tmp_path, capsys, *extra):
     return json.loads(capsys.readouterr().out)
 
 
-def test_review_route_uses_benchmark_p(tmp_path, capsys):
+def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     """I3/D2: seeded rows reach review ranking through the leg-id map."""
+    from plangraph.planner.routing import plan_spawn
     from test_route_round3 import test_review_same_family_table_order
+    # Pin CLI tier/admission inputs independently of the host catalog snapshot.
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, "catalog_rows", ())
     test_review_same_family_table_order()
     db = seeded_db(tmp_path)
     rows = benchmark_options(False, str(db))["benchmark"]
@@ -103,11 +106,30 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
     # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
     assert [leg["id"] for leg in bare["legs"]] == [
-        "opencode-gemini-4-argon", "opencode-big-pickle",
-        "agy-gemini-3.8-flash", "agy-gemini-4-argon", "opencode-go-gemini-4-argon",
-        "agy-gpt-oss-120b", "omniroute-deepseek-flash",
+        "agy-gemini-3.8-flash", "opencode-big-pickle", "opencode-gemini-4-argon", "agy-gemini-4-argon",
+        "agy-gpt-oss-120b", "omniroute-deepseek-flash", "omniroute-muse-spark",
+        "opencode-go-gemini-4-argon", "opencode-go-muse-spark", "opencode-console-muse-spark",
         "opencode-go-deepseek-v4-flash",
         ]
+
+
+def test_review_route_ignores_ambient_catalog_tiers(tmp_path, capsys, monkeypatch):
+    """The exact CLI order uses declared tiers even if the host catalog disagrees."""
+    from plangraph.routing_support import resolver
+
+    reads = []
+    def ambient_catalog():
+        reads.append(1)
+        return [{'id': 'agy/gemini-3.8-flash', 'tier': 'paid', 'available': 1, 'active': True}]
+
+    monkeypatch.setattr(resolver, 'get_catalog_models', ambient_catalog)
+    # Positive control: an unpinned CLI route reads this snapshot and changes order.
+    ambient = route_json(tmp_path, capsys)
+    assert reads == [1]
+    assert next(c for c in ambient['candidates'] if c['leg'] == 'agy-gemini-3.8-flash')['tier'] == 'paid'
+    assert ambient['first_leg']['id'] == 'opencode-big-pickle'
+    test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch)
+    assert reads == [1]  # The exact-order probe must inject its own catalog input.
 
 
 def test_unmapped_leg_no_p(tmp_path, capsys, monkeypatch):

@@ -1,0 +1,1 @@
+- Fix remote-first placement follow-up: keep route planning free of admission I/O with explicit placement gaps, name benchmark-only and unavailable-swap fallback reasons, persist refusal placement without masking the original error, honor configured host order on RAM ties, and regenerate the shared spawnd tool metadata fixture.

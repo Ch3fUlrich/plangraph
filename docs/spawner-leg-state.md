@@ -19,7 +19,9 @@ dimensions are not wildcards. Retry-After seconds/date, x-ratelimit-reset epoch
 seconds/date, and body “resets in N seconds/minutes/hours” give an explicit reset.
 At that reset the leg is eligible automatically. Without reset information the
 leg is limited for ten minutes then eligible with `reprobe` evidence until a
-real successful provider response clears it. Evidence older than six hours becomes `reprobe`, even when an old reset lies farther ahead; expired probe failures cannot complete a fresh down streak. Queries never update the database.
+real successful provider response clears it. Queries never update the database.
+Failure evidence expires to `reprobe` after six hours, even when its booked reset is later;
+expired probe failures cannot complete a fresh down streak.
 
 Resolver results include state/evidence on every candidate (including excluded
 limited candidates) and the selected leg. MCP catalog queries retain limited
@@ -52,11 +54,32 @@ only when every probe passes. MCP exposes `plangraph_agent_probe` with `leg`
 (an array of IDs), `all_writers`, `timeout`, and `json` inputs.
 
 A pass requires a changed HEAD with `ok.txt` in its tree. Failure records
-`down` with a redacted reason and timestamp (source `liveness-probe`, status
-503). `PLANGRAPH_LEG_DOWN_S` defaults to 1800; after that interval the state
+a redacted reason and timestamp (source `liveness-probe`, status 503), including
+the scrubbed last 400 stderr characters on one line. The reason retains its
+existing 300-character bound; only an explicit stderr excerpt adds up to 400
+characters (plus the separator). Direct callers without stderr keep the old bound.
+Two consecutive failures
+book `down`; one is a `reprobe` hint. `PLANGRAPH_LEG_DOWN_S` defaults to 1800; after that interval the state
 is `reprobe`. A later successful probe clears it. State is local to this host's
 state directory. `PLANGRAPH_LEG_PROBE_TIMEOUT_S` defaults to 180 seconds.
 Before a normal writer dispatch, stale or missing probe evidence triggers a
 probe; failure skips that leg and tries the next. Reviews and dry runs never
 probe. `PLANGRAPH_LEG_PROBE_TTL_S` defaults to 1800 seconds; 0 disables
 automatic probing. Explicit probes still run when TTL is 0.
+
+A `running` record on the same model/harness wins over a failed probe when its
+nonempty `live.log` grew within `LIVE_RUN_WRITE_WINDOW_S` (120 seconds).
+Probes inspect only the owning service's `runner.state` (the resolved CLI/MCP
+state directory), never a fresh environment fallback. Without that explicit
+state, no serving override is claimed. A first nonempty append-log observation
+uses its mtime; snapshots before and after the probe compare file identity and
+size. Touching an old log without adding bytes does not renew growth evidence;
+truncation, replacement, changing records and read races fail conservatively.
+The event source is `probe_failed_leg_serving`, with status 503, the diagnostic,
+and null `retry_after_s`/`reset_at`. It supersedes older probe failures without
+claiming a probe pass or refreshing the successful-probe TTL; dispatch continues.
+Missing, empty or older logs retain normal cooldown behaviour. Provider and
+`exit_outcome` quota/usage-limit events remain authoritative even when a later
+probe records serving evidence; this override applies only to probe failures.
+The probe result adds `state` only for serving failures (or `host-not-ready`);
+ordinary successes and failures omit the key, rather than returning null.

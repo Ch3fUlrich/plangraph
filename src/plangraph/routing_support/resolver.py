@@ -572,7 +572,8 @@ def host_skip_reason(row, *, probe=None, env=None):
 
 
 def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, account=None, combo=None) -> bool:
-    """Check admission and shared leg availability, including expired evidence.
+    """Check if model is eligible and available.
+
     Enforces Codex ACP luna-only: cxa/gpt-6-luna-high is eligible,
     while cxa/gpt-6-astra-max and cxa/gpt-6-sol-* are rejected.
     """
@@ -582,8 +583,7 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     reader = leg_state_reader or leg_status
     if enabled:
         return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] == "ok"
-    from .liveness import unavailable
-    return not unavailable(reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo))
+    return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] != "limited"
 
 def clamp_effort(model_id: str, requested_effort: str) -> str:
     """Clamp reasoning effort for models with vendor-specific constraints.

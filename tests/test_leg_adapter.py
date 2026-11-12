@@ -54,6 +54,20 @@ def test_off_no_reads(tmp_path):
     assert calls == []
 
 
+@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('state', ['ok', 'limited', 'down', 'off', 'reprobe'])
+def test_legacy_availability_preserves_state_policy(enabled, state):
+    def reader(model, **scope):
+        assert model == 'opencode-go/sample'
+        assert scope == dict(account='sample', combo='worker')
+        return dict(state=state, evidence=None)
+
+    reader.enabled = enabled
+    row = dict(id='opencode-go/sample', available=1, active=True)
+    expected = state == 'ok' if enabled else state != 'limited'
+    assert resolver.is_model_available(row, reader, account='sample', combo='worker') is expected
+
+
 def test_removed_first(tmp_path):
     reader, calls = adapter(tmp_path)
     for mid in resolver.OPERATOR_REMOVED_MODELS:
@@ -95,11 +109,11 @@ def test_catalog_policy_is_not_mutated(tmp_path):
               if resolver.is_model_available(m, reader)]
     # New review seats extend the catalog, never reorder the existing entries.
     expected = MAIN_ORDER.copy()
+    expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'gemini-4-argon-high')
+    expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'opencode/big-pickle')
     expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'gpt-oss-120b-medium')
-    expected[expected.index('mimo/mimo-v2.6-flash'):expected.index('mimo/mimo-v2.6-flash')] = [
-        'gemini-4-argon-high', 'opencode/big-pickle']
     expected[expected.index('opencode-go/glm-5.2'):expected.index('opencode-go/glm-5.2')] = [
-        'claude-opus-5-5-high', 'omniroute/deepseek-flash',
+        'claude-opus-4-6-thinking', 'claude-opus-5-5-high', 'omniroute/deepseek-flash',
         'omniroute/muse-spark-1.3-contributor', 'claude-opus-5-5-medium', 'opencode/gemini-4-argon']
     expected.insert(expected.index('omniroute/deepseek-direct-flash'), 'omniroute/gc/grok-4.7')
     expected.insert(expected.index('omniroute/deepseek-direct-flash'),

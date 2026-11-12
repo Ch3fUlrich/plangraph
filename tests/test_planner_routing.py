@@ -16,20 +16,19 @@ from plangraph.planner.routing import (RouteError, effective_estimate,
 
 DEFAULT_LEGS = tuple(dataclasses.replace(leg, disabled=None) for leg in DEFAULT_LEGS)  # mechanics probes ignore live policy
 route_card = functools.partial(route_card, legs=DEFAULT_LEGS)
-
+plan_spawn = functools.partial(plan_spawn, catalog_rows=())
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
     "openrouter-free", "cx-gpt-6.1-sol", "cx-gpt-6-luna",
-    "agy-gemini-3.8-flash", "agy-gpt-oss-120b", "agy-gemini-4-argon", "opencode-big-pickle",
-    "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "agy-opus-5.5",
-    "omniroute-deepseek-flash", "omniroute-muse-spark", "agy-opus", "opencode-gemini-4-argon",
+    "agy-gemini-3.8-flash", "agy-gemini-4-argon", "opencode-big-pickle", "agy-gpt-oss-120b",
+    "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "agy-claude-opus", "agy-opus-5.5", "omniroute-deepseek-flash", "omniroute-muse-spark", "agy-opus", "opencode-gemini-4-argon",
     "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
     "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark", "opencode-go-deepseek-v4-flash", "omniroute-gemini-3.8-flash", "deepseek",
     "claude-haiku-5.5",  # D-3605 Haiku leg
 ]
 #: Route order: tiers ascending, so the subscription Haiku leg precedes paid deepseek.
-ROUTE_IDS = [D25_IDS[i] for i in (0, 1, 2, 3, 9, 17, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16,
-                                18, 19, 20, 21, 22, 23, 24, 25, 27, 26)]
+ROUTE_IDS = [D25_IDS[i] for i in (0, 1, 2, 3, 6, 8, 18, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+                                19, 20, 21, 22, 23, 24, 25, 26, 28, 27)]
 
 
 def card(**kw):
@@ -58,7 +57,7 @@ def test_default_legs_exact_d25_order():
     assert "trial" not in {leg.tier for leg in DEFAULT_LEGS}
     # Independent expected tiers catch mis-tiered entries without routing them.
     by_id = {leg.id: leg for leg in DEFAULT_LEGS}
-    assert [by_id[leg_id].tier for leg_id in ROUTE_IDS] == ["free"] * 6 + ["subscription"] * 21 + ["paid"]
+    assert [by_id[leg_id].tier for leg_id in ROUTE_IDS] == ["free"] * 7 + ["subscription"] * 21 + ["paid"]
     ids_ = [leg.id for leg in DEFAULT_LEGS]
     assert ids_.index("cx-gpt-6.1-sol") < ids_.index("agy-gemini-3.8-flash") < ids_.index("mimo-v2.6-flash")
     assert ids_[-2:] == ["deepseek", "claude-haiku-5.5"]  # D-3605 Haiku leg
@@ -153,9 +152,9 @@ def test_small_estimate_goes_128k_qodercli_first():
 def test_90000_goes_256k_and_only_legs_with_that_window():
     r = route_card(card(estimate_tokens=90000))
     assert r.window_class == "256k"
-    assert ids(r) == ["qodercli-qwen3.8-flash", "cx-gpt-6.1-sol", "cx-gpt-6-luna",
-                      "agy-gemini-3.8-flash", "agy-gemini-4-argon",
-                      "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "agy-opus-5.5", "omniroute-grok-4.7", "claude-haiku-5.5", "deepseek"]
+    assert ids(r) == ["qodercli-qwen3.8-flash", "agy-gemini-3.8-flash", "cx-gpt-6.1-sol",
+                      "cx-gpt-6-luna", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
+                      "agy-sonnet-5.5", "agy-claude-opus", "agy-opus-5.5", "omniroute-grok-4.7", "claude-haiku-5.5", "deepseek"]
     assert all("256k" in leg.windows for leg in r.legs)
 
 
@@ -343,13 +342,13 @@ def test_writer_order_d2683_review_order_unchanged():
     # D-4196: without a diff, disabled Zen and inline-only Go cannot lead.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="review", writer_families=("claude",))
-    assert plan.first_leg.id == "opencode-gemini-4-argon"
+    assert plan.first_leg.id == "agy-gemini-3.8-flash"
 
 
 def test_writer_order_d2683_writer_family_exclusion():
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
-    assert plan_rev.first_leg.id == "opencode-gemini-4-argon"
+    assert plan_rev.first_leg.id == "agy-gemini-3.8-flash"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
     assert plan_imp.first_leg.id == "openrouter-free" and "gemini" not in {l.family for l in plan_imp.legs}
     plan_wf = plan_spawn(c, role="implement", writer_families=("gemini",))
@@ -376,12 +375,13 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
         "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free"} else leg
         for leg in DEFAULT_LEGS)
     plan = plan_spawn(c, role="implement", benchmark=rows, leg_reader=reader, legs=legs)
-    assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert plan.first_leg.id == "agy-gemini-3.8-flash"  # Measured free input precedes unmeasured free inputs.
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
     review = plan_spawn(dict(c, diff_ref={"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}), role="review", writer_families=("gpt",), benchmark=rows, leg_reader=reader)
     assert {s["leg"]: s["reason"] for s in review.skipped}["mimo-v2.6-pro"] == "limited"
     from test_route_free_first import WRITERS, FREE
-    assert [l.id for l in plan.legs] == [id for id in [FREE[0], FREE[1], *WRITERS] if id != "mimo-v2.6-pro"]
+    assert [l.id for l in plan.legs] == ["agy-gemini-3.8-flash", FREE[0], FREE[1], "openrouter-free", "opencode-big-pickle", "cx-gpt-6.1-sol", "agy-gemini-4-argon",
+        "mimo-v2.6-flash", "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
 
 
 def test_no_implement_plan_leg_has_claude_family():
@@ -407,8 +407,8 @@ def test_alternate_limit_lookup_restricted_to_agy_harness(monkeypatch):
         return {"state": "available", "evidence": None}
 
     c_rev = {"estimate_tokens": 20000, "risk_tags": []}
-    plan_rev = plan_spawn(c_rev, role="review", writer_families=("claude",), leg_reader=qoder_mock_reader, legs=tuple(dataclasses.replace(l, disabled=None) if l.family == "qwen" else l for l in DEFAULT_LEGS))
-    assert plan_rev.first_leg.id == "opencode-gemini-4-argon"
+    plan_rev = plan_spawn(c_rev, role="review", writer_families=("claude",), leg_reader=qoder_mock_reader, catalog_rows=(), legs=tuple(dataclasses.replace(l, disabled=None) if l.family == "qwen" else l for l in DEFAULT_LEGS))
+    assert [l.id for l in plan_rev.legs][:2] == ["qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free"]
     assert not any(s["leg"] == "qodercli-qwen3.8-flash" for s in plan_rev.skipped)
 
     # agy-gemini-3.8-flash (model gemini-3.8-flash, harness agy) IS skipped
@@ -421,7 +421,7 @@ def test_alternate_limit_lookup_restricted_to_agy_harness(monkeypatch):
     c_imp = {"estimate_tokens": 20000, "risk_tags": []}
     plan_imp = plan_spawn(c_imp, role="implement", leg_reader=agy_mock_reader)
     assert plan_imp.first_leg.id != "agy-gemini-3.8-flash"
-    assert plan_imp.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert plan_imp.first_leg.id == "opencode-deepseek-v4.1-flash-free"  # D-5092: free first.
     assert any(s["leg"] == "agy-gemini-3.8-flash" and s["reason"] == "limited" for s in plan_imp.skipped)
 
     # 2. next_leg_after_provider_stop:

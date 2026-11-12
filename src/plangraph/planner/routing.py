@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from plangraph.routing_support.liveness import unavailable
 import json
 import os
@@ -106,7 +106,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
                overflow: bool = False, role: str | None = None, now=None) -> Route:
     """Route ``card`` (keeper card dict) over ``legs``; see module docstring.
 
-    ``role`` falls back to ``card["role"]``; eligibility precedes cost/order.
+    ``role`` falls back to ``card["role"]``; cost tiers precede role preferences.
     ``overflow`` marks a context-overflow failure: the window class grows by one.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
@@ -225,6 +225,7 @@ class SpawnPlan:
     candidates: tuple[dict, ...] = ()
     writer_groups: tuple = ()
     seat_coverage: tuple[dict, ...] = ()
+    placement: dict = field(default_factory=lambda: dict(host=None, reason='placement_not_evaluated', free_mb=None))
 
     @property
     def first_leg(self) -> Leg | None:
@@ -232,29 +233,28 @@ class SpawnPlan:
 
     def to_dict(self):
         result = asdict(self)
-        if not self.writer_groups:
-            result.pop('writer_groups')
-        if not self.seat_coverage:
-            result.pop('seat_coverage')
+        for field in ('writer_groups', 'seat_coverage'):
+            if not getattr(self, field): result.pop(field)
         result["first_leg"] = asdict(self.first_leg) if self.first_leg else None
         return result
 
 
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
-                legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, catalog_rows=None) -> SpawnPlan:
+                legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, placement=None,
+                catalog_rows=None) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
 
-    Every role ranks measured inputs within cost tiers, without a writer pin.
+    Every role ranks measured inputs within cost tiers.
     ``exclude_families`` excludes the specified family names from candidate legs.
     ``policy`` (default :func:`load_route_policy`) skips banned/off families and
     paused harnesses.  A review leg whose family is ANY writer family is
     excluded; seats cover each writer part (:func:`pick_seats`).  An inline-only
     review leg needs ``card["diff_ref"]``: the spawner inlines that diff.
+    ``catalog_rows`` injects tier/admission data; None reads the live catalog once.
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
-    ``catalog_rows`` pins tier/admission inputs; otherwise one catalog snapshot
-    is shared by all validation and tier projection in this plan.
     """
+    placement = dict(placement) if placement is not None else dict(host=None, reason='placement_not_evaluated', free_mb=None)
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
         raise SpawnRefused("card required" + (": missing estimate_tokens" if isinstance(card, Mapping) and card else ""))
     for field in ('paths', 'write_set', 'risk_tags'):
@@ -280,6 +280,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             policy = load_route_policy()
         except ValueError as exc:
             raise SpawnRefused(str(exc)) from None
+    role = 'orchestrate' if role == 'research' else role
     if role not in ("implement", "review", "orchestrate"):
         raise ValueError("role must be implement|review|orchestrate")
     from plangraph.routing_support.risk import evaluate_risk
@@ -374,7 +375,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                            exclude_families=excluded, role=role, now=now)
     except RouteError as exc:
         return SpawnPlan((), tuple(skipped), "operator-order", (),
-                         tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details))
+                         tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details), placement=placement)
     ordered = list(route.legs)
     reasons, source = [*route.reasons, *bench_reasons], "operator-order"
     if benchmark is not None:
@@ -406,11 +407,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                                   key=lambda leg: input_order[leg.id])
                 for i, leg in zip(positions, siblings):
                     ordered[i] = leg
+        # Only measured legs bypass role preferences, never the cost-tier key.
         table_order = {leg.id: i for i, leg in enumerate(ordered)}
-        if benchmark is None:
-            ordered.sort(key=lambda leg: review_key(leg, TIERS.index(leg.tier), table_order[leg.id]))
-        # D-3605: Haiku remains the final review fallback even with measured utility.
-        ordered.sort(key=lambda leg: "haiku" in leg.model.lower())
+        ordered.sort(key=lambda leg: review_key(leg, TIERS.index(leg.tier), table_order[leg.id],
+                     measured=rows.get(leg.model, rows.get(leg.id)) is not None))
     ordered.sort(key=lambda leg: role == "orchestrate" and leg.claude_family)  # D-4812/D-297: Claude last
     seats, coverage, open_parts = [], (), []
     if role == "review":
@@ -434,7 +434,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     threshold = admit_fixer_threshold(card=card)
     groups = split_findings(card.get('findings', ()), limit=threshold) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
-                     tuple(candidate_details), groups, coverage)
+                     tuple(candidate_details), groups, coverage, placement)
 
 
 def validate_model(model, *, allow_inactive=False, catalog_rows=None):

@@ -1,7 +1,9 @@
 import asyncio
 import json
 import sqlite3
+
 import pytest
+
 from historical_legs import without_d4196
 
 from plangraph.planner.legs import DEFAULT_LEGS, LEAD_WRITER
@@ -45,14 +47,14 @@ def test_tier_first_and_swap(monkeypatch):
                      'cost_per_task_usd': 0, 'pool_burn_weight': 0}
             for i, l in enumerate(writers)}
     plan = plan_spawn(CARD, role='implement', benchmark=data)
-    expected = ('opencode-big-pickle', 'openrouter-free', 'opencode-glm-5.3-flash-free',
-                'opencode-deepseek-v4.1-flash-free', 'omniroute-deepseek-flash',
+    expected = ('opencode-big-pickle', 'agy-gemini-3.8-flash', 'openrouter-free', 'opencode-glm-5.3-flash-free',
+                'opencode-deepseek-v4.1-flash-free', 'omniroute-muse-spark', 'omniroute-deepseek-flash',
                 'mimo-v2.6-pro', 'mimo-v2.6-flash', 'agy-gemini-4-argon',
-                'agy-gemini-3.8-flash', 'cx-gpt-6.1-sol', 'deepseek')
+                'cx-gpt-6.1-sol', 'deepseek')
     assert tuple(l.id for l in plan.legs) == expected
     data[writers[0].model], data[writers[6].model] = data[writers[6].model], data[writers[0].model]
     swapped = plan_spawn(CARD, role='implement', benchmark=data)
-    assert tuple(l.id for l in swapped.legs) == (expected[3], expected[1], expected[2], expected[0], *expected[4:])
+    assert tuple(l.id for l in swapped.legs) == (expected[4], *expected[1:4], expected[0], *expected[5:])
 
 
 def test_candidate_json_and_limit(monkeypatch):
@@ -75,6 +77,15 @@ def test_candidate_json_and_limit(monkeypatch):
     assert candidates[writers[6].id]['reason'] == 'limited'
     assert candidates[writers[6].id]['evidence'] == evidence
     assert candidates[writers[6].id]['tier'] == writers[6].tier
+
+
+@pytest.mark.parametrize('probe', [test_tier_first_and_swap, test_candidate_json_and_limit])
+def test_exact_tier_checks_ignore_ambient_catalog(monkeypatch, probe):
+    def ambient_catalog():
+        pytest.fail('exact-tier checks must not read the host catalog')
+
+    monkeypatch.setattr('plangraph.routing_support.resolver.get_catalog_models', ambient_catalog)
+    probe(monkeypatch)
 
 
 def test_default_database_cli_mcp(tmp_path, monkeypatch, capsys):

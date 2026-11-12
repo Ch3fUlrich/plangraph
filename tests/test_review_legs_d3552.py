@@ -117,10 +117,10 @@ def test_review_route_keeps_lifted_families():
     assert "opencode-go-deepseek-v4-flash" in ids
     assert not {leg.family for leg in plan.legs} & {"glm"}
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
-    assert not (set(NEW_IDS) - {"opencode-go-muse-spark", "opencode-go-qwen3.8-max", "opencode-go-glm-5.2"}) & set(reasons)
+    assert not (set(NEW_IDS) - {"opencode-go-qwen3.8-max", "opencode-go-glm-5.2"}) & set(reasons)
     assert reasons["opencode-go-glm-5.2"].startswith("disabled:")
     assert reasons["opencode-go-qwen3.8-max"].startswith("disabled")
-    assert reasons["opencode-go-muse-spark"] == "off_family"
+    assert "opencode-go-muse-spark" in ids  # D-5113 lifts Muse admission.
 
 
 def test_review_xiaomi_writer_yields_two_new_leg_seat_families():

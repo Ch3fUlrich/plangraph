@@ -1,9 +1,9 @@
 """Cost-first route ordering and catalog tier projection."""
 
 
-def review_key(leg, tier_idx, pos):
+def review_key(leg, tier_idx, pos, *, measured=False):
     from .route_policy import review_priority
-    return ("haiku" in leg.model.lower(), tier_idx, review_priority(leg), pos)
+    return (tier_idx, not measured, 0 if measured else review_priority(leg), pos)
 
 
 def catalog_tiers(legs, rows):
@@ -11,8 +11,13 @@ def catalog_tiers(legs, rows):
     from dataclasses import replace
     from .legs import TIERS
     tiers = {row.get('id') or row.get('model_id'): row.get('tier') for row in rows}
-    result = []
-    for leg in legs:
-        tier = tiers.get(leg.model, tiers.get(f'{leg.harness}/{leg.model}'))
-        result.append(replace(leg, tier=tier) if tier in TIERS else leg)
-    return tuple(result)
+    for row in rows:
+        provider = row.get('provider_id') or row.get('harness')
+        if provider and row.get('upstream_id'):
+            tiers.setdefault(f"{provider}/{row['upstream_id']}", row.get('tier'))
+    # Harness-local model names resolve through their catalog provider prefix.
+    def tier(leg):
+        catalog_id = leg.model if '/' in leg.model else f'{leg.harness}/{leg.model}'
+        return tiers.get(catalog_id)
+    return tuple(replace(leg, tier=tier(leg))
+                 if tier(leg) in TIERS else leg for leg in legs)
