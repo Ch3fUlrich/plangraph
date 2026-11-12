@@ -135,7 +135,7 @@ def test_fleet_sync_configs(tmp_path, monkeypatch):
                                  'mem_available_mb': 5048,
                                  'checked_at': release.datetime.now(release.UTC).isoformat()}))
     assert 'run_cap' not in config['hosts']['host-a']
-    assert overflow.decide(50, 5000, 2048, 3000, overflow.ready_records(config), True).host == 'host-a'
+    assert overflow.decide(5000, 2048, 3000, overflow.ready_records(config), True).host == 'host-a'
     assert genconfig.sync(registry) == 0
     (genconfig.config_dir() / 'ps-hosts.json').write_text('{"hosts": []}')
     assert genconfig.sync(registry) == 1
