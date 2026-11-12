@@ -70,7 +70,7 @@ def test_operator_order_and_roles_roundtrip(tmp_path):
     assert [l.id for l in DEFAULT_LEGS if "implement" in l.roles] == [
         "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "openrouter-free",
         "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "agy-gemini-4-argon", "opencode-big-pickle",
-        "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "agy-opus-5.5",
+        "mimo-v2.6-flash", "mimo-v2.6-pro",
         "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
@@ -95,8 +95,8 @@ def test_benchmark_within_tier_only(monkeypatch):
     assert p.first_leg.id == "opencode-big-pickle"
     assert [l.id for l in p.legs] == [
         'opencode-big-pickle', 'openrouter-free', 'opencode-glm-5.3-flash-free',
-        'opencode-deepseek-v4.1-flash-free', 'omniroute-deepseek-flash', 'agy-opus-5.5',
-        'agy-sonnet-5.5', 'mimo-v2.6-pro', 'mimo-v2.6-flash', 'agy-gemini-4-argon',
+        'opencode-deepseek-v4.1-flash-free', 'omniroute-deepseek-flash',
+        'mimo-v2.6-pro', 'mimo-v2.6-flash', 'agy-gemini-4-argon',
         'agy-gemini-3.8-flash', 'cx-gpt-6.1-sol', 'deepseek']
     assert p.legs[-1].tier == 'paid'
     assert p.p_source == "benchmark"

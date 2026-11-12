@@ -153,7 +153,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         models = [a['leg']['model'] for a in record['attempts'] if isinstance(a['leg'], dict)]
         assert 'error' not in record, record.get('error')
-        assert len(models) == 13, record  # D-5092/D-5113: eligible utility inputs, Muse still manual-only
+        assert len(models) == 11, record  # Non-Claude utility inputs; Muse remains manual-only.
         assert len(runner.jobs) == 3
         assert next(a for a in record['attempts'] if isinstance(a['leg'], dict)
                     and a['leg']['model'] == 'opencode/big-pickle')['skip_reason'] == 'earlier_leg_succeeded'
@@ -166,7 +166,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         assert record['exit_code'] == 4
         assert record['evidence']
-        assert len(record["attempts"]) == 14
+        assert len(record["attempts"]) == 12
         assert all(a['status'] == 'skipped' and a['skip_reason'] == ('off_family'
                    if a['leg'] == 'omniroute-muse-spark' else 'limited') for a in record['attempts'])
         assert len(runner.jobs) == count
@@ -273,7 +273,7 @@ def test_transport_only_fallthrough(tmp_path, provider_stop, monkeypatch):
         runner.process_factory = factory
         service = SpawnService(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
-        assert len(record["attempts"]) == 14
+        assert len(record["attempts"]) == 12
         launched = [a for a in record['attempts'] if a['status'] != 'skipped']
         assert len(launched) == (2 if provider_stop else 1)
         assert len(runner.jobs) == len(launched)

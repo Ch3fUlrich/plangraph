@@ -141,6 +141,9 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     for pos, leg in enumerate(legs):
         if not leg_active(leg, now=now):
             why = "disabled"
+        elif effective_role == "implement" and (
+                leg.claude_family or leg.family in ("claude", "anthropic")):
+            why = "claude_implementer"
         elif leg.id in unavailable:
             why = "unavailable"
         elif leg.family in exclude_fams:
@@ -403,6 +406,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         table_order = {leg.id: i for i, leg in enumerate(ordered)}
         if benchmark is None:
             ordered.sort(key=lambda leg: review_key(leg, TIERS.index(leg.tier), table_order[leg.id]))
+        # D-3605: Haiku remains the final review fallback even with measured utility.
+        ordered.sort(key=lambda leg: "haiku" in leg.model.lower())
     ordered.sort(key=lambda leg: role == "orchestrate" and leg.claude_family)  # D-4812/D-297: Claude last
     seats, coverage, open_parts = [], (), []
     if role == "review":

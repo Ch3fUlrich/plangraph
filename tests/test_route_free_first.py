@@ -20,7 +20,7 @@ ACTIVE_FREE = ["openrouter-free"]
 SUBS = ["cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]   # D-3667: Sol heads the subscription tier
 WRITERS = [FREE[0], "openrouter-free", "opencode-big-pickle", SUBS[0],
            "agy-gemini-3.8-flash", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
-           "agy-sonnet-5.5", "agy-opus-5.5", "omniroute-deepseek-flash", "deepseek"]
+           "omniroute-deepseek-flash", "deepseek"]
 
 
 @pytest.fixture(autouse=True)
@@ -83,8 +83,8 @@ def test_cli_route_implement_gpt_first_no_claude_writer(tmp_path, capsys):
     plan = json.loads(capsys.readouterr().out)
     ids = [leg["id"] for leg in plan["legs"]]
     assert ids == WRITERS  # D-5092
-    assert "agy-sonnet-5.5" in ids
-    assert [leg["id"] for leg in plan["legs"] if leg["claude_family"]] == ["agy-sonnet-5.5", "agy-opus-5.5"]
+    assert "agy-sonnet-5.5" not in ids and "agy-opus-5.5" not in ids
+    assert not any(leg["claude_family"] for leg in plan["legs"])
 
 
 def test_route_and_refusal(tmp_path, capsys):
@@ -166,15 +166,16 @@ def test_fixed_review_order():
     plan = plan_spawn(CARD, role="review", writer_families=("gpt",), legs=legs,
                       policy=RoutePolicy(), leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
     assert [leg.id for leg in plan.legs] == ["qodercli-qwen3.8-flash", *FREE,
-        "agy-gemini-3.8-flash", "mimo-v2.6-flash", "claude-haiku-5.5", "deepseek"]
+        "agy-gemini-3.8-flash", "mimo-v2.6-flash", "deepseek", "claude-haiku-5.5"]
 
 
 def test_no_anthropic_implement_leg_removes_sonnet():
     from plangraph.planner.legs import DEFAULT_LEGS
     assert all(leg.id != "opencode-console-sonnet-5.5" for leg in DEFAULT_LEGS)
     assert {leg.id for leg in DEFAULT_LEGS if "implement" in leg.roles
-            and (leg.claude_family or leg.family in ("claude", "anthropic"))} == {
-                "agy-sonnet-5.5", "agy-opus-5.5"}
+            and (leg.claude_family or leg.family in ("claude", "anthropic"))} == set()
+    assert next(leg for leg in DEFAULT_LEGS if leg.id == "agy-sonnet-5.5").roles == ("review", "orchestrate")
+    assert next(leg for leg in DEFAULT_LEGS if leg.id == "agy-opus-5.5").roles == ("review",)
 
 
 def test_renamed_and_second_haiku_remain_last():
@@ -188,6 +189,40 @@ def test_renamed_and_second_haiku_remain_last():
             table["agy-gemini-3.8-flash"])
     assert [leg.id for leg in route_card(CARD, legs=legs, role="review").legs] == [
         "agy-gemini-3.8-flash", "renamed-review", "second-review"]
+
+
+@pytest.mark.parametrize("benchmark", [None, {}])
+def test_haiku_last_across_tiers_and_measurements(monkeypatch, benchmark):
+    from plangraph.planner.route_policy import RoutePolicy
+    from plangraph.routing_support import resolver
+    monkeypatch.setattr(resolver, "get_catalog_models", lambda: [])
+    table = {leg.id: leg for leg in DEFAULT_LEGS}
+    legs = (dataclasses.replace(table["claude-haiku-5.5"], tier="free"),
+            dataclasses.replace(table["agy-opus-5.5"], tier="paid"),
+            dataclasses.replace(table["agy-gemini-3.8-flash"], tier="paid"))
+    if benchmark is not None:
+        benchmark = {leg.model: {"aa_intelligence": 100 - i * 40,
+                     "cost_per_task_usd": 0, "pool_burn_weight": 0}
+                     for i, leg in enumerate(legs)}
+    result = plan_spawn(CARD, role="review", legs=legs, benchmark=benchmark,
+                        writer_families=("gpt",), policy=RoutePolicy(),
+                        leg_reader=lambda *a, **k: {"state": "ok", "evidence": None})
+    assert {leg.id for leg in result.legs} == {leg.id for leg in legs}
+    assert result.legs[-1].id == "claude-haiku-5.5"
+
+
+@pytest.mark.parametrize("family,flag", [("claude", False), ("anthropic", False), ("other", True)])
+def test_custom_claude_implement_roles_cannot_route(family, flag):
+    from plangraph.planner.route_policy import RoutePolicy
+    from plangraph.planner.routing import route_card
+    safe = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
+    blocked = dataclasses.replace(safe, id="custom-claude", family=family, claude_family=flag)
+    assert route_card(CARD, legs=(blocked, safe), role="implement").legs == (safe,)
+    result = plan_spawn(CARD, role="implement", legs=(blocked, safe), policy=RoutePolicy(),
+                        leg_reader=lambda *a, **k: {"state": "ok", "evidence": None})
+    assert result.legs == (safe,)
+    assert any(row["leg"] == blocked.id and row["reason"] == "claude_implementer"
+               for row in result.skipped)
 
 
 def test_fixed_implement_sol_across_tiers():

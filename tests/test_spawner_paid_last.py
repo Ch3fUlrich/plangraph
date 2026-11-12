@@ -62,7 +62,7 @@ def test_only_sol_writes():
     assert [leg.id for leg in legs.DEFAULT_LEGS if 'implement' in leg.roles] == [
         'opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free', 'openrouter-free',
         'cx-gpt-6.1-sol', 'agy-gemini-3.8-flash', 'agy-gemini-4-argon', 'opencode-big-pickle',
-        'mimo-v2.6-flash', 'mimo-v2.6-pro', 'agy-sonnet-5.5', 'agy-opus-5.5',
+        'mimo-v2.6-flash', 'mimo-v2.6-pro',
         'omniroute-deepseek-flash', 'omniroute-muse-spark', 'deepseek']
     assert {'deepseek', 'openrouter-free', 'mimo-v2.6-pro'} <= {leg.id for leg in legs.DEFAULT_LEGS}
 

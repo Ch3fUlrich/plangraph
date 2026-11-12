@@ -58,6 +58,61 @@ def test_record_only_pass_posts(tmp_path, capsys):
     assert "witness=record-chosen-leg" in body["reason"]
 
 
+def test_forward_delivery_retry_and_replay(tmp_path, monkeypatch):
+    from plangraph.spawner.notify import deliver_verdict
+    argv = record_dir(tmp_path, "forward", live_log=REVIEW)
+    directory = Path(argv[argv.index('--seat-dir') + 1])
+    record = json.loads((directory / 'record.json').read_text())
+    record.update(item_key='demo:A', given_writer_families=['deepseek'])
+    (directory / 'record.json').write_text(json.dumps(record))
+    monkeypatch.setenv('PG_REVIEWER_TOKEN_DIR', str(tmp_path / 'forward-tok'))
+    calls = []
+
+    class Endpoint:
+        url = 'http://fake.invalid'
+        def item(self, key):
+            return {'key': key, 'evidence': [
+                {'kind': 'commit+ci', 'verified': True, 'ref': {'commit': HEAD_SHA}}]}
+
+    def fake_send(url, token, payload):
+        calls.append((token, payload))
+        return (503, 'retry') if len(calls) == 1 else (200, 'ok')
+
+    monkeypatch.setattr(sv, 'send', fake_send)
+    deliver_verdict(directory, record, Endpoint())
+    assert not (directory / 'verdict.delivered').exists()
+    deliver_verdict(directory, record, Endpoint())
+    deliver_verdict(directory, record, Endpoint())
+    assert len(calls) == 2
+    assert calls[-1][0] == 'dummy'
+    assert calls[-1][1]['key'] == 'demo:A'
+    assert (directory / 'verdict.delivered').exists()
+
+
+@pytest.mark.parametrize('change,reason', [
+    ({'item_key': None}, 'missing item key'),
+    ({'served_model': 'unwitnessed', 'chosen_leg': {}}, 'unwitnessed'),
+    ({'stdout_tail': 'no decision'}, 'VERDICT'),
+    ({'given_writer_families': ['deepseek', 'xiaomi']}, 'writer families'),
+])
+def test_forward_skips_without_post(tmp_path, monkeypatch, change, reason):
+    from plangraph.spawner.notify import deliver_verdict
+    argv = record_dir(tmp_path, 'skip')
+    directory = Path(argv[argv.index('--seat-dir') + 1])
+    record = json.loads((directory / 'record.json').read_text())
+    record.update(item_key='demo:A', given_writer_families=['deepseek'])
+    record.update(change)
+    (directory / 'record.json').write_text(json.dumps(record))
+    monkeypatch.setattr(sv, 'send', lambda *a: pytest.fail('must not post'))
+    deliver_verdict(directory, record, None)
+    outcome = json.loads((directory / 'verdict.json').read_text())
+    assert outcome['status'] == 'skipped'
+    assert reason in outcome['reason']
+    assert (directory / 'verdict.delivered').exists()
+    monkeypatch.setattr(sv, 'evidence_from_record', lambda *a: pytest.fail('terminal skip replayed'))
+    deliver_verdict(directory, record, None)
+
+
 def test_record_pass_without_test_gaming_refused(tmp_path, capsys):
     assert sv.main(record_dir(tmp_path, "b", live_log="fine\nVERDICT: PASS\n")) == 4
     assert capsys.readouterr().out == ""

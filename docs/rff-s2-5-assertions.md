@@ -9,8 +9,8 @@ evidence, explicit effort variants, and generic utility/epsilon algorithm remain
 The changes below compare against `origin/main`, including assertions delivered
 by the four slices. `WRITERS` below is the concrete unmeasured neutral-policy
 route in `tests/test_route_free_first.py`: free DeepSeek, OpenRouter, Big Pickle,
-Sol, Gemini Flash, personal high-effort Argon, MiMo Flash, MiMo Pro, Sonnet,
-high-effort Opus, gateway DeepSeek Flash, paid direct DeepSeek. Muse stays
+Sol, Gemini Flash, personal high-effort Argon, MiMo Flash, MiMo Pro,
+gateway DeepSeek Flash, paid direct DeepSeek. Muse stays
 registered but manual-only; GLM stays disabled. Benchmarked routes may reorder
 within each cost tier, with missing rows last inside that tier.
 
@@ -22,7 +22,8 @@ within each cost tier, with missing rows last inside that tier.
   explicit non-training free DeepSeek leads both public and private probes;
   training Sol remains excluded with `trains_on_data`.
 - `test_cli_route_implement_gpt_first_no_claude_writer`: Sol-only, no Claude
-  writers -> concrete `WRITERS`, including registered Sonnet and high-effort Opus.
+  writers -> concrete non-Claude `WRITERS`; Sonnet and high-effort Opus remain
+  registered for review, never automatic implementation.
 - `test_route_and_refusal`: Sol model -> free DeepSeek model; missing-card
   refusal and complete JSON-shape assertions are unchanged.
 - `test_review_mimo_first`, `test_cli_route_review_mimo_first`: MiMo/Luna then
@@ -36,10 +37,10 @@ within each cost tier, with missing rows last inside that tier.
 - `test_route_sol_unavailable_keeps_tier_writer_order`: no remaining writers ->
   concrete `WRITERS` minus Sol, retaining its `down` evidence.
 - `test_fixed_review_order`: MiMo/Gemini/Luna-style pin -> fixed-table free
-  Qwen and free inputs before Gemini, MiMo, Haiku, paid DeepSeek.
+  Qwen and free inputs before Gemini, MiMo, paid DeepSeek, Haiku last.
 - `test_no_anthropic_implement_leg_removes_sonnet`: no Claude implementations ->
-  exactly Sonnet and high-effort Opus have implementation roles; removed console
-  Sonnet is still absent.
+  no Claude implementations retained; Sonnet serves review/orchestration and
+  high-effort Opus review only. Removed console Sonnet is still absent.
 - `test_fixed_implement_sol_across_tiers`: Sol always first -> exact trial,
   free, subscription, paid permutations; unavailable Sol is removed from each.
 - `test_implement_lead_independent_of_writer_order`: Sol survives legacy order
@@ -80,8 +81,8 @@ within each cost tier, with missing rows last inside that tier.
   Sol-only -> exact free-first combined mechanics route minus limited MiMo Pro;
   measured Sol cannot cross the free/subscription boundary.
 - `test_no_implement_plan_leg_has_claude_family`: zero Claude implementers and
-  pin-era review seats -> exactly the two registered Claude implementers and
-  two distinct non-writer review families at every tested estimate/diff setting.
+  two distinct non-writer review families remain required at every tested
+  estimate/diff setting, including the consolidated registrations.
 - `test_alternate_limit_lookup_restricted_to_agy_harness`: Qwen/Sol lead ->
   personal Argon/free DeepSeek lead. The important assertions are unchanged:
   Qwen does not inherit agy-prefixed evidence, Gemini does, and provider-stop
@@ -132,7 +133,7 @@ within each cost tier, with missing rows last inside that tier.
   DeepSeek bans, GLM stop, OpenRouter lead, disabled GLM override still refused.
 - `test_route_skips_paused_harness_per_role`: Sol lead, every opencode skip is
   `paused_harness`, no remaining writer -> OpenRouter lead, explicit permanent
-  GLM/manual Muse reasons take precedence, four eligible agy writers remain.
+  GLM/manual Muse reasons take precedence, two eligible Gemini agy writers remain.
 - `test_explicit_policy_argument_wins`: policy enables GLM -> policy enables
   free DeepSeek, but cannot bypass GLM's permanent operator stop.
 - `test_claude_written_high_gets_luna_and_qwen`: Qwen/MiMo -> Qwen/free Argon.
@@ -166,8 +167,9 @@ within each cost tier, with missing rows last inside that tier.
   including policy-filtered Muse. `test_strict_names_missing`: missing Sol ->
   missing free DeepSeek. Strict errors still name the absent first input.
 - `tests/test_spawner_cli_catalog.py::test_missing_legs_registered_for_utility`:
-  S3's exact implement/review roles -> additionally orchestration for Sonnet and
-  gateway DeepSeek/Muse, retaining exact model, active, family, harness checks.
+  S3's exact roles -> review/orchestration for Sonnet, review only for high-effort
+  Opus, and implementation/review/orchestration for gateway DeepSeek/Muse,
+  retaining exact model, active, family, harness checks.
 - `tests/test_spawner_host_bench.py::test_review_route_uses_benchmark_p`: old
   three-subscription route -> exact free-first combined route including personal
   Argon, Pickle, gateway DeepSeek and main's GPT-OSS.
@@ -177,11 +179,11 @@ within each cost tier, with missing rows last inside that tier.
   concrete combined implementation role list, including disabled GLM; legacy
   constant and retained free/paid fallback rows are still checked.
 - `tests/test_spawn_cli.py::test_replan_and_all_limited`: eight attempts,
-  Sol/DeepSeek/GLM/OpenRouter first -> thirteen eligible attempts plus manual Muse
+  Sol/DeepSeek/GLM/OpenRouter first -> eleven eligible attempts plus manual Muse
   skip, DeepSeek/GLM/OpenRouter/Pickle first. The success-spare assertion selects
   Pickle rather than a raw index; all-limited replan retains explicit Muse skip,
   provider evidence, exit 4, and no extra launches.
-- `test_transport_only_fallthrough`: eight -> fourteen recorded inputs; successful
+- `test_transport_only_fallthrough`: eight -> twelve recorded inputs; successful
   spare reasons apply to routed leg records, not the separate manual-policy
   skip. Exact one/two actual launches and captured-evidence checks are unchanged.
 - `tests/test_w11_selection.py::test_tier_first_and_swap`: pinned Sol-first list
@@ -205,3 +207,12 @@ within each cost tier, with missing rows last inside that tier.
   skipped attempt is unlaunched -> manual Muse retains its `off_family` reason,
   every routed spare remains `run_terminated_before_leg`; strict benchmark
   refusal type, evidence, exit status, and exactly one launch remain checked.
+
+## CI fix-round safety regressions
+
+`tests/test_route_agy_reset.py::test_no_claude_implementers_and_haiku_last` is
+unchanged. The combined branch removes implementation eligibility from default
+Sonnet/Opus while retaining every registered leg and explicit effort variant.
+New free-first tests reject custom Claude/Anthropic/Claude-flagged implement
+inputs and require Haiku last across cost tiers with and without measurements.
+These are safety constraints, not a new model preference list or benchmark row.

@@ -210,7 +210,7 @@ def test_route_skips_paused_harness_per_role():
     assert {leg_id: reasons[leg_id] for leg_id in paused_ids} == {
         leg_id: "disabled: D-3605 operator: glm not acceptable" if leg_id == "opencode-glm-5.3-flash-free"
         else "off_family" if leg_id == "omniroute-muse-spark" else "paused_harness" for leg_id in paused_ids}
-    assert [leg.id for leg in paused.legs] == ["agy-gemini-3.8-flash", "agy-gemini-4-argon", "agy-sonnet-5.5", "agy-opus-5.5"]
+    assert [leg.id for leg in paused.legs] == ["agy-gemini-3.8-flash", "agy-gemini-4-argon"]
 
 
 def test_explicit_policy_argument_wins():

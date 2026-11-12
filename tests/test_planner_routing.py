@@ -384,11 +384,11 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
 
 
 def test_no_implement_plan_leg_has_claude_family():
-    # D-5113: named Claude implementations retain family metadata and fences.
+    # D-3605: registered Claude review/orchestration legs never route implementations.
     for estimate in (1000, 20000, 100000):
         plan = plan_spawn({"estimate_tokens": estimate}, role="implement")
         assert plan.legs
-        assert {leg.id for leg in plan.legs if leg.claude_family} == {"agy-sonnet-5.5", "agy-opus-5.5"}
+        assert not any(leg.claude_family or leg.family in ("claude", "anthropic") for leg in plan.legs)
         from plangraph.planner.route_policy import DEFAULT_POLICY_PATH, load_route_policy
         for diff in ({"diff_ref": {"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}}, {}):
             review = plan_spawn({"estimate_tokens": estimate, **diff}, role="review", writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH))

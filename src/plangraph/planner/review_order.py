@@ -3,7 +3,7 @@
 
 def review_key(leg, tier_idx, pos):
     from .route_policy import review_priority
-    return (tier_idx, review_priority(leg), pos)
+    return ("haiku" in leg.model.lower(), tier_idx, review_priority(leg), pos)
 
 
 def catalog_tiers(legs, rows):
