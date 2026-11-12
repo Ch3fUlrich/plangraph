@@ -250,6 +250,7 @@ class SeatSpawnMixin:
                 status='failed', skip_reason='reasoning_output_limit',
                 served_model=job.served_model, served_family=job.served_family,
                 served_witness_reason=job.served_witness_reason,
+                **(dict(request_side_model=job.request_side_model, witness_kind=job.witness_kind) if routed else {}),
                 stdout_tail=job.stdout, stderr_tail=job.stderr, events=job.events))
             record.setdefault('events', []).extend(job.events)
 
@@ -279,9 +280,13 @@ class SeatSpawnMixin:
         job.status, job.exit_code = 'failed', job.exit_code or 1
         job.events.append(dict(event='reasoning_output_limit'))
         record_attempt(job)
+        if routed:
+            record.update(request_side_model=job.request_side_model, witness_kind=job.witness_kind,
+                served_model_mismatch=any(e.get('event') == 'served_model_mismatch' for e in job.events))
         record.update(status='failed', reason='reasoning_output_limit', exit_code=job.exit_code,
             served_model=job.served_model, served_family=job.served_family,
             served_witness_reason=job.served_witness_reason,
+            writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
             stdout_tail=record.get('stdout_tail', '') + job.stdout,
             stderr_tail=record.get('stderr_tail', '') + job.stderr)
         self._save(record)  # terminal evidence must survive even if the caller never saves again

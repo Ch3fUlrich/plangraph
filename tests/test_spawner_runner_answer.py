@@ -256,7 +256,8 @@ def test_inheritance_tests_use_proc():
 
 
 @pytest.mark.parametrize('signal', ['length', 'stdout-error', 'stderr-error'])
-def test_reasoning_limit_telemetry_survives_monitor(tmp_path, monkeypatch, signal):
+@pytest.mark.parametrize('padding', [None, '', '\n', ' \t'])
+def test_reasoning_limit_telemetry_survives_monitor(tmp_path, monkeypatch, signal, padding):
     output = stream(('step_finish', {'reason': 'length',
                                     'tokens': {'output': 0, 'reasoning': 32768}}))
     error = 'Response still truncated after two output token limit continuations'
@@ -265,6 +266,8 @@ def test_reasoning_limit_telemetry_survives_monitor(tmp_path, monkeypatch, signa
         output += '\n' + json.dumps({'type': 'error', 'error': {'type': 'output-limit', 'message': error}})
     elif signal == 'stderr-error':
         output, stderr = '', 'Error: output-limit: ' + error
+    if padding is not None:
+        output = padding + '\n' + output + '\n' + padding
     job = _monitor(tmp_path, monkeypatch, output, stderr=stderr)
     assert any(e['event'] == 'opencode_reasoning_exhausted' for e in job.events)
     if signal != 'stderr-error':
@@ -299,6 +302,7 @@ def test_display_answer_prevents_reasoning_retry(tmp_path, monkeypatch, framing)
     output = (stream(('text', {'text': verdict})) if framing == 'text' else verdict)
     if framing != 'plain':
         output = diagnostic + '\n' + output
+    assert answer_text(output, raw_fallback=False).strip()
     job = _monitor(tmp_path, monkeypatch, output, stderr='Error: output-limit', denied=True)
     assert job.stdout == answer_text(output) and verdict in job.stdout
     assert not any(e['event'] == 'opencode_reasoning_exhausted' for e in job.events)
@@ -310,3 +314,13 @@ def test_display_answer_prevents_reasoning_retry(tmp_path, monkeypatch, framing)
 def test_reasoning_cap_malformed_config_unavailable(config):
     from plangraph.spawner.opencode_answer import cap_reasoning
     assert not cap_reasoning({'OPENCODE_CONFIG_CONTENT': json.dumps(config)}, 'mimo/mimo-v2.6-flash')
+
+
+@pytest.mark.parametrize('status', ['timeout', 'stalled', 'cancelled'])
+def test_terminal_record_never_appends_attempt(status):
+    from plangraph.spawner.run_watchdog import terminal_record
+    attempt = dict(status='failed', skip_reason='reasoning_output_limit')
+    record = dict(role='review', attempts=[attempt], events=[])
+    job = SimpleNamespace(status=status, exit_code=124, events=[dict(event='watchdog_' + status)])
+    assert terminal_record(record, job) == (status != 'cancelled')
+    assert record['attempts'] == [attempt]

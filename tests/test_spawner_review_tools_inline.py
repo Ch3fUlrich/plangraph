@@ -92,6 +92,8 @@ def test_tools_invalid_diff_ref_refused(diff_ref):
     ('zero-exit', 2, True), ('cancelled', 1, False),
     ('timeout', 1, False), ('retry-timeout', 2, False), ('deadline', 1, True),
     ('provider-stop', 2, True), ('thin-budget', 1, True),
+    ('stalled', 1, False), ('retry-stalled', 2, False), ('retry-cancelled', 2, False),
+    ('ordinary-timeout', 1, False), ('ordinary-cancelled', 1, False),
 ])
 def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scenario, launches, terminal):
     """Use real spawn/render/monitor/record paths; only transport and witnesses are fake."""
@@ -133,17 +135,20 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
         if scenario == 'already-capped':
             assert config['providers']['mimo']['models']['mimo-v2.6-flash']['body']['thinking'] == {'type': 'disabled'}
         successful = scenario == 'normal' or len(calls) == 2 and scenario == 'verdict'
-        if scenario == 'cancelled':
+        if scenario in ('cancelled', 'ordinary-cancelled') or scenario == 'retry-cancelled' and len(calls) == 2:
             runner.jobs[jid].status = 'cancelled'
-        if scenario == 'timeout' or scenario == 'retry-timeout' and len(calls) == 2:
-            runner.jobs[jid].status, runner.jobs[jid].exit_code = 'timeout', 124
-            runner.jobs[jid].events.append({'event': 'watchdog_timeout', 'rule': 'max'})
+        if scenario in ('timeout', 'stalled', 'ordinary-timeout') or scenario in ('retry-timeout', 'retry-stalled') and len(calls) == 2:
+            status = 'stalled' if scenario.endswith('stalled') else 'timeout'
+            runner.jobs[jid].status, runner.jobs[jid].exit_code = status, 6 if status == 'stalled' else 124
+            runner.jobs[jid].events.append({'event': 'watchdog_' + status, 'rule': 'max'})
         if scenario in ('deadline', 'thin-budget'):
             clock[:] = [time.time() + (2000 if scenario == 'deadline' else 1475)]
         if scenario == 'provider-stop':
             runner.provider_responses[jid] = {'status': 429}
         if scenario == 'stderr-error':
             return b'', b'Error: output-limit: Response still truncated after two output token limit continuations'
+        if scenario.startswith('ordinary-'):
+            return b'', b''
         return (verdict if successful else exhausted).encode(), b''
 
     async def ready(*args, **kwargs):
@@ -159,7 +164,10 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     monkeypatch.setattr('plangraph.spawner.resolver.host_skip_reason_async', ready)
     monkeypatch.setattr('plangraph.spawner.resolver.plan_for_launch_async', launch)
     monkeypatch.setattr('plangraph.spawner.leg_probe.before_launch', ready)
-    monkeypatch.setattr('plangraph.spawner.gateway_witness.witness', lambda *a: None)
+    def witness(runner, jid, job, env):
+        job.request_side_model, job.witness_kind = chosen.model, 'hermetic-witness'
+        job.served_family = 'fixture-family'
+    monkeypatch.setattr('plangraph.spawner.gateway_witness.witness', witness)
     monkeypatch.setattr('plangraph.spawner.runner._opencode_served_model', lambda *a: None)
     monkeypatch.delenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', raising=False)
     monkeypatch.setenv('AUTOOS_OMNIROUTE_KEY', 'test-credential')
@@ -181,6 +189,7 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
                                      writer_families=['deepseek'], wait_seconds=None, **options))
     assert len(calls) == launches
     assert service.result(record['run_id']) == record
+    assert record['ended'] >= record['started'] and not service._running_records and not runner._tasks
     assert (record.get('reason') == 'reasoning_output_limit') == terminal
     real = [a for a in record['attempts'] if a['status'] != 'skipped']
     assert len(real) == launches
@@ -202,16 +211,28 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
         assert record.get('reason') is None
     if terminal:
         assert record['status'] == 'failed' and record['exit_code'] != 0
+        assert record['writer_family'] == 'fixture-family'
         assert continuation.await_count == 0
         assert all(any(e['event'] == 'opencode_reasoning_exhausted' for e in a['events']) for a in real)
         assert any(e['event'] == 'reasoning_output_limit' for e in record['events'])
-    if scenario == 'cancelled':
+        if dispatch == 'routed':
+            job = runner.jobs[record['job_id']]
+            assert record['request_side_model'] == job.request_side_model and record['witness_kind'] == job.witness_kind
+            assert record['served_model_mismatch'] == any(e.get('event') == 'served_model_mismatch' for e in job.events)
+            assert record['completion']['event'] == 'FAILED' and record['completion']['reason'] == 'reasoning_output_limit'
+            assert record['error'] and record['completion']['rc'] == job.exit_code
+            assert all(a['request_side_model'] == chosen.model and a['witness_kind'] == 'hermetic-witness' for a in real)
+    if scenario in ('cancelled', 'ordinary-cancelled', 'retry-cancelled'):
         assert record['status'] == 'cancelled'
     if scenario == 'non-review':
         assert not any(e['event'].startswith(('opencode_step_finish', 'opencode_reasoning', 'reasoning_'))
                        for e in record['events'])
-    if scenario in ('timeout', 'retry-timeout'):
+    if scenario in ('timeout', 'retry-timeout', 'ordinary-timeout'):
         assert record['status'] == 'timed_out' and record['reason'] == 'timeout'
+    if scenario in ('stalled', 'retry-stalled'):
+        assert record['status'] == record['reason'] == 'stalled'
+    if 'timeout' in scenario or 'stalled' in scenario:
+        assert sum(e['event'].startswith('watchdog_') for e in record['events']) == 1
 
 
 @pytest.fixture

@@ -135,6 +135,8 @@ def answer_text(stdout, *, raw_fallback=True):
         return complete
     texts = []
     for line in stdout.splitlines():
+        if not raw_fallback and not line.strip():
+            continue
         try:
             event = json.loads(line)
         except ValueError:
