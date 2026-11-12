@@ -8,6 +8,7 @@ import fnmatch
 import re
 
 import ci_commit_gate
+import ci_select
 import seat_verdict
 
 FACT_KEYS = frozenset({
@@ -16,6 +17,10 @@ FACT_KEYS = frozenset({
     "preflight_present", "main_changed_production_paths"})
 CHECK_KEYS = frozenset({"name", "head_sha", "status", "conclusion"})
 SEAT_KEYS = frozenset({"family", "verdict", "pinned", "open_findings"})
+REASON_CODES = frozenset({
+    "ci_pending", "head_moved", "ci_red", "seat_missing", "seat_pinned",
+    "seat_family_is_writer", "finding_open", "gate_path", "tier_high",
+    "plan_key_mismatch", "preflight_missing", "stale_green"})
 
 
 @dataclass(frozen=True)
@@ -44,8 +49,8 @@ def _keys(value, expected):
             and value.keys() == expected)
 
 
-def _path(value):
-    if not _text(value):
+def _path(value, *, pattern=False):
+    if not _text(value) or (not pattern and any(char in value for char in "*?[")):
         return None
     parts = value.replace("\\", "/").lower().split("/")
     if any(p in ("", "..", "unknown") or ":" in p for p in parts):
@@ -56,7 +61,7 @@ def _path(value):
 def _door_table_valid(table):
     if not isinstance(table, (tuple, list)) or not table:
         return False
-    normalized = [_path(p) for p in table]
+    normalized = [_path(p, pattern=True) for p in table]
     return (all(normalized) and len(set(normalized)) == len(normalized)
             and all("/" in p or p in ("roles*", "scopes*") for p in table))
 
@@ -67,7 +72,7 @@ def _gate_path(path):
               getattr(ci_commit_gate, "GATE_PATHS", None))
     if not all(_door_table_valid(table) for table in tables):
         return True  # An invalid authority cannot establish any path as safe.
-    if any(fnmatch.fnmatchcase(path, _path(p)) for table in tables for p in table):
+    if any(fnmatch.fnmatchcase(path, _path(p, pattern=True)) for table in tables for p in table):
         return True
     # Additional categories in D-5252 not yet covered by the trailer door table.
     name = path.rsplit("/", 1)[-1]
@@ -78,7 +83,41 @@ def _gate_path(path):
                  or "/split/" in path)))
 
 
+def _required_policy(paths):
+    """Local policy floor, not a claim about live branch protection/rulesets."""
+    always, suites = ci_select.ALWAYS, ci_select.SUITES
+    for table in (always, suites):
+        if (not isinstance(table, (tuple, list)) or not table
+                or not _strings(list(table)) or len(set(table)) != len(table)):
+            return None
+    normalized = [_path(p) for p in paths] if _strings(paths) else []
+    # The selector is case-sensitive. Union raw and conservative normalized
+    # paths so normalization can add requirements, never discard real suites.
+    selected = ci_select.select([*paths, *normalized] if normalized and all(normalized) else [])
+    if (not _keys(selected, set(suites) | {"full"})
+            or any(type(value) is not bool for value in selected.values())
+            or (selected["full"] and not all(selected[s] for s in suites))):
+        return None
+    return {"ci-gate", "select", *always, *(s for s in suites if selected[s])}
+
+
+def _accepts(text):
+    if not isinstance(text, str):
+        return False
+    parsed = seat_verdict.parse_verdict(text)
+    return (isinstance(parsed, tuple) and len(parsed) == 2 and parsed[0] is True
+            and type(parsed[1]) is int and 0 <= parsed[1] < len(text.splitlines()))
+
+
 def decide(facts):
+    """Never expose an unexpected dependency/validation exception to callers."""
+    try:
+        return _decide(facts)
+    except Exception:
+        return _refuse("ci_pending", "facts unavailable or invalid")
+
+
+def _decide(facts):
     """Return one Decision; first refusal wins in the documented order.
 
     ci_checks is the complete latest-per-name set, each with name/head_sha/
@@ -103,7 +142,9 @@ def decide(facts):
            for c in current):
         return _refuse("ci_red", "completed check is not green")
     names = [c.get("name") for c in checks]
+    policy = _required_policy(facts.get("changed_paths"))
     if (not _strings(required) or not required or not _strings(names)
+            or policy is None or not policy.issubset(required)
             or len(set(required)) != len(required) or len(set(names)) != len(names)
             or not set(required).issubset(names)
             or len(current) != len(checks)
@@ -127,10 +168,9 @@ def decide(facts):
            or any(level != "LOW" for level in s["open_findings"])
            or len(s["open_findings"]) > 1 for s in seats):
         return _refuse("finding_open", "open blocking or unknown finding")
-    accepted = [s["family"] for s in seats if isinstance(s.get("verdict"), str)
-                and seat_verdict.parse_verdict(s["verdict"])[0] is True]
+    accepted = [s["family"] for s in seats if _accepts(s.get("verdict"))]
     if (len(accepted) != len(seats) or len(set(families)) != len(families)
-            or seat_verdict.coverage(writers, accepted, need=1)):
+            or seat_verdict.coverage(writers, accepted, need=1) != []):
         return _refuse("seat_missing", "no independent accepting seat")
     paths = facts.get("changed_paths")
     if (not _strings(paths) or not paths

@@ -2,9 +2,10 @@
 """Shadow merge decision: read a local facts JSON; no merge or GO-row authority."""
 import json
 from pathlib import Path
+import re
 import sys
 
-from merge_gate_core import decide
+from merge_gate_core import Decision, REASON_CODES, decide
 
 
 def _unique_object(pairs):
@@ -23,13 +24,27 @@ def main(argv=None):
             raise ValueError
         facts = json.loads(Path(args[0]).read_text(encoding="utf-8"),
                            object_pairs_hook=_unique_object)
-    except (OSError, ValueError, UnicodeError, RecursionError):
+        result = decide(facts)
+        if not isinstance(result, Decision):
+            raise ValueError
+        if result.outcome == "GO":
+            if (result.code is not None or result.detail or not isinstance(result.sha, str)
+                    or not re.fullmatch(r"[0-9a-f]{40}", result.sha)
+                    or result.sha != facts["head_sha_now"]
+                    or result.sha != facts["head_sha_at_check"]):
+                raise ValueError
+            line, status = f"GO {result.sha}", 0
+        else:
+            if (result.outcome != "REFUSE" or result.code not in REASON_CODES
+                    or not isinstance(result.detail, str) or not result.detail
+                    or not result.detail.isprintable() or result.sha):
+                raise ValueError
+            line, status = f"REFUSE {result.code} {result.detail}", 1
+    except Exception:
         print("REFUSE ci_pending facts unavailable or invalid")
         return 1
-    result = decide(facts)
-    print(f"GO {result.sha}" if result.outcome == "GO" else
-          f"REFUSE {result.code} {result.detail}")
-    return int(result.outcome != "GO")
+    print(line)
+    return status
 
 
 if __name__ == "__main__":

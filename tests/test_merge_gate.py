@@ -1,122 +1,52 @@
 """Offline decision contract: no subprocess, network, keeper or merge effects."""
-import builtins
 import copy
-import datetime
-import io
 import json
-import os
 from pathlib import Path
-import socket
-import subprocess
-import sys
-import time
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-import merge_gate_core as core
-import merge_gate
 
 SHA = "a" * 40
 
 
-@pytest.fixture(autouse=True)
-def no_effects(monkeypatch):
-    def forbidden(*args, **kwargs):
-        pytest.fail("shadow decision attempted an external effect")
-    monkeypatch.setattr(subprocess, "Popen", forbidden)
-    monkeypatch.setattr(socket, "socket", forbidden)
-    monkeypatch.setattr(core.seat_verdict, "send", forbidden)
-    real_decide = core.decide
-
-    class NoEnvironment:
-        get = __getitem__ = __setitem__ = __iter__ = __contains__ = forbidden
-
-    class NoDatetime(datetime.datetime):
-        now = utcnow = today = forbidden
-
-    class NoDate(datetime.date):
-        today = forbidden
-
-    def guarded_decide(facts):
-        # Limit global guards to the call: pytest and the CLI may use files,
-        # environment and clocks outside decide(), but its real imports may not.
-        with monkeypatch.context() as guard:
-            guard.setattr(builtins, "open", forbidden)
-            guard.setattr(io, "open", forbidden)
-            guard.setattr(os, "open", forbidden)
-            guard.setattr(os, "environ", NoEnvironment())
-            guard.setattr(os, "getenv", forbidden)
-            for name in ("time", "time_ns", "monotonic", "monotonic_ns", "perf_counter"):
-                guard.setattr(time, name, forbidden)
-            guard.setattr(datetime, "datetime", NoDatetime)
-            guard.setattr(datetime, "date", NoDate)
-            return real_decide(facts)
-
-    monkeypatch.setattr(core, "decide", guarded_decide)
-    monkeypatch.setattr(merge_gate, "decide", guarded_decide)
-
-
-@pytest.fixture
-def facts():
-    return dict(head_sha_at_check=SHA, head_sha_now=SHA,
-                required_checks=["ci-gate"],
-                ci_checks=[dict(name="ci-gate", head_sha=SHA,
-                                status="completed", conclusion="success")],
-                seats=[dict(family="xiaomi", verdict="VERDICT: ACCEPT",
-                            pinned=False, open_findings=[])],
-                writer_families=["openai"], changed_paths=["src/example.rs"],
-                tier="standard", plan_key="demo:ITEM", item_key="demo:ITEM",
-                preflight_present=True, main_changed_production_paths=[])
-
-
-def refuse(facts, code):
-    before = copy.deepcopy(facts)
-    result = core.decide(facts)
-    assert result.outcome == "REFUSE" and result.code == code
-    assert result.detail and len(result.detail.splitlines()) == 1
-    assert facts == before
-
-
-def test_go(facts):
+def test_go(facts, core):
     before = copy.deepcopy(facts)
     result = core.decide(facts)
     assert (result.outcome, result.sha, result.code) == ("GO", SHA, None)
     assert facts == before
 
 
-def test_ci_red(facts):
+def test_ci_red(facts, refuse):
     facts["ci_checks"][0]["conclusion"] = "failure"
     refuse(facts, "ci_red")
 
 
-def test_ci_pending(facts):
+def test_ci_pending(facts, refuse):
     facts["ci_checks"][0]["status"] = "in_progress"
     refuse(facts, "ci_pending")
 
 
-def test_head_moved(facts):
+def test_head_moved(facts, refuse):
     facts["head_sha_now"] = "b" * 40
     refuse(facts, "head_moved")
 
 
-def test_seat_missing(facts):
+def test_seat_missing(facts, refuse):
     facts["seats"] = []
     refuse(facts, "seat_missing")
 
 
-def test_seat_pinned(facts):
+def test_seat_pinned(facts, refuse):
     facts["seats"][0]["pinned"] = True
     refuse(facts, "seat_pinned")
 
 
-def test_seat_family_is_writer(facts):
+def test_seat_family_is_writer(facts, refuse):
     facts["writer_families"].append("xiaomi")
     refuse(facts, "seat_family_is_writer")
 
 
 @pytest.mark.parametrize("severity", ["MED", "HIGH", "unknown"])
-def test_finding_open(facts, severity):
+def test_finding_open(facts, severity, refuse):
     facts["seats"][0]["open_findings"] = [severity]
     refuse(facts, "finding_open")
 
@@ -129,34 +59,34 @@ def test_finding_open(facts, severity):
     "tools/preflight.py", "tools/red_proof.py", "src/auth/session.rs",
     "rust/x/redact/pattern.rs", "configuration/allowlists/paths.json",
     "tools/public_scrub.py"])
-def test_gate_path(facts, path):
+def test_gate_path(facts, path, refuse):
     facts["changed_paths"] = [path]
     refuse(facts, "gate_path")
 
 
-def test_tier_high(facts):
+def test_tier_high(facts, refuse):
     facts["tier"] = "high"
     refuse(facts, "tier_high")
 
 
-def test_plan_key_mismatch(facts):
+def test_plan_key_mismatch(facts, refuse):
     facts["plan_key"] = "demo:OTHER"
     refuse(facts, "plan_key_mismatch")
 
 
-def test_preflight_missing(facts):
+def test_preflight_missing(facts, refuse):
     facts["preflight_present"] = False
     refuse(facts, "preflight_missing")
 
 
-def test_stale_green(facts):
+def test_stale_green(facts, refuse):
     facts["main_changed_production_paths"] = ["src/example.rs"]
     refuse(facts, "stale_green")
 
 
 @pytest.mark.parametrize("verdict", ["", "VERDICT: acceptable", "> VERDICT: ACCEPT",
     "```\nVERDICT: ACCEPT\n```", "VERDICT: ACCEPT | FIX", "VERDICT: REJECT"])
-def test_strict_verdict_reused(facts, verdict):
+def test_strict_verdict_reused(facts, verdict, refuse):
     facts["seats"][0]["verdict"] = verdict
     refuse(facts, "seat_missing")
 
@@ -169,12 +99,12 @@ def test_strict_verdict_reused(facts, verdict):
     ("preflight_present", "true", "preflight_missing"),
     ("changed_paths", None, "gate_path"),
     ("main_changed_production_paths", None, "stale_green")])
-def test_fail_closed(facts, field, value, code):
+def test_fail_closed(facts, field, value, code, refuse):
     facts[field] = value
     refuse(facts, code)
 
 
-def test_wrong_check_sha_and_red_precedence(facts):
+def test_wrong_check_sha_and_red_precedence(facts, refuse):
     facts["ci_checks"][0]["head_sha"] = "b" * 40
     refuse(facts, "ci_pending")
     facts["ci_checks"].append(dict(name="other", head_sha=SHA,
@@ -182,19 +112,19 @@ def test_wrong_check_sha_and_red_precedence(facts):
     refuse(facts, "ci_red")
 
 
-def test_disjoint_main_and_low_findings_go(facts):
+def test_disjoint_main_and_low_findings_go(facts, core):
     facts["main_changed_production_paths"] = ["src/other.rs"]
     facts["seats"][0]["open_findings"] = ["LOW"]
     assert core.decide(facts).outcome == "GO"
 
 
-def test_shared_policy_is_not_copied(facts, monkeypatch):
+def test_shared_policy_is_not_copied(facts, monkeypatch, core, refuse):
     monkeypatch.setattr(core.ci_commit_gate, "GATE_PATHS", ("src/example.rs",))
     refuse(facts, "gate_path")
 
 
 @pytest.mark.parametrize("red", [False, True])
-def test_cli_read_only(facts, tmp_path, capsys, monkeypatch, red):
+def test_cli_read_only(facts, tmp_path, capsys, monkeypatch, red, merge_gate):
     facts["preflight_present"] = not red
     file = tmp_path / "facts.json"
     file.write_text(json.dumps(facts))
@@ -206,19 +136,19 @@ def test_cli_read_only(facts, tmp_path, capsys, monkeypatch, red):
     assert file.read_bytes() == before and list(tmp_path.iterdir()) == [file]
 
 
-def test_cli_bad_json_is_one_safe_refusal(tmp_path, capsys):
+def test_cli_bad_json_is_one_safe_refusal(tmp_path, capsys, merge_gate):
     file = tmp_path / "facts.json"
     file.write_text("not json")
     assert merge_gate.main([str(file)]) == 1
     assert capsys.readouterr().out == "REFUSE ci_pending facts unavailable or invalid\n"
 
 
-def test_required_check_cannot_be_skipped(facts):
+def test_required_check_cannot_be_skipped(facts, refuse):
     facts["ci_checks"][0]["conclusion"] = "skipped"
     refuse(facts, "ci_pending")
 
 
-def test_unselected_suite_can_be_skipped(facts):
+def test_unselected_suite_can_be_skipped(facts, core):
     facts["ci_checks"].append(dict(name="unselected", head_sha=SHA,
                                     status="completed", conclusion="skipped"))
     assert core.decide(facts).outcome == "GO"
@@ -228,17 +158,17 @@ def test_unselected_suite_can_be_skipped(facts):
     ("status", "queued", "ci_pending"), ("conclusion", None, "ci_pending"),
     ("conclusion", "cancelled", "ci_red"), ("conclusion", "neutral", "ci_red"),
     ("conclusion", "timed_out", "ci_red"), ("conclusion", "unknown", "ci_red")])
-def test_check_states_fail_closed(facts, field, value, code):
+def test_check_states_fail_closed(facts, field, value, code, refuse):
     facts["ci_checks"][0][field] = value
     refuse(facts, code)
 
 
-def test_seat_coverage_is_reused(facts, monkeypatch):
+def test_seat_coverage_is_reused(facts, monkeypatch, core, refuse):
     monkeypatch.setattr(core.seat_verdict, "coverage", lambda *a, **kw: ["openai"])
     refuse(facts, "seat_missing")
 
 
-def test_cli_duplicate_facts_refused(tmp_path, capsys):
+def test_cli_duplicate_facts_refused(tmp_path, capsys, merge_gate):
     file = tmp_path / "facts.json"
     file.write_text('{"preflight_present":false,"preflight_present":true}')
     assert merge_gate.main([str(file)]) == 1

@@ -169,3 +169,40 @@ Duplicate JSON object keys at any depth and undecodable or excessively nested
 JSON refuse `ci_pending` without a traceback. Decision tests block file,
 environment and clock access inside the real parser/coverage dependency calls,
 in addition to subprocess, network and verdict-post effects.
+
+### Shadow merge decision slice 2: fail-closed boundaries
+
+`required_checks` must include `ci-gate`, `select`, the live `ci_select.ALWAYS`
+table and every suite selected by the existing pure `ci_select.select()` policy
+for `changed_paths`. The selector sees both literal and normalized paths so
+case normalization cannot silently remove a required suite. Empty, trivial or
+incomplete self-declared lists refuse `ci_pending`; each required check must
+complete successfully on the exact head. Every supplied check still participates
+in red/pending detection, even if it is not required. Invalid selector tables or
+results refuse `ci_pending`; the policy is imported, not copied into the gate.
+
+Slice 2 limit: this is a local repository-policy floor, not live GitHub branch
+protection/ruleset discovery, workflow parsing or authenticated evidence
+collection. Additional workflow jobs (including browser and platform jobs), live
+required contexts, workflow/base provenance and completeness/freshness must be
+established by the trusted future collector and included in `required_checks`.
+No count or self-declared list proves those external facts. This shadow CLI
+remains non-authoritative and must not be wired directly to unattended merges.
+
+Both the public core boundary and the CLI catch unexpected validation/dependency
+exceptions and return `REFUSE ci_pending facts unavailable or invalid`, without
+exception text or a traceback. Malformed parser/coverage return values refuse
+`seat_missing`. The CLI validates the decision's outcome, defined reason code,
+single-line detail and exact GO head before printing exactly one result line.
+The defined refusal codes remain `head_moved`, `ci_red`, `ci_pending`,
+`seat_missing`, `seat_pinned`, `seat_family_is_writer`, `finding_open`,
+`gate_path`, `tier_high`, `plan_key_mismatch`, `preflight_missing`, `stale_green`.
+
+Evidence paths are literal: `*`, `?` and `[` refuse `gate_path` in PR paths or
+`stale_green` in main-delta paths. Only imported door patterns may use globs.
+Shared fixtures are registered in `tests/conftest.py`, with bounded support code
+in `tests/_merge_gate_support.py`; neither test module imports the other. The
+guards block subprocess entry points, `os.system`/`os.popen`, socket construction
+and connection/server helpers, `urllib.request.urlopen` and verdict posting.
+Real dependency calls retain the scoped file/environment/clock guards. Tests
+isolate each live door table and verify the refusal disappears without it.
