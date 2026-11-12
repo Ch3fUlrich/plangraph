@@ -52,6 +52,11 @@ and recomputes each rolling-hour count at the tick's time. See
 [Turn-budget hook](turn-budget-hook.md) for the producer and schema.
 Over-budget sessions each enqueue one exact `TURN-BUDGET <role> <session>
 wake=<n>/<cap> hour=<n>/<cap>` message, without a `FLOW-WATCHDOG:` prefix;
-both caps firing still yields one line. The existing active-set/queue machinery
-suppresses identical lines until recovery or changed counts. No collector,
+both caps firing still yields one line. The active-set/queue machinery keys these
+alerts by `(role, session)`: changed counts refresh the active, queued and pending
+line in place, retaining delivery checkpoints rather than enqueuing each tick.
+After delivery, count changes stay suppressed until recovery; a subsequent breach
+can alert again. `PLANGRAPH_TURN_BUDGET_NOW` optionally supplies Unix seconds for
+deterministic reader tests; leave it unset for normal system-clock expiry.
+No collector,
 settings change, hook installation or live activation is performed by this lane.

@@ -1,11 +1,21 @@
 use super::BudgetStatus;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
 };
 
 const CHUNK_MAX: u64 = 8 * 1024 * 1024;
+
+pub fn message_key(id: &str) -> String {
+    // Tagged hashes make migration from the original raw-ID array idempotent.
+    if id.len() == 67 && id.starts_with("id:") && id[3..].bytes().all(|c| c.is_ascii_hexdigit()) {
+        id.into()
+    } else {
+        format!("id:{:x}", Sha256::digest(id.as_bytes()))
+    }
+}
 
 /// Consume complete JSONL records incrementally. API message IDs deduplicate
 /// streamed content blocks, multiple tools and repeated hook deliveries.
@@ -42,8 +52,13 @@ pub fn ingest(payload: &Value, status: &mut BudgetStatus, now: u64) -> std::io::
         let Some(id) = record["message"]["id"].as_str().filter(|s| !s.is_empty()) else {
             continue;
         };
-        if !status.seen.insert(id.into()) {
+        let key = message_key(id);
+        if status.seen.contains(&key) {
             continue;
+        }
+        status.seen.push_back(key);
+        if status.seen.len() > 2048 {
+            status.seen.pop_front();
         }
         let timestamp = record["timestamp"]
             .as_str()
@@ -53,6 +68,9 @@ pub fn ingest(payload: &Value, status: &mut BudgetStatus, now: u64) -> std::io::
         status.wake_calls = status.wake_calls.saturating_add(1);
         if timestamp <= now && now - timestamp < 3600 {
             status.calls.push(timestamp);
+            if status.calls.len() > 8192 {
+                status.calls.remove(0);
+            }
         }
     }
     status.offset += end as u64 + 1;

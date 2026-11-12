@@ -34,7 +34,7 @@ impl Fixture {
         writeln!(file, "{value}").unwrap();
     }
     fn call(&self, id: &str, seconds: u64) {
-        self.append(json!({"type":"assistant", "timestamp":format!("2026-01-01T00:{:02}:{:02}Z", seconds / 60, seconds % 60),
+        self.append(json!({"type":"assistant", "timestamp":chrono::DateTime::from_timestamp((START + seconds) as i64, 0).unwrap().to_rfc3339(),
             "message":{"id":id,"role":"assistant","content":[]}}));
     }
     fn status(&self) -> Value {
@@ -143,11 +143,12 @@ fn preserves_other_status_fields_and_resolves_launch_record() {
     let raw: Value =
         serde_json::from_slice(&fs::read(status_dir.join("test-session.json")).unwrap()).unwrap();
     assert_eq!(raw["other"], "untouched");
-    assert!(fs::read_dir(&status_dir).unwrap().all(|p| !p
+    let mut entries: Vec<_> = fs::read_dir(&status_dir)
         .unwrap()
-        .path()
-        .to_string_lossy()
-        .ends_with(".tmp")));
+        .map(|p| p.unwrap().file_name())
+        .collect();
+    entries.sort();
+    assert_eq!(entries, ["test-session.json", "test-session.lock"]);
 }
 
 #[test]
@@ -277,4 +278,95 @@ fn corrupt_status_is_preserved_and_a_busy_writer_never_blocks() {
     drop(guard);
     f.event("Stop", START + 1);
     assert_eq!(f.status()["wake_calls"], 1);
+}
+
+#[test]
+fn timestamps_in_test_transcripts_are_valid_beyond_the_first_hour() {
+    let f = Fixture::new();
+    f.call("later", 7201);
+    f.event("Stop", START + 7300);
+    assert_eq!(f.status()["calls"], json!([START + 7201]));
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_replacement_preserves_existing_status_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    f.event("Stop", START);
+    let path = f.config.state_dir.join("status/test-session.json");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+    f.event("Stop", START + 1);
+    assert_eq!(
+        fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+}
+
+#[test]
+fn bounded_message_history_does_not_freeze_long_session_accounting() {
+    let f = Fixture::new();
+    for i in 0..10_000 {
+        f.call(&format!("{i:05}{}", "x".repeat(220)), 1);
+    }
+    f.event("Stop", START + 1);
+    assert_eq!(f.status()["wake_calls"], 10_000);
+    assert_eq!(f.status()["seen"].as_array().unwrap().len(), 2048);
+    assert_eq!(f.status()["calls"].as_array().unwrap().len(), 8192);
+    f.call("next", 2);
+    f.event("Stop", START + 2);
+    assert_eq!(f.status()["wake_calls"], 10_001);
+    f.call("next", 2);
+    f.event("Stop", START + 2);
+    assert_eq!(f.status()["wake_calls"], 10_001);
+}
+
+#[test]
+fn oversized_stdin_exits_silently_without_creating_state() {
+    let f = Fixture::new();
+    // Valid JSON just over the cap, so accepting/truncating the cap cannot hide
+    // behind the malformed-JSON path. Exactly cap+1 bytes avoids a pipe race.
+    let prefix = r#"{"session_id":"test-session","hook_event_name":"Stop","padding":""#;
+    let input = format!(
+        "{prefix}{}\"}}",
+        "x".repeat(8 * 1024 * 1024 + 1 - prefix.len() - 2)
+    );
+    assert!(serde_json::from_str::<Value>(&input).is_ok());
+    let mut child = Command::new(env!("CARGO_BIN_EXE_turn-budget-hook"))
+        .env_clear()
+        .env("HOME", f.dir.path())
+        .env("FLEET_STATE_DIR", &f.config.state_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty() && out.stderr.is_empty());
+    assert!(!f.config.state_dir.exists());
+}
+
+#[test]
+fn legacy_near_cap_histories_are_compacted_before_the_next_update() {
+    let f = Fixture::new();
+    f.event("Stop", START);
+    let path = f.config.state_dir.join("status/test-session.json");
+    let mut raw: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    raw["turn_budget"]["seen"] = json!((0..4000)
+        .map(|i| format!("{i:05}{}", "x".repeat(220)))
+        .collect::<Vec<_>>());
+    fs::write(&path, raw.to_string()).unwrap();
+    assert!(fs::metadata(&path).unwrap().len() < 1024 * 1024);
+    f.call("new", 1);
+    f.event("Stop", START + 1);
+    assert_eq!(f.status()["wake_calls"], 1);
+    assert_eq!(f.status()["seen"].as_array().unwrap().len(), 2048);
+    assert!(fs::metadata(&path).unwrap().len() < 200_000);
 }

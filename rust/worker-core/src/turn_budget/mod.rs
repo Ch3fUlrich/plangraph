@@ -6,7 +6,7 @@ mod transcript;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, VecDeque},
     fs,
     path::{Path, PathBuf},
 };
@@ -59,10 +59,11 @@ pub struct BudgetStatus {
     pub hour_calls: u64,
     /// Timestamps in the trailing, half-open hour (now - 3600, now].
     pub calls: Vec<u64>,
-    seen: BTreeSet<String>,
+    seen: VecDeque<String>,
     transcript_path: String,
     offset: u64,
-    polls: BTreeSet<String>,
+    polls: VecDeque<String>,
+    reads: BTreeMap<String, storage::ReadState>,
 }
 
 pub fn safe_name(s: &str) -> bool {
@@ -115,7 +116,7 @@ pub fn read_alerts(state_dir: &Path, now: u64) -> Vec<String> {
     let Ok(entries) = fs::read_dir(state_dir.join("status")) else {
         return vec![];
     };
-    let mut lines = BTreeSet::new();
+    let mut lines = BTreeMap::new();
     for entry in entries.flatten() {
         if entry.path().extension().is_none_or(|e| e != "json") {
             continue;
@@ -128,10 +129,10 @@ pub fn read_alerts(state_dir: &Path, now: u64) -> Vec<String> {
             continue;
         };
         if let Some(line) = alert_line(&status, now) {
-            lines.insert(line);
+            lines.insert((status.role, status.session), line);
         }
     }
-    lines.into_iter().collect()
+    lines.into_values().collect()
 }
 
 /// Only recognised polling produces a refusal; accounting/IO failures are silent.
@@ -188,6 +189,16 @@ fn update(
     } else {
         BudgetStatus::default()
     };
+    // Migrate old raw IDs to fixed-size hashes, and compact legacy histories
+    // before ingestion so a near-cap file can resume accounting immediately.
+    status.seen = status
+        .seen
+        .iter()
+        .map(|id| transcript::message_key(id))
+        .collect();
+    status.seen.drain(..status.seen.len().saturating_sub(2048));
+    status.polls.drain(..status.polls.len().saturating_sub(256));
+    status.reads.retain(|key, _| status.polls.contains(key));
     let name = storage::resolve_name(config, id);
     status.session = name.clone();
     status.session_id = id.into();
@@ -196,6 +207,9 @@ fn update(
     // Counter failures must not disable a recognised polling refusal.
     let _ = transcript::ingest(payload, &mut status, now);
     status.calls.retain(|&t| t <= now && now - t < 3600);
+    status
+        .calls
+        .drain(..status.calls.len().saturating_sub(8192));
     status.hour_calls = status.calls.len() as u64;
     let event = payload["hook_event_name"].as_str().unwrap_or("");
     if matches!(event, "UserPromptSubmit" | "Notification") {
@@ -205,11 +219,40 @@ fn update(
     if event == "PreToolUse" {
         if let Some(command) = command.filter(|s| poll::read_only(s)) {
             let key = poll::fingerprint(command, payload["cwd"].as_str().unwrap_or(""));
-            denied = !status.polls.insert(key);
+            let known = status.polls.contains(&key);
+            let read = status.reads.entry(key.clone()).or_insert_with(|| {
+                storage::read_scope(command, payload["cwd"].as_str().unwrap_or(""))
+            });
+            denied = known && !read.retry;
+            read.retry = false;
+            if !known {
+                status.polls.push_back(key);
+            }
         }
     }
-    if event == "PostToolUse" && poll::changed_state(payload, command) {
-        status.polls.clear();
+    if event == "PostToolUse" && storage::successful(payload) {
+        let changed = storage::changed_paths(payload, command);
+        for read in status.reads.values_mut() {
+            if read.affected_by(&changed) {
+                read.retry = true;
+            }
+        }
+        if let Some(command) = command.filter(|s| poll::read_only(s)) {
+            let key = poll::fingerprint(command, payload["cwd"].as_str().unwrap_or(""));
+            if let Some(read) = status.reads.get_mut(&key) {
+                if let Some(output) = storage::output_key(&payload["tool_response"]) {
+                    if read.output.as_ref().is_some_and(|old| old != &output) {
+                        read.retry = true;
+                    }
+                    read.output = Some(output);
+                }
+            }
+        }
+    }
+    while status.polls.len() > 256 {
+        if let Some(key) = status.polls.pop_front() {
+            status.reads.remove(&key);
+        }
     }
     document["turn_budget"] = serde_json::to_value(&status)?;
     // Once identified, a repeated poll stays denied even if the advisory

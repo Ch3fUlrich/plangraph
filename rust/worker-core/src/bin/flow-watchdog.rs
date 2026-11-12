@@ -100,6 +100,10 @@ fn deliver(variable: &str, event: &str) -> Result<bool, Box<dyn std::error::Erro
     written?;
     Ok(true)
 }
+fn budget_identity(line: &str) -> Option<(&str, &str)> {
+    let mut parts = line.split_whitespace();
+    (parts.next()? == "TURN-BUDGET").then_some((parts.next()?, parts.next()?))
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 3 {
@@ -134,10 +138,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => vec!["invalid snapshot".to_owned()],
     };
     if let Some(state) = std::env::var_os("PLANGRAPH_TURN_BUDGET_STATE_DIR") {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = std::env::var("PLANGRAPH_TURN_BUDGET_NOW")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            });
         messages.extend(pg_worker_core::turn_budget::read_alerts(
             Path::new(&state),
             now,
@@ -153,7 +162,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let previous = fs::read_to_string(dir.join("active")).unwrap_or_default();
     if active != previous {
         for message in &messages {
-            if previous.lines().any(|line| line == message) {
+            if let Some(identity) = budget_identity(message) {
+                if let Some(index) = queue.iter().position(|event| {
+                    event["active"].as_str().and_then(budget_identity) == Some(identity)
+                }) {
+                    queue[index]["message"] = message.clone().into();
+                    queue[index]["active"] = message.clone().into();
+                    // Compact any old count-keyed duplicates while preserving
+                    // the oldest event and its per-channel acknowledgements.
+                    let mut position = 0;
+                    queue.retain(|event| {
+                        let keep = position == index
+                            || event["active"].as_str().and_then(budget_identity) != Some(identity);
+                        position += 1;
+                        keep
+                    });
+                    atomic(&queue_path, &serde_json::to_string(&queue)?)?;
+                    if pending.exists() {
+                        let mut event: serde_json::Value =
+                            serde_json::from_slice(&fs::read(&pending)?)?;
+                        if event["active"].as_str().and_then(budget_identity) == Some(identity) {
+                            event["message"] = message.clone().into();
+                            event["active"] = message.clone().into();
+                            atomic(&pending, &event.to_string())?;
+                        }
+                    }
+                    continue;
+                }
+            }
+            if previous.lines().any(|line| {
+                line == message
+                    || (budget_identity(message).is_some()
+                        && budget_identity(line) == budget_identity(message))
+            }) {
                 continue;
             }
             let line = if message.starts_with("TURN-BUDGET ") {
@@ -175,6 +216,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             queue[i]["routing_done"] = true.into();
             atomic(&queue_path, &serde_json::to_string(&queue)?)?;
+            if i == 0 && pending.exists() {
+                let mut event: serde_json::Value = serde_json::from_slice(&fs::read(&pending)?)?;
+                let identity = queue[i]["active"].as_str().and_then(budget_identity);
+                if identity.is_some()
+                    && event["active"].as_str().and_then(budget_identity) == identity
+                {
+                    event["routing_done"] = true.into();
+                    atomic(&pending, &event.to_string())?;
+                    atomic(&dir.join("routing.ok"), "ok")?;
+                }
+            }
         }
     }
     // Keep the pending head and the newest transitions; overflow is explicit.

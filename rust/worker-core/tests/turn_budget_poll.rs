@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 fn event(command: &str, name: &str) -> Value {
     json!({"session_id":"test-session", "hook_event_name":name, "tool_name":"Bash",
-        "tool_input":{"command":command}, "tool_response":{"exit_code":0}})
+        "cwd":"/workspace", "tool_input":{"command":command}, "tool_response":{"exit_code":0}})
 }
 fn config(dir: &tempfile::TempDir) -> Config {
     Config {
@@ -28,10 +28,17 @@ fn sleep_polling_shapes_are_refused() {
         "while ! test -f \"$ready\"; do sleep 1; done",
         "until [ -f \"$ready\" ]; do sleep 1; done",
         "sleep 1; cat \"$status\"",
+        "while true; do sleep 2; git status; done &",
+        "while git status; do :; done",
+        "for i in 1 2 3; do git status; done",
+        "watch -n 5 git status",
     ] {
         let line = handle(&event(command, "PreToolUse"), &c, 1).unwrap();
         assert!(line.contains("run_in_background=true"), "{command}: {line}");
     }
+    let mut background = event("while true; do sleep 2; git status; done", "PreToolUse");
+    background["tool_input"]["run_in_background"] = json!(true);
+    assert!(handle(&background, &c, 1).is_some());
 }
 
 #[test]
@@ -82,6 +89,11 @@ fn ordinary_commands_and_single_exiting_background_wait_pass() {
         "git commit -m 'sleep 1; git status'",
         "python -m plangraph.spawner.cli wait fake-run --timeout 60 &",
         "wait 123",
+        "timeout 2 git status", // one invocation, not a repeated check
+        "while build_next; do cargo test; done",
+        "for i in 1 2 3; do echo git status; done",
+        "while build_next; do git status; done",
+        "for i in 1 2 3; do touch marker; git status; done",
     ] {
         assert_eq!(
             handle(&event(command, "PreToolUse"), &c, 1),
@@ -172,7 +184,8 @@ fn edits_clear_poll_history_but_wakes_and_different_sessions_do_not_confuse_it()
     assert_eq!(
         handle(
             &json!({"session_id":"test-session", "hook_event_name":"PostToolUse",
-        "tool_name":"Edit", "tool_response":{}}),
+        "tool_name":"Edit", "cwd":"/workspace", "tool_input":{"file_path":"status.json"},
+        "tool_response":{}}),
             &c,
             5
         ),
@@ -193,5 +206,102 @@ fn malformed_metadata_never_denies_an_ordinary_command() {
         json!({"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo '"}}),
     ] {
         assert_eq!(handle(&payload, &c, 1), None);
+    }
+}
+
+#[test]
+fn unrelated_mutations_cannot_reenable_snapshot_polling() {
+    for (read, mutation) in [
+        ("cat status.json", "touch marker"),
+        ("cat status.json", "git add unrelated"),
+        ("gh pr checks 42", "touch marker"),
+        ("gh pr checks 42", "git add unrelated"),
+        ("git status", "touch /elsewhere/marker"),
+        ("git status", "git -C /elsewhere add unrelated"),
+        ("cat status.json", "echo ok > marker"),
+        ("cat status.json", "echo '>status.json'"),
+        ("cat status.json", "cd /elsewhere; touch status.json"),
+        ("cat status.json", "cp status.json unrelated.json"),
+        ("cat status.json", "install status.json unrelated.json"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let c = config(&dir);
+        let check = event(read, "PreToolUse");
+        assert_eq!(handle(&check, &c, 1), None);
+        assert!(handle(&check, &c, 2).is_some());
+        assert_eq!(handle(&event(mutation, "PostToolUse"), &c, 3), None);
+        assert!(handle(&check, &c, 4).is_some(), "{read}: {mutation}");
+        let edit = json!({"session_id":"test-session", "hook_event_name":"PostToolUse",
+            "tool_name":"Edit", "cwd":"/workspace", "tool_input":{"file_path":"/elsewhere/status.json"},
+            "tool_response":{}});
+        assert_eq!(handle(&edit, &c, 5), None);
+        assert!(handle(&check, &c, 6).is_some(), "unrelated edit: {read}");
+    }
+}
+
+#[test]
+fn relevant_mutations_and_changed_read_output_reenable_only_the_affected_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(&dir);
+    let check = event("cat status.json", "PreToolUse");
+    let other = event("cat other.json", "PreToolUse");
+    assert_eq!(handle(&check, &c, 1), None);
+    assert_eq!(handle(&other, &c, 1), None);
+    for command in ["touch status.json", "echo ok > status.json"] {
+        assert_eq!(handle(&event(command, "PostToolUse"), &c, 2), None);
+        assert_eq!(handle(&check, &c, 3), None);
+        assert!(handle(&check, &c, 4).is_some());
+        assert!(handle(&other, &c, 4).is_some());
+    }
+    let mut post = event("cat status.json", "PostToolUse");
+    post["tool_response"]["stdout"] = json!("same");
+    assert_eq!(handle(&post, &c, 5), None);
+    assert_eq!(handle(&post, &c, 6), None);
+    assert!(
+        handle(&check, &c, 7).is_some(),
+        "identical output is not progress"
+    );
+    post["tool_response"]["stdout"] = json!("changed");
+    assert_eq!(handle(&post, &c, 8), None);
+    assert_eq!(handle(&check, &c, 9), None);
+    assert!(handle(&other, &c, 9).is_some());
+}
+
+#[test]
+fn poll_history_retains_the_newest_256_checks_without_freezing_accounting() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(&dir);
+    for i in 0..300 {
+        assert_eq!(
+            handle(&event(&format!("cat state-{i}"), "PreToolUse"), &c, 1),
+            None
+        );
+    }
+    let raw: Value = serde_json::from_slice(
+        &std::fs::read(c.state_dir.join("status/test-session.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(raw["turn_budget"]["polls"].as_array().unwrap().len(), 256);
+    assert!(handle(&event("cat state-299", "PreToolUse"), &c, 2).is_some());
+    assert_eq!(handle(&event("cat state-0", "PreToolUse"), &c, 2), None);
+}
+
+#[test]
+fn workspace_git_mutations_are_allowed_progress_for_local_git_reads_by_design() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(&dir);
+    let check = event("git status", "PreToolUse");
+    assert_eq!(handle(&check, &c, 1), None);
+    for command in ["touch marker", "git add unrelated"] {
+        assert!(handle(&check, &c, 2).is_some());
+        assert_eq!(handle(&event(command, "PostToolUse"), &c, 3), None);
+        assert_eq!(handle(&check, &c, 4), None, "{command}");
+    }
+    for _ in 0..2 {
+        // One-shot timeout wrappers intentionally remain outside snapshot history.
+        assert_eq!(
+            handle(&event("timeout 2 git status", "PreToolUse"), &c, 5),
+            None
+        );
     }
 }

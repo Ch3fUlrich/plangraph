@@ -36,6 +36,9 @@ are counted; only Bash pre-tool events are candidates for polling refusals.
   serializes updates; a temporary file in the same directory is flushed and
   atomically renamed so readers never see a partial JSON document. A busy lock
   skips the event rather than holding a tool call open.
+  Replacement retains an existing status file's permissions; new files keep the
+  private tempfile default. The file is synced before rename and, on Unix, the
+  parent status directory is synced after rename for crash durability.
 - One model call is one distinct `assistant.message.id` in the session's JSONL
   transcript. Multiple streamed blocks or tool uses from that response count
   once. User/tool-result, progress, sidechain and missing-ID records do not count.
@@ -55,8 +58,15 @@ are counted; only Bash pre-tool events are candidates for polling refusals.
 Malformed stdin, unreadable/corrupt state, counter failures and missing transcripts
 never deny an ordinary tool. Input is capped at 8 MiB, status at 1 MiB and a
 transcript delta at 8 MiB. These caps, a busy lock, or failed IO may undercount;
-this is a fail-open advisory counter, not billing. Seen IDs stay for the session
-lifetime; retention/compaction is future work. Historical transcript replay
+this is a fail-open advisory counter, not billing. Seen IDs are SHA-256 hashes
+retained for the newest 2,048 distinct responses; replay outside that window can
+count again. The newest 256 distinct read fingerprints and at most 16 hashed
+path dependencies per read are retained; an evicted read may pass once again.
+The hour retains at most 8,192 timestamps, so larger bursts undercount the hour
+but continue incrementing the wake counter. Legacy histories below the file cap
+are compacted on the next update, avoiding permanent growth-induced freezes.
+Unrelated top-level fields still consume the shared 1 MiB cap and are never
+discarded to recover space. Historical transcript replay
 without a recorded wake is attributed to the current wake; register at session
 start for precise boundaries. No live counts are provided here.
 
@@ -68,13 +78,36 @@ quoted prose and comments are not executable commands. Simple shell `-c`/`-lc`
 wrappers are examined up to three levels deep. A loop does not become an allowed
 wait merely by setting `run_in_background` or appending `&`.
 Quoted or escaped shell keyword words are not treated as control flow.
+Sleep-free `while`/`until`/`for` loops consisting only of recognised snapshots
+and shell no-ops are also refused, as is `watch -n 5 git status` (including
+supported interval/display options). Thus `while git status; do :; done` and
+`for i in 1 2 3; do git status; done` are not loopholes. Mixed work loops such as
+`while build_next; do git status; done` and `for i in 1 2 3; do touch marker;
+git status; done` remain allowed by design rather than blocking ordinary work.
+`timeout 2 git status` runs the read once, not periodically, and is allowed by
+design even when repeated across tool calls; timeout wrappers are outside the
+historical snapshot recogniser. Tests pin each of these boundaries.
 
 The first recognised read-only check passes and records a SHA-256 fingerprint of
 its parsed words plus `cwd` per session. Repeating that check is refused, even
 after other read commands, notifications, or no-op commands. A successful
 `PostToolUse` for Edit/Write/NotebookEdit, a recognised mutating Bash command, or
-output redirection clears the read history. A pre-tool mutation or failed command
-does not. This is evidence of a mutating operation, not a filesystem diff.
+output redirection permits one retry only for reads whose observed paths can
+plausibly be affected. File reads depend on their literal path arguments; git
+snapshots depend on paths under their absolute `cwd` workspace, and directory
+listings depend on their named subtrees. Remote gh/spawner checks cannot be
+reset by local writes. A pre-tool mutation or failed command does not reset a
+read. This is evidence of a relevant mutating operation, not a filesystem diff.
+For example, `touch marker` or `git add unrelated` cannot reenable `cat
+status.json` or `gh pr checks 42`; `touch status.json` can reenable that file
+read, while `touch marker` or `git add unrelated` in the same workspace can
+reenable `git status` by design because they can affect its worktree/index view.
+Unrelated paths, missing path metadata and unresolved directory-changing compound
+commands never grant retries. Successful read results hash only output fields
+(`stdout`, `stderr`, `output`, `content`, or a string response); a differing
+result also permits one retry for that read alone. Identical output does not.
+For simple `cp`/`install`, only the destination is mutation evidence; naming the
+observed file as a copy source does not grant a retry.
 
 Recognised reads include ordinary git status/log/show/diff/rev-parse/ls-files,
 gh PR checks/view/list/status, gh run view/list, spawner ps/status/result and
@@ -102,9 +135,20 @@ line: `TURN-BUDGET build-L1 build-L1-0429 wake=7/6 hour=61/60`. The
 `read_alerts(state_dir, now)` function reads only injected status files, skips bad
 files and recomputes the rolling hour. FLOW-WATCHDOG opts into that reader only
 with `PLANGRAPH_TURN_BUDGET_STATE_DIR`; see [Flow watchdog](flow-watchdog.md).
+The alert identity is `(role, session)`, not the live counts: active, queued and
+pending lines refresh in place without adding a new event each tick. Completed
+delivery stays suppressed until recovery. `PLANGRAPH_TURN_BUDGET_NOW` optionally
+injects Unix seconds into this reader for deterministic subprocess tests; absent
+or invalid values use the system clock. Production deployments should leave it
+unset so rolling-hour expiry advances normally.
 
 Run the four `turn_budget_*` integration suites listed in CONTRIBUTING.md. They
 use disposable state, synthetic transcripts, explicit clocks and cleared child
 environments. They cover stdin/exit contracts, both counters, hour expiry, wake
 resets, message deduplication, partial transcripts, name resolution, status-key
 preservation, malformed inputs, IO failure, polling and opt-in watchdog delivery.
+The stdin contract includes a valid JSON payload over 8 MiB that exits silently
+without creating state. Atomic-write checks assert the exact `.json` and `.lock`
+directory entries (not a tempfile suffix), mode preservation and bounded-history
+recovery; watchdog tests exercise changing counts, delivery and recovery using
+an explicitly injected clock rather than wall time.

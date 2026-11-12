@@ -55,6 +55,20 @@ fn role_strips_only_the_numeric_counter_and_unknown_roles_get_initial_caps() {
     assert_eq!(role("build-L1-0429"), "build-L1");
     assert_eq!(role("build-L1"), "build-L1");
     assert_eq!(role("review-L2-latest"), "review-L2-latest");
+    assert_eq!(
+        ROLE_BUDGETS
+            .iter()
+            .map(|(role, _, _)| *role)
+            .collect::<Vec<_>>(),
+        [
+            "build-L1",
+            "build-L2",
+            "review-L1",
+            "review-L2",
+            "planner",
+            "routing"
+        ]
+    );
     assert!(ROLE_BUDGETS
         .iter()
         .all(|(_, wake, hour)| (*wake, *hour) == (6, 60)));
@@ -65,4 +79,18 @@ fn role_strips_only_the_numeric_counter_and_unknown_roles_get_initial_caps() {
         alert_line(&unknown, 1000).as_deref(),
         Some("TURN-BUDGET custom-role custom-role-12 wake=7/6 hour=0/60")
     );
+}
+
+#[test]
+fn reader_deduplicates_status_files_by_role_and_session_not_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("status")).unwrap();
+    for (name, wake) in [("first", 7), ("second", 8)] {
+        fs::write(
+            dir.path().join(format!("status/{name}.json")),
+            json!({"turn_budget":status(wake, 2)}).to_string(),
+        )
+        .unwrap();
+    }
+    assert_eq!(read_alerts(dir.path(), 1000).len(), 1);
 }

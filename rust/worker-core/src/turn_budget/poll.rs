@@ -1,5 +1,4 @@
 //! Narrow shell recognition, not a security parser or command sandbox.
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub fn refusal() -> String {
@@ -7,11 +6,11 @@ pub fn refusal() -> String {
 }
 
 #[derive(Debug)]
-struct Shell {
-    commands: Vec<Vec<String>>,
-    looped: bool,
-    writes: bool,
-    dynamic: bool,
+pub(super) struct Shell {
+    pub commands: Vec<Vec<String>>,
+    pub looped: bool,
+    pub writes: bool,
+    pub dynamic: bool,
 }
 
 fn push_word(words: &mut Vec<String>, word: &mut String, quoted: &mut bool) {
@@ -28,7 +27,7 @@ fn push_word(words: &mut Vec<String>, word: &mut String, quoted: &mut bool) {
 
 /// Quoted text stays a word; comments and whitespace never become commands.
 /// Unsupported/unbalanced syntax fails open rather than guessing a refusal.
-fn parse(s: &str) -> Option<Shell> {
+pub(super) fn parse(s: &str) -> Option<Shell> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut commands = Vec::new();
@@ -86,7 +85,8 @@ fn parse(s: &str) -> Option<Shell> {
             }
             '>' => {
                 writes = true;
-                word.push(c);
+                // Keep executable redirections distinct from literal '>' text.
+                word.push('\u{1}');
             }
             c if c.is_whitespace() => {
                 push_word(&mut words, &mut word, &mut quoted);
@@ -112,6 +112,7 @@ fn parse(s: &str) -> Option<Shell> {
             looped |= matches!(words[0].as_str(), "while" | "until");
             words.remove(0);
         }
+        looped |= words.first().is_some_and(|s| s == "for");
         for word in words.iter_mut() {
             if word.starts_with('\0') {
                 word.remove(0);
@@ -142,10 +143,19 @@ fn sleep_poll_depth(command: &str, depth: usize) -> bool {
         return false;
     };
     let has_sleep = shell.commands.iter().any(|c| c[0] == "sleep");
-    if shell.looped && has_sleep {
+    let only_checks = !shell.writes
+        && shell.commands.iter().any(|c| read_command(c))
+        && shell
+            .commands
+            .iter()
+            .all(|c| read_command(c) || matches!(c[0].as_str(), "true" | "false" | ":" | "for"));
+    if shell.looped && (has_sleep || only_checks) {
         return true;
     }
     for (i, c) in shell.commands.iter().enumerate() {
+        if c[0] == "watch" && watch_read(c) {
+            return true;
+        }
         if c[0] == "sleep" && shell.commands.get(i + 1).is_some_and(|c| read_command(c)) {
             return true;
         }
@@ -157,6 +167,19 @@ fn sleep_poll_depth(command: &str, depth: usize) -> bool {
                     return true;
                 }
             }
+        }
+    }
+    false
+}
+
+fn watch_read(c: &[String]) -> bool {
+    let mut i = 1;
+    while let Some(arg) = c.get(i) {
+        match arg.as_str() {
+            "-n" | "--interval" => i += 2,
+            "-d" | "--differences" | "-t" | "--no-title" | "--" => i += 1,
+            _ if arg.starts_with("--interval=") => i += 1,
+            _ => return read_command(&c[i..]),
         }
     }
     false
@@ -194,7 +217,8 @@ pub fn read_only(command: &str) -> bool {
     let Some(shell) = parse(command) else {
         return false;
     };
-    !shell.writes
+    !shell.looped
+        && !shell.writes
         && !shell.dynamic
         && !shell.commands.is_empty()
         && shell.commands.iter().all(|c| read_command(c))
@@ -207,49 +231,4 @@ pub fn fingerprint(command: &str, cwd: &str) -> String {
     hasher.update([0]);
     hasher.update(serde_json::to_vec(&words).unwrap_or_default());
     format!("{:x}", hasher.finalize())
-}
-
-pub fn changed_state(payload: &Value, command: Option<&str>) -> bool {
-    let response = &payload["tool_response"];
-    if response.is_null()
-        || response["is_error"] == true
-        || response["interrupted"] == true
-        || response["exit_code"].as_i64().is_some_and(|n| n != 0)
-    {
-        return false;
-    }
-    if matches!(
-        payload["tool_name"].as_str(),
-        Some("Edit" | "Write" | "NotebookEdit")
-    ) {
-        return true;
-    }
-    let Some(shell) = command.and_then(parse) else {
-        return false;
-    };
-    if shell.dynamic {
-        return false;
-    }
-    shell.writes
-        || shell.commands.iter().any(|c| {
-            matches!(
-                c[0].as_str(),
-                "touch" | "mkdir" | "mv" | "cp" | "rm" | "install" | "tee"
-            ) || (c[0] == "git"
-                && c.get(1).is_some_and(|s| {
-                    matches!(
-                        s.as_str(),
-                        "add"
-                            | "commit"
-                            | "apply"
-                            | "fetch"
-                            | "pull"
-                            | "merge"
-                            | "rebase"
-                            | "checkout"
-                            | "switch"
-                            | "reset"
-                    )
-                }))
-        })
 }
