@@ -51,12 +51,25 @@ session has ended. Unrelated live runs do not suppress the condition. No runs at
 all also qualifies. The last ended run is the one with the greatest end time
 (run ID breaks ties), or `none` when there are no runs. Idle sessions do not alert.
 
+Ties select the lexicographically greatest run ID, independent of input order.
+Rows with a literal `busy: false` are skipped before validating session ID, role
+or transcript evidence. Missing or non-boolean `busy` cannot establish idleness
+and reports `unknown=sessions`; busy rows still require a nonempty ID and role.
+
 Each firing session queues one routing line, with JSON-escaped identifiers:
 `FLOW-WATCHDOG: busy-quiet session="session-1" role="build" quiet_age_seconds=1260 last_ended_run="run-1"`.
+`quiet_age_seconds` rounds fractional silence up to the next whole second, so
+every firing line displays an age greater than the strict 1200-second threshold.
 The existing durable active/queue mechanism keys this condition by session ID and
 transcript mtime, not the increasing age or other display details. Repeated ticks
 in the same quiet period do not re-alert; transcript progress starts a new period,
 and an observed recovery clears the active identity just like existing rules.
+
+Live-own-run suppression counts as an observed recovery and ends the standing
+identity even when the session remains busy and transcript mtime is unchanged.
+When that run ends, the unchanged quiet period may queue another alert. A live
+run before the first firing never creates a durable skip identity: ending it
+allows the first alert. Ordinary repeated ticks without recovery remain deduped.
 
 Collectors must retain failed reads: null, missing or malformed transcript mtime
 and run evidence produce the condition's own `busy-quiet ... unknown=transcript`,
@@ -64,6 +77,14 @@ and run evidence produce the condition's own `busy-quiet ... unknown=transcript`
 healthy result or the unrelated `invalid snapshot` rule. A malformed run record
 invalidates the run evidence because its parent may be unknown. Missing/null/bad
 session lists, clock or reader blocks similarly report condition-local unknowns.
+Unreadable run evidence also queues a block-level `busy-quiet unknown=runs` line,
+even with an empty session list or only idle sessions; any per-busy-session unknowns
+remain separate. Reader, clock and session-list validation failures return their
+own unknown first, without evaluating later evidence blocks.
+Condition-local evaluation requires the outer snapshot to deserialize and pass
+its existing validation. If unrelated required fields or host records are invalid,
+the durable `invalid snapshot` alert supersedes all condition-local unknowns;
+`session_activity` is not partially evaluated in that case.
 Timestamps must be nonnegative and no later than `now`. No transcript contents,
 live session services, spawner files or LLMs are read by the checker itself; the
 snapshot remains the injectable read boundary. This detects busy sessions waiting

@@ -20,7 +20,6 @@ impl<'de> Deserialize<'de> for Reader {
 struct Session {
     session_id: String,
     role: String,
-    busy: bool,
     #[serde(default)]
     transcript_mtime: Value,
 }
@@ -79,16 +78,25 @@ impl Reader {
         // A bad record might belong to any parent. Never drop it and infer no runs.
         let runs = read_runs(input.get("runs"), now);
         let mut alerts = Vec::new();
+        if runs.is_none() {
+            alerts.push(unknown("", "runs"));
+        }
         for value in sessions {
+            // Known idle rows need no identity, role or transcript evidence.
+            match value.get("busy").and_then(Value::as_bool) {
+                Some(false) => continue,
+                Some(true) => (),
+                None => {
+                    alerts.push(unknown("", "sessions"));
+                    continue;
+                }
+            }
             let Ok(session) = serde_json::from_value::<Session>(value.clone()) else {
                 alerts.push(unknown("", "sessions"));
                 continue;
             };
             if session.session_id.is_empty() || session.role.is_empty() {
                 alerts.push(unknown("", "sessions"));
-                continue;
-            }
-            if !session.busy {
                 continue;
             }
             let id = serde_json::to_string(&session.session_id).unwrap();
@@ -126,7 +134,7 @@ impl Reader {
             alerts.push(Alert {
                 message: format!(
                     "busy-quiet {context}quiet_age_seconds={} last_ended_run={last}",
-                    (now - mtime).floor()
+                    (now - mtime).ceil()
                 ),
                 // Mutable age/role/run details must not refire a standing episode.
                 active: format!("busy-quiet session={id} transcript_mtime={mtime}"),
