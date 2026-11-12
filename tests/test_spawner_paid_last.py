@@ -13,7 +13,7 @@ def use_table(monkeypatch, table):
     original = routing.plan_spawn
     monkeypatch.setattr(legs, 'DEFAULT_LEGS', table)
     monkeypatch.setattr(routing, 'plan_spawn',
-        lambda *a, **kw: original(*a, **dict(kw, legs=table, catalog_rows=())))
+        lambda *a, **kw: original(*a, **dict(kw, legs=table)))
 
 
 def fake_runner(tmp_path, status='completed', stop=None, text='verdict: pass'):
@@ -58,8 +58,7 @@ def test_paid_pin(tmp_path, monkeypatch, harness, pin, free_up, reason):
 
 
 def test_only_sol_writes():
-    # D-5240: paid Muse is third, after both subscription writers.
-    assert legs.WRITER_ORDER == ('cx-gpt-6.1-sol', 'agy-gemini-3.8-flash', 'opencode-console-muse-spark')
+    assert legs.WRITER_ORDER == ('cx-gpt-6.1-sol', 'opencode-console-muse-spark')
     assert [leg.id for leg in legs.DEFAULT_LEGS if 'implement' in leg.roles] == list(legs.WRITER_ORDER)
     assert {'deepseek', 'openrouter-free', 'mimo-v2.6-pro'} <= {leg.id for leg in legs.DEFAULT_LEGS}
 
@@ -92,10 +91,14 @@ def test_muse_amber_paid_pin_checks_free_availability(tmp_path, monkeypatch, pin
 
 @pytest.mark.parametrize('pin', ['leg', 'model'])
 @pytest.mark.parametrize('subscriptions_up', [
-    legs.WRITER_ORDER[:2], legs.WRITER_ORDER[:1], legs.WRITER_ORDER[1:2], ()])
+    ('cx-gpt-6.1-sol', 'cx-gpt-6-luna'), ('cx-gpt-6.1-sol',), ('cx-gpt-6-luna',), ()])
 @pytest.mark.parametrize('reason', [None, 'Audited public writer override'])
-def test_muse_writer_pin_cannot_bypass_available_subscriptions(tmp_path, pin, subscriptions_up, reason):
-    writers = {leg.id: leg for leg in legs.DEFAULT_LEGS if leg.id in legs.WRITER_ORDER}
+def test_muse_writer_pin_cannot_bypass_available_subscriptions(tmp_path, monkeypatch, pin, subscriptions_up, reason):
+    # Mechanics table retains coverage for more than one subscription writer.
+    table = tuple(replace(leg, roles=('implement',)) for leg in legs.DEFAULT_LEGS
+                  if leg.id in (*legs.WRITER_ORDER, 'cx-gpt-6-luna'))
+    use_table(monkeypatch, table)
+    writers = {leg.id: leg for leg in table}
     amber = writers[legs.MUSE_AMBER]
     unavailable = {leg.model for mid, leg in writers.items() if mid != amber.id and mid not in subscriptions_up}
     runner = fake_runner(tmp_path, status='dry_run')
@@ -114,27 +117,35 @@ def test_muse_writer_pin_cannot_bypass_available_subscriptions(tmp_path, pin, su
         assert [call['model_or_combo'] for call in runner.calls] == [amber.model]
 
 
-@pytest.mark.parametrize('down_ids', [legs.WRITER_ORDER[:1], legs.WRITER_ORDER[:2]])
+@pytest.mark.parametrize('down_ids', [('cx-gpt-6.1-sol',), ('cx-gpt-6.1-sol', 'cx-gpt-6-luna')])
 @pytest.mark.parametrize('role', ['implement', 'review'])
 def test_measured_down_subscriptions_still_precede_paid_muse(tmp_path, monkeypatch, down_ids, role):
     import time
-    writers = tuple(leg for leg in legs.DEFAULT_LEGS if leg.id in legs.WRITER_ORDER)
+    subscriptions = ('cx-gpt-6.1-sol', 'cx-gpt-6-luna')
+    writers = tuple(leg for leg in legs.DEFAULT_LEGS if leg.id in (*subscriptions, legs.MUSE_AMBER))
     table = tuple(replace(leg, roles=(role,)) for leg in writers)
     use_table(monkeypatch, table)
     service = SpawnService(state=tmp_path, leg_reader=lambda *a, **kw: {'state': 'available', 'evidence': None})
     service._save(dict(run_id='run-subscriptions', status='failed', ended=time.time(),
         attempts=[dict(leg={'id': mid}, status='failed', down_reason='usage_limit') for mid in down_ids]))
-    plan = service.route({'estimate_tokens': 1000}, role=role, writer_families=['qwen'])
-    expected = sorted(legs.WRITER_ORDER[:2], key=lambda mid: mid in down_ids) + [legs.MUSE_AMBER]
+    plan = service.route({'estimate_tokens': 1000,
+                          'diff_ref': {'repo': '/repo', 'base': 'HEAD~1', 'head': 'HEAD'}},
+                         role=role, writer_families=['qwen'])
+    expected = sorted(subscriptions, key=lambda mid: mid in down_ids) + [legs.MUSE_AMBER]
     assert [leg.id for leg in plan.legs] == expected
 
 
 @pytest.mark.parametrize('role', ['implement', 'review'])
 def test_paid_muse_precedes_deepseek_despite_host_cooldown(tmp_path, monkeypatch, role):
     import time
+    from plangraph.routing_support import resolver
     amber = next(leg for leg in legs.DEFAULT_LEGS if leg.id == legs.MUSE_AMBER)
     deepseek = next(leg for leg in legs.DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
     use_table(monkeypatch, tuple(replace(leg, roles=(role,), tier='paid') for leg in (deepseek, amber)))
+    original_catalog = resolver.get_catalog_models
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
+        dict(row, tier='paid') if row['id'] == deepseek.model else row
+        for row in original_catalog()])
     service = SpawnService(state=tmp_path, leg_reader=lambda *a, **kw: {'state': 'available', 'evidence': None})
     service._save(dict(run_id='run-paidcooldown', status='failed', ended=time.time(),
         attempts=[dict(leg={'id': amber.id}, status='failed', down_reason='usage_limit')]))

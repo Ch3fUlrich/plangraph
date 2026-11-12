@@ -107,7 +107,7 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
     # D-5240: the subscription DeepSeek seat precedes paid Muse.
     assert [leg["id"] for leg in bare["legs"]] == [
-        "opencode-big-pickle", "agy-gemini-3.8-flash", "agy-gemini-4-argon",
+        "agy-gemini-3.8-flash", "opencode-big-pickle", "agy-gemini-4-argon",
         "agy-gpt-oss-120b", "omniroute-deepseek-flash", "omniroute-muse-spark",
         "opencode-go-gemini-4-argon", "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash",
         "opencode-console-muse-spark",

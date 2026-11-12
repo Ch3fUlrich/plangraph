@@ -56,9 +56,9 @@ def test_seats_and_impossible_fence():
                  for l in DEFAULT_LEGS)
     p = plan_spawn(CARD, role="review", writer_families=("gpt",), legs=legs)
     # Equal-cost seats retain table order; Claude review legs retain their family flag.
-    assert [l.family for l in p.review_seats] == ["qwen", "glm"]
+    assert [l.family for l in p.review_seats] == ["qwen", "gemini"]
     assert all(l.claude_family for l in p.legs if l.family == "claude")
-    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "glm"
+    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "gemini"
     # With the other automatic families fenced, muse-amber and Haiku remain; Grok is manual-only.
     p = plan_spawn(CARD, role="review",
                    writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo"),
@@ -78,7 +78,7 @@ def test_seats_and_impossible_fence():
 
 def test_operator_order_and_roles_roundtrip(tmp_path):
     assert [l.id for l in DEFAULT_LEGS if "implement" in l.roles] == [
-        "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "opencode-console-muse-spark"]  # D-5240
+        "cx-gpt-6.1-sol", "opencode-console-muse-spark"]  # D-5198
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
         "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
@@ -101,7 +101,7 @@ def test_benchmark_within_tier_only(monkeypatch):
     assert p.first_leg.id == "opencode-deepseek-v4.1-flash-free"  # D-5092
     assert [l.id for l in p.legs] == [
         'opencode-deepseek-v4.1-flash-free',
-        'opencode-glm-5.3-flash-free', 'openrouter-free', 'cx-gpt-6.1-sol', 'agy-gemini-3.8-flash',
+        'opencode-glm-5.3-flash-free', 'openrouter-free', 'agy-gemini-3.8-flash', 'cx-gpt-6.1-sol',
         'mimo-v2.6-flash', 'mimo-v2.6-pro', 'opencode-console-muse-spark', 'deepseek']
     assert p.legs[-1].tier == 'paid'
     assert p.p_source == "operator-order"

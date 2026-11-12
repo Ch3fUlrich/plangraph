@@ -109,8 +109,6 @@ def test_catalog_policy_is_not_mutated(tmp_path):
               if resolver.is_model_available(m, reader)]
     # New review seats extend the catalog, never reorder the existing entries.
     expected = MAIN_ORDER.copy()
-    # D-5240 changes Sol's model, never its retained catalog position.
-    expected[expected.index('omniroute/cx-gpt-6.1-sol')] = 'omniroute/cx-gpt-6.1-sol-xhigh'
     expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'gemini-4-argon-high')
     expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'opencode/big-pickle')
     expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'gpt-oss-120b-medium')

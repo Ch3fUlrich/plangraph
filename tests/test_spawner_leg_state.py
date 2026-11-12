@@ -73,8 +73,7 @@ def test_catalog_tier_survives_planning_and_cli(tier, role, monkeypatch, tmp_pat
     from plangraph.planner.routing import plan_spawn
     from plangraph.routing_support import resolver
     from plangraph.spawner.cli import main
-    base = replace(next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol'),
-                   id='catalog-writer', model='test/catalog-writer')
+    base = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol')
     legs = (replace(base, roles=(role,)), replace(base, id='free-review',
             model='test/free-review', family='gemini', tier='free', roles=(role,)))
     monkeypatch.setattr('plangraph.planner.legs.DEFAULT_LEGS', legs)

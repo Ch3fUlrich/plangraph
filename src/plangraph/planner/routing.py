@@ -14,7 +14,7 @@ from plangraph.routing_errors import RouteError, SpawnRefused
 
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
                          BenchRequired, benchmark_rows_from_db)
-from .legs import DEFAULT_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
+from .legs import DEFAULT_LEGS, LEAD_WRITER, MUSE_AMBER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
 from .provider_stop import next_leg_after_provider_stop
 from .review_order import review_key, catalog_tiers
 from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts  # noqa: F401
@@ -203,12 +203,13 @@ def next_after_failure(route: Route, tried: Sequence[str], exit_class: str,
         return ("wait", None)
     if tier_attempts < route.attempt_budget:
         return ("retry", last)
-    for leg in route.legs:
-        if leg.tier == last.tier == "subscription" and leg.id not in spent:
-            return ("rotate", leg)
     rank = TIERS.index(last.tier)
     for leg in route.legs:
         if TIERS.index(leg.tier) > rank:
+            if leg.id == MUSE_AMBER:  # Only Muse promotion must exhaust subscriptions.
+                for subscription in route.legs:
+                    if subscription.tier == "subscription" and subscription.id not in spent:
+                        return ("rotate", subscription)
             return ("promote", leg)
     return ("park", None)
 
@@ -429,8 +430,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     candidate_details.sort(key=lambda c: order.get(c['leg'], len(order)))
     from plangraph.routing_support.fixer import split_findings
     from plangraph.settings import admit_fixer_threshold
-    # plan_spawn receives no store-derived keeper item, so the trusted layers
-    # are global (R2); the card's project/phase layers may only tighten (R3).
+    # No store-derived item: global R2 applies; card project/phase may only tighten (R3).
     threshold = admit_fixer_threshold(card=card)
     groups = split_findings(card.get('findings', ()), limit=threshold) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,

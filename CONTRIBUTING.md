@@ -67,7 +67,6 @@ For an offline judge brief, run `python3 tools/judge_prompt.py --findings findin
 `ci.json` mapping job names to conclusion strings. The prompt includes complete
 findings and diff; `--byte-budget` limits whole file bodies and lists explicit cuts.
 See [Lean review harness](docs/lean-review-harness.md) for seat tool modes.
-The run-exit notification smoke uses the routed Sol xhigh writer, with its child replaced locally.
 Only `--tool-mode tools` advertises follow-up reads; `inline-only` reads the
 spawner-inlined diff without tools, and `prompt-only` uses supplied evidence.
 Gateway prompt-only config is file-backed via a portable launcher, never argv.

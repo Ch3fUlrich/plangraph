@@ -224,7 +224,7 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
 
 # Registered seats are the authoritative offline routing surface. Legacy rows
 # remain visible for diagnostics but must not become new offline spawn routes.
-from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.planner.legs import DEFAULT_LEGS, MUSE_AMBER
 
 # OVH removed by operator, muse-spark-1.3-free gone D-1714, D-2655 G3.
 OPERATOR_REMOVED_MODELS = frozenset({
@@ -254,9 +254,9 @@ for _leg in DEFAULT_LEGS:
         DEFAULT_FALLBACK_MODELS.append(dict(
             id=_model, family=_leg.family, harness=_leg.harness,
             tier=_leg.tier, available=int(_model in _fallback_legs),
-            active=_model in _fallback_legs,
-            context_window=_leg.max_request_tokens, tool_mode=_leg.tool_mode,
-            trains_on_prompts=int(_leg.trains_on_data), aa_intelligence=0.0, combos=[]))
+            active=_model in _fallback_legs, context_window=_leg.max_request_tokens,
+            tool_mode=_leg.tool_mode, aa_intelligence=0.0, combos=[],
+            **({'trains_on_prompts': int(_leg.trains_on_data)} if _leg.id == MUSE_AMBER else {})))
 
 _DEFAULT_CATALOG_DB: Any = None
 _MISSING = object()

@@ -63,7 +63,7 @@ def test_ready_card_moves_to_ready(w, repo):
     result = gate(w, repo, key)
     assert result.ready and result.acted and result.state == "ready"
     assert result.question_id is None and result.route_error is None
-    assert (result.route.first_leg.id, result.route.first_leg.tier) == ("opencode-big-pickle", "free")
+    assert (result.route.first_leg.harness, result.route.first_leg.tier) == ("agy", "free")
     assert all(leg.harness != "qodercli" for leg in result.route.legs)
     assert state_of(w, key) == "ready"
     assert gate(w, repo, key).state == "ready"
@@ -258,11 +258,11 @@ def test_pack_needs_a_window_class(w, repo):
 
 
 def test_route_for_card_prefers_qodercli(w):
-    """Historical name: disabled Qoder yields to the eligible free review leg."""
+    """Historical name: disabled Qoder yields to the eligible free Antigravity leg."""
     (key,) = seed(w, [("A", [])])
     put(w, key, estimate_tokens=40000, risk_tags=[])
     route = service.route_for_card(w.store, w.p("router"), key, legs=DEFAULT_LEGS)
-    assert (route.first_leg.id, route.first_leg.tier) == ("opencode-big-pickle", "free")
+    assert (route.first_leg.harness, route.first_leg.tier) == ("agy", "free")
     assert all(leg.harness != "qodercli" for leg in route.legs)
     assert route.window_class == "128k"
 

@@ -156,7 +156,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
         assert models[:4] == ['opencode/deepseek-v4.1-flash-free',
                               'opencode/glm-5.3-flash-free', 'openrouter/free',
-                              'omniroute/cx-gpt-6.1-sol-xhigh']
+                              'gemini-3.8-flash']
         for leg in service.route({'estimate_tokens': 1000}).legs:
                 store.record_provider_response(leg.model if '/' in leg.model else 'agy/' + leg.model,
                     429, 'provider quota exhausted', {}, 'test')

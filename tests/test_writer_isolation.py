@@ -47,7 +47,7 @@ def _run_writer(tmp_path, monkeypatch, work, *, act=lambda work: None, role='imp
         return SimpleNamespace(pid=FAKE_PID, returncode=0, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(work), process_factory=factory)
     async def run():
-        job = await runner.spawn('prompt', model_or_combo='omniroute/cx-gpt-6.1-sol-xhigh', role=role,
+        job = await runner.spawn('prompt', model_or_combo='omniroute/cx-gpt-6.1-sol', role=role,
                                  client='opencode', cwd=str(work), wait_seconds=3,
                                  extra_env={'GIT_AUTHOR_EMAIL': 'run-test@writer.plangraph.invalid'})
         await runner._tasks[job.job_id]

@@ -24,18 +24,15 @@ CARD = {"estimate_tokens": 20000}
 BY_ID = {leg.id: leg for leg in DEFAULT_LEGS}
 
 
-@pytest.fixture(autouse=True)
-def fixed_catalog(monkeypatch):
-    monkeypatch.setitem(plan_spawn.__kwdefaults__, "catalog_rows", ())
-
-
 def test_writer_cost_contract_cannot_be_reclassified_by_catalog():
+    # Historical name: catalog costs project uniformly, never grant writer roles.
     rows = [dict(id=leg.model if '/' in leg.model else 'agy/' + leg.model,
                  tier='free', available=1, active=True)
             for leg in DEFAULT_LEGS if leg.id in WRITER_ORDER]
     plan = plan_spawn(CARD, role='implement', catalog_rows=rows)
     assert tuple(leg.id for leg in plan.legs) == WRITER_ORDER
-    assert tuple(leg.tier for leg in plan.legs) == ('subscription', 'subscription', 'paid')
+    assert tuple(leg.tier for leg in plan.legs) == ('free', 'free')
+    assert 'implement' not in BY_ID['agy-gemini-3.8-flash'].roles
 
 
 def test_catalog_resolvers_share_derivation_and_family_convention():
@@ -129,8 +126,7 @@ def test_muse_never_automatic_even_if_lifted(role):
     (60000, ["tests/test_public_api.py"]),
 ])
 def test_muse_amber_routed_after_sol_and_mimo_public_only(estimate_tokens, paths):
-    # D-5240: subscription Gemini writes before paid Muse, even when Sol is down.
-    assert WRITER_ORDER == ("cx-gpt-6.1-sol", "agy-gemini-3.8-flash", MUSE_AMBER) and BY_ID[MUSE_AMBER].trains_on_data
+    assert WRITER_ORDER == ("cx-gpt-6.1-sol", MUSE_AMBER) and BY_ID[MUSE_AMBER].trains_on_data
     assert RoutePolicy().skip_reason(BY_ID[MUSE_AMBER], "implement") is None
     assert [l.id for l in plan_spawn(CARD, role="implement").legs] == list(WRITER_ORDER)
     diff = {"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}
@@ -166,12 +162,12 @@ def test_implement_subscriptions_precede_muse_amber(sol_up):
         return {"state": "available" if sol_up or model != BY_ID["cx-gpt-6.1-sol"].model else "down",
                 "evidence": None}
     plan = plan_spawn(CARD, role="implement", leg_reader=reader)
-    expected = (["cx-gpt-6.1-sol"] if sol_up else []) + ["agy-gemini-3.8-flash", MUSE_AMBER]
+    expected = (["cx-gpt-6.1-sol"] if sol_up else []) + [MUSE_AMBER]
     assert [leg.id for leg in plan.legs] == expected
-    assert BY_ID["cx-gpt-6.1-sol"].model == "omniroute/cx-gpt-6.1-sol-xhigh"
+    assert BY_ID["cx-gpt-6.1-sol"].model == "omniroute/cx-gpt-6.1-sol"
     assert [leg.tier for leg in plan.legs[:-1]] == ["subscription"] * (len(expected) - 1)
     # Even a reordered table cannot put a paid writer before an eligible subscription.
-    shuffled = tuple(BY_ID[mid] for mid in (MUSE_AMBER, "agy-gemini-3.8-flash", "cx-gpt-6.1-sol"))
+    shuffled = tuple(BY_ID[mid] for mid in (MUSE_AMBER, "cx-gpt-6.1-sol"))
     assert [leg.id for leg in plan_spawn(CARD, role="implement", legs=shuffled, leg_reader=reader).legs] == expected
 
 
@@ -183,9 +179,10 @@ def test_implement_no_subscription_writer_uses_muse_before_paid_deepseek():
     def reader(model, **kwargs):
         return {"state": "down" if model in subscriptions or model == "agy/gemini-3.8-flash" else "available",
                 "evidence": None}
-    plan = plan_spawn(CARD, role="implement", legs=writers, leg_reader=reader, policy=RoutePolicy())
+    plan = plan_spawn(CARD, role="implement", legs=writers, leg_reader=reader, policy=RoutePolicy(),
+                      catalog_rows=[dict(id=deepseek.model, tier='paid', available=1, active=True)])
     assert [leg.id for leg in plan.legs] == [MUSE_AMBER, deepseek.id]
-    assert {skip["leg"] for skip in plan.skipped} == {"cx-gpt-6.1-sol", "agy-gemini-3.8-flash"}
+    assert {skip["leg"] for skip in plan.skipped} == {"cx-gpt-6.1-sol"}
     assert all(skip["reason"] == "down" for skip in plan.skipped)
     assert all(leg.tier == "paid" for leg in plan.legs)
     production = plan_spawn(CARD, role="implement", leg_reader=reader)
@@ -195,10 +192,11 @@ def test_implement_no_subscription_writer_uses_muse_before_paid_deepseek():
 
 @pytest.mark.parametrize("role", ["implement", "review"])
 @pytest.mark.parametrize("exit_class", ["check_fail", "stall", "timeout", "rebase_conflict", "worker_crash"])
-@pytest.mark.parametrize("unavailable", [(), ("cx-gpt-6.1-sol",), ("agy-gemini-3.8-flash",), WRITER_ORDER[:2]])
+@pytest.mark.parametrize("unavailable", [(), ("cx-gpt-6.1-sol",), ("cx-gpt-6-luna",), ("cx-gpt-6.1-sol", "cx-gpt-6-luna")])
 @pytest.mark.parametrize("implicit_first", [False, True])
 def test_failure_promotion_exhausts_subscriptions_before_muse(role, exit_class, unavailable, implicit_first):
-    writers = tuple(BY_ID[mid] for mid in reversed(WRITER_ORDER))
+    writers = tuple(replace(BY_ID[mid], roles=(role,)) for mid in
+                    (MUSE_AMBER, 'cx-gpt-6.1-sol', 'cx-gpt-6-luna'))
     route = route_card(CARD, legs=writers, role=role, unavailable=unavailable)
     subscriptions = [leg.id for leg in route.legs if leg.tier == "subscription"]
     assert [leg.id for leg in route.legs] == [*subscriptions, MUSE_AMBER]
@@ -217,11 +215,12 @@ def test_failure_promotion_exhausts_subscriptions_before_muse(role, exit_class, 
 
 @pytest.mark.parametrize("exit_class", ["usage_limit", "outage"])
 def test_provider_failure_rotates_subscription_writer_before_waiting(exit_class):
-    route = route_card(CARD, legs=tuple(BY_ID[mid] for mid in WRITER_ORDER), role="implement")
-    for tried in ([], [WRITER_ORDER[0]]):
+    subscriptions = ('cx-gpt-6.1-sol', 'cx-gpt-6-luna')
+    route = route_card(CARD, legs=tuple(BY_ID[mid] for mid in (*subscriptions, MUSE_AMBER)), role="implement")
+    for tried in ([], [subscriptions[0]]):
         action, leg = next_after_failure(route, tried, exit_class, route.attempt_budget)
-        assert (action, leg.id) == ("rotate", WRITER_ORDER[1])
-    assert next_after_failure(route, WRITER_ORDER[:2], exit_class, route.attempt_budget) == ("wait", None)
+        assert (action, leg.id) == ("rotate", subscriptions[1])
+    assert next_after_failure(route, subscriptions, exit_class, route.attempt_budget) == ("wait", None)
 
 
 @pytest.mark.parametrize("status", [402, 429])
@@ -230,10 +229,15 @@ def test_provider_stop_exhausts_available_subscription_writers(tmp_path, status,
     from plangraph.planner.routing import next_leg_after_provider_stop
     from plangraph.routing_support.leg_state import LegStateStore
     store = LegStateStore(tmp_path / "legs.sqlite")
+    # An explicit mechanics table tests bare/qualified agy limits without enabling
+    # the production free, review-only Gemini writer.
+    gemini = replace(BY_ID['agy-gemini-3.8-flash'], tier='subscription', roles=('implement',))
+    writers = (BY_ID['cx-gpt-6.1-sol'], gemini, BY_ID[MUSE_AMBER])
     if gemini_down:
         store.record_provider_response(gemini_down, status, "quota exhausted", {}, "test", now=100)
-    plan = plan_spawn(CARD, role="implement", leg_reader=store, now=100)
-    expected = [WRITER_ORDER[0], *([] if gemini_down else [WRITER_ORDER[1]]), MUSE_AMBER]
+    plan = plan_spawn(CARD, role="implement", legs=writers, leg_reader=store, now=100,
+        catalog_rows=[dict(id='agy/' + gemini.model, tier='subscription', available=1, active=True)])
+    expected = ['cx-gpt-6.1-sol', *([] if gemini_down else [gemini.id]), MUSE_AMBER]
     assert [leg.id for leg in plan.legs] == expected
     for current, following in zip(expected, expected[1:]):
         leg = next_leg_after_provider_stop(plan, current, status, "quota exhausted", {}, "test", store=store, now=100)
@@ -247,14 +251,15 @@ def test_review_subscriptions_precede_muse_then_paid_deepseek(measured):
     deepseek = replace(BY_ID["opencode-go-deepseek-v4-flash"], tier="paid")
     # Paid Muse is deliberately before the subscriptions in this input table:
     # D-5240 requires tier ordering, not a hand-set list of subscription ids.
-    legs = (BY_ID[MUSE_AMBER], deepseek, BY_ID["agy-gemini-3.8-flash"], BY_ID["claude-haiku-5.5"])
+    legs = (BY_ID[MUSE_AMBER], deepseek, BY_ID["agy-gemini-4-argon"], BY_ID["claude-haiku-5.5"])
     benchmark = {deepseek.model: dict(aa_intelligence=999, cost_per_task_usd=0,
                                      pool_burn_weight=0)} if measured else None
     plan = plan_spawn(CARD, role="review", writer_families=("gpt",), legs=legs,
-                      leg_reader=lambda *a, **kw: {"state": "available", "evidence": None}, benchmark=benchmark)
-    assert [leg.id for leg in plan.legs] == ["agy-gemini-3.8-flash", "claude-haiku-5.5", MUSE_AMBER, deepseek.id]
+                      leg_reader=lambda *a, **kw: {"state": "available", "evidence": None}, benchmark=benchmark,
+                      catalog_rows=[dict(id=deepseek.model, tier='paid', available=1, active=True)])
+    assert [leg.id for leg in plan.legs] == ["agy-gemini-4-argon", "claude-haiku-5.5", MUSE_AMBER, deepseek.id]
     assert [leg.tier for leg in plan.legs] == ["subscription", "subscription", "paid", "paid"]
-    assert [leg.id for leg in plan.review_seats] == ["agy-gemini-3.8-flash", "claude-haiku-5.5"]
+    assert [leg.id for leg in plan.review_seats] == ["agy-gemini-4-argon", "claude-haiku-5.5"]
 
 
 @pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
@@ -288,11 +293,8 @@ def test_muse_fence_does_not_ban_other_meta_families(family, role):
 
 
 @pytest.mark.parametrize("mid", MUSE)
-def test_explicit_muse_requires_reason_and_still_works(tmp_path, mid, monkeypatch):
-    from plangraph.planner.routing import SpawnPlan
+def test_explicit_muse_requires_reason_and_still_works(tmp_path, mid):
     svc = SpawnService(SpawnerRunner(), state=tmp_path)
-    free = replace(BY_ID["qodercli-qwen3.8-flash"], disabled=None)
-    monkeypatch.setattr(svc, "_route", lambda *a, **kw: SpawnPlan((free,), (), "test", (), ()))
     kwargs = dict(card=CARD, prompt="Review public material", role="review",
                   writer_families=("gpt",), leg=mid, dry_run=True)
     with pytest.raises(SpawnRefused, match="override"):
@@ -322,11 +324,7 @@ def test_grok_render_is_scoped_and_preserves_host_refusals(monkeypatch, hermetic
     assert host_skip_reason(other, env=env, probe=lambda _: {row["model"]}).startswith("not_served_on_host")
     untouched = {"PLANGRAPH_GATEWAY_URL": gateway}
     assert render_gateway_providers(untouched, BY_ID["cx-gpt-6.1-sol"].model) is None
-    # D-5240's Sol xhigh writer needs its scoped model entry, unlike base Sol.
-    assert json.loads(untouched["OPENCODE_CONFIG_CONTENT"])["providers"] == {
-        "omniroute": {"models": {
-            "cx-gpt-6.1-sol-xhigh": {"name": "cx-gpt-6.1-sol-xhigh", "modelID": "cx/gpt-6.1-sol-xhigh",
-                                     "limit": {"context": 400000, "output": 128000}}}}}
+    assert "omniroute" not in json.loads(untouched["OPENCODE_CONFIG_CONTENT"])["providers"]
 
 
 def test_console_without_gateway_key_is_not_rendered():

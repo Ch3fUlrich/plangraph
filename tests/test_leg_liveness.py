@@ -119,7 +119,7 @@ def test_execute_probe_falls_through(tmp_path, monkeypatch):
 def failed_probe(tmp_path, monkeypatch):
     from plangraph.spawner import leg_probe
     from plangraph.planner.legs import DEFAULT_LEGS
-    leg = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol')
+    leg = next(l for l in DEFAULT_LEGS if l.model == 'omniroute/cx-gpt-6.1-sol')
     store = LegStateStore(tmp_path / 'legs.sqlite')
     runner = SimpleNamespace(leg_reader=store, stderr='probe diagnostic', jobs={})
     from plangraph.spawner.runner import spawn_service

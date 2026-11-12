@@ -47,7 +47,8 @@ def admit_leg(leg):
 
 def paid_pin_reason(available, role, override_reason, down):
     """A paid writer pin cannot bypass subscriptions; free legs need an audit."""
-    subscriptions = [leg.id for leg in available if leg.tier == 'subscription']
+    subscriptions = [leg.id for leg in available
+                     if leg.tier == 'subscription' and leg.id not in down]
     if role == 'implement' and subscriptions:
         raise SpawnRefused('paid writer pin refused; subscription writers available: '
                            + ', '.join(subscriptions))

@@ -74,7 +74,7 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
          note="free while qoder credits remain, until its rate limit"),
     _leg("mimo-v2.6-flash", "subscription", "opencode",
          "mimo/mimo-v2.6-flash", "mimo", ("128k", "256k", "1m"), 200000, False),
-    _leg("agy-gemini-3.8-flash", "subscription", "agy", "gemini-3.8-flash", "gemini",
+    _leg("agy-gemini-3.8-flash", "free", "agy", "gemini-3.8-flash", "gemini",
          ("128k", "256k", "1m"), 900000, False,
          note="gemini after its Friday-evening reset"),
     _leg("agy-sonnet-5.5", "subscription", "agy", "claude-sonnet-5-5-medium", "claude",
@@ -100,7 +100,7 @@ DEFAULT_LEGS = (
         disabled="D-4196 opencode zen never worked, use opencode go; never remove (D-3828)"),
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
-    Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol-xhigh",
+    Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",),
         note="D-3605: operator implement leg (ChatGPT subscription via OmniRoute cx)"),
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
@@ -162,10 +162,8 @@ DEFAULT_LEGS = (
 
 #: D-5198: the console Muse review seat and fallback writer.
 MUSE_AMBER = "opencode-console-muse-spark"
-# D-5240 / rule 3.23a: tier, then table order; Muse writes only after subscriptions.
-WRITER_ORDER: tuple[str, ...] = tuple(
-    leg.id for leg in sorted(DEFAULT_LEGS, key=lambda leg: TIERS.index(leg.tier))
-    if leg.id in ("cx-gpt-6.1-sol", "agy-gemini-3.8-flash", MUSE_AMBER))
+# D-5198/D-5240: retain Sol; paid Muse writes only after subscription writers.
+WRITER_ORDER: tuple[str, ...] = ("cx-gpt-6.1-sol", MUSE_AMBER)
 # D-3828: retain every leg and its review order; only WRITER_ORDER legs write.
 DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
                              disabled=leg.disabled or (

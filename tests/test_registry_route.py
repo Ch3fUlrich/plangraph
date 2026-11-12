@@ -178,9 +178,9 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
         assert policy.skip_reason(by_id[leg_id], role) == reason
         if role == "implement":
             assert reasons == {}  # Role-ineligible legs are not policy skips.
-            # D-5240: subscription Gemini is the fallback before paid Muse.
+            # D-5198: paid Muse is the only added writer.
             assert [leg.id for leg in plan.legs] == [
-                'cx-gpt-6.1-sol', 'agy-gemini-3.8-flash', 'opencode-console-muse-spark']
+                'cx-gpt-6.1-sol', 'opencode-console-muse-spark']
             from plangraph.planner.routing import SpawnRefused
             from plangraph.spawner.service import SpawnService
             with pytest.raises(SpawnRefused, match=r"leg disabled: .*D-4196"):
@@ -210,8 +210,7 @@ def test_route_skips_paused_harness_per_role():
     reasons = {s["leg"]: s["reason"] for s in paused.skipped}
     assert {leg_id: reasons[leg_id] for leg_id in paused_ids} == dict.fromkeys(
         paused_ids, "paused_harness")
-    # D-5240's agy subscription writer remains when opencode is paused.
-    assert [leg.id for leg in paused.legs] == ["agy-gemini-3.8-flash"]
+    assert not paused.legs
 
 
 def test_explicit_policy_argument_wins():
