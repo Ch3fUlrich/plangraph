@@ -34,5 +34,7 @@ resolve Python before clearing the environment; CLI tests use a private PATH wit
 that interpreter, so non-system Python installations work without inherited state.
 Only `rust/pg-hook/**` maps to this doc; the shared workspace manifest and lock
 file remain unmapped, as required by `.docs-map`'s shared-file policy.
+Merge policy tests retain the unique crate-local mapping and its existing doc,
+and preserve all workspace members in main's path order, including `pg-reap`.
 Hook ports, property tests, 14-day zero-diff observation, rollback canary and settings
 integration remain deferred; the production switch belongs to **RUST-HOOKS-SWITCH**.

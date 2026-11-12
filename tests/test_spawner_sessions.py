@@ -28,7 +28,8 @@ def test_handoff_prefixes_prompt(site):
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
     go(site, s, handoff=str(hf))
-    assert run.calls[0][0][-1] == f"Restart from handoff {hf.resolve()}.\n\n" + PROMPT
+    assert run.calls[0][0][-1] == ''
+    assert run.calls[0][1]['input'] == f"Restart from handoff {hf.resolve()}.\n\n" + PROMPT
 
 
 def test_dry_run_writes_nothing(site):
