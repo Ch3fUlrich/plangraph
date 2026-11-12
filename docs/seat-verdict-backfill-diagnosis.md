@@ -108,3 +108,34 @@ record fixture already used `demo:A`; the reported redaction syntax and default
 item-key defects were not present. Completion/exit checks also already existed in
 the shared evidence reader. The baseline selected suite passed before changes;
 the new behavioral regressions were run failing before the production fixes.
+
+## Round 2 attribution and outbox isolation
+
+Only review records positively bound by item key, named prompt item, or evidenced
+PR contribute item rejection reasons. Contradictory identities on a bound record
+still refuse; unrelated keyed records do not suppress the concrete `no record`
+requirements or pollute TSV reason tallies. Writer families are the union of Git
+trailers and matching implementation-record witnesses, never whichever source was
+found first. Unknown writer witnesses fail closed rather than shrinking coverage.
+
+Record discovery uses `os.walk(followlinks=False)` and prunes symlinked directories.
+Each pruned directory has an explicit stderr diagnostic separate from item reasons;
+discovery does not read through it to guess an item binding. Unrelated symlinked
+system ancestors remain supported. Pin-key presence refuses even null, empty, or
+numeric-zero values; only explicit boolean `false` is non-refusing. JSON rows in
+both modes always carry `delivery` and `verifier_exit`, initially null. Direct
+library calls cannot bypass explicit apply or combine apply with either dry-run.
+
+Each seat's lock creation, locking, journal access, verifier invocation, and outcome
+persistence are isolated from later items. Unexpected errors produce a failed row
+with a phase and exception type without logging potentially sensitive exception
+text. Poster crashes and invalid exit values preserve `sending`; a journal already
+persisted as terminal also remains non-replayable if its marker write fails.
+Regressions cover JSON and TSV batch continuation, preserved healthy outboxes, and
+the forward path's actual `notify.inbox_lock` contending with backfill before a
+single successful send. Existing CHANGES-first selection remains unchanged.
+
+All five round 2 redacted-literal, syntax, and fixture-key reports were not
+reproduced: the real files parse, the default fixture binds to `demo:A`, and both
+healthy and writer fixtures for the second item bind to `demo:B`. The unchanged
+baseline selected suite passed 427 tests before the new failing-first regressions.

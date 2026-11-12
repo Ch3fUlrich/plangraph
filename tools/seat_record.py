@@ -61,7 +61,7 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
                          f"run dir name {run_dir.name!r}")
     if record.get("role") != "review":
         raise ValueError(f"record role {record.get('role')!r} is not 'review'")
-    if (any(isinstance(part, dict) and any(part.get(k) not in (None, False, "")
+    if (any(isinstance(part, dict) and any(k in part and part[k] is not False
             for k in ("pin", "pinned", "spawn_pin"))
             for part in (record, record.get("plan"), record.get("chosen_leg")))
             or record.get("override_reason") or isinstance(record.get("plan"), dict)
@@ -143,19 +143,26 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
 
 class RecordIndex(dict):
     """Records plus their lexical root, excluding unrelated system ancestors."""
-
 def _has_symlink(path, index):
     root = getattr(index, "root", path.parent.parent).absolute()
     relative = path.absolute().relative_to(root)
     return any((root / p).is_symlink() for p in (relative, *relative.parents))
-
 def record_index(records_dir):
     """Read each record and prompt once, shared by writer and review discovery."""
     if isinstance(records_dir, dict):
         return records_dir
     rows = RecordIndex()
     rows.root = Path(records_dir).absolute()
-    for path in sorted(Path(records_dir).glob("**/run-*/record.json")):
+    rows.skips = []
+    for directory, dirs, files in os.walk(rows.root, followlinks=False):
+        parent = Path(directory)
+        links = {name for name in dirs if (parent / name).is_symlink()}
+        rows.skips.extend(f"symlinked directory skipped: {(parent / name).relative_to(rows.root)}"
+                          for name in sorted(links))
+        dirs[:] = sorted(set(dirs) - links)
+        if not parent.name.startswith("run-") or "record.json" not in files:
+            continue
+        path = parent / "record.json"
         try:
             record = json.loads(path.read_text("utf-8"))
             if not isinstance(record, dict):
@@ -173,16 +180,14 @@ def merged_pr(item, git, lookup=None):
     """Resolve only an evidenced commit; injected lookup may use a JSON cache."""
     from plangraph.keeper.evidence_repo import repo_key
     head = item.get("head_sha")
-    if not head:
-        return None
+    if not head: return None
     if lookup is not None:
         try:
             value = lookup(head)
-            if type(value) is int or isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
-                return int(value) if int(value) > 0 else None
+            return int(value) if (type(value) is int or isinstance(value, str)
+                                 and re.fullmatch(r"[0-9]+", value)) and int(value) > 0 else None
         except (OSError, ValueError, subprocess.SubprocessError):
             return None
-        return None
     repo = git.repo_path(repo_key(item, SimpleNamespace(git=git), head)) if git else None
     if repo:
         try:
@@ -191,12 +196,11 @@ def merged_pr(item, git, lookup=None):
         except (OSError, subprocess.SubprocessError):
             return None
         match = re.search(r"Merge PR #(\d+)\b", result.stdout)
-        if result.returncode == 0 and match:
-            return int(match[1])
+        return int(match[1]) if result.returncode == 0 and match else None
     return None
 
 def writer_families(item, head, records_dir, git):
-    """Prefer evidenced git writers; fall back to matching implement records."""
+    """Union evidenced git writers and matching implement-record writers."""
     from plangraph.keeper.evidence_repo import repo_key
     from seat_verdict import model_family
     models = []
@@ -211,9 +215,8 @@ def writer_families(item, head, records_dir, git):
             for trailers in rows:
                 for name, value in trailers.items():
                     if name.lower() == "writer":
-                        models.extend(v.split()[0] for v in
-                                      (value if isinstance(value, list) else [value]) if v.split())
-    if not models and records_dir is not None:
+                        models.extend(v.split()[0] for v in (value if isinstance(value, list) else [value]) if v.split())
+    if records_dir is not None:
         index = record_index(records_dir)
         for path, (r, _) in index.items():
             try:
@@ -222,8 +225,8 @@ def writer_families(item, head, records_dir, git):
                     models.append(r.get("served_model"))
             except (OSError, ValueError, AttributeError):
                 continue
-    families = [model_family(m) for m in models]
-    return sorted(set(families)) if families and None not in families else []
+    families = {model_family(m) for m in models}
+    return sorted(families) if None not in families else []
 
 def snapshot_item(item, records_dir=None, git=None):
     """Choose newest verified evidence; conflicting SHAs in its epoch refuse."""
@@ -272,29 +275,27 @@ def eligible_records(item, records_dir):
         return [], [item.get("missing_reason") or "head mismatch: missing or ambiguous evidenced commit"]
     if not writers or any(w not in KNOWN_FAMILIES for w in writers):
         return [], ["unknown writer"]
-    eligible, reasons = [], []
+    eligible, reasons, bound = [], [], False
     index = record_index(records_dir)
     for path, (record, prompt) in index.items():
         family = model_family(record.get("served_model"))
         try:
-            if record.get("role") != "review":
-                continue
+            if record.get("role") != "review": continue
             prs = {int(n) for n in re.findall(r"\bPR\s+#(\d+)\b", prompt, re.I)}
             named = bool(re.search(r"(?<![\w:])" + re.escape(item["key"]) + r"(?![\w-])", prompt))
-            same_pr = item.get("pr_number") in prs
+            if record.get("item_key") != item["key"] and not (named or item.get("pr_number") in prs):
+                continue
+            bound = True
             keys = set(re.findall(r"(?<![\w:])[\w-]+:[A-Z][A-Z0-9-]*(?![\w-])", prompt))
             if record.get("item_key") not in (None, item["key"]) or keys - {item["key"]}:
                 raise ValueError("item key mismatch")
-            if record.get("item_key") != item["key"] and not (named or same_pr):
-                continue
             if prs and item.get("pr_number") and prs != {item["pr_number"]}:
                 raise ValueError("PR number mismatch")
             if (_has_symlink(path, index)
                     or not re.fullmatch(r"run-[0-9a-f]{32}", path.parent.name)
                     or not re.fullmatch(r"[0-9a-f]{64}", str(record.get("card_hash")))
                     or not isinstance(record.get("plan"), dict)
-                    or not isinstance(record.get("attempts"), list)
-                    or not record["attempts"]
+                    or not isinstance(record.get("attempts"), list) or not record["attempts"]
                     or not isinstance(record.get("cwd"), str)
                     or any(type(record.get(k)) not in (int, float) for k in ("started", "ended"))
                     or record["ended"] < record["started"]):
@@ -305,13 +306,10 @@ def eligible_records(item, records_dir):
             if evidence["head_sha"].lower() != head.lower():
                 raise ValueError("head mismatch")
             family = model_family(evidence.get("served_model"))
-            if family is None:
-                raise ValueError("served family unknown")
-            if family in writers:
-                raise ValueError("family same as writer")
+            if family is None: raise ValueError("served family unknown")
+            if family in writers: raise ValueError("family same as writer")
             ok, _ = parse_verdict(text)
-            if ok is None:
-                raise ValueError("no VERDICT")
+            if ok is None: raise ValueError("no VERDICT")
             if ok and (evidence.get("finish_reason") not in ("stop", "end_turn")
                        or str(evidence.get("test_gaming")).lower() != "no"):
                 raise ValueError("PASS safety evidence missing")
@@ -321,12 +319,11 @@ def eligible_records(item, records_dir):
                                  seat_dir=path.parent, head_sha=evidence["head_sha"]))
         except (OSError, ValueError) as exc:
             completion = record.get("completion")
-            reasons.append(f"{exc} [seat={path.parent.name} family="
-                           f"{family} head="
+            reasons.append(f"{exc} [seat={path.parent.name} family={family} head="
                            f"{completion.get('head_sha') if isinstance(completion, dict) else None} expected={head}]")
-    return eligible, sorted(set(reasons)) or ([] if eligible else [
+    return eligible, sorted(set(reasons)) if bound else [
         f"no record [seat=review family=outside:{','.join(writers)} head={head} "
-        f"item={item['key']} PR={item.get('pr_number') or 'unresolved'}]"])
+        f"item={item['key']} PR={item.get('pr_number') or 'unresolved'}]"]
 
 def backfill(args, poster, pr_lookup=None):
     """Print TSV discovery and optionally invoke the existing single-seat CLI."""
@@ -334,6 +331,10 @@ def backfill(args, poster, pr_lookup=None):
     from collections import Counter
     from plangraph.keeper.evidence_git import GitAdapter
     from seat_verdict import apply_backfill
+    apply = getattr(args, "backfill_apply", False)
+    if apply and (getattr(args, "dry_run", False) or getattr(args, "backfill_dry_run", False)):
+        print("seat_verdict: --backfill-apply must run without --dry-run or --backfill-dry-run", file=sys.stderr)
+        return 1
     try:
         config = json.loads((Path.home() / ".local/share/plangraph/keeper.json").read_text())
     except (OSError, ValueError):
@@ -341,14 +342,15 @@ def backfill(args, poster, pr_lookup=None):
     git = GitAdapter(config.get("repos", {}), fetch_interval=float("inf"))
     git._maybe_fetch = lambda repo: False
     try:
-        snapshot = json.loads(args.snapshot.read_text("utf-8"))
-        items = snapshot["items"]
+        items = json.loads(args.snapshot.read_text("utf-8"))["items"]
         if not isinstance(items, list):
             raise ValueError("snapshot items must be a list")
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f"seat_verdict: snapshot: {exc}", file=sys.stderr)
         return 1
     index = record_index(args.records_dir)
+    for reason in getattr(index, "skips", []):
+        print(f"seat_verdict: {reason}", file=sys.stderr)
     cache_path = getattr(args, "pr_cache", None)
     try:
         cache = json.loads(cache_path.read_text()) if cache_path else {}
@@ -356,7 +358,7 @@ def backfill(args, poster, pr_lookup=None):
         cache = {}
     lookup = pr_lookup or ((cache.get if isinstance(cache, dict) else lambda _: None)
                            if cache_path else None)
-    if getattr(args, "pr_lookup_gh", False) and args.backfill_apply and lookup is None:
+    if getattr(args, "pr_lookup_gh", False) and apply and lookup is None:
         def lookup(sha):
             result = subprocess.run(["gh", "pr", "list", "--search", sha, "--state", "merged",
                                      "--json", "number"],
@@ -365,11 +367,9 @@ def backfill(args, poster, pr_lookup=None):
             return rows[0].get("number") if isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict) else None
     output, total, missing, failed, tallies = [], 0, 0, 0, Counter()
     for raw in items:
-        if raw.get("state") != "in_review":
-            continue
+        if raw.get("state") != "in_review": continue
         if not isinstance(raw.get("key"), str) or not raw["key"]:
-            item = dict(raw, key="<missing>")
-            seats, reasons = [], ["snapshot item missing key"]
+            item, seats, reasons = dict(raw, key="<missing>"), [], ["snapshot item missing key"]
         else:
             item = snapshot_item(raw, index, git)
             item = dict(item, pr_number=merged_pr(item, git, lookup))
@@ -382,13 +382,13 @@ def backfill(args, poster, pr_lookup=None):
                            for s in seats) if seats else "MISSING " + "; ".join(reasons)
         output.append(dict(key=item['key'], status="ELIGIBLE" if seats else "MISSING",
                            head_sha=item.get("head_sha"), pr_number=item.get("pr_number"),
+                           delivery=None, verifier_exit=None,
                            seats=[dict(s, seat_dir=str(s['seat_dir'])) for s in seats], reasons=reasons))
-        if args.backfill_apply and seats:
+        if apply and seats:
             # A terminal CHANGES must never let replay fall through to ACCEPT.
             seat = min(seats, key=lambda s: (s["ok"], str(s["seat_dir"])))
             failed += apply_backfill(args, item, seat, poster, output[-1])
-            detail += " delivery=" + output[-1]["delivery"]
-            detail += " " + "; ".join(output[-1]["reasons"])
+            detail += " delivery=" + output[-1]["delivery"] + " " + "; ".join(output[-1]["reasons"])
         if getattr(args, "format", "tsv") == "tsv":
             print(f"{item['key']}\t{detail.replace(chr(9), ' ').replace(chr(10), ' ')}")
     if getattr(args, "format", "tsv") == "json":

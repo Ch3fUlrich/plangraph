@@ -36,7 +36,6 @@ import urllib.request
 from pathlib import Path
 
 from seat_record import evidence_from_record
-
 ROUTE = "/v1/verdict"
 TIMEOUT = 30
 EXIT_IO, EXIT_REFUSED, EXIT_NO_VERDICT, EXIT_PASS_REFUSED = 1, 2, 3, 4
@@ -77,7 +76,6 @@ _FIRST_WORD = re.compile(r"([a-z]+)" + _WORD_END, re.I)
 # echo, and bare "request" stays unknown.
 _REQUEST_CHANGES = re.compile(r"request[\s_-]+changes" + _WORD_END, re.I)
 
-
 def model_family(model):
     """Family name for a model id, or None when unknown or ambiguous."""
     name = str(model or "").lower().rsplit("/", 1)[-1]
@@ -86,7 +84,6 @@ def model_family(model):
         return "alibaba"
     found = {family for pattern, family in FAMILIES if re.search(pattern, name)}
     return found.pop() if len(found) == 1 else None
-
 
 def parse_verdict(text):
     """Return (ok, index_of_line) from the LAST ``VERDICT:`` line, else (None, -1).
@@ -140,19 +137,16 @@ def parse_verdict(text):
         return None, idx
     return None, -1
 
-
 def findings(text, idx, limit=600):
     """First ``limit`` chars after the verdict line (before it if nothing after)."""
     lines = text.splitlines()
     after = "\n".join(lines[idx + 1:]).strip()
     return (after or "\n".join(lines[:idx]).strip())[:limit]
 
-
 def verdict_payload(key, ok, reason):
     """The exact JSON body the keeper's verdict route takes."""
     assert type(ok) is bool, "ok must be a JSON boolean, never a string"
     return {"key": str(key), "ok": ok, "reason": str(reason)}
-
 
 def build_reason(evidence, ok, text, idx, covers=None, witness=None,
                  witness_kind=None):
@@ -174,7 +168,6 @@ def build_reason(evidence, ok, text, idx, covers=None, witness=None,
         reason = f"{reason}\ncovers: {', '.join(covers)}"
     return reason
 
-
 def coverage(writers, seats, need=2, sensitive=False):
     """Return sorted writer families not covered by the recorded seats.
 
@@ -195,11 +188,9 @@ def coverage(writers, seats, need=2, sensitive=False):
             uncovered.append(writer)
     return sorted(uncovered)
 
-
 def parse_writer_families(value):
     """Parse comma-separated writer families, ignoring empty entries."""
     return [part.strip().lower() for part in str(value or "").split(",") if part.strip()]
-
 
 def send(url, token, payload):
     """POST the payload; return (http_status, reply_text)."""
@@ -219,14 +210,21 @@ def apply_backfill(args, item, seat, poster, row):
     from io import StringIO
     from plangraph.spawner.notify import _verdict_outcome
     from plangraph.spawner.private_io import atomic_write_private
-    directory, row["delivery"] = seat["seat_dir"], "skipped"
+    directory, row["delivery"], row["verifier_exit"] = seat["seat_dir"], "skipped", None
+    if (not getattr(args, "backfill_apply", False) or getattr(args, "dry_run", False)
+            or getattr(args, "backfill_dry_run", False)):
+        row["delivery"] = "failed"
+        row["reasons"].append("backfill requires explicit --backfill-apply without dry-run")
+        return 1
     journal = directory / "verdict.json"
-    if journal.is_symlink() or Path(str(journal) + ".lock").is_symlink():
-        row["reasons"].append("ambiguous verdict journal")
-        return 0
-    with os.fdopen(os.open(str(journal) + ".lock", os.O_RDWR | os.O_CREAT, 0o600), "r+b") as lock:
-        reason = "verdict lock busy"
-        try:
+    phase = "verdict outbox check"
+    try:
+        if journal.is_symlink() or Path(str(journal) + ".lock").is_symlink():
+            row["reasons"].append("ambiguous verdict journal")
+            return 0
+        phase = "verdict lock open"
+        with os.fdopen(os.open(str(journal) + ".lock", os.O_RDWR | os.O_CREAT, 0o600), "r+b") as lock:
+            phase = "verdict lock"
             if os.name == "nt":
                 import msvcrt
                 lock.write(b"0")
@@ -236,31 +234,40 @@ def apply_backfill(args, item, seat, poster, row):
             else:
                 import fcntl
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            reason = "ambiguous verdict journal"
+            phase = "verdict journal read"
             previous = json.loads(journal.read_text()) if journal.exists() else {}
             if (not isinstance(previous, dict) or journal.exists() and previous.get("status") not in
                     ("sending", "delivered", "skipped", "retry")
-                    or type(previous.get("attempts", 0)) is not int
-                    or previous.get("attempts", 0) < 0):
-                raise ValueError(reason)
-        except (OSError, ValueError):
-            row["reasons"].append(reason)
+                    or type(previous.get("attempts", 0)) is not int or previous.get("attempts", 0) < 0):
+                raise ValueError("ambiguous verdict journal")
+            if ((directory / "verdict.delivered").exists()
+                    or previous.get("status") in ("sending", "delivered", "skipped")):
+                row["reasons"].append("verdict already terminal or sending")
+                return 0
+            phase = "verdict sending journal write"
+            atomic_write_private(journal, json.dumps(dict(status="sending",
+                attempts=previous.get("attempts", 0))) + "\n")
+            phase = "verdict poster or verifier result"
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                rc = poster(["--key", item["key"], "--seat-dir", str(directory), "--head", seat["head_sha"],
+                             "--writer-family", ",".join(item["writer_families"]), "--token-dir",
+                             str(args.token_dir), "--url", args.url])
+            if type(rc) is not int or rc < 0: raise ValueError("invalid verifier exit")
+            row["verifier_exit"] = rc
+            phase = "verdict outcome write"
+            _verdict_outcome(directory, "delivered" if rc == 0 else "skipped", "backfill verifier exit " + str(rc))
+            row["delivery"] = "failed" if rc else "delivered"
+            return int(bool(rc))
+    except Exception as exc:
+        if phase == "verdict lock" and isinstance(exc, BlockingIOError):
+            row["reasons"].append("verdict lock busy")
             return 0
-        if ((directory / "verdict.delivered").exists()
-                or previous.get("status") in ("sending", "delivered", "skipped")):
-            row["reasons"].append("verdict already terminal or sending")
+        if phase == "verdict journal read" and isinstance(exc, ValueError):
+            row["reasons"].append("ambiguous verdict journal")
             return 0
-        atomic_write_private(journal, json.dumps(dict(status="sending",
-            attempts=previous.get("attempts", 0))) + "\n")
-        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-            rc = poster(["--key", item["key"], "--seat-dir", str(directory), "--head", seat["head_sha"],
-                         "--writer-family", ",".join(item["writer_families"]), "--token-dir",
-                         str(args.token_dir), "--url", args.url])
-        _verdict_outcome(directory, "delivered" if rc == 0 else "skipped",
-                         "backfill verifier exit " + str(rc))
-        row.update(delivery="failed" if rc else "delivered", verifier_exit=rc)
-        return int(bool(rc))
-
+        row["delivery"] = "failed"
+        row["reasons"].append(f"{phase} failed: {type(exc).__name__}")
+        return 1
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--key", help="item key to review")
@@ -276,10 +283,8 @@ def main(argv=None):
     ap.add_argument("--pr-lookup-gh", action="store_true", help="resolve merged PRs using gh (network)")
     ap.add_argument("--format", choices=("tsv", "json"), default="tsv")
     ap.add_argument("--url", default=os.environ.get("PG_URL"))
-    ap.add_argument("--head", help="expected record completion.head_sha "
-                                  "(record-derived evidence only); binds the "
-                                  "completion-time HEAD of the run cwd, not "
-                                  "the launch commit")
+    ap.add_argument("--head", help="expected record completion.head_sha (record-derived evidence only); "
+                                  "binds the completion-time HEAD of the run cwd, not the launch commit")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
     if args.backfill_dry_run or args.backfill_apply or (args.key is None and args.seat_dir is None):
@@ -320,12 +325,10 @@ def main(argv=None):
         print(f"seat_verdict: refused, record head_sha {evidence.get('head_sha')!r} "
               f"does not match --head {args.head!r}", file=sys.stderr)
         return EXIT_REFUSED
-    if not writer_families:
-        print("seat_verdict: refused, writer family list is empty", file=sys.stderr)
-        return EXIT_REFUSED
     unknown_writers = [w for w in writer_families if w not in KNOWN_FAMILIES]
-    if unknown_writers:
-        print(f"seat_verdict: refused, unknown writer families {unknown_writers!r}", file=sys.stderr)
+    if not writer_families or unknown_writers:
+        why = f"unknown writer families {unknown_writers!r}" if unknown_writers else "writer family list is empty"
+        print(f"seat_verdict: refused, {why}", file=sys.stderr)
         return EXIT_REFUSED
     served = evidence.get("served_model")
     model = served or evidence.get("requested_model")
@@ -352,8 +355,7 @@ def main(argv=None):
         # D-3564: the record's chosen leg is the only witness; count the family
         # by the request-side model and keep the witness auditable in the reason.
         candidate = evidence.get("request_side_model")
-        if isinstance(candidate, str) and candidate:
-            witness_model = candidate
+        if isinstance(candidate, str) and candidate: witness_model = candidate
     model = witness_model or model
     family = model_family(model)
     if family is None:
@@ -375,13 +377,12 @@ def main(argv=None):
         print("seat_verdict: pass refused (finish_reason not stop or end_turn, or test_gaming not no)",
               file=sys.stderr)
         return EXIT_PASS_REFUSED
-    covers = sorted({writer for writer in writer_families if writer != family})
-    payload = verdict_payload(args.key, ok, build_reason(evidence, ok, text, idx, covers, witness=witness_model,
-                                           witness_kind=evidence.get("witness_kind")))
+    payload = verdict_payload(args.key, ok, build_reason(evidence, ok, text, idx,
+                              sorted({writer for writer in writer_families if writer != family}),
+                              witness=witness_model, witness_kind=evidence.get("witness_kind")))
     if args.dry_run:
         print(json.dumps({"url": (args.url or "").rstrip("/") + ROUTE, "family": family,
-                          "headers": {"Authorization": "Bearer <redacted>"},
-                          "body": payload}, indent=2))
+                          "headers": {"Authorization": "Bearer <redacted>"}, "body": payload}, indent=2))
         return 0
     if not args.url:
         print("seat_verdict: no keeper URL: pass --url or set PG_URL", file=sys.stderr)
@@ -395,6 +396,5 @@ def main(argv=None):
     short = " ".join(reply.split())[:120]
     print(f"key={args.key} family={family} ok={ok} http={status} reply={short}")
     return 0 if 200 <= status < 300 else EXIT_IO
-
 if __name__ == "__main__":
     sys.exit(main())

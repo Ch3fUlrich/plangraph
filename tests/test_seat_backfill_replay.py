@@ -110,14 +110,17 @@ def test_forward_outbox_prevents_backfill_replay(backfill_case, status):
 
 
 @pytest.mark.parametrize("result", [sv.EXIT_IO, sv.EXIT_REFUSED, "interrupted"])
-def test_ambiguous_or_failed_apply_is_not_reposted(backfill_case, result):
+def test_ambiguous_or_failed_apply_is_not_reposted(backfill_case, capsys, result):
     args, run = backfill_case
     poster = Mock(side_effect=RuntimeError("interrupted")) if result == "interrupted" else Mock(return_value=result)
+    assert sr.backfill(args, poster) == 1
+    row = json.loads(capsys.readouterr().out)[0]
+    assert row["delivery"] == "failed"
     if result == "interrupted":
-        with pytest.raises(RuntimeError, match="interrupted"):
-            sr.backfill(args, poster)
+        assert "RuntimeError" in " ".join(row["reasons"])
+        assert json.loads((run / "verdict.json").read_text())["status"] == "sending"
     else:
-        assert sr.backfill(args, poster) == 1
+        assert row["verifier_exit"] == result
     assert sr.backfill(args, poster) == 0
     poster.assert_called_once()
     assert json.loads((run / "verdict.json").read_text())["status"] in ("sending", "skipped")

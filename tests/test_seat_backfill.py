@@ -1,5 +1,6 @@
 """Hermetic seat-record discovery and backfill regression tests."""
 import json
+import shutil
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -202,6 +203,7 @@ def test_seat_nested_records(tmp_path):
     assert seats[0]["run_id"] == run.name
 
 
+@pytest.mark.skipif(shutil.which("git") is None, reason="git executable unavailable")
 def test_seat_trailer_real_git(tmp_path, snapshot_shape):
     import subprocess
     from plangraph.keeper.evidence_git import GitAdapter
