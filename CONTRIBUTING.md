@@ -52,6 +52,26 @@ other suites. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
 literals, manifest-relative reads and paths leaving `rust/`; new repository
 inputs must be added to `RUST_INPUTS`, not inline to the workflow.
 
+### Rust builds and toolchain bumps
+
+Run Cargo from `rust/` (or a crate directory beneath it) so rustup reads
+`rust/rust-toolchain.toml`, the single Rust release pin shared with all CI jobs
+through `.github/actions/setup-rust`. Passing `--manifest-path` from the repository
+root does not select that toolchain locally. For example:
+
+```bash
+cd rust
+cargo build -p pg-spawnd --release
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+```
+
+**Bump step:** open one PR that changes the channel in `rust/rust-toolchain.toml`
+and fixes the new lints, without weakening `-D warnings`. Run every Rust CI job
+(`rust`, `rust-windows`, `rust-worker`, `rust-spike`) and require green before
+merging. Do not duplicate the version in workflows. The regression check is
+`python3 -m pytest -q -n 2 tests/test_ci_rust_toolchain.py`.
+
 ## Lanes
 
 Completed Rust ports remove only their own Python waiver from

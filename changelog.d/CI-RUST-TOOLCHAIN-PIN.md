@@ -1,0 +1,1 @@
+- Pin local and CI Rust builds to the release verified in green main run 43318640210 via `rust/rust-toolchain.toml`; guard every CI installer against bypassing the pin and document one-PR toolchain bumps with new-lint fixes (D-5297).
