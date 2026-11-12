@@ -134,8 +134,8 @@ from the worker-core hosts registry (`$XDG_CONFIG_HOME/plangraph/hosts.json`,
 or `~/.config/plangraph/hosts.json`), the same location used by fleet-sync.
 Local identity is `PLANGRAPH_HOST_NAME` when set, otherwise registry `self`;
 IDs and aliases resolve case-insensitively. Routing and the public-repository
-allowlist still come from `overflow-hosts.json`, but its legacy run/floor caps
-and local limit overrides are ignored. Missing/unreadable registry or missing,
+allowlist still come from `overflow-hosts.json`; legacy run/floor caps and local
+limit overrides are ignored except the orchestration thresholds below. Missing registry or
 malformed caps exclude that host from overflow. Local admission instead uses
 conservative defaults of floor 3000 MB and role 2048 MB, with a logged reason.
 The independent OOM guard (D-5057/D-5075) remains unchanged.
@@ -147,6 +147,15 @@ excluded for that spawn; when none can accept, a queued record lists safe
 refusal reasons. Without overflow config, admitted local runs have no annotation;
 below-floor runs queue with matching `reason` and `overflow_reason`. Dry runs do not overflow.
 Local benchmark databases cannot be forwarded. CLI/MCP use public `admit_spawn` once in the shared wrapper, not the CLI parent; the service persists queued/remote records.
+Per-host `orchestration_only: true` in `hosts.json` (or the local overflow hosts entry; default false)
+makes implement/review/research remote-first: rank MemAvailable minus floor, then config order; no run-count caps.
+Local fallback requires RAM admission, `local_min_available_mb` (overflow config, default 4096) and
+`local_max_swap_used_pct` (default 90); below/above respectively refuses with that name, exit 2, never queues.
+Spawn/refusal records carry `placement: {host, reason, free_mb}`: sampled MemAvailable and
+`remote_most_free_ram`, `local_fallback_no_remote`, `local_benchmark_database`, or refusal.
+Route planning never samples admission resources: absent a supplied placement snapshot,
+it reports `placement_not_evaluated` with null host/free RAM. Missing or unreadable swap
+readings refuse local fallback as `local_swap_unavailable`; see [placement rules](placement-rules.md).
 
 SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel
 lines around the remote spawn JSON. Only the single bracketed JSON receipt is
@@ -238,6 +247,18 @@ The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md]
 
 CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
 A probe with its harness binary missing reports `host-not-ready` and books no leg event.
+Failed probes retain a scrubbed, single-line excerpt of the last 400 stderr
+characters in their result, output line and leg-state event. A `running` record
+on the same model/harness with a nonempty `live.log` grown within
+`LIVE_RUN_WRITE_WINDOW_S` (120 seconds) overrides only the probe failure:
+`probe_failed_leg_serving` records the diagnostic without a retry/down-until
+time and does not block dispatch. Stale, empty or missing logs do not override.
+Real quota/usage-limit evidence from `exit_outcome` still books the leg down;
+serving evidence never clears that provider signal. Probes share the owning
+service's resolved state directory, with no environment fallback; pre/post size
+snapshots reject touches of old logs, truncations, replacements and read races.
+Only the explicit stderr excerpt extends the legacy 300-character reason bound.
+Ordinary probe JSON omits `state`; it is never emitted as null.
 CLI `launch-spec` (placement R6a-3d; nothing calls it yet): one JSON request on stdin, one launch spec on stdout (argv, cwd, the complete child env, stdin, warnings, events) for pg-spawnd; optional request `leg.explicit` must be boolean: only `true` permits document review without `diff_ref`, absent/false still refuses; it reuses the spawn prep and never launches; exit 2 = one redacted refusal line, exit 1 = internal error (type name only).
 MCP `route`, `spawn`, `ps`, `result`, `status`, `cancel` (with `plangraph_agent_` prefix) share these records. Spawn requires
 `card` and `prompt` in its schema; model_or_combo requires override_reason.
