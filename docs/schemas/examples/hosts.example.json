@@ -7,6 +7,8 @@
       "class": "worker",
       "aliases": ["devbox"],
       "transport": "local",
+      "ssh_target": "worker.example.invalid",
+      "env": { "PATH": "/opt/fleet/bin:/usr/bin:/bin" },
       "os": "linux",
       "state_dir": "/srv/fleet/code/state",
       "caps": {

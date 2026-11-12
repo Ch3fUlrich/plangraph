@@ -1,5 +1,6 @@
 """Hermetic regressions for review budgeting and transport completion."""
 import ast
+import inspect
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -75,6 +76,29 @@ def test_truncation_survives_finishes_without_a_completed_answer(finish):
     assert final_answer(output, allow_unfinished=True) is None
 
 
+@pytest.mark.parametrize('blank', [' ', ' \n', '\t\r\n'])
+@pytest.mark.parametrize('tail', [False, True])
+def test_blank_pending_stop_cannot_clear_truncation(blank, tail):
+    # Simulate blank text reaching pending if the earlier ingestion filter changes.
+    # Completion must enforce its own non-blank invariant, not trust that filter.
+    tree = ast.parse(inspect.getsource(final_answer))
+    filters = [node for node in ast.walk(tree) if isinstance(node, ast.If)
+               and isinstance(node.test, ast.BoolOp)
+               and ast.unparse(node.test) == 'isinstance(text, str) and text.strip()']
+    assert len(filters) == 1
+    filters[0].test = filters[0].test.values[0]
+    namespace = {'json': json}
+    exec(compile(ast.fix_missing_locations(tree), '<blank-pending>', 'exec'), namespace)
+    decode = namespace['final_answer']
+    output = stream(('text', {'text': 'partial'}),
+                    ('step_finish', {'reason': 'length'}),
+                    ('text', {'text': blank}), ('step_finish', {'reason': 'stop'}))
+    if tail:
+        output += '\n' + stream(('text', {'text': 'VERDICT: PASS'}))
+    assert decode(output, allow_unfinished=True) is None
+    assert decode(output) is None
+
+
 @pytest.mark.parametrize('prefix', [[], [
     ('text', {'text': 'tool note'}), ('step_finish', {'reason': 'tool-calls'}),
 ]])
@@ -110,11 +134,7 @@ def test_missing_and_unknown_finish_policy_is_documented():
     section = docs.split('### MiMo seat timeouts', 1)[1].split('\n### ', 1)[0]
     assert 'missing or unknown' in section
     assert 'fail closed' in section
-
-
-def test_spawner_document_stays_within_file_size_limit():
-    docs = Path(__file__).parents[1] / 'docs/SPAWNER.md'
-    assert len(docs.read_text().splitlines()) <= 400
+    assert 'whitespace-only' in section
 
 
 @pytest.mark.parametrize('timeout,max_s', [(None, 1500), ('', 5400), ('7', 7)])

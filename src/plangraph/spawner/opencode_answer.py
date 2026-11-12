@@ -34,7 +34,8 @@ def final_answer(stdout, *, allow_unfinished=False):
     Plain terminal output has no completion framing and is not evidence.
     Review verdicts may opt into pending text unless a finish reason other than
     stop/tool-calls (including a missing/unknown reason) blocks it. Only a
-    text-bearing stop clears that block; empty stops and tool calls do not.
+    non-blank text-bearing stop clears that block; empty/whitespace-only stops
+    and tool calls do not.
     """
     pending, complete = [], None
     truncated = False
@@ -54,7 +55,7 @@ def final_answer(stdout, *, allow_unfinished=False):
                 pending.append(text)
                 complete = None
         elif event.get('type') == 'step_finish':
-            if part.get('reason') == 'stop' and pending:
+            if part.get('reason') == 'stop' and any(p.strip() for p in pending):
                 complete = '\n'.join(pending)
                 truncated = False
             elif part.get('reason') not in ('stop', 'tool-calls'):

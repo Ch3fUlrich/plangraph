@@ -34,7 +34,7 @@ def admit(service, options, *, card=None):
         config = {}
     role = options.get('role', 'implement')
     role_mb, floor = overflow.local_limits(overflow.registry_caps(), role)
-    live, memory = resources(service)
+    _, memory = resources(service)
     if not overflow.memory_refusal(memory, role_mb, floor):
         return None
     repo = Path(((card or {}).get('diff_ref') or {}).get('repo') or
@@ -51,7 +51,7 @@ def admit(service, options, *, card=None):
         if options.get(key):
             flags.append('--' + key.replace('_', '-'))
     while True:
-        decision = overflow.decide(live, memory, role_mb, floor, rows, public)
+        decision = overflow.decide(memory, role_mb, floor, rows, public)
         if options.get('benchmark') is not None and decision.host is not None:
             decision = overflow.Decision(None, 'local benchmark database cannot be forwarded')
         if decision.host is None:
@@ -72,7 +72,6 @@ def admit(service, options, *, card=None):
             record.setdefault('status', 'unknown')
             break
         rows[name]['refusal'] = refusal
-    service._save(record)
     return record
 
 
@@ -105,7 +104,14 @@ def _refuse_oversized_diff(exc, leg):
 
 
 class SeatSpawnMixin:
-    """Needs ``_spawn``, ``_route``, ``save_refusal`` and ``state`` from the service."""
+    """Needs ``_spawn``, ``_route``, ``_save``, ``save_refusal`` and ``state`` from the service."""
+
+    def admit_spawn(self, options, *, card=None):
+        """Check admission and persist any queued or remote run through the service."""
+        record = admit(self, options, card=card)
+        if record is not None:
+            self._save(record)
+        return record
 
     async def spawn(self, *args, **kwargs):
         try:
@@ -117,7 +123,7 @@ class SeatSpawnMixin:
             from plangraph.planner.routing import SpawnRefused
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
-            admitted = admit(self, options, card=card)
+            admitted = self.admit_spawn(options, card=card)
             if admitted is not None:
                 return admitted
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
