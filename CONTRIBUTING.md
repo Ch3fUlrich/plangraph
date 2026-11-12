@@ -44,6 +44,8 @@ worktree and untracked changes; omit it to include checkout changes.
 Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
 the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
+`tools/smoke-run-exit-notify.sh` keeps its local helper prompt in argv and verifies
+stdin EOF before checking both the delivery marker and live keeper read-back.
 
 ## Lanes
 

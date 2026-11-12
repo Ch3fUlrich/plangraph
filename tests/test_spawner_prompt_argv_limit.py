@@ -25,7 +25,7 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
         'data = sys.stdin.buffer.read()\n'
         'prompt = json.loads(data)["message"]["content"]\n'
         'print(json.dumps({"event":"result", "result":{"status":"SUCCESS",'
-        '"response":"VERDICT: ACCEPT " + hashlib.sha256(prompt.encode()).hexdigest()}}))\n'
+        '"response":"VERDICT: ACCEPT " + json.dumps(list(hashlib.sha256(prompt.encode()).digest()))}}))\n'
     )
     binary.chmod(0o700)
     # No inherited PATH, gateway endpoint, state, credentials, or notification hook.
@@ -54,7 +54,8 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt=prompt,
             role='review', writer_families=['gpt'], wait_seconds=None)
         assert record['status'] == 'completed', record.get('error')
-        assert hashlib.sha256(prompt.encode()).hexdigest() in record['stdout_tail']
+        # All 256 digest bits survive as numbers; output redaction still masks hex tokens.
+        assert record['stdout_tail'] == 'VERDICT: ACCEPT ' + json.dumps(list(hashlib.sha256(prompt.encode()).digest()))
         assert record['attempts'][0]['status'] == 'completed'
         assert runner.jobs[record['job_id']].command[0] == 'agy'
         assert runner.jobs[record['job_id']].exit_code == 0
@@ -80,10 +81,13 @@ def test_every_harness_uses_stdin(harness, prompt):
 def test_legacy_commands_do_not_drop_stdin(command):
     from plangraph.routing_support.clients import PromptTransportError
     prompt = 'review payload\né\n' + 'x' * (300 * 1024)
-    # Refuse explicitly rather than silently dropping or duplicating a task.
+    # Unknown helpers keep their argv path; malformed known stdin modes refuse.
     original = command.copy()
-    with pytest.raises(PromptTransportError, match='stdin_prompt_command_unknown:'):
-        launch_stdin_payload(command, prompt, command[0])
+    if command[0] in ('opencode', 'codex'):
+        with pytest.raises(PromptTransportError, match='stdin_prompt_command_unknown:'):
+            launch_stdin_payload(command, prompt, command[0])
+    else:
+        assert launch_stdin_payload(command, prompt, command[0]) is None
     assert command == original
 
 
@@ -106,6 +110,79 @@ def test_prompt_only_launcher_is_a_known_stdin_reader(monkeypatch):
     assert is_prompt_only_command(cmd)
     assert prompt not in cmd
     assert launch_stdin_payload(cmd, prompt, cmd[0]) == prompt.encode()
+
+
+@pytest.mark.parametrize('prompt', ['p', 'json', 'plangraph'])
+def test_opencode_metadata_is_not_a_short_prompt_carrier(prompt):
+    cmd = ['opencode', 'run', '--format', 'json', '--model', 'fixture/model',
+           '--title', 'plangraph-job-12345678']
+    assert launch_stdin_payload(cmd, prompt, cmd[0]) == prompt.encode()
+
+
+@pytest.mark.parametrize('harness,tail', [
+    ('opencode', ['--model', 'run', 'serve']),
+    ('claude', ['--model', '-p']),
+    ('agy', ['-p', '', '--input-format', 'text', '--model', 'stream-json']),
+    ('qodercli', ['-p', '', '--input-format', 'stream-json', '--model', 'text']),
+    ('codex', ['exec', '--model', '-']),
+    ('claude', ['-p', '--input-format', 'stream-json']),
+    ('gemini', ['-p', '', '--input-format', 'stream-json']),
+    ('qwen', ['-p', '', '--input-format', 'stream-json']),
+])
+def test_stdin_contract_requires_real_mode_arguments(harness, tail):
+    from plangraph.routing_support.clients import PromptTransportError
+    with pytest.raises(PromptTransportError, match='stdin_prompt_command_unknown:'):
+        launch_stdin_payload([harness, *tail], 'private task', harness)
+
+
+@pytest.mark.parametrize('harness', ['opencode', 'claude', 'agy', 'qodercli', 'codex', 'gemini', 'qwen'])
+@pytest.mark.parametrize('tail', [
+    ['--model', 'private task payload'], ['--title=prefix private task payload suffix'],
+    ['--input-format', 'text'], ['--'],
+])
+def test_stdin_rejects_hidden_carriers_and_overridden_modes(harness, tail):
+    from plangraph.routing_support.clients import PromptTransportError
+    prompt = 'private task payload'
+    cmd = build_command(prompt, 'fixture/model', client=harness)
+    if tail == ['--input-format', 'text'] and harness != 'agy':
+        tail = ['--prompt', prompt]
+    if tail == ['--']:
+        tail = ['--', prompt]
+    cmd.extend(tail)
+    with pytest.raises(PromptTransportError):
+        launch_stdin_payload(cmd, prompt, harness)
+
+
+@pytest.mark.parametrize('command', [
+    ['gateway-client', 'run', 'private task'],
+    ['legacy-client', '-p', 'private task'],
+    ['claude', '--bg', 'private task'],
+])
+def test_argv_only_commands_keep_their_original_carrier(command):
+    original = command.copy()
+    assert launch_stdin_payload(command, 'private task', command[0]) is None
+    assert command == original and command.count('private task') == 1
+
+
+def test_real_argv_helper_gets_eof_not_a_duplicate_prompt(tmp_path, monkeypatch):
+    import subprocess
+    from plangraph.spawner import runner as module
+    prompt = 'review payload\né\n\n'
+    script = ('import hashlib,json,sys; assert sys.stdin.buffer.read() == b""; '
+              'print(json.dumps(list(hashlib.sha256(sys.argv[1].encode()).digest())))')
+    command = [sys.executable, '-c', script, prompt]
+    monkeypatch.setattr(module, 'build_command', lambda **kw: command.copy())
+    async def available(*a, **kw):
+        return None
+    monkeypatch.setattr('plangraph.spawner.resolver.host_skip_reason_async', available)
+    async def run():
+        runner = SpawnerRunner(default_cwd=str(tmp_path))
+        job = await runner.spawn(prompt, model_or_combo='omniroute/cx-gpt-6.1-sol', role='review', wait_seconds=3)
+        assert job.status == 'completed', job.stderr
+        assert json.loads(job.stdout) == list(hashlib.sha256(prompt.encode()).digest())
+        assert job.command == command
+    asyncio.run(run())
+    assert subprocess.run(command, input=b'', capture_output=True).returncode == 0
 
 
 @pytest.mark.parametrize('field', ['error', 'stderr', 'stderr_tail'])

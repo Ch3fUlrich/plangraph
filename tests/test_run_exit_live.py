@@ -18,6 +18,7 @@ def test_live_smoke_contract():
     assert 'keeper.delivered' in script
     assert 'run_ids' in script
     assert 'SpawnerRunner' in script
+    assert 'sys.stdin.buffer.read()' in script
 
 
 @pytest.mark.parametrize('visible', [True, False])
@@ -98,7 +99,8 @@ def test_real_exit_http_marker_retry(tmp_path, monkeypatch, script, rc):
     monkeypatch.setenv('PG_TOKEN_FILE', str(token))
     monkeypatch.setenv('PLANGRAPH_SPAWN_ITEM', 'p:item')
     monkeypatch.setattr('plangraph.spawner.runner.build_command',
-                        lambda **kw: [sys.executable, '-c', script])
+                        lambda **kw: [sys.executable, '-c',
+                                      'import sys; assert sys.stdin.buffer.read() == b""; ' + script])
     if rc == 124:
         monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', '.03')
     from plangraph.spawner import private_io

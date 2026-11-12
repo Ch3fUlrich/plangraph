@@ -66,8 +66,8 @@ one UTF-8 NDJSON user event on stdin followed by EOF. The last result's
 `response` supplies the answer and verdict; an ERROR or missing result fails
 explicitly, without publishing an unsuccessful response as an answer.
 OpenCode, Claude print mode, Gemini and Qwen read text stdin; Codex uses `exec -`.
-Unknown commands refuse as `stdin_prompt_command_unknown`; duplicate argv/stdin prompts
-refuse as `stdin_prompt_argv_conflict`. The prompt-only launcher retains stdin forwarding.
+Other helpers retain argv unchanged with no prompt stdin; malformed known modes refuse as
+`stdin_prompt_command_unknown`, duplicate carriers as `stdin_prompt_argv_conflict`. Metadata is not task content.
 Review prompts exceeding a known leg budget (three chars/token) record `prompt_too_large`;
 implement/edit bounds remain opt-in via `PLANGRAPH_CONTEXT_STRICT=1`, and absent budgets are safe.
 Only spawner-owned pre-exec errors/events name prompt refusals, never harness stderr echoes.

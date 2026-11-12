@@ -28,7 +28,8 @@ def build_case(tmp_path, monkeypatch):
 
         async def spawn(self, **kwargs):
             self.runner._child_envs['job'] = {'PATH': '/hermetic'}
-            return SimpleNamespace(events=[], command=['test'], job_id='job', task_prompt=kwargs['prompt'])
+            return SimpleNamespace(events=[], command=getattr(leg, 'command', ['test']),
+                                   job_id='job', task_prompt=kwargs['prompt'])
 
     monkeypatch.setattr(spec, 'SpawnService', Service)
     monkeypatch.setattr(spec, '_sweep', lambda *a: None)
@@ -58,6 +59,7 @@ def test_build_quota_pause_and_reset(build_case, tmp_path, dry):
     (tmp_path / 'quota-pause').unlink()
     result = spec.build(request)
     assert result['argv'] == ['test'] and result['prompt'] == 'test'
+    assert result['stdin'] is None  # The helper has no stdin-reading contract.
     assert result['events'][-1]['event'] == 'launch_spec'
     service_calls.assert_called_once_with(state=request['state'])
 
@@ -67,9 +69,21 @@ def test_build_other_provider_unchanged(build_case, tmp_path):
     leg.model = 'other-test'
     leg.id = request['leg']['id'] = 'other-test'
     baseline = spec.build(request)
+    assert baseline['argv'] == ['test'] and baseline['stdin'] is None
     (tmp_path / 'quota-pause').touch()
     assert spec.build(request) == baseline
     assert service_calls.call_count == 2
+
+
+@pytest.mark.parametrize('dry', [False, True])
+def test_build_argv_helper_preserves_prompt_without_stdin(build_case, dry):
+    request, leg, _ = build_case
+    request.update(dry_run=dry, prompt='private task\né\n\n')
+    leg.command = ['helper', '--prompt', request['prompt']]
+    result = spec.build(request)
+    assert result['argv'] == leg.command
+    assert result['stdin'] is None and result['prompt'] == request['prompt']
+    assert result['argv'].count(request['prompt']) == 1
 
 
 @pytest.mark.parametrize('key', ['state', 'role'])

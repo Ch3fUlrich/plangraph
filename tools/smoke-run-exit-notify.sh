@@ -26,7 +26,9 @@ async def main():
     state = Path(tempfile.mkdtemp(prefix='.notify-smoke-', dir=Path.cwd()))
     service = spawn_service(runner=SpawnerRunner(), state=state)
     with patch('plangraph.spawner.runner.build_command',
-               return_value=[sys.executable, '-c', 'print("notify smoke OK")']):
+               side_effect=lambda **kw: [sys.executable, '-c',
+                   'import sys; assert sys.stdin.buffer.read() == b""; '
+                   'assert "Reply OK only" in sys.argv[1]; print("notify smoke OK")', kw['prompt']]):
         record = await service.spawn(
             card={'estimate_tokens': 1000},
             prompt='Reply OK only', model='omniroute/cx-gpt-6.1-sol',
