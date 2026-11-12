@@ -117,9 +117,19 @@ def test_review_route_ignores_ambient_catalog_tiers(tmp_path, capsys, monkeypatc
     """The exact CLI order uses declared tiers even if the host catalog disagrees."""
     from plangraph.routing_support import resolver
 
-    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
-        {'id': 'agy/gemini-3.8-flash', 'tier': 'paid', 'available': 1, 'active': True}])
+    reads = []
+    def ambient_catalog():
+        reads.append(1)
+        return [{'id': 'agy/gemini-3.8-flash', 'tier': 'paid', 'available': 1, 'active': True}]
+
+    monkeypatch.setattr(resolver, 'get_catalog_models', ambient_catalog)
+    # Positive control: an unpinned CLI route reads this snapshot and changes order.
+    ambient = route_json(tmp_path, capsys)
+    assert reads == [1]
+    assert next(c for c in ambient['candidates'] if c['leg'] == 'agy-gemini-3.8-flash')['tier'] == 'paid'
+    assert ambient['first_leg']['id'] == 'opencode-big-pickle'
     test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch)
+    assert reads == [1]  # The exact-order probe must inject its own catalog input.
 
 
 def test_unmapped_leg_no_p(tmp_path, capsys, monkeypatch):

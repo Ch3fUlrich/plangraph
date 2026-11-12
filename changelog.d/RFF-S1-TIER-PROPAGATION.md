@@ -13,3 +13,5 @@
   liveness checks can retry stale legs; retain every disabled Zen route.
 - Pin exact-tier service and CLI tests to explicit routing inputs, and prevent
   orchestrate-only agy aliases from shadowing routed seats sharing their model.
+- Preserve legacy model-availability admission; cover catalog isolation with an
+  unpinned CLI positive control and pin remaining exact-tier regression inputs.

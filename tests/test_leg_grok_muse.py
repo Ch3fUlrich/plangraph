@@ -101,10 +101,11 @@ def test_muse_never_automatic_even_if_lifted(role):
     policy = RoutePolicy(review_allowed_families=("muse",))
     for leg in legs:
         assert policy.skip_reason(leg, role) is None
-    plan = plan_spawn(CARD, role=role, writer_families=("gpt",), legs=legs, policy=policy)
+    plan = plan_spawn(CARD, role=role, writer_families=("gpt",), legs=legs, policy=policy,
+                      catalog_rows=())
     assert set(plan.legs) == set(legs)
     denied = plan_spawn(CARD, role=role, writer_families=("gpt",), legs=legs,
-                        policy=RoutePolicy(banned_families=("muse",)))
+                        policy=RoutePolicy(banned_families=("muse",)), catalog_rows=())
     assert not denied.legs
 
 

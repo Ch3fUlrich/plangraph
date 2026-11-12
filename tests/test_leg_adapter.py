@@ -54,6 +54,20 @@ def test_off_no_reads(tmp_path):
     assert calls == []
 
 
+@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('state', ['ok', 'limited', 'down', 'off', 'reprobe'])
+def test_legacy_availability_preserves_state_policy(enabled, state):
+    def reader(model, **scope):
+        assert model == 'opencode-go/sample'
+        assert scope == dict(account='sample', combo='worker')
+        return dict(state=state, evidence=None)
+
+    reader.enabled = enabled
+    row = dict(id='opencode-go/sample', available=1, active=True)
+    expected = state == 'ok' if enabled else state != 'limited'
+    assert resolver.is_model_available(row, reader, account='sample', combo='worker') is expected
+
+
 def test_removed_first(tmp_path):
     reader, calls = adapter(tmp_path)
     for mid in resolver.OPERATOR_REMOVED_MODELS:

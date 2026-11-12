@@ -133,11 +133,9 @@ def test_harness_quota_falls_through(tmp_path, monkeypatch):
 
 
 def test_replan_and_all_limited(tmp_path, monkeypatch):
+    from plangraph.planner.routing import plan_spawn
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, 'catalog_rows', ())
     install_fallthrough_legs(monkeypatch)
-    from plangraph.spawner import resolver
-    rows = resolver.get_catalog_models()
-    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
-        dict(row, available=1, active=True) for row in rows])
     async def run():
         store = LegStateStore(tmp_path / 'legs.sqlite')
         runner = SpawnerRunner()
