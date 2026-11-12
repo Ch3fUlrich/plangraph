@@ -166,6 +166,10 @@ class SeatSpawnMixin:
 
     def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
         """Assemble one leg's payload, then apply opt-in whole-prompt admission."""
+        from .target import quota_paused
+        from plangraph.routing_errors import SpawnRefused
+        if quota_paused(self.state, role, leg):
+            raise SpawnRefused('quota pause')
         from . import context_pack
         prompt = self._unbounded_leg_prompt(prompt, card, role, leg, pack, document_review, diff_timeout)
         if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1':

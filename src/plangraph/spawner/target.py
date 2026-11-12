@@ -1,6 +1,30 @@
 """Resolve explicit spawn targets before admission or provider rendering."""
+import os
+from pathlib import Path
+import re
+
 from plangraph.planner.legs import leg_active
 from plangraph.routing_errors import SpawnRefused
+
+QUOTA_EXEMPT_ROLES = frozenset({'basic-analysis'})
+
+
+def quota_paused(state=None, role=None, leg=None):
+    """The usage owner creates quota-pause at USAGE >=95%, unlinks at reset.
+
+    Presence alone is authoritative: no second meter, expiry, or auto-clear.
+    A numbered session name carries its role; legs gate only Claude targets.
+    """
+    role = re.sub(r'-[0-9]{4}$', '', role or '')
+    if role in QUOTA_EXEMPT_ROLES:
+        return False
+    if leg is not None and not any(str(getattr(leg, k, '')).startswith('claude-')
+                                   for k in ('id', 'model')):
+        return False
+    if state is None:
+        state = os.environ.get('PLANGRAPH_SPAWN_STATE') or (
+            Path(os.environ.get('XDG_STATE_HOME', str(Path.home() / '.local/state'))) / 'plangraph')
+    return os.path.lexists(Path(state) / 'quota-pause')
 
 
 def admit_leg(leg):
