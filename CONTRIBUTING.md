@@ -89,6 +89,8 @@ Every change touching non-documentation paths requires an entry (rule D-653), ei
 
 `tests/fixtures/writer_docs_map.json` is the shared glob/parser case table for Rust writer finalization and `test_writer_docs_map_shared_parity` in `tests/test_check_changelog_docs.py`; run the latter with `python3 -m pytest -q -n 2 tests/test_check_changelog_docs.py`. Rust reads the head map; CI additionally retains merge-base rules (see [writer finalization](docs/SPAWNER.md#writer-result-finalization)).
 
+Shared `rust/Cargo.toml` and `rust/Cargo.lock` stay unmapped unless an existing workspace-wide doc applies; their mappings follow the head revision so retired crate-specific rules do not block other crates. Other paths retain merge-base and head enforcement.
+
 ## Commits
 
 Every commit message ends with one trailer paragraph — no blank lines inside it:
