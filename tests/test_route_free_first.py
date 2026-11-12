@@ -88,8 +88,8 @@ def test_route_and_refusal(tmp_path, capsys):
 def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
-    assert ids[:3] == ["agy-gemini-3.8-flash", "opencode-deepseek-v4.1-flash-free", "opencode-big-pickle"]
-    assert "opencode-glm-5.3-flash-free" not in ids
+    assert ids[:3] == ["agy-gemini-3.8-flash", "opencode-big-pickle", "agy-gemini-4-argon"]
+    assert not DISABLED_FREE & set(ids)
 
 
 def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
@@ -100,8 +100,8 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert [leg.id for leg in imp.legs] == SUBS[:1]  # D-3828
     rev = plan_spawn(CARD, role="review", writer_families=("claude",))
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
-    assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
-    assert reasons["opencode-glm-5.3-flash-free"].startswith("disabled: D-3605 ")
+    for leg_id in DISABLED_FREE:
+        assert reasons[leg_id].startswith("disabled: D-4196 ")
     assert [leg.id for leg in rev.legs][:2] == ["agy-gemini-3.8-flash", "opencode-big-pickle"]
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
@@ -129,8 +129,8 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    assert ids[:3] == ["agy-gemini-3.8-flash", "opencode-deepseek-v4.1-flash-free", "opencode-big-pickle"]
-    assert "opencode-glm-5.3-flash-free" not in ids
+    assert ids[:3] == ["agy-gemini-3.8-flash", "opencode-big-pickle", "agy-gemini-4-argon"]
+    assert not DISABLED_FREE & set(ids)
     assert ids.index("agy-gemini-3.8-flash") == 0
 
 
@@ -241,4 +241,4 @@ def test_main_policy_gpt_first_and_retained_routes():
         "omniroute-grok-4.7", "opencode-console-muse-spark",
         "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek", "claude-haiku-5.5", "omniroute-gemini-3.8-flash",
         "agy-gemini-4-argon", "opencode-big-pickle", "agy-claude-opus",
-        "omniroute-deepseek-flash", "omniroute-muse-spark"}
+        "omniroute-deepseek-flash", "omniroute-muse-spark", "agy-gpt-oss-120b"}

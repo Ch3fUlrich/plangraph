@@ -10,11 +10,11 @@
       "os": "linux",
       "state_dir": "/srv/fleet/code/state",
       "caps": {
-        "max_runs": 4,
-        "max_writers": 2,
+        "max_runs": 10,
+        "max_writers": 8,
         "max_seats": 3,
         "max_sessions": 8,
-        "mem_floor_mb": 512
+        "mem_floor_mb": 4096
       },
       "warmup": {
         "warmup_s": 30,
@@ -50,11 +50,11 @@
       "os": "windows",
       "state_dir": "C:\\fleet\\workstation\\state",
       "caps": {
-        "max_runs": 2,
-        "max_writers": 1,
+        "max_runs": 12,
+        "max_writers": 8,
         "max_seats": 2,
         "max_sessions": 4,
-        "mem_floor_mb": 1024
+        "mem_floor_mb": 8192
       },
       "warmup": {
         "warmup_s": 45,
@@ -75,6 +75,32 @@
           }
         }
       }
+    },
+    {
+      "id": "compact",
+      "class": "worker",
+      "aliases": [],
+      "transport": "ssh",
+      "os": "linux",
+      "state_dir": "/srv/fleet/compact/state",
+      "caps": {
+        "max_runs": 3,
+        "max_writers": 2,
+        "max_seats": 2,
+        "max_sessions": 4,
+        "mem_floor_mb": 2048
+      },
+      "warmup": {
+        "warmup_s": 30,
+        "ramp_mb": {
+          "implement": 256
+        }
+      },
+      "session_mb": 2048,
+      "roles": [
+        "implement"
+      ],
+      "repos": {}
     }
   ]
 }

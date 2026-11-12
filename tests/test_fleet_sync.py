@@ -122,17 +122,20 @@ def test_fleet_sync_configs(tmp_path, monkeypatch):
     monkeypatch.setenv('HOME', str(tmp_path))
     registry = {'hosts': [{'id': 'host-a', 'transport': 'ssh', 'os': 'linux',
                           'repos': {'plangraph': {'live_dir': '/srv/live'}},
-                          'caps': {'max_runs': 4, 'mem_floor_mb': 3000}}]}
+                          'caps': {'max_runs': 4, 'mem_floor_mb': 3000},
+                          'warmup': {'ramp_mb': {'implement': 2048}}}]}
     assert genconfig.sync(registry, True) == 0
+    (genconfig.config_dir() / 'hosts.json').write_text(json.dumps(registry))
     hosts = remote_ps.configured_hosts()
     assert hosts == [{'name': 'host-a', 'target': 'host-a', 'src': '/srv/live/src'}]
     config = json.loads((genconfig.config_dir() / 'overflow-hosts.json').read_text())
     ready = tmp_path / '.local/state/plangraph/host-ready/host-a.json'
     ready.parent.mkdir(parents=True)
     ready.write_text(json.dumps({'host': 'host-a', 'ok': True, 'live_runs': 0,
-                                 'mem_available_mb': 5000,
+                                 'mem_available_mb': 5048,
                                  'checked_at': release.datetime.now(release.UTC).isoformat()}))
-    assert overflow.decide(4, 5000, 4, 3000, overflow.ready_records(config), True).host == 'host-a'
+    assert 'run_cap' not in config['hosts']['host-a']
+    assert overflow.decide(50, 5000, 2048, 3000, overflow.ready_records(config), True).host == 'host-a'
     assert genconfig.sync(registry) == 0
     (genconfig.config_dir() / 'ps-hosts.json').write_text('{"hosts": []}')
     assert genconfig.sync(registry) == 1

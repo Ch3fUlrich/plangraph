@@ -4,8 +4,17 @@ import json
 from types import SimpleNamespace
 
 import pytest
+import importlib.util
+from pathlib import Path
 
 from plangraph.spawner.runner import JobInfo, SpawnerRunner
+
+
+def _oom_config():
+    spec = importlib.util.spec_from_file_location('oom_test_config', Path(__file__).with_name('conftest.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _monitor(tmp_path, monkeypatch, output, stderr='Error: terminated', rc=1,
@@ -87,3 +96,160 @@ def test_denied_review_verdict_completion(tmp_path, monkeypatch, verdict, framin
         ('text', {'text': verdict}), ('step_finish', {'reason': framing}))
     job = _monitor(tmp_path, monkeypatch, output, denied=True, stderr='')
     assert job.status == ('failed' if framing == 'length' else 'completed')
+def test_oom_adjustment_never_lowers_and_records_denial(tmp_path, monkeypatch):
+    from plangraph.spawner.proc_kill import raise_oom_score
+    path = tmp_path / 'oom_score_adj'
+    for current, expected in [(-900, 500), (750, 750)]:
+        path.write_text(str(current))
+        assert raise_oom_score(path)['event'] == 'oom_score_adj'
+        assert int(path.read_text()) == expected
+    def denied(*args, **kwargs):
+        raise PermissionError(13, 'denied')
+    monkeypatch.setattr(type(path), 'write_text', denied)
+    monkeypatch.setattr(type(path), 'read_text', lambda self: '-900')
+    assert raise_oom_score(path)['event'] == 'oom_score_adj_denied'
+
+
+def test_linux_child_oom_inherits_before_exec(tmp_path):
+    import asyncio
+    import sys
+    import pytest
+    from plangraph.spawner.proc_kill import oom_process_factory
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux proc policy')
+    async def run():
+        path = Path('/proc/self/oom_score_adj')
+        before = path.read_text()
+        proc = await oom_process_factory(
+            sys.executable, '-c',
+            "import subprocess,sys; print(open(sys.argv[1]).read().strip()); "
+            "subprocess.run(['cat', sys.argv[1]], check=True)", str(path),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        out, err = await proc.communicate()
+        assert proc.returncode == 0, err
+        assert len(out.splitlines()) == 2
+        assert all(int(score) >= 500 for score in out.splitlines())
+        assert path.read_text() == before
+        assert b'oom_score_adj' in err
+    asyncio.run(run())
+
+
+def test_oom_deploy_contract():
+    import configparser
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    unit = configparser.ConfigParser(interpolation=None)
+    text = (root / 'deploy/systemd/claude-daemon.service').read_text()
+    unit.read_string(text)
+    assert int(unit['Service']['OOMScoreAdjust']) == 200
+    assert unit['Service']['KillMode'] == 'process'
+    assert not re.search(r'(?i)(api[_-]?key|token|password|secret)\s*=', text)
+    docs = (root / 'deploy/oom-policy.md').read_text()
+    assert 'systemd-run --user --scope' in docs
+    assert 'claude --bg' in docs
+    assert 'Not deployed' in docs
+    assert 'second authenticated session' in docs
+    assert 'min(4, CPUs, memory GiB)' in docs
+    for name, matches in [('prefer', ['python3', 'pytest', 'opencode']),
+                          ('avoid', ['herdr', 'claude', 'plangraph-keeper'[:15]])]:
+        pattern = (root / f'deploy/earlyoom/{name}.regex').read_text().strip()
+        assert all(re.search(pattern, value) for value in matches)
+        assert not re.search(pattern, 'x' + matches[0])
+
+
+def test_pytest_memory_policy(tmp_path):
+    conftest = _oom_config()
+    mem = tmp_path / 'meminfo'
+    mem.write_text('MemTotal:       15728640 kB\n')
+    assert conftest._oom_worker_count(16, mem) == 4
+    assert conftest._oom_worker_count(2, mem) == 2
+    mem.write_text('MemTotal:       67108864 kB\n')
+    assert conftest._oom_worker_count(16, mem) == 4
+    mem.write_text('MemTotal:       2097152 kB\n')
+    assert conftest._oom_worker_count(16, mem) == 2
+
+
+def test_oom_factory_preserves_preexec_and_tolerates_bad_score(tmp_path, monkeypatch):
+    from plangraph.spawner import proc_kill
+    path = tmp_path / 'score'
+    path.write_text('invalid')
+    assert proc_kill.raise_oom_score(path)['event'] == 'oom_score_adj_failed'
+    seen = {}
+    async def spawn(*args, **kwargs):
+        seen.update(kwargs)
+    callback = lambda: None
+    monkeypatch.setattr(proc_kill.asyncio, 'create_subprocess_exec', spawn)
+    asyncio.run(proc_kill.oom_process_factory('true', preexec_fn=callback, oom_path=path))
+    assert seen['preexec_fn'] is callback
+
+
+def test_oom_worker_override(tmp_path, monkeypatch):
+    conftest = _oom_config()
+    monkeypatch.setenv('PYTEST_XDIST_AUTO_NUM_WORKERS', '2')
+    assert conftest._oom_worker_count(16, tmp_path / 'missing') == 2
+
+
+@pytest.mark.parametrize('platform', ['linux', 'darwin', 'win32'])
+def test_oom_serial_configure(monkeypatch, platform):
+    conftest = _oom_config()
+    from plangraph.spawner import proc_kill
+    calls = []
+    monkeypatch.setattr(conftest.sys, 'platform', platform)
+    monkeypatch.setattr(proc_kill, 'raise_oom_score', lambda: calls.append(1) or {'event': 'oom_score_adj'})
+    conftest.pytest_oom_configure(SimpleNamespace())
+    assert calls == ([1] if platform == 'linux' else [])
+
+
+def test_rust_oom_envelope_is_recorded(tmp_path, monkeypatch):
+    event = {'event': 'oom_score_adj_denied'}
+    job = _monitor(tmp_path, monkeypatch, '', stderr=json.dumps({'plangraph_oom': event}))
+    assert event in job.events
+
+
+def test_oom_envelopes_are_bounded_and_validated(tmp_path, monkeypatch):
+    valid = json.dumps({'plangraph_oom': {'event': 'oom_score_adj_failed'}})
+    invalid = [json.dumps({'plangraph_oom': value}) for value in [None, [], 'bad', {'event': 'unknown'}]]
+    job = _monitor(tmp_path, monkeypatch, '', stderr='\n'.join([valid] * 1000 + invalid))
+    assert [e for e in job.events if e.get('event', '').startswith('oom_score_adj')] == [
+        {'event': 'oom_score_adj_failed'}]
+
+
+@pytest.mark.parametrize('override, expected', [('bad', 2), ('99', 2), ('0', 1)])
+def test_oom_override_is_safe(tmp_path, monkeypatch, override, expected):
+    monkeypatch.setenv('PYTEST_XDIST_AUTO_NUM_WORKERS', override)
+    mem = tmp_path / 'meminfo'
+    mem.write_text('MemTotal: 2097152 kB\n')
+    assert _oom_config()._oom_worker_count(16, mem) == expected
+
+
+@pytest.mark.parametrize('args', [[], ['score'], ['score', '/missing/oom-command']])
+def test_oom_wrapper_diagnoses_failure(tmp_path, args):
+    import subprocess
+    import sys
+    from plangraph.spawner import proc_kill
+    (tmp_path / 'score').write_text('500')
+    result = subprocess.run([sys.executable, proc_kill.__file__, *args],
+                            cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode in (2, 127)
+    assert 'oom wrapper:' in result.stderr
+    assert 'Traceback' not in result.stderr
+
+
+def test_linux_oom_call_is_guarded():
+    from plangraph.spawner import proc_kill
+    from unittest.mock import patch, AsyncMock
+    with patch.object(proc_kill.sys, 'platform', 'darwin'), patch.object(
+            proc_kill.asyncio, 'create_subprocess_exec', new_callable=AsyncMock) as spawn:
+        asyncio.run(proc_kill.oom_process_factory('true'))
+        assert spawn.call_args.args == ('true',)
+    source = (Path(__file__).resolve().parents[1] / 'rust/worker-core/src/run/group_unix.rs').read_text()
+    assert '#[cfg(target_os = "linux")]\n    unsafe {\n        cmd.pre_exec' in source
+
+
+def test_inheritance_tests_use_proc():
+    import inspect
+    root = Path(__file__).resolve().parents[1]
+    rust = (root / 'rust/worker-core/src/run/group_tests.rs').read_text()
+    assert 'cat /proc/self/oom_score_adj' in rust
+    assert '/proc/self/oom_score_adj' in inspect.getsource(test_linux_child_oom_inherits_before_exec)

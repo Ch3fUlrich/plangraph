@@ -42,7 +42,7 @@ def _run_writer(tmp_path, monkeypatch, work, *, act=lambda work: None, role='imp
         seen['env'] = dict(kwargs['env'])
         seen['env']['_config_text'] = Path(kwargs['env']['OPENCODE_CONFIG']).read_text()
         act(work)
-        async def communicate():
+        async def communicate(input=None):
             return b'done', b''
         return SimpleNamespace(pid=FAKE_PID, returncode=0, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(work), process_factory=factory)

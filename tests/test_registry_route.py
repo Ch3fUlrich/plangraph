@@ -223,14 +223,14 @@ def test_claude_written_high_gets_luna_and_qwen(pre_d3552_policy):
     # D-3901: seats follow the free-first review route, retaining coverage.
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
     assert plan.error is None
-    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "mimo-v2.6-flash"}
+    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "opencode-big-pickle"}
 
 
 def test_default_policy_seats_deepseek_for_review():
     # D-3552: with the live policy a deepseek leg may be a review seat.
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
     assert "deepseek" in {leg.family for leg in plan.legs}
-    assert _families(plan)[0] == "mimo"
+    assert _families(plan)[0] == "gemini"
 
 
 def test_seat_never_shares_family_with_a_single_writer():
@@ -244,10 +244,10 @@ def test_seat_excludes_every_writer_family(pre_d3552_policy):
     from plangraph.keeper.coverage import uncovered
     plan = plan_spawn(RCARD, role="review", writer_families=("gpt", "qwen"))
     assert plan.error is None
-    assert set(_families(plan)) == {"gemini", "mimo"}
+    assert set(_families(plan)) == {"gemini", "pickle"}
     assert uncovered(["gpt", "qwen"], _families(plan), need=1) == []
     # Coverage names the parts as the keeper does (gpt = openai, qwen = alibaba).
-    assert plan.seat_coverage == ({"leg": "mimo-v2.6-flash", "covers": ["alibaba", "openai"]},
+    assert plan.seat_coverage == ({"leg": "opencode-big-pickle", "covers": ["alibaba", "openai"]},
                                   {"leg": "opencode-go-gemini-4-argon", "covers": ["alibaba", "openai"]})
 
 
@@ -263,7 +263,7 @@ def test_high_needs_two_families_per_part_incl_non_claude():
 
 def test_uncoverable_parts_are_an_error():
     only = RoutePolicy(banned_families=("deepseek", "glm", "gpt", "mimo", "gemini", "muse",
-                                        "north", "laguna", "nvidia", "openai", "openrouter", "kimi", "grok"),
+                                        "north", "laguna", "nvidia", "openai", "openrouter", "kimi", "grok", "pickle"),
                        off_families=(), paused_harnesses={})
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",), policy=only)
     assert plan.error and "qwen" in _families(plan)

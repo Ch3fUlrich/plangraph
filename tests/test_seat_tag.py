@@ -133,7 +133,7 @@ def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch, spelling):
 
     async def factory(*a, **kw):
         seen.update(kw['env'])
-        async def communicate():
+        async def communicate(input=None):
             return b'', b''
         return SimpleNamespace(pid=FAKE_PID, returncode=0, communicate=communicate)
 

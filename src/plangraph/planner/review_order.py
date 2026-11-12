@@ -12,8 +12,9 @@ def catalog_tiers(legs, rows):
     from .legs import TIERS
     tiers = {row.get('id') or row.get('model_id'): row.get('tier') for row in rows}
     for row in rows:
-        if row.get('harness') and row.get('upstream_id'):
-            tiers.setdefault(f"{row['harness']}/{row['upstream_id']}", row.get('tier'))
+        provider = row.get('provider_id') or row.get('harness')
+        if provider and row.get('upstream_id'):
+            tiers.setdefault(f"{provider}/{row['upstream_id']}", row.get('tier'))
     # Harness-local model names resolve through their catalog provider prefix.
     def tier(leg):
         catalog_id = leg.model if '/' in leg.model else f'{leg.harness}/{leg.model}'

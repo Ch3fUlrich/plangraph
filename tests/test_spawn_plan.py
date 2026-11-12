@@ -17,14 +17,14 @@ def test_writer_live_limit_reset_and_scope(tmp_path, monkeypatch):
     install_fallthrough_legs(monkeypatch)
     store = LegStateStore(tmp_path / "state.sqlite")
     p = plan_spawn(CARD, role="implement", leg_reader=store, now=100)
-    assert p.first_leg.model == "omniroute/cx-gpt-6.1-sol"  # D-3745
+    assert p.first_leg.model == "opencode/deepseek-v4.1-flash-free"  # D-5092
     nxt = next_leg_after_provider_stop(p, p.first_leg.id, 429, "quota exhausted",
                                        {"Retry-After": "60"}, "test", store=store,
                                        now=100, account="A")
-    assert nxt.id == "opencode-deepseek-v4.1-flash-free"  # Synthetic WRITER_ORDER fallback.
+    assert nxt.id == "opencode-glm-5.3-flash-free"  # Same-tier synthetic fallback.
     limited = plan_spawn(dict(CARD, account="A"), role="implement", leg_reader=store, now=101)
     assert limited.first_leg == nxt
-    assert next(s for s in limited.skipped if s["leg"] == "cx-gpt-6.1-sol")["evidence"]["status"] == 429
+    assert next(s for s in limited.skipped if s["leg"] == p.first_leg.id)["evidence"]["status"] == 429
     assert plan_spawn(dict(CARD, account="B"), role="implement", leg_reader=store, now=101).first_leg == p.first_leg
     assert plan_spawn(dict(CARD, account="A"), role="implement", leg_reader=store, now=160).first_leg == p.first_leg
     json.dumps(limited.to_dict())
@@ -50,18 +50,19 @@ def test_seats_and_impossible_fence():
     legs = tuple(dataclasses.replace(l, disabled=None) if l.family == "qwen" else l
                  for l in DEFAULT_LEGS)
     p = plan_spawn(CARD, role="review", writer_families=("gpt",), legs=legs)
-    # No diff_ref: Go is inline-only; Zen is disabled; funded DeepSeek is writer-only.
-    assert [l.family for l in p.review_seats] == ["qwen", "gemini"]
-    assert all(l.family != "claude" for l in p.legs if l.id != "claude-haiku-5.5")  # D-3605 Haiku leg
+    # Free Gemini precedes Qwen; Claude review legs retain their family flag.
+    assert [l.family for l in p.review_seats] == ["gemini", "qwen"]
+    assert all(l.claude_family for l in p.legs if l.family == "claude")
     assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "gemini"
-    # With all automatic families fenced, only Haiku remains; Grok is manual-only.
+    # With all other automatic families fenced, only Claude remains.
     p = plan_spawn(CARD, role="review",
-                   writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo"), legs=legs)
+                   writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo", "muse"),
+                   exclude_families=("pickle", "openai"), legs=legs)
     assert [l.family for l in p.review_seats] == ["claude"]
     assert p.error == "two distinct review families unavailable"
     # Impossible fence: every family but the single writer's is excluded.
     p = plan_spawn(CARD, role="review", writer_families=("qwen",),
-                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude", "grok"))  # D-3605 Haiku leg
+                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude", "grok", "pickle"))
     assert not p.review_seats and p.error
 
 
@@ -71,7 +72,8 @@ def test_operator_order_and_roles_roundtrip(tmp_path):
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
         "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
-        "mimo-v2.6-flash", "mimo-v2.6-pro", "opencode-go-gemini-4-argon",
+        "agy-gemini-4-argon", "opencode-big-pickle", "agy-gpt-oss-120b", "mimo-v2.6-flash", "mimo-v2.6-pro",
+        "agy-sonnet-5.5", "agy-claude-opus", "omniroute-deepseek-flash", "omniroute-muse-spark", "opencode-go-gemini-4-argon",
         "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
         "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark",
         "opencode-go-deepseek-v4-flash", "omniroute-gemini-3.8-flash", "claude-haiku-5.5"]  # D-3605 Haiku leg
@@ -86,11 +88,11 @@ def test_benchmark_within_tier_only(monkeypatch):
     rows = {l.model: {"aa_intelligence": 40 + i * 10, "cost_per_task_usd": 0,
                       "pool_burn_weight": 0} for i, l in enumerate(writer)}
     p = plan_spawn(CARD, role="implement", benchmark=rows)
-    assert p.first_leg.id == "cx-gpt-6.1-sol"  # D-3745
+    assert p.first_leg.id == "opencode-deepseek-v4.1-flash-free"  # D-5092
     assert [l.id for l in p.legs] == [
-        'cx-gpt-6.1-sol', 'opencode-deepseek-v4.1-flash-free',
+        'opencode-deepseek-v4.1-flash-free',
         'opencode-glm-5.3-flash-free', 'openrouter-free', 'agy-gemini-3.8-flash',
-        'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek']
+        'cx-gpt-6.1-sol', 'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek']
     assert p.legs[-1].tier == 'paid'
     assert p.p_source == "operator-order"
     assert "no benchmark p" in plan_spawn(CARD, role="implement").reasons
@@ -158,4 +160,6 @@ def test_agy_leg_models_use_agy_model_ids():
     # `agy models` ids: agy refuses the bare "sonnet-5.5" (workst run-1897ba45, 2026-10-26)
     agy = {l.id: l.model for l in DEFAULT_LEGS if l.harness == "agy"}
     assert agy == {"agy-gemini-3.8-flash": "gemini-3.8-flash",
+                   "agy-gemini-4-argon": "gemini-4-argon-high", "agy-claude-opus": "claude-opus-4-6-thinking",
+                   "agy-gpt-oss-120b": "gpt-oss-120b-medium",
                    "agy-sonnet-5.5": "claude-sonnet-5-5-medium"}

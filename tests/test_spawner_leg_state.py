@@ -41,7 +41,7 @@ def test_registered_pool_seats_exclude_claude_writers():
 
 
 @pytest.mark.parametrize('tier', ['free', 'subscription', 'paid'])
-@pytest.mark.parametrize('source', ['id', 'model_id'])
+@pytest.mark.parametrize('source', ['id', 'model_id', 'provider_id'])
 def test_catalog_tier_identity_and_route_output(tier, source):
     from dataclasses import replace
     from plangraph.planner.legs import DEFAULT_LEGS
@@ -51,6 +51,10 @@ def test_catalog_tier_identity_and_route_output(tier, source):
     # Provider-qualified catalog identity must win over an unrelated bare name.
     rows = [{source: 'agy/' + leg.model, 'tier': tier},
             {source: leg.model, 'tier': 'paid' if tier != 'paid' else 'free'}]
+    if source == 'provider_id':
+        rows[0] = {'id': 'agy/served-alias', 'provider_id': 'agy', 'harness': None,
+                   'upstream_id': leg.model, 'tier': tier}
+        rows[1] = {'id': leg.model, 'tier': 'paid' if tier != 'paid' else 'free'}
     for role in ('implement', 'review'):
         projected, = catalog_tiers((replace(leg, roles=(role,)),), rows)
         output = SpawnPlan((projected,), (), 'test', (projected,), ()).to_dict()
@@ -58,6 +62,36 @@ def test_catalog_tier_identity_and_route_output(tier, source):
         assert output['legs'][0]['tier'] == tier
         assert output['review_seats'][0]['tier'] == tier
         assert projected.roles == (role,)
+
+
+@pytest.mark.parametrize('tier', ['trial', 'free', 'subscription', 'paid'])
+@pytest.mark.parametrize('role', ['implement', 'review'])
+def test_catalog_tier_survives_planning_and_cli(tier, role, monkeypatch, tmp_path, capsys):
+    import json
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS, TIERS
+    from plangraph.planner.routing import plan_spawn
+    from plangraph.routing_support import resolver
+    from plangraph.spawner.cli import main
+    base = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol')
+    legs = (replace(base, roles=(role,)), replace(base, id='free-review',
+            model='test/free-review', family='gemini', tier='free', roles=(role,)))
+    monkeypatch.setattr('plangraph.planner.legs.DEFAULT_LEGS', legs)
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, 'legs', legs)
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
+        {'id': l.model, 'tier': tier if l.id == base.id else 'free',
+         'available': 1, 'active': True} for l in legs])
+    card = {'estimate_tokens': 1000}
+    plan = plan_spawn(card, role=role, writer_families=('claude',))
+    assert next(l for l in plan.legs if l.id == base.id).tier == tier
+    assert [TIERS.index(l.tier) for l in plan.legs] == sorted(TIERS.index(l.tier) for l in plan.legs)
+    assert main(['--state', str(tmp_path), 'route', '--role', role,
+                 '--writer-family', 'claude', '--card', json.dumps(card), '--json']) == 0
+    output = json.loads(capsys.readouterr().out)
+    for key in ('legs', 'candidates', 'review_seats') if role == 'review' else ('legs', 'candidates'):
+        assert next(row for row in output[key] if row.get('id', row.get('leg')) == base.id)['tier'] == tier
+    assert output['first_leg']['tier'] == plan.first_leg.tier
+    assert all(l.roles == (role,) for l in plan.legs)
 
 
 def test_old_limit_evidence_reprobes(store):

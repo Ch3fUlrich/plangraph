@@ -156,9 +156,9 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         assert len(models) == 8, record   # D-3817: Sonnet no longer implements
         assert len(runner.jobs) == 3
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
-        assert models[:4] == ['omniroute/cx-gpt-6.1-sol',
-                              'opencode/deepseek-v4.1-flash-free',
-                              'opencode/glm-5.3-flash-free', 'openrouter/free']
+        assert models[:4] == ['opencode/deepseek-v4.1-flash-free',
+                              'opencode/glm-5.3-flash-free', 'openrouter/free',
+                              'gemini-3.8-flash']
         for leg in service.route({'estimate_tokens': 1000}).legs:
                 store.record_provider_response(leg.model if '/' in leg.model else 'agy/' + leg.model,
                     429, 'provider quota exhausted', {}, 'test')
@@ -321,7 +321,7 @@ def test_windows_killer():
     async def run():
         calls = []
         class Process:
-            async def communicate(self): return b'', b''
+            async def communicate(self, input=None): return b'', b''
         async def factory(*args, **kwargs):
             calls.append(args)
             return Process()

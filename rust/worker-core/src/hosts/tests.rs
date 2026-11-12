@@ -101,7 +101,7 @@ fn v5_slot_only_in_cache_env_values() {
 fn v6_numbers_ramp_roles_and_repo_shape() {
     let runs = edited("/hosts/0/caps/max_runs", json!(0));
     assert!(matches!(runs, Err(HostsError::NumbersShape(_))));
-    let writers = edited("/hosts/0/caps/max_writers", json!(9));
+    let writers = edited("/hosts/0/caps/max_writers", json!(11));
     assert!(matches!(writers, Err(HostsError::NumbersShape(_))));
     let ramp = edited(
         "/hosts/0/warmup/ramp_mb",

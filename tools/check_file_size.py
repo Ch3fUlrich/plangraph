@@ -175,13 +175,43 @@ def reference_baseline(root, refs=REFERENCE_REFS):
     return None, [], None
 
 
-def measure(root, allowed):
+def measure(root, allowed, head=None):
     """``({path: lines}, binaries)`` for every tracked file the gate counts.
 
     ``-z`` and a NUL split: a name may hold any byte, and plain ``ls-files``
     mangles non-ASCII ones through ``core.quotePath`` into strings that name
     no file at all - such a file would silently never be measured.
     """
+    if head:
+        tree = subprocess.run(["git", "-C", str(root), "ls-tree", "-rz", head],
+                              capture_output=True, check=True).stdout
+        entries = []
+        for entry in filter(None, tree.split(b"\0")):
+            meta, raw_path = entry.split(b"\t", 1)
+            _, kind, oid = meta.split()
+            rel = os.fsdecode(raw_path)
+            if kind == b"blob" and not is_excluded(rel) and rel not in allowed:
+                entries.append((rel, oid))
+        result = subprocess.run(["git", "-C", str(root), "cat-file", "--batch"],
+                                input=b"".join(oid + b"\n" for _, oid in entries),
+                                capture_output=True, check=True).stdout
+        measured, binaries, offset = {}, 0, 0
+        for rel, _ in entries:
+            try:
+                end = result.index(b"\n", offset)
+                oid, kind, raw_size = result[offset:end].split()
+                size = int(raw_size)
+                if kind != b"blob" or size < 0:
+                    raise ValueError
+            except ValueError:
+                raise SystemExit("check-file-size: malformed git cat-file --batch header") from None
+            data = result[end + 1:end + 1 + size]
+            offset = end + size + 2
+            if b"\0" in data[:BINARY_SNIFF_BYTES]:
+                binaries += 1
+            else:
+                measured[rel] = len(data.decode("utf-8", "replace").splitlines())
+        return measured, binaries
     run = git(root, "ls-files", "-z")
     if run.returncode != 0:
         raise SystemExit("check-file-size: git ls-files failed: %s"
@@ -272,13 +302,14 @@ def main(argv=None):
     ap.add_argument("--update-baseline", action="store_true",
                     help="rewrite %s: create it if missing, otherwise only "
                          "lower counts - never raise, never add"
-                         % BASELINE_NAME)
+                          % BASELINE_NAME)
+    ap.add_argument("--head", help="measure this revision instead of the checkout")
     args = ap.parse_args(argv)
 
     root = git_toplevel()
     allowed, allow_errors = read_allow(full_path(root, ALLOW_NAME))
     counts, base_errors = read_baseline(full_path(root, BASELINE_NAME))
-    measured, binaries = measure(root, allowed)
+    measured, binaries = measure(root, allowed, args.head)
     required = os.environ.get(REQUIRE_BASE_ENV, "")
     if required:
         base = git(root, "rev-parse", "--verify", "--quiet",
@@ -288,7 +319,7 @@ def main(argv=None):
                   "(actions/checkout fetch-depth: 0) so the baseline ratchets "
                   "against it, not against HEAD" % (REQUIRE_BASE_ENV, required))
             return 1
-        if base.stdout.strip() == git(root, "rev-parse", "HEAD").stdout.strip():
+        if base.stdout.strip() == git(root, "rev-parse", args.head or "HEAD").stdout.strip():
             print("check-file-size: %s=%s is HEAD itself - the ratchet would "
                   "compare the change with itself" % (REQUIRE_BASE_ENV, required))
             return 1

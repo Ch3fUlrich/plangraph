@@ -100,7 +100,8 @@ def test_hook_passes_safe_ref_updates(repo, new_branch):
 
 @pytest.mark.parametrize("source", ["@", "HEAD~1"])
 @pytest.mark.parametrize("new_branch", [False, True])
-def test_push_revision_expression_uses_installed_hook(repo, tmp_path, source, new_branch):
+def test_push_revision_expression_uses_installed_hook(
+        repo, tmp_path, monkeypatch, source, new_branch):
     r, base = repo
     remote = tmp_path / "remote.git"
     git(r, "init", "--bare", str(remote))
@@ -120,7 +121,13 @@ def test_push_revision_expression_uses_installed_hook(repo, tmp_path, source, ne
     )
     wrapper.chmod(0o755)
     git(r, "config", "core.hooksPath", str(hooks))
-    git(r, "push", str(remote), f"{source}:refs/heads/main")
+    # Like run_hook(), isolate ref-safety coverage from preflight: this tiny
+    # repository deliberately has no tools/preflight.py or project toolchain.
+    monkeypatch.setenv("PREFLIGHT_SKIP", "1")
+    try:
+        git(r, "push", str(remote), f"{source}:refs/heads/main")
+    except subprocess.CalledProcessError as exc:
+        pytest.fail(f"installed pre-push hook refused the push:\n{exc.stderr}")
     assert marker.exists(), "Git must invoke the installed pre-push hook"
     assert git(remote, "rev-parse", "refs/heads/main").strip() == head
 

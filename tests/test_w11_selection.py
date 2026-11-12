@@ -42,9 +42,9 @@ def test_tier_first_and_swap(monkeypatch):
                      'cost_per_task_usd': 0, 'pool_burn_weight': 0}
             for i, l in enumerate(writers)}
     plan = plan_spawn(CARD, role='implement', benchmark=data)
-    expected = ('cx-gpt-6.1-sol', 'opencode-deepseek-v4.1-flash-free',
+    expected = ('opencode-deepseek-v4.1-flash-free',
                 'opencode-glm-5.3-flash-free', 'openrouter-free', 'agy-gemini-3.8-flash',
-                'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek')
+                'cx-gpt-6.1-sol', 'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek')
     assert tuple(l.id for l in plan.legs) == expected
     data[writers[0].model], data[writers[6].model] = data[writers[6].model], data[writers[0].model]
     assert tuple(l.id for l in plan_spawn(CARD, role='implement', benchmark=data).legs) == expected
@@ -60,7 +60,7 @@ def test_candidate_json_and_limit(monkeypatch):
     data = {l.model: {'aa_intelligence': 40, 'cost_per_task_usd': 0, 'pool_burn_weight': 0} for l in writers}
     del data[writers[0].model]
     plan = plan_spawn(CARD, role='implement', benchmark=data, leg_reader=reader)
-    assert plan.first_leg == LEAD
+    assert plan.first_leg == writers[0]  # D-5092: eligible free leg, despite missing p.
     assert writers[6] not in plan.legs
     candidates = {c['leg']: c for c in plan.to_dict()['candidates']}
     assert candidates[writers[0].id]['u_core'] is None
