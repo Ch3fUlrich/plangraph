@@ -35,6 +35,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from seat_backfill import apply_backfill
 from seat_record import evidence_from_record
 ROUTE = "/v1/verdict"
 TIMEOUT = 30
@@ -203,71 +204,6 @@ def send(url, token, payload):
             return resp.status, resp.read(65536).decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read(65536).decode("utf-8", "replace")
-def apply_backfill(args, item, seat, poster, row):
-    """Use the forward outbox lock without waiting; ambiguous state never sends."""
-    from contextlib import redirect_stdout, redirect_stderr
-    from io import StringIO
-    from plangraph.spawner.notify import _verdict_outcome
-    from plangraph.spawner.private_io import atomic_write_private
-    directory, row["delivery"], row["verifier_exit"] = seat["seat_dir"], "skipped", None
-    url = getattr(args, "url", os.environ.get("PG_URL"))
-    if not url or not all(getattr(args, k, None) for k in ("backfill_apply", "token_dir")) or any(
-            getattr(args, k, False) for k in ("dry_run", "backfill_dry_run")):
-        row["delivery"] = "failed"
-        row["reasons"].append("backfill requires explicit --backfill-apply without dry-run; apply requires --url and --token-dir")
-        return 1
-    journal = directory / "verdict.json"
-    phase = "verdict outbox check"
-    try:
-        if journal.is_symlink() or Path(str(journal) + ".lock").is_symlink():
-            row["reasons"].append("ambiguous verdict journal")
-            return 0
-        phase = "verdict lock open"
-        with os.fdopen(os.open(str(journal) + ".lock", os.O_RDWR | os.O_CREAT, 0o600), "r+b") as lock:
-            phase = "verdict lock"
-            if os.name == "nt":
-                import msvcrt
-                lock.write(b"0")
-                lock.flush()
-                lock.seek(0)
-                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            phase = "verdict journal read"
-            previous = json.loads(journal.read_text()) if journal.exists() else {}
-            if (not isinstance(previous, dict) or journal.exists() and previous.get("status") not in
-                    ("sending", "delivered", "skipped", "retry")
-                    or type(previous.get("attempts", 0)) is not int or previous.get("attempts", 0) < 0):
-                raise ValueError("ambiguous verdict journal")
-            if ((directory / "verdict.delivered").exists()
-                    or previous.get("status") in ("sending", "delivered", "skipped")):
-                row["reasons"].append("verdict already terminal or sending")
-                return 0
-            phase = "verdict sending journal write"
-            atomic_write_private(journal, json.dumps(dict(status="sending",
-                attempts=previous.get("attempts", 0))) + "\n")
-            phase = "verdict poster or verifier result"
-            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-                rc = poster(["--key", item["key"], "--seat-dir", str(directory), "--head", seat["head_sha"],
-                             "--writer-family", ",".join(item["writer_families"]), "--token-dir",
-                              str(args.token_dir), "--url", url])
-            if type(rc) is not int or rc < 0: raise ValueError("invalid verifier exit")
-            row["verifier_exit"] = rc
-            phase = "verdict outcome write"
-            _verdict_outcome(directory, "delivered" if rc == 0 else "skipped", "backfill verifier exit " + str(rc))
-            row["delivery"] = "failed" if rc else "delivered"
-            return int(bool(rc))
-    except Exception as exc:
-        if phase == "verdict lock" and isinstance(exc, BlockingIOError):
-            row["reasons"].append("verdict lock busy")
-            return 0
-        if phase == "verdict journal read" and isinstance(exc, ValueError):
-            row["reasons"].append("ambiguous verdict journal")
-            return 0
-        row["delivery"] = "failed"
-        row["reasons"].append(f"{phase} failed: {type(exc).__name__}")
-        return 1
 
 
 def read_record_identity(seat_dir):

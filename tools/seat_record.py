@@ -18,6 +18,7 @@ import re
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from seat_backfill import backfill
 _HEAD_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 # F8: both spellings count (review/tail.md uses TEST-GAMING).
 _TEST_GAMING = re.compile(r"^TEST[_-]GAMING:[ \t]*(.*)$", re.I | re.M)
@@ -323,80 +324,3 @@ def eligible_records(item, records_dir, known_keys=()):
     return eligible, sorted(set(reasons)) if bound else [
         f"no record [seat=review family=outside:{','.join(writers)} head={head} "
         f"item={item['key']} PR={item.get('pr_number') or 'unresolved'}]"]
-
-def backfill(args, poster, pr_lookup=None):
-    """Print TSV discovery and optionally invoke the existing single-seat CLI."""
-    import sys
-    from collections import Counter
-    from plangraph.keeper.evidence_git import GitAdapter
-    from seat_verdict import apply_backfill
-    apply = getattr(args, "backfill_apply", False)
-    if apply and (getattr(args, "dry_run", False) or getattr(args, "backfill_dry_run", False)):
-        print("seat_verdict: --backfill-apply must run without --dry-run or --backfill-dry-run", file=sys.stderr)
-        return 1
-    try:
-        config = json.loads((Path.home() / ".local/share/plangraph/keeper.json").read_text())
-    except (OSError, ValueError):
-        config = {}
-    git = GitAdapter(config.get("repos", {}), fetch_interval=float("inf"))
-    git._maybe_fetch = lambda repo: False
-    try:
-        items = json.loads(args.snapshot.read_text("utf-8"))["items"]
-        if not isinstance(items, list):
-            raise ValueError("snapshot items must be a list")
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        print(f"seat_verdict: snapshot: {exc}", file=sys.stderr)
-        return 1
-    index = record_index(getattr(args, "records_dir", None))
-    for reason in getattr(index, "skips", []):
-        print(f"seat_verdict: {reason}", file=sys.stderr)
-    cache_path = getattr(args, "pr_cache", None)
-    try:
-        cache = json.loads(cache_path.read_text()) if cache_path else {}
-    except (OSError, ValueError):
-        cache = {}
-    lookup = pr_lookup or ((cache.get if isinstance(cache, dict) else lambda _: None)
-                           if cache_path else None)
-    if getattr(args, "pr_lookup_gh", False) and apply and lookup is None:
-        def lookup(sha):
-            result = subprocess.run(["gh", "pr", "list", "--search", sha, "--state", "merged",
-                                     "--json", "number"],
-                                    capture_output=True, text=True, timeout=30)
-            rows = json.loads(result.stdout) if result.returncode == 0 else []
-            return rows[0].get("number") if isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict) else None
-    output, total, missing, failed, tallies = [], 0, 0, 0, Counter()
-    known_keys = {r["key"] for r in items if isinstance(r, dict) and isinstance(r.get("key"), str)}
-    for raw in items:
-        if not isinstance(raw, dict) or raw.get("state") != "in_review": continue
-        item, seats, reasons = dict(raw, key="<missing>", head_sha=None, pr_number=None), [], ["snapshot item missing key"]
-        if isinstance(raw.get("key"), str) and raw["key"]:
-            item["key"] = raw["key"]
-            try:
-                item = snapshot_item(raw, index, git)
-                item["pr_number"] = merged_pr(item, git, lookup)
-            except (KeyError, AttributeError, OSError, subprocess.SubprocessError) as exc:
-                reasons = [f"item PR/writer resolution failed: {type(exc).__name__}"]
-            else: seats, reasons = eligible_records(item, index, known_keys)
-        total += 1
-        missing += not bool(seats)
-        if not seats: tallies.update({r.split(" [seat=", 1)[0] for r in reasons})
-        detail = "ELIGIBLE " + "; ".join(f"{s['run_id']}:{s['family']}:{'PASS' if s['ok'] else 'FIX'}"
-                           for s in seats) if seats else "MISSING " + "; ".join(reasons)
-        output.append(dict(key=item['key'], status="ELIGIBLE" if seats else "MISSING",
-                           head_sha=item.get("head_sha"), pr_number=item.get("pr_number"),
-                           delivery=None, verifier_exit=None,
-                           seats=[dict(s, seat_dir=str(s['seat_dir'])) for s in seats], reasons=reasons))
-        if apply and seats:
-            # A terminal CHANGES must never let replay fall through to ACCEPT.
-            seat = min(seats, key=lambda s: (s["ok"], str(s["seat_dir"])))
-            failed += apply_backfill(args, item, seat, poster, output[-1])
-            detail += " delivery=" + output[-1]["delivery"] + " " + "; ".join(output[-1]["reasons"])
-        if getattr(args, "format", "tsv") == "tsv":
-            print(f"{item['key']}\t{detail.replace(chr(9), ' ').replace(chr(10), ' ')}")
-    if getattr(args, "format", "tsv") == "json":
-        print(json.dumps(output))
-    else:
-        print(f"counts\titems={total}\teligible={total - missing}\tmissing={missing}\tfailed={failed}")
-        for reason, count in sorted(tallies.items()):
-            print(f"reason\t{reason}\t{count}")
-    return int(bool(failed))
