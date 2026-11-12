@@ -39,7 +39,7 @@ def build_fleet(registry, samples=None, runs=None):
                 samples=list((samples or {}).items()), runs=runs))),
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
         if result.returncode:
-            raise ValueError('fleet projection failed')
+            raise RuntimeError('fleet projection failed')
         data = json.loads(result.stdout)
         error = data.get('error')
         if error is not None:

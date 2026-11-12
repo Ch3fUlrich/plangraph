@@ -11,7 +11,9 @@ unchanged.
 `src/plangraph/fleet_snapshot.py` is now a thin caller of the private
 `pg-spawnd fleet-snapshot` subcommand (`rust/pg-spawnd/src/fleet_snapshot.rs`).
 `build_fleet(registry, samples=None, runs=None)` projects JSON inputs without probing.
-Rust failures raise in `load_fleet`, preserving the existing snapshot fallback. Every registry host
+Infrastructure failures (including nonzero helper exits) raise a fixed `RuntimeError`
+without subprocess diagnostics; JSON registry validation errors remain `ValueError`.
+Both preserve the existing `load_fleet` snapshot fallback. Every registry host
 appears once, sorted by id, with `host_id`, `class`, `caps`, `sample`, `samples`
 and `running_agents`. The live loader reads the existing persisted `bus_hosts`
 registry; it has no class/caps columns, so those fields are null. It reads the
@@ -41,3 +43,5 @@ The pytest CI lanes build the release `pg-spawnd` helper using the shared Cargo
 cache; projection tests never skip when it is missing. The private protocol
 returns fixed registry validation errors in JSON, not subprocess stderr. Opaque
 registry class/caps metadata remains in Python without JSON coercion.
+The fleet projection port is complete: only serialization, opaque metadata and
+persisted-input loading remain in Python, so its new-code allowlist waiver is removed.

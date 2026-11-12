@@ -1,4 +1,6 @@
-use super::*;
+use super::{check, command, row, source_checks, valid, MAX_WORKERS, TIMEOUT};
+use serde_json::{json, Value};
+use std::io;
 
 fn host() -> Value {
     json!({"name":"a", "target":"a", "src":"/src"})
@@ -96,80 +98,24 @@ fn invalid_command_is_filtered() {
 
 #[test]
 fn configured_host_regexes_match_legacy_filter() {
-    // Golden acceptance/rejection cases: no interpreter, filesystem, or site-packages.
-    // Keep the Python batching deadline tied to the actual Rust probe limits.
-    let remote = include_str!("../../../src/plangraph/spawner/remote_ps.py");
-    assert!(remote.contains(&format!("MAX_WORKERS = {MAX_WORKERS}\n")));
-    assert!(remote.contains(&format!("TIMEOUT = {}\n", TIMEOUT.as_secs())));
-    let cases = [
-        (
-            "name",
-            vec![json!("a"), json!("A0_.-"), json!("a".repeat(63))],
-            vec![
-                json!(3),
-                json!(""),
-                json!("-a"),
-                json!("a".repeat(64)),
-                json!("a\n"),
-            ],
-        ),
-        (
-            "target",
-            vec![json!("user@host:22"), json!("_a.-")],
-            vec![
-                json!(3),
-                json!(""),
-                json!("-host"),
-                json!("host space"),
-                json!("host\n"),
-            ],
-        ),
-        (
-            "src",
-            vec![json!("/"), json!("~/"), json!("/source space/_.-09")],
-            vec![
-                json!(3),
-                json!(""),
-                json!("relative"),
-                json!("/src;bad"),
-                json!("/src\n"),
-            ],
-        ),
-        (
-            "win_src",
-            vec![json!("C:/"), json!(r"z:\source space\_.-09")],
-            vec![
-                json!(3),
-                json!("bad"),
-                json!("C:relative"),
-                json!("C:/src;bad"),
-                json!("C:/src\n"),
-            ],
-        ),
-        (
-            "wsl_distro",
-            vec![json!("Ubuntu-24.04"), json!("_"), json!(".")],
-            vec![
-                json!(3),
-                json!(""),
-                json!("-Ubuntu"),
-                json!("Ubuntu space"),
-                json!("Ubuntu\n"),
-            ],
-        ),
-    ];
-    for (key, accepted, rejected) in cases {
-        for (values, expected) in [(accepted, true), (rejected, false)] {
-            for value in values {
-                let mut h = host();
+    // The Python configured_hosts pytest consumes this same table and probe limits.
+    // Embed JSON, not Python source: no interpreter or checkout newline assumptions.
+    let golden: Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/doctor_sources.json")).unwrap();
+    assert_eq!(golden["max_workers"], MAX_WORKERS);
+    assert_eq!(golden["timeout_secs"], TIMEOUT.as_secs());
+    for case in golden["cases"].as_array().unwrap() {
+        let key = case["field"].as_str().unwrap();
+        for (kind, expected) in [("accepted", true), ("rejected", false)] {
+            for value in case[kind].as_array().unwrap() {
+                let mut h = golden["base"].clone();
                 if key == "win_src" {
                     h.as_object_mut().unwrap().remove("src");
                 }
-                h[key] = value;
-                if expected {
-                    assert!(valid(&h), "unexpectedly invalid: {h}");
-                } else {
-                    assert_filtered(h.clone());
+                h[key] = value.clone();
+                assert_eq!(valid(&h), expected, "{key} {kind}: {h}");
+                if !expected {
+                    assert_filtered(h);
                 }
             }
         }

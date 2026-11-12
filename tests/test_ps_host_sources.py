@@ -1,10 +1,38 @@
 import json
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from plangraph.spawner import doctor, remote_ps
+
+SOURCE_GOLDENS = json.loads(
+    (Path(__file__).parent / 'fixtures/doctor_sources.json').read_text(encoding='utf-8'))
+
+
+def test_doctor_source_probe_limits_match_goldens():
+    assert remote_ps.MAX_WORKERS == SOURCE_GOLDENS['max_workers']
+    assert remote_ps.TIMEOUT == SOURCE_GOLDENS['timeout_secs']
+
+
+@pytest.mark.parametrize('field,value,accepted', [
+    (case['field'], value, accepted)
+    for case in SOURCE_GOLDENS['cases']
+    for kind, accepted in [('accepted', True), ('rejected', False)]
+    for value in case[kind]
+])
+def test_configured_hosts_match_rust_goldens(tmp_path, monkeypatch, field, value, accepted):
+    host = dict(SOURCE_GOLDENS['base'])
+    if field == 'win_src':
+        del host['src']
+    host[field] = value
+    config = tmp_path / 'plangraph'
+    config.mkdir()
+    (config / 'ps-hosts.json').write_text(json.dumps(dict(hosts=[host])), encoding='utf-8')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    assert remote_ps.configured_hosts() == (
+        [host] if accepted else [dict(name='invalid-config', invalid=True)])
 
 
 @pytest.fixture

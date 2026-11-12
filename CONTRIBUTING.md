@@ -45,6 +45,12 @@ systemd user scope. Use `affected` or `full` to measure each separately.
 
 ## Lanes
 
+Completed Rust ports remove only their own Python waiver from
+`tools/new_code_allowlist.txt`; preserve unrelated exceptions when merging main.
+Doctor source-filter goldens live in `tests/fixtures/doctor_sources.json` and run
+through both Rust unit tests and `tests/test_ps_host_sources.py`; update both
+consumers rather than matching Python source text or spawning Python from Rust.
+
 One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `main`.
 Work that covers two plan items is two lanes.
 

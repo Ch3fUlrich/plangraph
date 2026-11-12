@@ -87,7 +87,7 @@ def test_fleet_rust_failure_is_public(tmp_path, monkeypatch):
     def fail(*args, **kwargs):
         return subprocess.CompletedProcess(args, 2, '', f'{tmp_path}/private secret')
     monkeypatch.setattr(subprocess, 'run', fail)
-    with pytest.raises(ValueError, match='^fleet projection failed$'):
+    with pytest.raises(RuntimeError, match='^fleet projection failed$'):
         fleet.load_fleet(SimpleNamespace(list_bus_hosts=lambda: []))
 
 
@@ -149,7 +149,7 @@ def test_opaque_metadata_and_zero_id():
     assert row["caps"] is caps and row["class"] is cls
 
 
-@pytest.mark.parametrize("failure", ["missing", "timeout", "keys", "json"])
+@pytest.mark.parametrize("failure", ["missing", "timeout", "exit", "keys", "json"])
 def test_bridge_failure_snapshot_fallback(tmp_path, monkeypatch, caplog, failure):
     import subprocess
     def fail(*args, **kwargs):
@@ -157,7 +157,8 @@ def test_bridge_failure_snapshot_fallback(tmp_path, monkeypatch, caplog, failure
             raise FileNotFoundError("private")
         if failure == "timeout":
             raise subprocess.TimeoutExpired("private", 10)
-        return subprocess.CompletedProcess(args, 0, "{}" if failure == "keys" else "usage: private", "")
+        return subprocess.CompletedProcess(args, int(failure == "exit"),
+            "{}" if failure == "keys" else "usage: private", "private diagnostic")
     monkeypatch.setattr(subprocess, "run", fail)
     with pytest.raises(RuntimeError, match="^fleet projection failed$"):
         fleet.build_fleet([])

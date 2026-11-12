@@ -505,7 +505,7 @@ The SSH ps endpoint serializes only running and queued records. Terminal history
 does not consume the 1 MiB transport budget; malformed terminal fields do not
 hide live runs. Malformed live replies and oversized replies name the queried
 host as unknown rather than silently omitting it.
-Source-filter tests use platform-independent accepted/rejected host fixtures;
-they do not launch an ambient Python interpreter. Rust tests also check the
-Python worker-count and per-probe timeout constants, keeping the doctor's
-batching deadline aligned with the source-check implementation.
+Rust source-filter tests and pytest's real `configured_hosts` checks consume
+`tests/fixtures/doctor_sources.json`, binding both validators and probe limits
+to the same accepted/rejected cases. Rust embeds JSON, never Python source or
+an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
