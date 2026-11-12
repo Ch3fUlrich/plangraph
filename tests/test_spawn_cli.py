@@ -153,7 +153,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         models = [a['leg']['model'] for a in record['attempts']]
         assert 'error' not in record, record.get('error')
-        assert len(models) == 8, record   # D-3817: Sonnet no longer implements
+        assert len(models) == 9, record   # D-5198: public mechanics routes gain the paid Muse writer, not extra launches.
         assert len(runner.jobs) == 3
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
         assert models[:4] == ['omniroute/cx-gpt-6.1-sol',
@@ -166,7 +166,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         assert record['exit_code'] == 4
         assert record['evidence']
-        assert len(record["attempts"]) == 8   # D-3817: Sonnet no longer implements
+        assert len(record["attempts"]) == 9   # D-5198: Muse is also skipped when all nine legs are limited.
         assert all(a['status'] == 'skipped' and a['skip_reason'] == 'limited'
                    for a in record['attempts'])
         assert len(runner.jobs) == count
@@ -273,7 +273,8 @@ def test_transport_only_fallthrough(tmp_path, provider_stop, monkeypatch):
         runner.process_factory = factory
         service = SpawnService(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
-        assert len(record["attempts"]) == 8   # D-3817: Sonnet no longer implements
+        assert len(record["attempts"]) == 9   # D-5198: public cards retain the added Muse writer, even after success.
+        assert record['attempts'][-2]['leg']['model'] == 'console-meta/muse-spark-1.3-contributor'
         launched = [a for a in record['attempts'] if a['status'] != 'skipped']
         assert len(launched) == (2 if provider_stop else 1)
         assert len(runner.jobs) == len(launched)
