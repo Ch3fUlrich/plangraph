@@ -143,8 +143,10 @@ def run(cfg, *, host=None, port=None, ready=None):
             return 0
     finally:
         if server is not None and not cleanup_started:
-            server.stop_reaper()
-            server.server_close()
+            with suppress(Exception):
+                server.stop_reaper()
+            with suppress(Exception):
+                server.server_close()
         with suppress(Exception):
             conn.close()
         with suppress(Exception):

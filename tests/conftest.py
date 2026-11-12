@@ -81,32 +81,17 @@ def bounded_shutdown_cleanup(monkeypatch):
     yield
 
 
-@pytest.fixture(autouse=True, scope="module")
-def no_leaked_keeper_threads():
-    """Track worker targets at start, before Thread deletes its target."""
-    workers = []
-    start = threading.Thread.start
+@pytest.fixture
+def keeper_thread_guard():
+    from _keeper_threads import guard_new_threads
+    return guard_new_threads
 
-    def track(thread, *args, **kwargs):
-        target = getattr(thread, "_target", None)
-        from functools import partial
-        while isinstance(target, partial):
-            target = target.func
-        module = getattr(target, "__module__", "")
-        if (module == "plangraph.keeper" or module.startswith("plangraph.keeper.")
-                or thread.name.startswith("keeper-")):
-            workers.append(thread)
-        return start(thread, *args, **kwargs)
 
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(threading.Thread, "start", track)
+@pytest.fixture(autouse=True)
+def no_leaked_keeper_threads(keeper_thread_guard):
+    """Bounded-join threads born during each test, regardless of target or name."""
+    with keeper_thread_guard():
         yield
-    leaked = [thread for thread in workers if thread.is_alive()]
-    for thread in leaked:
-        thread.join(timeout=5)
-    leaked = [thread for thread in leaked if thread.is_alive()]
-    assert not leaked, "Leaked keeper threads: " + ", ".join(
-        f"{thread.name} (daemon={thread.daemon})" for thread in leaked)
 
 
 @pytest.fixture
