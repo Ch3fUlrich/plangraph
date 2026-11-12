@@ -2,7 +2,7 @@
 import json
 import re
 from decimal import Decimal
-from .redact_tokens import TOKENS, JWT, redact_wrapped
+from .redact_tokens import TOKENS, JWT, redact_wrapped, join_shielded_assignments
 
 
 def _redact_pem(text):
@@ -18,6 +18,20 @@ def _redact_pem(text):
     if start is not None:
         return ''.join((*out, text[copied:start], '[REDACTED]'))
     return ''.join((*out, text[copied:]))
+
+
+_ASSIGNMENT = re.compile(
+    r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
+    r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
+    r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)")
+
+
+def _redact_assignments(text):
+    def replace(m):
+        value = m[0][len(m[1]):]
+        return m[1] + (value[0] + '[REDACTED]' + value[-1]
+                       if value[0] in '\"\x27' and value[-1] == value[0] else '[REDACTED]')
+    return _ASSIGNMENT.sub(replace, text)
 
 
 def redact(value):
@@ -55,13 +69,9 @@ def _redact(value, *, source):
             value = _redact_pem(value)
             value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
             if not source:
-                value = re.sub(
-                    r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
-                    r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
-                    r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)",
-                    lambda m: m[1] + (m[0][len(m[1])] + '[REDACTED]' + m[0][-1]
-                                      if m[0][len(m[1])] in '\"\x27' and
-                                      m[0][-1] == m[0][len(m[1])] else '[REDACTED]'), value)
+                # P joins values behind shielded names, then main's order runs.
+                value = join_shielded_assignments(value, _ASSIGNMENT)
+                value = _redact_assignments(value)
             value = redact_wrapped(value)
             # Greedily consume through the last @ within the quoted/space boundary.
             value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',

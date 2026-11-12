@@ -32,13 +32,20 @@ directory. Its home fallback is systemd `%h`, independent of the manager's `HOME
 redeploy the service template to apply the guard.
 
 Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; private-key blocks are masked in both modes, and token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
-Both modes apply complete/truncated PEM, Bearer, wrapped prefixed tokens, URL userinfo,
-the Rust token catalog (OpenAI, GitHub, Slack, AWS and Google prefixes), and JWT rules.
-Wrapped bodies share the catalog's alphabets/floors and bounded 4096-byte LF/CRLF joins.
-Source spans must start and end on line boundaries; invalid spans withhold the prompt.
-Only child-produced output text additionally uses `redact_output`: long hex (32+)
-then base64/url-safe blobs (40+, mixing letters and digits), before tail truncation.
-These broad rules never run on prompts or record structures: commit SHAs and hashes
+Python and Rust order: complete/truncated PEM, Bearer, then plain-mode pre-pass P:
+shield every matched assignment's name/quote/separator with an indexed marker
+`U+E000 + decimal index + U+E001`, leaving values untouched; run the wrapped join,
+then restore the names.
+P is skipped entirely if either shield character already occurs in the text.
+Then main's order runs: full assignments, wrapped prefixed tokens, URL userinfo,
+token catalog and JWT. The shielded join cannot cross/eat a credential name while
+its value is unmasked. Source mode skips P and assignments; its order is unchanged.
+The catalog covers OpenAI, GitHub, Slack, AWS and Google prefixes; wrapped bodies
+share its alphabets/floors and bounded 4096-byte LF/CRLF joins.
+Source spans must start and end on line boundaries; invalid spans (even empty ones) withhold the prompt.
+Long hex (32+), then base64/url-safe blobs (40+, mixing letters and digits), run
+only on child output via Python's `redact_output`, and as part of Rust's `redact`.
+Python never runs these broad rules on prompts or record structures: SHAs and hashes
 must stay readable there, including run IDs, card hashes and prompt SHA-256 fields.
 Stored stdout/stderr tails have already passed the output scrubber at collection.
 A tail therefore masks commit SHAs and long slash paths: take SHAs from git or the run record, never from a tail.
