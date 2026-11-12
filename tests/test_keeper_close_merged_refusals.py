@@ -180,18 +180,46 @@ def test_unproven_merge_refuses(w, monkeypatch, proof):
 
 
 def test_real_git_merge_head_survives_later_trailer_commit(w, tmp_path, monkeypatch):
-    from git_helpers import git_cli
+    import os
+    import subprocess
     from plangraph.keeper import context_sources
     from plangraph.keeper.evidence_git import GitAdapter
 
-    git_cli(tmp_path, monkeypatch)  # isolate the production adapter's git config too
-    for name, value in {"GIT_AUTHOR_NAME": "Fixture", "GIT_COMMITTER_NAME": "Fixture",
-                        "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
-                        "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}.items():
+    required_env = {
+        "GIT_AUTHOR_NAME": "Fixture", "GIT_COMMITTER_NAME": "Fixture",
+        "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+        "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+        "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+    }
+    real_run = subprocess.run
+
+    def checked_run(args, **kwargs):
+        if args[0] == "git":
+            env = kwargs.get("env", os.environ)
+            assert all(env.get(k) == v for k, v in required_env.items()), (
+                "every git call must have explicit fixture identity and isolated config")
+            if "init" in args:
+                assert "init.defaultBranch=main" in args
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", checked_run)
+    for name in list(os.environ):
+        if name.startswith("GIT_"):
+            monkeypatch.delenv(name)
+    home = tmp_path / "git-home"
+    home.mkdir()
+    for name, value in {**required_env, "HOME": str(home),
+                        "XDG_CONFIG_HOME": str(home)}.items():
         monkeypatch.setenv(name, value)
-    git, init = git_cli(tmp_path)
+
+    def git(repo, *args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                              capture_output=True, text=True,
+                              env=os.environ.copy()).stdout.strip()
+
     repo = tmp_path / "fixture-repo"
-    init(repo, "-q", "-b", "main")
+    repo.mkdir()
+    git(repo, "-c", "init.defaultBranch=main", "init", "-q")
     git(repo, "commit", "--allow-empty", "-m", "initial")
     git(repo, "switch", "-c", "lane")
     git(repo, "commit", "--allow-empty", "-m", f"work\n\nPlan-Item: {KEY}")

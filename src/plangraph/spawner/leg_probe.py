@@ -275,21 +275,21 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
             ok, reason, infra = False, 'probe leaked into caller repo', False
         excerpt, serving = '', False
         if not ok and not infra:
-            from .env_redact import redact, redact_env_values
+            from .env_redact import redact_output, redact_env_values
             diagnostic = job or next((j for jid, j in getattr(runner, 'jobs', {}).items() if jid in owned_ids), None)
             stderr = getattr(diagnostic, 'stderr', '') or stderr
             if isinstance(stderr, bytes):
                 stderr = stderr.decode('utf-8', 'replace')
             env = dict(os.environ)
             env.update(getattr(runner, '_child_envs', {}).get(getattr(diagnostic, 'job_id', None), {}))
-            excerpt = ' '.join(leg_state._redact(redact(redact_env_values(stderr, env)), limit=None)[-400:].splitlines())
+            excerpt = ' '.join(leg_state._redact(redact_output(redact_env_values(stderr, env)), limit=None)[-400:].splitlines())
             serving = await asyncio.to_thread(_leg_serving, runner, leg, previous)
         if not infra:
             if ok:
                 state.record_probe_pass(key(leg), caller='leg-probe')
             else:
                 state.record_probe_fail(key(leg), reason, caller='leg-probe', serving=serving, stderr_excerpt=excerpt)
-        reason += ': ' + excerpt if excerpt else ''
+        reason += ': ' + excerpt if excerpt and not leaked else ''
         result = dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start, stderr_excerpt=excerpt)
         if serving:
             result['state'] = 'probe_failed_leg_serving'

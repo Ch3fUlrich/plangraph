@@ -389,7 +389,7 @@ def test_unresolved_refusal_falls_through_to_next_leg(tmp_path, monkeypatch):
     async def fake_factory(exe, *args, **kwargs):
         launched.append(exe)
         proc = AsyncMock()
-        proc.communicate = AsyncMock(return_value=(b"ok", b""))
+        proc.communicate = AsyncMock(return_value=(b'{"event":"result","result":{"status":"SUCCESS","response":"ok"}}\n', b""))
         proc.returncode = 0
         proc.pid = FAKE_PID
         return proc
