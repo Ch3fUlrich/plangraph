@@ -62,12 +62,13 @@ def bounded_shutdown_cleanup(monkeypatch):
 
     def run(*args, **kwargs):
         record_exit = os._exit  # the test has installed its recorder by now
+        preexisting = set(threading.enumerate())
 
         def exit_and_join(code):
-            # Real _exit never returns. In this in-process test the blocked
-            # close has a two-second backstop; finish it before conn.close().
+            # Real _exit never returns. Give this run's cleanup a five-second
+            # join backstop before the recorder can permit conn.close().
             cleaners = [t for t in threading.enumerate()
-                        if t.name == "keeper-shutdown"]
+                        if t not in preexisting and t.name == "keeper-shutdown"]
             for thread in cleaners:
                 thread.join(timeout=5)
                 assert not thread.is_alive(), "keeper shutdown did not finish"

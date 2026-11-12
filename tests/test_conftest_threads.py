@@ -1,9 +1,8 @@
 """Runtime-owned executors outlive a test without becoming keeper leaks."""
 import asyncio
-import inspect
 import threading
-from types import SimpleNamespace
-from unittest.mock import patch
+from concurrent.futures import ThreadPoolExecutor
+from types import FunctionType
 
 import pytest
 
@@ -14,23 +13,20 @@ def test_guard_rejects_keeper_start_even_with_runtime_name(name, daemon, keeper_
     thread = threading.Thread(target=lambda: (entered.set(), release.wait()),
                               name=name, daemon=daemon)
     join = thread.join
-    # A zero-time join makes this deliberately leaked thread deterministic.
+    # A zero teardown budget makes this deliberate leak deterministic.
     try:
-        with patch.object(thread, "join", lambda timeout: join(timeout=0)):
-            with pytest.raises(AssertionError, match=f"Leaked keeper threads: {name}"):
-                with keeper_thread_guard():
-                    thread.start()
-                    assert entered.wait(timeout=5)
-                    assert thread.is_alive()
+        with pytest.raises(AssertionError, match=f"Leaked keeper threads: {name}"):
+            with keeper_thread_guard(timeout=0):
+                thread.start()
+                assert entered.wait(timeout=5)
+                assert thread.is_alive()
     finally:
         release.set()
         join(timeout=5)
     assert not thread.is_alive()
 
 
-def test_guard_tracks_executor_descendant_by_start_identity(monkeypatch, keeper_thread_guard):
-    from concurrent.futures import ThreadPoolExecutor
-
+def test_guard_tracks_executor_descendant_by_start_identity(keeper_thread_guard):
     executor = ThreadPoolExecutor(max_workers=1)
     threads = []
 
@@ -39,16 +35,13 @@ def test_guard_tracks_executor_descendant_by_start_identity(monkeypatch, keeper_
 
     parent = threading.Thread(target=owner)
     try:
-        with monkeypatch.context() as scoped:
-            with pytest.raises(AssertionError, match="Leaked keeper threads:"):
-                with keeper_thread_guard():
-                    parent.start()
-                    parent.join(timeout=5)
-                    assert not parent.is_alive()
-                    child, = threads
-                    child.name = "renamed-after-start"
-                    join = child.join
-                    scoped.setattr(child, "join", lambda timeout: join(timeout=0))
+        with pytest.raises(AssertionError, match="Leaked keeper threads: renamed-after-start"):
+            with keeper_thread_guard(timeout=0):
+                parent.start()
+                parent.join(timeout=5)
+                assert not parent.is_alive()
+                child, = threads
+                child.name = "renamed-after-start"
     finally:
         executor.shutdown(wait=True)
         parent.join(timeout=5)
@@ -56,57 +49,39 @@ def test_guard_tracks_executor_descendant_by_start_identity(monkeypatch, keeper_
 
 
 def test_guard_leaves_temporal_workflow_executor_to_worker(keeper_thread_guard):
-    pytest.importorskip("temporalio")
-    from temporalio.bridge.proto.workflow_activation import (
-        RemoveFromCache, WorkflowActivation)
-    from temporalio.bridge.worker import PollShutdownError
-    from temporalio.common import MetricMeter
-    from temporalio.converter import DataConverter
-    from temporalio.worker import UnsandboxedWorkflowRunner
-    from temporalio.worker._workflow import _WorkflowWorker
+    # Small fake of Temporal SDK 1.36.0, temporalio/worker/_workflow.py:
+    # 143-150 creates the pool, 632-637 dispatches activation, 278-280 shuts it
+    # down at worker exit. No private SDK constructor/cache/bridge is needed.
+    class WorkflowWorker:
+        def __init__(self):
+            self.executor = ThreadPoolExecutor(max_workers=1,
+                                              thread_name_prefix="temporal_workflow_")
 
-    class Bridge:
-        async def complete_workflow_activation(self, completion):
-            pass
+        async def activate(self):
+            return await asyncio.get_running_loop().run_in_executor(
+                self.executor, threading.current_thread)
 
-        async def poll_workflow_activation(self):
-            raise PollShutdownError()
+        def shutdown(self):
+            self.executor.shutdown(wait=True)
 
-    options = dict(
-        bridge_worker=Bridge, namespace="default", task_queue="guard-test", workflows=[],
-        workflow_task_executor=None, max_concurrent_workflow_tasks=1,
-        workflow_runner=UnsandboxedWorkflowRunner(),
-        unsandboxed_workflow_runner=UnsandboxedWorkflowRunner(),
-        data_converter=DataConverter.default, interceptors=[],
-        workflow_failure_exception_types=[], patch_activation_callback=None,
-        debug_mode=False, disable_eager_activity_execution=False,
-        metric_meter=MetricMeter.noop, on_eviction_hook=None, disable_safe_eviction=False,
-        should_enforce_versioning_behavior=False, assert_local_activity_valid=lambda _: None,
-        encode_headers=False, max_workflow_task_external_storage_concurrency=1)
-    # Exercise the real SDK worker without a server, across optional SDK knobs.
-    worker = _WorkflowWorker(**{k: v for k, v in options.items()
-                               if k in inspect.signature(_WorkflowWorker).parameters})
-    threads = []
-    worker._running_workflows["guard"] = SimpleNamespace(
-        deadlocked_activation_task=None,
-        activate=lambda _: threads.append(threading.current_thread()))
-    # Temporal creates this pool and shuts it down from _WorkflowWorker.run's
-    # finally block. LiveRig.stop already shuts down/awaits its module workers.
+    worker = WorkflowWorker()
     try:
         with keeper_thread_guard():
-            asyncio.run(worker._handle_cache_eviction(
-                WorkflowActivation(run_id="guard"), RemoveFromCache()))
-            thread, = threads
+            thread = asyncio.run(worker.activate())
+            assert thread is not threading.current_thread()
+            assert thread.name == "temporal_workflow__0"
             assert thread.is_alive()
         assert thread.is_alive(), "a per-test guard must not stop a module worker"
     finally:
-        asyncio.run(worker.run())
+        worker.shutdown()
     assert not thread.is_alive()
 
 
 def test_guard_leaves_playwright_file_executor_to_runtime(tmp_path, keeper_thread_guard):
-    pytest.importorskip("playwright")
-    from playwright._impl._helper import async_writefile
+    # Same observable contract as Playwright 1.64.0, _impl/_helper.py:541-547:
+    # async_writefile dispatches a write to the session loop's default pool.
+    async def async_writefile(path, data):
+        await asyncio.get_running_loop().run_in_executor(None, path.write_bytes, data)
 
     loop = asyncio.new_event_loop()
     thread = None
@@ -125,3 +100,65 @@ def test_guard_leaves_playwright_file_executor_to_runtime(tmp_path, keeper_threa
         loop.run_until_complete(loop.shutdown_default_executor())
         loop.close()
     assert not thread.is_alive()
+
+
+def test_guard_leaves_executor_started_from_test_frame(keeper_thread_guard):
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        with keeper_thread_guard():
+            thread = executor.submit(threading.current_thread).result(timeout=5)
+            assert thread.is_alive()
+        assert thread.is_alive()
+    finally:
+        executor.shutdown(wait=True)
+    assert not thread.is_alive()
+
+
+def test_guard_rejects_keeper_executor_started_from_test_frame(keeper_thread_guard):
+    def submit(executor):
+        return executor.submit(threading.current_thread).result(timeout=5)
+
+    # Only the starter's module changes: same executor, target and test caller.
+    keeper_submit = FunctionType(submit.__code__,
+                                {"__name__": "plangraph.keeper.guard_test",
+                                 "threading": threading})
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="keeper-executor")
+    try:
+        with pytest.raises(AssertionError, match="Leaked keeper threads: keeper-executor_0"):
+            with keeper_thread_guard(timeout=0):
+                thread = keeper_submit(executor)
+                assert thread.is_alive()
+        assert thread.is_alive()
+    finally:
+        executor.shutdown(wait=True)
+    assert not thread.is_alive()
+
+
+def test_guard_waits_past_first_join_for_worker_to_stop(monkeypatch, keeper_thread_guard):
+    import _keeper_threads as guard
+
+    release = threading.Event()
+    worker = threading.Thread(target=release.wait, name="slow-cleanup", daemon=True)
+    real_join = worker.join
+    elapsed, joins = [0.0], []
+
+    def join(timeout):
+        joins.append(timeout)
+        elapsed[0] += timeout
+        if elapsed[0] >= 6:
+            release.set()
+            real_join(timeout=5)
+
+    # Advance a local clock, not wall time: the cleanup stops at logical t=6.
+    monkeypatch.setattr(guard, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(worker, "join", join)
+    try:
+        with keeper_thread_guard():
+            worker.start()
+            assert worker.is_alive()
+        assert elapsed[0] == 6
+        assert len(joins) > 1
+        assert not worker.is_alive()
+    finally:
+        release.set()
+        real_join(timeout=5)

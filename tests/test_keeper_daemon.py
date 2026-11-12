@@ -100,15 +100,40 @@ def test_mock_exit_waits_before_recorder(monkeypatch, node_name, request):
     cleaner = Cleaner()
     calls = []
     monkeypatch.setattr(os, "_exit", lambda code: calls.append((code, cleaner.alive)))
-    monkeypatch.setattr(daemon, "run", lambda: os._exit(75))
+
+    def run():
+        monkeypatch.setattr(threading, "enumerate", lambda: [cleaner])
+        os._exit(75)
+
+    monkeypatch.setattr(daemon, "run", run)
     monkeypatch.setattr(request.node, "name", node_name)
     request.getfixturevalue("bounded_shutdown_cleanup")
     assert request.node.name == node_name
     assert cleaner.is_alive()
-    with monkeypatch.context() as patch:
-        patch.setattr(threading, "enumerate", lambda: [cleaner])
-        daemon.run()
+    daemon.run()
     assert calls == [(75, False)]
+
+
+def test_mock_exit_ignores_preexisting_same_named_thread(monkeypatch, request):
+    from plangraph.keeper import daemon
+
+    release = threading.Event()
+    stale = threading.Thread(target=release.wait, name="keeper-shutdown", daemon=True)
+    stale.start()
+    calls = []
+    monkeypatch.setattr(os, "_exit", calls.append)
+    monkeypatch.setattr(daemon, "run", lambda: os._exit(75))
+    request.getfixturevalue("bounded_shutdown_cleanup")
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(stale, "join", lambda timeout: pytest.fail("joined stale cleanup"))
+            daemon.run()
+        assert calls == [75]
+        assert stale.is_alive()
+    finally:
+        release.set()
+        stale.join(timeout=5)
+    assert not stale.is_alive()
 
 
 @pytest.mark.parametrize("shape", ["keeper_util", "test_module", "partial", "lambda", "bound"])
@@ -116,6 +141,7 @@ def test_mock_exit_waits_before_recorder(monkeypatch, node_name, request):
 def test_leak_guard_tracks_unnamed_worker_and_joins(
         monkeypatch, shape, survives, keeper_thread_guard):
     import functools
+    import _keeper_threads as guard
     entered, release = threading.Event(), threading.Event()
 
     def target(self=None):
@@ -138,8 +164,11 @@ def test_leak_guard_tracks_unnamed_worker_and_joins(
         joins.append(timeout)
         if not survives:
             release.set()
+        elapsed[0] += timeout
         real_join(timeout=0 if survives else timeout)
 
+    elapsed = [0.0]
+    monkeypatch.setattr(guard, "monotonic", lambda: elapsed[0])
     monkeypatch.setattr(worker, "join", join)
     monkeypatch.setattr(unrelated, "join", lambda timeout: unrelated_joins.append(timeout))
     expected = (pytest.raises(AssertionError, match="Leaked keeper threads: worker")
@@ -151,7 +180,7 @@ def test_leak_guard_tracks_unnamed_worker_and_joins(
                 worker.start()
                 assert entered.wait(timeout=5)
                 assert worker.is_alive()
-        assert joins == [5]
+        assert joins == [guard.JOIN_INTERVAL] * (10 if survives else 1)
         assert unrelated_joins == []
     finally:
         release.set()
@@ -205,6 +234,7 @@ def test_shutdown_wrapper_is_opt_in(monkeypatch, request, opt_in):
 
 def test_leak_guard_joins_real_worker(tmp_path, monkeypatch, keeper_thread_guard):
     from plangraph.keeper import daemon
+    from _keeper_threads import JOIN_INTERVAL
     stop, entered = threading.Event(), threading.Event()
     settings = {"enabled": True, "dir": str(tmp_path), "keep": 1,
                 "daily_days": 1, "interval_s": 60}
@@ -225,7 +255,7 @@ def test_leak_guard_joins_real_worker(tmp_path, monkeypatch, keeper_thread_guard
             worker.start()
             assert entered.wait(timeout=5)
             assert worker.is_alive()
-        assert joins == [5]
+        assert joins == [JOIN_INTERVAL]
         assert not worker.is_alive()
     finally:
         stop.set()

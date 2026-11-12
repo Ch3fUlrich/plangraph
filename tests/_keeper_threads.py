@@ -3,17 +3,20 @@ from contextlib import contextmanager
 from pathlib import Path
 import sys
 import threading
+from time import monotonic
 from unittest.mock import patch
 
 _TESTS = Path(__file__).resolve().parent
+THREAD_SHUTDOWN_TIMEOUT = 10.0
+JOIN_INTERVAL = 1.0
 
 
 def _keeper_start():
     """Attribute the start call, not the target callable or the thread's name.
 
-    Keeper frames own their callees too (e.g. an executor). Test/fixture code
-    that starts a thread directly owns it, but a runtime reached through an
-    event loop does not become keeper code just because a test drives the loop.
+    Keeper frames own their callees too (e.g. an executor). Otherwise only a
+    direct test/fixture start is owned: stdlib executor/event-loop frames count
+    as runtime callers, even when a test submits the work that starts the pool.
     """
     frame = sys._getframe(1)
     caller = None
@@ -22,8 +25,7 @@ def _keeper_start():
             module = frame.f_globals.get("__name__", "")
             if module.startswith("plangraph.keeper."):
                 return True
-            if (caller is None and module != __name__
-                    and module.partition(".")[0] not in sys.stdlib_module_names):
+            if caller is None and module != __name__:
                 caller = frame.f_code.co_filename
             frame = frame.f_back
         return caller is not None and Path(caller).resolve().is_relative_to(_TESTS)
@@ -32,8 +34,8 @@ def _keeper_start():
 
 
 @contextmanager
-def guard_new_threads():
-    """Bounded-join only identities started by keeper/test code in this scope."""
+def guard_new_threads(*, timeout=THREAD_SHUTDOWN_TIMEOUT):
+    """Join owned starts/descendants until stopped or the shared deadline expires."""
     started = set()
     lock = threading.Lock()
     original_start = threading.Thread.start
@@ -55,16 +57,19 @@ def guard_new_threads():
         try:
             yield
         finally:
-            joined = set()
+            deadline = monotonic() + timeout
             while True:
                 with lock:
-                    pending = started - joined
-                if not pending:
+                    pending = [thread for thread in started if thread.is_alive()]
+                if not pending or monotonic() >= deadline:
                     break
                 for thread in pending:
-                    if thread.is_alive():
-                        thread.join(timeout=5)
-                joined.update(pending)
-            leaked = [thread for thread in joined if thread.is_alive()]
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        break
+                    thread.join(timeout=min(JOIN_INTERVAL, remaining))
+            with lock:
+                leaked = sorted((thread for thread in started if thread.is_alive()),
+                                key=lambda thread: thread.name)
             assert not leaked, "Leaked keeper threads: " + ", ".join(
                 f"{thread.name} (daemon={thread.daemon})" for thread in leaked)
