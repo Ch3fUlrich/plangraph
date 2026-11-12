@@ -145,8 +145,14 @@ def test_factory_preserves_adapter_and_hung_rank(boundary, tmp_path, reason):
 
 
 def test_fixture_disabled_reader_matches_main_plan(tmp_path, monkeypatch):
+    from plangraph.planner import legs
     import plangraph.planner.routing as routing
     original = routing.plan_spawn
+    # Test reader parity and exact hung rotation within a single cost tier.
+    # Production mixed-tier ordering is checked separately below (D-5240).
+    table = tuple(leg for leg in legs.DEFAULT_LEGS if leg.tier == 'subscription')
+    monkeypatch.setattr(legs, 'DEFAULT_LEGS', table)
+    monkeypatch.setitem(original.__kwdefaults__, 'legs', table)
     seen = []
 
     def spy(*args, **kwargs):
@@ -161,6 +167,19 @@ def test_fixture_disabled_reader_matches_main_plan(tmp_path, monkeypatch):
     assert seen[0]('sample') == dict(state='ok', evidence=None)
     s.hung.waiting.add(baseline.legs[0].id)
     assert s._route(CARD).legs == baseline.legs[1:] + baseline.legs[:1]
+
+
+def test_fixture_hung_writer_keeps_subscriptions_before_paid(tmp_path):
+    from plangraph.planner.legs import MUSE_AMBER, WRITER_ORDER
+    s = service(tmp_path)
+    baseline = plan_spawn(CARD, role='implement', leg_reader=None)
+    assert tuple(leg.id for leg in baseline.legs) == WRITER_ORDER
+    assert asdict(s._route(CARD)) == asdict(baseline)
+    s.hung.waiting.add(baseline.legs[0].id)
+    assert tuple(leg.id for leg in s._route(CARD).legs) == (
+        'agy-gemini-3.8-flash', 'cx-gpt-6.1-sol', MUSE_AMBER)
+    s.hung.waiting.update(WRITER_ORDER[:2])
+    assert s._route(CARD).legs == baseline.legs
 
 
 def test_rank_subset_and_leg_keys(boundary, tmp_path):

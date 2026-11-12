@@ -292,10 +292,12 @@ def review_child_env():
 
 def witness_order(card, role, legs, down):
     """Keep paid legs last, then apply witness capability and host-local cooldown."""
+    from plangraph.planner.review_order import paid_priority
     need = bool(role == 'review' and card and card.get('witness_required'))
     env = review_child_env() if need else None
     return tuple(sorted(legs, key=lambda leg: (
-        getattr(leg, 'tier', None) == 'paid', need and not gateway_leg(leg.model, env), leg.id in down)))
+        getattr(leg, 'tier', None) == 'paid', paid_priority(leg),
+        need and not gateway_leg(leg.model, env), leg.id in down)))
 
 
 def witness_gate_legs(card, role, legs):

@@ -23,8 +23,8 @@ def test_sol_only_and_no_fallback():
     plan = plan_spawn({'estimate_tokens': 100}, role='implement')
     assert [l.id for l in plan.legs] == list(WRITER_ORDER)
     sol_out = plan_spawn({'estimate_tokens': 100}, role='implement', leg_reader=lambda model, **kw: (
-        {'state': 'limited' if model == 'omniroute/cx-gpt-6.1-sol' else 'available',
-         'evidence': {'status': 429} if model == 'omniroute/cx-gpt-6.1-sol' else None}))
+        {'state': 'limited' if model == 'omniroute/cx-gpt-6.1-sol-xhigh' else 'available',
+         'evidence': {'status': 429} if model == 'omniroute/cx-gpt-6.1-sol-xhigh' else None}))
     assert [l.id for l in sol_out.legs] == ['agy-gemini-3.8-flash', 'opencode-console-muse-spark']
     limited = plan_spawn({'estimate_tokens': 100}, role='implement',
                          leg_reader=lambda *a, **kw: {'state': 'limited', 'evidence': {'status': 429}})

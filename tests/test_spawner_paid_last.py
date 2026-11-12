@@ -13,7 +13,7 @@ def use_table(monkeypatch, table):
     original = routing.plan_spawn
     monkeypatch.setattr(legs, 'DEFAULT_LEGS', table)
     monkeypatch.setattr(routing, 'plan_spawn',
-        lambda *a, **kw: original(*a, **dict(kw, legs=table)))
+        lambda *a, **kw: original(*a, **dict(kw, legs=table, catalog_rows=())))
 
 
 def fake_runner(tmp_path, status='completed', stop=None, text='verdict: pass'):
@@ -91,7 +91,8 @@ def test_muse_amber_paid_pin_checks_free_availability(tmp_path, monkeypatch, pin
 
 
 @pytest.mark.parametrize('pin', ['leg', 'model'])
-@pytest.mark.parametrize('subscriptions_up', [legs.WRITER_ORDER[:2], legs.WRITER_ORDER[:1], legs.WRITER_ORDER[1:2], ()])
+@pytest.mark.parametrize('subscriptions_up', [
+    legs.WRITER_ORDER[:2], legs.WRITER_ORDER[:1], legs.WRITER_ORDER[1:2], ()])
 @pytest.mark.parametrize('reason', [None, 'Audited public writer override'])
 def test_muse_writer_pin_cannot_bypass_available_subscriptions(tmp_path, pin, subscriptions_up, reason):
     writers = {leg.id: leg for leg in legs.DEFAULT_LEGS if leg.id in legs.WRITER_ORDER}
@@ -126,6 +127,19 @@ def test_measured_down_subscriptions_still_precede_paid_muse(tmp_path, monkeypat
     plan = service.route({'estimate_tokens': 1000}, role=role, writer_families=['qwen'])
     expected = sorted(legs.WRITER_ORDER[:2], key=lambda mid: mid in down_ids) + [legs.MUSE_AMBER]
     assert [leg.id for leg in plan.legs] == expected
+
+
+@pytest.mark.parametrize('role', ['implement', 'review'])
+def test_paid_muse_precedes_deepseek_despite_host_cooldown(tmp_path, monkeypatch, role):
+    import time
+    amber = next(leg for leg in legs.DEFAULT_LEGS if leg.id == legs.MUSE_AMBER)
+    deepseek = next(leg for leg in legs.DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
+    use_table(monkeypatch, tuple(replace(leg, roles=(role,), tier='paid') for leg in (deepseek, amber)))
+    service = SpawnService(state=tmp_path, leg_reader=lambda *a, **kw: {'state': 'available', 'evidence': None})
+    service._save(dict(run_id='run-paidcooldown', status='failed', ended=time.time(),
+        attempts=[dict(leg={'id': amber.id}, status='failed', down_reason='usage_limit')]))
+    plan = service.route({'estimate_tokens': 1000}, role=role, writer_families=['qwen'])
+    assert [leg.id for leg in plan.legs] == [amber.id, deepseek.id]
 
 
 @pytest.mark.parametrize('reason', ['credit usage limit', 'model not available',

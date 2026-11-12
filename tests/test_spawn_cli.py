@@ -133,11 +133,9 @@ def test_harness_quota_falls_through(tmp_path, monkeypatch):
 
 
 def test_replan_and_all_limited(tmp_path, monkeypatch):
+    from plangraph.planner.routing import plan_spawn
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, 'catalog_rows', ())
     install_fallthrough_legs(monkeypatch)
-    from plangraph.spawner import resolver
-    rows = resolver.get_catalog_models()
-    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
-        dict(row, available=1, active=True) for row in rows])
     async def run():
         store = LegStateStore(tmp_path / 'legs.sqlite')
         runner = SpawnerRunner()
@@ -153,12 +151,12 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         models = [a['leg']['model'] for a in record['attempts']]
         assert 'error' not in record, record.get('error')
-        assert len(models) == 9, record   # D-5198: public mechanics routes gain the paid Muse writer, not extra launches.
+        assert len(models) == 9, record   # D-5198: paid Muse adds a mechanics leg, not a launch.
         assert len(runner.jobs) == 3
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
-        assert models[:4] == ['omniroute/cx-gpt-6.1-sol',
-                              'opencode/deepseek-v4.1-flash-free',
-                              'opencode/glm-5.3-flash-free', 'openrouter/free']
+        assert models[:4] == ['opencode/deepseek-v4.1-flash-free',
+                              'opencode/glm-5.3-flash-free', 'openrouter/free',
+                              'omniroute/cx-gpt-6.1-sol-xhigh']
         for leg in service.route({'estimate_tokens': 1000}).legs:
                 store.record_provider_response(leg.model if '/' in leg.model else 'agy/' + leg.model,
                     429, 'provider quota exhausted', {}, 'test')

@@ -100,22 +100,30 @@ DEFAULT_LEGS = (
         disabled="D-4196 opencode zen never worked, use opencode go; never remove (D-3828)"),
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
-    Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
+    Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol-xhigh",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",),
         note="D-3605: operator implement leg (ChatGPT subscription via OmniRoute cx)"),
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
+    Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-high",
+        "gemini", ("128k", "256k", "1m"), 900000, False, roles=("implement", "review")),
+    Leg("opencode-big-pickle", "free", "opencode", "opencode/big-pickle",
+        "glm", ("128k",), 100000, True, roles=("implement", "review")),
     Leg("agy-gpt-oss-120b", "subscription", "agy", "gpt-oss-120b-medium",
         "openai", ("128k",), 100000, False, roles=("review",)),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False,
         roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
-    _legacy["agy-sonnet-5.5"],
-    # D-3552: opencode-go review seats, placed before the paid deepseek
-    # leg so existing order is unchanged; deepseek/glm lifted for review only (route_policy).
+    _replace(_legacy["agy-sonnet-5.5"], roles=("orchestrate", "review")),
+    Leg("agy-claude-opus", "subscription", "agy", "claude-opus-4-6-thinking",
+        "claude", ("128k", "256k"), 180000, False, claude_family=True, roles=("review",)),
+    Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-flash",
+        "deepseek", ("128k",), 100000, False, roles=("review",)),
+    Leg("omniroute-muse-spark", "subscription", "opencode", "omniroute/muse-spark-1.3-contributor",
+        "muse", ("128k",), 100000, False, roles=("review",)),
     Leg("opencode-go-gemini-4-argon", "subscription", "opencode",
         "opencode-go/gemini-4-argon", "gemini", ("128k",), 100000,
         False, roles=("review",)),
@@ -139,8 +147,6 @@ DEFAULT_LEGS = (
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
         False, roles=("review",)),
-    # D-4193: one gateway review leg, placed after the opencode-go review
-    # legs as the fallback seat; its upstream route is not verified.
     Leg("omniroute-gemini-3.8-flash", "subscription", "opencode",
         "omniroute/gemini-3.8-flash", "gemini", ("128k",), 100000, True,
         roles=("review",),
@@ -154,7 +160,7 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-#: D-5173: the one Muse leg the route picks by itself (operator path: opencode console).
+#: D-5198: the console Muse review seat and fallback writer.
 MUSE_AMBER = "opencode-console-muse-spark"
 # D-5240 / rule 3.23a: tier, then table order; Muse writes only after subscriptions.
 WRITER_ORDER: tuple[str, ...] = tuple(

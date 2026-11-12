@@ -1,0 +1,1 @@
+- Keep shared Rust workspace manifests and lockfiles independent of crate docs, including retired base mappings; retain pg-probe-only documentation enforcement and add regression coverage.

@@ -14,7 +14,7 @@ import pytest
 @pytest.mark.parametrize('explicit', [False, True])
 def test_real_binary_unavailable_and_secret(tmp_path, monkeypatch, caplog, explicit):
     from plangraph.spawner.runner import SpawnerRunner
-    first = replace(DEFAULT_LEGS[0], harness='opencode', model='omniroute/cx-gpt-6.1-sol')
+    first = replace(DEFAULT_LEGS[0], harness='opencode', model='omniroute/cx-gpt-6.1-sol-xhigh')
     second = replace(first, id='second', model='opencode-go/gemini-4-argon')
     binary = tmp_path / 'opencode'
     binary.write_text('#!/bin/sh\ncase "$*" in *cx-gpt*) echo "Error: Model unavailable: x $MY_GATEWAY_TOKEN" >&2; exit 1;; esac\necho success\n')
@@ -49,9 +49,12 @@ def test_dry_run_never_probes(tmp_path, monkeypatch):
 
 
 def test_free_zen_legs_are_exactly_the_disabled_set():
-    free = {l.id: l.disabled for l in DEFAULT_LEGS if l.model.startswith('opencode/')}
-    assert set(free) == {'opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free'}
-    assert all(free.values())
+    zen = {l.id: l.disabled for l in DEFAULT_LEGS if l.model.startswith('opencode/')}
+    assert zen == {'opencode-deepseek-v4.1-flash-free':
+                   'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)',
+                   'opencode-glm-5.3-flash-free':
+                   'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)',
+                   'opencode-big-pickle': None}
 
 
 @pytest.mark.parametrize('leg_id', ['opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free'])
