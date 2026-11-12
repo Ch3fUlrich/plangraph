@@ -437,7 +437,7 @@ def test_resolver_mimo_scores_above_qwen():
 
 def test_resolver_gemini_argon_smart_model_and_cost_adaptation():
     """Verify opencode-go/gemini-4-argon is selected as frontier smart model and cost adapts by risk."""
-    models = {m["id"]: m for m in get_catalog_models()}
+    models = {m["id"]: m for m in get_catalog_models(metric_view="benchmark")}
     argon = models["opencode-go/gemini-4-argon"]
     assert argon is not None
     assert argon["available"] == 1
@@ -446,13 +446,13 @@ def test_resolver_gemini_argon_smart_model_and_cost_adaptation():
     assert argon["aa_intelligence"] == 50.0
     assert argon["cost_per_task_usd"] == 9.95
 
-    # Current AA task cost outweighs Argon's intelligence advantage even at high risk.
     sonnet = models["agy/claude-sonnet-5-5-high"]
     score_argon_high = score_model(argon, role="implement", risk="high")
     score_sonnet_high = score_model(sonnet, role="implement", risk="high")
     assert score_argon_high < score_sonnet_high
+    calibrated = {m["id"]: m for m in get_catalog_models()}
+    assert score_model(calibrated[argon["id"]], risk="high") > score_model(calibrated[sonnet["id"]], risk="high")
 
-    # Low-risk utility still prefers the cheaper free-tier Flash observation.
     qwen_flash = models["qoder/qwen3.8-flash-next"]
     score_qwen_flash_low = score_model(qwen_flash, role="implement", risk="low")
     score_sonnet_low = score_model(sonnet, role="implement", risk="low")
@@ -771,7 +771,7 @@ def test_ubiquitous_symbol_fanout_blocklist():
 
 def test_deepseek_flash_cost_and_tier_ranking():
     """Missing composite/cost stay unknown; matched inputs preserve subscription priority."""
-    models = {m["id"]: m for m in get_catalog_models()}
+    models = {m["id"]: m for m in get_catalog_models(metric_view="benchmark")}
     ds_sub, ds_paid = (models[m] for m in ("opencode-go/deepseek-v4.1-flash", "deepseek/deepseek-v4-flash-max"))
 
     assert ds_sub["aa_intelligence"] is None and ds_sub["cost_per_task_usd"] is None

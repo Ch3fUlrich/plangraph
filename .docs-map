@@ -2,6 +2,7 @@
 # Docs mapping for plangraph (rule D-653)
 src/plangraph/routing_support/catalog* -> docs/benchmark-catalog.md
 src/plangraph/catalog_data.py -> docs/benchmark-catalog.md
+src/plangraph/registry_columns.py -> docs/benchmark-catalog.md
 src/plangraph/routing_support/resolver.py -> docs/benchmark-catalog.md
 src/plangraph/spawner/bench_entry.py -> docs/benchmark-catalog.md
 src/plangraph/spawner/mcp.py -> docs/benchmark-catalog.md

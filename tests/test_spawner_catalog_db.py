@@ -41,18 +41,15 @@ def test_schema_initialization_and_idempotency(tmp_path: Path) -> None:
     db_file = tmp_path / "catalog_test.db"
     db = CatalogDB(db_file)
     try:
-        # First init and seed
         db.init_and_seed()
         models_first = db.list_models()
         assert len(models_first) == 61  # benchmark-only effort/item identities included
         assert len({m["master_rank"] for m in models_first if m.get("master_rank")}) == 22
 
-        # Second init and seed (must not raise UNIQUE constraint violations)
         db.init_and_seed()
         models_second = db.list_models()
         assert len(models_second) == 61
 
-        # Verify key tables exist with rows
         tables = [
             "catalog_quota_pools",
             "catalog_providers",
@@ -70,13 +67,14 @@ def test_schema_initialization_and_idempotency(tmp_path: Path) -> None:
 
 
 def test_all_22_models_and_exact_aa_v432_benchmarks(memory_db: CatalogDB) -> None:
-    """Keep all 22 historical ranks, with current independently sourced measurements."""
+    """Historical test ID retained; assert current observations, not AA v4.3.2."""
+    from functools import partial
+    get_observation = partial(memory_db.get_model, metric_view="benchmark")
     models = memory_db.list_models()
     assert len(models) == 61
     assert len({m["master_rank"] for m in models if m.get("master_rank")}) == 22
 
-    # 1. MiMo Flash: unsupported historical components are not relabelled as AA evidence.
-    flash = memory_db.get_model("mimo/mimo-v2.6-flash")
+    flash = get_observation("mimo/mimo-v2.6-flash")
     assert flash is not None
     assert flash["verified_tok_per_s"] == 38.0
     assert flash["direct_api_tok_per_s"] is None
@@ -86,9 +84,8 @@ def test_all_22_models_and_exact_aa_v432_benchmarks(memory_db: CatalogDB) -> Non
     assert flash["aa_intelligence"] == 27.0
     assert flash["benchmark_source"] == "AA-v5.0.1 snapshot"
 
-    # 2. Current observed scores, not historical routing preference, determine intelligence.
-    pro = memory_db.get_model("mimo/mimo-v2.6-pro")
-    qwen = memory_db.get_model("opencode-go/qwen3.8-max")
+    pro = get_observation("mimo/mimo-v2.6-pro")
+    qwen = get_observation("opencode-go/qwen3.8-max")
     assert pro is not None
     assert qwen is not None
     assert pro["aa_intelligence"] == 30.0
@@ -98,8 +95,7 @@ def test_all_22_models_and_exact_aa_v432_benchmarks(memory_db: CatalogDB) -> Non
     assert qwen["aa_intelligence"] == 34.0
     assert pro["aa_intelligence"] < qwen["aa_intelligence"]
 
-    # 3. Opus high retains its historical rank, never unsupported component claims.
-    opus = memory_db.get_model("agy/claude-opus-5-5-high")
+    opus = get_observation("agy/claude-opus-5-5-high")
     assert opus is not None
     assert opus["master_rank"] == 1
     assert opus["aa_intelligence"] == 52.0
@@ -108,8 +104,7 @@ def test_all_22_models_and_exact_aa_v432_benchmarks(memory_db: CatalogDB) -> Non
     assert opus["verified_tok_per_s"] == 105.0
     assert opus["cost_per_task_usd"] == 3.46
 
-    # 4. opencode-go/gemini-4-argon: rank 2, active smart model under OpenCode Go subscription
-    argon_oc = memory_db.get_model("opencode-go/gemini-4-argon")
+    argon_oc = get_observation("opencode-go/gemini-4-argon")
     assert argon_oc is not None
     assert argon_oc["master_rank"] == 2
     assert argon_oc["aa_intelligence"] == 50.0
@@ -118,8 +113,7 @@ def test_all_22_models_and_exact_aa_v432_benchmarks(memory_db: CatalogDB) -> Non
     assert argon_oc["available"] == 1
     assert argon_oc["tier"] == "subscription"
 
-    # gemini/gemini-4-argon-high: rank 2, upgrade placeholder on direct Gemini API
-    argon = memory_db.get_model("gemini/gemini-4-argon-high")
+    argon = get_observation("gemini/gemini-4-argon-high")
     assert argon is not None
     assert argon["master_rank"] == 2
     assert argon["aa_intelligence"] == 50.0
@@ -128,34 +122,44 @@ def test_all_22_models_and_exact_aa_v432_benchmarks(memory_db: CatalogDB) -> Non
     assert argon["status"] == "upgrade"
     assert argon["available"] == 0
 
-    # 5. Astra max: rank 3 retained; current composite and task cost.
-    astra = memory_db.get_model("cxa/gpt-6-astra-max")
+    astra = get_observation("cxa/gpt-6-astra-max")
     assert astra is not None
     assert astra["master_rank"] == 3
     assert astra["aa_intelligence"] == 57.0
     assert astra["coding_index"] is None
     assert astra["cost_per_task_usd"] == 6.24
 
-    # 6. Do not attribute old components to a new evaluation version.
-    sonnet_xhigh = memory_db.get_model("agy/claude-sonnet-5-5-xhigh")
+    sonnet_xhigh = get_observation("agy/claude-sonnet-5-5-xhigh")
     assert sonnet_xhigh is not None
     assert sonnet_xhigh["master_rank"] == 4
     assert sonnet_xhigh["terminal_bench"] is None
     assert sonnet_xhigh["frontier_code"] is None
 
-    # 7. Contributor: only the exact published DeepSWE component is supported.
-    muse = memory_db.get_model("opencode-go/muse-spark-1.3-contributor")
+    muse = get_observation("opencode-go/muse-spark-1.3-contributor")
     assert muse is not None
     assert muse["coding_index"] is None and muse["deepswe"] == 75.4
     assert muse["agentic_index"] is None
     assert muse["verified_tok_per_s"] is None
 
-    # 8. GLM: exact SciCode component; no fabricated coding index.
-    glm = memory_db.get_model("opencode-go/glm-5.2")
+    glm = get_observation("opencode-go/glm-5.2")
     assert glm is not None
     assert glm["coding_index"] is None
     assert glm["scicode"] == pytest.approx(51.1574074074074)
+    for row in (flash, pro, qwen, opus, argon_oc, argon, astra, sonnet_xhigh, muse, glm):
+        assert row["source_url"].startswith("https://") and row["source_date"] == "2026-11-12"
 
+def test_catalog_leg_without_benchmark_is_refused(tmp_path):
+    from plangraph.planner import legs
+    from plangraph.planner.routing import BenchRequired, plan_spawn
+    from plangraph.spawner.bench_entry import benchmark_options, LEG_BENCHMARK_MODEL
+    leg = next(l for l in legs.spawnable_legs() if l.id == "cx-gpt-6.1-sol")
+    with CatalogDB(tmp_path / "catalog.db") as db:
+        db.init_and_seed()
+        db.conn.execute("DELETE FROM catalog_benchmarks WHERE model_id=?", (LEG_BENCHMARK_MODEL[leg.id],))
+        db.conn.commit()
+    with pytest.raises(BenchRequired, match=leg.id):
+        options = benchmark_options(True, str(tmp_path / "catalog.db"))
+        plan_spawn({"estimate_tokens": 1000}, role="implement", legs=(leg,), benchmark=options["benchmark"], strict=True)
 
 def test_5_rung_tier_ladder_ordering(memory_db: CatalogDB) -> None:
     """Verify trial < free < credit < subscription < paid tier ladder sorting."""
@@ -174,17 +178,14 @@ def test_5_rung_tier_ladder_ordering(memory_db: CatalogDB) -> None:
     rungs = [TIER_RUNG[m["tier"]] for m in all_models]
     assert rungs == sorted(rungs)
 
-    # Free models appear first (qoder/qwen3.8-flash-next, agy/gemini-3.8-flash-tiered-high)
     free_models = [m for m in all_models if m["tier"] == "free"]
     assert len(free_models) >= 2
     for m in free_models:
         assert TIER_RUNG[m["tier"]] == 1
 
-    # Subscription models come after free and before paid
     sub_models = [m for m in all_models if m["tier"] == "subscription"]
     assert len(sub_models) > 0
 
-    # Paid models come last
     paid_models = [m for m in all_models if m["tier"] == "paid"]
     assert len(paid_models) >= 2
     for pm in paid_models:
@@ -287,16 +288,13 @@ def test_sonnet_medium_in_l2_worker_and_reviewer_routes() -> None:
 
 def test_family_and_intelligence_filtering(memory_db: CatalogDB) -> None:
     """Verify family inclusion, exclusion, and intelligence threshold filters."""
-    # Family filter
     claude_models = memory_db.list_models(family="claude")
     assert len(claude_models) > 0
     assert all(m["family"] == "claude" for m in claude_models)
 
-    # Exclude families
     no_claude_no_mimo = memory_db.list_models(exclude_families=["claude", "mimo"])
     assert not any(m["family"] in ("claude", "mimo") for m in no_claude_no_mimo)
 
-    # Route legs filtering
     l1_legs_all = memory_db.get_route_legs("l1-orchestrator", active_only=True)
     l1_legs_no_claude = memory_db.get_route_legs(
         "l1-orchestrator", active_only=True, exclude_families=["claude"]
@@ -304,7 +302,6 @@ def test_family_and_intelligence_filtering(memory_db: CatalogDB) -> None:
     assert len(l1_legs_no_claude) < len(l1_legs_all)
     assert not any(l["family"] == "claude" for l in l1_legs_no_claude)
 
-    # Intelligence filter
     l1_high_intel = memory_db.get_route_legs(
         "l1-orchestrator", active_only=True, min_intelligence=46.0
     )

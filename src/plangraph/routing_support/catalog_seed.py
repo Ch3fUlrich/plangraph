@@ -6,6 +6,7 @@ exact-identity benchmark snapshots, upgrades, and role route seed definitions.
 
 import hashlib
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -320,6 +321,7 @@ SEED_CLIENTS: list[dict[str, Any]] = [
 ]
 
 
+@lru_cache(maxsize=1)
 def snapshot_data():
     """Frozen upstream observations and historical upgrade fingerprints."""
     return json.loads(Path(__file__).with_name("catalog_benchmark_sources.json").read_text(encoding="utf-8"))
@@ -333,6 +335,30 @@ def published_rows():
     return rows
 
 
+def metric_view(row, view):
+    """Keep the router's v4 calibration separate from current observations."""
+    if view not in {"benchmark", "routing"}:
+        raise ValueError("unknown catalog metric view: " + view)
+    if view == "benchmark":
+        return row
+    current = next((r for r in SEED_BENCHMARKS if r["model_id"] == row["model_id"]), {})
+    legacy = snapshot_data()["legacy"].get(row["model_id"], {}).get("metrics")
+    columns = {key for evidence in snapshot_data()["legacy"].values() for key in evidence["metrics"]}
+    columns |= {"source_url", "source_date", "swe_bench_verified", "swe_atlas_qna"}
+    # Only unchanged authored observations use the pre-refresh calibration.
+    # Never substitute it for operator measurements or attach current URLs.
+    if legacy and all(row.get(k) == current.get(k) for k in columns - {"updated_at"}):
+        benchmark = {k: row.get(k) for k in current}
+        row = dict(row, **{k: v for k, v in legacy.items() if k != "updated_at"})
+        row.update(source_url=None, source_date=None, benchmark=benchmark)
+    return dict(row, metric_view=view)
+
+
+def has_utility_inputs(row):
+    """Unknown measurements are not utility inputs; absent legacy cost is valid."""
+    return row.get("aa_intelligence") is not None and ("cost_per_task_usd" not in row or row["cost_per_task_usd"] is not None)
+
+
 def migrate(conn):
     """Add nullable provenance/components and preserve every operator value."""
     columns = {r[1] for r in conn.execute("PRAGMA table_info(catalog_benchmarks)")}
@@ -343,6 +369,7 @@ def migrate(conn):
     model_columns = {r[1] for r in conn.execute("PRAGMA table_info(catalog_models)")}
     if "benchmark_only" not in model_columns:
         conn.execute("ALTER TABLE catalog_models ADD COLUMN benchmark_only INTEGER NOT NULL DEFAULT 0")
+    conn.execute("CREATE TABLE IF NOT EXISTS catalog_model_seed_versions (model_id TEXT PRIMARY KEY, seed_json TEXT NOT NULL)")
     info = list(conn.execute("PRAGMA table_info(catalog_benchmarks)"))
     nullable = {"aa_intelligence", "verified_tok_per_s", "cost_per_task_usd"}
     if any(r[3] and r[1] in nullable for r in info):
@@ -356,11 +383,21 @@ def migrate(conn):
         conn.execute("DROP TABLE catalog_benchmarks_legacy")
 
 
+def refresh_model_seed(conn, seed):
+    """Three-way identity refresh: update seed-owned cells, retain operator edits."""
+    saved = conn.execute("SELECT seed_json FROM catalog_model_seed_versions WHERE model_id=?", (seed["model_id"],)).fetchone()
+    prior = json.loads(saved[0]) if saved else snapshot_data()["prior_models"].get(seed["model_id"], seed)
+    current = dict(conn.execute("SELECT * FROM catalog_models WHERE model_id=?", (seed["model_id"],)).fetchone())
+    fields = {key: value for key, value in seed.items() if key != "model_id" and
+              (current.get(key) == prior.get(key) or current.get(key) == value)}
+    if fields:
+        conn.execute("UPDATE catalog_models SET " + ", ".join(k + "=?" for k in fields) + " WHERE model_id=?",
+                     (*fields.values(), seed["model_id"]))
+    conn.execute("INSERT OR REPLACE INTO catalog_model_seed_versions VALUES (?,?)", (seed["model_id"], json.dumps(seed, sort_keys=True)))
+
+
 def backfill_provenance(conn, seeds):
     """Refresh exact old seeds (including PR self-citations), never operator edits."""
-    conn.execute("UPDATE catalog_models SET upstream_id='muse-spark-1.3-contributor',parameter_effort='max' "
-                 "WHERE model_id='opencode-go/muse-spark-1.3-contributor' "
-                 "AND upstream_id='muse-spark-1.3' AND parameter_effort='xhigh'")
     snapshot = snapshot_data()
     previous = {model: evidence["metrics"] for model, evidence in snapshot["legacy"].items()}
     for seed in seeds:
@@ -380,7 +417,7 @@ def backfill_provenance(conn, seeds):
                 and all(value is None for key, value in row.items()
                         if key not in legacy and key not in {"source_url", "source_date"})):
             fields = {key: seed.get(key) for key in row if key != "model_id"}
-        elif fingerprint == snapshot["prior_pr"].get(seed["model_id"]):
+        elif fingerprint in snapshot["prior_pr"].get(seed["model_id"], []):
             fields = {key: seed.get(key) for key in row if key != "model_id"}
         elif row["source_url"] is None and row["source_date"] is None and all(
                 row[key] == value for key, value in seed.items() if key not in {"source_url", "source_date"}):

@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 from plangraph.routing_support.leg_state import leg_status, model_admitted
-from plangraph.routing_support.catalog_seed import TIER_RUNG
+from plangraph.routing_support.catalog_seed import TIER_RUNG, has_utility_inputs
 from plangraph.mimo_policy import ACCEPTED_MIMO_IDS, mimo_path_allowed
 from plangraph.routing_support.clients import build_routing_envelope_headers
 from plangraph.routing_support.risk import (
@@ -379,7 +379,7 @@ def detect_model_family(model_id: str) -> str:
 def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
     """Fail closed: both catalog admission signals must be explicit."""
     return (row.get('id') not in OPERATOR_REMOVED_MODELS
-            and row.get('available') == 1 and row.get('active') is True)
+            and not row.get('benchmark_only') and row.get('available') == 1 and row.get('active') is True)
 
 
 _served_cache = {}
@@ -738,7 +738,7 @@ _catalog_failures = {}
 
 
 def get_catalog_models(db: Any = None, *, active_only: bool = False,
-                       clock=time.monotonic, include_benchmark_only=False) -> list[dict[str, Any]]:
+                       clock=time.monotonic, include_benchmark_only=False, metric_view="routing") -> list[dict[str, Any]]:
     """Read routing identities; query_catalog can also request benchmark-only rows."""
     catalog_source = None
     identity = db if db is not None else _get_default_catalog_db
@@ -761,7 +761,8 @@ def get_catalog_models(db: Any = None, *, active_only: bool = False,
         target_db = db if db is not None else _get_default_catalog_db()
         if target_db is not None:
             if hasattr(target_db, "list_models"):
-                models = target_db.list_models(active_only=active_only)
+                models = (target_db.list_models(active_only=active_only, metric_view=metric_view)
+                          if isinstance(target_db, CatalogDB) else target_db.list_models(active_only=active_only))
                 # D-2631: no admitted rows is not an empty catalog. Preserve the
                 # active-only query contract, but probe total rows before fallback.
                 if active_only and not models:
@@ -770,14 +771,12 @@ def get_catalog_models(db: Any = None, *, active_only: bool = False,
                         return []
                 if models:
                     _catalog_failures.pop(key, None)
-                    return [_normalize_catalog_row(m) for m in models if (include_benchmark_only or not m.get("benchmark_only"))
-                            and (not active_only or catalog_row_admitted(_normalize_catalog_row(m)))]
+                    return [_normalize_catalog_row(m) for m in models if (include_benchmark_only or not m.get("benchmark_only")) and (not active_only or catalog_row_admitted(_normalize_catalog_row(m)))]
             if hasattr(target_db, "get_models"):
                 models = target_db.get_models()
                 if models:
                     _catalog_failures.pop(key, None)
-                    return [_normalize_catalog_row(m) for m in models if (include_benchmark_only or not m.get("benchmark_only"))
-                            and (not active_only or catalog_row_admitted(_normalize_catalog_row(m)))]
+                    return [_normalize_catalog_row(m) for m in models if (include_benchmark_only or not m.get("benchmark_only")) and (not active_only or catalog_row_admitted(_normalize_catalog_row(m)))]
     except Exception as exc:
         import logging
         if not failure:
@@ -887,7 +886,7 @@ def resolve_review_plan(
         if getattr(reader, 'enabled', False):
             d['available'] = int(d['leg_state']['state'] == 'ok')
         return d
-    all_models = [annotate(m) for m in get_catalog_models(db)]
+    all_models = [annotate(m) for m in get_catalog_models(db) if has_utility_inputs(m)]
 
     # Filter candidate models
     target_db = None if any(m.get("catalog_source") == "offline_fallback_db_error" for m in all_models) else (db if db is not None else _get_default_catalog_db())
@@ -900,7 +899,7 @@ def resolve_review_plan(
             candidates = [
                 annotate(_normalize_catalog_row(r))
                 for r in route_legs
-                if is_model_available(_normalize_catalog_row(r), reader, account=account, combo=combo_name) and _passes_context_and_cliff(r, need_tokens, role="review")
+                if has_utility_inputs(r) and is_model_available(_normalize_catalog_row(r), reader, account=account, combo=combo_name) and _passes_context_and_cliff(r, need_tokens, role="review")
             ]
             combo_priority_legs = True
 
@@ -1143,7 +1142,7 @@ def resolve_model_for_task(
     if getattr(reader, 'enabled', False):
         all_models = [dict(m, available=int(m['leg_state']['state'] == 'ok')) for m in all_models]
     def _eligible(m: Mapping[str, Any], require_combo: bool) -> bool:
-        if not is_model_available(m, reader, account=account, combo=combo_name):
+        if not has_utility_inputs(m) or not is_model_available(m, reader, account=account, combo=combo_name):
             return False
         combos = m.get("combos")
         if require_combo and combo_name and combos and combo_name not in combos:

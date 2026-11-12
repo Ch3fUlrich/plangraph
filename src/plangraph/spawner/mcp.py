@@ -241,11 +241,13 @@ class MCPSpawnerServer:
             family = arguments.get("family")
             min_intel = arguments.get("min_intelligence")
 
-            models = get_catalog_models(include_benchmark_only=True)
+            # Combo queries retain their calibrated routing thresholds. General
+            # catalog queries expose the raw, current benchmark observations.
+            models = get_catalog_models(include_benchmark_only=True, metric_view="routing" if combo else "benchmark")
             matched: list[dict[str, Any]] = []
             for m in models:
                 m = dict(m, leg_state=leg_status(m["id"], combo=combo))
-                if not is_model_available(m, lambda *a, **kw: {"state": "ok"}):
+                if not m.get("benchmark_only") and not is_model_available(m, lambda *a, **kw: {"state": "ok"}):
                     continue
                 if combo and combo not in m.get("combos", []):
                     continue

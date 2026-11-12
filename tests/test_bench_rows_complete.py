@@ -51,12 +51,12 @@ def assert_provenance(row):
     assert urlsplit(row["source_url"]).scheme == "https"
     assert "/git/blobs/" not in row["source_url"]
     if model == "opencode/big-pickle":
-        assert row["source_url"] == "https://github.com/PhillipChaffee/big-pickle-swe-atlas"
+        assert re.fullmatch(r"https://github.com/PhillipChaffee/big-pickle-swe-atlas/blob/[a-f0-9]{40}/results/summary.json#L2-L10", row["source_url"])
         assert row["swe_atlas_qna"] == 50.81 and row["swe_bench_verified"] is None
         assert "Self-reported single trial" in evidence["excerpt"] and "63/124" in evidence["excerpt"]
         return
     if model == "claude-haiku-5-5":
-        assert row["source_url"] == "https://opencode.ai/data/anthropic/claude-haiku-5-5.json"
+        assert row["source_url"] == "https://www.anthropic.com/claude-haiku-5-5#performance"
         assert row["terminal_bench"] == 39.2 and row["aa_intelligence"] is None
         assert '"version": "4.0"' in evidence["excerpt"]
         return
@@ -70,7 +70,8 @@ def assert_provenance(row):
     if effort == "max" and slug.startswith("gpt-"):
         slug = slug.removesuffix("-max")
     if "muse-spark" in model:
-        assert evidence["source_url"] == "https://opencode.ai/data/meta/" + slug + ".json"
+        assert urlsplit(evidence["source_url"]).hostname == "research.meta.ai"
+        assert urlsplit(evidence["source_url"]).path.split("/") == ["", "articles", "introducing-muse-1-3", "benchmarks", "benchmark-scorecard-v6.webp"]
         assert "Contributor" in evidence["title"] and "max effort" in evidence["excerpt"]
         assert "xhigh" not in evidence["excerpt"]
     else:
@@ -123,7 +124,7 @@ def test_bench_rows_complete(tmp_path):
     with CatalogDB(path) as db:
         db.init_and_seed()
         rows = {r["model_id"]: dict(r) for r in db.conn.execute("SELECT * FROM catalog_benchmarks")}
-        models = {r["model_id"]: r for r in db.list_models()}
+        models = {r["model_id"]: r for r in db.list_models(metric_view="benchmark")}
         seen = set()
         for leg in legs.spawnable_legs():
             if leg.disabled:
@@ -179,7 +180,7 @@ def test_provenance_migration_backfills_only_exact_seed_rows(tmp_path):
         db.conn.execute("ALTER TABLE catalog_benchmarks DROP COLUMN source_date")
         db.conn.commit()
         db.init_and_seed()
-        assert_provenance(db.get_model("mimo/mimo-v2.6-flash"))
+        assert_provenance(db.get_model("mimo/mimo-v2.6-flash", metric_view="benchmark"))
         operator = db.get_model("mimo/mimo-v2.6-pro")
         assert operator["aa_intelligence"] == 12.345
         assert operator["source_url"] is None and operator["source_date"] is None
@@ -190,10 +191,14 @@ def test_provenance_migration_backfills_only_exact_seed_rows(tmp_path):
 def test_catalog_query_exposes_source_and_date(tmp_path, method, args):
     with CatalogDB(tmp_path / "queries.db") as db:
         db.init_and_seed()
-        result = getattr(db, method)(*args)
+        result = getattr(db, method)(*args, metric_view="benchmark")
+        checked = 0
         for row in result if isinstance(result, list) else [result]:
-            if any(row[key] is not None for key in ("aa_intelligence", "scicode", "deepswe")):
+            assert "source_url" in row and "source_date" in row
+            if row["model_id"] not in UNMEASURED:
                 assert_provenance(row)
+                checked += 1
+        assert checked > 0
 
 
 def test_future_active_leg_without_a_row_fails(tmp_path, monkeypatch):
@@ -212,14 +217,15 @@ def test_exact_effort_scores_and_components(tmp_path):
         for effort, score in zip(legs.CX_EFFORTS, (35, 46, 50, 52, 55)):
             assert db.get_model("omniroute/cx-gpt-6.1-sol-" + effort)["aa_intelligence"] == score
         for effort, score in (("low", 54), ("medium", 56), ("high", 62)):
-            row = db.get_model("claude-fable-5-2-" + effort)
+            row = db.get_model("claude-fable-5-2-" + effort, metric_view="benchmark")
             assert row["aa_intelligence"] == score
-            assert row["available"] == 1 and row["benchmark_only"] == 1
-        muse = db.get_model("opencode-go/muse-spark-1.3-contributor")
+            assert row["available"] == 0 and row["benchmark_only"] == 1
+        muse = db.get_model("opencode-go/muse-spark-1.3-contributor", metric_view="benchmark")
         assert muse["deepswe"] == 75.4 and muse["aa_intelligence"] is None
         assert muse["verified_tok_per_s"] is None and muse["cost_per_task_usd"] is None
     ranked = benchmark_options(False, str(path))["benchmark"]
-    assert muse["model_id"] not in ranked  # Component-only evidence is not a utility input.
+    assert ranked[muse["model_id"]]["benchmark"]["deepswe"] == 75.4
+    assert ranked[muse["model_id"]]["metric_view"] == "routing"  # Never rebrand calibration as a new measurement.
     assert "gemini-3.8-flash-low" not in ranked  # published score, unknown task cost
 
 
@@ -252,7 +258,7 @@ def test_query_catalog_tool_returns_provenance(tmp_path, monkeypatch):
         result = asyncio.run(server.call_tool("plangraph_agent_query_catalog", {}))
         assert result["count"]
         assert {r["model_id"] for r in result["models"]} == {
-            r["model_id"] for r in db.list_models() if r["available"] and r["status"] == "active"}
+            r["model_id"] for r in db.list_models() if r["benchmark_only"] or r["available"] and r["status"] == "active"}
         assert {"omniroute/cx-gpt-6.1-sol-" + effort for effort in legs.CX_EFFORTS} <= {
             r["model_id"] for r in result["models"]}
         for row in result["models"]:
@@ -272,7 +278,7 @@ def test_provenance_rejects_live_mismatched_or_changed_evidence(tmp_path, model,
     with CatalogDB(tmp_path / "invalid.db") as db:
         db.init_and_seed()
         with pytest.raises((AssertionError, KeyError)):
-            assert_provenance(dict(db.get_model(model), **change))
+                assert_provenance(dict(db.get_model(model, metric_view="benchmark"), **change))
 
 
 def test_seed_import_does_not_load_planner_policy(tmp_path):
@@ -302,7 +308,7 @@ def test_benchmark_refresh_preserves_main_scores_and_routing(tmp_path):
             db._insert_records("catalog_benchmarks", [evidence["metrics"]])
         db.init_and_seed()
         for model in SOURCES["legacy"]:
-            assert_provenance(db.get_model(model))
+            assert_provenance(db.get_model(model, metric_view="benchmark"))
         assert [dict(row) for row in db.conn.execute("SELECT * FROM catalog_route_legs")] == routes
         for row in db.list_models(active_only=True):
             assert row["model_id"] in SOURCES["legacy"] or row["benchmark_only"], row["model_id"]
@@ -335,12 +341,16 @@ def test_unmeasured_effort_is_not_a_sibling_measurement(tmp_path, model):
     path = tmp_path / "unmeasured.db"
     with CatalogDB(path) as db:
         db.init_and_seed()
-        row = db.get_model(model)
+        row = db.get_model(model, metric_view="benchmark")
         assert_provenance(row)
         assert row["benchmark_source"].startswith("UNMEASURED:")
         assert not any(row[k] is not None for k in
                        ("aa_intelligence", "scicode", "deepswe", "swe_bench_verified"))
-    assert model not in benchmark_options(False, str(path))["benchmark"]
+    ranked = benchmark_options(False, str(path))["benchmark"]
+    if model in SOURCES["legacy"]:
+        assert ranked[model]["benchmark"]["aa_intelligence"] is None
+    else:
+        assert model not in ranked
 
 
 def test_explicit_catalog_providers_and_reader_aliases(tmp_path):
@@ -363,15 +373,15 @@ def test_explicit_catalog_providers_and_reader_aliases(tmp_path):
         for model, row in benchmark_rows_from_db(path)[0].items():
             if row.get("aa_intelligence") is not None and row.get("cost_per_task_usd") is not None:
                 assert rows[model]["model_id"] == model
-                assert rows[model]["aa_intelligence"] == row["aa_intelligence"]
+                assert rows[model].get("benchmark", rows[model])["aa_intelligence"] == row["aa_intelligence"]
         for alias, canonical in BENCHMARK_MODEL_ALIASES.items():
             if alias == "omniroute/cx-gpt-6-luna":
-                assert alias not in rows  # Its unmeasured DB identity must not become medium.
+                assert rows[alias]["benchmark"]["aa_intelligence"] is None  # Not relabelled medium.
                 assert rows["cx-gpt-6-luna"] is rows[canonical]
                 continue
             assert rows[alias] is rows[canonical]
             assert rows[alias]["model_id"] == canonical
-            assert_provenance(rows[alias])
+            assert_provenance(rows[alias].get("benchmark", rows[alias]))
 
 
 @pytest.mark.parametrize("model,field,value", [

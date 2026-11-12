@@ -16,6 +16,10 @@ from typing import Any
 # deepseek API are not runner harnesses).  A new provider must be registered
 # here: the KeyError in tag_seed_rows is deliberate.
 PROVIDER_HARNESS: dict[str, Any] = {
+    "opencode": "opencode",
+    "omniroute": "opencode",
+    "gc": "opencode",
+    "console-meta": "opencode",
     "opencode-go": "opencode",
     "mimo": "opencode",
     "cx": "opencode",

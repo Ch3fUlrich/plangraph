@@ -17,7 +17,7 @@ from typing import Any, Sequence
 from plangraph import registry_columns
 from .catalog_seed import (SEED_BENCHMARKS, SEED_CLIENTS, SEED_MODELS, SEED_PROVIDERS,
                            SEED_QUOTA_POOLS, SEED_ROUTE_LEGS, SEED_ROUTES, TIER_RUNG,
-                           backfill_provenance, migrate as migrate_benchmarks)
+                           backfill_provenance, metric_view, refresh_model_seed, migrate as migrate_benchmarks)
 
 def default_db_path() -> Path:
     """Catalog DB path, resolved at call time so PLANGRAPH_CATALOG_DB wins (D3)."""
@@ -100,9 +100,13 @@ class CatalogDB:
             sql = f"INSERT OR {mode} INTO {table_name} ({col_list}) VALUES ({placeholders})"
             values = [r.get(c) for c in cols]
             cursor.execute(sql, values)
+            if seed and table_name == "catalog_models":
+                refresh_model_seed(self.conn, r)
         return len(records)
 
-    def get_model(self, model_id: str) -> dict[str, Any] | None:
+    _metric_view = staticmethod(metric_view)
+
+    def get_model(self, model_id: str, *, metric_view="routing") -> dict[str, Any] | None:
         """Fetch model joined with benchmark, provider, and quota pool."""
         sql = """
         SELECT
@@ -143,7 +147,7 @@ class CatalogDB:
         if not row:
             return None
         d = dict(row)
-        d['active'] = d.get('status') == 'active'
+        d['active'] = d.get('status') == 'active' and not d.get('benchmark_only')
         d["id"] = d["model_id"]
         d["context_window"] = d["context_tokens"]
         combos_rows = self.conn.execute(
@@ -151,7 +155,7 @@ class CatalogDB:
             (model_id,),
         ).fetchall()
         d["combos"] = [r["route_id"] for r in combos_rows]
-        return d
+        return self._metric_view(d, metric_view)
 
     def list_models(
         self,
@@ -160,6 +164,7 @@ class CatalogDB:
         exclude_families: Sequence[str] = (),
         min_intelligence: float = 0.0,
         min_context: int = 0,
+        *, metric_view="routing",
     ) -> list[dict[str, Any]]:
         """List models filtered and ordered by 5-rung tier ladder, intelligence, and speed."""
         where_clauses: list[str] = []
@@ -177,9 +182,6 @@ class CatalogDB:
             placeholders = ", ".join(["?"] * len(exclude_families))
             where_clauses.append(f"LOWER(m.family) NOT IN ({placeholders})")
             params.extend([f.lower() for f in exclude_families])
-        if min_intelligence > 0.0:
-            where_clauses.append("b.aa_intelligence >= ?")
-            params.append(min_intelligence)
         if min_context > 0:
             where_clauses.append("m.context_tokens >= ?")
             params.append(min_context)
@@ -232,7 +234,8 @@ class CatalogDB:
             b.aa_intelligence DESC,
             b.verified_tok_per_s DESC
         """
-        rows = [dict(r) for r in self.conn.execute(sql, params).fetchall()]
+        rows = [self._metric_view(dict(r), metric_view) for r in self.conn.execute(sql, params).fetchall()]
+        rows = [r for r in rows if (r.get("aa_intelligence") or 0) >= min_intelligence]
         leg_rows = self.conn.execute(
             "SELECT model_id, route_id FROM catalog_route_legs ORDER BY route_id ASC"
         ).fetchall()
@@ -241,7 +244,7 @@ class CatalogDB:
             combos_by_model.setdefault(lr["model_id"], []).append(lr["route_id"])
 
         for r in rows:
-            r['active'] = r.get('status') == 'active'
+            r['active'] = r.get('status') == 'active' and not r.get('benchmark_only')
             r["id"] = r["model_id"]
             r["context_window"] = r["context_tokens"]
             r["combos"] = combos_by_model.get(r["model_id"], [])
@@ -262,6 +265,7 @@ class CatalogDB:
         active_only: bool = True,
         exclude_families: Sequence[str] = (),
         min_intelligence: float = 0.0,
+        *, metric_view="routing",
     ) -> list[dict[str, Any]]:
         """Get ordered legs for a role route with optional filtering."""
         where_clauses: list[str] = ["rl.route_id = ?"]
@@ -276,9 +280,6 @@ class CatalogDB:
             placeholders = ", ".join(["?"] * len(exclude_families))
             where_clauses.append(f"LOWER(m.family) NOT IN ({placeholders})")
             params.extend([f.lower() for f in exclude_families])
-        if min_intelligence > 0.0:
-            where_clauses.append("b.aa_intelligence >= ?")
-            params.append(min_intelligence)
 
         sql = f"""
         SELECT
@@ -320,8 +321,9 @@ class CatalogDB:
         WHERE {' AND '.join(where_clauses)}
         ORDER BY rl.position ASC
         """
-        return [dict(r, active=r['status'] == 'active')
+        rows = [self._metric_view(dict(r, active=r['status'] == 'active' and not r['benchmark_only']), metric_view)
                 for r in self.conn.execute(sql, params).fetchall()]
+        return [r for r in rows if (r.get("aa_intelligence") or 0) >= min_intelligence]
 
     def export_json(self, output_path: str | Path | None = None) -> dict[str, Any]:
         """Export all catalog tables to a deterministic dictionary / JSON file."""

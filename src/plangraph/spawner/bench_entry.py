@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 from plangraph.planner.routing import benchmark_rows_from_db, BenchDataError
+from plangraph.routing_support.catalog_seed import has_utility_inputs, metric_view
 
 #: Explicit leg-id -> benchmark model_id (D2). Seeded benchmark rows are keyed
 #: by provider-qualified model ids while spawner legs name bare harness models,
@@ -42,11 +43,10 @@ def benchmark_options(require_bench=False, bench_db=None):
             if errors:
                 raise BenchDataError('; '.join(errors))
             measured_ids.update(found)
+            found = {key: metric_view(row, "routing") for key, row in found.items()}
             # Old benchmark tables may omit cost entirely; main supports those.
             # An explicitly unknown score/cost is evidence, not a utility input.
-            rows.update({key: row for key, row in found.items()
-                         if all(key not in row or row[key] is not None for key in
-                                ("aa_intelligence", "cost_per_task_usd"))})
+            rows.update({key: row for key, row in found.items() if has_utility_inputs(row)})
         # Alias mapped rows under their leg ids so the plan lookup
         # (rows.get(leg.model, rows.get(leg.id))) reaches them.
         for leg_id, model_id in (LEG_BENCHMARK_MODEL | BENCHMARK_MODEL_ALIASES).items():

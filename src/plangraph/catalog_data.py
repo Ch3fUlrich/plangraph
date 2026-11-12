@@ -1,7 +1,7 @@
 """Plangraph Catalog Data (neutral).
 
-Canonical 22-model SEED_MODELS table (Artificial Analysis v4.3.2), shared by the
-spawner catalog and the review gateway. Imports nothing from plangraph.spawner.
+Historical routing identities and exact-effort, mixed-provenance benchmark
+identities, shared by catalog readers. Imports nothing from plangraph.spawner.
 """
 
 import json
@@ -17,19 +17,26 @@ def model_rows(rows):
     for row in json.loads(path.read_text(encoding="utf-8")):
         if row["model_id"] in by_id:
             raise ValueError("duplicate benchmark catalog identity: " + row["model_id"])
-        by_id[row["model_id"]] = dict(row, benchmark_only=1)
-    return list(by_id.values())
+        by_id[row["model_id"]] = dict(row, benchmark_only=1, available=0,
+                                    unavailable_reason=row.get("unavailable_reason") or
+                                    "Benchmark-only identity; not admitted for automatic routing")
+    # Registry defaults apply uniformly; explicit asset overrides survive.
+    result = []
+    for row in by_id.values():
+        explicit = {key: row[key] for key in ("harness", "tool_mode") if key in row}
+        tagged = tag_seed_rows([dict(row)])[0]
+        result.append(dict(tagged, **explicit))
+    return result
 
 # Historical identities plus exact served effort variants (D-5173).
-SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
+SEED_MODELS: list[dict[str, Any]] = model_rows([
     {
         "model_id": "agy/claude-opus-5-5-high",
         "provider_id": "agy",
         "upstream_id": "claude-opus-5-5",
         "family": "claude",
         "parameter_effort": "high",
-        "max_safe_effort": "high",
-        "effort_warning": None,
+        "max_safe_effort": "high", "effort_warning": None,
         "context_tokens": 1000000,
         "max_output_tokens": 128000,
         "price_cliff_tokens": None,
@@ -69,8 +76,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "gemini-4-argon",
         "family": "gemini",
         "parameter_effort": "high",
-        "max_safe_effort": "high",
-        "effort_warning": None,
+        "max_safe_effort": "high", "effort_warning": None,
         "context_tokens": 1000000,
         "max_output_tokens": 65536,
         "price_cliff_tokens": None,
@@ -350,8 +356,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "kimi-k3.1-pro",
         "family": "kimi",
         "parameter_effort": None,
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 256000,
         "max_output_tokens": 64000,
         "price_cliff_tokens": None,
@@ -369,8 +374,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "kimi-k3",
         "family": "kimi",
         "parameter_effort": None,
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 256000,
         "max_output_tokens": 64000,
         "price_cliff_tokens": None,
@@ -388,8 +392,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "claude-haiku-4-5",
         "family": "claude",
         "parameter_effort": None,
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 200000,
         "max_output_tokens": 64000,
         "price_cliff_tokens": 100000,
@@ -407,8 +410,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "gpt-6-sol",
         "family": "gpt",
         "parameter_effort": "low",
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 400000,
         "max_output_tokens": 128000,
         "price_cliff_tokens": None,
@@ -553,4 +555,4 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "supports_reasoning": 1, "supports_tool_calling": 1, "supports_vision": 1,
         "trains_on_prompts": 1,  # D-4193 upstream route not verified, conservative
     },
-]))
+])
