@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
     path::Path,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 pub(crate) struct Runs {
@@ -100,26 +100,18 @@ impl Runs {
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
         }
-        let item = args["card"]["item_key"]
-            .as_str()
-            .or_else(|| args["card"]["item"].as_str())
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned)
+        let item = [&args["card"]["item_key"], &args["card"]["item"]]
+            .into_iter()
+            .find(|v| !v.is_null() && v.as_str() != Some(""))
+            .cloned()
             .or_else(|| {
                 std::env::var("PLANGRAPH_SPAWN_ITEM")
                     .ok()
                     .filter(|s| !s.is_empty())
-            })
-            .or_else(|| {
-                let prompt = args["prompt"].as_str().unwrap_or("");
-                static RE: LazyLock<regex::Regex> =
-                    LazyLock::new(|| regex::Regex::new(r"\bplangraph:[A-Za-z0-9._:-]+").unwrap());
-                let keys: std::collections::BTreeSet<_> =
-                    RE.find_iter(prompt).map(|m| m.as_str()).collect();
-                (keys.len() == 1).then(|| keys.first().unwrap().to_string())
+                    .map(Value::String)
             });
         base["item_key"] = match item {
-            Some(s) if crate::records::valid_item(&s) => json!(s),
+            Some(Value::String(s)) if crate::records::valid_item(&s) => json!(s),
             Some(_) => {
                 if base.get("warnings").is_none() {
                     base["warnings"] = json!([]);

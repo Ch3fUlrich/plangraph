@@ -931,7 +931,8 @@ def spawn_service(*args, **kwargs):
                     if record.get('status') == 'needs_input':
                         record['completion'].update(event='NEEDS_INPUT', question=record['question'])
                     changed = True
-            if changed: super()._save(record)
+            if changed:
+                super()._save(record)
             if terminal:
                 from .notify import deliver_verdict; deliver_verdict(self._path(record['run_id']).parent, record, self.keeper_sink)
                 for recipient, sink in (('parent', self.completion_sink), ('keeper', self.keeper_sink)):
@@ -1046,7 +1047,7 @@ def spawn_service(*args, **kwargs):
             from .context_pack import annotate
             from .item_key import annotate_item
             pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
-            annotate_item(record, card, prompt=prompt)
+            annotate_item(record, card)
             for skipped in plan.to_dict()['skipped']:
                 if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
                     record.setdefault('skipped', []).append(skipped)

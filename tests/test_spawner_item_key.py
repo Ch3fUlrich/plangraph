@@ -1,183 +1,186 @@
+"""Validated spawn identity is persisted without inferring keys from prompts."""
 import asyncio
 import json
+
 import pytest
+
 from plangraph.planner.routing import SpawnRefused
-from registry_route_util import _Runner, _service
+from plangraph.spawner.item_key import annotate_item, valid_item
 from plangraph.spawner.runner import spawn_service
+from registry_route_util import _Runner, _service
 
 
-@pytest.mark.parametrize('model', ['unknown-model', 'gemini'])
-def test_autopost_refuses_unknown_or_writer_family(tmp_path, monkeypatch, model):
-    from plangraph.spawner import item_key
-    monkeypatch.setenv('PLANGRAPH_SEAT_AUTOPOST', '1')
-    monkeypatch.setenv('PG_URL', 'http://keeper.invalid')
-    snapshot = tmp_path / 'snapshot.json'
-    snapshot.write_text(json.dumps({'items': [{'key': 'p:x', 'writer_evidence': [
-        dict(verified=True, head_sha='a' * 40, role='implement', family='google')]}]}))
-    monkeypatch.setenv('PLANGRAPH_SEAT_SNAPSHOT', str(snapshot))
-    calls = []
-    monkeypatch.setattr(item_key, '_post_verdict', lambda args: calls.append(args))
-    record = dict(role='review', status='completed', item_key='p:x',
-                  served_model=model, completion={'head_sha': 'a' * 40})
-    assert item_key.autopost(record, tmp_path / 'record.json')
-    assert not calls
-    assert record['events'][-1]['reason'] == 'ValueError'
+KEY = 'plangraph:D-5047'
+OTHER_KEY = 'plangraph:D-5048'
+MISSING_EVENT = dict(event='seat_item_missing', level='warning')
 
 
-@pytest.mark.parametrize('code', [0, 2, 3, 4])
-def test_scheduled_outcome_survives_return(tmp_path, monkeypatch, code):
-    from plangraph.spawner import item_key
-    monkeypatch.setenv('PLANGRAPH_SEAT_AUTOPOST', '1')
-    record = dict(role='review', status='completed')
-    def post(record, path):
-        record['seat_autopost_attempted'] = True
-        record.setdefault('events', []).append(dict(event='seat_autopost', exit_code=code))
-        return True
-    monkeypatch.setattr(item_key, 'autopost', post)
-    assert item_key.schedule_autopost(record, tmp_path / 'record.json')
-    assert record['events'][-1]['exit_code'] == code
-    assert json.loads((tmp_path / 'seat-autopost.json').read_text())['exit_code'] == code
+@pytest.fixture(autouse=True)
+def isolated_identity(tmp_path, monkeypatch):
+    monkeypatch.delenv('PLANGRAPH_SPAWN_ITEM', raising=False)
+    monkeypatch.chdir(tmp_path)
 
 
-def test_scheduled_failure_is_diagnosed(tmp_path, monkeypatch):
-    from plangraph.spawner import item_key
-    monkeypatch.setenv('PLANGRAPH_SEAT_AUTOPOST', '1')
-    def fail(*args):
-        raise OSError('private diagnostic must not leak')
-    monkeypatch.setattr(item_key, 'autopost', fail)
-    record = dict(role='review', status='completed')
-    assert item_key.schedule_autopost(record, tmp_path / 'record.json')
-    assert record['events'][-1]['reason'] == 'OSError'
-    assert 'private' not in (tmp_path / 'seat-autopost.json').read_text()
+@pytest.mark.parametrize('key', [
+    KEY, 'plan.graph-1_test:D-5047.part_2:review',
+    'p:' + 'x' * 180, 'p' * 19 + ':' + 'x' * 180,
+])
+def test_valid_item_shape(key):
+    assert valid_item(key)
 
 
-def test_service_persists_autopost_outcome(tmp_path, monkeypatch):
-    from plangraph.spawner import item_key
-    service = spawn_service(_Runner(), state=tmp_path)
-    def post(record, path):
-        record.setdefault('events', []).append(dict(event='seat_autopost', exit_code=2))
-        return True
-    monkeypatch.setattr(item_key, 'schedule_autopost', post)
-    record = dict(run_id='run-outcome', role='review', status='completed',
-                  ended=1, completion={'item': 'p:x'})
-    service._save(record)
-    saved = json.loads(service._path(record['run_id']).read_text())
-    assert saved['events'][-1] == dict(event='seat_autopost', exit_code=2)
+@pytest.mark.parametrize('key', [
+    'garbage', ':x', 'plangraph:', '', 'bad/item', 'plangraph:D-5047\n',
+    'plangraph:D 5047', 'plängraph:D-5047', 'plangraph:D-５０４７',
+    'p:' + 'x' * 181, 'p' * 20 + ':' + 'x' * 180, None, 12, {}, [],
+])
+def test_invalid_item_shape(key):
+    assert not valid_item(key)
+
+
+@pytest.mark.parametrize('role', ['review', 'judge'])
+def test_seat_card_key_and_missing_warning(role):
+    record = {'role': role}
+    annotate_item(record, {'item_key': KEY})
+    assert record['item_key'] == KEY
+    assert 'events' not in record
+    missing = {'role': role, 'events': [dict(event='existing')]}
+    annotate_item(missing, {})
+    annotate_item(missing, {})
+    assert missing['item_key'] is None
+    assert missing['events'] == [dict(event='existing'), MISSING_EVENT]
+
+
+@pytest.mark.parametrize('role', ['review', 'judge', 'implement'])
+def test_prompt_cannot_supply_item_identity(role):
+    record = {'role': role, 'prompt': f'Review {KEY} now'}
+    annotate_item(record, {})
+    assert record['item_key'] is None
+    assert record.get('events', []) == ([MISSING_EVENT] if role != 'implement' else [])
+
+
+@pytest.mark.parametrize('card,env,expected', [
+    ({'item_key': KEY}, OTHER_KEY, KEY),
+    ({'item_key': KEY, 'item': OTHER_KEY}, None, KEY),
+    ({'item_key': '', 'item': KEY}, OTHER_KEY, KEY),
+    ({'item_key': 'garbage', 'item': KEY}, OTHER_KEY, None),
+    ({'item_key': 12, 'item': KEY}, OTHER_KEY, None),
+    ({'item_key': None, 'item': KEY}, OTHER_KEY, KEY),
+])
+def test_item_alias_precedence(monkeypatch, card, env, expected):
+    if env is not None:
+        monkeypatch.setenv('PLANGRAPH_SPAWN_ITEM', env)
+    record = {'role': 'review', 'prompt': f'Review {OTHER_KEY} now'}
+    annotate_item(record, card)
+    assert record['item_key'] == expected
+    if expected is None:
+        assert record['warnings'] == ['invalid item_key; stored as null']
 
 
 @pytest.mark.parametrize('fault,expected', [
-    ('wrong_family', 2), ('head', 2), ('verdict', 3), ('forged', 2)])
+    ('wrong_family', 2), ('head', 2), ('verdict', 3), ('forged', 2),
+])
 def test_poster_refusals_are_hermetic(tmp_path, monkeypatch, fault, expected):
     from test_seat_record_fixes import rec_dir, argv_for, sv
-    seat = rec_dir(tmp_path, 'run-' + '1' * 32,
+    seat = rec_dir(tmp_path, 'run-' + '1' * 32, item_key=KEY,
                    tail='nothing decided' if fault == 'verdict' else 'VERDICT: FIX')
     args = argv_for(seat, writers='xiaomi' if fault == 'wrong_family' else 'google',
                     head='b' * 40 if fault == 'head' else 'a' * 40)
+    args[args.index('--key') + 1] = KEY
     args.remove('--dry-run')
     args.extend(['--url', 'http://keeper.invalid'])
     if fault == 'forged':
         record = json.loads((seat / 'record.json').read_text())
         record['run_id'] = 'run-' + '2' * 32
         (seat / 'record.json').write_text(json.dumps(record))
+
     def forbidden(*args, **kwargs):
         pytest.fail('refused evidence must not reach network')
+
     monkeypatch.setattr(sv, 'send', forbidden)
     assert sv.main(args) == expected
 
-@pytest.mark.parametrize('pattern', ['sys.path.insert', 'keeper.json', '._maybe_fetch'])
-def test_autopost_runtime_is_isolated(pattern):
-    from pathlib import Path
-    assert pattern not in Path('src/plangraph/spawner/item_key.py').read_text()
-def test_autopost_is_scheduled():
-    from plangraph.spawner import item_key
-    assert callable(item_key.schedule_autopost)
-def test_poster_failure_diagnostics(monkeypatch):
-    from types import SimpleNamespace
-    from plangraph.spawner import item_key
-    monkeypatch.setattr(item_key.subprocess, 'run', lambda *a, **kw:
-                        SimpleNamespace(returncode=1, stderr='Traceback: crash'))
-    with pytest.raises(RuntimeError, match='poster crashed'):
-        item_key._post_verdict([])
-def test_prompt_regex_cached():
-    from pathlib import Path
-    assert 'LazyLock' in Path('rust/pg-spawnd/src/runs.rs').read_text()
-def test_backfill_claim_matches_delivery():
-    from pathlib import Path
-    assert 'Add local TSV seat-record backfill discovery' not in Path('CHANGELOG.md').read_text()
-def test_seat_card_key_and_missing_warning(monkeypatch):
-    from plangraph.spawner.item_key import annotate_item
-    monkeypatch.delenv('PLANGRAPH_SPAWN_ITEM', raising=False)
-    record = {'role': 'review'}
-    annotate_item(record, {'item_key': 'plangraph:D-5047'})
-    assert record['item_key'] == 'plangraph:D-5047'
-    missing = {'role': 'judge'}
-    annotate_item(missing, {})
-    assert missing['events'][0]['event'] == 'seat_item_missing'
-def test_seat_prompt_identity(monkeypatch):
-    from plangraph.spawner.item_key import annotate_item
-    monkeypatch.delenv('PLANGRAPH_SPAWN_ITEM', raising=False)
-    record = {'role': 'review', 'prompt': 'Review plangraph:D-5047 now'}
-    annotate_item(record, {})
-    assert record['item_key'] == 'plangraph:D-5047'
-@pytest.mark.parametrize('enabled,code', [(False, 0), (True, 0), (True, 2)])
-def test_seat_autopost(tmp_path, monkeypatch, enabled, code):
-    import json
-    from plangraph.spawner import item_key
-    monkeypatch.setenv('PLANGRAPH_SEAT_AUTOPOST', '1' if enabled else '0')
-    monkeypatch.setenv('PG_URL', 'http://keeper.invalid')
-    record = dict(run_id='run-test', role='review', status='completed',
-                  item_key='plangraph:D-5047', served_model='gpt-5',
-                  completion={'head_sha': 'a' * 40})
-    path = tmp_path / 'runs/run-test/record.json'
-    path.parent.mkdir(parents=True)
-    snapshot = tmp_path / 'snapshot.json'
-    snapshot.write_text(json.dumps({'items': [{'key': record['item_key'], 'writer_model': 'gemini',
-        'writer_evidence': [{'verified': True, 'head_sha': 'a' * 40,
-                             'role': 'implement', 'family': 'google'}]}]}))
-    monkeypatch.setenv('PLANGRAPH_SEAT_SNAPSHOT', str(snapshot))
+
+@pytest.mark.parametrize('stored_key', [KEY, None])
+def test_poster_rejects_foreign_key(tmp_path, monkeypatch, capsys, stored_key):
+    from test_seat_record_fixes import rec_dir, argv_for, sv
+    seat = rec_dir(tmp_path, 'run-' + '1' * 32, item_key=stored_key)
+    args = argv_for(seat, writers='google')
+    args[args.index('--key') + 1] = OTHER_KEY
+    args.remove('--dry-run')
+    args.extend(['--url', 'http://keeper.invalid'])
+    (tmp_path / 'reviewer-xiaomi.token').write_text('dummy\n')
+    monkeypatch.setattr(sv, 'send', lambda *a: pytest.fail('foreign key must not post'))
+    assert sv.main(args) == sv.EXIT_REFUSED
+    assert 'item_key does not match --key' in capsys.readouterr().err
+
+
+def test_poster_accepts_matching_record_key(tmp_path, capsys):
+    from test_seat_record_fixes import rec_dir, argv_for, sv
+    seat = rec_dir(tmp_path, 'run-' + '1' * 32, item_key=KEY)
+    args = argv_for(seat, writers='google')
+    args[args.index('--key') + 1] = KEY
+    assert sv.main(args) == 0
+    assert json.loads(capsys.readouterr().out)['body']['key'] == KEY
+
+
+@pytest.mark.parametrize('key', [KEY, None])
+def test_terminal_save_uses_only_verdict_outbox(tmp_path, monkeypatch, key):
+    from plangraph.spawner import notify
+    monkeypatch.delenv('PLANGRAPH_SPAWN_NOTIFY_CMD', raising=False)
+    monkeypatch.setenv('PLANGRAPH_SEAT_AUTOPOST', '1')
     calls = []
-    monkeypatch.setattr(item_key, '_post_verdict', lambda args: calls.append(args) or code)
-    item_key.autopost(record, path)
-    item_key.autopost(record, path)
-    assert len(calls) == int(enabled)
-    if enabled:
-        args = calls[0]
-        assert args == ['--seat-dir', str(path.parent), '--head', 'a' * 40,
-                        '--key', record['item_key'], '--writer-family', 'google',
-                        '--token-dir', str(item_key.Path.home() / '.config/plangraph/tokens'),
-                        '--url', 'http://keeper.invalid']
-        assert record['events'][-1]['exit_code'] == code
-        assert record['status'] == 'completed'
+    monkeypatch.setattr(notify, 'deliver_verdict', lambda directory, record, keeper:
+                        calls.append((directory, record['item_key'])))
+    service = spawn_service(_Runner(), state=tmp_path, keeper_sink=notify.FileInbox(tmp_path))
+    record = dict(run_id='run-outcome', role='review', status='completed', ended=1,
+                  item_key=key, completion={'event_id': 'run-outcome:completion'})
+    service._save(record)
+    path = service._path(record['run_id'])
+    assert calls == [(path.parent, key)]
+    assert json.loads(path.read_text())['item_key'] == key
+    assert 'seat_autopost_attempted' not in record
+    assert 'events' not in record
+    assert not (path.parent / 'seat-autopost.json').exists()
+
+
 @pytest.mark.parametrize('positional', [False, True])
 def test_refusal_item_key(tmp_path, monkeypatch, positional):
     service = _service(tmp_path, monkeypatch)
+
     def refuse(*args, **kwargs):
         raise SpawnRefused('test refusal')
+
     monkeypatch.setattr(service, '_route', refuse)
     saved = []
     monkeypatch.setattr(service, '_save', lambda record: saved.append(dict(record)))
-    card = {'estimate_tokens': 100, 'item': 'p:x'}
+    card = {'estimate_tokens': 100, 'item': KEY}
     with pytest.raises(SpawnRefused, match='test refusal'):
         asyncio.run(service.spawn(card) if positional else service.spawn(card=card))
     assert len(saved) == 1 and saved[0]['status'] == 'refused'
-    assert saved[0]['item_key'] == 'p:x'
+    assert saved[0]['item_key'] == KEY
+
+
 @pytest.mark.parametrize('dispatch', [False, True])
-def test_item_card_intake(tmp_path, monkeypatch, dispatch):
+@pytest.mark.parametrize('field', ['item', 'item_key'])
+def test_item_card_intake(tmp_path, monkeypatch, dispatch, field):
     service = _service(tmp_path, monkeypatch)
     if dispatch:
         service = spawn_service(_Runner(), state=tmp_path)
-    card = {'estimate_tokens': 100, 'item': 'p:card'}
-    # route is the public card-check entry point shared by both Python paths.
+    card = {'estimate_tokens': 100, field: KEY}
     assert service.route(card).legs
-    result = asyncio.run(service.spawn(card=card, prompt='', dry_run=True))
-    assert result['item_key'] == 'p:card'
+    result = asyncio.run(service.spawn(card=card, prompt=f'Review {OTHER_KEY}', dry_run=True))
+    assert result['item_key'] == KEY
+    assert json.loads(service._path(result['run_id']).read_text())['item_key'] == KEY
+
+
 @pytest.mark.parametrize('dispatch', [False, True])
 @pytest.mark.parametrize('item,env,expected', [
-    ('p:card', None, 'p:card'), (None, 'p:env', 'p:env'),
-    ('p:card', 'p:env', 'p:card'), (None, None, None),
-    ('bad/item', 'p:env', None), ('', 'p:env', 'p:env'), (12, 'bad/item', None)])
+    (KEY, None, KEY), (None, KEY, KEY), (KEY, OTHER_KEY, KEY),
+    (None, None, None), ('bad/item', OTHER_KEY, None), ('', KEY, KEY),
+    (12, 'bad/item', None), ('garbage', OTHER_KEY, None), (':x', OTHER_KEY, None),
+])
 def test_spawn_item_key(tmp_path, monkeypatch, dispatch, item, env, expected):
-    monkeypatch.delenv('PLANGRAPH_SPAWN_ITEM', raising=False)
     monkeypatch.setenv('PLANGRAPH_HOST', 'host-a')
     if env is not None:
         monkeypatch.setenv('PLANGRAPH_SPAWN_ITEM', env)
@@ -186,45 +189,56 @@ def test_spawn_item_key(tmp_path, monkeypatch, dispatch, item, env, expected):
         service = spawn_service(_Runner(), state=tmp_path)
     saved = []
     original = service._save
+
     def save(record):
         saved.append(dict(record))
         original(record)
+
     service._save = save
     card = {'estimate_tokens': 100}
     if item is not None:
         card['item'] = item
-    result = asyncio.run(service._spawn(card=card, prompt='', dry_run=True))
+    result = asyncio.run(service._spawn(card=card, prompt=f'Review {OTHER_KEY}', dry_run=True))
     assert saved and all(r['item_key'] == expected for r in saved)
     assert result['item_key'] == expected
-    if item == 'bad/item' or env == 'bad/item':
+    assert json.loads(service._path(result['run_id']).read_text())['item_key'] == expected
+    if item in ('bad/item', 'garbage', ':x', 12) or env == 'bad/item':
         assert any('invalid item_key' in w for w in result['warnings'])
-@pytest.mark.parametrize('item', ['p:parent', None, 'bad/item'])
+
+
+@pytest.mark.parametrize('item', [KEY, None, 'bad/item'])
 def test_continuation_identity(tmp_path, monkeypatch, item):
     service = _service(tmp_path, monkeypatch)
-    monkeypatch.setenv('PLANGRAPH_SPAWN_ITEM', 'p:other')
+    monkeypatch.setenv('PLANGRAPH_SPAWN_ITEM', OTHER_KEY)
     parent = dict(run_id='run-parent', role='implement', exit_code=0,
                   cwd=str(tmp_path), chosen_leg={}, item_key=item)
     asyncio.run(service._continue_writer(parent, 'Remaining gaps: fix alpha'))
     child = service.result(parent['continuation_run_id'])
-    assert child['item_key'] == ('p:parent' if item == 'p:parent' else None)
+    assert child['item_key'] == (KEY if item == KEY else None)
+
+
 def test_seat_refusal_identity(tmp_path, monkeypatch):
+    from dataclasses import replace
     from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import SpawnPlan
     service = _service(tmp_path, monkeypatch)
     seat = DEFAULT_LEGS[0]
+
     async def refuse(**kwargs):
         raise SpawnRefused('seat refused')
+
     monkeypatch.setattr(service, '_spawn', refuse)
-    # replace() needs a real plan; use the existing routing plan with one seat.
-    from dataclasses import replace
-    from plangraph.planner.routing import SpawnPlan
     plan = SpawnPlan((seat,), (), 'test', (), ())
     monkeypatch.setattr(service, '_route', lambda *a, **kw: replace(plan, review_seats=(seat,)))
-    out = asyncio.run(service._spawn_seats(card={'item': 'p:seat'}, prompt='', role='review',
+    out = asyncio.run(service._spawn_seats(card={'item_key': KEY}, prompt='', role='review',
         writer_families=(), review_of=None, model=None, leg=None, benchmark=None, require_bench=False))
-    assert out['seats'][0]['item_key'] == 'p:seat'
-@pytest.mark.parametrize('item,expected', [('p:good', 'p:good'), ('bad/item', None)])
+    assert out['seats'][0]['item_key'] == KEY
+
+
+@pytest.mark.parametrize('item,expected', [
+    (KEY, KEY), ('bad/item', None), ('garbage', None), (':x', None),
+])
 def test_listing_identity(tmp_path, item, expected):
-    import json
     from plangraph.spawner.stall_watchdog import read_runs
     path = tmp_path / 'runs/run-list/record.json'
     path.parent.mkdir(parents=True)

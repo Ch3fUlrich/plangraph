@@ -1,1 +1,1 @@
-- Preserve review item identity and record bounded opt-in verdict posting outcomes, including refusal and failure. Backfill discovery, apply, and live count verification remain undelivered.
+- Record validated card/environment item keys in Python and pg-spawnd runs without prompt inference; preserve missing-seat warning events and bind record-derived manual verdict posting to the recorded key. Remove the duplicate opt-in autopost path in favor of the existing spawner verdict outbox.

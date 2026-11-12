@@ -238,6 +238,9 @@ def main(argv=None):
             print(f"seat_verdict: refused, record: {exc}", file=sys.stderr)
             return EXIT_REFUSED
         from_record = True
+        if "item_key" in evidence and evidence["item_key"] != args.key:
+            print("seat_verdict: refused, record item_key does not match --key", file=sys.stderr)
+            return EXIT_REFUSED
     else:
         try:
             evidence = json.loads((args.seat_dir / "evidence.json").read_text("utf-8"))
