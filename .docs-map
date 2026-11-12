@@ -1,8 +1,13 @@
 # enforce-after: 2026-11-08
 # Docs mapping for plangraph (rule D-653)
-tools/** -> CONTRIBUTING.md
-src/plangraph/fleet_sync/** -> docs/fleet-sync.md
-src/plangraph/spawner/** -> docs/SPAWNER.md
-src/plangraph/keeper/** -> docs/KEEPER.md
 rust/pg-probe/** -> docs/context-probes.md
-rust/Cargo.toml -> docs/context-probes.md
+src/plangraph/fleet_sync/** -> docs/fleet-sync.md
+src/plangraph/keeper/** -> docs/KEEPER.md
+src/plangraph/routing_support/clients.py -> docs/lean-review-harness.md
+src/plangraph/routing_support/review_mode.py -> docs/lean-review-harness.md
+src/plangraph/spawner/** -> docs/SPAWNER.md
+rust/worker-core/src/writer_* -> docs/SPAWNER.md
+tests/test_check_changelog_docs.py -> CONTRIBUTING.md
+tools/** -> CONTRIBUTING.md
+src/plangraph/routing_support/leg_state.py -> docs/spawner-leg-state.md
+# Shared rust/Cargo.toml and rust/Cargo.lock are not owned by a single crate.

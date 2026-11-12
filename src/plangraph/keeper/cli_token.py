@@ -12,15 +12,24 @@ from .cli_verbs import EXIT_OK, EXIT_REFUSED, EXIT_UNREACHABLE, RefusedCli, Unre
 
 
 def cmd_token(args, session) -> int:
-    body = {"key": args.key, "role": args.role, "run_id": args.run}
+    host = getattr(args, 'host', None)
+    revoke = getattr(args, 'revoke_host', None)
+    verb = 'mint_host_token' if host else 'revoke_host_token' if revoke else 'mint_run_token'
+    body = ({'host_id': host} if host else {'token_id': revoke} if revoke else
+            {"key": args.key, "role": args.role, "run_id": args.run})
+    if not host and not revoke and not all((args.key, args.role, args.run)):
+        print('run token requires key, role and run', file=sys.stderr)
+        return EXIT_REFUSED
     try:
-        out = session.call("POST", "mint_run_token", body=body)
+        out = session.call("POST", verb, body=body)
     except RefusedCli as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_REFUSED
     except Unreachable as exc:
         print(f"keeper unreachable: {exc}", file=sys.stderr)
         return EXIT_UNREACHABLE
+    if revoke:
+        return EXIT_OK
     token = out.get("token")
     if not token:
         print("keeper returned no token", file=sys.stderr)
@@ -33,6 +42,9 @@ def cmd_token(args, session) -> int:
 
 def add_parser(sub, make):
     p = make(sub, "token", help="router/l1: mint a run-bound token (printed once)")
-    p.add_argument("key")
-    p.add_argument("--role", required=True, choices=("writer", "reviewer"))
-    p.add_argument("--run", required=True, help="autoos run id (must exist)")
+    p.add_argument("key", nargs='?')
+    p.add_argument("--role", choices=("writer", "reviewer"))
+    p.add_argument("--run", help="autoos run id (must exist)")
+    group = p.add_mutually_exclusive_group()
+    group.add_argument('--host', help='router/l1: mint ingest-only host token')
+    group.add_argument('--revoke-host', type=int, help='router/l1: revoke host token id')
