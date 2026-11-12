@@ -1,5 +1,6 @@
 """D-852 hermetic regressions for the router GO close (D-5504/D-5506)."""
 from contextlib import contextmanager
+from itertools import count
 from types import SimpleNamespace
 
 import pytest
@@ -13,10 +14,29 @@ from plangraph.keeper.evidence_decisions import DecisionsAdapter
 
 KEY = "demo:A"
 HEAD = "abcdef0123456789" * 2 + "abcdef01"
+MERGE = "1" * 40
+
+
+class MergedGit:
+    def repo_path(self, project):
+        assert project == "demo"
+        return "fixture-repo"
+
+    def repo_ref(self, project):
+        return "main"
+
+    def merge_commit_of(self, repo, sha, ref):
+        return (MERGE, "fixture@example.invalid") if sha == HEAD else None
+
+    def _run(self, repo, args):
+        assert args == ["show", "-s", "--format=%P", "--end-of-options", MERGE]
+        return SimpleNamespace(returncode=0, stdout=f"{'2' * 40} {HEAD}")
 
 
 @pytest.fixture
 def w(tmp_path, monkeypatch):
+    tokens = count()
+    monkeypatch.setattr(auth, "_mint_token", lambda: f"fixture-token-{next(tokens)}")
     world = World(tmp_path, backend="sqlite")
     token = auth.add_principal(world.conn, "spawner", "spawner", [])
     world.principals["spawner"] = auth.authenticate(world.conn, token)
@@ -28,12 +48,18 @@ def w(tmp_path, monkeypatch):
     path = tmp_path / "DECISIONS.md"
     path.write_text(f"| D-5504 | demo | GO {HEAD[:8]} |\n", encoding="utf-8")
     world.decision_path = path
-    world.store.ctx = {"decisions": DecisionsAdapter(path)}
+    world.store.ctx = {"decisions": DecisionsAdapter(path), "git": MergedGit()}
     world.store.verifiers["decision"] = DecisionVerifier()
     # This is exactly the keeper source used to render merged_on_default.
     from plangraph.keeper import context_sources
+    world.real_plan_item_commits = context_sources.plan_item_commits
     monkeypatch.setattr(context_sources, "plan_item_commits", lambda *a, **kw: [
         {"sha": HEAD, "date": "2026-01-01", "merge": {"pr": 1}}])
+    for key in (KEY, "demo:H"):
+        world.store.record_run(world.p("spawner"), key, {
+            "run_id": "fixture-seats", "phase": "finished", "rc": 0,
+            "seats": [{"model": "gemini-test", "verdict": "pass"},
+                      {"model": "deepseek-test", "verdict": "pass"}]})
     yield world
     world.close()
 
@@ -50,7 +76,8 @@ def _counts(w):
 
 def _refused(w, code, reason, **kwargs):
     before = _counts(w)
-    state = w.store._item(kwargs.get("key", KEY))["state"]
+    item = w.store._item(kwargs.get("key", KEY))
+    state = item["state"] if item else None
     with pytest.raises(Refused) as exc:
         _close(w, **kwargs)
     assert exc.value.code == code and reason in exc.value.msg
@@ -59,7 +86,8 @@ def _refused(w, code, reason, **kwargs):
     row = w.conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
     assert (row["action"], row["ok"], row["code"]) == ("close_merged", 0, code)
     assert reason in row["msg"]
-    assert w.store._item(kwargs.get("key", KEY))["state"] == state
+    item = w.store._item(kwargs.get("key", KEY))
+    assert (item["state"] if item else None) == state
 
 
 @pytest.mark.parametrize("key,families", [(KEY, [" Google "]),
@@ -117,7 +145,9 @@ def test_go_row_head_mismatch_refuses(w, text):
     _refused(w, "evidence_unverified", "go_row_head_mismatch")
 
 
-@pytest.mark.parametrize("text", [f"HOLD {HEAD}", f"NO-GO {HEAD}", f"NO GO {HEAD}"])
+@pytest.mark.parametrize("text", [f"HOLD {HEAD}", f"NO-GO {HEAD}", f"NO GO {HEAD}",
+                                 f"NOT A GO {HEAD}", f"not yet a GO {HEAD}",
+                                 f"title GO {HEAD}"])
 def test_non_go_row_refuses(w, text):
     w.decision_path.write_text(f"| D-5504 | demo | {text} |\n", encoding="utf-8")
     _refused(w, "evidence_unverified", "go_row_not_go")
@@ -135,6 +165,10 @@ def test_head_in_another_cell_cannot_authorize_close(w):
     (["google", "Anthropic"], "same_family", "anthropic_seat_family"),
     (["google", "claude-sonnet"], "same_family", "anthropic_seat_family"),
     (["google", " "], "family_unknown", "seat_family_empty"),
+    (["google", "foo"], "family_unknown", "seat_family_unknown"),
+    (["google", "gpt-claude"], "family_unknown", "seat_family_unknown"),
+    (["google", None], "family_unknown", "seat_family_empty"),
+    (["google", 7], "family_unknown", "seat_family_empty"),
     ([], "coverage", "insufficient_seat_families"),
     ("google", "validation", "families must be a list"),
 ])
@@ -153,8 +187,11 @@ def test_recorded_writer_family_is_excluded(w, source):
         field = "claimed_by" if source == "claimant" else "delegate"
         w.conn.execute(f"UPDATE items SET {field}='writerGoogle' WHERE key=?", (KEY,))
     else:
-        w.store._append(w.p("router"), KEY, "run_recorded",
-                        {"writer": {"family": "google", "model": "gemini-test"}}, w.clock())
+        w.store.record_run(w.p("spawner"), KEY, {
+            "run_id": "fixture-writer", "phase": "finished", "rc": 0,
+            "writer": {"family": "google", "model": "gemini-test"}})
+        # Exercise the event reader, not just record_run's writer_model cache.
+        w.conn.execute("UPDATE items SET writer_model=NULL WHERE key=?", (KEY,))
     _refused(w, "same_family", "writer_seat_family")
 
 
@@ -165,17 +202,12 @@ def test_absent_writer_family_does_not_invent_one(w):
 
 def test_real_keeper_merged_on_default_source_is_used(w, monkeypatch):
     from plangraph.keeper import context_sources
-    monkeypatch.undo()
+    monkeypatch.setattr(context_sources, "plan_item_commits", w.real_plan_item_commits)
 
-    class Git:
-        def repo_path(self, project):
-            assert project == "demo"
-            return "fixture-repo"
-
-        def repo_ref(self, project):
-            return "main"
-
+    class Git(MergedGit):
         def _run(self, repo, args):
+            if args[:3] == ["show", "-s", "--format=%P"]:
+                return super()._run(repo, args)
             if args[0] == "log":
                 out = f"{HEAD}\x1f2026-01-01\x1fwork\x1f{KEY}\x1d"
             elif args[0] == "rev-list":
@@ -233,7 +265,8 @@ def doors(w, tmp_path):
 
 
 def test_http_close_merged_door(w, doors):
-    for body in ({}, {"key": KEY, "families": []}):
+    for body in ({}, {"key": KEY, "families": []},
+                 {"key": [], "decision_id": {}, "families": None}):
         status, response = doors.http("workerA", "POST", "/v1/close_merged", body)
         assert status == 403 and response["error"] == "forbidden"
     before = _counts(w)
@@ -257,12 +290,13 @@ def test_mcp_close_merged_door_and_schema(w, doors, tmp_path):
     assert tool["inputSchema"]["required"] == ["key", "decision_id", "families"]
     assert tool["inputSchema"]["properties"]["families"]["type"] == "array"
     for who, error in (("workerA", True), ("router", False)):
-        token = tmp_path / "mcp.token"
-        token.write_text(w.tok(who), encoding="utf-8")
+        token_path = tmp_path / f"fixture-{who}.token"
+        assert w.tok(who).startswith("fixture-token-")
+        token_path.write_text(w.tok(who), encoding="utf-8")
         response = mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                "params": {"name": "close_merged", "arguments": {
                                    "key": KEY, "decision_id": "D-5504", "families": ["google"]}}},
-                              mcp.HttpKeeper(doors.url, str(token)))
+                              mcp.HttpKeeper(doors.url, str(token_path)))
         assert response["result"]["isError"] is error
 
 
