@@ -17,7 +17,7 @@ Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12
 | `evidence.py` | pluggable verifiers (below) |
 | `importer.py` | YAML dir → router-attributed batch; `export_yaml(conn, dir)` for round trip |
 | `api.py` | HTTP JSON server around `Store` |
-| `cli.py` (`python -m plangraph.keeper.cli` / entry `pg`) | thin client of the API; also `admin` subcommands run locally on the keeper host; `oversight-check` and `oversight-audit --out-dir DIR --cursor FILE --router-log FILE` live in `cli_oversight.py` |
+| `cli.py` (`python -m plangraph.keeper.cli` / entry `pg`) | thin client of the API; `cli_admin` and oversight's `db` import are lazy, so remote `whoami` works without POSIX `fcntl` on Windows; local DB commands still require the keeper host; `oversight-check` and `oversight-audit --out-dir DIR --cursor FILE --router-log FILE` live in `cli_oversight.py` |
 | `mcp.py` | stdio MCP server (hand-written JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`; no SDK), same verbs, calls the API |
 
 Critical-path stall alerts notify owners and routing without mutating keeper state; see [configuration and delivery semantics](keeper/crit-path-stall.md).
@@ -275,7 +275,7 @@ Origin-main `decision_ref` closes need no batch file; see [decision-close proof,
 `Authorization: Bearer <token>` (health is open). Errors: `{"error": code, "msg": …}` with 4xx. Compact text responses where the verb is
 meant for agents (`ready`, `show`, `alerts`) via `?fmt=text` (default text for CLI). The server also runs the reaper every 60 s and rewrites
 `plan.snapshot.json` (path from config) after every committed write. Config file (JSON, mode 600 checked): db path, snapshot path, repos
-{project: path}, runs_dir, decisions_file, ci per project (plus `forgejo_url` + `forgejo_token_file`
+{project: path} or {project: {path, ref, non_pr: true}}: router-owned `non_pr` opts into merge-commit-on-target-ref proof instead of a hosted PR association (for non-PR repositories); direct pushes remain refused, green CI is required (`ci: none` cannot use this proof), and principal, trailer, time and floor guards remain. Also runs_dir, decisions_file, ci per project (plus `forgejo_url` + `forgejo_token_file`
 for `forgejo:` values), bind, lease defaults. No config value that is a secret is ever printed.
 
 ## CLI `pg`
