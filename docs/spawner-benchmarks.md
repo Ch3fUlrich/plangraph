@@ -52,6 +52,52 @@ The SQLite catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py
 | 21 | `cxa/gpt-6-sol-low` | gpt | subscription | 40.0 | 110.0 | 60.0 | $0.20 | 75.0% | *(Gated: Codex ACP luna-only)* |
 | 22 | `cxa/gpt-6-luna-low` | gpt | subscription | 34.0 | 220.0 | 120.0 | $0.03 | 85.0% | `l3-driver` |
 
+### Offline benchmark data contract (BENCH-DATA-TEST, slice 1)
+
+`tests/test_benchmark_data_contract.py` checks the actual
+`routing_support/catalog_seed.py::SEED_BENCHMARKS` data against
+`catalog_data.py::SEED_MODELS` and `planner/legs.py::spawnable_legs()` (routed
+**and** explicit-only legs). The spawner catalog modules are compatibility
+aliases for the routing-support modules. This slice changes no row values,
+SQLite schema, runtime admission, ranking, or availability.
+
+- Every `status == "active"` catalog model and every non-permanently-disabled
+  spawnable leg requires an exact model-id × effort benchmark row. Availability
+  flags do not waive coverage. Temporary pauses do not waive eventual coverage;
+  the test supplies a fixed time rather than reading the clock.
+- Bare leg models are qualified with their harness, as in the benchmark reader.
+  Effort is the explicit leg/row `effort`, otherwise the catalog's
+  `parameter_effort`, otherwise a recognized effort suffix. Null is a distinct
+  unspecified effort, not a wildcard. There is no cross-provider or fuzzy
+  model matching; identity aliases do not supply coverage for another row.
+- Each row requires a nonempty HTTP(S) `source_url`, an ISO `source_date`
+  (`YYYY-MM-DD`), and a `source_record` object containing publisher `title`
+  and/or `excerpt` text. That text must name the exact `model_id` or a nonempty
+  string explicitly listed in the row's `aliases` array (optional, defaults to
+  empty). Matching is case-insensitive and token-bounded: a different release
+  or effort suffix cannot match a shorter id. Record metadata and the URL do
+  not count as publisher text. `updated_at` is not a source date and a generic
+  `benchmark_source` label is not identity evidence.
+
+The **only** pending list is
+`configuration/benchmark_data_pending.json`: each entry names a subject,
+effort, specific failing checks, and a reason. Missing-leg subjects bind both
+the leg id and its qualified model id, so a retargeted leg cannot reuse a waiver.
+Its initial 58 entries cover 33 missing-row cases and the three provenance gaps
+on each of 25 existing rows
+(108 individual violations). An independently frozen set in the test bounds
+the exact allowed violations, so additions and same-size substitutions fail.
+Resolved violations must be removed; provenance debt cannot hide missing rows.
+Do not extend or regenerate the frozen ceiling when fixing data.
+
+All verification is local: the test blocks network and subprocess entry points
+and reads neither Git history nor a live catalog. Synthetic mutations prove
+that missing rows, null/omitted citations, wrong effort, unrelated source text,
+and pending-list growth fail. This is a structural/identity contract, **not**
+verification that publisher bytes or scores are authentic. Independent source
+collection, review, and any row corrections belong to a later slice; this slice
+does not invent citations, aliases, or evidence for legacy rows.
+
 ### Key Ranking & Guardrail Invariants
 
 - **`mimo/mimo-v2.6-pro` vs `opencode-go/qwen3.8-max`**:
@@ -66,4 +112,3 @@ The SQLite catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py
   `claude/claude-haiku-4-5` imposes a steep price increase for contexts above 100K tokens. When `need_tokens > 100000`, the resolver strictly drops Haiku from candidate pools.
 - **DeepSeek Flash v1017**:
   The updated DeepSeek Flash v1017 snapshot reaches an Artificial Analysis Intelligence Index of `45.0` at `$0.26/task` cost and `231 tok/s` verified throughput. Available in both `opencode-go` subscription (`opencode-go/deepseek-v4.1-flash`, $U_{\text{core}} = 0.90$) and direct paid PAYG (`deepseek/deepseek-v4-flash-max`, $U_{\text{core}} = -2.60$). Subscription DeepSeek Flash beats Qwen Max ($U_{\text{core}} = -0.60$) on cost efficiency while providing strong code reasoning.
-
