@@ -6,6 +6,15 @@ main, supplies the completion-to-verdict bridge and its independent delivery
 outbox. Historical backfill uses that same locked outbox to avoid replaying a
 forwarded or ambiguous verdict; it does not replace the bridge or its parser.
 
+## CI timeout diagnosis
+
+`tests/test_route_round3.py::test_changelog_fragment_only` requires the shared
+`CHANGELOG.md` to match main. The backfill entry changed that large ledger;
+pytest's verbose failure rendering then spent minutes in `difflib._fancy_replace`
+while the remaining workers reached 99%. This was CPU-bound assertion reporting,
+not a keeper call, network request, or sleeping review test. Keep the entry in
+`changelog.d/SEAT-VERDICT-TO-KEEPER-r2.md` and leave the shared ledger unchanged.
+
 ## Observed counts
 
 The saved initial dry-run inspected 177 in-review items and accepted zero:
