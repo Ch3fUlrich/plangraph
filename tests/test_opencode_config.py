@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import pytest
 from pathlib import Path
@@ -135,25 +136,34 @@ def test_provider_mimo():
 
 
 @pytest.mark.parametrize("review_url_set", [False, True])
-@pytest.mark.parametrize("source", ["OMNIROUTE_BASE_URL", "PLANGRAPH_GATEWAY_URL", "config"])
+@pytest.mark.parametrize("sources", [
+    ("OMNIROUTE_BASE_URL",), ("PLANGRAPH_GATEWAY_URL",), ("config",),
+    ("OMNIROUTE_BASE_URL", "config"), ("PLANGRAPH_GATEWAY_URL", "config"),
+    ("OMNIROUTE_BASE_URL", "PLANGRAPH_GATEWAY_URL", "config"),
+])
 @pytest.mark.parametrize("model", ["mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro"])
-@pytest.mark.parametrize("path", ["", "/mimo/v1/"])
+@pytest.mark.parametrize("path", ["", "/v1", "/mimo/v1/"])
 def test_mimo_overlay_uses_configured_gateway(monkeypatch, tmp_path, caplog,
-                                            review_url_set, source, model, path):
+                                            review_url_set, sources, model, path):
     from plangraph.review.gateway import GATEWAY_ENV_VAR
     from plangraph.routing_support.clients import build_child_env
     from plangraph.routing_support.opencode_overlay import overlay_env
     from plangraph.routing_support.opencode_render import render_gateway_providers
 
+    caplog.set_level(logging.DEBUG)
     for name in (GATEWAY_ENV_VAR, "OMNIROUTE_BASE_URL", "PLANGRAPH_GATEWAY_URL",
                  "AUTOOS_OMNIROUTE_URL", "OPENCODE_CONFIG_CONTENT"):
         monkeypatch.delenv(name, raising=False)
     gateway = "https://gateway.invalid" + path
     if review_url_set:
         monkeypatch.setenv(GATEWAY_ENV_VAR, "https://review.invalid/v1")
-    config = {"gateway_url": gateway} if source == "config" else None
-    if config is None:
-        monkeypatch.setenv(source, gateway)
+    config = None
+    for index, source in enumerate(sources):
+        url = gateway if index == 0 else f"https://unused-{index}.invalid/v1"
+        if source == "config":
+            config = {"gateway_url": url}
+        else:
+            monkeypatch.setenv(source, url)
     monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path))
     root_config = tmp_path / "opencode.jsonc"
     root_config.write_text(json.dumps(load_config()), encoding="utf-8")
@@ -172,9 +182,34 @@ def test_mimo_overlay_uses_configured_gateway(monkeypatch, tmp_path, caplog,
     assert providers["mimo"]["models"][model.split("/", 1)[1]]["modelID"] == model
     assert providers["mimo"]["env"] == ["AUTOOS_OMNIROUTE_KEY"]
     assert env["AUTOOS_OMNIROUTE_KEY"] == sentinel
+    if not review_url_set:
+        assert GATEWAY_ENV_VAR not in env
     assert sentinel not in env["OPENCODE_CONFIG_CONTENT"]
-    assert sentinel not in root_config.read_text(encoding="utf-8")
+    for file in tmp_path.rglob("*"):
+        if file.is_file():
+            assert sentinel not in file.read_text(encoding="utf-8")
     assert sentinel not in caplog.text
+
+
+def test_mimo_config_only_gateway_preserves_concrete_root_url(monkeypatch, tmp_path):
+    from plangraph.routing_support.clients import build_child_env
+    from plangraph.routing_support.opencode_overlay import overlay_env
+    from plangraph.routing_support.opencode_render import render_gateway_providers
+
+    for name in ("OMNIROUTE_BASE_URL", "PLANGRAPH_GATEWAY_URL", "AUTOOS_OMNIROUTE_URL",
+                 "PLANGRAPH_REVIEW_URL", "OPENCODE_CONFIG_CONTENT"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path))
+    config = load_config()
+    root_url = "https://root.invalid/v1"
+    for provider in ("mimo", "omniroute"):
+        config["providers"][provider]["settings"]["baseURL"] = root_url
+    (tmp_path / "opencode.jsonc").write_text(json.dumps(config), encoding="utf-8")
+    env = overlay_env(build_child_env(config={"gateway_url": "https://generated.invalid/v1"}))
+    assert render_gateway_providers(env, "mimo/mimo-v2.6-flash") is None
+    providers = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]
+    assert providers["omniroute"]["settings"]["baseURL"] == root_url
+    assert providers["mimo"]["settings"]["baseURL"] == root_url
 
 
 @pytest.mark.parametrize("url", ["https://user:password@gateway.invalid/v1",
