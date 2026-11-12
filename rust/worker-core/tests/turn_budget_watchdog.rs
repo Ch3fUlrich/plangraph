@@ -111,7 +111,13 @@ fn opt_in_reader_queues_one_line_and_under_budget_queues_none() {
 
 #[test]
 fn corrupt_pending_refresh_does_not_stop_other_alert_delivery() {
-    for corrupt in [b"not json".as_slice(), b"\xff".as_slice()] {
+    for corrupt in [
+        b"not json".to_vec(),
+        b"\xff".to_vec(),
+        json!({"padding":"x".repeat(1024 * 1024)})
+            .to_string()
+            .into_bytes(),
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let fleet = dir.path().join("fleet");
         fs::create_dir_all(fleet.join("status")).unwrap();
@@ -127,7 +133,7 @@ fn corrupt_pending_refresh_does_not_stop_other_alert_delivery() {
             .to_string(),
         )
         .unwrap();
-        fs::write(state.join("pending.json"), corrupt).unwrap();
+        fs::write(state.join("pending.json"), &corrupt).unwrap();
         fs::write(state.join("active"), format!("placement\n{old}")).unwrap();
         fs::write(
             fleet.join("status/test-session.json"),

@@ -7,7 +7,7 @@ include!("flow_watchdog_stuck/legacy_tests.rs");
 use serde::Deserialize;
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     path::Path,
     process::{Command, Stdio},
 };
@@ -105,7 +105,17 @@ fn budget_identity(line: &str) -> Option<(&str, &str)> {
     (parts.next()? == "TURN-BUDGET").then_some((parts.next()?, parts.next()?))
 }
 fn pending_event(path: &Path) -> Option<serde_json::Value> {
-    serde_json::from_slice(&fs::read(path).ok()?).ok()
+    const FILE_MAX: u64 = 1024 * 1024;
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(FILE_MAX + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > FILE_MAX {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -284,4 +294,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     validated.map(|_| ())
+}
+
+#[cfg(test)]
+mod pending_tests {
+    use super::*;
+
+    #[test]
+    fn pending_json_is_bounded_and_oversized_bytes_are_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pending.json");
+        let at_cap = format!("\"{}\"", "x".repeat(1024 * 1024 - 2));
+        fs::write(&path, &at_cap).unwrap();
+        assert!(pending_event(&path).is_some());
+        let over_cap = format!("{at_cap} ");
+        fs::write(&path, &over_cap).unwrap();
+        assert!(pending_event(&path).is_none());
+        assert_eq!(fs::read_to_string(path).unwrap(), over_cap);
+    }
 }

@@ -42,7 +42,8 @@ fn sleep_polling_shapes_are_refused() {
         "for ((;;)); do git status; done",
         "for i in 1 2 3; do cat notes.txt; done; sleep 2; git status",
     ] {
-        let line = handle(&event(command, "PreToolUse"), &c, 1).unwrap();
+        let line = handle(&event(command, "PreToolUse"), &c, 1)
+            .unwrap_or_else(|| panic!("poll escaped: {command}"));
         assert!(line.contains("run_in_background=true"), "{command}: {line}");
     }
     let mut background = event("while true; do sleep 2; git status; done", "PreToolUse");
@@ -151,7 +152,7 @@ fn quoted_shell_keywords_are_ordinary_arguments_not_control_flow() {
 }
 
 #[test]
-fn unchanged_check_is_refused_on_second_call_until_successful_state_change() {
+fn unchanged_check_is_refused_until_a_successful_non_read_grants_one_retry() {
     let dir = tempfile::tempdir().unwrap();
     let c = config(&dir);
     let check = event("git status --short", "PreToolUse");
@@ -166,7 +167,8 @@ fn unchanged_check_is_refused_on_second_call_until_successful_state_change() {
         handle(&event("echo still waiting", "PostToolUse"), &c, 5),
         None
     );
-    assert!(handle(&check, &c, 6).is_some());
+    assert_eq!(handle(&check, &c, 6), None);
+    assert!(handle(&check, &c, 6).is_some(), "only one retry after echo");
     assert_eq!(handle(&event("touch changed", "PreToolUse"), &c, 7), None);
     assert!(
         handle(&check, &c, 8).is_some(),
@@ -228,7 +230,7 @@ fn malformed_metadata_never_denies_an_ordinary_command() {
 }
 
 #[test]
-fn unrelated_mutations_cannot_reenable_snapshot_polling() {
+fn bash_success_grants_one_local_retry_but_unrelated_edits_and_writes_do_not_reset_remote() {
     for (read, mutation) in [
         ("cat status.json", "touch marker"),
         ("cat status.json", "git add unrelated"),
@@ -255,6 +257,13 @@ fn unrelated_mutations_cannot_reenable_snapshot_polling() {
         }
         assert!(handle(&check, &c, 2).is_some());
         assert_eq!(handle(&event(mutation, "PostToolUse"), &c, 3), None);
+        if !read.starts_with("gh ") {
+            assert_eq!(
+                handle(&check, &c, 4),
+                None,
+                "local retry: {read}: {mutation}"
+            );
+        }
         assert!(handle(&check, &c, 4).is_some(), "{read}: {mutation}");
         let edit = json!({"session_id":"test-session", "hook_event_name":"PostToolUse",
             "tool_name":"Edit", "cwd":workspace(), "tool_input":{"file_path":"/elsewhere/status.json"},
@@ -265,21 +274,22 @@ fn unrelated_mutations_cannot_reenable_snapshot_polling() {
 }
 
 #[test]
-fn relevant_mutations_and_changed_read_output_reenable_only_the_affected_check() {
+fn bash_retry_is_local_but_changed_read_output_reenables_only_its_own_check() {
     let dir = tempfile::tempdir().unwrap();
     let c = config(&dir);
     let check = event("cat status.json", "PreToolUse");
     let other = event("cat other.json", "PreToolUse");
     assert_eq!(handle(&check, &c, 1), None);
-    assert_eq!(handle(&other, &c, 1), None);
     let mut post = event("cat status.json", "PostToolUse");
     post["tool_response"]["stdout"] = json!("same");
     assert_eq!(handle(&post, &c, 1), None);
+    assert_eq!(handle(&other, &c, 1), None);
     for command in ["touch status.json", "echo ok > status.json"] {
         assert_eq!(handle(&event(command, "PostToolUse"), &c, 2), None);
         assert_eq!(handle(&check, &c, 3), None);
         assert_eq!(handle(&post, &c, 3), None);
         assert!(handle(&check, &c, 4).is_some());
+        assert_eq!(handle(&other, &c, 4), None);
         assert!(handle(&other, &c, 4).is_some());
     }
     assert!(
@@ -290,6 +300,15 @@ fn relevant_mutations_and_changed_read_output_reenable_only_the_affected_check()
         handle(&event("touch status.json", "PostToolUse"), &c, 8),
         None
     );
+    assert_eq!(handle(&check, &c, 8), None);
+    assert_eq!(handle(&post, &c, 8), None);
+    assert_eq!(handle(&other, &c, 8), None);
+    assert!(handle(&other, &c, 8).is_some());
+    // A relevant Edit grants only the affected read a new comparison.
+    let edit = json!({"session_id":"test-session", "hook_event_name":"PostToolUse",
+        "tool_name":"Edit", "cwd":workspace(), "tool_input":{"file_path":"status.json"},
+        "tool_response":{}});
+    assert_eq!(handle(&edit, &c, 8), None);
     assert_eq!(handle(&check, &c, 8), None);
     post["tool_response"]["stdout"] = json!("changed");
     assert_eq!(handle(&post, &c, 8), None);

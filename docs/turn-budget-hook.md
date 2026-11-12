@@ -101,10 +101,17 @@ ignore-environment, nice adjustment and command `-p`; unknown wrapper options
 remain outside this narrow recogniser. Tests pin each of these boundaries.
 
 The first recognised read-only check passes and records a SHA-256 fingerprint of
-its parsed words plus `cwd` per session. Repeating a local check is refused, even
-after other read commands, notifications, or no-op commands. A successful
+its parsed words plus `cwd` per session. Literal path operands are normalised
+before hashing (`./status.json` and `status.json` share history); search patterns
+and option values retain their spelling. Repeating a local check is refused, even
+after other read commands or notifications. A successful non-read Bash command
+grants exactly one retry of each local read, including after builds, scripts,
+in-place editors and no-op commands; the next unchanged read is refused again.
+The local refusal tells the caller to run the work that can change the result,
+then retry once, rather than prescribing a spawner wait for a plain file read.
+A successful
 `PostToolUse` for Edit/Write/NotebookEdit, a recognised mutating Bash command, or
-output redirection permits one retry only for reads whose observed paths can
+output redirection also supplies mutation evidence for reads whose observed paths can
 plausibly be affected. File reads depend on their literal path arguments; git
 snapshots depend on paths under their absolute `cwd` workspace, and directory
 listings depend on their named subtrees. Remote gh/spawner checks cannot be
@@ -115,19 +122,27 @@ even if remote state changes without local writes. Changed remote output keeps
 comparisons reachable. Missing output never proves an identical remote snapshot.
 A pre-tool mutation or failed mutation does not reset a read; a failed read does
 allow its own retry. This is evidence of a relevant mutating operation, not a filesystem diff.
-For example, `touch marker` or `git add unrelated` cannot reenable `cat
-status.json` or `gh pr checks 42`; `touch status.json` can reenable that file
+For example, `touch marker` or `git add unrelated` cannot reenable remote
+`gh pr checks 42`, but grants a bounded local retry for `cat status.json`;
+`touch status.json` also supplies relevant mutation evidence for that file
 read, while `touch marker` or `git add unrelated` in the same workspace can
 reenable `git status` by design because they can affect its worktree/index view.
-Unrelated paths, missing path metadata and unresolved directory-changing compound
-commands never grant retries. Successful read results hash only output fields
+Unrelated Edit/Write paths and missing path metadata never grant scoped retries;
+successful non-read Bash commands still grant the bounded local retry even when
+their mutation paths cannot be resolved, including directory-changing compounds.
+Successful read results hash only output fields
 (`stdout`, `stderr`, `output`, `content`, or a string response); a differing
 result also permits one retry for that read alone. Identical output does not.
-Read results only advance history after an admitted pre-tool event, not from
-standalone or duplicated post-tool events. Paths are platform-native absolute
+Read results only advance history for the currently admitted pre-tool event;
+the next pre-tool event expires all pending admissions, even when a post never
+arrived. Standalone or duplicated posts without a current admission do not
+advance history. This is sequential event matching, not a tool-call nonce:
+out-of-order same-fingerprint results during a newer admission are not
+distinguishable when the payload supplies no matching identity. Paths are platform-native absolute
 paths; the tests use the same fixture contract on Unix and Windows.
 For simple `cp`/`install`, only the destination is mutation evidence; naming the
-observed file as a copy source does not grant a retry.
+observed file as a copy source is not scoped evidence, although successful
+non-read Bash execution still grants the same one-shot local retry.
 
 Recognised reads include ordinary git status/log/show/diff/rev-parse/ls-files,
 gh PR checks/view/list/status, gh run view/list, spawner ps/status/result and
@@ -137,14 +152,22 @@ shell syntax, variable expansion, aliases, heredocs and arbitrary custom checks
 are not a sandbox: they fail open rather than being guessed read-only. The
 existing security-focused `bash_guard.py` remains independent and unchanged.
 Simple variable arguments do not hide an otherwise recognised sleep loop or
-sleep-then-read chain; command substitutions remain outside this narrow parser.
-Specifically, `while true; do sleep 2; git status $(echo); done`, repeated `git
-status $(date)` (or backticks), and `echo "$(cat state)"` are allowed by design.
+sleep-then-read chain. The loop/sleep scan runs on the original command independently
+of read/scope parsing: substitutions, backticks, redirects, unbalanced quotes and
+variable indirection do not disable recognised polling refusals. Specifically,
+`while true; do sleep 2; git status $(echo); done` and `sleep 5; git status $(true)`
+are refused, as are snapshot loops with those syntax additions. Repeated ordinary
+`git status $(date)` (or backticks) and `echo "$(cat state)"` still pass because
+unsupported non-loop reads are not guessed read-only or added to history.
 Variable command/subcommand indirection (`tool=git; $tool status`, `$tool status`,
 `git $subcommand`) and dynamic read arguments (`cat "$status"`) also remain
-allowed across calls, including an indirect sleep-free loop. Regression tests
+allowed across calls outside loops; indirect sleep-free loops are refused.
+Literal assignment prefixes also do not hide snapshot loops. Regression tests
 make these deliberate fail-open parser limits visible rather than claiming a
-shell sandbox or treating ordinary substitutions as polling.
+shell sandbox or treating ordinary substitutions as polling. Script-file contents
+are not inspected: `bash poll.sh` and `./poll.sh` can contain sleep/poll loops
+outside static detection. A disposable script-file regression explicitly pins
+this known limit; use the documented wait command instead of hiding a loop in a file.
 Fixed-list loops do not hide an inner `watch` or shell-wrapped infinite loop;
 arithmetic `for ((;;))` snapshot loops are refused, not treated as finite lists.
 An adjacent sleep-then-read chain outside the finite loop body is still refused.
@@ -174,7 +197,7 @@ delivery stays suppressed until recovery. `PLANGRAPH_TURN_BUDGET_NOW` optionally
 injects Unix seconds into this reader for deterministic subprocess tests; absent
 or invalid values use the system clock. Production deployments should leave it
 unset so rolling-hour expiry advances normally.
-Corrupt or unreadable pending events are preserved and skipped during refresh
+Corrupt, unreadable or over-1-MiB pending events are preserved and skipped during refresh
 and acknowledgement; independent queue routing and other alerts still advance.
 Legacy duplicate budget events compact by identity, retaining the oldest event's
 channel acknowledgements even when several identities are interleaved.
@@ -186,7 +209,8 @@ resets, message deduplication, partial transcripts, name resolution, status-key
 preservation, malformed inputs, IO failure, polling and opt-in watchdog delivery.
 The stdin contract includes a valid JSON payload over 8 MiB that exits silently
 without creating state. Atomic-write checks assert the exact `.json` and `.lock`
-directory entries (not a tempfile suffix), mode preservation and bounded-history
+directory entries (not a tempfile suffix), concurrent readers always parsing
+complete JSON during updates, mode preservation and bounded-history
 recovery; watchdog tests exercise changing counts, delivery and recovery using
 an explicitly injected clock rather than wall time.
 Storage tests also cover existing over-cap status and rejected over-cap writes.

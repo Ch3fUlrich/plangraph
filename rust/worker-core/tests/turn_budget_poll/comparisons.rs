@@ -48,8 +48,18 @@ fn remote_comparison_runs_use_real_pre_post_order_and_a_bounded_window() {
             assert_eq!(handle(&post, &c, now), None);
         }
         assert!(handle(&pre, &c, 4).is_some(), "unchanged: {command}");
-        assert_eq!(handle(&event("touch marker", "PostToolUse"), &c, 5), None);
-        assert!(handle(&pre, &c, 6).is_some(), "local writes: {command}");
+        for local in [
+            "touch marker",
+            "cargo build",
+            "sed -i s/a/b/ status.json",
+            "python x.py",
+        ] {
+            assert_eq!(handle(&event(local, "PostToolUse"), &c, 5), None);
+            assert!(
+                handle(&pre, &c, 6).is_some(),
+                "local work: {command}: {local}"
+            );
+        }
         assert!(handle(&pre, &c, 62).is_some(), "inside window: {command}");
         assert_eq!(handle(&pre, &c, 63), None, "cooldown: {command}");
         post["tool_response"]["stdout"] = json!("complete");
@@ -138,11 +148,10 @@ fn failed_reads_allow_corrected_and_identical_retries() {
 }
 
 #[test]
-fn substitutions_and_variable_indirection_are_allowed_by_design_not_a_shell_sandbox() {
+fn ordinary_substitutions_and_variable_indirection_are_not_guessed_read_only() {
     let dir = tempfile::tempdir().unwrap();
     let c = config(&dir);
     for command in [
-        "while true; do sleep 2; git status $(echo); done",
         "git status $(date)",
         "git status `date`",
         "echo \"$(cat state)\"",
@@ -150,7 +159,6 @@ fn substitutions_and_variable_indirection_are_allowed_by_design_not_a_shell_sand
         "$tool status",
         "git $subcommand",
         "cat \"$status\"",
-        "tool=git; while true; do $tool status; done",
     ] {
         for _ in 0..2 {
             assert_eq!(
@@ -158,6 +166,158 @@ fn substitutions_and_variable_indirection_are_allowed_by_design_not_a_shell_sand
                 None,
                 "{command}"
             );
+        }
+    }
+}
+
+#[test]
+fn unsupported_read_syntax_cannot_hide_sleep_or_snapshot_loops() {
+    for command in [
+        "sleep 5; git status $(true)",
+        "sleep 5; git status `true`",
+        "while true; do sleep 2; git status $(echo); done",
+        "while true; do sleep 2; git status `echo`; done",
+        "while true; do sleep 2; git status; done </dev/null",
+        "while true; do sleep 2; git status >status; done",
+        "while true; do sleep 2; git status; done; echo '",
+        "while true; do git status $(echo); done",
+        "while true; do git status `echo`; done",
+        "while true; do git status; done </dev/null",
+        "while true; do git status >status; done",
+        "while true; do <status.json git status; done",
+        "while true; do >status.json git status; done",
+        "while true; do 2>/dev/null git status; done",
+        "<status.json while true; do git status; done",
+        "while true; do git status; done; echo '",
+        "echo '; while true; do sleep 2; git status; done",
+        "echo \"$(while true; do sleep 2; git status; done)\"",
+        "tool=git; while true; do $tool status; done",
+        "tool=git; while true; do ${tool} status; done",
+        "while true; do tool=git; $tool status; done",
+        "while true; do MODE=plain git status; done",
+        "while true; do git status; done; echo ok \\",
+        "cat <<EOF; while true; do sleep 2; git status; done\nEOF",
+        "while true; do git $subcommand; done",
+        "tool=git; while true; do sleep 2; $tool status; done",
+        "bash -c 'while true; do sleep 2; git status $(echo); done'",
+        "bash -c 'while true; do git status $(echo); done'",
+        "while true; do bash -c 'git status $(echo)'; done",
+        "while true; do bash -c 'git status'; done </dev/null",
+        "sleep 2; git status $(echo unterminated",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let c = config(&dir);
+        let line = handle(&event(command, "PreToolUse"), &c, 1)
+            .unwrap_or_else(|| panic!("poll escaped: {command}"));
+        assert!(line.contains("python -m plangraph.spawner.cli wait <run_id>"));
+    }
+}
+
+#[test]
+fn literal_path_spellings_share_history_without_normalising_search_patterns() {
+    for (first, second) in [
+        ("cat ./status.json", "cat status.json"),
+        ("head ./dir/./status.json", "head dir/status.json"),
+        ("stat './status.json'", "stat status.json"),
+        ("rg ready ./status.json", "rg ready status.json"),
+        ("git diff -- ./status.json", "git diff -- status.json"),
+        ("git diff ./status.json", "git diff status.json"),
+        ("rg -e ready ./status.json", "rg -e ready status.json"),
+        ("cat -- ./status.json", "cat -- status.json"),
+        ("cat -n ./status.json", "cat -n status.json"),
+        ("rg -n ready ./status.json", "rg -n ready status.json"),
+        ("git status ./status.json", "git status status.json"),
+        ("ls -t ./status.json", "ls -t status.json"),
+        ("cat -t ./status.json", "cat -t status.json"),
+        ("test -f ./status.json", "test -f status.json"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let c = config(&dir);
+        assert_eq!(handle(&event(first, "PreToolUse"), &c, 1), None);
+        assert!(
+            handle(&event(second, "PreToolUse"), &c, 2).is_some(),
+            "{first}"
+        );
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(&dir);
+    for (first, second) in [
+        ("rg ./ready status.json", "rg ready status.json"),
+        ("rg -e ./ready status.json", "rg -e ready status.json"),
+        (
+            "rg --glob ./ready pattern status.json",
+            "rg --glob ready pattern status.json",
+        ),
+        ("test ./ready = ready", "test ready = ready"),
+        ("stat -c ./ready status.json", "stat -c ready status.json"),
+        (
+            "ls --ignore ./ready status.json",
+            "ls --ignore ready status.json",
+        ),
+    ] {
+        assert_eq!(handle(&event(first, "PreToolUse"), &c, 1), None);
+        assert_eq!(handle(&event(second, "PreToolUse"), &c, 1), None);
+    }
+}
+
+#[test]
+fn successful_non_read_commands_grant_exactly_one_local_retry() {
+    for command in [
+        "cargo build",
+        "sed -i s/a/b/ status.json",
+        "python x.py",
+        "echo ok",
+    ] {
+        for read in ["git status", "cat status.json"] {
+            let dir = tempfile::tempdir().unwrap();
+            let c = config(&dir);
+            let pre = event(read, "PreToolUse");
+            assert_eq!(handle(&pre, &c, 1), None);
+            assert!(handle(&pre, &c, 2).is_some());
+            assert_eq!(handle(&event(command, "PreToolUse"), &c, 3), None);
+            assert!(handle(&pre, &c, 4).is_some(), "pre is not success");
+            let mut failed = event(command, "PostToolUse");
+            failed["tool_response"]["exit_code"] = json!(1);
+            assert_eq!(handle(&failed, &c, 5), None);
+            assert!(handle(&pre, &c, 6).is_some(), "failed is not success");
+            assert_eq!(handle(&event(command, "PostToolUse"), &c, 7), None);
+            assert_eq!(handle(&pre, &c, 8), None, "{read}: {command}");
+            let line = handle(&pre, &c, 9).unwrap();
+            assert!(line.contains("successful non-read command"), "{line}");
+            assert!(line.contains("retry once"), "{line}");
+        }
+    }
+}
+
+#[test]
+fn next_pre_expires_an_admission_whose_post_never_arrived() {
+    for intervening in ["cat status.json", "cat other.json", "cargo build"] {
+        let dir = tempfile::tempdir().unwrap();
+        let c = config(&dir);
+        let pre = event("cat status.json", "PreToolUse");
+        assert_eq!(handle(&pre, &c, 1), None);
+        let _ = handle(&event(intervening, "PreToolUse"), &c, 2);
+        let mut late = event("cat status.json", "PostToolUse");
+        late["tool_response"]["exit_code"] = json!(1);
+        assert_eq!(handle(&late, &c, 3), None);
+        assert!(handle(&pre, &c, 4).is_some(), "{intervening}");
+    }
+}
+
+#[test]
+fn script_file_contents_are_an_explicit_uninspected_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(&dir);
+    std::fs::write(
+        dir.path().join("poll.sh"),
+        "while true; do sleep 2; git status; done\n",
+    )
+    .unwrap();
+    for command in ["bash poll.sh", "./poll.sh"] {
+        let mut pre = event(command, "PreToolUse");
+        pre["cwd"] = json!(dir.path());
+        for now in 1..=2 {
+            assert_eq!(handle(&pre, &c, now), None, "{command}");
         }
     }
 }

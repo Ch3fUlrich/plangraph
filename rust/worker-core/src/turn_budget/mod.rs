@@ -216,7 +216,12 @@ fn update(
         status.wake_calls = 0;
     }
     let mut denied = false;
+    let mut local_read = false;
     if event == "PreToolUse" {
+        // An admission expires at the next pre event, even if its post was lost.
+        for read in status.reads.values_mut() {
+            read.pending = false;
+        }
         if let Some(command) = command.filter(|s| poll::read_only(s)) {
             let key = poll::fingerprint(command, payload["cwd"].as_str().unwrap_or(""));
             let known = status.polls.contains(&key);
@@ -226,6 +231,7 @@ fn update(
             // Older status documents predate remote comparison metadata.
             read.remote =
                 storage::read_scope(command, payload["cwd"].as_str().unwrap_or("")).remote;
+            local_read = !read.remote;
             let comparison_due = read.remote
                 && read
                     .compared_at
@@ -248,7 +254,9 @@ fn update(
             vec![]
         };
         for read in status.reads.values_mut() {
-            if read.affected_by(&changed) {
+            let local_retry =
+                success && !read.remote && command.is_some_and(|s| !poll::read_only(s));
+            if local_retry || read.affected_by(&changed) {
                 read.retry = true;
             }
         }
@@ -287,5 +295,11 @@ fn update(
     if !denied {
         written?;
     }
-    Ok(denied.then(poll::refusal))
+    Ok(denied.then(|| {
+        if local_read {
+            poll::read_refusal()
+        } else {
+            poll::refusal()
+        }
+    }))
 }

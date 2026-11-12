@@ -64,12 +64,30 @@ fn counts_model_messages_not_tools_and_resets_only_on_wake() {
     assert_eq!(f.status()["role"], "build-L1");
     f.event("Notification", START + 3);
     assert_eq!(f.status()["wake_calls"], 0);
+    assert_eq!(f.status()["hour_calls"], 2);
     f.call("message-3", 4);
     f.event("Stop", START + 4);
     assert_eq!(f.status()["wake_calls"], 1);
     assert_eq!(f.status()["hour_calls"], 3);
     f.event("UserPromptSubmit", START + 5);
     assert_eq!(f.status()["wake_calls"], 0);
+    assert_eq!(f.status()["hour_calls"], 3);
+}
+
+#[test]
+fn wake_ingests_unseen_previous_responses_before_reset_without_stop() {
+    let f = Fixture::new();
+    for (index, event) in ["UserPromptSubmit", "Notification"].iter().enumerate() {
+        let seconds = index as u64 + 1;
+        f.call(&format!("before-{event}"), seconds);
+        f.event(event, START + seconds);
+        assert_eq!(f.status()["wake_calls"], 0);
+        assert_eq!(f.status()["hour_calls"], seconds);
+        assert_eq!(
+            f.status()["seen"].as_array().unwrap().len(),
+            seconds as usize
+        );
+    }
 }
 
 #[test]
@@ -246,7 +264,9 @@ fn stdin_entrypoint_counts_and_denies_without_stdout() {
     let out = run(payload);
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty());
-    assert_eq!(String::from_utf8(out.stderr).unwrap().lines().count(), 1);
+    let line = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(line.lines().count(), 1);
+    assert!(line.contains("python -m plangraph.spawner.cli wait <run_id>"));
 }
 
 #[test]

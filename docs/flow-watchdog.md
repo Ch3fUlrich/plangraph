@@ -65,3 +65,7 @@ event's channel acknowledgements. Corrupt or unreadable pending JSON is preserve
 and skipped for refresh/delivery rather than aborting independent queued routing
 or suppressing unrelated alerts. The shell-delivery integration suite is Unix-only;
 its opt-out subprocess clears both budget-reader variables, including the clock.
+Pending reads are capped at 1 MiB plus one overflow-detection byte; oversized
+files follow the same preserve-and-skip path without an unbounded allocation.
+Portable unit coverage checks the exact cap and overflow; delivery coverage also
+pins preservation while unrelated queued routing continues.

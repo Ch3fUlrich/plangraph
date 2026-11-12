@@ -64,3 +64,45 @@ fn rejected_over_cap_update_preserves_original_bytes_and_exact_directory_entries
     assert_eq!(entries(&dir), before);
     assert_eq!(before, ["test-session.json", "test-session.lock"]);
 }
+
+#[test]
+fn concurrent_reader_only_observes_complete_atomic_status_documents() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Barrier,
+    };
+    let f = Fixture::new();
+    f.event("Stop", START);
+    let path = f.config.state_dir.join("status/test-session.json");
+    let mut document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    document["other"] = json!("x".repeat(128 * 1024));
+    fs::write(&path, document.to_string()).unwrap();
+    let start = Barrier::new(2);
+    let done = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let reader = scope.spawn(|| {
+            let mut reads = 0;
+            start.wait();
+            while !done.load(Ordering::Acquire) || reads < 100 {
+                let raw = fs::read(&path).unwrap();
+                let value: Value = serde_json::from_slice(&raw).unwrap();
+                assert_eq!(value["other"].as_str().unwrap().len(), 128 * 1024);
+                assert!(value["turn_budget"].is_object());
+                reads += 1;
+            }
+            reads
+        });
+        start.wait();
+        for index in 1..=30 {
+            f.call(&format!("atomic-{index}"), index);
+            f.event("Stop", START + index);
+        }
+        done.store(true, Ordering::Release);
+        assert!(reader.join().unwrap() >= 100);
+    });
+    assert_eq!(f.status()["wake_calls"], 30);
+    assert_eq!(
+        entries(path.parent().unwrap()),
+        ["test-session.json", "test-session.lock"]
+    );
+}

@@ -6,6 +6,10 @@ pub fn refusal() -> String {
     "TURN-BUDGET polling refused; use `python -m plangraph.spawner.cli wait <run_id> --timeout 3600` with Bash run_in_background=true (one command that exits), then wait for its completion notification.".into()
 }
 
+pub fn read_refusal() -> String {
+    format!("TURN-BUDGET unchanged local read refused; run a successful non-read command (for example, the build or edit that can change the result), then retry once; for remote completion, {}", refusal())
+}
+
 #[derive(Debug)]
 pub(super) struct Shell {
     pub commands: Vec<Vec<String>>,
@@ -14,6 +18,8 @@ pub(super) struct Shell {
     pub dynamic: bool,
     finite_for: bool,
     inside_for: Vec<bool>,
+    inside_loop: Vec<bool>,
+    expansions: Vec<String>,
 }
 
 fn push_word(words: &mut Vec<String>, word: &mut String, quoted: &mut bool) {
@@ -29,8 +35,12 @@ fn push_word(words: &mut Vec<String>, word: &mut String, quoted: &mut bool) {
 }
 
 /// Quoted text stays a word; comments and whitespace never become commands.
-/// Unsupported/unbalanced syntax fails open rather than guessing a refusal.
+/// Unsupported/unbalanced syntax is not classified as read-only or mutation evidence.
 pub(super) fn parse(s: &str) -> Option<Shell> {
+    parse_shell(s, false)
+}
+
+fn parse_shell(s: &str, polling: bool) -> Option<Shell> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut commands = Vec::new();
@@ -39,18 +49,24 @@ pub(super) fn parse(s: &str) -> Option<Shell> {
     let mut quoted = false;
     let mut writes = false;
     let mut dynamic = false;
+    let mut expansions = Vec::new();
     while let Some(c) = chars.next() {
         if let Some(q) = quote {
             if q == '"' && matches!(c, '$' | '`') {
                 if c == '`' || chars.peek() == Some(&'(') {
-                    return None;
+                    if !polling {
+                        return None;
+                    }
+                    expansions.push(wrappers::skip_expansion(c, &mut chars));
+                    word.push('$');
+                    continue;
                 }
                 dynamic = true;
             }
             if c == q {
                 quote = None;
             } else if c == '\\' && q == '"' {
-                word.push(chars.next()?);
+                word.push(chars.next().or(polling.then_some('\\'))?);
             } else {
                 word.push(c);
             }
@@ -59,21 +75,57 @@ pub(super) fn parse(s: &str) -> Option<Shell> {
         match c {
             // No expansion or heredoc modelling: do not mistake their contents
             // for a known read-only check or a state-changing command.
+            '`' if polling => {
+                expansions.push(wrappers::skip_expansion(c, &mut chars));
+                word.push('$');
+            }
+            '<' | '>' if polling => {
+                writes = true;
+                if c == '<' && chars.peek() == Some(&'<') {
+                    expansions.push(wrappers::skip_heredoc(&mut chars));
+                } else {
+                    if word.chars().all(|c| c.is_ascii_digit()) {
+                        word.clear();
+                    }
+                    wrappers::skip_redirect(&mut chars);
+                }
+            }
             '`' | '<' => return None,
             '$' => {
                 if chars.peek() == Some(&'(') {
-                    return None;
+                    if !polling {
+                        return None;
+                    }
+                    expansions.push(wrappers::skip_expansion(c, &mut chars));
+                    word.push('$');
+                    continue;
+                }
+                if polling && chars.peek() == Some(&'{') {
+                    chars.next();
+                    word.push('$');
+                    for c in chars.by_ref() {
+                        if c == '}' {
+                            break;
+                        }
+                        word.push(c);
+                    }
+                    continue;
                 }
                 dynamic = true;
                 word.push(c);
             }
             '\'' | '"' => {
+                // Keep balanced literals intact, but an unmatched quote must not
+                // swallow the raw loop scan for the rest of the command.
+                if polling && !wrappers::closing_quote(chars.clone(), c) {
+                    continue;
+                }
                 quote = Some(c);
                 quoted = true;
             }
             '\\' => {
                 quoted = true;
-                word.push(chars.next()?);
+                word.push(chars.next().or(polling.then_some('\\'))?);
             }
             '#' if word.is_empty() => {
                 while chars.peek().is_some_and(|&c| c != '\n') {
@@ -97,7 +149,7 @@ pub(super) fn parse(s: &str) -> Option<Shell> {
             c => word.push(c),
         }
     }
-    if quote.is_some() {
+    if quote.is_some() && !polling {
         return None;
     }
     push_word(&mut words, &mut word, &mut quoted);
@@ -108,6 +160,8 @@ pub(super) fn parse(s: &str) -> Option<Shell> {
     let mut finite_for = false;
     let mut for_depth: usize = 0;
     let mut inside_for = Vec::new();
+    let mut loop_depth: usize = 0;
+    let mut inside_loop = Vec::new();
     for words in &mut commands {
         while words.first().is_some_and(|s| {
             matches!(
@@ -116,8 +170,13 @@ pub(super) fn parse(s: &str) -> Option<Shell> {
             )
         }) {
             looped |= matches!(words[0].as_str(), "while" | "until");
+            loop_depth += usize::from(matches!(words[0].as_str(), "while" | "until"));
             if words[0] == "done" {
-                for_depth = for_depth.saturating_sub(1);
+                if for_depth > 0 {
+                    for_depth -= 1;
+                } else {
+                    loop_depth = loop_depth.saturating_sub(1);
+                }
             }
             words.remove(0);
         }
@@ -126,6 +185,7 @@ pub(super) fn parse(s: &str) -> Option<Shell> {
             // for ((;;)) is parsed as a bare for command and can run forever.
             finite_for |= words.len() > 1;
             looped |= words.len() == 1;
+            loop_depth += usize::from(words.len() == 1);
             for_depth += usize::from(words.len() > 1);
         }
         for word in words.iter_mut() {
@@ -136,6 +196,7 @@ pub(super) fn parse(s: &str) -> Option<Shell> {
         if let Some(first) = words.first_mut() {
             *first = first.rsplit('/').next()?.to_owned();
             inside_for.push(for_depth > 0);
+            inside_loop.push(loop_depth > 0);
         }
     }
     commands.retain(|c| !c.is_empty());
@@ -146,6 +207,8 @@ pub(super) fn parse(s: &str) -> Option<Shell> {
         dynamic,
         finite_for: finite_for && !looped,
         inside_for,
+        inside_loop,
+        expansions,
     })
 }
 
@@ -157,16 +220,44 @@ fn sleep_poll_depth(command: &str, depth: usize) -> bool {
     if depth > 3 {
         return false;
     }
-    let Some(shell) = parse(command) else {
+    // Scan the original command independently of read/scope classification:
+    // substitutions, redirects and malformed quotes must not hide a loop.
+    let Some(shell) = parse_shell(command, true) else {
         return false;
     };
-    let commands: Vec<_> = shell.commands.iter().map(|c| wrappers::peel(c)).collect();
+    if shell
+        .expansions
+        .iter()
+        .any(|s| sleep_poll_depth(s, depth + 1))
+    {
+        return true;
+    }
+    let commands: Vec<_> = shell
+        .commands
+        .iter()
+        .map(|c| {
+            let assignments = c.iter().take_while(|s| wrappers::assignment(s)).count();
+            wrappers::peel(if assignments < c.len() {
+                &c[assignments..]
+            } else {
+                c
+            })
+        })
+        .collect();
     let has_sleep = commands.iter().any(|c| c[0] == "sleep");
-    let only_checks = !shell.writes
-        && commands.iter().any(|c| read_command(c))
-        && commands
-            .iter()
-            .all(|c| read_command(c) || matches!(c[0].as_str(), "true" | "false" | ":" | "for"));
+    let loop_commands: Vec<_> = commands
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| shell.inside_loop[*i])
+        .map(|(_, c)| c)
+        .collect();
+    let poll_check = |c: &[String]| poll_command(c, depth);
+    let only_checks = loop_commands.iter().any(|c| poll_check(c))
+        && loop_commands.iter().all(|c| {
+            poll_check(c)
+                || c.iter().all(|s| wrappers::assignment(s))
+                || matches!(c[0].as_str(), "true" | "false" | ":" | "for")
+        });
     if shell.looped && !shell.finite_for && (has_sleep || only_checks) {
         return true;
     }
@@ -176,7 +267,7 @@ fn sleep_poll_depth(command: &str, depth: usize) -> bool {
         }
         if c[0] == "sleep"
             && !(shell.finite_for && shell.inside_for[i])
-            && commands.get(i + 1).is_some_and(|c| read_command(c))
+            && commands.get(i + 1).is_some_and(|c| poll_check(c))
         {
             return true;
         }
@@ -191,6 +282,27 @@ fn sleep_poll_depth(command: &str, depth: usize) -> bool {
         }
     }
     false
+}
+
+fn poll_command(c: &[String], depth: usize) -> bool {
+    if read_command(c)
+        || c[0].starts_with('$')
+        || (c[0] == "git" && c.get(1).is_some_and(|s| s.starts_with('$')))
+    {
+        return true;
+    }
+    if depth >= 3 {
+        return false;
+    }
+    wrappers::script(c)
+        .and_then(|s| parse_shell(s, true))
+        .is_some_and(|shell| {
+            !shell.commands.is_empty()
+                && shell
+                    .commands
+                    .iter()
+                    .all(|c| poll_command(&wrappers::peel(c), depth + 1))
+        })
 }
 
 fn watch_read(c: &[String]) -> bool {
@@ -269,7 +381,10 @@ fn read_commands_depth(command: &str, depth: usize) -> Option<Vec<Vec<String>>> 
 }
 
 pub fn fingerprint(command: &str, cwd: &str) -> String {
-    let words = read_commands(command).unwrap_or_default();
+    let mut words = read_commands(command).unwrap_or_default();
+    for c in &mut words {
+        wrappers::normalize_paths(c);
+    }
     let mut hasher = Sha256::new();
     hasher.update(cwd.as_bytes());
     hasher.update([0]);
