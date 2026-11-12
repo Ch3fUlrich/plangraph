@@ -1,1 +1,2 @@
 - Pin local and CI Rust builds to the release verified in green main run 43318640210 via `rust/rust-toolchain.toml`; guard every CI installer against bypassing the pin and document one-PR toolchain bumps with new-lint fixes (D-5297).
+- Reject workflow/job/step toolchain environment overrides and direct Cargo/rustup selectors across every workflow and local composite action; commit-pin the shared upstream installer (D-5297).

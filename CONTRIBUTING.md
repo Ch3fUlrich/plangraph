@@ -71,6 +71,10 @@ and fixes the new lints, without weakening `-D warnings`. Run every Rust CI job
 (`rust`, `rust-windows`, `rust-worker`, `rust-spike`) and require green before
 merging. Do not duplicate the version in workflows. The regression check is
 `python3 -m pytest -q -n 2 tests/test_ci_rust_toolchain.py`.
+It scans every workflow and local composite action, rejecting `RUSTUP_TOOLCHAIN`
+overrides, `cargo +<toolchain>`, direct rustup installation/selection and Rust
+installer actions outside the shared setup. The shared installer's upstream
+action is commit-pinned; update that SHA explicitly in a reviewed PR when needed.
 
 ## Lanes
 
