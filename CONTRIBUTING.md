@@ -27,6 +27,8 @@ plangraph is public; the plans it tracks usually are not. Keep that difference c
 
 Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so there is no
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
+The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
+with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
 
 ```bash
 python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
@@ -85,6 +87,10 @@ on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
 (today only `CHANGELOG.md`, an append-only ledger).
 The file-size gate refuses malformed Git batch headers with a single reason line.
+
+New Python source outside tests needs a `path | reason (D-id)` line in
+`tools/new_code_allowlist.txt`, which `python3 tools/check_new_code_lang.py` reads; for
+example the keeper's host-sample store stays Python because the keeper is Python (D-5038).
 
 ## Changelog and documentation
 

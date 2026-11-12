@@ -44,6 +44,7 @@ def put(w, key, **kw):
 
 
 def gate(w, repo, key, **kw):
+    kw.setdefault("legs", DEFAULT_LEGS)  # Exact-tier checks use the declared table.
     return service.gate_card(w.store, w.p("router"), key, repo_root=repo, **kw)
 
 
@@ -62,7 +63,7 @@ def test_ready_card_moves_to_ready(w, repo):
     result = gate(w, repo, key)
     assert result.ready and result.acted and result.state == "ready"
     assert result.question_id is None and result.route_error is None
-    assert result.route.first_leg.harness == "opencode"
+    assert (result.route.first_leg.harness, result.route.first_leg.tier) == ("agy", "free")
     assert all(leg.harness != "qodercli" for leg in result.route.legs)
     assert state_of(w, key) == "ready"
     assert gate(w, repo, key).state == "ready"
@@ -257,9 +258,50 @@ def test_pack_needs_a_window_class(w, repo):
 
 
 def test_route_for_card_prefers_qodercli(w):
+    """Historical name: disabled Qoder yields to the eligible free Antigravity leg."""
     (key,) = seed(w, [("A", [])])
     put(w, key, estimate_tokens=40000, risk_tags=[])
-    route = service.route_for_card(w.store, w.p("router"), key)
-    assert route.first_leg.harness == "opencode"
+    route = service.route_for_card(w.store, w.p("router"), key, legs=DEFAULT_LEGS)
+    assert (route.first_leg.harness, route.first_leg.tier) == ("agy", "free")
     assert all(leg.harness != "qodercli" for leg in route.legs)
     assert route.window_class == "128k"
+
+
+@pytest.mark.parametrize("entry_point", ["gate_card", "route_for_card"])
+def test_exact_tier_checks_inject_leg_table(w, repo, monkeypatch, entry_point):
+    """Keeper routing takes legs, not catalog_rows; exact-tier checks pin that input."""
+    from plangraph.routing_support import resolver
+
+    original = getattr(service, entry_point)
+
+    def explicit_legs(*args, **kwargs):
+        assert kwargs.get("legs") is DEFAULT_LEGS
+        return original(*args, **kwargs)
+
+    def ambient_catalog():
+        pytest.fail("exact-tier checks must not read the host catalog")
+
+    monkeypatch.setattr(service, entry_point, explicit_legs)
+    monkeypatch.setattr(resolver, "get_catalog_models", ambient_catalog)
+    if entry_point == "gate_card":
+        test_ready_card_moves_to_ready(w, repo)
+    else:
+        test_route_for_card_prefers_qodercli(w)
+
+
+@pytest.mark.parametrize("entry_point", ["gate_card", "route_for_card"])
+def test_keeper_readiness_does_not_enable_implementation_fallbacks(w, repo, entry_point):
+    """S5 writer admission must not lift main's role-neutral readiness policy."""
+    (key,) = seed(w, [("A", [])])
+    put(w, key)
+    if entry_point == "gate_card":
+        route = gate(w, repo, key).route
+    else:
+        route = service.route_for_card(w.store, w.p("router"), key, legs=DEFAULT_LEGS)
+    assert route.first_leg.id == "agy-gemini-3.8-flash"
+    assert {leg.id for leg in route.legs if leg.roles == ("implement",)} == {"cx-gpt-6.1-sol"}
+    # Explicit worker routing still uses S5's registered free/paid fallbacks.
+    worker = service.route_for_card(w.store, w.p("router"), key,
+                                    legs=DEFAULT_LEGS, role="implement")
+    assert worker.first_leg.id == "openrouter-free"
+    assert worker.legs[-1].id == "deepseek"

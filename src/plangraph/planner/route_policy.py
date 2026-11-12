@@ -30,15 +30,15 @@ _KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_
 
 
 def review_priority(leg) -> int:
-    """D-4147 role order, not a cost/free-tier preference."""
+    """D-4147 role order within a cost tier; no new family preferences."""
     return 2 if "haiku" in leg.model.lower() else 0 if leg.family == "mimo" else 1
 
 
 def implement_key(leg, tier_idx, pos):
-    """The table's lead precedes cost tiers; eligibility is applied first."""
+    """Cost precedes writer preference; eligibility is applied first."""
     from .legs import LEAD_WRITER, WRITER_ORDER
     index = WRITER_ORDER.index(leg.id) if leg.id in WRITER_ORDER else len(WRITER_ORDER)
-    return (leg.id != LEAD_WRITER, tier_idx, index, pos)
+    return (tier_idx, leg.id != LEAD_WRITER, index, pos)
 
 
 @dataclass(frozen=True)
@@ -57,9 +57,9 @@ class RoutePolicy:
         # Keeper families too: "zhipu" bans glm legs, "deepseek" every deepseek spelling.
         from .seats import seat_family
 
-        # D-4280/D-4543/D-4557: Muse and Grok are manual-only, with no policy lift.
+        # D-5113 lifts Muse admission; utility inputs choose among its routes.
         # Explicit audited --leg overrides do not use this automatic-route gate.
-        if leg.family in ("muse", "grok") or seat_family(leg.family) == "xai":
+        if leg.family == "grok" or seat_family(leg.family) == "xai":
             return "off_family"
 
         def listed(families):

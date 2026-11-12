@@ -46,7 +46,7 @@ IMPLEMENT_HEADER = ("You run as the opencode build agent: git commit is allowed 
 _keeper_unconfigured_last_warned = None
 
 
-from .env_redact import first_reason, redact
+from .env_redact import first_reason, redact, _redact_prompt
 from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
@@ -328,7 +328,7 @@ class SpawnerRunner:
         # REMOVE-AT-R10: capture the final prompt before command construction.
         if prepare_launch and not dry_run:  # REMOVE-AT-R10
             raise ValueError('launch preparation requires dry run')
-        prompt = redact(prompt)  # REMOVE-AT-R10
+        prompt = _redact_prompt(prompt, redact)  # REMOVE-AT-R10
         if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
             from .private_io import atomic_write_private
             path, record, save = prompt_record
@@ -1057,8 +1057,8 @@ def spawn_service(*args, **kwargs):
 
             if not plan.legs or plan.error:
                 host_skips = [s for s in plan.skipped if any(marker in str(s) for marker in ('not_served_on_host', 'harness_missing'))]
-                exhausted = not plan.legs and (not plan.error or
-                    bool(plan.skipped) and all(s['reason'] == 'limited' for s in plan.skipped))
+                from plangraph.routing_support.liveness import provider_exhausted
+                exhausted = not plan.legs and (not plan.error or provider_exhausted(plan.skipped))
                 record.update(status='failed' if host_skips else 'limited' if exhausted else 'refused',
                               exit_code=1 if host_skips else 4 if exhausted else 2, ended=time.time(),
                               error='; '.join(s.get('skip_reason') or s.get('reason', '') for s in host_skips) if host_skips else plan.error,

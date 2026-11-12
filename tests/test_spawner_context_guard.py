@@ -123,17 +123,27 @@ def test_every_slice_passes_through_redact_before_packing(tree):
     track(tree, "cfg.py", f'a = 1\nSERVICE_KEY=hunter2\nheader = "Bearer abc.def.ghi"\nb = "{leaked}"\nlast = 2\n')
     pack = pack_for(tree, "cfg.py:1-5")
     assert "a = 1" in pack.text and "last = 2" in pack.text
-    assert "hunter2" not in pack.text and "abc.def.ghi" not in pack.text and leaked not in pack.text
-    assert pack.text.count("[REDACTED]") >= 3
+    assert "SERVICE_KEY=hunter2" in pack.text   # source mode skips credential-name assignments only
+    assert "abc.def.ghi" not in pack.text and leaked not in pack.text
+    assert 'header = "Bearer [REDACTED]"' in pack.text and 'b = "[REDACTED]"' in pack.text
+    assert pack.text.count("[REDACTED]") == 2
 
 
 def test_redact_runs_on_the_text_that_is_packed(tree, monkeypatch):
-    from plangraph.spawner import runner
+    from plangraph.spawner import env_redact
     seen = []
-    monkeypatch.setattr(runner, "redact", lambda text: (seen.append(text), text.replace("two", "2"))[1])
+
+    def scrub(text):
+        seen.append(text)
+        return text.replace("two", "2")
+
+    monkeypatch.setattr(context_pack, "redact_source", scrub)
+    monkeypatch.setattr(env_redact, "redact_source", scrub)
     track(tree, "m.py", "one\ntwo\nthree\n")
     pack = pack_for(tree, "m.py:1-3")
-    assert seen == ["one\ntwo\nthree"] and "one\n2\nthree" in pack.text
+    assert seen == ["one\ntwo\nthree", "one\n2\nthree"]   # _source_block scrubs the first output again
+    assert "--- m.py:1-3 ---\n```\none\n2\nthree\n```" in pack.text
+    assert "one\ntwo\nthree" not in pack.text
 
 
 def test_slice_holding_a_private_key_block_is_dropped(tree):
