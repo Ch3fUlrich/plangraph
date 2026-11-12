@@ -20,7 +20,8 @@ seconds/date, and body “resets in N seconds/minutes/hours” give an explicit 
 At that reset the leg is eligible automatically. Without reset information the
 leg is limited for ten minutes then eligible with `reprobe` evidence until a
 real successful provider response clears it. Queries never update the database.
-Failure evidence expires to `reprobe` after six hours, even when its booked reset is later.
+Failure evidence expires to `reprobe` after six hours, even when its booked reset is later;
+expired probe failures cannot complete a fresh down streak.
 
 Resolver results include state/evidence on every candidate (including excluded
 limited candidates) and the selected leg. MCP catalog queries retain limited
@@ -29,10 +30,20 @@ without introducing a forbidden runtime spawner import. Planner selection runs
 by default, with benchmark utility confined to each operator-selected tier.
 
 The card-driven planner now reads this evidence through `plan_spawn` in
-`planner/routing.py`. Both `limited` and `down` exclude a leg; expired and `reprobe` legs
-remain selectable. The card's optional `account` and `combo` are passed unchanged
+`planner/routing.py`. `limited`, `down`, and provider `expired` exclude a leg; `reprobe`
+remains selectable. The card's optional `account` and `combo` are passed unchanged
 to the reader. The planner's provider-stop callback records only actual 429/402
 responses with nonempty provider text, and can use an injected store for tests.
+
+Operator configuration may pair a `disabled` reason with a finite epoch `expires`.
+The stop holds before that instant and expires at the boundary, using the planner's
+injected `now` when supplied; it is never simultaneously an eligible leg and a
+disabled skip. Stops with no expiry remain permanent. These local operator stops
+do not override provider availability. A Go quota stop does not suppress a personal
+credential leg; normal routing advances through the remaining eligible inputs.
+When every otherwise eligible provider is limited/down/expired, static manual or
+disabled skips remain visible but do not change the exhausted run's exit 4 into a
+contract refusal. Static-policy-only or request-size failures still refuse.
 
 ## Bounded writer liveness
 

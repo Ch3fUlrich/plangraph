@@ -3,9 +3,29 @@ import ast
 from dataclasses import replace
 from pathlib import Path
 import subprocess
+import pytest
 
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import plan_spawn
+
+pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
+
+
+def assert_review_seat_safety(estimate):
+    """Retain main's exact diff/no-diff seats and writer-family fence."""
+    from plangraph.planner.route_policy import DEFAULT_POLICY_PATH, load_route_policy
+    for diff in ({"diff_ref": {"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}}, {}):
+        review = plan_spawn({"estimate_tokens": estimate, **diff}, role="review",
+                            writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH), catalog_rows=())
+        assert len({leg.family for leg in review.review_seats}) == 2
+        assert all(leg.family != "gpt" for leg in review.review_seats)
+        exception = not diff
+        fenced = review.review_seats[:-1] if exception else review.review_seats
+        assert not any(leg.claude_family or leg.family in ("claude", "anthropic") for leg in fenced)
+        if exception:
+            assert [leg.id for leg in review.review_seats] == ["agy-gemini-3.8-flash", "agy-sonnet-5.5"]
+        else:
+            assert [leg.id for leg in review.review_seats] == ["agy-gemini-3.8-flash", "mimo-v2.6-flash"]
 
 
 def test_review_same_family_table_order():
@@ -43,7 +63,8 @@ def test_changelog_fragment_only():
 
 
 def test_top_level_definition_spacing():
-    for name in ("src/plangraph/planner/routing.py", "tests/test_spawn_cli.py"):
+    for name in ("src/plangraph/planner/routing.py", "src/plangraph/routing_support/leg_state.py",
+                 "tests/test_spawn_cli.py"):
         text = Path(name).read_text()
         lines = text.splitlines()
         tree = ast.parse(text)
@@ -52,3 +73,27 @@ def test_top_level_definition_spacing():
                     node, (ast.FunctionDef, ast.ClassDef)):
                 start = min([node.lineno] + [d.lineno for d in node.decorator_list])
                 assert lines[previous.end_lineno:start - 1] == ["", ""], (name, node.name)
+
+
+def test_registered_fallback_inputs():
+    from plangraph.planner.legs import DEFAULT_LEGS
+    table = {leg.id: leg for leg in DEFAULT_LEGS}
+    for id in ("omniroute-deepseek-flash", "omniroute-muse-spark", "agy-opus",
+               "opencode-gemini-4-argon"):
+        assert table[id].disabled is None
+    assert table["deepseek"].tier == "paid"
+    assert table["opencode-gemini-4-argon"].model == "opencode/gemini-4-argon"
+
+
+def test_each_role_falls_through_failed_and_limited():
+    from plangraph.planner.route_policy import RoutePolicy
+    base = next(leg for leg in DEFAULT_LEGS if leg.id == "opencode-deepseek-v4.1-flash-free")
+    for role in ("implement", "review", "orchestrate"):
+        legs = (replace(base, id="first", roles=(role,), disabled=None),
+                replace(base, id="second", model="opencode/big-pickle", family="pickle", roles=(role,), disabled=None))
+        for state in ("limited", "down"):
+            def reader(model, **kwargs):
+                return {"state": state if model == base.model else "available", "evidence": None}
+            plan = plan_spawn({"estimate_tokens": 1000}, role=role, legs=legs,
+                              policy=RoutePolicy(), leg_reader=reader, writer_families=("gpt",))
+            assert [leg.id for leg in plan.legs] == ["second"]

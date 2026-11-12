@@ -257,7 +257,7 @@ def test_disabled_and_fallback_routes():
              for role in ('review', 'implement')]
     for leg in DEFAULT_LEGS:
         if leg.model.startswith('opencode/') and leg.model.endswith('-free'):
-            assert 'D-4196' in leg.disabled
+            assert leg.disabled == 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'
             for plan in plans:
                 assert leg.id not in [l.id for l in plan.legs]
                 if 'implement' in leg.roles or plan is plans[0]:

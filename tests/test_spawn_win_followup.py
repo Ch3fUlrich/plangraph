@@ -28,8 +28,9 @@ def test_agy_long_stream_payload(exe, size):
 def test_agy_argv_unchanged(is_nt, prompt):
     cmd = build_standalone_fallback_command('agy', prompt, 'test')
     before = list(cmd)
-    assert launch_stdin_payload(cmd, prompt, 'agy.exe', is_nt=is_nt) is None
-    assert cmd == before == ['agy', '--dangerously-skip-permissions', '--model', 'test', '-p', prompt]
+    assert json.loads(launch_stdin_payload(cmd, prompt, 'agy.exe', is_nt=is_nt))['message']['content'] == prompt
+    assert cmd == before == ['agy', '--dangerously-skip-permissions', '--model', 'test', '-p', '',
+                            '--input-format', 'stream-json', '--output-format', 'stream-json']
 
 
 @pytest.mark.parametrize('status,error', [('SUCCESS', ''), ('ERROR', 'recorded failure'), (None, 'agy_stream_missing_result')])
@@ -70,9 +71,9 @@ def test_long_qoder_stdin(exe):
     payload = launch_stdin_payload(cmd, prompt, exe, is_nt=True)
     assert payload == prompt.encode('utf-8')
     assert prompt not in cmd
-    assert cmd[-2:] == ['--input-format', 'text']
+    assert cmd[3:5] == ['--input-format', 'text']
     assert cmd[cmd.index('-p') + 1] == ''
-    assert cmd == ['qodercli', '-p', '', '--model', 'qoder/test', '--input-format', 'text']
+    assert cmd == ['qodercli', '-p', '', '--input-format', 'text', '--model', 'qoder/test']
     assert _resolve_launch(exe, cmd[1:], is_nt=True)[1] is None
 
 
