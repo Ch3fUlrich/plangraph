@@ -117,15 +117,19 @@ DEFAULT_LEGS = (
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False,
         roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
-    _replace(_legacy["agy-sonnet-5.5"], roles=("implement", "review")),
+    _replace(_legacy["agy-sonnet-5.5"], roles=("implement", "review", "orchestrate")),
     Leg("agy-opus-5.5", "subscription", "agy", "claude-opus-5-5-high",
         "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
         roles=("implement", "review")),
     Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-flash",
-        "deepseek", ("128k",), 100000, False, roles=("implement", "review")),
+        "deepseek", ("128k",), 100000, False, roles=("implement", "review", "orchestrate")),
     Leg("omniroute-muse-spark", "subscription", "opencode",
         "omniroute/muse-spark-1.3-contributor", "muse", ("128k",), 100000, False,
-        roles=("implement", "review")),
+        roles=("implement", "review", "orchestrate")),
+    Leg("agy-opus", "subscription", "agy", "claude-opus-5-5-medium", "claude",
+        ("128k",), 100000, False, claude_family=True, roles=("review", "orchestrate")),
+    Leg("opencode-gemini-4-argon", "free", "opencode", "opencode/gemini-4-argon",
+        "gemini", ("128k",), 100000, True, roles=("review", "orchestrate")),
     Leg("opencode-go-gemini-4-argon", "subscription", "opencode",
         "opencode-go/gemini-4-argon", "gemini", ("128k",), 100000,
         False, roles=("review",)),
@@ -160,15 +164,7 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# D-5092: eligibility is input to utility, never a designated-writer pin.
-DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
-                             disabled=leg.disabled or (
-                                 'D-3828: writer disabled; no retained review or orchestrate role'
-                                 if leg.roles == ('implement',) else None))
-                     if leg.id not in {'cx-gpt-6.1-sol', 'agy-gemini-4-argon', 'agy-sonnet-5.5',
-                                       'agy-opus-5.5', 'omniroute-deepseek-flash', 'omniroute-muse-spark',
-                                       'opencode-big-pickle', 'opencode-deepseek-v4.1-flash-free'}
-                     else leg for leg in DEFAULT_LEGS)
+# Catalog roles are eligibility inputs, not a single-writer pin.
 WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
 )
