@@ -270,10 +270,8 @@ def remote_spawn(name, host, card, prompt, options):
             for ref in ('base', 'head'):
                 commands.append(shlex.join(['git', 'fetch', 'origin', '--', diff[ref]]))
         command = ['python3', '-m', 'plangraph.spawner.cli', 'spawn', '--card',
-                   '@' + directory + '/card.json']
-        # A sentinel prevents command substitution from stripping trailing newlines.
-        commands.append('prompt=$(cat ' + q(directory + '/prompt.txt') + ' && printf .)')
-        spawn = shlex.join(command) + ' "${prompt%.}" ' + shlex.join(options)
+                   '@' + directory + '/card.json', '--prompt-file', directory + '/prompt.txt']
+        spawn = shlex.join(command + options)
         nonce = secrets.token_hex(16)
         begin, end = (f'PLANGRAPH_RECEIPT_{nonce}_{suffix}' for suffix in ('BEGIN', 'END'))
         commands.append("printf '%s\\n' " + q(begin))

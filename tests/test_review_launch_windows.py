@@ -37,7 +37,8 @@ def test_review_spawn_skips_edit_baseline_and_hides_console(monkeypatch, tmp_pat
     monkeypatch.setattr('plangraph.spawner.resolver.host_skip_reason_async',
                         AsyncMock(return_value=None))
     proc = SimpleNamespace(returncode=0, pid=None, stdin=None,
-                           communicate=AsyncMock(return_value=(b'VERDICT: ACCEPT', b'')))
+                           communicate=AsyncMock(return_value=(
+                               b'{"event":"result","result":{"status":"SUCCESS","response":"VERDICT: ACCEPT"}}\n', b'')))
     factory = AsyncMock(return_value=proc)
 
     async def run():

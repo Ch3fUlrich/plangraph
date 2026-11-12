@@ -60,7 +60,7 @@ The RUN-WORKTREE Python regression exception (D-5062) retires with SPAWNER-RUST-
 Work that covers two plan items is two lanes.
 A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) only for the item's latest verified head; interrupted sends are not blindly replayed.
 
-New production code must be Rust unless explicitly listed in `tools/new_code_allowlist.txt`; the host-readiness source-probe helper is a single-file exception for the pre-gate lane, retired by `SPAWNER-RUST-PORT`.
+New production code must be Rust unless explicitly listed in `tools/new_code_allowlist.txt`; the host-readiness source-probe helper is a single-file exception for the pre-gate lane, retired by `SPAWNER-RUST-PORT`. `src/plangraph/spawner/redact_tokens.py` is a second one: the Python scrubber must mirror the Rust token catalog until that port retires it (D-5279).
 
 For an offline judge brief, run `python3 tools/judge_prompt.py --findings findings.txt
 --base origin/main --head HEAD --ci-summary ci.json --output judge.md`, with
@@ -130,6 +130,90 @@ An explicit missing or unreadable list refuses pushes to any remote. The env lis
 Remotes are public unless `git config remote.<name>.plangraph-private true` is set:
 that skips private-word matching, not public patterns. Classification uses local config only.
 Diagnostics never show matched values or the words-file path.
+
+## Shadow merge decision (D-5252, slice 1)
+
+`python3 tools/merge_gate.py facts.json` prints `GO <sha>` (exit 0) or
+`REFUSE <code> <detail>` (exit 1); it only reads that file. No collection,
+network, merge, GO-row write, verdict post or item closure is implemented.
+`merge_gate_core.decide(facts)` is pure and returns one immutable decision.
+Facts: `head_sha_at_check`, `head_sha_now` (full lowercase SHA), `required_checks`
+(nonempty names), `ci_checks` (complete latest-per-name records with `name`,
+`head_sha`, `status`, `conclusion`), `seats` (`family`, raw `verdict` text,
+boolean `pinned`, `open_findings` severity strings), `writer_families`,
+`changed_paths`, `tier`, `plan_key`, `item_key`, boolean `preflight_present`,
+and `main_changed_production_paths` (complete main delta since CI base).
+Path lists include deleted paths and both rename sides. Missing facts refuse;
+only completed success checks pass (unrequired suites may be skipped).
+The trusted future collector owns
+completeness, freshness and evidence provenance; this CLI grants no authority.
+First refusal wins: head, CI red/pending, seat absent/pinned/family/findings/
+acceptance, gate path, tier, PLAN key, preflight, stale green (rule 3.19).
+Python imports the existing strict seat parser/coverage and trailer door table;
+additional conservative path categories cover docs-map, deployment, allowlists,
+redact/auth and gate/check/scrub tools without copying the door list.
+
+The facts object and every CI/seat record require exactly the keys above;
+missing, renamed, non-string or extra keys refuse (`ci_pending` for facts/CI,
+`seat_missing` for seats). Top-level schema validation precedes the semantic
+refusal order; CI/seat record schemas are validated at their respective stages.
+Wrong value types, UNKNOWN values and duplicate evidence never yield GO.
+Required/check names, writer/seat families, severity lists and normalized path
+lists must be unique; every supplied seat must independently parse as accepting.
+Malformed CI values refuse `ci_pending`; malformed writer families refuse
+`seat_family_is_writer`; malformed seat pinning/findings/verdicts refuse
+`seat_pinned`/`finding_open`/`seat_missing`, respectively. Duplicate seat families
+refuse `seat_missing`, duplicate changed paths refuse `gate_path`, and duplicate
+main-delta paths refuse `stale_green`. LOW-only findings remain nonblocking.
+Item/PLAN keys must match `[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?`, with no UNKNOWN
+component; invalid keys refuse `plan_key_mismatch`. String-list entries must be
+nonempty, printable and have no surrounding whitespace. Paths use the same
+case/separator/dot normalization for both evidence and imported door patterns.
+Both door tables must be nonempty tuple/list collections of valid path patterns;
+the authority's existing root globs `roles*` and `scopes*` are intentional
+slash-less exceptions. Missing/malformed/duplicate table entries refuse
+`gate_path`, including when a table is accidentally replaced by a plain string.
+Duplicate JSON object keys at any depth and undecodable or excessively nested
+JSON refuse `ci_pending` without a traceback. Decision tests block file,
+environment and clock access inside the real parser/coverage dependency calls,
+in addition to subprocess, network and verdict-post effects.
+
+### Shadow merge decision slice 2: fail-closed boundaries
+
+`required_checks` must include `ci-gate`, `select`, the live `ci_select.ALWAYS`
+table and every suite selected by the existing pure `ci_select.select()` policy
+for `changed_paths`. The selector sees both literal and normalized paths so
+case normalization cannot silently remove a required suite. Empty, trivial or
+incomplete self-declared lists refuse `ci_pending`; each required check must
+complete successfully on the exact head. Every supplied check still participates
+in red/pending detection, even if it is not required. Invalid selector tables or
+results refuse `ci_pending`; the policy is imported, not copied into the gate.
+
+Slice 2 limit: this is a local repository-policy floor, not live GitHub branch
+protection/ruleset discovery, workflow parsing or authenticated evidence
+collection. Additional workflow jobs (including browser and platform jobs), live
+required contexts, workflow/base provenance and completeness/freshness must be
+established by the trusted future collector and included in `required_checks`.
+No count or self-declared list proves those external facts. This shadow CLI
+remains non-authoritative and must not be wired directly to unattended merges.
+
+Both the public core boundary and the CLI catch unexpected validation/dependency
+exceptions and return `REFUSE ci_pending facts unavailable or invalid`, without
+exception text or a traceback. Malformed parser/coverage return values refuse
+`seat_missing`. The CLI validates the decision's outcome, defined reason code,
+single-line detail and exact GO head before printing exactly one result line.
+The defined refusal codes remain `head_moved`, `ci_red`, `ci_pending`,
+`seat_missing`, `seat_pinned`, `seat_family_is_writer`, `finding_open`,
+`gate_path`, `tier_high`, `plan_key_mismatch`, `preflight_missing`, `stale_green`.
+
+Evidence paths are literal: `*`, `?` and `[` refuse `gate_path` in PR paths or
+`stale_green` in main-delta paths. Only imported door patterns may use globs.
+Shared fixtures are registered in `tests/conftest.py`, with bounded support code
+in `tests/_merge_gate_support.py`; neither test module imports the other. The
+guards block subprocess entry points, `os.system`/`os.popen`, socket construction
+and connection/server helpers, `urllib.request.urlopen` and verdict posting.
+Real dependency calls retain the scoped file/environment/clock guards. Tests
+isolate each live door table and verify the refusal disappears without it.
 
 ## Turn-budget hook development
 

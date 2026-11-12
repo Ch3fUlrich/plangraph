@@ -146,7 +146,7 @@ fn dry_command_text() {
         let mut f = Fixture::new("echo hi", stdin.clone(), &[]);
         let r = payload(f.call("spawn", json!({"prompt":"p","card":{"x":1},"dry_run":true})));
         let suffix = if stdin.is_null() {
-            ""
+            " [stdin: 14 bytes]"
         } else {
             " [stdin: 7 bytes]"
         };
@@ -181,4 +181,50 @@ fn launch_errors_do_not_create_records() {
             assert!(!f.state.path().join("runs").exists());
         }
     }
+}
+
+#[test]
+fn oversized_prompt_records_named_reason() {
+    let mut f = Fixture::new("exit 0", Value::Null, &[]);
+    std::fs::write(f.state.path().join("launch"),
+        "#!/bin/sh\ncat >/dev/null\necho 'inline_diff_failed: prompt_too_large: request limit' >&2\nexit 2\n").unwrap();
+    let row = payload(f.spawn(2.0));
+    assert_eq!(row["status"], "failed");
+    assert_eq!(row["reason"], "prompt_too_large");
+    assert_eq!(row["exit_code"], 2);
+    let saved = payload(f.call("result", json!({"run_id":row["run_id"]})));
+    assert_eq!(saved["exit_code"], 2);
+    assert_eq!(saved["reason"], "prompt_too_large");
+    assert_eq!(saved["plan"]["first_leg"]["id"], "leg");
+    assert_eq!(saved["attempts"][0]["status"], "failed");
+    assert_eq!(saved["attempts"][0]["skip_reason"], "prompt_too_large");
+    assert_eq!(saved["attempts"][0]["stderr_tail"], saved["stderr_tail"]);
+    assert_eq!(
+        saved["stderr_tail"],
+        "inline_diff_failed: prompt_too_large: request limit"
+    );
+}
+
+#[test]
+fn malformed_prompt_transport_records_named_reason() {
+    let mut f = Fixture::new("exit 0", Value::Null, &[]);
+    std::fs::write(f.state.path().join("launch"),
+        "#!/bin/sh\ncat >/dev/null\necho 'stdin_prompt_flag_missing: expected -p with an empty value' >&2\nexit 2\n").unwrap();
+    let row = payload(f.spawn(2.0));
+    assert_eq!(row["status"], "failed");
+    assert_eq!(row["reason"], "stdin_prompt_flag_missing");
+    assert_eq!(row["exit_code"], 2);
+    let saved = payload(f.call("result", json!({"run_id":row["run_id"]})));
+    assert_eq!(saved["reason"], "stdin_prompt_flag_missing");
+    assert_eq!(saved["plan"]["first_leg"]["id"], "leg");
+    assert_eq!(saved["attempts"][0]["status"], "failed");
+    assert_eq!(
+        saved["attempts"][0]["skip_reason"],
+        "stdin_prompt_flag_missing"
+    );
+    assert_eq!(saved["attempts"][0]["stderr_tail"], saved["stderr_tail"]);
+    assert_eq!(
+        saved["stderr_tail"],
+        "stdin_prompt_flag_missing: expected -p with an empty value"
+    );
 }

@@ -350,7 +350,7 @@ def bound_prompt(prompt: str, max_request_tokens: int) -> str:
     Requirements are never truncated. Diagnostics contain sizes and a reason code, not prompt content.
     """
     if len(prompt) > max_request_tokens * 3:
-        raise PromptBoundError(f'inline_prompt_oversized: chars {len(prompt)} '
+        raise PromptBoundError(f'prompt_too_large: inline_prompt_oversized: chars {len(prompt)} '
                            f'estimated_tokens {(len(prompt) + 2) // 3} max_request_tokens {max_request_tokens}')
     return prompt
 

@@ -10,7 +10,7 @@ import subprocess
 import time
 import uuid
 _start_supervisor = subprocess.Popen
-from .runner import spawn_service as SpawnService, redact
+from .runner import spawn_service as SpawnService, redact_output
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
 from plangraph.routing_support import background_process_options
 
@@ -27,7 +27,7 @@ def _drain_chunks(chunks, write, observe=lambda size: None):
     def clean(data):
         if isinstance(data, bytes):
             data = data.decode('utf-8')
-        return redact(redact_env_values(data, redact_base)).encode()
+        return redact_output(redact_env_values(data, redact_base)).encode()
     pending = b''
     for chunk in chunks:
         pending += decoder.decode(chunk).encode('utf-8')
@@ -258,7 +258,7 @@ def drain():
             pass
         def emit(line):
             nonlocal output
-            data = supervisor.redact(redact_env_values(line.decode("utf-8", errors="replace"), redact_base)).encode()
+            data = supervisor.redact_output(redact_env_values(line.decode("utf-8", errors="replace"), redact_base)).encode()
             # Bound even a native writer's multi-megabyte unterminated line,
             # but only after redaction so truncation cannot expose a secret suffix.
             data = data[-1024 * 1024:]
@@ -343,7 +343,7 @@ raise SystemExit(code)
                         # Discard the possibly partial first line before displaying a suffix.
                         if size > 262144:
                             text = text.partition('\n')[2]
-                        tail = '\n'.join(redact(redact_env_values(text, redaction_env(overlay_env(os.environ)))).splitlines()[-20:])
+                        tail = '\n'.join(redact_output(redact_env_values(text, redaction_env(overlay_env(os.environ)))).splitlines()[-20:])
                         tail = tail.encode()[-4096:].decode('utf-8', errors='ignore')
                         raise ValueError('spawn supervisor failed; check card and override reason' +
                                          ('\n' + tail if tail else ''))
