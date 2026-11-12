@@ -47,7 +47,7 @@ TOOLS_METADATA = [
             "properties": {
                 "prompt": {"type": "string", "description": "The task instructions for the agent"},
                 "model_or_combo": {"type": "string", "description": "Target model or combo (default 'l2-worker')"},
-                "role": {"type": "string", "enum": ["implement", "review", "orchestrate", "drive"], "default": "implement"},
+                "role": {"type": "string", "enum": ["implement", "review", "orchestrate", "drive", "research"], "default": "implement"},
                 "risk": {"type": "string", "enum": ["low", "normal", "high", "critical"], "default": "normal"},
                 "dry_run": {"type": "boolean", "description": "Plan without starting subprocess", "default": False},
                 "wait_seconds": {"type": "number", "description": "Seconds to wait synchronously before returning", "default": 0.0},
@@ -130,7 +130,7 @@ for _tool in TOOLS_METADATA:
             'review_scope': {'type': 'string', 'enum': ['per-fixer', 'batch']},
             'review_of': {'type': 'string'}, 'no_fallthrough': {'type': 'boolean'},
             'seats': {'type': 'boolean', 'description': 'role review: spawn every seat route picks (per writer part); inline-only legs get card.diff_ref inlined'}})
-        _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review']
+        _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review', 'research']
         _tool['inputSchema']['properties']['model_or_combo']['description'] = 'Exceptional audited override only; requires override_reason'
 TOOLS_METADATA.extend(SESSION_TOOLS)
 
