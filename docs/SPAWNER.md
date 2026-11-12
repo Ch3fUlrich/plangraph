@@ -74,9 +74,9 @@ Default CLI and MCP spawns try healthy SSH overflow hosts when local RAM
 admission refuses, only for repositories in the `public_repos` allowlist.
 Private or unknown repositories queue without copying. Failed targets are
 excluded for that spawn; when none can accept, a queued record lists safe
-refusal reasons. With no overflow config file, ordinary local admission is
-unchanged and no overflow annotation is added. Dry runs do not overflow.
-Local benchmark databases cannot be forwarded.
+refusal reasons. Without overflow config, admitted local runs have no annotation;
+below-floor runs queue with matching `reason` and `overflow_reason`. Dry runs do not overflow.
+Local benchmark databases cannot be forwarded. CLI/MCP use public `admit_spawn` once in the shared wrapper, not the CLI parent; the service persists queued/remote records.
 
 SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel
 lines around the remote spawn JSON. Only the single bracketed JSON receipt is
