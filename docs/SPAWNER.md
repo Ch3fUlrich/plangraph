@@ -32,10 +32,13 @@ directory. Its home fallback is systemd `%h`, independent of the manager's `HOME
 redeploy the service template to apply the guard.
 
 Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; private-key blocks are masked in both modes, and token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
-Both modes apply complete/truncated PEM, Bearer, wrapped prefixed tokens, URL userinfo,
-the Rust token catalog (OpenAI, GitHub, Slack, AWS and Google prefixes), and JWT rules.
+Python and Rust order: complete/truncated PEM, Bearer, wrapped prefixed tokens,
+credential-name assignments (plain mode only), URL userinfo, token catalog, then JWT.
+Wrapped joins run before assignments so masking a first-line value cannot leak its tail.
+The shared token catalog covers OpenAI, GitHub, Slack, AWS and Google prefixes.
 Wrapped bodies share the catalog's alphabets/floors and bounded 4096-byte LF/CRLF joins.
-Source spans must start and end on line boundaries; invalid spans withhold the prompt.
+Source spans must start and end on line boundaries; invalid spans (even empty spans
+at non-line boundaries) withhold the prompt. Rust then applies long-hex/blob rules.
 Only child-produced output text additionally uses `redact_output`: long hex (32+)
 then base64/url-safe blobs (40+, mixing letters and digits), before tail truncation.
 These broad rules never run on prompts or record structures: commit SHAs and hashes

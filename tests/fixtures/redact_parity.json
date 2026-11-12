@@ -55,6 +55,8 @@
   {"id": "jwt", "input_parts": ["ey", "JAb1Ab1Ab", ".Cd2Cd2Cd", ".Ef3Ef3Ef"], "expected": "[REDACTED]", "source": "[REDACTED]"},
   {"id": "wrapped-lf", "input_parts": ["gh", "p_A_-9A_-9\nA_-9A_-9A_-9; retained"], "expected": "[REDACTED]; retained", "source": "[REDACTED]; retained"},
   {"id": "wrapped-crlf", "input_parts": ["xo", "xb-A_-9\r\nA_-9A_; retained"], "expected": "[REDACTED]; retained", "source": "[REDACTED]; retained"},
+  {"id": "assignment-wrapped-lf", "input_parts": ["API_", "KEY=", "gh", "p_", "Ab9_Ab9_Ab9_Ab", "\n", "9_Ab9_Ab9_Ab9_Ab", "\nnext"], "expected": "API_KEY=[REDACTED]", "source": "API_KEY=[REDACTED]", "output": "API_KEY=[REDACTED]"},
+  {"id": "assignment-wrapped-crlf", "input_parts": ["API_", "KEY=", "gh", "p_", "Ab9_Ab9_Ab9_Ab", "\r\n", "9_Ab9_Ab9_Ab9_Ab", "\r\nnext"], "expected": "API_KEY=[REDACTED]", "source": "API_KEY=[REDACTED]", "output": "API_KEY=[REDACTED]"},
   {"id": "two-pem-plain", "input_parts": ["-----BEGIN ", "TEST PRIVATE KEY-----\nfake\n-----END ", "TEST PRIVATE KEY-----\nmid\n-----BEGIN ", "TEST PRIVATE KEY-----\nfake\n-----END ", "TEST PRIVATE KEY-----\n"], "expected": "[REDACTED]\nmid\n[REDACTED]\n", "source": "[REDACTED]\nmid\n[REDACTED]\n"},
   {"id": "pem-diff-plain", "input_parts": ["+-----BEGIN ", "TEST PRIVATE KEY-----\n-fake\n+fake\n------END ", "TEST PRIVATE KEY-----\n+retained\n"], "expected": "+[REDACTED]\n+retained\n", "source": "+[REDACTED]\n+retained\n"},
   {"id": "hex-32", "input_parts": ["ab12ab12ab12ab12", "ab12ab12ab12ab12"], "expected": ["ab12ab12ab12ab12", "ab12ab12ab12ab12"], "output_only": true, "output": "[REDACTED]"},
