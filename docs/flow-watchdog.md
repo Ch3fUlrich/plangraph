@@ -48,6 +48,13 @@ it. Absence is reserved for legacy collectors without this reader; compatibility
 means the checker cannot distinguish a contract-violating omission from legacy
 non-implementation. Within a present block, retain failed evidence explicitly.
 
+Collectors implementing this reader must also declare the top-level boolean
+`session_activity_supported: true` on every snapshot. With that capability marker,
+an omitted `session_activity` reports `busy-quiet unknown=reader`; an explicit
+null does the same. The marker is optional for legacy snapshots, and an omitted
+or false marker never suppresses a present block. This capability declaration
+removes the omission ambiguity above for collectors advertising support.
+
 `now`, transcript mtime and run `ended` use Unix seconds (fractions allowed).
 The injected collector supplies the complete session list and spawner run records,
 including each run's parent session and end time. `ended: null` means still live;
@@ -61,6 +68,11 @@ Ties select the lexicographically greatest run ID, independent of input order.
 Rows with a literal `busy: false` are skipped before validating session ID, role
 or transcript evidence. Missing or non-boolean `busy` cannot establish idleness
 and reports `unknown=sessions`; busy rows still require a nonempty ID and role.
+
+Rows are grouped by nonempty session ID before evaluating alerts. Identical rows
+collapse to one; conflicting rows produce one `busy-quiet session="..." unknown=sessions`
+identity, independent of row order, rather than retaining multiple quiet periods.
+Groups whose rows are all explicitly idle remain skipped without validating details.
 
 Each firing session queues one routing line, with JSON-escaped identifiers:
 `FLOW-WATCHDOG: busy-quiet session="session-1" role="build" quiet_age_seconds=1260 last_ended_run="run-1"`.
@@ -77,6 +89,11 @@ When that run ends, the unchanged quiet period may queue another alert. A live
 run before the first firing never creates a durable skip identity: ending it
 allows the first alert. Ordinary repeated ticks without recovery remain deduped.
 
+Condition-local unknown evidence takes precedence over live-own-run suppression:
+a live run does not hide unreadable transcript or run evidence. Its unknown line
+remains deduplicated until the evidence recovers; with readable evidence, a live
+own run suppresses the quiet alert and clears the standing identity as above.
+
 Collectors must retain failed reads: null, missing or malformed transcript mtime
 and run evidence produce the condition's own `busy-quiet ... unknown=transcript`,
 `unknown=runs`, or `unknown=transcript,runs` line for each affected busy session, never a
@@ -92,6 +109,10 @@ when no per-session line reports unknown run evidence, including an empty sessio
 list or only idle sessions. This fallback retains failed reads without pairing
 the same run failure with a redundant block-level line. Reader, clock and session-list validation failures return their
 own unknown first, without evaluating later evidence blocks.
+Unknown run lines caused by malformed records include `run_record_index=N`, the
+zero-based offending record position (the first for that parent or block).
+This diagnostic is display-only and does not change the standing unknown identity
+when records move; unreadable whole lists have no record index to report.
 Condition-local evaluation requires the outer snapshot to deserialize and pass
 its existing validation. If unrelated required fields or host records are invalid,
 the durable `invalid snapshot` alert supersedes all condition-local unknowns;
@@ -101,6 +122,11 @@ CI counts and a nonpositive budget return `Err` from the validation closure in
 `flow-watchdog.rs`; only its `Ok` arm calls the quiet reader. The legacy findings,
 host messages and stuck-condition messages in that arm are condition alerts,
 not validation errors encoded as messages.
+An invalid outer snapshot is not an observed quiet-session recovery: the checker
+retains existing `busy-quiet` active identities without evaluating new evidence.
+Thus a valid, invalid, valid sequence queues one quiet alert for an unchanged
+period, plus the independent invalid-snapshot alert; a later valid recovery still
+clears the quiet identity normally. Legacy condition identities are unchanged.
 Timestamps must be nonnegative and no later than `now`. No transcript contents,
 live session services, spawner files or LLMs are read by the checker itself; the
 snapshot remains the injectable read boundary. This detects busy sessions waiting

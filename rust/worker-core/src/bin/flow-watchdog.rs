@@ -19,7 +19,7 @@ struct Snapshot {
     hosts: Vec<hosts::Host>,
     #[serde(flatten)]
     stuck: stuck::Snapshot,
-    #[serde(default)]
+    #[serde(flatten)]
     session_activity: quiet::Reader,
     pace: f64,
     budget: f64,
@@ -151,9 +151,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(_) => vec![Alert::from("invalid snapshot".to_owned())],
     };
+    let previous = fs::read_to_string(dir.join("active")).unwrap_or_default();
     let active = messages
         .iter()
         .map(|alert| alert.active.as_str())
+        // Validation failure is not an observed recovery for quiet sessions.
+        .chain(
+            previous
+                .lines()
+                .filter(|line| validated.is_err() && line.starts_with("busy-quiet ")),
+        )
         .collect::<Vec<_>>()
         .join("\n");
     let queue_path = dir.join("queue.json");
@@ -162,7 +169,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e.into()),
     };
-    let previous = fs::read_to_string(dir.join("active")).unwrap_or_default();
     if active != previous {
         for alert in &messages {
             if previous.lines().any(|line| line == alert.active) {
