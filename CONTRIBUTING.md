@@ -58,6 +58,8 @@ The RUN-WORKTREE Python regression exception (D-5062) retires with SPAWNER-RUST-
 Work that covers two plan items is two lanes.
 A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) only for the item's latest verified head; interrupted sends are not blindly replayed.
 Seat records bind manual `tools/seat_verdict.py --key` posting to their recorded `item_key`; a different key or an explicit null is refused before token reads or network I/O. Older records without the field remain usable through the manual CLI. Card/environment identity validation never infers a target from prompt text.
+The `evidence.json` path applies the same refusal to every supplied `item_key` or `key`, including explicit nulls and conflicting aliases; evidence without either identity field retains the legacy manual path. Reviewer tokens belong to the seat's model family, not the `--writer-family` being reviewed.
+When evidence and a record coexist, the record's `item_key` remains binding even if evidence omits or replaces it; an unreadable or malformed companion record is refused.
 
 New production code must be Rust unless explicitly listed in `tools/new_code_allowlist.txt`; the host-readiness source-probe helper is a single-file exception for the pre-gate lane, retired by `SPAWNER-RUST-PORT`.
 

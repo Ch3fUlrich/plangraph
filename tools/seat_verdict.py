@@ -238,9 +238,6 @@ def main(argv=None):
             print(f"seat_verdict: refused, record: {exc}", file=sys.stderr)
             return EXIT_REFUSED
         from_record = True
-        if "item_key" in evidence and evidence["item_key"] != args.key:
-            print("seat_verdict: refused, record item_key does not match --key", file=sys.stderr)
-            return EXIT_REFUSED
     else:
         try:
             evidence = json.loads((args.seat_dir / "evidence.json").read_text("utf-8"))
@@ -251,6 +248,23 @@ def main(argv=None):
         if not isinstance(evidence, dict):
             print("seat_verdict: evidence.json is not an object", file=sys.stderr)
             return EXIT_IO
+        record_path = args.seat_dir / "record.json"
+        if record_path.exists():
+            try:
+                record = json.loads(record_path.read_text("utf-8"))
+                if not isinstance(record, dict):
+                    raise ValueError("record is not an object")
+            except (OSError, ValueError):
+                print("seat_verdict: refused, cannot read record identity", file=sys.stderr)
+                return EXIT_REFUSED
+            if "item_key" in record and record["item_key"] != args.key:
+                print("seat_verdict: refused, record item_key does not match --key", file=sys.stderr)
+                return EXIT_REFUSED
+    for field in ("item_key", "key"):
+        if field in evidence and evidence[field] != args.key:
+            source = "record" if from_record else "evidence"
+            print(f"seat_verdict: refused, {source} {field} does not match --key", file=sys.stderr)
+            return EXIT_REFUSED
     if args.head and not from_record:
         print("seat_verdict: refused, --head only for record seats", file=sys.stderr)
         return EXIT_REFUSED

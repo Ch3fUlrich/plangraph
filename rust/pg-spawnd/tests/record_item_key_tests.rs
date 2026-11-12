@@ -11,6 +11,9 @@ pub struct Fixture {
 }
 impl Fixture {
     pub fn new(item: Option<&str>) -> Self {
+        Self::with_events(item, json!([]))
+    }
+    pub fn with_events(item: Option<&str>, events: Value) -> Self {
         let state = TempDir::new();
         for (name, value) in [
             (
@@ -19,7 +22,7 @@ impl Fixture {
             ),
             (
                 "launch",
-                json!({"argv":["/bin/sh","-c","exit 0"],"cwd":state.path(),"env":{"PROMPT":"p"},"stdin":null,"prompt":"p","warnings":[],"events":[]}),
+                json!({"argv":["/bin/sh","-c","exit 0"],"cwd":state.path(),"env":{"PROMPT":"p"},"stdin":null,"prompt":"p","warnings":[],"events":events}),
             ),
         ] {
             let path = state.path().join(name);
@@ -38,6 +41,13 @@ impl Fixture {
             .spawn()
             .unwrap();
         let mut client = McpClient::connect(&socket);
+        // Spawn requests wait up to five seconds; the shared client's two-second
+        // read deadline must not expire before the requested wait completes.
+        client
+            .stream
+            .get_mut()
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
         client.initialize();
         Self {
             _state: state,

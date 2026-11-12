@@ -127,16 +127,39 @@ fn record_item_key_ignores_prompt_mentions() {
 
 #[test]
 fn record_item_key_missing_event_is_persisted() {
-    for dry in [false, true] {
-        let mut f = Fixture::new(None);
+    for (dry, supplied) in [false, true].into_iter().flat_map(|dry| {
+        [false, true]
+            .into_iter()
+            .map(move |supplied| (dry, supplied))
+    }) {
+        let expected = json!({"event":"seat_item_missing","level":"warning"});
+        let existing = json!({"event":"existing"});
+        let mut f = Fixture::with_events(
+            None,
+            if supplied {
+                json!([existing, expected])
+            } else {
+                json!([existing])
+            },
+        );
         let r = payload(f.call(
             "spawn",
             json!({"prompt":"p", "card":{"estimate_tokens":100}, "role":"review", "dry_run":dry, "wait_seconds":5}),
         ));
         assert_eq!(r["status"], if dry { "dry_run" } else { "completed" });
         assert_eq!(r["item_key"], Value::Null);
-        let expected = json!({"event":"seat_item_missing","level":"warning"});
         assert!(r["events"].as_array().unwrap().contains(&expected), "{r}");
+        assert_eq!(
+            r["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|e| **e == expected)
+                .count(),
+            1,
+            "{r}"
+        );
+        assert!(r["events"].as_array().unwrap().contains(&existing), "{r}");
         let stored: Value = serde_json::from_str(
             &std::fs::read_to_string(
                 f._state
@@ -149,5 +172,6 @@ fn record_item_key_missing_event_is_persisted() {
         )
         .unwrap();
         assert!(stored["events"].as_array().unwrap().contains(&expected));
+        assert_eq!(stored["events"], r["events"]);
     }
 }

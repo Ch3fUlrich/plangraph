@@ -2,7 +2,7 @@
 //! diagnostic output is intentionally not ported; malformed rows are skipped.
 use crate::errors::ToolError;
 use pg_worker_core::run::record::{run_dir, valid_run_id};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::io::Read;
 use std::path::Path;
 
@@ -22,6 +22,40 @@ pub(crate) fn valid_item(value: &str) -> bool {
         && id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+}
+
+pub(crate) fn annotate_item(base: &mut Value, card: &Value, events: &mut Vec<Value>) {
+    let item = [&card["item_key"], &card["item"]]
+        .into_iter()
+        .find(|v| !v.is_null() && v.as_str() != Some(""))
+        .cloned()
+        .or_else(|| {
+            std::env::var("PLANGRAPH_SPAWN_ITEM")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(Value::String)
+        });
+    base["item_key"] = match item {
+        Some(Value::String(s)) if valid_item(&s) => json!(s),
+        Some(_) => {
+            if base.get("warnings").is_none() {
+                base["warnings"] = json!([]);
+            }
+            base["warnings"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("invalid item_key; stored as null"));
+            Value::Null
+        }
+        None => Value::Null,
+    };
+    let missing = json!({"event":"seat_item_missing","level":"warning"});
+    if base["item_key"].is_null()
+        && matches!(base["role"].as_str(), Some("review" | "judge"))
+        && !events.contains(&missing)
+    {
+        events.push(missing);
+    }
 }
 
 #[cfg(all(test, unix))]

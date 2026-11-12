@@ -1,6 +1,89 @@
 use super::*;
 
 #[test]
+fn queue_refusal_preserves_missing_seat_events() {
+    for role in ["review", "judge"] {
+        for dry in [false, true] {
+            missing_seat_events(role, dry, false);
+        }
+    }
+    missing_seat_events("judge", false, true);
+}
+
+// Judge is not admitted by the public routing API; exercise its run-record path.
+fn missing_seat_events(role: &str, dry: bool, capture_refused: bool) {
+    use pg_worker_core::run::{group::Confinement, supervise::Config, supervisor::SupervisorCfg};
+    let dir = std::env::temp_dir().join(new_run_id());
+    std::fs::create_dir(&dir).unwrap();
+    if capture_refused {
+        std::os::unix::fs::symlink(&dir, dir.join(".git")).unwrap();
+    }
+    let mut cfg = SupervisorCfg::new(Config {
+        state_dir: dir.clone(),
+        confinement: Confinement::Plain,
+        ..Config::default()
+    });
+    cfg.max_runs = 1;
+    cfg.max_queued = 0;
+    let runs = Runs::new(Arc::new(Supervisor::new(cfg).unwrap()));
+    let held = new_run_id();
+    runs.supervisor
+        .start(RunSpec {
+            run_id: held.clone(),
+            job_id: new_job_id(),
+            program: "/bin/sleep".into(),
+            args: vec!["60".into()],
+            cwd: dir.clone(),
+            env: vec![],
+            stdin: None,
+            base: Default::default(),
+            events: vec![],
+            finish: None,
+        })
+        .unwrap();
+    let args = json!({"prompt":"p","card":{"item_key":"invalid"},"dry_run":dry});
+    let expected = json!({"event":"seat_item_missing","level":"warning"});
+    let existing = json!({"event":"existing"});
+    let result = runs.spawn_using(
+        &dir,
+        args.as_object().unwrap(),
+        "fixture",
+        json!(role),
+        json!({"first_leg":{"family":"f"}}),
+        |_, _| {
+            Ok(crate::launch::LaunchSpec {
+                argv: vec!["/bin/true".into()],
+                cwd: dir.clone(),
+                env: BTreeMap::new(),
+                stdin: Some("p".into()),
+                prompt: Some("p".into()),
+                warnings: None,
+                events: Some(vec![existing.as_object().unwrap().clone()]),
+            })
+        },
+    );
+    runs.supervisor.cancel(&held);
+    assert!(runs
+        .supervisor
+        .wait_finished(&held, Duration::from_secs(15)));
+    let result = result.unwrap_or_else(|_| panic!("spawn failed"));
+    assert_eq!(result["status"], if dry { "dry_run" } else { "refused" });
+    if !dry {
+        if capture_refused {
+            assert_eq!(result["reason"], "gitconfig_capture_refused");
+        } else {
+            assert_eq!(result["refusal"], "QueueFull");
+        }
+    }
+    assert_eq!(result["item_key"], Value::Null);
+    assert_eq!(result["events"], json!([existing, expected]));
+    let saved = crate::records::read_record(&dir, &result["run_id"])
+        .unwrap_or_else(|_| panic!("missing refusal record"));
+    assert_eq!(saved["events"], result["events"]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn launch_booking_carries_later_id_into_finish() {
     let dir = std::env::temp_dir().join(new_run_id());
     let prior = json!({"status":"failed","exit_code":7});

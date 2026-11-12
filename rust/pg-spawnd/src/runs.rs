@@ -1,4 +1,5 @@
-//! Local runs; Python retains witnesses, retries, continuation and delivery.
+//! Local runs; witnesses, retry/fall-through, writer checks/continuation, delivery,
+//! dispatch refusal and D3622 liveness remain unported; packs/env use Python.
 use crate::{errors::ToolError, placement::Args};
 use pg_worker_core::run::{
     record::{new_job_id, new_run_id, RunRecord, Status},
@@ -12,6 +13,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+
 pub(crate) struct Runs {
     pub supervisor: Arc<Supervisor>,
     pub jobs: Mutex<BTreeMap<String, String>>,
@@ -86,50 +88,27 @@ impl Runs {
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
-        if !dry && crate::gitconfig_guard::writer_role(&role) {
-            let dir = crate::gitconfig_guard::run_dir(state, &run_id)
-                .map_err(|_| internal("invalid run id"))?;
-            match crate::gitconfig_guard::capture(&launch.cwd, &dir) {
-                Ok(armed) => base["gitconfig_guard"] = json!(armed),
-                Err(_) => {
-                    base["reason"] = json!("gitconfig_capture_refused");
-                    return Ok(create(state, &run_id, host, base, Status::Refused)?.to_value());
-                }
-            }
-        }
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
         }
-        let item = [&args["card"]["item_key"], &args["card"]["item"]]
-            .into_iter()
-            .find(|v| !v.is_null() && v.as_str() != Some(""))
-            .cloned()
-            .or_else(|| {
-                std::env::var("PLANGRAPH_SPAWN_ITEM")
-                    .ok()
-                    .filter(|s| !s.is_empty())
-                    .map(Value::String)
-            });
-        base["item_key"] = match item {
-            Some(Value::String(s)) if crate::records::valid_item(&s) => json!(s),
-            Some(_) => {
-                if base.get("warnings").is_none() {
-                    base["warnings"] = json!([]);
-                }
-                let warnings = base["warnings"].as_array_mut().unwrap();
-                warnings.push(json!("invalid item_key; stored as null"));
-                Value::Null
-            }
-            None => Value::Null,
-        };
         let mut events: Vec<Value> = launch
             .events
             .unwrap_or_default()
             .into_iter()
             .map(Value::Object)
             .collect();
-        if base["item_key"].is_null() && matches!(role.as_str(), Some("review" | "judge")) {
-            events.push(json!({"event":"seat_item_missing","level":"warning"}));
+        crate::records::annotate_item(&mut base, &args["card"], &mut events);
+        if !dry && crate::gitconfig_guard::writer_role(&role) {
+            let dir = crate::gitconfig_guard::run_dir(state, &run_id)
+                .map_err(|_| internal("invalid run id"))?;
+            match crate::gitconfig_guard::capture(&launch.cwd, &dir) {
+                Ok(armed) => base["gitconfig_guard"] = json!(armed),
+                Err(_) => {
+                    base["events"] = json!(events);
+                    base["reason"] = json!("gitconfig_capture_refused");
+                    return Ok(create(state, &run_id, host, base, Status::Refused)?.to_value());
+                }
+            }
         }
         let attempt_id = book_attempt(&mut base, &leg);
         if dry {
@@ -164,7 +143,7 @@ impl Runs {
                     .collect(),
                 stdin: launch.stdin.map(String::into_bytes),
                 base: base.as_object().unwrap().clone(),
-                events,
+                events: events.clone(),
                 finish: Some(Box::new(move |record, status| {
                     finish(record, status, &leg, attempt_id)
                 })),
@@ -172,6 +151,7 @@ impl Runs {
             match self.supervisor.start(spec) {
                 Ok(()) => {}
                 Err(SupervisorError::QueueFull) => {
+                    base["events"] = json!(events);
                     base["refusal"] = json!("QueueFull");
                     base["error"] = json!("run queue full");
                     base["exit_code"] = json!(2);
@@ -360,8 +340,10 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
             if result.is_ok() {
                 record.set("seat_dir", json!(record.path().with_file_name("seat")));
             } else {
-                let error = json!("review artifacts unavailable");
-                record.set("review_artifact_error", error);
+                record.set(
+                    "review_artifact_error",
+                    json!("review artifacts unavailable"),
+                );
             }
         }
         let role = value["role"].as_str().unwrap_or("");
@@ -386,8 +368,11 @@ mod record_tests;
 #[path = "runs_tests.rs"]
 mod tests;
 fn wait_duration(value: Option<&Value>) -> Duration {
-    let seconds = value.and_then(Value::as_f64).unwrap_or(0.0);
     #[allow(clippy::manual_clamp)]
-    let seconds = seconds.max(0.0).min(3600.0);
+    let seconds = value
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        .max(0.0)
+        .min(3600.0);
     Duration::from_secs_f64(seconds)
 }

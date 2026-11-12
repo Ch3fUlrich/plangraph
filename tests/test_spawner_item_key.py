@@ -1,6 +1,7 @@
 """Validated spawn identity is persisted without inferring keys from prompts."""
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -102,17 +103,110 @@ def test_poster_refusals_are_hermetic(tmp_path, monkeypatch, fault, expected):
 
 
 @pytest.mark.parametrize('stored_key', [KEY, None])
-def test_poster_rejects_foreign_key(tmp_path, monkeypatch, capsys, stored_key):
+@pytest.mark.parametrize('token_present', [False, True])
+def test_poster_rejects_foreign_key(tmp_path, monkeypatch, capsys, stored_key,
+                                    token_present):
     from test_seat_record_fixes import rec_dir, argv_for, sv
     seat = rec_dir(tmp_path, 'run-' + '1' * 32, item_key=stored_key)
     args = argv_for(seat, writers='google')
     args[args.index('--key') + 1] = OTHER_KEY
     args.remove('--dry-run')
     args.extend(['--url', 'http://keeper.invalid'])
-    (tmp_path / 'reviewer-xiaomi.token').write_text('dummy\n')
+    # The seat is Xiaomi; --writer-family names the reviewed writer, not the token.
+    token = tmp_path / 'reviewer-xiaomi.token'
+    if token_present:
+        token.write_text('dummy\n')
+    assert token.exists() is token_present
+    read_text = Path.read_text
+
+    def guarded_read(path, *args, **kwargs):
+        assert path != token, 'foreign key must be refused before token reads'
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'read_text', guarded_read)
     monkeypatch.setattr(sv, 'send', lambda *a: pytest.fail('foreign key must not post'))
     assert sv.main(args) == sv.EXIT_REFUSED
     assert 'item_key does not match --key' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('identity', [
+    {'item_key': KEY}, {'key': KEY}, {'item_key': None}, {'key': None},
+    {'item_key': OTHER_KEY, 'key': KEY}, {'item_key': KEY, 'key': OTHER_KEY},
+    {'item_key': [], 'key': OTHER_KEY}, {'item_key': OTHER_KEY, 'key': {}},
+])
+@pytest.mark.parametrize('with_record', [False, True])
+def test_poster_rejects_foreign_evidence_identity(tmp_path, monkeypatch, capsys,
+                                                identity, with_record):
+    from test_seat_record_fixes import rec_dir, sv
+    seat = (rec_dir(tmp_path, 'run-' + '1' * 32, item_key=KEY)
+            if with_record else tmp_path / 'seat')
+    seat.mkdir(exist_ok=True)
+    (seat / 'evidence.json').write_text(json.dumps(
+        dict(served_model='gemini-3-pro', **identity)))
+    (seat / 'review.txt').write_text('VERDICT: FIX\n')
+    token = tmp_path / 'reviewer-google.token'
+    assert not token.exists()
+    read_text = Path.read_text
+
+    def guarded_read(path, *args, **kwargs):
+        assert path != token, 'foreign identity must be refused before token reads'
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'read_text', guarded_read)
+    monkeypatch.setattr(sv, 'send', lambda *a: pytest.fail('foreign identity must not post'))
+    assert sv.main(['--key', OTHER_KEY, '--seat-dir', str(seat),
+                    '--writer-family', 'xiaomi', '--token-dir', str(tmp_path),
+                    '--url', 'http://keeper.invalid']) == sv.EXIT_REFUSED
+    assert 'does not match --key' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('identity', [{}, {'item_key': KEY}, {'key': KEY},
+                                     {'item_key': KEY, 'key': KEY}])
+@pytest.mark.parametrize('with_record', [False, True])
+def test_poster_accepts_matching_or_legacy_evidence(tmp_path, capsys, identity,
+                                                  with_record):
+    from test_seat_record_fixes import rec_dir, sv
+    seat = (rec_dir(tmp_path, 'run-' + '1' * 32, item_key=KEY)
+            if with_record else tmp_path)
+    (seat / 'evidence.json').write_text(json.dumps(
+        dict(served_model='gemini-3-pro', **identity)))
+    (seat / 'review.txt').write_text('VERDICT: FIX\n')
+    assert sv.main(['--key', KEY, '--seat-dir', str(seat),
+                    '--writer-family', 'xiaomi', '--token-dir', str(tmp_path),
+                    '--dry-run']) == 0
+    assert json.loads(capsys.readouterr().out)['body']['key'] == KEY
+
+
+@pytest.mark.parametrize('stored_key', [KEY, None])
+@pytest.mark.parametrize('identity', [{}, {'item_key': OTHER_KEY, 'key': OTHER_KEY}])
+def test_evidence_cannot_override_record_identity(tmp_path, monkeypatch, capsys,
+                                                stored_key, identity):
+    from test_seat_record_fixes import rec_dir, sv
+    seat = rec_dir(tmp_path, 'run-' + '1' * 32, item_key=stored_key)
+    (seat / 'evidence.json').write_text(json.dumps(
+        dict(served_model='gemini-3-pro', **identity)))
+    (seat / 'review.txt').write_text('VERDICT: FIX\n')
+    monkeypatch.setattr(sv, 'send', lambda *a: pytest.fail('record identity must not be overridden'))
+    assert sv.main(['--key', OTHER_KEY, '--seat-dir', str(seat),
+                    '--writer-family', 'xiaomi', '--token-dir', str(tmp_path),
+                    '--dry-run']) == sv.EXIT_REFUSED
+    assert 'record item_key does not match --key' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('record', ['{', '[]', 'null', 'directory'])
+def test_evidence_with_unreadable_record_identity_is_refused(tmp_path, capsys, record):
+    from test_seat_record_fixes import sv
+    (tmp_path / 'evidence.json').write_text(json.dumps({'served_model': 'gemini-3-pro'}))
+    (tmp_path / 'review.txt').write_text('VERDICT: FIX\n')
+    path = tmp_path / 'record.json'
+    if record == 'directory':
+        path.mkdir()
+    else:
+        path.write_text(record)
+    assert sv.main(['--key', KEY, '--seat-dir', str(tmp_path),
+                    '--writer-family', 'xiaomi', '--token-dir', str(tmp_path),
+                    '--dry-run']) == sv.EXIT_REFUSED
+    assert 'cannot read record identity' in capsys.readouterr().err
 
 
 def test_poster_accepts_matching_record_key(tmp_path, capsys):
@@ -127,6 +221,10 @@ def test_poster_accepts_matching_record_key(tmp_path, capsys):
 @pytest.mark.parametrize('key', [KEY, None])
 def test_terminal_save_uses_only_verdict_outbox(tmp_path, monkeypatch, key):
     from plangraph.spawner import notify
+    root = Path(__file__).resolve().parents[1]
+    flag = 'PLANGRAPH_SEAT_AUTOPOST'
+    assert all(flag not in path.read_text() for directory in
+               (root / 'src', root / 'tools') for path in directory.rglob('*.py'))
     monkeypatch.delenv('PLANGRAPH_SPAWN_NOTIFY_CMD', raising=False)
     monkeypatch.setenv('PLANGRAPH_SEAT_AUTOPOST', '1')
     calls = []
@@ -142,6 +240,23 @@ def test_terminal_save_uses_only_verdict_outbox(tmp_path, monkeypatch, key):
     assert 'seat_autopost_attempted' not in record
     assert 'events' not in record
     assert not (path.parent / 'seat-autopost.json').exists()
+
+
+@pytest.mark.parametrize('dispatch', [False, True])
+def test_spawn_missing_seat_identity_is_persisted(tmp_path, monkeypatch, dispatch):
+    service = _service(tmp_path, monkeypatch)
+    if dispatch:
+        service = spawn_service(_Runner(), state=tmp_path)
+    result = asyncio.run(service.spawn(card={'estimate_tokens': 100},
+        prompt=f'Review {KEY} now', role='review', writer_families=('google',),
+        dry_run=True, wait_seconds=5))
+    assert result['role'] == 'review'
+    assert result['item_key'] is None
+    assert result['events'].count(MISSING_EVENT) == 1
+    stored = json.loads(service._path(result['run_id']).read_text())
+    assert stored['role'] == 'review'
+    assert stored['item_key'] is None
+    assert stored['events'].count(MISSING_EVENT) == 1
 
 
 @pytest.mark.parametrize('positional', [False, True])
