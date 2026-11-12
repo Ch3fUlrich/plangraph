@@ -253,3 +253,47 @@ def test_inheritance_tests_use_proc():
     rust = (root / 'rust/worker-core/src/run/group_tests.rs').read_text()
     assert 'cat /proc/self/oom_score_adj' in rust
     assert '/proc/self/oom_score_adj' in inspect.getsource(test_linux_child_oom_inherits_before_exec)
+
+
+@pytest.mark.parametrize('signal', ['length', 'stdout-error', 'stderr-error'])
+def test_reasoning_limit_telemetry_survives_monitor(tmp_path, monkeypatch, signal):
+    output = stream(('step_finish', {'reason': 'length',
+                                    'tokens': {'output': 0, 'reasoning': 32768}}))
+    error = 'Response still truncated after two output token limit continuations'
+    stderr = ''
+    if signal == 'stdout-error':
+        output += '\n' + json.dumps({'type': 'error', 'error': {'type': 'output-limit', 'message': error}})
+    elif signal == 'stderr-error':
+        output, stderr = '', 'Error: output-limit: ' + error
+    job = _monitor(tmp_path, monkeypatch, output, stderr=stderr)
+    assert any(e['event'] == 'opencode_reasoning_exhausted' for e in job.events)
+    if signal != 'stderr-error':
+        step = next(e for e in job.events if e['event'] == 'opencode_step_finish')
+        assert (step['finish_reason'], step['output_tokens'], step['reasoning_tokens']) == ('length', 0, 32768)
+
+
+@pytest.mark.parametrize('part', [
+    {'reason': 'length'}, {'reason': 'length', 'tokens': {'output': False}},
+    {'reason': 'length', 'tokens': {'output': 1}},
+    {'reason': 'stop', 'tokens': {'output': 0}},
+])
+def test_reasoning_limit_requires_explicit_zero_length(tmp_path, monkeypatch, part):
+    job = _monitor(tmp_path, monkeypatch, stream(('step_finish', part)), stderr='')
+    assert not any(e['event'] == 'opencode_reasoning_exhausted' for e in job.events)
+
+
+def test_later_answer_recovers_reasoning_exhaustion(tmp_path, monkeypatch):
+    output = stream(('step_finish', {'reason': 'length', 'tokens': {'output': 0}}),
+                    ('text', {'text': 'Complete answer'}),
+                    ('step_finish', {'reason': 'stop', 'tokens': {'output': 3}}))
+    job = _monitor(tmp_path, monkeypatch, output, stderr='', rc=0)
+    assert job.status == 'completed' and job.stdout == 'Complete answer'
+    assert not any(e['event'] == 'opencode_reasoning_exhausted' for e in job.events)
+
+
+@pytest.mark.parametrize('config', [None, [], {'providers': []}, {'providers': {'mimo': None}},
+    {'providers': {'mimo': {'package': '@opencode/ai/providers/openai-compatible',
+                          'models': {'mimo-v2.6-flash': {'body': []}}}}}])
+def test_reasoning_cap_malformed_config_unavailable(config):
+    from plangraph.spawner.opencode_answer import cap_reasoning
+    assert not cap_reasoning({'OPENCODE_CONFIG_CONTENT': json.dumps(config)}, 'mimo/mimo-v2.6-flash')

@@ -1,0 +1,1 @@
+- OpenCode inline reviews retain step finish/token diagnostics and retry zero-output reasoning exhaustion once with MiMo thinking disabled. A repeated failure or unavailable cap ends with terminal `reasoning_output_limit`, without unchanged retries or spare-leg fall-through; normal runs and non-review roles are unchanged.

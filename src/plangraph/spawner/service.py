@@ -320,20 +320,9 @@ class SpawnService(SeatSpawnMixin):
                     launched = True
                     leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, record['run_id'])
                     worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
-                    job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
+                    job = await self._launch_leg(record, chosen, prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
                         prompt_record=(self._path(record['run_id']).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
-                    self._running_records[job.job_id] = record
-                    record['job_id'] = job.job_id
-                    record['cwd'] = getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd())
-                    process = self.runner._processes.get(job.job_id)
-                    record['pid'] = process.pid if process else None
-                    record['pid_start'] = getattr(self.runner, '_owned', {}).get(job.job_id, {}).get('pid_start')   # a CLI cancel proves the root by it
-                    record.update({k: v for k, v in getattr(self.runner, '_owned', {}).get(job.job_id, {}).items() if k in ('job_name', 'escapees')})
-                    self._save(record)
-                    task = self.runner._tasks.get(job.job_id)
-                    if task:
-                        await asyncio.shield(task)
                     stop = self.runner.provider_responses.get(job.job_id)
                     if terminal_record(record, job):
                         break

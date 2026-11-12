@@ -73,6 +73,32 @@ Only a `stop` with non-blank pending text clears that block; empty or
 whitespace-only stops and tool calls cannot launder truncation into a verdict.
 A completed `stop` answer remains eligible.
 
+### Reasoning-only output exhaustion (MIMO-REASONING-OUTPUT-LIMIT)
+
+Before decoding display stdout, `opencode_answer.record_steps` retains each
+`step_finish` as an `opencode_step_finish` event with `finish_reason`,
+`output_tokens` and `reasoning_tokens`; absent usage remains null, not zero.
+Structured `output-limit` errors and the matching OpenCode stderr diagnostic
+add `opencode_output_limit`. These are diagnostic events, not served-model witnesses.
+A final `length` step with output zero, or that error with no text/output,
+adds `opencode_reasoning_exhausted`; later completed output is not retried.
+The monitor's events reach `record.json` through either dispatch path.
+
+For an OpenCode inline `review`, shared `SeatSpawnMixin._launch_leg` retries
+once with the same prompt, model and harness, never unchanged. MiMo v2.6 Flash
+and Pro use model-local `body.thinking.type=disabled` (zero reasoning budget)
+in the isolated child config; the root config and other roles are unchanged.
+An already-disabled or unsupported control is unavailable, not an unchanged retry.
+The failed attempt and its events stay in the record, with `reasoning_retry=1`
+saved before the retry. Tool denial, fresh job isolation and the original review
+wall deadline remain in force. No new retry loop or provider-health booking is added.
+Repeated zero-output exhaustion, an unavailable cap, or no remaining retry budget
+ends the run `failed` with terminal `reason: reasoning_output_limit`; no spare leg
+or writer continuation runs. Cancellation, timeout and kill-incomplete still win.
+Normal output, nonzero-output truncation and non-review roles retain existing behavior.
+Hermetic coverage is in `tests/test_spawner_review_tools_inline.py` and
+`tests/test_spawner_runner_answer.py`; the live #768 seat is an after-merge operator check.
+
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:
 - `verdict.json` audits outcomes; `verdict.delivered` stops replay.
