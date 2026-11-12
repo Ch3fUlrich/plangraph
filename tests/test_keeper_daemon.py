@@ -116,43 +116,47 @@ def test_mock_exit_waits_before_recorder(monkeypatch, node_name, request):
 def test_leak_guard_tracks_unnamed_worker_and_joins(
         monkeypatch, shape, survives, keeper_thread_guard):
     import functools
+    entered, release = threading.Event(), threading.Event()
 
     def target(self=None):
-        pass
+        entered.set()
+        release.wait()
     target.__module__ = "keeper_util" if shape == "keeper_util" else __name__
     if shape == "partial":
         target = functools.partial(target)
     elif shape == "lambda":
-        target = lambda: None
+        target = lambda: (entered.set(), release.wait())
     elif shape == "bound":
         target = type("Worker", (), {"run": target})().run
 
-    class Worker:
-        name = "worker"
-        daemon = True
+    worker = threading.Thread(target=target, name="worker", daemon=True)
+    unrelated = threading.Thread(target=release.wait, daemon=True)
+    real_join = worker.join
+    joins, unrelated_joins = [], []
 
-        def __init__(self, target):
-            self._target, self.alive, self.joins = target, True, 0
+    def join(timeout):
+        joins.append(timeout)
+        if not survives:
+            release.set()
+        real_join(timeout=0 if survives else timeout)
 
-        def is_alive(self):
-            return self.alive
-
-        def join(self, timeout):
-            self.joins += 1
-            self.alive = survives
-
-    worker, unrelated = Worker(target), Worker(lambda: None)
-    visible = [unrelated]
+    monkeypatch.setattr(worker, "join", join)
+    monkeypatch.setattr(unrelated, "join", lambda timeout: unrelated_joins.append(timeout))
     expected = (pytest.raises(AssertionError, match="Leaked keeper threads: worker")
                 if survives else nullcontext())
-    with monkeypatch.context() as patch:
-        patch.setattr(threading, "enumerate", lambda: list(visible))
+    unrelated.start()
+    try:
         with expected:
             with keeper_thread_guard():
-                visible.append(worker)
+                worker.start()
+                assert entered.wait(timeout=5)
                 assert worker.is_alive()
-        assert worker.joins == 1
-        assert unrelated.joins == 0
+        assert joins == [5]
+        assert unrelated_joins == []
+    finally:
+        release.set()
+        real_join(timeout=5)
+        threading.Thread.join(unrelated, timeout=5)
 
 
 @pytest.mark.parametrize("opt_in", [False, True])

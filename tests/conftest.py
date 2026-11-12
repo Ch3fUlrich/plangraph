@@ -89,7 +89,7 @@ def keeper_thread_guard():
 
 @pytest.fixture(autouse=True)
 def no_leaked_keeper_threads(keeper_thread_guard):
-    """Bounded-join threads born during each test, regardless of target or name."""
+    """Bounded-join keeper-owned starts, not session-runtime executor threads."""
     with keeper_thread_guard():
         yield
 
