@@ -144,3 +144,28 @@ acceptance, gate path, tier, PLAN key, preflight, stale green (rule 3.19).
 Python imports the existing strict seat parser/coverage and trailer door table;
 additional conservative path categories cover docs-map, deployment, allowlists,
 redact/auth and gate/check/scrub tools without copying the door list.
+
+The facts object and every CI/seat record require exactly the keys above;
+missing, renamed, non-string or extra keys refuse (`ci_pending` for facts/CI,
+`seat_missing` for seats). Top-level schema validation precedes the semantic
+refusal order; CI/seat record schemas are validated at their respective stages.
+Wrong value types, UNKNOWN values and duplicate evidence never yield GO.
+Required/check names, writer/seat families, severity lists and normalized path
+lists must be unique; every supplied seat must independently parse as accepting.
+Malformed CI values refuse `ci_pending`; malformed writer families refuse
+`seat_family_is_writer`; malformed seat pinning/findings/verdicts refuse
+`seat_pinned`/`finding_open`/`seat_missing`, respectively. Duplicate seat families
+refuse `seat_missing`, duplicate changed paths refuse `gate_path`, and duplicate
+main-delta paths refuse `stale_green`. LOW-only findings remain nonblocking.
+Item/PLAN keys must match `[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?`, with no UNKNOWN
+component; invalid keys refuse `plan_key_mismatch`. String-list entries must be
+nonempty, printable and have no surrounding whitespace. Paths use the same
+case/separator/dot normalization for both evidence and imported door patterns.
+Both door tables must be nonempty tuple/list collections of valid path patterns;
+the authority's existing root globs `roles*` and `scopes*` are intentional
+slash-less exceptions. Missing/malformed/duplicate table entries refuse
+`gate_path`, including when a table is accidentally replaced by a plain string.
+Duplicate JSON object keys at any depth and undecodable or excessively nested
+JSON refuse `ci_pending` without a traceback. Decision tests block file,
+environment and clock access inside the real parser/coverage dependency calls,
+in addition to subprocess, network and verdict-post effects.

@@ -1,10 +1,15 @@
 """Offline decision contract: no subprocess, network, keeper or merge effects."""
+import builtins
 import copy
+import datetime
+import io
 import json
+import os
 from pathlib import Path
 import socket
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -22,6 +27,34 @@ def no_effects(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", forbidden)
     monkeypatch.setattr(socket, "socket", forbidden)
     monkeypatch.setattr(core.seat_verdict, "send", forbidden)
+    real_decide = core.decide
+
+    class NoEnvironment:
+        get = __getitem__ = __setitem__ = __iter__ = __contains__ = forbidden
+
+    class NoDatetime(datetime.datetime):
+        now = utcnow = today = forbidden
+
+    class NoDate(datetime.date):
+        today = forbidden
+
+    def guarded_decide(facts):
+        # Limit global guards to the call: pytest and the CLI may use files,
+        # environment and clocks outside decide(), but its real imports may not.
+        with monkeypatch.context() as guard:
+            guard.setattr(builtins, "open", forbidden)
+            guard.setattr(io, "open", forbidden)
+            guard.setattr(os, "open", forbidden)
+            guard.setattr(os, "environ", NoEnvironment())
+            guard.setattr(os, "getenv", forbidden)
+            for name in ("time", "time_ns", "monotonic", "monotonic_ns", "perf_counter"):
+                guard.setattr(time, name, forbidden)
+            guard.setattr(datetime, "datetime", NoDatetime)
+            guard.setattr(datetime, "date", NoDate)
+            return real_decide(facts)
+
+    monkeypatch.setattr(core, "decide", guarded_decide)
+    monkeypatch.setattr(merge_gate, "decide", guarded_decide)
 
 
 @pytest.fixture
@@ -94,7 +127,8 @@ def test_finding_open(facts, severity):
     "src/plangraph/spawner/auth.py", "TOOLS/SEAT_VERDICT.PY", "../src/x.rs",
     ".filesize-baseline", ".gitleaks.toml", "tools/ci_select.py",
     "tools/preflight.py", "tools/red_proof.py", "src/auth/session.rs",
-    "rust/x/redact/pattern.rs", "configuration/allowlists/paths.json"])
+    "rust/x/redact/pattern.rs", "configuration/allowlists/paths.json",
+    "tools/public_scrub.py"])
 def test_gate_path(facts, path):
     facts["changed_paths"] = [path]
     refuse(facts, "gate_path")
@@ -129,6 +163,7 @@ def test_strict_verdict_reused(facts, verdict):
 
 @pytest.mark.parametrize("field,value,code", [
     ("ci_checks", [], "ci_pending"), ("required_checks", [], "ci_pending"),
+    ("required_checks", ["ci-gate", "ci-gate"], "ci_pending"),
     ("writer_families", [], "seat_family_is_writer"),
     ("plan_key", "", "plan_key_mismatch"), ("tier", "unknown", "tier_high"),
     ("preflight_present", "true", "preflight_missing"),

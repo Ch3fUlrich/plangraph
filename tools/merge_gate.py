@@ -23,7 +23,7 @@ def main(argv=None):
             raise ValueError
         facts = json.loads(Path(args[0]).read_text(encoding="utf-8"),
                            object_pairs_hook=_unique_object)
-    except (OSError, ValueError, UnicodeError):
+    except (OSError, ValueError, UnicodeError, RecursionError):
         print("REFUSE ci_pending facts unavailable or invalid")
         return 1
     result = decide(facts)
