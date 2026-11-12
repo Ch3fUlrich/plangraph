@@ -7,6 +7,8 @@ tests/**/test_*.py | Regression tests at any depth (D-4691: tests allowed)
 src/plangraph/web/*.js | browser UI glue (D-4808, D-4811)
 configuration/opencode/plugins/**/*.mjs | OpenCode plugin byte copy from AutoOS (interim, D-4844)
 tests/**/_*.py | test-only helper modules imported by tests/**/test_*.py (D-4821, D-4870)
+src/plangraph/keeper/store_host_samples.py | keeper PG store; keeper is Python; D-5038
+src/plangraph/keeper/host_samples_rollup.py | keeper PG store; keeper is Python; D-5038
 src/plangraph/spawner/ps_host_doctor.py | lane started before the gate (D-5062, rule 9.14), retired by SPAWNER-RUST-PORT
 tools/preflight.py | CI/tool helper (D-5062, rule 9.14), tools exception
 tools/preflight_private_scrub.py | CI/tool helper (D-5062, rule 9.14), tools exception

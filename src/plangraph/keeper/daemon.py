@@ -56,6 +56,17 @@ def _backup_prune_loop(settings: dict, stop: threading.Event, log=None) -> None:
             break
 
 
+def _host_samples_loop(server, stop):
+    while not stop.is_set():
+        try:
+            with server.lock:
+                server.store.maintain_host_samples()
+        except Exception as exc:
+            print(f"keeper: host samples maintenance failed: {type(exc).__name__}", file=sys.stderr)
+        if stop.wait(60):
+            break
+
+
 def run(cfg, *, host=None, port=None, ready=None):
     """Start the server and block until a signal; returns 0 on clean shutdown."""
     lock = kdb.lock_keeper(cfg.db, **cfg.db_options)
@@ -89,6 +100,11 @@ def run(cfg, *, host=None, port=None, ready=None):
                                       name="keeper-http")
             thread.start()
         prune_thread = None
+        samples_thread = None
+        if thread is not None and hasattr(conn, 'schema'):
+            samples_thread = threading.Thread(target=_host_samples_loop, args=(server, stop),
+                                              daemon=True, name='keeper-host-samples')
+            samples_thread.start()
         bp = getattr(cfg, "backup_prune", None) or {}
         if thread is not None and bp.get("enabled"):   # opt-in; default off
             prune_thread = threading.Thread(
@@ -110,6 +126,8 @@ def run(cfg, *, host=None, port=None, ready=None):
         finally:
             def _cleanup():
                 stop.set()
+                if samples_thread is not None:
+                    samples_thread.join(timeout=5)
                 bus_stop = getattr(server, "bus_stop", None)
                 bus_thread = getattr(server, "bus_thread", None)
                 # F3: stop and bounded-join the bus registry before the steps
