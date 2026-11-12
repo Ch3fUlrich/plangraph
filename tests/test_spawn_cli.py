@@ -111,11 +111,10 @@ def test_harness_quota_falls_through(tmp_path, monkeypatch):
         store = LegStateStore(tmp_path / 'legs.sqlite')
         calls = []
         runner = SpawnerRunner()
-
         async def factory(*args, **kwargs):
             calls.append(list(runner.jobs.values())[-1].model_or_combo)
             code = ('import sys; print(' + repr(QUOTA) + ', file=sys.stderr); sys.exit(3)'
-                    if len(calls) == 1 else 'print("done")')
+                    if len(calls) == 1 else 'print(' + repr(json.dumps({'event': 'result', 'result': {'status': 'SUCCESS', 'response': 'done'}})) + ')')
             return await asyncio.create_subprocess_exec(sys.executable, '-c', code, **kwargs)
 
         runner.process_factory = factory
@@ -128,7 +127,6 @@ def test_harness_quota_falls_through(tmp_path, monkeypatch):
         state = store.leg_status(model, now=1000)
         assert state['state'] == 'limited'
         assert state['evidence']['reset_at'] == 39426
-
     asyncio.run(run())
 
 
@@ -145,19 +143,20 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
                 runner.provider_response(list(runner.jobs)[-1], model,
                     429 if len(runner.jobs) == 1 else 402, 'provider quota exhausted', {}, store=store,
                     source='gateway_adapter', adapter_token=runner._adapter_tokens[list(runner.jobs)[-1]])
-            return await asyncio.create_subprocess_exec(sys.executable, '-c', 'print("done")', **kwargs)
+            return await asyncio.create_subprocess_exec(sys.executable, '-c',
+                'print(' + repr(json.dumps({'event': 'result', 'result': {'status': 'SUCCESS', 'response': 'done'}})) + ')', **kwargs)
         runner.process_factory = factory
         service = spawn_service(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         models = [a['leg']['model'] for a in record['attempts'] if isinstance(a['leg'], dict)]
         assert 'error' not in record, record.get('error')
-        assert len(models) == 12, record  # Non-Claude utility inputs, including main's admitted Muse.
+        assert len(models) == 12, record  # Preserve every registered non-Claude utility input.
         assert len(runner.jobs) == 3
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
         assert next(a for a in record['attempts'] if isinstance(a['leg'], dict)
                     and a['leg']['model'] == 'opencode/big-pickle')['skip_reason'] == 'earlier_leg_succeeded'
-        assert models[:4] == ['opencode/deepseek-v4.1-flash-free',
-                              'opencode/glm-5.3-flash-free', 'openrouter/free', 'gemini-3.8-flash']
+        assert models[:4] == ['omniroute/cx-gpt-6.1-sol-xhigh', 'gemini-3.8-flash',
+                              'opencode/deepseek-v4.1-flash-free', 'opencode/glm-5.3-flash-free']
         attempted_ids = {a['leg']['id'] for a in record['attempts']}
         for leg in service.route({'estimate_tokens': 1000}).legs:
                 store.record_provider_response(leg.model if '/' in leg.model else 'agy/' + leg.model,
@@ -271,7 +270,8 @@ def test_transport_only_fallthrough(tmp_path, provider_stop, monkeypatch):
                 runner.provider_response(job_id, first_model, 429,
                     'provider quota exhausted', {}, store=store, source='gateway_adapter',
                     adapter_token=runner._adapter_tokens[job_id])
-            return await asyncio.create_subprocess_exec(sys.executable, '-c', 'print("429")', **kwargs)
+            return await asyncio.create_subprocess_exec(sys.executable, '-c',
+                'print(' + repr(json.dumps({'event': 'result', 'result': {'status': 'SUCCESS', 'response': '429'}})) + ')', **kwargs)
         runner.process_factory = factory
         service = SpawnService(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)

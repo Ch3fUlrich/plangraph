@@ -62,6 +62,7 @@ class Leg:
     tool_mode: str = "tools"
     disabled: str | None = None
     expires: float | None = None
+    effort: str | None = None
 
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
@@ -168,24 +169,24 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# Preserve main's role-neutral keeper admission separately from S5's workers.
-# This is the existing D-3828 policy, not a new route preference order.
+# Preserve role-neutral keeper admission before applying implement-only policy.
 READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
                                disabled=leg.disabled or (
                                    'D-3828: writer disabled; no retained review or orchestrate role'
                                    if leg.roles == ('implement',) else None))
                        if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
 
-# Catalog roles are eligibility inputs, not a single-writer pin.
+# D-5206/D-5212 change writer priority, not the registered fallback roles.
 WRITER_ORDER: tuple[str, ...] = (
-    "cx-gpt-6.1-sol",   # Main's unmeasured same-tier tie-breaker; never a cross-tier pin.
+    "cx-gpt-6.1-sol-xhigh",  # D-5206: effort-qualified default, then agy fallback
+    "agy-gemini-3.8-flash",
 )
-LEAD_WRITER = "cx-gpt-6.1-sol"
+LEAD_WRITER = WRITER_ORDER[0]
 
 #: Operator 2026-11-09: Claude 5.5 seats and effort variants, spawnable by an
 #: explicit ``--leg`` pick (or the model override) only.  They are NOT in
-#: DEFAULT_LEGS, so no route, keeper plan or role order changes (D-3605: Claude is
-#: no default writer or seat; D-3828: no writer fallback); ``SpawnService.route``
+#: DEFAULT_LEGS, except Sol xhigh promoted below (D-5206); Claude is never an
+#: automatic writer; ``SpawnService.route``
 #: appends them as ``explicit_only`` skips, ``plan_spawn`` does not.  Model ids are what ``agy models`` and OmniRoute
 #: /v1/models served that day (agy serves no Sonnet xhigh, cx no -ultra).  Claude
 #: legs are claude-family, so the D-2511 fence keeps them off claude-written work.
@@ -199,13 +200,20 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
           "gemini", ("128k", "256k", "1m"), 900000, False, roles=("review",))
       for e in ("low", "medium", "high")),
     *(Leg(f"cx-gpt-6.1-sol-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6.1-sol-{e}",
-          "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",))
+          "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",), effort=e)
       for e in CX_EFFORTS),
     *(Leg(f"cx-gpt-6-luna-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6-luna-{e}",
           "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
           tool_mode="inline-only")
       for e in CX_EFFORTS),
 )
+# Promote the existing effort leg; retain plain Sol as an active explicit-only pick.
+_plain_sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
+_sol_xhigh = next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER)
+DEFAULT_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in DEFAULT_LEGS)
+EXPLICIT_LEGS = (_plain_sol, *(leg for leg in EXPLICIT_LEGS if leg.id != LEAD_WRITER))
+# Keeper readiness keeps its existing admission, but uses the current routed id.
+READINESS_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in READINESS_LEGS)
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
     leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)
@@ -271,6 +279,8 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         problems.append(f"{where}.tool_mode: {raw['tool_mode']!r} not in {TOOL_MODES}")
     windows = raw.get("windows")
     disabled = raw.get("disabled")
+    if raw.get("effort") is not None and raw["effort"] not in CX_EFFORTS:
+        problems.append(f"{where}.effort: must be one of {CX_EFFORTS} or null")
     expiry = raw.get('expires')
     if expiry is not None and (isinstance(expiry, bool) or not isinstance(expiry, (int, float)) or not math.isfinite(expiry)):
         problems.append(f"{where}.expires: must be a finite epoch timestamp")
@@ -300,7 +310,7 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     data = dict(raw)
     data["windows"] = tuple(windows)
     data["roles"] = tuple(roles)
-    return Leg(**data)
+    return Leg(effort=data.pop("effort", None), **data)
 
 
 def load_legs(path: Path | None) -> tuple[Leg, ...]:

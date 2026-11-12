@@ -10,7 +10,7 @@ import argparse
 import os
 import sys
 
-from . import (cli_audit_meta, cli_changelog, cli_check, cli_names,
+from . import (cli_audit_meta, cli_changelog, cli_check, cli_names, cli_output_verbs,
                cli_oversight, cli_progress, cli_token, cli_verbs, outbox)
 from .cli_verbs import Session
 
@@ -42,6 +42,7 @@ HANDLERS = {
     "withdraw": cli_verbs.cmd_withdraw,
     "reopen": cli_verbs.cmd_reopen,
     "set-kind": cli_verbs.cmd_set_kind,
+    "close-merged": cli_output_verbs.cmd_close_merged,
     "close": cli_verbs.cmd_close,
     "legacy": cli_verbs.cmd_legacy,
     "priority": cli_verbs.cmd_priority,
@@ -165,6 +166,12 @@ def _add_writes(sub):
     set_kind = _p(sub, "set-kind", help="router: turn an open lane into a question / operator_task")
     set_kind.add_argument("key")
     set_kind.add_argument("kind", help="question or operator_task (the keeper checks)")
+
+    merged = _p(sub, "close-merged", help="router: close one merged review on a GO decision")
+    merged.add_argument("key")
+    merged.add_argument("decision_id", metavar="D-NNN")
+    merged.add_argument("--family", dest="families", action="append", required=True,
+                        help="seat family; repeat for high tier (keeper validates)")
 
     close = _p(sub, "close", help="claimant/router: close tier-none or decision/operator_task items on proof")
     close.add_argument("key")

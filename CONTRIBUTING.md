@@ -29,6 +29,7 @@ Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so t
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
 with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
+The D-5504/D-5506 `mcp_tools.py` exception only splits schema data out of the full Python MCP transport; it also retires with MCP-RUST.
 
 ```bash
 python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
@@ -45,6 +46,16 @@ Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
 the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
 
+CI suite selection in `tools/ci_select.py` treats `docs/schemas/**` and its
+`RUST_INPUTS` list as Rust inputs even when they are documentation. These inputs
+select both `rust` and `rust-windows` via the shared `rust` output without changing
+other suites. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
+literals, manifest-relative reads and paths leaving `rust/`; new repository
+inputs must be added to `RUST_INPUTS`, not inline to the workflow.
+Include paths passed through read helpers too: `pg-hook` reads `.docs-map`,
+`docs/rust-hooks.md`, `tools/new_code_allowlist.txt` and its parity corpus at
+`tests/hooks/parity_payloads.json`; all four are explicit selector inputs.
+
 ## Lanes
 
 Completed Rust ports remove only their own Python waiver from
@@ -59,6 +70,9 @@ One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `m
 The RUN-WORKTREE Python regression exception (D-5062) retires with SPAWNER-RUST-PORT.
 Work that covers two plan items is two lanes.
 A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) only for the item's latest verified head; interrupted sends are not blindly replayed.
+Seat records bind manual `tools/seat_verdict.py --key` posting to their recorded `item_key`; a different key or an explicit null is refused before token reads or network I/O. Older records without the field remain usable through the manual CLI. Card/environment identity validation never infers a target from prompt text.
+The `evidence.json` path applies the same refusal to every supplied `item_key` or `key`, including explicit nulls and conflicting aliases; evidence without either identity field retains the legacy manual path. Reviewer tokens belong to the seat's model family, not the `--writer-family` being reviewed.
+When evidence and a record coexist, the record's `item_key` remains binding even if evidence omits or replaces it; an unreadable or malformed companion record is refused. The record identity check also runs independently of evidence derivation on the record-only path. `--key` is required for all manual invocations, including legacy records; omitting it exits 2 before seat/token reads or network I/O.
 
 New production code must be Rust unless explicitly listed in `tools/new_code_allowlist.txt`; the host-readiness source-probe helper is a single-file exception for the pre-gate lane, retired by `SPAWNER-RUST-PORT`. `src/plangraph/spawner/redact_tokens.py` is a second one: the Python scrubber must mirror the Rust token catalog until that port retires it (D-5279).
 
@@ -214,3 +228,14 @@ guards block subprocess entry points, `os.system`/`os.popen`, socket constructio
 and connection/server helpers, `urllib.request.urlopen` and verdict posting.
 Real dependency calls retain the scoped file/environment/clock guards. Tests
 isolate each live door table and verify the refusal disappears without it.
+
+## Turn-budget hook development
+
+The standalone Rust `turn-budget-hook` lives in `rust/worker-core`, beside the
+existing watchdog binaries; `tools/hooks/install_hooks.sh` remains Python-only.
+Build, registration examples, injectable state paths and the polling-recognition
+boundary are documented in [Turn-budget hook](docs/turn-budget-hook.md).
+Run its hermetic contracts with `cargo test --manifest-path rust/Cargo.toml -p
+pg-worker-core --test turn_budget_hook --test turn_budget_poll --test
+turn_budget_alert --test turn_budget_watchdog`. Tests never install hooks, read
+live session state, or change permissions/settings files.

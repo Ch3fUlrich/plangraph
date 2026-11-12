@@ -310,7 +310,7 @@ class SpawnerRunner:
         gateway: bool = True,
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
-        client: str | None = None,
+        client: str | None = None, reasoning_cap=False,
         watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial',  # REMOVE-AT-R10
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
@@ -450,6 +450,9 @@ class SpawnerRunner:
                     child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
+                from .opencode_answer import cap_reasoning
+                if reasoning_cap and not cap_reasoning(child_env, model_or_combo):
+                    render_reason = 'reasoning_output_limit: no supported reasoning cap'
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
         else:
@@ -721,7 +724,8 @@ class SpawnerRunner:
                                            nonce=self._nonces[job_id])
             from .env_redact import redact_env_values
             env = self._child_envs.get(job_id, os.environ)
-            from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer
+            from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer, record_steps
+            record_steps(job, stdout_text, stderr_text, env)
             decoded, stderr_text, exit_code = native_answer(job, answer_text(stdout_text) if is_opencode(job) else stdout_text, stderr_text, exit_code)
             job.stdout = redact_output(redact_env_values(decoded, env))
             job.stderr = redact_output(redact_env_values(stderr_text, env))
@@ -1089,23 +1093,11 @@ def spawn_service(*args, **kwargs):
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
                         worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
-                        job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
+                        job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
                             role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
-                        self._running_records[job.job_id] = record
-                        process = self.runner._processes.get(job.job_id)
-                        record.update(job_id=job.job_id, pid=process.pid if process else None,
-                                      **{k: bool(v) if k == 'job_object' else v for k, v in getattr(self.runner, '_owned', {}).get(job.job_id, {}).items() if k != 'pid'},
-                                      writer_family=chosen.family,
-                                      cwd=job.cwd or getattr(self.runner, 'default_cwd', os.getcwd()))
-                        self._save(record)
-                        task = self.runner._tasks.get(job.job_id)
-                        if task:
-                            await asyncio.wait([task])   # a monitor cancelled by runner.cancel ends the leg, not this loop
-                            if task.cancelled():
-                                from .cancel_job import publish_cancel; publish_cancel(job)
-                            elif not task.cancelled() and task.exception() is not None:
-                                raise task.exception()
+                        if record.get('reason') == 'reasoning_output_limit':
+                            return
                         if job.survivors:   # kill_incomplete: terminal, no fall-through leg, no second writer
                             record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason='kill_incomplete'))
                             record.update(status='failed', exit_code=1, reason='kill_incomplete', survivors=job.survivors,

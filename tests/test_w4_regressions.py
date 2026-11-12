@@ -10,6 +10,7 @@ the dispatcher/supervisor is gone (Q21/M14).
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -63,7 +64,8 @@ def test_running_records_release_every_attempt_job(tmp_path, monkeypatch):
 
     async def factory(*args, **kwargs):
         code = ('import sys; print(' + repr(QUOTA) + ', file=sys.stderr); sys.exit(3)'
-                if not calls else 'print("done")')
+                if not calls else 'print(' + repr(json.dumps({
+                    'event': 'result', 'result': {'status': 'SUCCESS', 'response': 'done'}})) + ')')
         calls.append(code)
         return await asyncio.create_subprocess_exec(sys.executable, '-c', code, **kwargs)
 
