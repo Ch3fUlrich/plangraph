@@ -17,3 +17,4 @@ the last accepted state; `age()` saturates at zero and `is_stale()` is true at
 
 Run `cd rust && cargo test -p pg-ctx mirror` for local-only bare-origin tests.
 Keeper scheduling, HTTP/blob APIs, alarm delivery and a gix backend are deferred.
+The shared `pg-ctx` crate also exposes the independent [capability gate](dup-gates.md); mirror APIs are unchanged.

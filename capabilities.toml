@@ -1,0 +1,15 @@
+[[capability]]
+name = "read_token"
+canonical = "plangraph.live_follow"
+language = "python"
+forbidden_defs = ["read_token"]
+[[capability]]
+name = "inbox_writer"
+canonical = "tools.hooks.fleet_report"
+language = "python"
+forbidden_defs = ["append_inbox"]
+[[capability]]
+name = "git_helper"
+canonical = "tools.merge_batch_util"
+language = "python"
+forbidden_defs = ["git"]

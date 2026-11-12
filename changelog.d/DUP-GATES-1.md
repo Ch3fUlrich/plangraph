@@ -1,0 +1,1 @@
+- Add a three-capability ownership registry and Rust pg-ctx library checker with file:line violations, a shrink-only baseline, and hermetic fixture tests (DUP-GATES slice 1; CLI/CI wiring deferred).
