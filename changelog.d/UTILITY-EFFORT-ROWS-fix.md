@@ -1,3 +1,4 @@
 - Fix automatic implement exclusion for every Claude-family alias, including Fable, through canonical resolver family detection; retain the Sol xhigh default and agy Gemini fallback (D-5206/D-5212).
 - Restore Python/Rust reconciliation fixture parity with the optional leg effort field, without changing the fixture contract test.
 - Explicitly forward operator JSON effort into the loaded leg and pin its end-to-end preservation in implement route and saved run records; cover every other validated leg field and accurately name the Sol-to-agy fallback regression.
+- Align worktree, CLI opt-in and overflow regression fixtures with the Sol xhigh default; plain Sol remains an explicit-only pick, and all worktree assertions and parameter cases are retained.

@@ -8,4 +8,6 @@ src/plangraph/planner/** -> docs/routing.md
 src/plangraph/routing_support/clients.py -> docs/lean-review-harness.md
 src/plangraph/routing_support/review_mode.py -> docs/lean-review-harness.md
 src/plangraph/spawner/** -> docs/SPAWNER.md
+rust/worker-core/src/writer_* -> docs/SPAWNER.md
+tests/test_check_changelog_docs.py -> CONTRIBUTING.md
 tools/** -> CONTRIBUTING.md
