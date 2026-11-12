@@ -16,7 +16,7 @@ from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # n
                          BenchRequired, benchmark_rows_from_db)
 from .legs import DEFAULT_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
 from .provider_stop import next_leg_after_provider_stop
-from .review_order import review_key
+from .review_order import review_key, catalog_tiers
 from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts  # noqa: F401
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
@@ -106,7 +106,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
                overflow: bool = False, role: str | None = None) -> Route:
     """Route ``card`` (keeper card dict) over ``legs``; see module docstring.
 
-    ``role`` falls back to ``card["role"]``; implement leads with LEAD_WRITER, then tier/order.
+    ``role`` falls back to ``card["role"]``; cost tiers precede role preferences.
     ``overflow`` marks a context-overflow failure: the window class grows by one.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
@@ -237,7 +237,8 @@ class SpawnPlan:
 
 
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
-                legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, placement=None) -> SpawnPlan:
+                legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, placement=None,
+                catalog_rows=None) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
 
     The implement role ignores benchmark permutation (operator order D-2683).
@@ -246,6 +247,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     paused harnesses.  A review leg whose family is ANY writer family is
     excluded; seats cover each writer part (:func:`pick_seats`).  An inline-only
     review leg needs ``card["diff_ref"]``: the spawner inlines that diff.
+    ``catalog_rows`` injects tier/admission data; None reads the live catalog once.
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
     """
@@ -297,10 +299,11 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         raise SpawnRefused('zero reviewers requires low/normal review_exempt')
     from plangraph.routing_support.leg_state import leg_status
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
-    from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS
-    legs = tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS)
+    from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS, get_catalog_models
+    catalog_rows = tuple(get_catalog_models() if catalog_rows is None else catalog_rows)
+    legs = catalog_tiers(tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS), catalog_rows)
     for candidate in legs:
-        validate_model(candidate.model, allow_inactive=not leg_active(candidate))
+        validate_model(candidate.model, allow_inactive=not leg_active(candidate), catalog_rows=catalog_rows)
     candidates = tuple(l for l in legs if role in l.roles and leg_active(l))
     rows = (benchmark if isinstance(benchmark, Mapping) else {
         row["model_id"]: row for row in benchmark}) if benchmark is not None else {}
@@ -401,9 +404,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                                   key=lambda leg: input_order[leg.id])
                 for i, leg in zip(positions, siblings):
                     ordered[i] = leg
+        # Only measured legs bypass role preferences, never the cost-tier key.
         table_order = {leg.id: i for i, leg in enumerate(ordered)}
-        ordered.sort(key=lambda leg: review_key(
-            leg, TIERS.index(leg.tier), table_order[leg.id]))
+        ordered.sort(key=lambda leg: review_key(leg, TIERS.index(leg.tier), table_order[leg.id],
+                     measured=rows.get(leg.model, rows.get(leg.id)) is not None))
     ordered.sort(key=lambda leg: role == "orchestrate" and leg.claude_family)  # D-4812/D-297: Claude last
     seats, coverage, open_parts = [], (), []
     if role == "review":
@@ -430,7 +434,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                      tuple(candidate_details), groups, coverage, placement)
 
 
-def validate_model(model, *, allow_inactive=False):
+def validate_model(model, *, allow_inactive=False, catalog_rows=None):
     """The resolver catalog and registered legs are the exact admission door."""
     from plangraph.routing_support.resolver import (get_catalog_models, catalog_row_admitted,
                                            OPERATOR_REMOVED_MODELS)
@@ -439,7 +443,7 @@ def validate_model(model, *, allow_inactive=False):
     if not isinstance(model, str) or not model:
         raise SpawnRefused('model must be a nonempty string')
     check_mimo_path(model)
-    rows = get_catalog_models()
+    rows = get_catalog_models() if catalog_rows is None else catalog_rows
     inactive = {row['id'] for row in rows if not catalog_row_admitted(row)} if not allow_inactive else set()
     allowed = ({row['id'] for row in rows if catalog_row_admitted(row)} |
                {leg.model for leg in (*_legs.DEFAULT_LEGS, *_legs.EXPLICIT_LEGS)}

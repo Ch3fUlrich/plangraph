@@ -49,9 +49,12 @@ def test_dry_run_never_probes(tmp_path, monkeypatch):
 
 
 def test_free_zen_legs_are_exactly_the_disabled_set():
-    free = {l.id: l.disabled for l in DEFAULT_LEGS if l.model.startswith('opencode/')}
-    assert set(free) == {'opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free'}
-    assert all(free.values())
+    zen = {l.id: l.disabled for l in DEFAULT_LEGS if l.model.startswith('opencode/')}
+    assert zen == {'opencode-deepseek-v4.1-flash-free':
+                   'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)',
+                   'opencode-glm-5.3-flash-free':
+                   'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)',
+                   'opencode-big-pickle': None}
 
 
 @pytest.mark.parametrize('leg_id', ['opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free'])

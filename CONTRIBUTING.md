@@ -27,6 +27,8 @@ plangraph is public; the plans it tracks usually are not. Keep that difference c
 
 Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so there is no
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
+The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
+with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
 
 ```bash
 python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
@@ -47,7 +49,6 @@ systemd user scope. Use `affected` or `full` to measure each separately.
 
 Completed Rust ports remove only their own Python waiver from
 `tools/new_code_allowlist.txt`; preserve unrelated exceptions when merging main.
-Preserve upstream waiver deletions and insert new docs-map rules in path order.
 SPAWNER-RUST-PORT slice 2 also removes the stale doctor-source waiver retired by
 slice 1; its changelog fragment accounts for all four named Python waivers.
 Doctor source-filter goldens live in `tests/fixtures/doctor_sources.json` and run

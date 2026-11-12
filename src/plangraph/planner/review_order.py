@@ -1,6 +1,23 @@
-"""D-4147: mimo first, table order next, Haiku last (independent of cost)."""
+"""Cost-first route ordering and catalog tier projection."""
 
 
-def review_key(leg, tier_idx, pos):
+def review_key(leg, tier_idx, pos, *, measured=False):
     from .route_policy import review_priority
-    return (review_priority(leg), pos)
+    return (tier_idx, not measured, 0 if measured else review_priority(leg), pos)
+
+
+def catalog_tiers(legs, rows):
+    """Project explicit catalog costs, never admission or writer permissions."""
+    from dataclasses import replace
+    from .legs import TIERS
+    tiers = {row.get('id') or row.get('model_id'): row.get('tier') for row in rows}
+    for row in rows:
+        provider = row.get('provider_id') or row.get('harness')
+        if provider and row.get('upstream_id'):
+            tiers.setdefault(f"{provider}/{row['upstream_id']}", row.get('tier'))
+    # Harness-local model names resolve through their catalog provider prefix.
+    def tier(leg):
+        catalog_id = leg.model if '/' in leg.model else f'{leg.harness}/{leg.model}'
+        return tiers.get(catalog_id)
+    return tuple(replace(leg, tier=tier(leg))
+                 if tier(leg) in TIERS else leg for leg in legs)

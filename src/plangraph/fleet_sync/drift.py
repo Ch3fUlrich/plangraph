@@ -13,7 +13,7 @@ def transport(host):
         remote = (subprocess.list2cmdline(command) if host['os'] == 'windows'
                   else shlex.join(command))
         command = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
-                   '--', host['id'], remote]
+                   '--', host.get('ssh_target') or host['id'], remote]
     elif host['transport'] != 'local':
         raise ValueError('unsupported transport')
     return subprocess.check_output(command, text=True, stderr=subprocess.DEVNULL, timeout=5).strip()

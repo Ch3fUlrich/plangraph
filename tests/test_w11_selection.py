@@ -1,6 +1,9 @@
 import asyncio
 import json
 import sqlite3
+
+import pytest
+
 from historical_legs import without_d4196
 
 from plangraph.planner.legs import DEFAULT_LEGS, LEAD_WRITER
@@ -41,13 +44,13 @@ def test_tier_first_and_swap(monkeypatch):
     data = {l.model: {'aa_intelligence': 40 + i * 10,
                      'cost_per_task_usd': 0, 'pool_burn_weight': 0}
             for i, l in enumerate(writers)}
-    plan = plan_spawn(CARD, role='implement', benchmark=data)
-    expected = ('cx-gpt-6.1-sol', 'opencode-deepseek-v4.1-flash-free',
+    plan = plan_spawn(CARD, role='implement', benchmark=data, catalog_rows=())
+    expected = ('opencode-deepseek-v4.1-flash-free',
                 'opencode-glm-5.3-flash-free', 'openrouter-free', 'agy-gemini-3.8-flash',
-                'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek')
+                'cx-gpt-6.1-sol', 'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek')
     assert tuple(l.id for l in plan.legs) == expected
     data[writers[0].model], data[writers[6].model] = data[writers[6].model], data[writers[0].model]
-    assert tuple(l.id for l in plan_spawn(CARD, role='implement', benchmark=data).legs) == expected
+    assert tuple(l.id for l in plan_spawn(CARD, role='implement', benchmark=data, catalog_rows=()).legs) == expected
 
 
 def test_candidate_json_and_limit(monkeypatch):
@@ -59,8 +62,8 @@ def test_candidate_json_and_limit(monkeypatch):
                 'evidence': evidence if model == writers[6].model else None}
     data = {l.model: {'aa_intelligence': 40, 'cost_per_task_usd': 0, 'pool_burn_weight': 0} for l in writers}
     del data[writers[0].model]
-    plan = plan_spawn(CARD, role='implement', benchmark=data, leg_reader=reader)
-    assert plan.first_leg == LEAD
+    plan = plan_spawn(CARD, role='implement', benchmark=data, leg_reader=reader, catalog_rows=())
+    assert plan.first_leg == writers[0]  # D-5092: eligible free leg, despite missing p.
     assert writers[6] not in plan.legs
     candidates = {c['leg']: c for c in plan.to_dict()['candidates']}
     assert candidates[writers[0].id]['u_core'] is None
@@ -70,6 +73,15 @@ def test_candidate_json_and_limit(monkeypatch):
     assert candidates[writers[6].id]['reason'] == 'limited'
     assert candidates[writers[6].id]['evidence'] == evidence
     assert candidates[writers[6].id]['tier'] == writers[6].tier
+
+
+@pytest.mark.parametrize('probe', [test_tier_first_and_swap, test_candidate_json_and_limit])
+def test_exact_tier_checks_ignore_ambient_catalog(monkeypatch, probe):
+    def ambient_catalog():
+        pytest.fail('exact-tier checks must not read the host catalog')
+
+    monkeypatch.setattr('plangraph.routing_support.resolver.get_catalog_models', ambient_catalog)
+    probe(monkeypatch)
 
 
 def test_default_database_cli_mcp(tmp_path, monkeypatch, capsys):
