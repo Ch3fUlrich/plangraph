@@ -164,7 +164,7 @@ def test_risky_tag_removes_trains_on_data_legs_with_reason():
     for tag in ("auth", "secrets", "money", "live-step"):
         r = route_card(card(risk_tags=[tag]))
         assert not any(leg.trains_on_data for leg in r.legs)
-        assert "excluded 4 legs: trains_on_data" in r.reasons
+        assert "excluded 5 legs: trains_on_data" in r.reasons
     # migration / public-contract keep the free trainers
     r = route_card(card(risk_tags=["migration"]))
     assert any(leg.trains_on_data for leg in r.legs)
@@ -350,7 +350,7 @@ def test_writer_order_d2683_writer_family_exclusion():
     assert plan_imp.first_leg.id == "cx-gpt-6.1-sol" and "gemini" not in {l.family for l in plan_imp.legs}
     # F2: writer_families does not exclude implement legs
     plan_wf = plan_spawn(c, role="implement", writer_families=("gemini",))
-    assert [l.id for l in plan_wf.legs] == ["cx-gpt-6.1-sol"]
+    assert [l.id for l in plan_wf.legs] == ["cx-gpt-6.1-sol", "opencode-console-muse-spark"]
 
 
 def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
@@ -378,7 +378,7 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
     review = plan_spawn(dict(c, diff_ref={"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}), role="review", writer_families=("gpt",), benchmark=rows, leg_reader=reader)
     assert {s["leg"]: s["reason"] for s in review.skipped}["mimo-v2.6-pro"] == "limited"
-    assert [l.id for l in plan.legs] == ["cx-gpt-6.1-sol"]
+    assert [l.id for l in plan.legs] == ["cx-gpt-6.1-sol", "opencode-console-muse-spark"]
 
 
 def test_no_implement_plan_leg_has_claude_family():

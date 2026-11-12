@@ -177,7 +177,7 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
         assert policy.skip_reason(by_id[leg_id], role) == reason
         if role == "implement":
             assert reasons == {}  # Role-ineligible legs are not policy skips.
-            assert [leg.id for leg in plan.legs] == ['cx-gpt-6.1-sol']
+            assert [leg.id for leg in plan.legs] == ['cx-gpt-6.1-sol', 'opencode-console-muse-spark']
             from plangraph.planner.routing import SpawnRefused
             from plangraph.spawner.service import SpawnService
             with pytest.raises(SpawnRefused, match=r"leg disabled: .*D-4196"):

@@ -43,8 +43,8 @@ def test_tier_first_and_swap(monkeypatch):
             for i, l in enumerate(writers)}
     plan = plan_spawn(CARD, role='implement', benchmark=data)
     expected = ('cx-gpt-6.1-sol', 'opencode-deepseek-v4.1-flash-free',
-                'opencode-glm-5.3-flash-free', 'openrouter-free', 'agy-gemini-3.8-flash',
-                'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek')
+                'opencode-glm-5.3-flash-free', 'openrouter-free', 'opencode-console-muse-spark',
+                'agy-gemini-3.8-flash', 'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek')
     assert tuple(l.id for l in plan.legs) == expected
     data[writers[0].model], data[writers[6].model] = data[writers[6].model], data[writers[0].model]
     assert tuple(l.id for l in plan_spawn(CARD, role='implement', benchmark=data).legs) == expected

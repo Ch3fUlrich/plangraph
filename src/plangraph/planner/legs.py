@@ -133,8 +133,9 @@ DEFAULT_LEGS = (
         False, roles=("review",)),
     Leg("opencode-console-muse-spark", "subscription", "opencode",
         "console-meta/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
-        False, roles=("review",),
-        note="D-4280: explicit audited selection; scrubbed or public material only"),
+        True, roles=("review", "implement"),
+        note="D-5173: muse-amber, routed review seat and second writer after Sol, "
+             "pay-as-you-go; D-4280: scrubbed or public material only"),
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
         False, roles=("review",)),
@@ -153,15 +154,18 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# D-3828: retain every leg and its review order, but never fall back writers.
+#: D-5173: the one Muse leg the route picks by itself (operator path: opencode console).
+MUSE_AMBER = "opencode-console-muse-spark"
+WRITER_ORDER: tuple[str, ...] = (
+    "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
+    MUSE_AMBER,         # D-5179: writes when Sol is unavailable
+)
+# D-3828: retain every leg and its review order; only WRITER_ORDER legs write.
 DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
                              disabled=leg.disabled or (
                                  'D-3828: writer disabled; no retained review or orchestrate role'
                                  if leg.roles == ('implement',) else None))
-                     if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
-WRITER_ORDER: tuple[str, ...] = (
-    "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
-)
+                     if leg.id not in WRITER_ORDER else leg for leg in DEFAULT_LEGS)
 LEAD_WRITER = "cx-gpt-6.1-sol"
 
 #: Operator 2026-11-09: Claude 5.5 seats and effort variants, spawnable by an

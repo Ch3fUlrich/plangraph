@@ -1,0 +1,1 @@
+- Route muse-amber (`opencode-console-muse-spark`) automatically: review seat after the mimo legs and second writer after `cx-gpt-6.1-sol`; the leg is marked as training on data, so risk-tagged cards skip it. The opencode-go Muse leg and Grok stay manual-only.

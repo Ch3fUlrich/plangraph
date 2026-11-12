@@ -20,6 +20,7 @@ import seat_verdict  # noqa: E402
 
 GROK = "omniroute-grok-4.7"
 MUSE = ("opencode-go-muse-spark", "opencode-console-muse-spark")
+MUSE_MANUAL = ("opencode-go-muse-spark",)  # D-5173: the console leg is routed
 CARD = {"estimate_tokens": 20000}
 BY_ID = {leg.id: leg for leg in DEFAULT_LEGS}
 
@@ -96,12 +97,28 @@ def test_listing_accepts_nested_ids_not_non_ids(monkeypatch):
 
 @pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
 def test_muse_never_automatic_even_if_lifted(role):
-    legs = tuple(replace(BY_ID[mid], roles=(role,)) for mid in MUSE)
+    legs = tuple(replace(BY_ID[mid], roles=(role,)) for mid in MUSE_MANUAL)
     policy = RoutePolicy(review_allowed_families=("muse",))
     for leg in legs:
         assert policy.skip_reason(leg, role) == "off_family"
     plan = plan_spawn(CARD, role=role, writer_families=("gpt",))
-    assert not any(l.family == "muse" for l in (*plan.legs, *plan.review_seats))
+    assert not any(l.id in MUSE_MANUAL for l in (*plan.legs, *plan.review_seats))
+
+
+def test_muse_amber_routed_after_sol_and_mimo_public_only():
+    from plangraph.planner.legs import MUSE_AMBER, WRITER_ORDER
+    assert WRITER_ORDER == ("cx-gpt-6.1-sol", MUSE_AMBER) and BY_ID[MUSE_AMBER].trains_on_data
+    assert RoutePolicy().skip_reason(BY_ID[MUSE_AMBER], "implement") is None
+    assert [l.id for l in plan_spawn(CARD, role="implement").legs] == list(WRITER_ORDER)
+    diff = {"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}
+    ids = [l.id for l in plan_spawn(dict(CARD, diff_ref=diff), role="review",
+                                    writer_families=("gpt",)).legs]
+    assert ids.index("mimo-v2.6-pro") < ids.index(MUSE_AMBER)
+    # D-4280 data fence: a risk-tagged card never reaches the training Muse leg.
+    for role in ("implement", "review"):
+        private = plan_spawn(dict(CARD, risk_tags=["secrets"]), role=role, writer_families=("gpt",))
+        assert MUSE_AMBER not in [l.id for l in (*private.legs, *private.review_seats)]
+        assert {s["leg"]: s["reason"] for s in private.skipped}[MUSE_AMBER] == "trains_on_data"
 
 
 @pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
