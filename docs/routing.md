@@ -12,5 +12,8 @@ Automatic implement eligibility uses the resolver's canonical family detection f
 both the catalog family and model identity, including Fable aliases even when
 the legacy `claude_family` flag is absent. All catalog rows are regression-tested.
 
-Route JSON and saved `chosen_leg` include `effort` (`xhigh` by default, otherwise
-`null`). The per-run renderer declares cx effort models; see [SPAWNER.md](SPAWNER.md#card-driven-routing-core).
+Route JSON and saved `chosen_leg` include `effort` (`xhigh` by default).
+Operator leg JSON preserves its validated `effort` through the loaded leg, route
+plan, saved `chosen_leg`, and attempt rows; omitted or explicit `null` effort
+stays `null`. All other validated leg fields are retained too. The per-run
+renderer declares cx effort models; see [SPAWNER.md](SPAWNER.md#card-driven-routing-core).

@@ -288,7 +288,7 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     data.pop("expires", None)  # Old operator rows remain loadable, without local expiry.
     data["windows"] = tuple(windows)
     data["roles"] = tuple(roles)
-    return Leg(**data)
+    return Leg(effort=data.pop("effort", None), **data)
 
 
 def load_legs(path: Path | None) -> tuple[Leg, ...]:

@@ -1,4 +1,4 @@
-"""Production writers never fall back; explicit disabled writers are refused."""
+"""Production writers use Sol then agy; explicit disabled writers are refused."""
 import asyncio
 
 import pytest
@@ -17,7 +17,7 @@ def test_disabled_writer_refusal(tmp_path, leg):
             override_reason='writer policy regression', dry_run=True))
 
 
-def test_sol_only_and_no_fallback():
+def test_sol_xhigh_then_agy_fallback_and_all_limited_refused():
     assert WRITER_ORDER == ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash')
     plan = plan_spawn({'estimate_tokens': 100}, role='implement')
     assert [l.id for l in plan.legs] == list(WRITER_ORDER)
