@@ -171,6 +171,73 @@ fn ordinary_substitutions_and_variable_indirection_are_not_guessed_read_only() {
 }
 
 #[test]
+fn dollar_leading_commands_only_count_as_poll_checks_inside_loops() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(&dir);
+    for command in [
+        "sleep 5; $SCRIPT",
+        "sleep 5; MODE=x $RUNNER",
+        "sleep 5; env MODE=x $RUNNER",
+        "sleep 5; bash -c '$SCRIPT'",
+    ] {
+        for now in 1..=2 {
+            assert_eq!(
+                handle(&event(command, "PreToolUse"), &c, now),
+                None,
+                "{command}"
+            );
+        }
+    }
+    for command in [
+        "while true; do $SCRIPT; done",
+        "while true; do MODE=x $RUNNER; done",
+        "while true; do bash -c '$SCRIPT'; done",
+    ] {
+        assert!(
+            handle(&event(command, "PreToolUse"), &c, 3).is_some(),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn polling_scan_depth_cap_is_an_explicit_fail_open_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(&dir);
+    for depth in 0..=4 {
+        let mut body = "sleep 2; git status".to_owned();
+        for _ in 0..depth {
+            body = format!("echo \"$({body})\"");
+        }
+        let command = format!("while true; do {body}; done");
+        assert_eq!(
+            handle(&event(&command, "PreToolUse"), &c, 1).is_some(),
+            depth <= 3,
+            "substitution depth {depth}: {command}"
+        );
+        let mut command = "while true; do git status; done".to_owned();
+        for _ in 0..depth {
+            command = format!("bash -c '{}'", command.replace('\'', "'\\''"));
+        }
+        assert_eq!(
+            handle(&event(&command, "PreToolUse"), &c, 1).is_some(),
+            depth <= 3,
+            "shell depth {depth}: {command}"
+        );
+        let mut body = "git status $(echo)".to_owned();
+        for _ in 0..depth {
+            body = format!("bash -c '{}'", body.replace('\'', "'\\''"));
+        }
+        let command = format!("while true; do {body}; done");
+        assert_eq!(
+            handle(&event(&command, "PreToolUse"), &c, 1).is_some(),
+            depth <= 3,
+            "snapshot-command depth {depth}: {command}"
+        );
+    }
+}
+
+#[test]
 fn unsupported_read_syntax_cannot_hide_sleep_or_snapshot_loops() {
     for command in [
         "sleep 5; git status $(true)",

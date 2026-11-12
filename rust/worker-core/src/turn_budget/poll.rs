@@ -251,7 +251,7 @@ fn sleep_poll_depth(command: &str, depth: usize) -> bool {
         .filter(|(i, _)| shell.inside_loop[*i])
         .map(|(_, c)| c)
         .collect();
-    let poll_check = |c: &[String]| poll_command(c, depth);
+    let poll_check = |c: &[String]| poll_command(c, depth, true);
     let only_checks = loop_commands.iter().any(|c| poll_check(c))
         && loop_commands.iter().all(|c| {
             poll_check(c)
@@ -267,7 +267,9 @@ fn sleep_poll_depth(command: &str, depth: usize) -> bool {
         }
         if c[0] == "sleep"
             && !(shell.finite_for && shell.inside_for[i])
-            && commands.get(i + 1).is_some_and(|c| poll_check(c))
+            && commands
+                .get(i + 1)
+                .is_some_and(|c| poll_command(c, depth, shell.inside_loop[i + 1]))
         {
             return true;
         }
@@ -284,9 +286,9 @@ fn sleep_poll_depth(command: &str, depth: usize) -> bool {
     false
 }
 
-fn poll_command(c: &[String], depth: usize) -> bool {
+fn poll_command(c: &[String], depth: usize, inside_loop: bool) -> bool {
     if read_command(c)
-        || c[0].starts_with('$')
+        || (inside_loop && c[0].starts_with('$'))
         || (c[0] == "git" && c.get(1).is_some_and(|s| s.starts_with('$')))
     {
         return true;
@@ -301,7 +303,7 @@ fn poll_command(c: &[String], depth: usize) -> bool {
                 && shell
                     .commands
                     .iter()
-                    .all(|c| poll_command(&wrappers::peel(c), depth + 1))
+                    .all(|c| poll_command(&wrappers::peel(c), depth + 1, inside_loop))
         })
 }
 
