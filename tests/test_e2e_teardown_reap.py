@@ -90,6 +90,29 @@ def test_stale_and_missing(tmp_path, children):
         p.wait(timeout=2)
 
 
+def wait_recorded_pid(pid_dir):
+    end = time.monotonic() + 2
+    while True:
+        for record in pid_dir.iterdir():
+            # The shell's redirect creates the entry before echo writes the PID.
+            # reap_recorded skips empty/partial records, so wait for publication.
+            if record.read_text() == f"{record.name}\n":
+                return int(record.name)
+        assert time.monotonic() < end, "fake opencode did not publish its PID"
+        time.sleep(.01)
+
+
+@pytest.mark.parametrize("pending", ["", "12"])
+def test_wait_recorded_pid_waits_for_complete_record(tmp_path, monkeypatch, pending):
+    record = tmp_path / "123"
+    record.write_text(pending)
+    # Drive publication at the next poll, without a scheduling-dependent delay.
+    monkeypatch.setattr(sys.modules[__name__], "time", SimpleNamespace(
+        monotonic=time.monotonic, sleep=lambda _: record.write_text("123\n")))
+    assert wait_recorded_pid(tmp_path) == 123
+    assert record.read_text() == "123\n", "directory entry is not a published PID"
+
+
 def test_exited_worker(tmp_path, children, monkeypatch):
     monkeypatch.setattr(u, "FAKE_OPENCODE", u.FAKE_OPENCODE + "exec sleep 60\n")
     bin_dir = tmp_path / "different bin"
@@ -101,11 +124,7 @@ def test_exited_worker(tmp_path, children, monkeypatch):
                           PG_FAKE_PID_DIR=str(pid_dir)), tmp_path / "worker.log")
     try:
         worker.proc.wait(timeout=2)
-        end = time.monotonic() + 2
-        while not list(pid_dir.iterdir()):
-            assert time.monotonic() < end
-            time.sleep(.01)
-        pid = int(next(pid_dir.iterdir()).name)
+        pid = wait_recorded_pid(pid_dir)
         children.append(pid)
         assert worker.pid_dir == pid_dir
         worker.stop()

@@ -36,7 +36,7 @@ The historical assertion ledger below records the prior consolidation at
 - `plan_spawn(catalog_rows=...)` pins both admission and tier projection; absent
   an explicit snapshot, one `get_catalog_models()` result is reused throughout
   a plan. That resolver currently defaults to a seeded in-memory catalog, not
-  the host file. Exact planner/free-first/spawn-plan/W11/round-three probes pin
+  the host file. Exact planner, free-first, spawn-plan, W11 and round-three probes pin
   empty catalog rows to exercise their declared leg tables; shared test setup
   also isolates `PLANGRAPH_CATALOG_DB` and the legacy default path so CLI
   benchmark discovery and child processes never consume host measurements.
