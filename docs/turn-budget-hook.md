@@ -67,6 +67,7 @@ sleep, and sleep-then-read chains separated by `;`, `&&`, or a newline. Literal
 quoted prose and comments are not executable commands. Simple shell `-c`/`-lc`
 wrappers are examined up to three levels deep. A loop does not become an allowed
 wait merely by setting `run_in_background` or appending `&`.
+Quoted or escaped shell keyword words are not treated as control flow.
 
 The first recognised read-only check passes and records a SHA-256 fingerprint of
 its parsed words plus `cwd` per session. Repeating that check is refused, even

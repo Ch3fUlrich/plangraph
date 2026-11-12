@@ -14,6 +14,18 @@ struct Shell {
     dynamic: bool,
 }
 
+fn push_word(words: &mut Vec<String>, word: &mut String, quoted: &mut bool) {
+    if word.is_empty() && !*quoted {
+        return;
+    }
+    // Preserve quote provenance until reserved-word recognition is complete.
+    if *quoted {
+        word.insert(0, '\0');
+    }
+    words.push(std::mem::take(word));
+    *quoted = false;
+}
+
 /// Quoted text stays a word; comments and whitespace never become commands.
 /// Unsupported/unbalanced syntax fails open rather than guessing a refusal.
 fn parse(s: &str) -> Option<Shell> {
@@ -22,6 +34,7 @@ fn parse(s: &str) -> Option<Shell> {
     let mut commands = Vec::new();
     let mut chars = s.chars().peekable();
     let mut quote = None;
+    let mut quoted = false;
     let mut writes = false;
     let mut dynamic = false;
     while let Some(c) = chars.next() {
@@ -52,17 +65,21 @@ fn parse(s: &str) -> Option<Shell> {
                 dynamic = true;
                 word.push(c);
             }
-            '\'' | '"' => quote = Some(c),
-            '\\' => word.push(chars.next()?),
+            '\'' | '"' => {
+                quote = Some(c);
+                quoted = true;
+            }
+            '\\' => {
+                quoted = true;
+                word.push(chars.next()?);
+            }
             '#' if word.is_empty() => {
                 while chars.peek().is_some_and(|&c| c != '\n') {
                     chars.next();
                 }
             }
             ';' | '&' | '|' | '\n' | '(' | ')' | '{' | '}' => {
-                if !word.is_empty() {
-                    words.push(std::mem::take(&mut word));
-                }
+                push_word(&mut words, &mut word, &mut quoted);
                 if !words.is_empty() {
                     commands.push(std::mem::take(&mut words));
                 }
@@ -72,9 +89,7 @@ fn parse(s: &str) -> Option<Shell> {
                 word.push(c);
             }
             c if c.is_whitespace() => {
-                if !word.is_empty() {
-                    words.push(std::mem::take(&mut word));
-                }
+                push_word(&mut words, &mut word, &mut quoted);
             }
             c => word.push(c),
         }
@@ -82,9 +97,7 @@ fn parse(s: &str) -> Option<Shell> {
     if quote.is_some() {
         return None;
     }
-    if !word.is_empty() {
-        words.push(word);
-    }
+    push_word(&mut words, &mut word, &mut quoted);
     if !words.is_empty() {
         commands.push(words);
     }
@@ -98,6 +111,11 @@ fn parse(s: &str) -> Option<Shell> {
         }) {
             looped |= matches!(words[0].as_str(), "while" | "until");
             words.remove(0);
+        }
+        for word in words.iter_mut() {
+            if word.starts_with('\0') {
+                word.remove(0);
+            }
         }
         if let Some(first) = words.first_mut() {
             *first = first.rsplit('/').next()?.to_owned();

@@ -1,4 +1,4 @@
-use pg_worker_core::turn_budget::{alert_line, read_alerts, BudgetStatus};
+use pg_worker_core::turn_budget::{alert_line, read_alerts, role, BudgetStatus, ROLE_BUDGETS};
 use serde_json::json;
 use std::fs;
 
@@ -48,4 +48,21 @@ fn injectable_reader_skips_bad_files_and_recomputes_expired_hours() {
     let mut unsafe_status = status(8, 0);
     unsafe_status.session = "forged\nline".into();
     assert_eq!(alert_line(&unsafe_status, 1000), None);
+}
+
+#[test]
+fn role_strips_only_the_numeric_counter_and_unknown_roles_get_initial_caps() {
+    assert_eq!(role("build-L1-0429"), "build-L1");
+    assert_eq!(role("build-L1"), "build-L1");
+    assert_eq!(role("review-L2-latest"), "review-L2-latest");
+    assert!(ROLE_BUDGETS
+        .iter()
+        .all(|(_, wake, hour)| (*wake, *hour) == (6, 60)));
+    let mut unknown = status(7, 0);
+    unknown.session = "custom-role-12".into();
+    unknown.role = "custom-role".into();
+    assert_eq!(
+        alert_line(&unknown, 1000).as_deref(),
+        Some("TURN-BUDGET custom-role custom-role-12 wake=7/6 hour=0/60")
+    );
 }

@@ -78,6 +78,7 @@ fn ordinary_commands_and_single_exiting_background_wait_pass() {
         "sleep 1",
         "sleep 1; touch ready",
         "sleep 1; touch ready; git status",
+        "cat 'do'", // a literal argument is not a shell keyword
         "git commit -m 'sleep 1; git status'",
         "python -m plangraph.spawner.cli wait fake-run --timeout 60 &",
         "wait 123",
@@ -99,6 +100,23 @@ fn ordinary_commands_and_single_exiting_background_wait_pass() {
     let exiting_wait = event("gh pr checks 42 --watch", "PreToolUse");
     for _ in 0..2 {
         assert_eq!(handle(&exiting_wait, &c, 1), None);
+    }
+}
+
+#[test]
+fn quoted_shell_keywords_are_ordinary_arguments_not_control_flow() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(&dir);
+    for command in [
+        "'while' sleep 1",
+        "'until' sleep 1",
+        "echo 'while'; sleep 1",
+    ] {
+        assert_eq!(
+            handle(&event(command, "PreToolUse"), &c, 1),
+            None,
+            "{command}"
+        );
     }
 }
 
