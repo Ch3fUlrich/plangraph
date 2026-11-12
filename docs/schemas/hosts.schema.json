@@ -25,6 +25,8 @@
         "class": { "enum": ["worker", "restricted"], "default": "worker", "description": "Policy label; restricted cap bounds are enforced by Rust." },
         "aliases": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "transport": { "enum": ["local", "keeper", "ssh"] },
+        "ssh_target": { "type": "string", "minLength": 1 },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
         "os": { "enum": ["linux", "windows"] },
         "state_dir": { "type": "string", "minLength": 1 },
         "caps": { "$ref": "#/$defs/caps" },

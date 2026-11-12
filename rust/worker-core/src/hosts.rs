@@ -105,6 +105,10 @@ pub struct HostEntry {
     pub class: HostClass,
     pub aliases: Vec<String>,
     pub transport: Transport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_target: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
     pub os: Os,
     pub state_dir: String,
     pub caps: Caps,
