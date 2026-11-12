@@ -10,6 +10,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
+
 from plangraph.catalog_data import SEED_MODELS
 from plangraph.planner.legs import DEFAULT_LEGS, Leg
 from plangraph.planner.route_policy import RoutePolicy, load_route_policy

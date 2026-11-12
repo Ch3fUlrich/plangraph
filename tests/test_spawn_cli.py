@@ -111,11 +111,10 @@ def test_harness_quota_falls_through(tmp_path, monkeypatch):
         store = LegStateStore(tmp_path / 'legs.sqlite')
         calls = []
         runner = SpawnerRunner()
-
         async def factory(*args, **kwargs):
             calls.append(list(runner.jobs.values())[-1].model_or_combo)
             code = ('import sys; print(' + repr(QUOTA) + ', file=sys.stderr); sys.exit(3)'
-                    if len(calls) == 1 else 'print("done")')
+                    if len(calls) == 1 else 'print(' + repr(json.dumps({'event': 'result', 'result': {'status': 'SUCCESS', 'response': 'done'}})) + ')')
             return await asyncio.create_subprocess_exec(sys.executable, '-c', code, **kwargs)
 
         runner.process_factory = factory
@@ -128,7 +127,6 @@ def test_harness_quota_falls_through(tmp_path, monkeypatch):
         state = store.leg_status(model, now=1000)
         assert state['state'] == 'limited'
         assert state['evidence']['reset_at'] == 39426
-
     asyncio.run(run())
 
 
@@ -145,19 +143,21 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
                 runner.provider_response(list(runner.jobs)[-1], model,
                     429 if len(runner.jobs) == 1 else 402, 'provider quota exhausted', {}, store=store,
                     source='gateway_adapter', adapter_token=runner._adapter_tokens[list(runner.jobs)[-1]])
-            return await asyncio.create_subprocess_exec(sys.executable, '-c', 'print("done")', **kwargs)
+            return await asyncio.create_subprocess_exec(sys.executable, '-c',
+                'print(' + repr(json.dumps({'event': 'result', 'result': {'status': 'SUCCESS', 'response': 'done'}})) + ')', **kwargs)
         runner.process_factory = factory
         service = spawn_service(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
-        models = [a['leg']['model'] for a in record['attempts']]
+        models = [a['leg']['model'] for a in record['attempts'] if isinstance(a['leg'], dict)]
         assert 'error' not in record, record.get('error')
-        assert len(models) == 8, record   # D-3817: Sonnet no longer implements
+        assert len(models) == 8, record  # Explicit mechanics table, not production writers.
         assert len(runner.jobs) == 3
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
         assert models[:4] == ['omniroute/cx-gpt-6.1-sol-xhigh',
                               'gemini-3.8-flash',
                               'opencode/deepseek-v4.1-flash-free',
                               'opencode/glm-5.3-flash-free']
+        attempted_ids = {a['leg']['id'] for a in record['attempts']}
         for leg in service.route({'estimate_tokens': 1000}).legs:
                 store.record_provider_response(leg.model if '/' in leg.model else 'agy/' + leg.model,
                     429, 'provider quota exhausted', {}, 'test')
@@ -165,7 +165,8 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         assert record['exit_code'] == 4
         assert record['evidence']
-        assert len(record["attempts"]) == 8   # D-3817: Sonnet no longer implements
+        assert len(record["attempts"]) == 8
+        assert {a['leg'] for a in record['attempts']} == attempted_ids
         assert all(a['status'] == 'skipped' and a['skip_reason'] == 'limited'
                    for a in record['attempts'])
         assert len(runner.jobs) == count
@@ -244,7 +245,8 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
     assert final['status'] == 'completed', {k: final.get(k) for k in ('exit_code', 'reason', 'error', 'events')}
 
 
-def test_records_and_review(tmp_path):
+def test_records_and_review(tmp_path, monkeypatch):
+    install_fallthrough_legs(monkeypatch)  # Known writer families in this mechanics table.
     async def run():
         service = SpawnService(state=tmp_path)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', dry_run=True)
@@ -268,19 +270,19 @@ def test_transport_only_fallthrough(tmp_path, provider_stop, monkeypatch):
                 runner.provider_response(job_id, first_model, 429,
                     'provider quota exhausted', {}, store=store, source='gateway_adapter',
                     adapter_token=runner._adapter_tokens[job_id])
-            return await asyncio.create_subprocess_exec(sys.executable, '-c', 'print("429")', **kwargs)
+            return await asyncio.create_subprocess_exec(sys.executable, '-c',
+                'print(' + repr(json.dumps({'event': 'result', 'result': {'status': 'SUCCESS', 'response': '429'}})) + ')', **kwargs)
         runner.process_factory = factory
         service = SpawnService(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
-        assert len(record["attempts"]) == 8   # D-3817: Sonnet no longer implements
+        assert len(record["attempts"]) == 8
         launched = [a for a in record['attempts'] if a['status'] != 'skipped']
-        assert len(launched) == (2 if provider_stop else 1)
-        assert len(runner.jobs) == len(launched)
-        assert all(a['skip_reason'] == 'earlier_leg_succeeded'
-                   for a in record['attempts'][len(launched):])
+        assert (len(launched), len(runner.jobs)) == ((2, 2) if provider_stop else (1, 1))
+        spares = [a for a in record['attempts'] if a['status'] == 'skipped']
+        assert all(isinstance(a['leg'], dict) for a in spares)
+        assert all(a['skip_reason'] == 'earlier_leg_succeeded' for a in spares)
         first_model = list(runner.jobs.values())[0].model_or_combo
-        first_key = first_model if '/' in first_model else 'agy/' + first_model
-        assert store.leg_status(first_key)['state'] == ('limited' if provider_stop else 'ok')
+        assert store.leg_status(first_model if '/' in first_model else 'agy/' + first_model)['state'] == ('limited' if provider_stop else 'ok')
         if provider_stop:
             assert service.route({'estimate_tokens': 1000}).first_leg.model != first_model
     asyncio.run(run())

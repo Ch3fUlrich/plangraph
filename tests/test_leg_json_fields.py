@@ -27,17 +27,22 @@ def load_row(tmp_path, row):
 
 
 @pytest.mark.parametrize("effort", [*CX_EFFORTS, None])
-def test_json_effort_reaches_implement_route_and_saved_record(tmp_path, effort):
+def test_json_effort_reaches_implement_route_and_saved_record(tmp_path, monkeypatch, effort):
+    monkeypatch.setenv("PLANGRAPH_CATALOG_DB", str(tmp_path / "absent.db"))
+    def ambient_catalog():
+        pytest.fail("JSON effort roundtrip must not read the host catalog")
+    monkeypatch.setattr("plangraph.routing_support.resolver.get_catalog_models", ambient_catalog)
     model = "omniroute/cx-gpt-6.1-sol" + ("-" + effort if effort else "")
     leg = load_row(tmp_path, sol_row(id=model.split("/", 1)[1], model=model, effort=effort))
     assert leg.effort == effort
     card = {"estimate_tokens": 1000}
     reader = lambda *a, **kw: {"state": "available", "evidence": None}
     plan = plan_spawn(card, role="implement", legs=(leg,), policy=RoutePolicy(),
-                      leg_reader=reader)
+                      leg_reader=reader, catalog_rows=())
     route = json.loads(json.dumps(plan.to_dict()))
     assert route["first_leg"]["effort"] == effort
     assert route["legs"][0]["effort"] == effort
+    monkeypatch.setattr("plangraph.routing_support.resolver.get_catalog_models", lambda: [])
     service = SpawnService(state=tmp_path, leg_reader=reader)
     record = asyncio.run(service.spawn(card=card, prompt="Implement public code",
                                        dry_run=True, _plan=plan))
@@ -65,7 +70,7 @@ def test_every_json_leg_field_is_preserved(tmp_path, field):
     # Non-default optional values catch validated fields silently dropped at construction.
     row = sol_row(claude_family=True, note="operator JSON preservation regression",
                   roles=["review", "implement"], tool_mode="inline-only",
-                  disabled="operator policy", trains_on_data=True, effort="high")
+                  disabled="operator policy", trains_on_data=True, effort="high", expires=123)
     leg = load_row(tmp_path, row)
     assert set(row) == {field.name for field in dataclasses.fields(Leg)}
     expected = tuple(row[field]) if field in ("windows", "roles") else row[field]

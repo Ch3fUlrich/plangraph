@@ -184,6 +184,7 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
             with pytest.raises(SpawnRefused, match=r"leg disabled: .*D-4196"):
                 asyncio.run(SpawnService(state=tmp_path).spawn(
                     card=CARD, leg=leg_id, override_reason="policy regression", dry_run=True))
+            assert not (tmp_path / "spawn-overrides.jsonl").exists()
 
 
 def test_route_skips_paused_harness_per_role():
@@ -214,6 +215,7 @@ def test_route_skips_paused_harness_per_role():
 def test_explicit_policy_argument_wins():
     open_policy = RoutePolicy(banned_families=(), off_families=(), paused_harnesses={})
     plan = plan_spawn(CARD, role="review", writer_families=("mimo",), policy=open_policy)
+    assert "opencode-deepseek-v4.1-flash-free" in [leg.id for leg in plan.legs]
     assert "opencode-glm-5.3-flash-free" in [leg.id for leg in plan.legs]
 
 
@@ -224,7 +226,7 @@ def test_claude_written_high_gets_luna_and_qwen(pre_d3552_policy):
     # D-3901: seats follow the free-first review route, retaining coverage.
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
     assert plan.error is None
-    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "mimo-v2.6-flash"}
+    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "opencode-gemini-4-argon"}
 
 
 def test_default_policy_seats_deepseek_for_review():
@@ -245,11 +247,11 @@ def test_seat_excludes_every_writer_family(pre_d3552_policy):
     from plangraph.keeper.coverage import uncovered
     plan = plan_spawn(RCARD, role="review", writer_families=("gpt", "qwen"))
     assert plan.error is None
-    assert set(_families(plan)) == {"mimo", "muse"}  # GLM off; agy paused by this fixture.
+    assert set(_families(plan)) == {"gemini", "mimo"}  # Free personal Argon survives the agy pause.
     assert uncovered(["gpt", "qwen"], _families(plan), need=1) == []
     # Coverage names the parts as the keeper does (gpt = openai, qwen = alibaba).
-    assert plan.seat_coverage == ({"leg": "mimo-v2.6-flash", "covers": ["alibaba", "openai"]},
-                                  {"leg": "omniroute-muse-spark", "covers": ["alibaba", "openai"]})
+    assert plan.seat_coverage == ({"leg": "opencode-gemini-4-argon", "covers": ["alibaba", "openai"]},
+                                  {"leg": "mimo-v2.6-flash", "covers": ["alibaba", "openai"]})
 
 
 def test_high_needs_two_families_per_part_incl_non_claude():
@@ -264,7 +266,7 @@ def test_high_needs_two_families_per_part_incl_non_claude():
 
 def test_uncoverable_parts_are_an_error():
     only = RoutePolicy(banned_families=("deepseek", "glm", "gpt", "mimo", "gemini", "muse",
-                                        "north", "laguna", "nvidia", "openai", "openrouter", "kimi", "grok"),
+                                        "north", "laguna", "nvidia", "openai", "openrouter", "kimi", "grok", "pickle"),
                        off_families=(), paused_harnesses={})
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",), policy=only)
     assert plan.error and "qwen" in _families(plan)

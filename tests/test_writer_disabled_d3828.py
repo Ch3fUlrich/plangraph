@@ -3,6 +3,8 @@ import asyncio
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
+
 from plangraph.planner.legs import DEFAULT_LEGS, WRITER_ORDER
 from plangraph.planner.routing import SpawnRefused, plan_spawn
 from plangraph.spawner.service import SpawnService

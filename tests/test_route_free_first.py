@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import dataclasses
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -12,14 +11,17 @@ from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import plan_spawn
 from plangraph.spawner.cli import main
 
+pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
+
 # Ordering probes include inline-only review legs, which require diff metadata.
 CARD = {"estimate_tokens": 20000, "risk_tags": [],
         "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
 FREE = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "openrouter-free"]
 DISABLED_FREE = {"opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free"}
-# D-4196: retain Zen rows for explicit-table probes, but never route them by default.
+# D-4196: both retained Zen rows stay permanently disabled as on main.
 ACTIVE_FREE = ["openrouter-free"]
 SUBS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]
+WRITERS = SUBS[:2]
 
 
 @pytest.fixture(autouse=True)
@@ -29,117 +31,64 @@ def isolated_catalog(monkeypatch, tmp_path):
     monkeypatch.setenv("PLANGRAPH_CATALOG_DB", str(tmp_path / "absent.db"))
 
 
-@pytest.mark.parametrize("card", [CARD, {"estimate_tokens": 1000}, {"estimate_tokens": 20000},
-    {"estimate_tokens": 20000, "risk_tags": []}, {"estimate_tokens": 20000, "risk_tags": ["secrets"]}])
-@pytest.mark.parametrize("state", ["available", "limited", "down", "expired"])
-def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card, state):
-    from plangraph.spawner.service import SpawnService
-    def reader(model, **kwargs):
-        return {"state": state if model == "omniroute/cx-gpt-6.1-sol-xhigh" else "available", "evidence": None}
-    service = SpawnService(state=tmp_path, leg_reader=reader)
-    plan = service.route(card, role="implement")
-    expected = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash"] if state == "available" else ["agy-gemini-3.8-flash"]
-    assert [leg.id for leg in plan.legs] == expected
-    assert all(not leg.claude_family and leg.family not in ("claude", "anthropic")
-               and not any(name in leg.model.lower() for name in ("claude", "fable", "opus", "sonnet", "haiku"))
-               for leg in plan.legs)
-    record = asyncio.run(service.spawn(card=card, prompt="Implement public code", dry_run=True))
-    assert record["chosen_leg"]["id"] == expected[0]
-    assert record["chosen_leg"]["effort"] == ("xhigh" if state == "available" else None)
-    assert not (tmp_path / "spawn-overrides.jsonl").exists()
+def test_main_zen_disables_retained_exactly():
+    reason = "D-4196 opencode zen never worked, use opencode go; never remove (D-3828)"
+    for leg in DEFAULT_LEGS:
+        if leg.id in DISABLED_FREE:
+            assert leg.disabled == reason
+            assert leg.expires is None
 
 
-def test_implement_family_exclusion_over_all_catalog_rows():
-    from plangraph.catalog_data import SEED_MODELS
-    from plangraph.planner.routing import route_card
-    from plangraph.routing_support.resolver import DEFAULT_FALLBACK_MODELS
-    template, fallback = (next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
-                          for leg_id in SUBS[:2])
-    for row in [*SEED_MODELS, *DEFAULT_FALLBACK_MODELS]:
-        # Make every catalog row otherwise eligible, including inactive rows.
-        model = row.get("model_id", row.get("id"))
-        candidate = dataclasses.replace(template, id="catalog:" + model, model=model,
-                                        family=row["family"], claude_family=False)
-        route = route_card(CARD, legs=(candidate, fallback), role="implement")
-        assert (candidate in route.legs) == (row["family"] != "claude"), model
-
-
-@pytest.mark.parametrize("alias", ["claude", "anthropic", "fable", "opus", "sonnet", "haiku"])
-@pytest.mark.parametrize("source", ["family", "model"])
-@pytest.mark.parametrize("effort", ["", "-5.2-high"])
-def test_implement_claude_aliases_use_canonical_family(monkeypatch, alias, source, effort):
-    from plangraph.planner.route_policy import RoutePolicy
-    from plangraph.planner.routing import route_card
+def test_explicit_catalog_snapshot_never_reads_ambient_catalog(monkeypatch):
     from plangraph.routing_support import resolver
-    template, fallback = (next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
-                          for leg_id in SUBS[:2])
-    fields = dict(id="catalog-writer", model="catalog/opaque-model",
-                  family="distinct-family", claude_family=False)
-    fields[source] = alias.upper() + effort if source == "family" else "catalog/" + alias + "-next" + effort
-    candidate = dataclasses.replace(template, **fields)
-    monkeypatch.setattr(resolver, "get_catalog_models", lambda: [
-        {"id": candidate.model, "available": 1, "active": True}])
-    # Family aliases and model identities both work without the legacy flag.
-    assert resolver.detect_model_family(fields[source]) == "claude"
-    assert route_card(CARD, legs=(candidate, fallback), role="implement").legs == (fallback,)
-    assert route_card(dict(CARD, role="implement"), legs=(candidate, fallback)).legs == (fallback,)
-    plan = plan_spawn(CARD, role="implement", legs=(candidate, fallback), policy=RoutePolicy(), catalog_rows=None,
-                      leg_reader=lambda *a, **kw: {"state": "available", "evidence": None})
-    assert plan.legs == (fallback,)
-    assert {skip["leg"]: skip["reason"] for skip in plan.skipped}[candidate.id] == "excluded_family"
+    def forbidden():
+        pytest.fail("explicit catalog snapshot must not read the host catalog")
+    monkeypatch.setattr(resolver, "get_catalog_models", forbidden)
+    sol = next(leg for leg in DEFAULT_LEGS if leg.id == SUBS[0])
+    plan = plan_spawn(CARD, role="implement", legs=(sol,),
+                      catalog_rows=({"id": sol.model, "tier": "free", "available": 1, "active": True},))
+    assert plan.first_leg.id == sol.id
+    assert plan.first_leg.tier == "free"
 
 
-@pytest.mark.parametrize("identity", ["id", "harness", "flag", "unknown"])
-def test_implement_renamed_operator_claude_fails_closed(tmp_path, identity):
-    from plangraph.planner.legs import load_legs
-    from plangraph.planner.route_policy import RoutePolicy
-    from plangraph.planner.routing import RouteError, route_card
-    template, fallback = (next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
-                          for leg_id in SUBS[:2])
-    row = dict(dataclasses.asdict(template), id="operator-writer", model="provider/some-model",
-               family="unidentified-high" if identity == "unknown" else "gpt", claude_family=identity == "flag",
-               harness="claude" if identity == "harness" else "opencode")
-    if identity == "id":
-        row["id"] = "fable-5.2-high"
-    path = tmp_path / "legs.json"
-    path.write_text(json.dumps({"legs": [row]}))
-    candidate, = load_legs(path)
-    assert route_card(CARD, legs=(candidate,), role="review").legs == (candidate,)
-    for card, role in ((CARD, "implement"), (dict(CARD, role="implement"), None)):
-        assert route_card(card, legs=(candidate, fallback), role=role).legs == (fallback,)
-        with pytest.raises(RouteError) as exc:
-            route_card(card, legs=(candidate,), role=role)
-        assert exc.value.exclusion_reasons == {"excluded_family": 1}
-    plan = plan_spawn(CARD, role="implement", legs=(candidate, fallback), policy=RoutePolicy(),
-                      catalog_rows=({"id": candidate.model, "available": 1, "active": True},),
-                      leg_reader=lambda *a, **kw: {"state": "available", "evidence": None})
-    assert plan.legs == (fallback,)
-    assert {skip["leg"]: skip["reason"] for skip in plan.skipped}[candidate.id] == "excluded_family"
-
-
-@pytest.mark.parametrize("refusal", ['{"type":"error","error":{"status":402}}',
-    '{"type":"error","error":{"status":429}}', 'not_served_on_host: refused'])
-def test_default_writer_refusal_falls_through_to_agy(tmp_path, refusal):
-    from types import SimpleNamespace as NS
-    from plangraph.spawner.service import SpawnService
-    runner = NS(_processes={}, _tasks={}, provider_responses={}, jobs={})
+def test_default_plan_reads_catalog_once(monkeypatch):
+    from plangraph.routing_support import resolver
     calls = []
-    async def spawn(**kwargs):
-        model, first = kwargs["model_or_combo"], not calls
-        calls.append((model, kwargs["client"]))
-        job = NS(job_id=str(len(calls)), status="failed" if first else "completed",
-                 exit_code=1 if first else 0, stdout="", stderr=refusal if first else "",
-                 served_model=model, served_family="gpt" if first else "gemini", events=[], served_witness_reason="test")
-        runner.jobs[job.job_id] = job
-        return job
-    runner.spawn = spawn
-    service = SpawnService(runner, state=tmp_path)
-    record = asyncio.run(service.spawn(card=CARD, prompt="Implement public code", wait_seconds=None))
-    assert calls == [("omniroute/cx-gpt-6.1-sol-xhigh", "opencode"), ("gemini-3.8-flash", "agy")]
-    assert record["status"] == "completed"
-    assert record["chosen_leg"]["id"] == "agy-gemini-3.8-flash"
-    assert record["chosen_leg"]["effort"] is None
-    assert not (tmp_path / "spawn-overrides.jsonl").exists()
+    def catalog():
+        calls.append(True)
+        return []
+    monkeypatch.setattr(resolver, "get_catalog_models", catalog)
+    result = plan_spawn(CARD, role="implement", catalog_rows=None)
+    assert result.legs
+    assert calls == [True]
+
+
+def test_explicit_catalog_snapshot_preserves_admission():
+    from plangraph.planner.routing import SpawnRefused
+    sol = next(leg for leg in DEFAULT_LEGS if leg.id == SUBS[0])
+    unknown = dataclasses.replace(sol, model="test/unregistered")
+    with pytest.raises(SpawnRefused, match="unknown model: test/unregistered"):
+        plan_spawn(CARD, role="implement", legs=(unknown,), catalog_rows=())
+    with pytest.raises(SpawnRefused, match="unknown model:"):
+        plan_spawn(CARD, role="implement", legs=(sol,), catalog_rows=(
+            dict(id=sol.model, tier="free", available=0, active=False),))
+
+
+def test_fixed_rows_ignore_conflicting_ambient_catalog(monkeypatch):
+    from plangraph.routing_support import resolver
+    monkeypatch.setattr(resolver, "get_catalog_models", lambda: [
+        dict(id="opencode/big-pickle", tier="paid", available=1, active=True)])
+    result = plan_spawn(CARD, role="implement")
+    assert [leg.id for leg in result.legs] == WRITERS
+    review = plan_spawn(CARD, role="review", writer_families=("claude",))
+    assert next(leg for leg in review.legs if leg.id == "opencode-big-pickle").tier == "free"
+
+
+@pytest.fixture(autouse=True)
+def isolated_utility_inputs(tmp_path, monkeypatch):
+    from plangraph.routing_support import catalog_db
+    monkeypatch.setattr(catalog_db, "DEFAULT_DB_PATH", tmp_path / "absent.db")
+    monkeypatch.setenv("PLANGRAPH_CATALOG_DB", str(tmp_path / "absent.db"))
 
 
 @pytest.fixture(autouse=True)
@@ -201,7 +150,7 @@ def test_cli_route_implement_gpt_first_no_claude_writer(tmp_path, capsys):
     plan = json.loads(capsys.readouterr().out)
     ids = [leg["id"] for leg in plan["legs"]]
     assert ids == SUBS[:2]
-    assert "agy-sonnet-5.5" not in ids
+    assert "agy-sonnet-5.5" not in ids and "agy-opus-5.5" not in ids
     assert [leg["id"] for leg in plan["legs"] if leg["claude_family"]] == []
 
 
@@ -219,8 +168,10 @@ def test_route_and_refusal(tmp_path, capsys):
 def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
-    assert ids[:3] == ["agy-gemini-3.8-flash", "opencode-big-pickle", "mimo-v2.6-flash"]
-    assert not DISABLED_FREE & set(ids)
+    assert ids[:4] == ["agy-gemini-3.8-flash", "opencode-big-pickle", "opencode-gemini-4-argon", "mimo-v2.6-flash"]
+    assert DISABLED_FREE.isdisjoint(ids)
+    assert ACTIVE_FREE == [leg.id for leg in DEFAULT_LEGS if leg.id in FREE
+                           and leg.disabled == "D-3828: writer disabled; no retained review or orchestrate role"]
 
 
 def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
@@ -231,9 +182,10 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert [leg.id for leg in imp.legs] == SUBS[:2]
     rev = plan_spawn(CARD, role="review", writer_families=("claude",))
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
-    for leg_id in DISABLED_FREE:
-        assert reasons[leg_id].startswith("disabled: D-4196 ")
-    assert [leg.id for leg in rev.legs][:2] == ["agy-gemini-3.8-flash", "mimo-v2.6-flash"]
+    assert reasons[FREE[0]].startswith("disabled: D-4196 ")
+    assert reasons[FREE[1]].startswith("disabled: D-4196 ")
+    assert reasons["omniroute-deepseek-flash"] == "banned_family"
+    assert [leg.id for leg in rev.legs][:3] == ["agy-gemini-3.8-flash", "opencode-gemini-4-argon", "mimo-v2.6-flash"]
     assert reasons["opencode-big-pickle"] == "off_family"
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
@@ -261,8 +213,8 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    assert ids[:3] == ["agy-gemini-3.8-flash", "opencode-big-pickle", "mimo-v2.6-flash"]
-    assert not DISABLED_FREE & set(ids)
+    assert ids[:4] == ["agy-gemini-3.8-flash", "opencode-big-pickle", "opencode-gemini-4-argon", "mimo-v2.6-flash"]
+    assert DISABLED_FREE.isdisjoint(ids)
     assert ids.index("agy-gemini-3.8-flash") == 0
 
 
@@ -293,8 +245,10 @@ def test_fixed_review_order():
 def test_no_anthropic_implement_leg_removes_sonnet():
     from plangraph.planner.legs import DEFAULT_LEGS
     assert all(leg.id != "opencode-console-sonnet-5.5" for leg in DEFAULT_LEGS)
-    assert all("implement" not in leg.roles for leg in DEFAULT_LEGS
-                if leg.claude_family or leg.family in ("claude", "anthropic"))
+    assert {leg.id for leg in DEFAULT_LEGS if "implement" in leg.roles
+            and (leg.claude_family or leg.family in ("claude", "anthropic"))} == set()
+    assert next(leg for leg in DEFAULT_LEGS if leg.id == "agy-sonnet-5.5").roles == ("orchestrate", "review")
+    assert next(leg for leg in DEFAULT_LEGS if leg.id == "agy-opus-5.5").roles == ("review",)
 
 
 def test_renamed_and_second_haiku_remain_last():
@@ -308,6 +262,47 @@ def test_renamed_and_second_haiku_remain_last():
             table["agy-gemini-3.8-flash"])
     assert [leg.id for leg in route_card(CARD, legs=legs, role="review").legs] == [
         "agy-gemini-3.8-flash", "renamed-review", "second-review"]
+
+
+@pytest.mark.parametrize("benchmark", [None, {}])
+def test_haiku_last_across_tiers_and_measurements(monkeypatch, benchmark):
+    from plangraph.planner.route_policy import RoutePolicy
+    from plangraph.routing_support import resolver
+    monkeypatch.setattr(resolver, "get_catalog_models", lambda: [])
+    table = {leg.id: leg for leg in DEFAULT_LEGS}
+    legs = (dataclasses.replace(table["claude-haiku-5.5"], tier="free"),
+            dataclasses.replace(table["agy-opus-5.5"], tier="paid"),
+            dataclasses.replace(table["agy-gemini-3.8-flash"], tier="paid"))
+    if benchmark is not None:
+        benchmark = {leg.model: {"aa_intelligence": 100 - i * 40,
+                     "cost_per_task_usd": 0, "pool_burn_weight": 0}
+                     for i, leg in enumerate(legs)}
+    result = plan_spawn(CARD, role="review", legs=legs, benchmark=benchmark,
+                        writer_families=("gpt",), policy=RoutePolicy(),
+                        leg_reader=lambda *a, **k: {"state": "ok", "evidence": None})
+    assert {leg.id for leg in result.legs} == {leg.id for leg in legs}
+    # Main's reviewed tier boundary wins even for a catalog-repriced Haiku;
+    # it remains last within a shared tier when no measurements supersede it.
+    assert [leg.id for leg in result.legs] == ["claude-haiku-5.5", "agy-opus-5.5", "agy-gemini-3.8-flash"]
+    same_tier = tuple(dataclasses.replace(leg, tier="subscription") for leg in legs)
+    fallback = plan_spawn(CARD, role="review", legs=same_tier,
+                          writer_families=("gpt",), policy=RoutePolicy(),
+                          leg_reader=lambda *a, **k: {"state": "ok", "evidence": None})
+    assert fallback.legs[-1].id == "claude-haiku-5.5"
+
+
+@pytest.mark.parametrize("family,flag", [("claude", False), ("anthropic", False), ("other", True)])
+def test_custom_claude_implement_roles_cannot_route(family, flag):
+    from plangraph.planner.route_policy import RoutePolicy
+    from plangraph.planner.routing import route_card
+    safe = next(leg for leg in DEFAULT_LEGS if leg.id == SUBS[0])
+    blocked = dataclasses.replace(safe, id="custom-claude", family=family, claude_family=flag)
+    assert route_card(CARD, legs=(blocked, safe), role="implement").legs == (safe,)
+    result = plan_spawn(CARD, role="implement", legs=(blocked, safe), policy=RoutePolicy(),
+                        leg_reader=lambda *a, **k: {"state": "ok", "evidence": None})
+    assert result.legs == (safe,)
+    assert any(row["leg"] == blocked.id and row["reason"] == "excluded_family"
+               for row in result.skipped)
 
 
 def test_fixed_implement_sol_across_tiers():
@@ -329,6 +324,23 @@ def test_fixed_implement_sol_across_tiers():
                 *SUBS[:2], FREE[2], FREE[0], SUBS[2]]
             fallback = route_card(CARD, legs=writers, role="implement", unavailable=(SUBS[0],))
             assert [leg.id for leg in fallback.legs] == [SUBS[1], FREE[2], FREE[0], SUBS[2]]
+        # Neither writer promotion may erase the subscription/paid non-writer slots.
+        for other_tier in TIERS:
+            other = replace(table[SUBS[3]], tier=other_tier)
+            rest = (replace(table["deepseek"], disabled=None), table[SUBS[2]], other,
+                    replace(table[FREE[2]], disabled=None))
+            expected_rest = {
+                "trial": [other.id, FREE[2], SUBS[2], "deepseek"],
+                "free": [other.id, FREE[2], SUBS[2], "deepseek"],
+                "subscription": [FREE[2], SUBS[2], other.id, "deepseek"],
+                "paid": [FREE[2], SUBS[2], "deepseek", other.id],
+            }[other_tier]
+            writers = (*rest, replace(table[SUBS[0]], tier=tier),
+                       replace(table[SUBS[1]], tier=tier))
+            for unavailable, prefix in (((), SUBS[:2]), ((SUBS[0],), SUBS[1:2]),
+                                        (tuple(SUBS[:2]), [])):
+                route = route_card(CARD, legs=writers, role="implement", unavailable=unavailable)
+                assert [leg.id for leg in route.legs] == prefix + expected_rest
 
 
 def test_implement_lead_independent_of_writer_order(monkeypatch):
@@ -337,7 +349,7 @@ def test_implement_lead_independent_of_writer_order(monkeypatch):
     monkeypatch.setattr(legs, "WRITER_ORDER", ("openrouter-free", *legs.WRITER_ORDER))
     plan = plan_spawn(CARD, role="implement",
                       leg_reader=lambda *a, **k: {"state": "ok", "evidence": None})
-    assert plan.first_leg.id == legs.LEAD_WRITER
+    assert plan.first_leg.id == SUBS[0]  # D-5206: the designated lead is independent.
 
 
 def test_writer_order_d2683_implement_first_seven(monkeypatch):
@@ -373,7 +385,8 @@ def test_main_policy_gpt_first_and_retained_routes():
         assert "deepseek" in {leg.family for leg in review.legs}
         assert "glm" not in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {
-        "qodercli-qwen3.8-flash", *FREE, *SUBS, "cx-gpt-6-luna", "agy-sonnet-5.5",
+        "qodercli-qwen3.8-flash", *FREE, *SUBS, "cx-gpt-6-luna", "agy-sonnet-5.5", "agy-gemini-4-argon", "opencode-big-pickle",
+        "agy-opus", "agy-opus-5.5", "omniroute-deepseek-flash", "omniroute-muse-spark", "opencode-gemini-4-argon",
         "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
         "omniroute-grok-4.7", "opencode-console-muse-spark",
         "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek", "claude-haiku-5.5", "omniroute-gemini-3.8-flash",

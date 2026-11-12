@@ -5,8 +5,12 @@ review routed for a PR written by its own family (D-2511 family exclusion).
 """
 from __future__ import annotations
 
+import pytest
+
 from plangraph.planner.legs import DEFAULT_LEGS, WRITER_ORDER
 from plangraph.planner.routing import plan_spawn
+
+pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 
 CARD = {"estimate_tokens": 20000, "risk_tags": []}
 LUNA = "cx-gpt-6-luna"

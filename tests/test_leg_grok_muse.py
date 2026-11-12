@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
+
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.route_policy import RoutePolicy
 from plangraph.planner.routing import SpawnRefused, plan_spawn

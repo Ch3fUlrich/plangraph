@@ -43,7 +43,7 @@ def store(tmp_path, monkeypatch):
 def plan(store, role='review', writers=('xiaomi',), legs=DEFAULT_LEGS):
     # No diff_ref: inline-only legs (luna) skip with inline_only_needs_diff.
     return plan_spawn(dict(estimate_tokens=1000), role=role, writer_families=writers, leg_reader=store, now=100,
-                      policy=RoutePolicy(), legs=legs)
+                      policy=RoutePolicy(), legs=legs, catalog_rows=())
 
 
 def test_leg_data():
@@ -97,7 +97,7 @@ def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
     explicit = {s['leg'] for s in routed.skipped if s['reason'] == 'explicit_only'}
     assert explicit == set(listed)
     if role == 'implement':
-        assert routed.legs[0].id == LEAD_WRITER
+        assert [leg.id for leg in routed.legs] == [LEAD_WRITER, 'agy-gemini-3.8-flash']
 
 
 @pytest.mark.parametrize('role', ['review', 'implement'])
@@ -180,10 +180,12 @@ def test_service_route_lists_explicit_legs(tmp_path):
 
 
 def test_agy_command_passes_the_served_model():
-    from plangraph.routing_support.clients import build_command
+    from plangraph.routing_support.clients import build_command, launch_stdin_payload
     cmd = build_command('hi', 'claude-opus-5-5-high', role='review', client='agy')
     assert cmd == ['agy', '--dangerously-skip-permissions', '--model',
-                   'claude-opus-5-5-high', '-p', 'hi']
+                   'claude-opus-5-5-high', '-p', '', '--input-format', 'stream-json', '--output-format', 'stream-json']
+    assert json.loads(launch_stdin_payload(cmd, 'hi', 'agy')) == {
+        'event': 'user', 'message': {'role': 'user', 'content': 'hi'}}
 
 
 def _render(model, models=None):
