@@ -33,5 +33,6 @@ python3 -m pytest -q tests/test_keeper_mcp_snapshot.py
 ```
 
 Existing Python and Rust CI jobs discover these tests. Production keeps using
-Python MCP. HTTP proxying, auth parity, shadow diffs, seeded mutation replay,
+Python MCP; the snapshot also advertises the router-only `close_merged` GO close.
+HTTP proxying, auth parity, shadow diffs, seeded mutation replay,
 role canary configuration and deleting Python MCP are later slices.

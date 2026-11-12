@@ -9,8 +9,7 @@ asks for a different one.  Entry point: ``python -m plangraph.keeper.mcp``:
 ``main()`` switches stdin/stdout to UTF-8 first, since Windows stdio defaults
 to cp1252 and a non-ASCII item title would otherwise kill the server.
 
-Tool failures (a refused verb or an unreachable API) are MCP results with
-``isError`` true — JSON-RPC errors are reserved for a broken request envelope.
+Tool failures set ``isError``; JSON-RPC errors mean a broken request envelope.
 """
 from __future__ import annotations
 
@@ -72,6 +71,10 @@ TOOLS = (
     _tool("waive_second_family", "Router: waive the second-family rule (verified decision).",
           {"key": {"type": "string"}, "decision_id": {"type": "string"}},
           ("key", "decision_id")),
+    _tool("close_merged", "Router: close one merged in_review item on a head-bound GO decision.",
+          {"key": {"type": "string"}, "decision_id": {"type": "string"},
+           "families": {"type": "array", "items": {"type": "string"}}},
+          ("key", "decision_id", "families")),
     _tool("withdraw_review", "Router: take a decision-closable item out of review (decision names it in Closes:).",
           {"key": {"type": "string"}, "decision_id": {"type": "string"}},
           ("key", "decision_id")),
@@ -145,6 +148,7 @@ _ROUTES = {
     "evidence": ("POST", "add_evidence"), "submit": ("POST", "submit"),
     "verdict": ("POST", "verdict"), "cancel": ("POST", "cancel"),
     "waive_second_family": ("POST", "waive_second_family"),
+    "close_merged": ("POST", "close_merged"),
     "close_on_decision": ("POST", "close_on_decision"),
     "withdraw_review": ("POST", "withdraw_review"),
     "reopen": ("POST", "reopen"),
@@ -332,8 +336,6 @@ def serve(instream, outstream, client=None):
             outstream.flush()
 
 
-
-
 def _is_loopback(host):
     if host == "localhost":
         return True
@@ -388,13 +390,11 @@ def _utf8(stream, errors):
 
 
 def main(argv=None):
-    # cp1252 stdout would raise UnicodeEncodeError on any non-ASCII title and
-    # drop the MCP client; utf-8 in, utf-8 out, with the reader never fatal
+    # UTF-8 in/out avoids cp1252 losing non-ASCII titles; the reader is never fatal
     # ("replace") and the writer never fatal ("backslashreplace").
     serve(_utf8(sys.stdin, "replace"), _utf8(sys.stdout, "backslashreplace"),
           _default_client())
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -27,7 +27,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
-                "withdraw_review", "reopen", "set_kind", "set_metrics", "requeue",
+                "withdraw_review", "reopen", "set_kind", "close_merged", "set_metrics", "requeue",
                # phase_plan is POST transport only; the verb is read-only (planner/phase.py)
                "governor_override", "phase_plan",
                # phase_finish mutates only GitHub, never the store; transport is POST
@@ -279,6 +279,8 @@ def _worker_claim(store, principal, body, need):
 
 
 ROUTER_VERBS = {"mint_run_token": _mint_run_token,
+                "close_merged": lambda store, principal, body, need: store.close_merged(
+                    principal, body.get("key"), body.get("decision_id"), body.get("families")),
                 "replay": _replay,
                 "withdraw_review": _withdraw_review,
                 "reopen": _reopen,

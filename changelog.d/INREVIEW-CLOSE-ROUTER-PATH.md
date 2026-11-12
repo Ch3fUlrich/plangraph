@@ -1,0 +1,1 @@
+- Add router-only `close-merged` (D-5504/D-5506) across keeper engine, HTTP, CLI and MCP: close one merged in-review standard/high item on a head-bound indexed GO decision and independent non-Anthropic seat families, preserving evidence, locking and single-attempt audit semantics; add hermetic refusal and door regressions.
