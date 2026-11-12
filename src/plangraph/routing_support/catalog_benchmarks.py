@@ -1,6 +1,14 @@
 """D-5173 benchmark provenance migration and published snapshot data."""
+import hashlib
 import json
 from pathlib import Path
+from urllib.parse import quote
+
+
+def blob_url(oid, fragment):
+    """Immutable evidence in the public repository, addressed without a site login."""
+    return ("https://api.github.com/repositories/1407069640/git/blobs/"
+            + oid + "#" + quote(fragment, safe="/"))
 
 
 def migrate(conn):
@@ -24,41 +32,47 @@ def migrate(conn):
         conn.execute("DROP TABLE catalog_benchmarks_legacy")
 
 
+def snapshot_data():
+    """Checked-in observations: live URLs alone cannot freeze a score or effort."""
+    path = Path(__file__).with_name("catalog_benchmark_sources.json")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def published_rows():
-    """Live-source snapshot; absent metrics are intentionally not filled."""
+    """Exact measured identities only; routing aliases belong in the reader."""
     path = Path(__file__).with_name("catalog_benchmarks.json")
     rows = json.loads(path.read_text(encoding="utf-8"))
-    # Routing envelope defaults, not a new measurement or effort interpolation.
-    for base in ("omniroute/cx-gpt-6.1-sol", "omniroute/cx-gpt-6-luna"):
-        medium = next((r for r in rows if r["model_id"] == base + "-medium"), None)
-        if medium:
-            rows.append(dict(medium, model_id=base))
-    high = next((r for r in rows if r["model_id"] == "agy/gemini-3.8-flash-tiered-high"), None)
-    if high:
-        rows.append(dict(high, model_id="gemini-3.8-flash"))
+    evidence = path.with_name("catalog_benchmark_sources.json").read_bytes()
+    oid = hashlib.sha1(b"blob " + str(len(evidence)).encode() + b"\0" + evidence).hexdigest()
+    for row in rows:
+        row["source_url"] = blob_url(oid, "published/" + row["model_id"])
     return rows
 
 
+def benchmark_rows(legacy):
+    """Overlay only supplied metrics, preserving legacy ranks and other fields."""
+    historical = snapshot_data()["legacy"]
+    by_id = {}
+    for row in legacy:
+        provenance = historical[row["model_id"]]["provenance"]
+        by_id[row["model_id"]] = dict(row, source_date=provenance["source_date"],
+            source_url=blob_url(provenance["source_oid"], provenance["source_line"]))
+    for row in published_rows():
+        model = row["model_id"]
+        previous = by_id.get(model, {})
+        merged = dict(previous, **row)
+        if previous:
+            merged["benchmark_source"] += "; retained fields: " + previous["source_url"]
+        by_id[model] = merged
+    return list(by_id.values())
+
+
 def model_rows(rows):
-    """Register measured effort ids without changing routes or operator policy."""
-    from plangraph.planner.legs import spawnable_legs
+    """Explicit catalog identities, independent of planner leg policy/providers."""
+    path = Path(__file__).with_name("catalog_benchmark_models.json")
     by_id = {r["model_id"]: r for r in rows}
-    measured = {r["model_id"] for r in published_rows()}
-    by_id["claude/claude-haiku-4-5"].update(
-        available=0, unavailable_reason="D-5173 unmeasured: no published evaluation")
-    for leg in spawnable_legs():
-        if leg.model in by_id or leg.model not in measured:
-            continue
-        provider = {"agy": "agy", "claude": "claude"}.get(leg.harness, "cx")
-        if leg.model.startswith("console-meta/"):
-            provider = "opencode-go"
-        active = not leg.disabled
-        by_id[leg.model] = {
-            "model_id": leg.model, "provider_id": provider, "upstream_id": leg.model,
-            "family": leg.family, "parameter_effort": next((e for e in
-                ("low", "medium", "high", "xhigh", "max") if leg.model.endswith("-" + e)), None),
-            "context_tokens": leg.max_request_tokens, "max_output_tokens": 64000,
-            "status": "active" if active else "gated", "available": int(active),
-            "unavailable_reason": None if active else "explicit benchmark identity only",
-            "harness": leg.harness if leg.harness != "claude" else None, "tool_mode": leg.tool_mode}
+    for row in json.loads(path.read_text(encoding="utf-8")):
+        if row["model_id"] in by_id:
+            raise ValueError("duplicate benchmark catalog identity: " + row["model_id"])
+        by_id[row["model_id"]] = row
     return list(by_id.values())

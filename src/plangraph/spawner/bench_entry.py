@@ -17,6 +17,12 @@ LEG_BENCHMARK_MODEL = {
     "cx-gpt-6.1-sol": "omniroute/cx-gpt-6.1-sol-medium",
     "cx-gpt-6-luna": "omniroute/cx-gpt-6-luna-medium",
 }
+# Resolve defaults at lookup time without minting measured catalog identities.
+BENCHMARK_MODEL_ALIASES = {
+    "omniroute/cx-gpt-6.1-sol": "omniroute/cx-gpt-6.1-sol-medium",
+    "omniroute/cx-gpt-6-luna": "omniroute/cx-gpt-6-luna-medium",
+    "gemini-3.8-flash": "agy/gemini-3.8-flash-tiered-high",
+}
 
 
 def benchmark_options(require_bench=False, bench_db=None):
@@ -38,9 +44,9 @@ def benchmark_options(require_bench=False, bench_db=None):
                                 ("aa_intelligence", "cost_per_task_usd"))})
         # Alias mapped rows under their leg ids so the plan lookup
         # (rows.get(leg.model, rows.get(leg.id))) reaches them.
-        for leg_id, model_id in LEG_BENCHMARK_MODEL.items():
+        for leg_id, model_id in (LEG_BENCHMARK_MODEL | BENCHMARK_MODEL_ALIASES).items():
             row = rows.get(model_id)
-            if row is not None and leg_id not in rows:
+            if row is not None and (leg_id not in rows or leg_id in BENCHMARK_MODEL_ALIASES):
                 rows[leg_id] = row
     return dict(benchmark=rows, require_bench=bool(require_bench) or
                 os.environ.get('PLANGRAPH_REQUIRE_BENCH') == '1')

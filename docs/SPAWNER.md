@@ -1,5 +1,6 @@
 # Plangraph Spawner & Model Routing Architecture
 Benchmark catalog queries expose [source URLs and dates](benchmark-catalog.md); component-only evidence never substitutes for a missing composite score.
+Published citations resolve to immutable exact-model observations; routing defaults retain the canonical measured identity.
 
 ### Windows prompt delivery
 Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows

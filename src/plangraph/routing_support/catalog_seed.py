@@ -10,7 +10,7 @@ from typing import Any
 # here so spawner importers keep working unchanged.
 from plangraph.catalog_data import SEED_MODELS as SEED_MODELS
 
-from .catalog_benchmarks import published_rows
+from .catalog_benchmarks import benchmark_rows
 
 # 5-rung tier ladder ordering contract:
 # trial (0) < free (1) < credit (2) < subscription (3) < paid (4)
@@ -152,6 +152,9 @@ SEED_QUOTA_POOLS: list[dict[str, Any]] = [
 ]
 
 SEED_PROVIDERS: list[dict[str, Any]] = [
+    {"provider_id": "console-meta", "omniroute_id": "console-meta",
+     "tier": "subscription", "transport": "gateway", "gateway_mode": "omniroute_acp",
+     "available": 1, "unavailable_reason": None, "updated_at": "2026-11-12T00:00:00Z"},
     {
         "provider_id": "agy",
         "omniroute_id": "agy",
@@ -804,9 +807,9 @@ SEED_BENCHMARKS: list[dict[str, Any]] = [
     },
 ]
 
-# Published rows replace only the corresponding historical seed, never an
-# operator's persisted score. Uncited legacy seed rows remain until researched.
-SEED_BENCHMARKS = published_rows()
+# Published metrics overlay historical fields; untouched rows retain their
+# versioned seed citation, not a newly invented upstream measurement.
+SEED_BENCHMARKS = benchmark_rows(SEED_BENCHMARKS)
 # The 4 Role Routes
 SEED_ROUTES: list[dict[str, Any]] = [
     {

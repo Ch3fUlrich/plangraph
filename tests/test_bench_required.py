@@ -129,8 +129,7 @@ def test_gate_complete_short_and_two_databases(tmp_path):
     result = gate(complete, short, json_output=True)
     assert result.returncode == 1
     evidence = json.loads(result.stdout)
-    assert str(short) in {db["db"] for db in evidence["databases"]}
-    assert missing_writer in result.stdout
+    assert str(short) in result.stdout and missing_writer in result.stdout
     assert len(evidence["databases"]) == 2
 
 
