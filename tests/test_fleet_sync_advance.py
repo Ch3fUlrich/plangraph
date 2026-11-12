@@ -222,13 +222,16 @@ def test_fleet_sync_ssh_paths_are_remote(fleet, monkeypatch):
     assert seen[0]['repo'] == repo
 
 
-def test_fleet_sync_windows_transport_exact_argv(fleet, monkeypatch):
+@pytest.mark.parametrize('ssh_target', [None, 'remote-user@worker.example.invalid'])
+def test_fleet_sync_windows_transport_exact_argv(fleet, monkeypatch, ssh_target):
     import base64
     import inspect
     import subprocess
 
     from plangraph.fleet_sync import advance as module
     host = fleet[0]['hosts'][0]
+    if ssh_target:
+        host['ssh_target'] = ssh_target
     host['os'] = 'windows'
     config = {'repo': host['repos']['plangraph'], 'sha': 'a' * 40, 'windows': True}
     code = inspect.getsource(worker) + '\nimport json; print(json.dumps(worker(json.loads(' + repr(json.dumps(config)) + '))))'
@@ -238,7 +241,7 @@ def test_fleet_sync_windows_transport_exact_argv(fleet, monkeypatch):
 
     def check_output(argv, **kwargs):
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
-                        '--', 'host-a', remote]
+                        '--', ssh_target or 'host-a', remote]
         assert '\n' not in argv[-1] and '\r' not in argv[-1]
         return '{"ok": true, "events": []}'
 

@@ -2,55 +2,129 @@
 
 ### QUOTA-PAUSE-GATE
 
-The usage owner creates `quota-pause` in the spawner state directory at usage >=95% and unlinks it at reset. Presence alone (including a dangling symlink) pauses admission: no second meter, expiry or automatic clearing. Flag read errors also pause admission.
-An empty/unset state falls back to `PLANGRAPH_SPAWN_STATE`, then `$XDG_STATE_HOME/plangraph`; an empty/unset XDG root uses `~/.local/state/plangraph`.
-Session `launch` and `relaunch` refuse with `quota pause` before invoking the action or stopping an existing session, without a model filter. Dry runs do not bypass the quota check or write audit records.
-Leg-aware checks in launch-spec, pre-launch probing and seat prompt assembly pause legs whose `id` or `model` starts with `claude-`, accepting object or mapping metadata. Known other providers are unaffected; missing provider metadata is unknown-provider and cannot bypass a pause.
-`basic-analysis` is the sole exempt role, including session names with any trailing numeric suffix (`basic-analysis-001`, `basic-analysis-00012`).
-Seat mixins accept `state` or `_state`. Probes use configured runner roots (`state`, `_state`, `state_root`), then the probe store's `state_root` or database parent, before environment defaults.
-Launch-spec retains its required `state` and `role` request fields; quota refusals use reason code `quota_pause`. Omitted required fields remain invalid requests, not environment-defaulted builds.
-The deployed ctx-watchdog skips its external router call with one alert line for either a flag or symlink. Its home fallback is systemd `%h`, independent of the manager's `HOME`; redeploy the service template to apply the guard.
+The usage owner creates `quota-pause` in the spawner state directory at usage
+>=95% and unlinks it at reset. Presence alone (including a dangling symlink)
+pauses admission: no second meter, expiry or automatic clearing. Flag read errors
+also pause admission.
+An empty/unset state falls back to `PLANGRAPH_SPAWN_STATE`, then
+`$XDG_STATE_HOME/plangraph`; an empty/unset XDG root uses
+`~/.local/state/plangraph`.
+Session `launch` and `relaunch` refuse with `quota pause` before invoking the
+action or stopping an existing session, without a model filter. Dry runs do not
+bypass the quota check or write audit records.
+Leg-aware checks in launch-spec, pre-launch probing and seat prompt assembly
+pause legs whose `id` or `model` starts with `claude-`, accepting object or mapping
+metadata. Known other providers are unaffected; missing provider metadata is
+unknown-provider and cannot bypass a pause.
+`basic-analysis` is the sole exempt role, including session names with any trailing
+numeric suffix (`basic-analysis-001`, `basic-analysis-00012`).
+Seat mixins accept `state` or `_state`. Probes check runner roots (`state`,
+`_state`, `state_root`) or environment defaults before resolving the probe store,
+then check its `state_root` or database parent if no runner root was configured.
+Launch-spec retains its required `state` and `role` request fields; quota refusals
+use reason code `quota_pause`. Omitted required fields remain invalid requests,
+not environment-defaulted builds.
+The deployed ctx-watchdog skips its external router call with one alert line for
+either a flag or symlink, or a missing, invalid, unreadable or unsearchable state
+directory. Its home fallback is systemd `%h`, independent of the manager's `HOME`;
+redeploy the service template to apply the guard.
 
 ### Windows prompt delivery
 
-Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows argv guard (32,000 characters, or 8,000 for batch shims). This uses the existing per-job stdin payload path, not a temporary prompt file.
-Qoder retains an explicit empty `-p` value with `--input-format text`; missing prompt flags fail with `stdin_prompt_flag_missing`. Oversized Windows agy commands use `--input-format stream-json --output-format stream-json -p ""`, with one UTF-8 NDJSON user event on stdin followed by EOF.
-The last result's `response` supplies the answer and verdict; an ERROR or missing result fails explicitly, without publishing an unsuccessful response as an answer.
+Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
+argv guard (32,000 characters, or 8,000 for batch shims). This uses the existing
+per-job stdin payload path, not a temporary prompt file. Qoder retains an explicit
+empty `-p` value with `--input-format text`; missing prompt flags fail with
+`stdin_prompt_flag_missing`. Oversized Windows agy
+commands use `--input-format stream-json --output-format stream-json -p ""`, with
+one UTF-8 NDJSON user event on stdin followed by EOF. The last result's
+`response` supplies the answer and verdict; an ERROR or missing result fails
+explicitly, without publishing an unsuccessful response as an answer.
 Short agy prompts and Linux launches retain their existing argv form; see [background review launches and deadlines](spawner-operations.md) for Windows console suppression and bounded prompt packaging.
-Rejected stdin input or an unavailable/closed input pipe fails the run explicitly; the watchdog never retries a rejected payload as an empty prompt. Gateway config size refusal leaves the caller's environment unchanged.
+Rejected stdin input or an unavailable/closed input pipe fails the run explicitly;
+the watchdog never retries a rejected payload as an empty prompt. Gateway config
+size refusal leaves the caller's environment unchanged.
 
 ### Writer result finalization
-
-`worker-core::writer_result::check_result` runs the mandatory Rust file-size gate before returning a checked result; export rechecks it before content gates, bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>` and no publish/push is attempted.
-Changed tracked files use the Python CI gate's 400-line rule, exemptions, binary detection, splitlines counting and baseline ratchet. CI still runs unchanged `tools/check_file_size.py` over all tracked files.
+Terminal saves dispatch review verdicts to the keeper:
+- `verdict.json` audits outcomes; `verdict.delivered` stops replay.
+- Invalid evidence, missing keys, unwitnessed families and unparseable verdicts skip.
+- Pre-verifier I/O/import failures retry at most three times; lock failures defer without journal writes.
+- Verifier exit codes govern retries; ambiguous exceptions after invocation skip to prevent duplicate POSTs.
+- Remove both journal and marker explicitly to requeue after repair.
+- Delivery markers stop retries even when the completion field is absent.
+`worker-core::writer_result::check_result` runs the mandatory Rust file-size
+gate before returning a checked result; export rechecks it before content gates,
+bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
+and no publish/push is attempted. Changed tracked files use the Python CI gate's
+400-line rule, exemptions, binary detection, splitlines counting and baseline
+ratchet. CI still runs unchanged `tools/check_file_size.py` over all tracked files.
 The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI entry/skip-trailer rule, returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. The `.docs-map` gate moves into Rust in slice S1c. Doc-only and empty commits do not require skip reasons; section boundaries include indented headings in both Rust and CI.
 
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.
 ### Doctor host source checks
 
-`python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust `pg-spawnd doctor-sources` subcommand. `doctor.py` prefers the checkout's `rust/target/release/pg-spawnd`, otherwise resolves `pg-spawnd` on `PATH`, and reads its JSON check rows with a ten-second subprocess timeout. There is no Python fallback for these checks.
+`python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust
+`pg-spawnd doctor-sources` subcommand. `doctor.py` resolves it on the host's
+`PATH`, never from checkout build artifacts, and reads its JSON check rows with
+a ten-second subprocess timeout. Before any checks, optional `env.PATH` from the
+local hosts registry entry replaces the inherited PATH for both pg-spawnd and
+harness discovery/children. Identity is `PLANGRAPH_HOST_NAME` or registry `self`,
+with case-insensitive id/alias lookup; absent configuration retains inherited PATH.
+There is no Python fallback for source checks; fresh release clones need no build.
 
-The Rust command reads `plangraph/ps-hosts.json` under `XDG_CONFIG_HOME` (or `~/.config`), checking valid entries with `src` or `win_src` in parallel with at most 16 workers. SSH uses batch mode, a two-second connection timeout and a three-second probe deadline; source checks support POSIX, WSL and Windows paths.
-SSH output and diagnostics are discarded. A missing config or no eligible entries produces no source check rows; unreadable or malformed configuration produces `ps_hosts: fail` with `invalid configuration`.
+The Rust command reads `plangraph/ps-hosts.json` under `XDG_CONFIG_HOME` (or
+`~/.config`), checking valid entries with `src` or `win_src` in parallel with
+at most 16 workers. SSH uses batch mode, a two-second connection timeout and
+a three-second probe deadline; source checks support POSIX, WSL and Windows
+paths. SSH output and diagnostics are discarded. A missing config or no
+eligible entries produces no source check rows; unreadable or malformed
+configuration produces `ps_hosts: fail` with `invalid configuration`.
 
-Each `ps_host_<name>` row passes with `ok` on SSH exit 0; exit 44 reports `src missing`, exit 255 or an SSH launch/I/O error reports `unreachable`, and a timeout or other exit reports `host query failed`.
-If the Rust binary is missing, Python adds `ps_hosts: fail` with `unavailable`; a nonzero subcommand exit, invalid JSON/non-list response, timeout or other invocation error instead reports `host query failed`. Any failed check makes doctor exit 1.
+Each `ps_host_<name>` row passes with `ok` on SSH exit 0; exit 44 reports
+`src missing`, exit 255 or an SSH launch/I/O error reports `unreachable`, and
+a timeout or other exit reports `host query failed`. If the Rust binary is
+missing, Python adds `ps_hosts: fail` with `unavailable`; a nonzero subcommand
+exit, invalid JSON/non-list response, timeout or other invocation error instead
+reports `host query failed`. Any failed check makes doctor exit 1.
 
 ## Spawn by card
 Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged.
 
-CLI and overflow admission use the worker-core memory rule: `effective_free_mb - reservation_mb >= mem_floor_mb`, with MemAvailable as free memory and `warmup.ramp_mb[role]` as the reservation (an unknown role uses that host's largest positive ramp). Live run/writer counts never limit admission. Overflow ranks hosts by free RAM above their floor.
-Admission reads `caps.mem_floor_mb` and `warmup.ramp_mb` for each host from the worker-core hosts registry (`$XDG_CONFIG_HOME/plangraph/hosts.json`, or `~/.config/plangraph/hosts.json`), the same location used by fleet-sync.
-Local identity is `PLANGRAPH_HOST_NAME` when set, otherwise registry `self`; IDs and aliases resolve case-insensitively. Routing and the public-repository allowlist still come from `overflow-hosts.json`, but its legacy run/floor caps and local limit overrides are ignored.
-Missing/unreadable registry or missing, malformed caps exclude that host from overflow. Local admission instead uses conservative defaults of floor 3000 MB and role 2048 MB, with a logged reason. The independent OOM guard (D-5057/D-5075) remains unchanged.
+CLI and overflow admission use the worker-core memory rule:
+`effective_free_mb - reservation_mb >= mem_floor_mb`, with MemAvailable as
+free memory and `warmup.ramp_mb[role]` as the reservation (an unknown role
+uses that host's largest positive ramp). Live run/writer counts never limit
+admission. Overflow ranks hosts by free RAM above their floor.
+Admission reads `caps.mem_floor_mb` and `warmup.ramp_mb` for each host
+from the worker-core hosts registry (`$XDG_CONFIG_HOME/plangraph/hosts.json`,
+or `~/.config/plangraph/hosts.json`), the same location used by fleet-sync.
+Local identity is `PLANGRAPH_HOST_NAME` when set, otherwise registry `self`;
+IDs and aliases resolve case-insensitively. Routing and the public-repository
+allowlist still come from `overflow-hosts.json`, but its legacy run/floor caps
+and local limit overrides are ignored. Missing/unreadable registry or missing,
+malformed caps exclude that host from overflow. Local admission instead uses
+conservative defaults of floor 3000 MB and role 2048 MB, with a logged reason.
+The independent OOM guard (D-5057/D-5075) remains unchanged.
 
-Default CLI and MCP spawns try healthy SSH overflow hosts when local RAM admission refuses, only for repositories in the `public_repos` allowlist. Private or unknown repositories queue without copying. Failed targets are excluded for that spawn; when none can accept, a queued record lists safe refusal reasons.
-With no overflow config file, ordinary local admission is unchanged and no overflow annotation is added. Dry runs do not overflow. Local benchmark databases cannot be forwarded.
+Default CLI and MCP spawns try healthy SSH overflow hosts when local RAM
+admission refuses, only for repositories in the `public_repos` allowlist.
+Private or unknown repositories queue without copying. Failed targets are
+excluded for that spawn; when none can accept, a queued record lists safe
+refusal reasons. Without overflow config, admitted local runs have no annotation;
+below-floor runs queue with matching `reason` and `overflow_reason`. Dry runs do not overflow.
+Local benchmark databases cannot be forwarded. CLI/MCP use public `admit_spawn` once in the shared wrapper, not the CLI parent; the service persists queued/remote records.
 
-SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel lines around the remote spawn JSON. Only the single bracketed JSON receipt is accepted; shell-init banners, env-file echoes and JSON after the end are ignored.
-Missing, repeated or reversed sentinel pairs report `receipt_unbracketed` without retrying an already acknowledged spawn. Remote stderr stays private, and the existing credential-shape masking helper masks receipts before stdout exposure.
-Unreadable receipts or receipts without a nonblank remote run ID produce a local tracking ID, `acknowledged_unknown=true` and `status=unknown` on the selected host; they are never refused or retried.
+SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel
+lines around the remote spawn JSON. Only the single bracketed JSON receipt is
+accepted; shell-init banners, env-file echoes and JSON after the end are ignored.
+Missing, repeated or reversed sentinel pairs report `receipt_unbracketed` without
+retrying an already acknowledged spawn. Remote stderr stays private, and the
+existing credential-shape masking helper masks receipts before stdout exposure.
+Unreadable receipts or receipts without a nonblank remote run ID produce a
+local tracking ID, `acknowledged_unknown=true` and `status=unknown` on the
+selected host; they are never refused or retried.
 
 Install the package on each host, then use `python -m plangraph.spawner.cli`
 (or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
@@ -72,53 +146,126 @@ its timeout stops waiting, not the writer.
 `--no-fallthrough` disables automatic advancement after a captured provider stop.
 Plain stdout, including text saying 429, is never provider evidence.
 
-Private `runs/<run_id>/record.json` contains card hash, role, complete plan, chosen leg, served model/family with witness kind (a structured claude `system/init` model is a native witness; a mismatch with the requested leg sets `served_model_mismatch`), writer family, status, started/ended timestamps, attempts with provider stop details, job id, pid, and stdout tail. These records are the only source for `--review-of`; unknown ids refuse.
+### Opt-in per-attempt worktrees (RUN-WORKTREE slice 1)
 
-On terminal save the supervisor publishes a completion per run to `inbox/parent.jsonl` and the authenticated live keeper HTTP sink. Events include stable `event_id`, DONE/FAILED, run_id, rc, head_sha, take_cmd and discard_cmd. `PLANGRAPH_SPAWN_PARENT_SESSION` and `PLANGRAPH_SPAWN_ITEM` identify the destination session and keeper item.
-The private parent inbox does not by itself inject a message into an agent session. Terminal run records are the durable retry journal. The pluggable `deliver(recipient, event)` sink can bridge a fleet bus. The default keeper sink uses the spawner-role `record_run` API; it does not close items or bypass the keeper's authorization checks.
-`PLANGRAPH_SPAWN_NOTIFY_CMD` optionally names an argv-style command (no shell); it receives recipient as its final argument and event JSON on stdin. Consumers must deduplicate by event_id: external delivery is at-least-once across crashes. Failed hooks are logged and retried on re-save; local inbox replay is idempotent.
-`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds each child execution in seconds; unset gives a 25-minute review cap, while empty means no review cap; expiry kills its process tree and records rc 124 with FAILED completion.
-The detached supervisor must survive the child; killing the supervisor itself requires a future recovery service. This interim event contract carries over to the later Temporal implementation (also covers FLEET-STATUS-HOOK).
+CLI `spawn --run-worktree` / service `spawn(run_worktree=True)` creates a fresh
+`attempt-<uuid>` directory before each launch, including sequential fallthroughs
+and fixer continuations. The trusted `PLANGRAPH_SETTINGS` JSON/TOML top-level
+`worktree_root` config key overrides the per-host default `<state>/worktrees`.
+Fetch has a 30-second timeout outside the exclusive **`<root>/.lock`**; the fetched
+SHA is pinned before locked dependency checks and `git worktree add`. This exact
+lock name is reserved for WORKTREE-REAPER, not held during network waits.
+New lanes use the fetched `origin/main` head, never the caller's HEAD. Optional
+card `lane_branch` names the branch (default `lane/<run_id>`); `continuation: true`
+resumes that existing local branch's tip instead. Card `finished_dependencies`
+lists exactly 40- or 64-hex commit SHAs: a new lane refuses with `RunWorktreeDependencyNotMerged`
+(`run_worktree_dependency_not_merged`) if any is not an ancestor of fetched main,
+including missing commits. Continuations are sequential handoffs, not concurrent
+writers on one branch; retained earlier directories must no longer be used.
+Git failures become `SpawnRefused` codes: `run_worktree_invalid_branch`,
+`run_worktree_branch_exists`, `run_worktree_branch_missing`, `run_worktree_fetch_failed`,
+`run_worktree_fetch_timeout`, `run_worktree_base_unavailable`,
+`run_worktree_git_timeout` or `run_worktree_create_failed`, without raw Git diagnostics.
+The private run record saves `run_worktree: {path, branch, base_sha}` before launch
+and retains ordered creation evidence in `worktree_attempts`; `base_sha` is the
+attempt's starting commit (main head or continuation tip). A failed fixer creation
+records no worktree and a null cwd, never its parent's path. Runner `JobInfo.cwd`,
+process cwd and child PWD use that path. With the flag off, cwd is unchanged;
+dry runs create nothing. No worktrees are removed, no pg-reap lock sharing is
+implemented, and enabling by default and the Rust port remain later slices.
+
+Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
+chosen leg, served model/family with witness kind (a structured claude `system/init` model is a native witness; a mismatch with the requested leg sets `served_model_mismatch`), writer family, status, started/ended timestamps,
+attempts with provider stop details, job id, pid, and stdout tail.
+These records are the only source for `--review-of`; unknown ids refuse.
+
+On terminal save the supervisor publishes a completion per run to
+`inbox/parent.jsonl` and the authenticated live keeper HTTP sink. Events
+include stable `event_id`, DONE/FAILED, run_id, rc, head_sha, take_cmd and
+discard_cmd. `PLANGRAPH_SPAWN_PARENT_SESSION` and `PLANGRAPH_SPAWN_ITEM` identify
+the destination session and keeper item. The private parent inbox does not by
+itself inject a message into an agent session. Terminal run records are the
+durable retry journal. The pluggable `deliver(recipient, event)` sink can bridge
+a fleet bus. The default keeper sink uses the spawner-role `record_run` API;
+it does not close items or bypass the keeper's authorization checks.
+`PLANGRAPH_SPAWN_NOTIFY_CMD` optionally names an argv-style command (no shell);
+it receives recipient as its final argument and event JSON on stdin. Consumers
+must deduplicate by event_id: external delivery is at-least-once across crashes.
+Failed hooks are logged and retried on re-save; local inbox replay is idempotent.
+`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds each child execution in seconds; unset gives a 25-minute review cap, while empty means no review cap;
+expiry kills its process tree and records rc 124 with FAILED completion.
+The detached supervisor must survive the child; killing the supervisor itself
+requires a future recovery service. This interim event contract carries over to
+the later Temporal implementation (also covers FLEET-STATUS-HOOK).
 Writing run roles (implement/fix) guard shared .git/config against in-place mutations (e.g. core.autocrlf), restoring original bytes and failing the run if changed. The spawner kills only the process tree it started: the root is proven ours at spawn (direct child, own group; or Job Object member), a snapshot of its descendants is taken before any signal, and a kill is verified (up to 10 s). Survivors fail the run with reason `kill_incomplete` (event `kill_incomplete`, `survivors` pids): no fall-through leg, no second writer. Runs use argv exec only (no shell wrapper), enforced by a static guard test.
 
 Slice 1 cancellation with survivors ends the run as `failed` with reason `kill_incomplete` and never publishes `cancelled`; already-terminal cancellation results keep their status and exit code. Leg probes track spawned job IDs (not shared working directories), wait at most five seconds per launch/cancel/monitor cleanup operation, and attempt every owned job even after an error. Successful cleanup removes the temporary directory; incomplete cleanup raises an explicit error and retains it rather than deleting it under a possibly live process. `setsid` containment and periodic reaping are not implemented yet.
-`--model`/`--leg` require `--override-reason` of at least ten characters, audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
+`--model`/`--leg` require `--override-reason` of at least ten characters,
+audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
 The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md](spawner-seats.md) (D-3198).
 
 CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
 A probe with its harness binary missing reports `host-not-ready` and books no leg event.
 CLI `launch-spec` (placement R6a-3d; nothing calls it yet): one JSON request on stdin, one launch spec on stdout (argv, cwd, the complete child env, stdin, warnings, events) for pg-spawnd; optional request `leg.explicit` must be boolean: only `true` permits document review without `diff_ref`, absent/false still refuses; it reuses the spawn prep and never launches; exit 2 = one redacted refusal line, exit 1 = internal error (type name only).
-MCP `route`, `spawn`, `ps`, `result`, `status`, `cancel` (with `plangraph_agent_` prefix) share these records. Spawn requires `card` and `prompt` in its schema; model_or_combo requires override_reason.
+MCP `route`, `spawn`, `ps`, `result`, `status`, `cancel` (with `plangraph_agent_` prefix) share these records. Spawn requires
+`card` and `prompt` in its schema; model_or_combo requires override_reason.
 Result/status/cancel accept `run_id`; legacy job-id operations remain available.
 MCP `ps` is compact (all running/queued runs, the newest 20 ended, `total`, `omitted`); use `result` or CLI `ps` for full records.
 No JSON-RPC notification is answered or dispatched. A reply over 8 MiB becomes a `ReplyTooLarge` error (code -32000, same request id); stdio keeps serving.
-Only actual probe results write liveness state. Gateway adapters call `runner.provider_response` with actual captured responses.
+Only actual probe results write liveness state. Gateway adapters call
+`runner.provider_response` with actual captured responses.
 
-Runtime path: `src/plangraph/planner/routing.py` is the only module allowed to import `plangraph.spawner` at runtime; the boundary is enforced by `tests/test_spawner_import_guard.py`. Selection runs without a feature flag.
+Runtime path: `src/plangraph/planner/routing.py` is the only module allowed to
+import `plangraph.spawner` at runtime; the boundary is enforced by
+`tests/test_spawner_import_guard.py`. Selection runs without a feature flag.
 
 ### Card-driven routing core
 
-`planner.routing.plan_spawn(card, role="implement"|"review")` applies the canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
+`planner.routing.plan_spawn(card, role="implement"|"review")` applies the
+canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
 Writers put eligible free legs first, then subscriptions in `WRITER_ORDER` (`planner/legs.py`), headed by `omniroute/cx-gpt-6.1-sol`; banned/off families are skipped for writers too.
 Review seats start with Qoder Qwen, then what the route policy leaves; a no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat; Claude is no default writer or seat. A review without a writer family refuses (D-1533). The `claude` harness (Haiku review leg, D-3605) runs with an allowlisted env (`claude_env.py`: HOME, PATH, PWD, locale, XDG_*, proxies, `CLAUDE_CONFIG_DIR`; every other variable is dropped whatever its case), and a host without the `claude` binary skips the leg as `harness_missing: claude` (D-3649). A finished claude run's stdout (the record's `stdout_tail`) is the final text of its stream-json `result` event (else the last assistant text), so `tools/seat_verdict.py` finds the `VERDICT:` line; the raw stream is kept as `claude-stream.jsonl` beside the run's `live.log`, which still carries the raw activity feed.
-Claude 5.5 and effort-variant legs (operator 2026-11-09): `agy-claude-{sonnet,opus}-5-5-{low,medium,high}` (agy harness, review and implement), `agy-gemini-3.8-flash-{low,medium,high}` (review), `cx-gpt-6-luna-{low,medium,high,xhigh,max}` (inline-only review) and `cx-gpt-6.1-sol-{low,medium,high,xhigh,max}` (implement).
-The ids are what `agy models` and OmniRoute `/v1/models` served that day; agy serves no Sonnet xhigh and cx serves no `-ultra`, so neither is a leg. They live in `EXPLICIT_LEGS`, not `DEFAULT_LEGS`: an explicit `--leg` pick (or the model override) spawns them, and no route, keeper plan or role order changes (D-3605: Claude is no default writer or seat; D-3828: no writer fallback).
-`SpawnService.route` appends them to the plan as `explicit_only` skips, so `route` shows them; `plan_spawn` itself does not list them. A Claude leg is claude-family: the fence refuses it for a claude writer, given or via `review_of`; with mixed writers the D-3084 per-part rule admits a seat that covers another writer part.
-The Claude and sol-effort writers are `EXPLICIT_WRITERS`, which the spawn service admits for `implement`. The catalog spelling `agy/<model>` (MCP `model_or_combo`) resolves to the agy leg that holds the bare model.
-A cx effort model is not declared in the AutoOS root opencode config, so `render_gateway_providers` adds `providers.omniroute.models["cx-<m>-<effort>"]` (`modelID` `cx/<m>-<effort>`, the base model's limit) for that run only; without it opencode answers `provider.no-route`.
+Claude 5.5 and effort-variant legs (operator 2026-11-09): `agy-claude-{sonnet,opus}-5-5-{low,medium,high}`
+(agy harness, review and implement), `agy-gemini-3.8-flash-{low,medium,high}` (review),
+`cx-gpt-6-luna-{low,medium,high,xhigh,max}` (inline-only review) and
+`cx-gpt-6.1-sol-{low,medium,high,xhigh,max}` (implement). The ids are what `agy models` and
+OmniRoute `/v1/models` served that day; agy serves no Sonnet xhigh and cx serves no `-ultra`, so neither is a leg.
+They live in `EXPLICIT_LEGS`, not `DEFAULT_LEGS`: an explicit `--leg` pick (or the model
+override) spawns them, and no route, keeper plan or role order changes (D-3605: Claude is no
+default writer or seat; D-3828: no writer fallback). `SpawnService.route` appends them to
+the plan as `explicit_only` skips, so `route` shows them; `plan_spawn` itself does not list them. A Claude leg is claude-family: the fence refuses
+it for a claude writer, given or via `review_of`; with mixed writers the D-3084 per-part rule
+admits a seat that covers another writer part. The Claude and sol-effort writers are
+`EXPLICIT_WRITERS`, which the spawn service admits for `implement`. The catalog spelling
+`agy/<model>` (MCP `model_or_combo`) resolves to the agy leg that holds the bare model. A cx
+effort model is not declared in the AutoOS root opencode config, so `render_gateway_providers`
+adds `providers.omniroute.models["cx-<m>-<effort>"]` (`modelID` `cx/<m>-<effort>`, the base
+model's limit) for that run only; without it opencode answers `provider.no-route`.
 Leg notes ("after its Friday-evening reset") are static text: availability is the leg state (`limited` after a provider stop), not a schedule.
 Two review seats must differ in family from every writer and each other; an impossible fence returns fewer seats and an explicit plan error, not a fallback.
 
-An explicitly supplied `benchmark=` mapping (model or leg id to resolver metric row), or sequence of rows with `model_id`, ranks measured legs only inside their existing tier. Legs without rows go **last inside their tier**, retaining their relative operator order.
-`plan.gaps` (also in `to_dict()`) records each missing role-policy leg as `{leg, model, reason: "no benchmark row"}`; reasons name each gap, including legs filtered by eligibility or provider state. With `benchmark=None`, all role-policy legs are gaps, `p_source` is `operator-order`, and reasons explicitly say `benchmark data absent` (the legacy `no benchmark p` reason remains compatible).
-`plan_spawn(..., strict=True)` refuses any missing role-policy row with `SpawnRefused("benchmark rows missing: <legs>")`. This is the routing hook for the production CLI's `--require-bench`.
+An explicitly supplied `benchmark=` mapping (model or leg id to resolver metric
+row), or sequence of rows with `model_id`, ranks measured legs only inside their
+existing tier. Legs without rows go **last inside their tier**, retaining their
+relative operator order. `plan.gaps` (also in `to_dict()`) records each missing
+role-policy leg as `{leg, model, reason: "no benchmark row"}`; reasons name each
+gap, including legs filtered by eligibility or provider state. With `benchmark=None`,
+all role-policy legs are gaps, `p_source` is `operator-order`, and reasons explicitly
+say `benchmark data absent` (the legacy `no benchmark p` reason remains compatible).
+`plan_spawn(..., strict=True)` refuses any missing role-policy row with
+`SpawnRefused("benchmark rows missing: <legs>")`. This is the routing hook for the
+production CLI's `--require-bench`.
 
 Operator rules and `route_card` tier order come first; U_core only permutes within a tier, and only for review/orchestrate: implement keeps the writer order (D-2683), so a writer route shows `u_core` without applying it.
 CLI route/spawn and MCP load an existing `PLANGRAPH_CATALOG_DB` (default `~/.cache/plangraph/spawner_catalog.db`), unless `--bench-db`/`bench_db` overrides it.
 Route JSON `candidates` exposes each leg's tier, `u_core` (null without a row), `p_source` (`prior`/`measured`), and skip reason/evidence; live limited legs are skipped.
 
-`benchmark_rows_from_db(path)` returns `(rows_by_model_id, errors)` using SQLite read-only mode; it never creates a missing database. It accepts `catalog_benchmarks` or OmniRoute `model_benchmarks` (catalog takes precedence if both exist).
-`BENCHMARK_COLUMNS` documents the small column alias map. Missing/unreadable files, missing tables and malformed model IDs return an empty mapping with explicit errors. Duplicate model rows expose `benchmark_row_count`; the first row supplies metrics.
+`benchmark_rows_from_db(path)` returns `(rows_by_model_id, errors)` using SQLite
+read-only mode; it never creates a missing database. It accepts `catalog_benchmarks`
+or OmniRoute `model_benchmarks` (catalog takes precedence if both exist).
+`BENCHMARK_COLUMNS` documents the small column alias map. Missing/unreadable files,
+missing tables and malformed model IDs return an empty mapping with explicit errors.
+Duplicate model rows expose `benchmark_row_count`; the first row supplies metrics.
 
 ### Required benchmark release/swap gate (D-2576)
 
@@ -128,13 +275,23 @@ Before an OmniRoute image release or swap, check both host database snapshots:
 python tools/bench_gate.py --db workstation.sqlite --db server.sqlite --json
 ```
 
-Every distinct model in `DEFAULT_LEGS` with an `implement` or `review` role must have at least one row **in each database**. Output includes per-model counts and total rows per database as evidence.
-Exit codes: **0** complete coverage, **1** missing policy rows (models and database named), **2** unreadable database or unsupported/missing benchmark table. No data is synthesized or seeded by this gate; benchmark preparation/shipping lanes must supply the real rows.
+Every distinct model in `DEFAULT_LEGS` with an `implement` or `review` role must
+have at least one row **in each database**. Output includes per-model counts and
+total rows per database as evidence. Exit codes: **0** complete coverage, **1**
+missing policy rows (models and database named), **2** unreadable database or
+unsupported/missing benchmark table. No data is synthesized or seeded by this gate;
+benchmark preparation/shipping lanes must supply the real rows.
 
-`leg_reader=` accepts a store or leg-status callable; card `account` and `combo` scope live provider evidence exactly. `next_leg_after_provider_stop` records actual 429/402 responses with nonempty provider text and advances to the next currently eligible leg.
-Other responses do not suppress a leg. Transport adapters must supply actual provider responses, never agent output or exit-code guesses.
+`leg_reader=` accepts a store or leg-status callable; card `account` and `combo`
+scope live provider evidence exactly. `next_leg_after_provider_stop` records
+actual 429/402 responses with nonempty provider text and advances to the next
+currently eligible leg. Other responses do not suppress a leg. Transport adapters
+must supply actual provider responses, never agent output or exit-code guesses.
 
-`hand_picked` always requires an override reason of at least ten nonblank characters, enforces the Mimo provider fence, and appends an audit JSON line to `$XDG_STATE_HOME/plangraph/spawn-overrides.jsonl` (or injected `log_path`). Readiness remains separate in `planner/readiness.py`.
+`hand_picked` always requires an override reason of at least ten nonblank characters,
+enforces the Mimo provider fence, and appends an audit JSON line to
+`$XDG_STATE_HOME/plangraph/spawn-overrides.jsonl` (or injected `log_path`).
+Readiness remains separate in `planner/readiness.py`.
 
 Plangraph Spawner provisions, routes, and supervises autonomous agents across multi-model coding workflows. It combines a local WAL-mode SQLite benchmark catalog, a 5-rung tier priority ladder, fine-grained task complexity and risk measurement, OmniRoute ACP-first execution with full Windows Tailnet environment preservation, cross-family code review isolation, and a JSON-RPC 2.0 MCP server.
 
@@ -325,76 +482,17 @@ Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can
 
 ---
 
-## 4. 5-Rung Tier Priority Order & Quota Pools
+Benchmark catalog and ranking invariants: see [verified benchmarks](spawner-benchmarks.md).
 
-Every model candidate is assigned a tier according to its billing and quota consumption profile:
+Continue with [review protocol, interfaces, and operations](spawner-operations.md); see [OOM policy](../deploy/oom-policy.md) for repository checks versus live-pressure evidence.
+See [spawner prompt rules](operations/spawner-prompt-rules.md) for fixer reports and retry bounds.
+The served-model probe cache has a five-minute freshness bound,
+not a five-minute completion or delivery SLA; see the operations guide for details.
 
-| Rung | Tier | Description | Examples |
-|---|---|---|---|
-| **0** | `trial` | Zero-cost evaluation tiers | Experimental free trial keys |
-| **1** | `free` | No marginal cost, daily replenished allowance | `agy/gemini-3.8-flash-tiered-high`, `qoder/qwen3.8-flash-next` |
-| **2** | `credit` | Pre-funded non-recurring promotional balance | Promotional API balances |
-| **3** | `subscription` | Fixed recurring subscription pools; strictly prioritized before paid APIs | `agy` (Claude/Gemini), `cxa` (Codex Luna), `mimo` (v2.6 pro/flash), `opencode-go`, `claude` |
-| **4** | `paid` | Pay-as-you-go per-token APIs; used strictly as last resort | `deepseek` direct API, `gemini` direct API |
-
-### Quota Pool Mechanics
-
-1. **Antigravity (`agy`) Multi-Pool**:
-   - Manages 3 independent pools: free daily tier, pro subscription seat allowance, and team pooled capacity.
-   - Prevents starvation across concurrent planning and worker sessions.
-2. **OpenCode-Go (`opencode-go`) Rolling Caps**:
-   - Tracks sliding window usage caps per rolling 5-hour and 24-hour periods.
-   - Models like `qwen3.8-max` and `glm-5.2-max` consume from subscription credits before failing over.
-3. **MIMO Subscription & Cache Hit Discount**:
-   - `mimo/mimo-v2.6-pro` and `mimo/mimo-v2.6-flash` operate under a deep subscription pool.
-   - Features a **98% prompt caching discount** (`0.924` cache hit rate), reducing task cost to `$0.13` (Pro) and `$0.04` (Flash).
-   - This economic and performance profile places `mimo/mimo-v2.6-pro` ahead of `opencode-go/qwen3.8-max` in utility ranking.
-
----
-
-## 5. Verified AA v4.3.2 Benchmark Catalog
-
-The SQLite catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py`, `catalog_db.py`) records 22 verified models benchmarked under Artificial Analysis v4.3.2 (October 2026):
-
-| Rank | Model ID | Family | Tier | AA Intel | Verified tok/s | Direct tok/s | Task Cost ($) | Cache Hit | Role Routes |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | `agy/claude-opus-5-5-high` | claude | subscription | 57.6 | 98.0 | 45.0 | $1.82 | 88.0% | `l1-orchestrator` |
-| 2 | `gemini/gemini-4-argon-high` | gemini | paid | 53.0 | 120.0 | 60.0 | $0.85 | 85.0% | `l1-orchestrator` |
-| 3 | `agy/claude-sonnet-5-5-xhigh` | claude | subscription | 48.5 | 95.0 | 50.0 | $1.25 | 91.0% | `l1-orchestrator`, `l2-reviewer` |
-| 4 | `agy/claude-sonnet-5-5-high` | claude | subscription | 46.8 | 100.0 | 52.0 | $1.12 | 91.0% | `l1-orchestrator`, `l2-worker`, `l2-reviewer` |
-| 5 | `mimo/mimo-v2.6-pro` | mimo | subscription | **46.0** | **51.0** | **29.0** | **$0.13** | **92.4%** | `l1-orchestrator`, `l2-worker`, `l2-reviewer` |
-| 6 | `opencode-go/qwen3.8-max` | qwen | subscription | 45.4 | 85.0 | 50.0 | $0.45 | 80.0% | `l1-orchestrator`, `l2-worker` |
-| 7 | `opencode-go/deepseek-v4.1-flash` | deepseek | subscription | **45.0** | **231.0** | **115.0** | **$0.26** | 84.0% | `l2-worker`, `l3-driver` |
-| 8 | `opencode-go/glm-5.2` | glm | subscription | 45.1 | 90.0 | 55.0 | $0.35 | 82.0% | `l2-worker`, `l2-reviewer` |
-| 9 | `opencode-go/muse-spark-1.3-contributor` | muse | subscription | 45.0 | 287.0 | 140.0 | $1.37 | 78.0% | `l2-worker` |
-| 10 | `deepseek/deepseek-v4-flash-max` | deepseek | paid | **45.0** | **231.0** | **115.0** | **$0.26** | 84.0% | `l2-worker`, `l3-driver` |
-| 11 | `claude/claude-haiku-4-5` | claude | subscription | 43.4 | 130.0 | 70.0 | $0.21 | 89.0% | `l2-worker` |
-| 12 | `cxa/gpt-6-luna-high` | gpt | subscription | **38.4** | **180.0** | **95.0** | **$0.07** | **85.0%** | `l1-orchestrator`, `l2-worker`, `l2-reviewer`, `l3-driver` |
-| 13 | `mimo/mimo-v2.6-flash` | mimo | subscription | 37.9 | **54.0** | **29.0** | **$0.04** | **92.4%** | `l2-worker`, `l3-driver` |
-| 14 | `agy/gemini-3.8-flash-tiered-high` | gemini | free | 41.0 | 158.0 | 85.0 | $1.24 | 86.0% | `l1-orchestrator`, `l2-worker` |
-| 15 | `qoder/qwen3.8-flash-next` | qwen | free | 40.0 | 175.0 | 90.0 | $0.05 | 81.0% | `l2-worker`, `l3-driver` |
-| 16 | `cxa/gpt-6-astra-max` | gpt | subscription | 53.0 | 69.0 | 35.0 | $3.26 | 70.0% | *(Gated: Codex ACP luna-only)* |
-| 17 | `cxa/gpt-6-sol-max` | gpt | subscription | 52.0 | 60.0 | 30.0 | $0.72 | 75.0% | *(Gated: Codex ACP luna-only)* |
-| 18 | `cxa/gpt-6-sol-xhigh` | gpt | subscription | 50.5 | 65.0 | 32.0 | $0.58 | 75.0% | *(Gated: Codex ACP luna-only)* |
-| 19 | `cxa/gpt-6-sol-high` | gpt | subscription | 48.0 | 72.0 | 38.0 | $0.44 | 75.0% | *(Gated: Codex ACP luna-only)* |
-| 20 | `cxa/gpt-6-sol-medium` | gpt | subscription | 44.0 | 85.0 | 45.0 | $0.31 | 75.0% | *(Gated: Codex ACP luna-only)* |
-| 21 | `cxa/gpt-6-sol-low` | gpt | subscription | 40.0 | 110.0 | 60.0 | $0.20 | 75.0% | *(Gated: Codex ACP luna-only)* |
-| 22 | `cxa/gpt-6-luna-low` | gpt | subscription | 34.0 | 220.0 | 120.0 | $0.03 | 85.0% | `l3-driver` |
-
-### Key Ranking & Guardrail Invariants
-
-- **`mimo/mimo-v2.6-pro` vs `opencode-go/qwen3.8-max`**: `mimo/mimo-v2.6-pro` has `46.0` AA Intelligence vs `45.4` for Qwen, verified token speed of `51 tok/s` (with `29 tok/s` direct API floor), lower task cost ($0.13 vs $0.45), higher cache hit rate (`92.4%` vs `80.0%`), and access to a deeper subscription pool. Utility scoring deterministically ranks `mimo/mimo-v2.6-pro` ahead of Qwen in both `l1-orchestrator` and `l2-worker`.
-- **`mimo/mimo-v2.6-flash` Performance**: Measured at `54 tok/s` overall verified, `29 tok/s` direct API, `75.4` CyberBench score, and only `$0.04/task` cost, making it the premier budget fast-worker for S0/S1 tasks.
-- **Codex ACP Luna-Only Policy**: Codex ACP (`cxa`) currently supports `cxa/gpt-6-luna-high` (`38.4` Intel, `180 tok/s`, `$0.07/task`) as the sole active production model. Models under `cxa/gpt-6-astra-max` and `cxa/gpt-6-sol-*` are gated (`status = 'gated'`, `available = 0`) to avoid silent failure or API timeouts.
-- **Claude Sonnet 5.5 Effort Clamping**: Anthropic Claude Sonnet 5.5 does not support effort level `max`. `clamp_effort()` automatically transforms requested effort `max` $\rightarrow$ `xhigh` for all `claude-sonnet-5-5*` models.
-- **Claude Haiku Price Cliff**: `claude/claude-haiku-4-5` imposes a steep price increase for contexts above 100K tokens. When `need_tokens > 100000`, the resolver strictly drops Haiku from candidate pools.
-- **DeepSeek Flash v1017**: The updated DeepSeek Flash v1017 snapshot reaches an Artificial Analysis Intelligence Index of `45.0` at `$0.26/task` cost and `231 tok/s` verified throughput. Available in both `opencode-go` subscription (`opencode-go/deepseek-v4.1-flash`, $U_{\text{core}} = 0.90$) and direct paid PAYG (`deepseek/deepseek-v4-flash-max`, $U_{\text{core}} = -2.60$). Subscription DeepSeek Flash beats Qwen Max ($U_{\text{core}} = -0.60$) on cost efficiency while providing strong code reasoning.
-
----
-
-Continue with [review protocol, interfaces, and operations](spawner-operations.md); see [OOM policy](../deploy/oom-policy.md) for repository checks versus live-pressure evidence. See [spawner prompt rules](operations/spawner-prompt-rules.md) for fixer reports and retry bounds. The served-model probe cache has a five-minute freshness bound, not a five-minute completion or delivery SLA; see the operations guide for details.
-
-Cross-host ps: see [site configuration and transport](spawner-ps.md).
+Cross-host ps: see [site configuration and transport](spawner-ps.md); [host readiness](placement-rules.md#host-readiness-consumer-contract) requires a matching ps entry and string source paths. Its ps `target` and overflow `ssh` must be the same string, even for aliases of one machine; mismatch lines name both values. Ordinary malformed host/probe and state-write errors emit per-host failure lines rather than aborting the fan-out; resource exhaustion (`MemoryError`, `RecursionError`) and process-control exceptions propagate instead.
 # Remote ps protocol
 
-The SSH ps endpoint serializes only running and queued records. Terminal history does not consume the 1 MiB transport budget; malformed terminal fields do not hide live runs. Malformed live replies and oversized replies name the queried host as unknown rather than silently omitting it.
+The SSH ps endpoint serializes only running and queued records. Terminal history
+does not consume the 1 MiB transport budget; malformed terminal fields do not
+hide live runs. Malformed live replies and oversized replies name the queried
+host as unknown rather than silently omitting it.

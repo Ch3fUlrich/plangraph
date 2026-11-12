@@ -20,3 +20,8 @@ Launch-spec reports `quota_pause` (its `state` and `role` fields remain required
 The watchdog also skips dangling symlinks and uses systemd `%h` when XDG is unset.
 Hermetic regressions cover dry-run refusals, pre-stop relaunch refusal, launch-spec
 build/reset, and real admission/probe resumption after reset.
+
+The watchdog now also refuses missing, invalid, unreadable or unsearchable state
+directories with the same single alert. Probe admission checks runner/environment
+quota state before resolving the probe store, then checks the configured store
+fallback. Unrelated spawner-guide text and wrapping are restored unchanged.

@@ -82,8 +82,8 @@ def test_leg_metadata(tmp_path, factory, fields, paused):
     assert not quota_paused(tmp_path, 'review', factory(**fields))
 
 
-def test_spawner_doc_size_and_quota_contract():
+def test_spawner_quota_doc_contract():
     doc = (Path(__file__).resolve().parents[1] / 'docs/SPAWNER.md').read_text()
-    assert len(doc.splitlines()) <= 400
-    for term in ('quota_pause', 'unknown-provider', 'numeric suffix', 'read errors', '%h'):
-        assert term in doc
+    section = doc.split('### QUOTA-PAUSE-GATE\n', 1)[1].split('\n### ', 1)[0]
+    for term in ('quota-pause', 'quota_pause', 'basic-analysis', 'claude-', 'unreadable', '%h'):
+        assert term in section

@@ -73,9 +73,16 @@ def test_build_other_provider_unchanged(build_case, tmp_path):
 
 
 @pytest.mark.parametrize('key', ['state', 'role'])
-def test_build_missing_required_fields_is_invalid(build_case, key):
+@pytest.mark.parametrize('paused', [False, True])
+def test_build_missing_required_fields_is_invalid(build_case, tmp_path, monkeypatch, key, paused):
+    from plangraph.spawner import target
     request, leg, service_calls = build_case
+    if paused:
+        (tmp_path / 'quota-pause').touch()
+    quota_check = Mock(side_effect=AssertionError('quota check before request validation'))
+    monkeypatch.setattr(target, 'quota_paused', quota_check)
     del request[key]
     with pytest.raises(spec.InvalidRequest, match='^' + key + '$'):
         spec.build(request)
+    quota_check.assert_not_called()
     service_calls.assert_not_called()

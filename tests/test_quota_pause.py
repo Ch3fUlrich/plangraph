@@ -1,4 +1,8 @@
 """Hermetic quota admission checks; no model processes are started."""
+import os
+from pathlib import Path
+import shlex
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -39,6 +43,25 @@ def test_session_pause_and_reset(tmp_path, monkeypatch, action, dry):
     assert len(calls) == 2
 
 
+@pytest.mark.parametrize('dry', [False, True])
+def test_action_run_reraises_parameter_refused_and_only_skips_dry_audit(tmp_path, monkeypatch, dry):
+    sessions = Sessions(state_root=tmp_path)
+    audit = Mock()
+    monkeypatch.setattr(sessions, '_audit_guarded', audit)
+    refusal = ParameterRefused('injected refusal')
+    action = Mock(side_effect=refusal)
+    with pytest.raises(ParameterRefused) as exc:
+        sessions._action_run('launch', 'implement-0001', action, dry)
+    assert exc.value is refusal
+    action.assert_called_once_with()
+    if dry:
+        audit.assert_not_called()
+    else:
+        audit.assert_called_once_with('launch', 'implement-0001', False, str(refusal),
+                                      None, sessions._audit_argv, refusal)
+    assert not sessions._sessions.exists()
+
+
 @pytest.mark.parametrize('state_attr', ['state', '_state', None])
 def test_claude_seat_pause_and_reset(tmp_path, monkeypatch, state_attr):
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path / 'unrelated'))
@@ -62,18 +85,11 @@ def test_claude_seat_pause_and_reset(tmp_path, monkeypatch, state_attr):
 @pytest.mark.parametrize('source', ['state', 'xdg', 'home', 'empty'])
 @pytest.mark.parametrize('kind', ['file', 'directory', 'dangling-link', 'link-loop'])
 def test_watchdog_skips_with_one_alert(tmp_path, source, kind):
-    import shlex
-    import subprocess
-    from pathlib import Path
     home = tmp_path / 'manager-home'
     root = {'state': tmp_path / 'explicit state', 'xdg': tmp_path / 'xdg/plangraph',
             'home': home / '.local/state/plangraph', 'empty': home / '.local/state/plangraph'}[source]
     root.mkdir(parents=True)
-    unit = (Path(__file__).resolve().parents[1] /
-            'deploy/ctx-watchdog/ctx-watchdog.service.in').read_text()
-    condition = next(line.split('=', 1)[1] for line in unit.splitlines()
-                     if line.startswith('ExecCondition='))
-    command = shlex.split(condition.replace('$$', '$').replace('%h', str(home)))
+    command = _watchdog_command(home)
     env = {'PATH': '/usr/bin:/bin'}  # HOME absent: systemd %h is authoritative.
     if source == 'state':
         env.update(PLANGRAPH_SPAWN_STATE=str(root), XDG_STATE_HOME=str(tmp_path / 'wrong'))
@@ -96,6 +112,62 @@ def test_watchdog_skips_with_one_alert(tmp_path, source, kind):
     result = subprocess.run(command, env=env, cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0
     assert not result.stdout and not result.stderr
+
+
+def _watchdog_command(home):
+    unit = (Path(__file__).resolve().parents[1] /
+            'deploy/ctx-watchdog/ctx-watchdog.service.in').read_text()
+    condition = next(line.split('=', 1)[1] for line in unit.splitlines()
+                     if line.startswith('ExecCondition='))
+    return shlex.split(condition.replace('$$', '$').replace('%h', str(home)))
+
+
+@pytest.mark.parametrize('kind', ['unreadable', 'unsearchable', 'missing', 'file',
+                                 'dangling-link', 'link-loop'])
+def test_watchdog_uninspectable_state_fails_closed(tmp_path, kind):
+    root = tmp_path / 'state'
+    if kind in ('unreadable', 'unsearchable'):
+        if os.name != 'posix' or os.geteuid() == 0:
+            pytest.skip('directory permission checks need an unprivileged POSIX user')
+        root.mkdir()
+        root.chmod(0o300 if kind == 'unreadable' else 0o600)
+    elif kind == 'file':
+        root.touch()
+    elif kind in ('dangling-link', 'link-loop'):
+        root.symlink_to(tmp_path / 'missing' if kind == 'dangling-link' else root)
+    try:
+        result = subprocess.run(_watchdog_command(tmp_path), cwd=tmp_path,
+                                env={'PATH': '/usr/bin:/bin', 'PLANGRAPH_SPAWN_STATE': str(root)},
+                                capture_output=True, text=True)
+        assert result.returncode == 1
+        assert result.stdout.splitlines() == ['ctx-watchdog: quota pause; relaunch skipped']
+        assert not result.stderr
+    finally:
+        if kind in ('unreadable', 'unsearchable'):
+            root.chmod(0o700)
+
+
+@pytest.mark.parametrize('dry', [False, True])
+@pytest.mark.parametrize('source', ['state', '_state', 'state_root', 'env'])
+def test_judge_pause_precedes_store_resolution(tmp_path, monkeypatch, dry, source):
+    import asyncio
+    from plangraph.spawner import leg_probe
+    runner = SimpleNamespace()
+    if source == 'env':
+        monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    else:
+        setattr(runner, source, tmp_path)
+        monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path / 'unrelated'))
+    resolve_store = Mock(side_effect=OSError('injected store failure'))
+    monkeypatch.setattr(leg_probe, '_store_for', resolve_store)
+    (tmp_path / 'quota-pause').touch()
+    leg = SimpleNamespace(id='claude-test', model='claude-test')
+    assert asyncio.run(leg_probe.before_launch(runner, leg, 'review', dry)) == 'quota pause'
+    resolve_store.assert_not_called()
+    (tmp_path / 'quota-pause').unlink()
+    with pytest.raises(OSError, match='injected store failure'):
+        asyncio.run(leg_probe.before_launch(runner, leg, 'review', dry))
+    resolve_store.assert_called_once_with(runner)
 
 
 def test_claude_judge_admission_before_probe(tmp_path, monkeypatch):
