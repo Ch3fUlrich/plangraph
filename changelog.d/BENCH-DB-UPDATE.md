@@ -1,2 +1,3 @@
 - D-5173: add lossless benchmark provenance migration and active leg/effort coverage guard; source URL/date are visible in catalog queries. Published scores land in separate leg-group commits; unmeasured exact variants remain disabled/explicit-only, never deleted.
 - Claude group: publish Fable 5.2 low/medium/high and Opus/Sonnet 5.5 effort measurements from Artificial Analysis v5.0.1, snapshot 2026-11-12. Haiku 4.5 is unmeasured (no composite).
+- GPT group: publish GPT-6.1 Sol and Luna low/medium/high/xhigh/max independently; map unsuffixed cx legs to the routing envelope's medium default. No interpolation; old gated GPT-6 Sol non-max efforts are unmeasured for the current index.

@@ -14,7 +14,13 @@ def migrate(conn):
 def published_rows():
     """Live-source snapshot; absent metrics are intentionally not filled."""
     path = Path(__file__).with_name("catalog_benchmarks.json")
-    return json.loads(path.read_text(encoding="utf-8"))
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    # Routing envelope defaults, not a new measurement or effort interpolation.
+    for base in ("omniroute/cx-gpt-6.1-sol", "omniroute/cx-gpt-6-luna"):
+        medium = next((r for r in rows if r["model_id"] == base + "-medium"), None)
+        if medium:
+            rows.append(dict(medium, model_id=base))
+    return rows
 
 
 def model_rows(rows):
