@@ -80,7 +80,8 @@ def test_route_and_refusal(tmp_path, capsys):
     assert main(['--state', str(tmp_path), 'route', '--card', '{"estimate_tokens":1000}', '--role', 'implement', '--json']) == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.1-sol'  # D-3745
-    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates'}
+    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates', 'placement'}
+    assert plan['placement'] == {'host': None, 'reason': 'placement_not_evaluated', 'free_mb': None}
     assert main(['--state', str(tmp_path), 'spawn', 'task']) == 2
     assert 'spawn by card' in capsys.readouterr().err
 
@@ -170,7 +171,8 @@ def test_renamed_and_second_haiku_remain_last():
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.routing import route_card
     table = {leg.id: leg for leg in DEFAULT_LEGS}
-    haiku = table["claude-haiku-5.5"]
+    # Ordering must still work for operator-configured, enabled Haiku siblings.
+    haiku = replace(table["claude-haiku-5.5"], disabled=None)
     legs = (replace(haiku, id="renamed-review"),
             replace(haiku, id="second-review", model="claude-haiku-next"),
             table["agy-gemini-3.8-flash"])

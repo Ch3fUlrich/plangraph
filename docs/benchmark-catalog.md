@@ -41,3 +41,10 @@ does not treat component evidence or unknown task costs as a utility input. Unsp
 Haiku efforts and GPT-OSS medium are unmeasured and disabled, not removed.
 Unspecified Grok retains its existing audited explicit-only admission and automatic
 route ban; benchmark coverage does not disable this unrelated manual workflow.
+
+Merge regressions retain main's prompt-only Haiku mode and exercise dispatch,
+refusal monitoring, and last-seat ordering with enabled synthetic Haiku fixtures.
+The production unmeasured-effort fence remains covered separately; cross-family
+routing checks include a diff reference so inline-only reviewers remain eligible.
+Installed packages include all three benchmark JSON assets alongside main's
+existing configuration JSON and SQL package data.

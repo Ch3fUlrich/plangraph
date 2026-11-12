@@ -4,6 +4,7 @@ The claude child env allowlist and the harness_missing admission live in test_cl
 """
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 
 import pytest
@@ -33,7 +34,11 @@ def test_leg_present_review_only_and_last():
 
 
 def test_review_route_ends_with_haiku_for_mimo_writer():
-    plan = plan_spawn(CARD, role="review", writer_families=("mimo",), leg_reader=_clear)
+    # Exercise ordering independently of the exact-effort measurement fence.
+    assert _leg().disabled and _leg().tool_mode == "prompt-only"
+    legs = tuple(replace(leg, disabled=None) if leg is _leg() else leg
+                 for leg in DEFAULT_LEGS)
+    plan = plan_spawn(CARD, role="review", writer_families=("mimo",), legs=legs, leg_reader=_clear)
     ids = [l.id for l in plan.legs]
     assert ids[-1] == "claude-haiku-5.5"
     assert ids.index("claude-haiku-5.5") > max(

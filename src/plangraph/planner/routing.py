@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from plangraph.routing_support.liveness import unavailable
 import json
 import os
@@ -222,6 +222,7 @@ class SpawnPlan:
     candidates: tuple[dict, ...] = ()
     writer_groups: tuple = ()
     seat_coverage: tuple[dict, ...] = ()
+    placement: dict = field(default_factory=lambda: dict(host=None, reason='placement_not_evaluated', free_mb=None))
 
     @property
     def first_leg(self) -> Leg | None:
@@ -229,16 +230,14 @@ class SpawnPlan:
 
     def to_dict(self):
         result = asdict(self)
-        if not self.writer_groups:
-            result.pop('writer_groups')
-        if not self.seat_coverage:
-            result.pop('seat_coverage')
+        for field in ('writer_groups', 'seat_coverage'):
+            if not getattr(self, field): result.pop(field)
         result["first_leg"] = asdict(self.first_leg) if self.first_leg else None
         return result
 
 
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
-                legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None) -> SpawnPlan:
+                legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, placement=None) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
 
     The implement role ignores benchmark permutation (operator order D-2683).
@@ -250,6 +249,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
     """
+    placement = dict(placement) if placement is not None else dict(host=None, reason='placement_not_evaluated', free_mb=None)
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
         raise SpawnRefused("card required" + (": missing estimate_tokens" if isinstance(card, Mapping) and card else ""))
     for field in ('paths', 'write_set', 'risk_tags'):
@@ -275,6 +275,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             policy = load_route_policy()
         except ValueError as exc:
             raise SpawnRefused(str(exc)) from None
+    role = 'orchestrate' if role == 'research' else role
     if role not in ("implement", "review", "orchestrate"):
         raise ValueError("role must be implement|review|orchestrate")
     from plangraph.routing_support.risk import evaluate_risk
@@ -368,7 +369,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                            exclude_families=excluded, role=role)
     except RouteError as exc:
         return SpawnPlan((), tuple(skipped), "operator-order", (),
-                         tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details))
+                         tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details), placement=placement)
     ordered = list(route.legs)
     reasons, source = [*route.reasons, *bench_reasons], "operator-order"
     if benchmark is not None and role != "implement":
@@ -426,7 +427,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     threshold = admit_fixer_threshold(card=card)
     groups = split_findings(card.get('findings', ()), limit=threshold) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
-                     tuple(candidate_details), groups, coverage)
+                     tuple(candidate_details), groups, coverage, placement)
 
 
 def validate_model(model, *, allow_inactive=False):

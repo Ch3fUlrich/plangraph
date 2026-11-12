@@ -1,9 +1,11 @@
 """D-5173: exact effort coverage, provenance, and lossless catalog upgrades."""
 from datetime import date
+from fnmatch import fnmatchcase
 import hashlib
 import json
 from pathlib import Path
 import re
+import tomllib
 from urllib.parse import unquote, urlsplit
 
 import pytest
@@ -87,6 +89,18 @@ def test_raw_rows_match_frozen_upstream_sources():
         evidence = SOURCES["published"][row["model_id"]]
         assert row["source_url"] == evidence["source_url"]
         assert row["source_date"] == evidence["source_date"]
+
+
+def test_installed_catalog_includes_snapshot_data():
+    root = Path(__file__).resolve().parents[1]
+    packaging = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    patterns = packaging["tool"]["setuptools"]["package-data"]["plangraph"]
+    assert "config/*.json" in patterns and "**/*.sql" in patterns
+    assets = list(SOURCES_PATH.parent.glob("catalog_benchmark*.json"))
+    assert len(assets) == 3
+    for asset in assets:
+        relative = asset.relative_to(root / "src" / "plangraph").as_posix()
+        assert any(fnmatchcase(relative, pattern) for pattern in patterns), relative
 
 
 def test_bench_rows_complete(tmp_path):

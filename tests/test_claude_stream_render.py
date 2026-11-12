@@ -7,6 +7,7 @@ prints (hook, init, thinking, assistant and result events), with synthetic ids a
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import json
 import os
 import sys
@@ -144,7 +145,10 @@ def run_review(tmp_path, monkeypatch, lines, exit_code=0):
     monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:9/v1")
     monkeypatch.delenv("PLANGRAPH_SPAWN_RUN_TIMEOUT", raising=False)
-    leg = next(l for l in DEFAULT_LEGS if l.id == "claude-haiku-5.5")
+    # This fake-process test exercises dispatch, not benchmark admission policy.
+    leg = replace(next(l for l in DEFAULT_LEGS if l.id == "claude-haiku-5.5"), disabled=None)
+    monkeypatch.setattr("plangraph.planner.legs.DEFAULT_LEGS",
+                        tuple(leg if item.id == leg.id else item for item in DEFAULT_LEGS))
 
     async def run():
         runner = SpawnerRunner(process_factory=fake_claude(tmp_path, lines, exit_code), default_cwd=str(tmp_path))

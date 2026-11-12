@@ -6,3 +6,6 @@
 - Verify explicit Fable selection/family fences and MCP query provenance; retain the exact disabled-leg list and model/effort inventory in regression coverage.
 - Keep a published composite with unknown task cost queryable but out of utility ranking, without supplying a guessed default cost.
 - Review fixes: overlay supplied measurements without losing any legacy ranks/fields or rows; freeze exact-model evidence in content-addressed Git snapshots, resolve defaults only in the reader, use explicit provider identities without planner imports, restore unrelated assertions, and isolate database regression writes under tmp_path.
+- Merge round D-5266: retain main's prompt-only Haiku review mode and all reviewed routing changes; combine documentation mappings and language exceptions without duplicate entries, keeping the allowlist sorted.
+- Preserve every routing/stream/refusal regression assertion by enabling only synthetic Haiku mechanics fixtures; give cross-family route checks a diff reference so inline-only alternatives remain eligible under the unmeasured-effort fence.
+- Include all benchmark JSON snapshots in main's new installed-package metadata without dropping its configuration JSON or SQL assets.
