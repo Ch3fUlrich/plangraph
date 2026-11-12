@@ -17,9 +17,12 @@ def fixed_catalog(monkeypatch):
     monkeypatch.setitem(plan_spawn.__kwdefaults__, "catalog_rows", ())
 
 
-def test_writer_live_limit_reset_and_scope(tmp_path, monkeypatch):
+@pytest.mark.parametrize("gemini_tier", ["free", "subscription"])
+def test_writer_live_limit_reset_and_scope(tmp_path, monkeypatch, gemini_tier):
     from mechanics_legs import install_fallthrough_legs
     install_fallthrough_legs(monkeypatch)
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, "catalog_rows", (
+        {"id": "agy/gemini-3.8-flash", "tier": gemini_tier},))
     store = LegStateStore(tmp_path / "state.sqlite")
     p = plan_spawn(CARD, role="implement", leg_reader=store, now=100)
     assert p.first_leg.model == "omniroute/cx-gpt-6.1-sol-xhigh"  # D-5206

@@ -1,4 +1,4 @@
-"""D-5092: cost-tier ordering, without pinned review or writer leads."""
+"""D-5212: Sol xhigh then Gemini writers; other legs retain cost-tier ordering."""
 from __future__ import annotations
 
 import json
@@ -66,7 +66,8 @@ def test_implement_family_exclusion_over_all_catalog_rows():
 
 @pytest.mark.parametrize("alias", ["claude", "anthropic", "fable", "opus", "sonnet", "haiku"])
 @pytest.mark.parametrize("source", ["family", "model"])
-def test_implement_claude_aliases_use_canonical_family(monkeypatch, alias, source):
+@pytest.mark.parametrize("effort", ["", "-5.2-high"])
+def test_implement_claude_aliases_use_canonical_family(monkeypatch, alias, source, effort):
     from plangraph.planner.route_policy import RoutePolicy
     from plangraph.planner.routing import route_card
     from plangraph.routing_support import resolver
@@ -74,7 +75,7 @@ def test_implement_claude_aliases_use_canonical_family(monkeypatch, alias, sourc
                           for leg_id in SUBS[:2])
     fields = dict(id="catalog-writer", model="catalog/opaque-model",
                   family="distinct-family", claude_family=False)
-    fields[source] = alias.upper() if source == "family" else "catalog/" + alias + "-next"
+    fields[source] = alias.upper() + effort if source == "family" else "catalog/" + alias + "-next" + effort
     candidate = dataclasses.replace(template, **fields)
     monkeypatch.setattr(resolver, "get_catalog_models", lambda: [
         {"id": candidate.model, "available": 1, "active": True}])
@@ -83,6 +84,34 @@ def test_implement_claude_aliases_use_canonical_family(monkeypatch, alias, sourc
     assert route_card(CARD, legs=(candidate, fallback), role="implement").legs == (fallback,)
     assert route_card(dict(CARD, role="implement"), legs=(candidate, fallback)).legs == (fallback,)
     plan = plan_spawn(CARD, role="implement", legs=(candidate, fallback), policy=RoutePolicy(), catalog_rows=None,
+                      leg_reader=lambda *a, **kw: {"state": "available", "evidence": None})
+    assert plan.legs == (fallback,)
+    assert {skip["leg"]: skip["reason"] for skip in plan.skipped}[candidate.id] == "excluded_family"
+
+
+@pytest.mark.parametrize("identity", ["id", "harness", "flag", "unknown"])
+def test_implement_renamed_operator_claude_fails_closed(tmp_path, identity):
+    from plangraph.planner.legs import load_legs
+    from plangraph.planner.route_policy import RoutePolicy
+    from plangraph.planner.routing import RouteError, route_card
+    template, fallback = (next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
+                          for leg_id in SUBS[:2])
+    row = dict(dataclasses.asdict(template), id="operator-writer", model="provider/some-model",
+               family="unidentified-high" if identity == "unknown" else "gpt", claude_family=identity == "flag",
+               harness="claude" if identity == "harness" else "opencode")
+    if identity == "id":
+        row["id"] = "fable-5.2-high"
+    path = tmp_path / "legs.json"
+    path.write_text(json.dumps({"legs": [row]}))
+    candidate, = load_legs(path)
+    assert route_card(CARD, legs=(candidate,), role="review").legs == (candidate,)
+    for card, role in ((CARD, "implement"), (dict(CARD, role="implement"), None)):
+        assert route_card(card, legs=(candidate, fallback), role=role).legs == (fallback,)
+        with pytest.raises(RouteError) as exc:
+            route_card(card, legs=(candidate,), role=role)
+        assert exc.value.exclusion_reasons == {"excluded_family": 1}
+    plan = plan_spawn(CARD, role="implement", legs=(candidate, fallback), policy=RoutePolicy(),
+                      catalog_rows=({"id": candidate.model, "available": 1, "active": True},),
                       leg_reader=lambda *a, **kw: {"state": "available", "evidence": None})
     assert plan.legs == (fallback,)
     assert {skip["leg"]: skip["reason"] for skip in plan.skipped}[candidate.id] == "excluded_family"
@@ -294,6 +323,12 @@ def test_fixed_implement_sol_across_tiers():
         assert [leg.id for leg in route_card(CARD, legs=legs, role="implement").legs] == expected
         fallback = route_card(CARD, legs=legs, role="implement", unavailable=(SUBS[0],))
         assert [leg.id for leg in fallback.legs] == [FREE[2], FREE[0], SUBS[2]]
+        for gemini_tier in TIERS:
+            writers = (*legs, replace(table[SUBS[1]], tier=gemini_tier))
+            assert [leg.id for leg in route_card(CARD, legs=writers, role="implement").legs] == [
+                *SUBS[:2], FREE[2], FREE[0], SUBS[2]]
+            fallback = route_card(CARD, legs=writers, role="implement", unavailable=(SUBS[0],))
+            assert [leg.id for leg in fallback.legs] == [SUBS[1], FREE[2], FREE[0], SUBS[2]]
 
 
 def test_implement_lead_independent_of_writer_order(monkeypatch):
@@ -308,15 +343,17 @@ def test_implement_lead_independent_of_writer_order(monkeypatch):
 def test_writer_order_d2683_implement_first_seven(monkeypatch):
     from mechanics_legs import install_fallthrough_legs
     install_fallthrough_legs(monkeypatch)
-    # D-5206: eligible Sol leads; remaining writers retain tier/WRITER_ORDER.
+    # D-5212 / rule 3.23a: Sol xhigh, then Gemini, before all other cost tiers.
     # Explicit mechanics table tests all eight ordering slots; production
     # disabled-leg eligibility is independently asserted above and in Go tests.
     c = {"estimate_tokens": 20000, "risk_tags": []}
-    plan = plan_spawn(c, role="implement")
     expected = [*SUBS[:2], 'opencode-deepseek-v4.1-flash-free',
                 'opencode-glm-5.3-flash-free', 'openrouter-free',
                 'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek']
-    assert [leg.id for leg in plan.legs] == expected
+    for gemini_tier in ("trial", "free", "subscription", "paid"):
+        plan = plan_spawn(c, role="implement", catalog_rows=(
+            {"id": "agy/gemini-3.8-flash", "tier": gemini_tier},))
+        assert [leg.id for leg in plan.legs] == expected
 
 
 def test_main_policy_gpt_first_and_retained_routes():

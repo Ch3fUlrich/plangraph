@@ -38,19 +38,22 @@ def test_disabled_writer_never_routed():
     assert plan.legs and not disabled & {l.id for l in plan.legs}
 
 
-def test_tier_first_and_swap(monkeypatch):
+@pytest.mark.parametrize('gemini_tier', ['free', 'subscription'])
+def test_tier_first_and_swap(monkeypatch, gemini_tier):
     from mechanics_legs import install_fallthrough_legs
     writers = tuple(l for l in install_fallthrough_legs(monkeypatch) if 'implement' in l.roles)
     data = {l.model: {'aa_intelligence': 40 + i * 10,
                      'cost_per_task_usd': 0, 'pool_burn_weight': 0}
             for i, l in enumerate(writers)}
-    plan = plan_spawn(CARD, role='implement', benchmark=data, catalog_rows=())
+    # D-5212: both designated writers precede free legs, even at subscription cost.
+    catalog = () if gemini_tier == 'free' else ({'id': 'agy/gemini-3.8-flash', 'tier': gemini_tier},)
+    plan = plan_spawn(CARD, role='implement', benchmark=data, catalog_rows=catalog)
     expected = ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash', 'opencode-deepseek-v4.1-flash-free',
                 'opencode-glm-5.3-flash-free', 'openrouter-free',
                 'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek')
     assert tuple(l.id for l in plan.legs) == expected
     data[writers[0].model], data[writers[6].model] = data[writers[6].model], data[writers[0].model]
-    assert tuple(l.id for l in plan_spawn(CARD, role='implement', benchmark=data, catalog_rows=()).legs) == expected
+    assert tuple(l.id for l in plan_spawn(CARD, role='implement', benchmark=data, catalog_rows=catalog).legs) == expected
 
 
 def test_candidate_json_and_limit(monkeypatch):
@@ -81,7 +84,11 @@ def test_exact_tier_checks_ignore_ambient_catalog(monkeypatch, probe):
         pytest.fail('exact-tier checks must not read the host catalog')
 
     monkeypatch.setattr('plangraph.routing_support.resolver.get_catalog_models', ambient_catalog)
-    probe(monkeypatch)
+    if probe is test_tier_first_and_swap:
+        for tier in ('free', 'subscription'):
+            probe(monkeypatch, tier)
+    else:
+        probe(monkeypatch)
 
 
 def test_default_database_cli_mcp(tmp_path, monkeypatch, capsys):
