@@ -894,7 +894,7 @@ def spawn_service(*args, **kwargs):
                 return await super()._continue_writer(record, output)
 
         def __init__(self, *args, completion_sink=None, keeper_sink=None, **kwargs):
-            super().__init__(*args, **kwargs)
+            super().__init__(*args, **kwargs); self.runner.state = self.state  # probes share this run directory
             from .notify import FileInbox
             self.completion_sink = completion_sink or FileInbox(self.state)
             from .notify import KeeperSink

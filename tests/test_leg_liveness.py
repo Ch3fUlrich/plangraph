@@ -1,4 +1,6 @@
 import asyncio
+import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -110,3 +112,125 @@ def test_execute_probe_falls_through(tmp_path, monkeypatch):
     assert len(probed) == 2 and len(launched) == 1
     assert record['attempts'][0]['status'] == 'skipped'
     assert record['attempts'][0]['skip_reason'] == 'down: timeout'
+
+
+@pytest.fixture
+def failed_probe(tmp_path, monkeypatch):
+    from plangraph.spawner import leg_probe
+    from plangraph.planner.legs import DEFAULT_LEGS
+    leg = next(l for l in DEFAULT_LEGS if l.model == 'omniroute/cx-gpt-6.1-sol')
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    runner = SimpleNamespace(leg_reader=store, stderr='probe diagnostic', jobs={})
+    from plangraph.spawner.runner import spawn_service
+    spawn_service(runner, state=tmp_path, leg_reader=store)
+    async def spawn(**kwargs):
+        return SimpleNamespace(job_id='probe', status='failed', exit_code=1, stderr=runner.stderr)
+    async def cancel(job_id):
+        pass
+    def temporary(**kwargs):
+        root = tmp_path / 'probe'
+        root.mkdir()
+        return str(root)
+    runner.spawn, runner.cancel = spawn, cancel
+    monkeypatch.setattr(leg_probe.time, 'time', lambda: 1000)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda *a, **kw: 'fake')
+    monkeypatch.setattr(leg_probe, 'caller_heads', lambda: {})
+    monkeypatch.setattr(leg_probe.tempfile, 'mkdtemp', temporary)
+    monkeypatch.setattr(subprocess, 'check_output', lambda *a, **kw: b'initial')
+    monkeypatch.setenv('PLANGRAPH_LEG_DOWN_S', '1800')
+    return runner, leg, store
+
+
+def test_probe_stderr_excerpt_and_output(failed_probe, monkeypatch, capsys):
+    from plangraph.spawner import cli, leg_probe
+    from plangraph.spawner.env_redact import redact, redact_env_values
+    runner, leg, store = failed_probe
+    monkeypatch.setenv('PROBE_TEST_TOKEN', 'synthetic-probe-credential')
+    runner.stderr = 'discarded\n' + 'detail ' * 90 + '\nBearer sk-example\nsynthetic-probe-credential\nfinal failure'
+    from plangraph.routing_support.leg_state import _redact
+    expected = ' '.join(_redact(redact(redact_env_values(runner.stderr, os.environ)), limit=None)[-400:].splitlines())
+    result = asyncio.run(leg_probe.probe_many(runner, [leg.id]))['probes'][0]
+    assert result['stderr_excerpt'] == expected and len(expected) == 400
+    assert 'discarded' not in result['reason'] and expected in result['reason']
+    assert 'synthetic-probe-credential' not in result['reason'] and 'sk-example' not in result['reason']
+    with store._connect() as db:
+        assert db.execute('SELECT body_excerpt FROM leg_events').fetchone()[0] == result['reason']
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: SimpleNamespace(runner=runner))
+    assert cli.main(['probe', '--leg', leg.id]) == 1
+    assert expected in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('age,status,model,text,serving', [
+    (119, 'running', None, 'writing', True), (120, 'running', None, 'writing', True),
+    (121, 'running', None, 'writing', False), (None, 'running', None, 'writing', False),
+    (0, 'completed', None, 'writing', False), (0, 'running', 'other/model', 'writing', False),
+    (0, 'running', None, '', False),
+])
+def test_probe_failure_live_run(failed_probe, monkeypatch, age, status, model, text, serving):
+    from dataclasses import asdict
+    from plangraph.spawner import leg_probe
+    runner, leg, store = failed_probe
+    if age is not None:
+        directory = runner.state / 'runs' / 'run-live'
+        directory.mkdir(parents=True)
+        current = dict(asdict(leg), model=model or leg.model)
+        (directory / 'record.json').write_text(json.dumps(dict(
+            status=status, chosen_leg=None, attempts=[], plan=dict(legs=[current]))))
+        log = directory / 'live.log'
+        log.write_text(text)
+        os.utime(log, (1000 - age, 1000 - age))
+    store.record_probe_fail(leg_probe.key(leg), 'earlier failure', 'leg-probe', now=999)
+    result = asyncio.run(leg_probe.probe_many(runner, [leg.id]))['probes'][0]
+    assert result['ok'] is False
+    with store._connect() as db:
+        event = dict(db.execute('SELECT * FROM leg_events ORDER BY id DESC').fetchone())
+    assert 'probe diagnostic' in event['body_excerpt']
+    assert event['source'] == ('probe_failed_leg_serving' if serving else 'liveness-probe')
+    assert event['reset_at'] == (None if serving else 2800)
+    assert event['retry_after_s'] == (None if serving else 1800)
+    assert store.leg_status(leg_probe.key(leg))['state'] == ('ok' if serving else 'down')
+    assert store.last_probe_ts(leg_probe.key(leg)) is None
+    assert store.last_probe_attempt_ts(leg_probe.key(leg)) == 1000
+    assert store.last_probe_outcome(leg_probe.key(leg))['ok'] is False
+    if serving:
+        monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+        assert asyncio.run(leg_probe.before_launch(runner, leg, 'implement', False)) is None
+        store.record_probe_fail(leg_probe.key(leg), 'later failure', 'leg-probe')
+        assert store.leg_status(leg_probe.key(leg))['state'] == 'reprobe'
+
+
+def test_serving_probe_does_not_clear_quota(failed_probe):
+    from dataclasses import asdict
+    from plangraph.spawner import leg_probe, exit_outcome
+    runner, leg, store = failed_probe
+    directory = runner.state / 'runs' / 'run-live'
+    directory.mkdir(parents=True)
+    (directory / 'record.json').write_text(json.dumps(dict(status='running', chosen_leg=asdict(leg))))
+    log = directory / 'live.log'
+    log.write_text('writing')
+    os.utime(log, (1000, 1000))
+    job = SimpleNamespace(stdout='', stderr='Error: usage limit reached', exit_code=1,
+                          status='failed', events=[], command=['opencode'])
+    record = {}
+    assert exit_outcome.fallthrough_reason(SimpleNamespace(leg_reader=store), leg, job, record)
+    assert record['reason'] == 'harness_limit'
+    result = asyncio.run(leg_probe.probe(runner, leg, store=store))
+    assert result['state'] == 'probe_failed_leg_serving'
+    assert store.leg_status(leg_probe.key(leg))['state'] == 'limited'
+    store.record_probe_fail(leg_probe.key(leg), 'later probe failure', 'leg-probe')
+    assert store.leg_status(leg_probe.key(leg))['state'] == 'limited'
+
+
+def test_probe_serving_uses_current_attempt(failed_probe):
+    from dataclasses import asdict
+    from plangraph.spawner import leg_probe
+    runner, leg, store = failed_probe
+    directory = runner.state / 'runs' / 'run-live'
+    directory.mkdir(parents=True)
+    previous = dict(asdict(leg), id='other', model='other/model')
+    (directory / 'record.json').write_text(json.dumps(dict(status='running', chosen_leg=None,
+        plan=dict(legs=[previous, asdict(leg)]), attempts=[dict(leg=previous, status='failed')])))
+    log = directory / 'live.log'
+    log.write_text('writing')
+    os.utime(log, (1000, 1000))
+    assert leg_probe._leg_serving(runner, leg)

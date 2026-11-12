@@ -3,4 +3,5 @@
 tools/** -> CONTRIBUTING.md
 src/plangraph/fleet_sync/** -> docs/fleet-sync.md
 src/plangraph/spawner/** -> docs/SPAWNER.md
+src/plangraph/routing_support/leg_state.py -> docs/spawner-leg-state.md
 src/plangraph/keeper/** -> docs/KEEPER.md

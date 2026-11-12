@@ -1,5 +1,6 @@
 """Bounded commit-task liveness checks, shared by dispatch, CLI and MCP."""
 import asyncio
+import json
 import math
 import os
 import shutil
@@ -31,6 +32,32 @@ GIT_REDIRECT_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE',
 #: expressed as removals -- ``build_child_env`` drops a key whose extra_env
 #: value is None. Every harness child inherits this (D-3465).
 CHILD_ISOLATION = {**GIT_ISOLATION, **dict.fromkeys(GIT_REDIRECT_VARS)}
+LIVE_RUN_WRITE_WINDOW_S = 120
+
+
+def _leg_serving(runner, leg):
+    """A nonempty append-only live log's mtime is its last growth evidence."""
+    root = Path(getattr(runner, 'state', None) or os.environ.get('PLANGRAPH_SPAWN_STATE',
+                Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
+    now = time.time()
+    for path in (root / 'runs').glob('run-*/record.json'):
+        try:
+            record = json.loads(path.read_text())
+            if record.get('status') != 'running':
+                continue
+            current = record.get('chosen_leg') or record.get('leg')
+            if not current:
+                tried = {a['leg']['id'] if isinstance(a.get('leg'), dict) else a.get('leg')
+                         for a in record.get('attempts', ())}
+                current = next((l for l in record.get('plan', {}).get('legs', ()) if l['id'] not in tried), {})
+            matches = (current.get('model') == leg.model and current.get('harness') == leg.harness
+                       if isinstance(current, dict) else current == getattr(leg, 'id', None))
+            log = path.with_name('live.log').stat()
+            if matches and log.st_size > 0 and 0 <= now - log.st_mtime <= LIVE_RUN_WRITE_WINDOW_S:
+                return True
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            continue
+    return False
 
 
 def probe_env(base=None):
@@ -155,6 +182,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
     deadline = start + timeout
     root = tempfile.mkdtemp(prefix='plangraph-leg-probe-')
     job = None
+    stderr = ''
     spawn_task = None
     owned_ids = set()
 
@@ -193,8 +221,9 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
                 job = await asyncio.wait_for(asyncio.shield(spawn_task), max(deadline - time.monotonic(), 0))
             except asyncio.TimeoutError:
                 ok, reason = False, 'timeout'
-            except (ValueError, RuntimeError, OSError):
+            except (ValueError, RuntimeError, OSError) as exc:
                 ok, reason = False, 'exit 1'
+                stderr = getattr(exc, 'stderr', '') or ''
         if ok is None:
             try:
                 await _await_completion(runner, job, deadline)
@@ -215,12 +244,25 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
         if leaked:
             # Report the leak; NEVER auto-reset the caller's repo here.
             ok, reason, infra = False, 'probe leaked into caller repo', False
+        excerpt, serving = '', False
+        if not ok and not infra:
+            from .env_redact import redact, redact_env_values
+            diagnostic = job or next((j for jid, j in getattr(runner, 'jobs', {}).items() if jid in owned_ids), None)
+            stderr = getattr(diagnostic, 'stderr', '') or stderr
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode('utf-8', 'replace')
+            env = dict(os.environ)
+            env.update(getattr(runner, '_child_envs', {}).get(getattr(diagnostic, 'job_id', None), {}))
+            excerpt = ' '.join(leg_state._redact(redact(redact_env_values(stderr, env)), limit=None)[-400:].splitlines())
+            reason += ': ' + excerpt if excerpt else ''
+            serving = await asyncio.to_thread(_leg_serving, runner, leg)
         if not infra:
             if ok:
                 state.record_probe_pass(key(leg), caller='leg-probe')
             else:
-                state.record_probe_fail(key(leg), reason, caller='leg-probe')
-        return dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start)
+                state.record_probe_fail(key(leg), reason, caller='leg-probe', serving=serving)
+        return dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start,
+                    stderr_excerpt=excerpt, state='probe_failed_leg_serving' if serving else None)
     finally:
         from .probe_cleanup import cleanup
         cleanup_task = asyncio.create_task(cleanup(runner, spawn_task, job, root, owned_ids))
@@ -272,7 +314,7 @@ async def before_launch(runner, leg, role, dry_run):
     result = await asyncio.shield(pending)
     if result.get('state') == 'host-not-ready':
         return result['reason']
-    return admission() if result['ok'] or result.get('infra') else 'down: ' + result['reason']
+    return admission() if result['ok'] or result.get('infra') or result.get('state') == 'probe_failed_leg_serving' else 'down: ' + result['reason']
 
 
 async def probe_many(runner, legs=(), all_writers=False, timeout=None):

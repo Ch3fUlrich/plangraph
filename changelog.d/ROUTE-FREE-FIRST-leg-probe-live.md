@@ -1,0 +1,1 @@
+- Keep bounded, scrubbed probe stderr in diagnostics and leg-state events; let recently writing live runs override probe-only failures without masking provider quota/usage limits.
