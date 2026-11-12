@@ -11,18 +11,18 @@ from plangraph.spawner import overflow as o
 
 def healthy(**changes):
     return dict(ssh='invented-alias', ok=True, fresh=True, live_runs=0,
-                mem_available_mb=6000, run_cap=4, floor_mb=3000, **changes)
+                mem_available_mb=6000, role_mb=2048, floor_mb=3000, **changes)
 
 
-@pytest.mark.parametrize('live,mem', [(4, 9000), (0, 2999)])
+@pytest.mark.parametrize('live,mem', [(50, 4000), (0, 2999)])
 def test_best_host(live, mem):
     rows = {'birch': healthy(), 'ash': healthy(), 'cedar': healthy()}
     rows['cedar']['live_runs'] = 1
-    assert o.decide(live, mem, 4, 3000, rows, True).host == 'ash'
+    assert o.decide(live, mem, 2048, 3000, rows, True).host == 'ash'
 
 
 def test_local_room():
-    assert o.decide(3, 3000, 4, 3000, {}, False) == (None, 'local room')
+    assert o.decide(50, 5048, 2048, 3000, {}, False) == (None, 'local room')
 
 
 def bracket(command, receipt):
@@ -36,7 +36,7 @@ def bracket(command, receipt):
 def test_refused(field, value, reason):
     row = healthy()
     row[field] = value
-    result = o.decide(4, 6000, 4, 3000, {'ash': row}, True)
+    result = o.decide(4, 3000, 2048, 3000, {'ash': row}, True)
     assert result.host is None and reason in result.reason
 
 
@@ -44,17 +44,14 @@ def test_refused(field, value, reason):
 def test_negative_readiness_is_malformed(field):
     row = healthy()
     row[field] = -5
-    result = o.decide(4, 6000, 4, 3000, {'first': row}, True)
+    result = o.decide(4, 3000, 2048, 3000, {'first': row}, True)
     assert result.host is None and 'malformed readiness' in result.reason
-    assert o.decide(4, 6000, 4, 3000, {'first': row, 'second': healthy()}, True).host == 'second'
+    assert o.decide(4, 3000, 2048, 3000, {'first': row, 'second': healthy()}, True).host == 'second'
 
 
 @pytest.mark.parametrize('stdout,expected', [
-    ('{"status":"running","card":{"a":1}}', {'status': 'running', 'card': {'a': 1}}),
-    ('{\n"status":"running","card":{"a":1}\n}',
-     {'status': 'running', 'card': {'a': 1}}),
-    ('{"env":"secret"}\nunreadable receipt',
-     {'warning': 'remote spawn succeeded; receipt unavailable'}),
+    ('{"run_id":"run-r","status":"running","card":{"a":1}}',
+     {'run_id': 'run-r', 'status': 'running', 'card': {'a': 1}}),
 ])
 def test_remote_outer_receipt(monkeypatch, stdout, expected):
     def run(argv, **kwargs):
@@ -75,7 +72,8 @@ def inputs(tmp_path, monkeypatch):
     registry = o.config_dir() / 'hosts.json'
     registry.parent.mkdir(parents=True)
     registry.write_text(json.dumps({'self': 'local', 'hosts': [
-        {'id': name, 'caps': {'max_runs': 4, 'mem_floor_mb': 3000}}
+        {'id': name, 'caps': {'max_runs': 4, 'mem_floor_mb': 3000},
+         'warmup': {'ramp_mb': {'implement': 2048}}}
         for name in ('local', 'ash', 'birch')]}))
     config = tmp_path / 'config.json'
     monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
@@ -83,7 +81,7 @@ def inputs(tmp_path, monkeypatch):
     card.write_text(json.dumps({'diff_ref': {'repo': str(tmp_path), 'base': 'abc', 'head': 'def'}}))
     prompt = tmp_path / 'prompt.txt'
     prompt.write_text('a prompt')
-    monkeypatch.setattr(o, 'local_resources', lambda: (4, 6000))
+    monkeypatch.setattr(o, 'local_resources', lambda: (4, 4000))
     return tmp_path, config, ['spawn', '--repo', str(tmp_path), '--card', str(card), '--prompt', str(prompt)]
 
 
@@ -133,9 +131,9 @@ def test_readiness_fail_closed(inputs, contents):
                                    checked_at=(datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat()))
     (directory / 'ash.json').write_text(contents)
     records = o.ready_records({'hosts': {'ash': {'ssh': 'invented-alias'}}})
-    assert o.decide(4, 6000, 4, 3000, records, True).host is None
+    assert o.decide(4, 3000, 2048, 3000, records, True).host is None
     if 'checked_at' in contents:
-        assert 'stale' in o.decide(4, 6000, 4, 3000, records, True).reason
+        assert 'stale' in o.decide(4, 3000, 2048, 3000, records, True).reason
 
 
 @pytest.mark.parametrize('card', ['{"diff_ref": {}}', '{"diff_ref": {"base": "abc"}}', None])
@@ -205,7 +203,7 @@ def test_remote_receipt_boundary_and_mask(inputs, monkeypatch, capsys, mode):
         output = '/invented-stage'
         if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
             spawns.append(argv)
-            output = bracket(argv[-1], json.dumps({'status': 'running', 'note': 'password ' + secret}))
+            output = bracket(argv[-1], json.dumps({'run_id': 'run-r', 'status': 'running', 'note': 'password ' + secret}))
             lines = output.splitlines()
             if mode == 'missing_end':
                 output = '\n'.join(lines[:-1])
@@ -225,7 +223,7 @@ def test_remote_receipt_boundary_and_mask(inputs, monkeypatch, capsys, mode):
         assert result['note'] == 'password [redacted]'
     else:
         assert result['reason'] == 'receipt_unbracketed'
-        assert 'status' not in result
+        assert result['status'] == 'unknown' and result['acknowledged_unknown']
     assert len(spawns) == 1
 
 
@@ -261,7 +259,7 @@ def test_remote_rewrite_and_quoting(monkeypatch):
             cards.append(json.loads(o.Path(argv[2]).read_text()))
         stdout = '/invented-stage\n'
         if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
-            stdout = bracket(argv[-1], '{"status":"running"}')
+            stdout = bracket(argv[-1], '{"run_id":"run-r","status":"running"}')
         return SimpleNamespace(returncode=0, stdout=stdout)
     monkeypatch.setattr(o.subprocess, 'run', run)
     host = dict(ssh='invented-alias', repo='/invented checkout', spawner_src='/invented source', env_file='/invented env')
@@ -321,9 +319,39 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
             result = real_run(['sh', '-c', command], capture_output=True, text=True)
             assert result.returncode == 0, result.stderr
             received.append(result.stdout.splitlines()[1])
-            return SimpleNamespace(returncode=0, stdout=bracket(argv[-1], '{}'))
+            return SimpleNamespace(returncode=0, stdout=bracket(argv[-1], '{"run_id":"run-r"}'))
         return SimpleNamespace(returncode=0, stdout=str(stage) if argv[-1] == 'mktemp -d' else '{}')
     monkeypatch.setattr(o.subprocess, 'run', run)
     host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src='src')
-    assert o.remote_spawn('invented', host, {}, prompt, []) == {}
+    assert o.remote_spawn('invented', host, {}, prompt, []) == {'run_id': 'run-r'}
     assert received == [repr(prompt)]
+
+
+@pytest.mark.parametrize('receipt', ['unreadable', '{}', '[]', '{"status":"running"}'])
+@pytest.mark.parametrize('entry', ['main', 'admit'])
+def test_acknowledged_unknown_never_retries(inputs, monkeypatch, capsys, receipt, entry):
+    from plangraph.spawner import seat_spawn as admission
+    from plangraph.spawner.service import SpawnService
+    root, path, args = inputs
+    host = dict(ssh='invented', repo='/invented', spawner_src='/invented/src')
+    path.write_text(json.dumps({'public_repos': [str(root)], 'hosts': {'ash': host, 'birch': host}}))
+    monkeypatch.setattr(o, 'ready_records', lambda config, role='implement': {'ash': healthy(), 'birch': healthy()})
+    spawns = []
+    def run(argv, **kwargs):
+        stdout = '/invented-stage'
+        if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
+            spawns.append(argv)
+            stdout = receipt if receipt == 'unreadable' else bracket(argv[-1], receipt)
+        return SimpleNamespace(returncode=0, stdout=stdout)
+    monkeypatch.setattr(o.subprocess, 'run', run)
+    if entry == 'main':
+        assert o.main(args) == 0
+        record = json.loads(capsys.readouterr().out)
+    else:
+        service = SpawnService(state=str(root / 'state'))
+        service.runner.default_cwd = str(root)
+        monkeypatch.setattr(admission, 'resources', lambda service: (100, 4000))
+        record = admission.admit(service, {}, card={})
+        assert record in service.ps()['runs']
+    assert record['status'] == 'unknown' and record['acknowledged_unknown']
+    assert record['host'] == 'ash' and len(spawns) == 1

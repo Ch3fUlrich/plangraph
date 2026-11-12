@@ -71,7 +71,7 @@ def test_operator_order_and_roles_roundtrip(tmp_path):
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
         "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
-        "mimo-v2.6-flash", "mimo-v2.6-pro", "opencode-go-gemini-4-argon",
+        "agy-gpt-oss-120b", "mimo-v2.6-flash", "mimo-v2.6-pro", "opencode-go-gemini-4-argon",
         "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
         "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark",
         "opencode-go-deepseek-v4-flash", "omniroute-gemini-3.8-flash", "claude-haiku-5.5"]  # D-3605 Haiku leg
@@ -158,4 +158,5 @@ def test_agy_leg_models_use_agy_model_ids():
     # `agy models` ids: agy refuses the bare "sonnet-5.5" (workst run-1897ba45, 2026-10-26)
     agy = {l.id: l.model for l in DEFAULT_LEGS if l.harness == "agy"}
     assert agy == {"agy-gemini-3.8-flash": "gemini-3.8-flash",
+                   "agy-gpt-oss-120b": "gpt-oss-120b-medium",
                    "agy-sonnet-5.5": "claude-sonnet-5-5-medium"}

@@ -189,9 +189,14 @@ def test_resolve_launch_windows_guard(tmp_path, monkeypatch):
     assert err_bat_agy is not None
     assert err_bat_agy.startswith("command_line_too_long:")
 
-    # 4. Spawner runner integration: agy argv of 40 000 chars refuses and factory is never called
+    # 4. The runner now moves oversized agy prompts to stream-json stdin.
     async def run_spawn():
-        factory = AsyncMock()
+        proc = AsyncMock()
+        proc.pid = None
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(
+            b'{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n', b''))
+        factory = AsyncMock(return_value=proc)
         runner = SpawnerRunner(process_factory=factory)
         monkeypatch.setattr(runner_module, "_is_nt", lambda: True)
         monkeypatch.setattr(
@@ -203,11 +208,14 @@ def test_resolve_launch_windows_guard(tmp_path, monkeypatch):
             prompt="x" * 40000,
             model_or_combo="agy/claude-sonnet-5-5-high",
             client="agy",
+            role="review",
+            wait_seconds=2,
         )
-        assert job.status == "failed"
-        assert job.exit_code == 1
-        assert "command_line_too_long" in job.stderr
-        factory.assert_not_called()
+        assert job.status == "completed"
+        assert job.exit_code == 0
+        assert job.stdout == "done"
+        assert "x" * 40000 not in factory.call_args.args
+        assert b'"event": "user"' in proc.communicate.call_args.kwargs['input']
 
     asyncio.run(run_spawn())
 

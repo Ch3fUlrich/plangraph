@@ -105,7 +105,7 @@ def test_collect_enforces_deadline_with_injected_transport(monkeypatch):
         job._watchdog_baseline = 'baseline'
         stopped = asyncio.Event()
         class Transport:
-            async def communicate(self):
+            async def communicate(self, input=None):
                 await stopped.wait()
                 return b'synthetic output', b''
         async def reap(*args):

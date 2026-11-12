@@ -1,5 +1,26 @@
 # Contributing
 
+Run `python3 tools/preflight.py --base origin/main --head HEAD` before pushing:
+it blocks on scrub, CI policy (including commit trailers), changed-crate Rust checks,
+and affected tests, in that order. Each family ends with a timed PASS/FAIL/SKIP/INFRA
+summary; failed checks with HTTP 5xx output in any family (including policy) are
+inferred as INFRA and retried once; persistent INFRA exits 3, other failures exit 1.
+Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
+affected pytest has 900 seconds. The hook has no additional overall preflight bound.
+Use `--keep-going` to collect all failures or `--fast`
+to skip affected tests. The existing pre-push hook runs preflight too; set
+`PREFLIGHT_FAST=1` for its fast mode or `PREFLIGHT_SKIP=1` to bypass only that hook
+invocation (not the existing scrub/ref/file-size gates or direct CLI runs). Private
+scrub words come from `PLANGRAPH_SCRUB_WORDS` or `~/.config/plangraph/scrub-words.txt`;
+when neither is present, public rules still run but scrub reports SKIP with a reason.
+`PREFLIGHT_TOOLS_DIR` overrides tool paths for tests.
+The revision controls `FILESIZE_REQUIRE_BASE`, `NEWCODE_BASE` and `CHANGELOG_BASE`
+are scoped to policy checks. Other families receive none of these controls,
+including inherited values, so nested Git test fixtures own their revision bases.
+Affected tests also clear Git's repository-local environment reported by
+`git rev-parse --local-env-vars`, including indexed configuration pairs. Policy
+checks retain the caller's Git context; test repositories keep their own hooks.
+
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
 ## Setup and tests
@@ -16,6 +37,8 @@ python -m pytest -q -n auto tests            # main merge + nightly full suite
 The affected selector falls back to the full suite for unmapped Python source,
 shared fixtures and suite configuration; documentation/status/build artifacts do
 not trigger a full run. Do not bypass a conservative fallback on PRs.
+Pass `--head <revision>` for a committed-only comparison, excluding staged,
+worktree and untracked changes; omit it to include checkout changes.
 Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
 the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
@@ -36,6 +59,7 @@ counts, and CI refuses an entry added or raised against the change's base (`orig
 on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
 (today only `CHANGELOG.md`, an append-only ledger).
+The file-size gate refuses malformed Git batch headers with a single reason line.
 
 ## Changelog and documentation
 

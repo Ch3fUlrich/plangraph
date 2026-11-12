@@ -35,6 +35,10 @@ pub enum WriterError {
     Unrecorded,
     #[error("conflict")]
     Conflict,
+    #[error("HOLD gate file-size: {0}")]
+    FileSize(String),
+    #[error("HOLD gate changelog: {0}")]
+    Changelog(String),
 }
 impl From<std::io::Error> for WriterError {
     fn from(_: std::io::Error) -> Self {
@@ -79,7 +83,11 @@ pub fn check_result(
     checkout: &Path,
     workspace: &Workspace,
 ) -> Result<CheckedResult, WriterError> {
-    let base = workspace.base_sha.as_deref().ok_or(WriterError::Invalid)?;
+    let base = workspace
+        .base_sha
+        .as_deref()
+        .filter(|base| !base.is_empty())
+        .ok_or_else(|| WriterError::FileSize("no base".into()))?;
     if !oid(base) {
         return Err(WriterError::Invalid);
     }
@@ -135,6 +143,8 @@ pub fn check_result(
             return Err(WriterError::Verify);
         }
     }
+    file_size::check(checkout, base, &head).map_err(WriterError::FileSize)?;
+    changelog::check(checkout, base, &head).map_err(WriterError::Changelog)?;
     Ok(CheckedResult {
         repo_id: workspace.repo_id.clone(),
         base_sha: base.into(),
@@ -201,3 +211,9 @@ pub fn export_result(
 #[cfg(test)]
 #[path = "writer_result_tests.rs"]
 mod tests;
+
+#[path = "writer_file_size.rs"]
+mod file_size;
+
+#[path = "writer_changelog.rs"]
+mod changelog;
