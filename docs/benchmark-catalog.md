@@ -13,5 +13,7 @@ an explicit `UNMEASURED` exception must remain disabled or explicit-only, never
 removed (D-3828). Unknown scores must not be interpolated from sibling efforts.
 
 New measurements are recorded in `routing_support/catalog_benchmarks.json`.
+Claude Fable 5.2 low/medium/high are explicit-only; Claude 5.5 effort rows use
+separate exact ids. Haiku 4.5 has no published composite score in this snapshot.
 Historical October seeds remain uncited until verified; group commits replace
 them with published measurements, rather than merely attaching plausible URLs.

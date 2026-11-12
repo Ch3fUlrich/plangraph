@@ -89,13 +89,13 @@ class CatalogDB:
     def _insert_records(self, table_name: str, records: list[dict[str, Any]], *, seed=False) -> int:
         if not records:
             return 0
-        cols = list(dict.fromkeys(c for row in records for c in row))
-        col_list = ", ".join(cols)
-        placeholders = ", ".join(["?"] * len(cols))
         mode = "IGNORE" if seed else "REPLACE"
-        sql = f"INSERT OR {mode} INTO {table_name} ({col_list}) VALUES ({placeholders})"
         cursor = self.conn.cursor()
         for r in records:
+            cols = list(r)
+            col_list = ", ".join(cols)
+            placeholders = ", ".join(["?"] * len(cols))
+            sql = f"INSERT OR {mode} INTO {table_name} ({col_list}) VALUES ({placeholders})"
             values = [r.get(c) for c in cols]
             cursor.execute(sql, values)
         return len(records)

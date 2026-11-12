@@ -6,9 +6,10 @@ spawner catalog and the review gateway. Imports nothing from plangraph.spawner.
 
 from typing import Any
 from plangraph.registry_columns import tag_seed_rows
+from plangraph.routing_support.catalog_benchmarks import model_rows
 
 # Canonical 22 Models from Artificial Analysis v4.3.2
-SEED_MODELS: list[dict[str, Any]] = tag_seed_rows([
+SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
     {
         "model_id": "agy/claude-opus-5-5-high",
         "provider_id": "agy",
@@ -552,4 +553,4 @@ SEED_MODELS: list[dict[str, Any]] = tag_seed_rows([
         "supports_reasoning": 1, "supports_tool_calling": 1, "supports_vision": 1,
         "trains_on_prompts": 1,  # D-4193 upstream route not verified, conservative
     },
-])
+]))

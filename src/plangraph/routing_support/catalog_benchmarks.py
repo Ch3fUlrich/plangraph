@@ -15,3 +15,25 @@ def published_rows():
     """Live-source snapshot; absent metrics are intentionally not filled."""
     path = Path(__file__).with_name("catalog_benchmarks.json")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def model_rows(rows):
+    """Register measured effort ids without changing routes or operator policy."""
+    from plangraph.planner.legs import DEFAULT_LEGS, spawnable_legs
+    by_id = {r["model_id"]: r for r in rows}
+    for leg in spawnable_legs():
+        if leg.model in by_id:
+            continue
+        provider = {"agy": "agy", "claude": "claude"}.get(leg.harness, "cx")
+        if leg.model.startswith("console-meta/"):
+            provider = "opencode-go"
+        active = leg in DEFAULT_LEGS and not leg.disabled
+        by_id[leg.model] = dict(
+            model_id=leg.model, provider_id=provider, upstream_id=leg.model,
+            family=leg.family, parameter_effort=next((e for e in
+                ("low", "medium", "high", "xhigh", "max") if leg.model.endswith("-" + e)), None),
+            context_tokens=leg.max_request_tokens, max_output_tokens=64000,
+            status="active" if active else "gated", available=int(active),
+            unavailable_reason=None if active else "explicit benchmark identity only",
+            harness=leg.harness if leg.harness != "claude" else None, tool_mode=leg.tool_mode)
+    return list(by_id.values())

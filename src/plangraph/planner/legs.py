@@ -173,6 +173,9 @@ LEAD_WRITER = "cx-gpt-6.1-sol"
 #: legs are claude-family, so the D-2511 fence keeps them off claude-written work.
 #: A cx effort model needs a per-run opencode entry (``opencode_render``).
 EXPLICIT_LEGS: tuple[Leg, ...] = (
+    *(Leg(f"agy-claude-fable-5-2-{e}", "subscription", "agy", f"claude-fable-5-2-{e}",
+          "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
+          roles=("review", "implement")) for e in ("low", "medium", "high")),
     *(Leg(f"agy-claude-{m}-5-5-{e}", "subscription", "agy", f"claude-{m}-5-5-{e}",
           "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
           roles=("review", "implement"), note="operator 2026-11-09: Antigravity quota")
