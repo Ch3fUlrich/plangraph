@@ -1,0 +1,1 @@
+- **RUST-HOOKS slice 1:** add `pg-hook` shadow-only replay, five pending Rust hooks, best-effort JSONL diffs and hermetic parity-corpus tests; Python stays authoritative.
