@@ -34,7 +34,7 @@ _BLOCKING_LABEL = re.compile(
     r"\b[*_`]*(?:critical|high|med|medium|major|blocker)[*_`]*\s*(?:[:(]|[-–—]\s)", re.I)
 _LOW_LABEL = re.compile(
     r"\b[*_`]*(?:low|lows|nit|nits|minor)[*_`]*(?:\s+only[*_`]*)?\s*[:(]", re.I)
-_VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
+_VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[*_`]*(?:[\s*_`]*:[\s*_`]*|[ \t]+(?=[*_`]*(?:[a-z]+|request[ _-]+changes|no[ -]+go)[*_`]*[.,;:!]*[ \t]*$))(.*)$", re.I)
 # no "?": "VERDICT: pass?" is a question, not a decision (fail closed)
 _WORD_END = r"(?=$|[\s.,;:!)(*_`—–-])(?!\s*[|/])"
 _FIRST_WORD = re.compile(r"([a-z]+)" + _WORD_END, re.I)
@@ -87,7 +87,7 @@ def _scan_verdict(text: str) -> tuple[str | None, bool]:
         if found:
             match = found
     if match is not None:
-        stripped = match.group(1).strip()
+        stripped = match.group(1).strip().lstrip('*_`')
         if _REQUEST_CHANGES.match(stripped):
             return "fix", False
         if re.match(r"no(?:-|\s+)go\b", stripped, re.I):

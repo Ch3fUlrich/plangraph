@@ -147,10 +147,21 @@ async def harness(name):
 
 
 async def diagnose(probe=False):
+    from plangraph.fleet_sync.genconfig import config_dir
     from plangraph.planner.legs import HARNESSES
     from .service import SpawnService
     from .leg_probe import probe_many
     checks, plans = [], {}
+    try:
+        registry = json.loads((config_dir() / 'hosts.json').read_text())
+        name = (os.environ.get('PLANGRAPH_HOST_NAME') or registry['self']).casefold()
+        host = next(h for h in registry['hosts']
+                    if name in [s.casefold() for s in [h['id'], *h.get('aliases', [])]])
+        path = host.get('env', {}).get('PATH')
+        if isinstance(path, str) and path:
+            os.environ['PATH'] = path
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, StopIteration):
+        pass
     def source_checks():
         from .remote_ps import configured_hosts, MAX_WORKERS, TIMEOUT as probe_timeout
         try:
@@ -158,8 +169,7 @@ async def diagnose(probe=False):
         except (OSError, ValueError, KeyError, TypeError):
             count = 0
         timeout = max(TIMEOUT, ((count + MAX_WORKERS - 1) // MAX_WORKERS) * probe_timeout + TIMEOUT)
-        binary = Path(__file__).resolve().parents[3] / 'rust/target/release/pg-spawnd'
-        binary = str(binary) if binary.is_file() else (shutil.which('pg-spawnd') or 'pg-spawnd')
+        binary = shutil.which('pg-spawnd') or 'pg-spawnd'
         detail = 'host query failed'
         try:
             result = subprocess.run([binary, 'doctor-sources'], check=False,
