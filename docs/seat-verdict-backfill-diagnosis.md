@@ -103,12 +103,6 @@ produce `no commit evidence` rather than aborting the snapshot. The unused
 `card_head_matches` helper and its decorative mock were removed: the production
 contract is exact completion-head equality, not an ancestry-based relaxation.
 
-At the supplied round 1 head, `tests/test_seat_backfill.py` already parsed and its
-record fixture already used `demo:A`; the reported redaction syntax and default
-item-key defects were not present. Completion/exit checks also already existed in
-the shared evidence reader. The baseline selected suite passed before changes;
-the new behavioral regressions were run failing before the production fixes.
-
 ## Round 2 attribution and outbox isolation
 
 Only review records positively bound by item key, named prompt item, or evidenced
@@ -135,7 +129,23 @@ Regressions cover JSON and TSV batch continuation, preserved healthy outboxes, a
 the forward path's actual `notify.inbox_lock` contending with backfill before a
 single successful send. Existing CHANGES-first selection remains unchanged.
 
-All five round 2 redacted-literal, syntax, and fixture-key reports were not
-reproduced: the real files parse, the default fixture binds to `demo:A`, and both
-healthy and writer fixtures for the second item bind to `demo:B`. The unchanged
-baseline selected suite passed 427 tests before the new failing-first regressions.
+## Fail-closed lookup and transport preconditions
+
+An exception, empty result, or missing writer trailer from a configured Git lookup
+refuses attribution as `unknown writer`; implementation records cannot replace that
+missing Git evidence with a smaller writer set. PR/writer resolution errors produce
+a reasoned missing row for that item and do not prevent later items from finishing.
+
+Apply checks for a URL and token directory before inspecting or creating the shared
+outbox journal or lock. Missing transport reports `delivery=failed` with a reason
+and leaves the forward outbox unchanged. Library discovery uses the same default
+records directory as the CLI when `records_dir` is absent or null. Explicit batch
+flags reject single-seat identity and writer arguments instead of ignoring them.
+An absent library `url` uses `PG_URL`, matching the CLI; a null or empty URL still
+refuses delivery, as does an absent/null token directory.
+
+Prompt identity scanning accepts complete project/item tokens, including dotted,
+underscored, and lowercase identifiers, only within projects known from the snapshot
+or the current item. Tokens such as `model:GPT-4`, `Branch:MAIN`, and `Team:AI` do not
+become contradictory item keys merely because their suffix is uppercase; actual
+contradictory keys in known projects still refuse the bound record.

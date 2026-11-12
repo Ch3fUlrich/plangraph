@@ -186,7 +186,7 @@ def test_seat_snapshot_writer_sources(tmp_path, snapshot_shape, source):
     run = record(tmp_path, role="implement", served_model="gpt-5")
     from unittest.mock import Mock
     git = Mock()
-    git.repo_path.return_value = str(tmp_path)
+    git.repo_path.return_value = str(tmp_path) if source == "trailer" else None
     git.writer_trailers.return_value = ([{"Writer": "openai/gpt-5 run-abc"}]
                                         if source == "trailer" else [])
     if source == "trailer":

@@ -22,8 +22,10 @@ def test_invalid_cached_pr_is_unresolved(value):
     assert seat_record.merged_pr({"head_sha": "a" * 40}, None, lambda _: value) is None
 
 
-@pytest.mark.parametrize("text", ["09:30 run:1 sha:abc", "demo:B", "demo:A demo:B"])
-def test_prompt_tokens_do_not_lose_other_seats(tmp_path, text):
+@pytest.mark.parametrize("text,count", [
+    ("09:30 run:1 sha:abc", 2), ("model:GPT-4", 2), ("Branch:MAIN Team:AI", 2),
+    ("demo:B", 1), ("demo:A demo:B", 1)])
+def test_prompt_tokens_do_not_lose_other_seats(tmp_path, text, count):
     from test_seat_backfill import ITEM, record
     good = record(tmp_path)
     other = tmp_path / "other"
@@ -32,7 +34,9 @@ def test_prompt_tokens_do_not_lose_other_seats(tmp_path, text):
     (bad / "prompt.txt").write_text("Review item demo:A " + text)
     seats, reasons = seat_record.eligible_records(ITEM, tmp_path)
     assert good.name in [s["run_id"] for s in seats]
-    assert len(seats) == (2 if text.startswith("09") else 1), reasons
+    assert len(seats) == count, reasons
+    if count == 2:
+        assert reasons == []
 
 
 def test_backfill_defects_are_not_missing_seats(tmp_path):

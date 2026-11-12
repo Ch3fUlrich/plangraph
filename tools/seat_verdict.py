@@ -203,7 +203,6 @@ def send(url, token, payload):
             return resp.status, resp.read(65536).decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read(65536).decode("utf-8", "replace")
-
 def apply_backfill(args, item, seat, poster, row):
     """Use the forward outbox lock without waiting; ambiguous state never sends."""
     from contextlib import redirect_stdout, redirect_stderr
@@ -211,10 +210,11 @@ def apply_backfill(args, item, seat, poster, row):
     from plangraph.spawner.notify import _verdict_outcome
     from plangraph.spawner.private_io import atomic_write_private
     directory, row["delivery"], row["verifier_exit"] = seat["seat_dir"], "skipped", None
-    if (not getattr(args, "backfill_apply", False) or getattr(args, "dry_run", False)
-            or getattr(args, "backfill_dry_run", False)):
+    url = getattr(args, "url", os.environ.get("PG_URL"))
+    if not url or not all(getattr(args, k, None) for k in ("backfill_apply", "token_dir")) or any(
+            getattr(args, k, False) for k in ("dry_run", "backfill_dry_run")):
         row["delivery"] = "failed"
-        row["reasons"].append("backfill requires explicit --backfill-apply without dry-run")
+        row["reasons"].append("backfill requires explicit --backfill-apply without dry-run; apply requires --url and --token-dir")
         return 1
     journal = directory / "verdict.json"
     phase = "verdict outbox check"
@@ -251,7 +251,7 @@ def apply_backfill(args, item, seat, poster, row):
             with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
                 rc = poster(["--key", item["key"], "--seat-dir", str(directory), "--head", seat["head_sha"],
                              "--writer-family", ",".join(item["writer_families"]), "--token-dir",
-                             str(args.token_dir), "--url", args.url])
+                              str(args.token_dir), "--url", url])
             if type(rc) is not int or rc < 0: raise ValueError("invalid verifier exit")
             row["verifier_exit"] = rc
             phase = "verdict outcome write"
@@ -287,10 +287,10 @@ def main(argv=None):
                                   "binds the completion-time HEAD of the run cwd, not the launch commit")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+    if (args.backfill_dry_run or args.backfill_apply) and any(v is not None for v in (args.key, args.seat_dir, args.head, args.writer_family)):
+        ap.error("backfill modes cannot use single-seat arguments: --key, --seat-dir, --head, --writer-family")
     if args.backfill_dry_run or args.backfill_apply or (args.key is None and args.seat_dir is None):
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-        if args.records_dir is None:
-            args.records_dir = Path.home() / ".local/share/plangraph/spawner-records"
         if args.backfill_apply and (not args.url or not args.token_dir or args.dry_run):
             ap.error("--backfill-apply requires --url and --token-dir, without --dry-run")
         from seat_record import backfill
