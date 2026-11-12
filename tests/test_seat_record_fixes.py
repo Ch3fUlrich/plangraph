@@ -11,6 +11,12 @@ import seat_record  # noqa: E402
 import seat_verdict as sv  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert Path.home() == tmp_path
+
+
 @pytest.mark.parametrize("value", ["invalid", {}, [], True, -1, 0, 1.5])
 def test_invalid_cached_pr_is_unresolved(value):
     assert seat_record.merged_pr({"head_sha": "a" * 40}, None, lambda _: value) is None
@@ -271,3 +277,85 @@ def test_fixture_free_leg_pass_posts(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["family"] == "openai"
     assert payload["body"]["ok"] is True
+
+
+@pytest.mark.parametrize("evidence", [None, "bad", {}, [None, "bad", {}]])
+def test_malformed_evidence_is_missing_not_a_batch_failure(evidence):
+    item = seat_record.snapshot_item({"key": "demo:A", "evidence": evidence})
+    assert item["head_sha"] is None
+    assert item["missing_reason"] == "no commit evidence"
+
+
+def test_pr_lookup_without_adapter_is_unresolved():
+    assert seat_record.merged_pr({"head_sha": HEAD40}, None) is None
+
+
+def test_local_pr_lookup_timeout_is_bounded(tmp_path, monkeypatch):
+    import subprocess
+    from unittest.mock import Mock
+    calls = []
+    def timeout(*args, **kwargs):
+        calls.append(args)
+        assert 0 < kwargs["timeout"] <= 30
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+    monkeypatch.setattr(subprocess, "run", timeout)
+    git = Mock()
+    git.repo_path.return_value = tmp_path
+    assert seat_record.merged_pr({"head_sha": HEAD40}, git) is None
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("family", ["openai", "deepseek"])
+def test_discovery_uses_the_evidence_witness_family(tmp_path, monkeypatch, family):
+    from test_seat_backfill import ITEM, record
+    run = record(tmp_path)
+    evidence, text = seat_record.evidence_from_record(run)
+    evidence.update(served_model="opencode/gpt-free" if family == "openai" else
+                    "opencode/deepseek-free", witness_kind="record-chosen-leg")
+    monkeypatch.setattr(seat_record, "evidence_from_record", lambda *a, **k: (evidence, text))
+    seats, reasons = seat_record.eligible_records(ITEM, tmp_path)
+    if family == "openai":
+        assert seats == []
+        assert "family same as writer" in " ".join(reasons)
+        assert "family=openai" in " ".join(reasons)
+    else:
+        assert seats[0]["family"] == family
+
+
+def test_unwitnessed_free_leg_is_discovered(tmp_path):
+    from test_seat_backfill import ITEM, record
+    record(tmp_path, served_model="unwitnessed", chosen_leg=FREE_LEG)
+    seats, reasons = seat_record.eligible_records(ITEM, tmp_path)
+    assert [s["family"] for s in seats] == ["xiaomi"], reasons
+
+
+@pytest.mark.parametrize("role", ["review", "implement"])
+def test_system_symlink_outside_records_root_is_allowed(tmp_path, role):
+    from test_seat_backfill import ITEM, record
+    target = tmp_path / "target"
+    target.mkdir()
+    records = target / "records"
+    records.mkdir()
+    record(records, role=role, served_model="gpt-5" if role == "implement" else
+           "deepseek/deepseek-v3")
+    alias = tmp_path / "system-mount"
+    alias.symlink_to(target, target_is_directory=True)
+    root = alias / "records"
+    if role == "review":
+        seats, reasons = seat_record.eligible_records(ITEM, root)
+        assert len(seats) == 1, reasons
+    else:
+        assert seat_record.writer_families(ITEM, HEAD40, root, None) == ["openai"]
+
+
+def test_unused_ancestry_helper_is_removed():
+    assert not hasattr(sv, "card_head_matches")
+
+
+@pytest.mark.parametrize("location", ["record", "plan", "chosen_leg"])
+def test_single_record_cannot_bypass_pin_gate(tmp_path, capsys, location):
+    changes = {"pinned": True} if location == "record" else {
+        location: dict(FREE_LEG if location == "chosen_leg" else {}, pinned=True)}
+    seat = rec_dir(tmp_path, "run-" + "e" * 32, **changes)
+    assert sv.main(argv_for(seat)) == sv.EXIT_REFUSED
+    assert "pinned seat" in capsys.readouterr().err

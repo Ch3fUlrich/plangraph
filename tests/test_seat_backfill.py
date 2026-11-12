@@ -69,24 +69,6 @@ def test_seat_backfill_cached_pr_json(tmp_path, capsys, snapshot_shape):
     assert rows[0]["pr_number"] == 7
 
 
-def test_seat_card_head_requires_diff_and_ancestry(tmp_path):
-    import subprocess
-    def git(*args):
-        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True).strip()
-    git("init", "-q")
-    def commit():
-        git("-c", "user.name=Test", "-c", "user.email=test@example.test",
-            "commit", "--allow-empty", "-qm", "fixture")
-        return git("rev-parse", "HEAD")
-    base, head, merge = commit(), commit(), commit()
-    card = tmp_path / "card.json"
-    card.write_text(json.dumps({"diff_ref": {"base": base[:8], "head": head[:8]}}))
-    assert sv.card_head_matches(tmp_path, head, merge, tmp_path)
-    assert not sv.card_head_matches(tmp_path, base, merge, tmp_path)
-    card.unlink()
-    assert not sv.card_head_matches(tmp_path, head, merge, tmp_path)
-
-
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -224,7 +206,7 @@ def test_seat_trailer_real_git(tmp_path, snapshot_shape):
     import subprocess
     from plangraph.keeper.evidence_git import GitAdapter
     def git(*args):
-        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True).strip()
+        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True, timeout=10).strip()
     git("init", "-q")
     git("-c", "user.name=Test", "-c", "user.email=test@example.test", "commit",
         "--allow-empty", "-qm", "fixture\n\nWriter: openai/gpt-5 run-fixture")
@@ -342,7 +324,7 @@ def test_missing_head_backfill_tallied(tmp_path, snapshot_shape, capsys, complet
     assert "reason\trecord completion.head_sha missing or not 40 hex chars\t1" in output
 
 
-@pytest.mark.parametrize("case", ["ancestor", "record-key", "prompt-key", "reason", "namespace"])
+@pytest.mark.parametrize("case", ["head", "record-key", "prompt-key", "reason", "namespace"])
 def test_round_two_binding(tmp_path, case):
     run = record(tmp_path, **({"item_key": "demo:B"} if case == "record-key" else {}))
     (run / "prompt.txt").write_text("Review PR #7 item " + ("demo:B" if case == "prompt-key" else "demo:A"))
@@ -351,9 +333,9 @@ def test_round_two_binding(tmp_path, case):
         with patch.object(sr, "evidence_from_record", return_value=({}, "VERDICT: FIX")):
             assert not sr.eligible_records(ITEM, tmp_path)[0]
         return
-    evidence = {"head_sha": "d" * 40} if case == "ancestor" else {}
-    if case in ("ancestor", "reason"):
-        with patch.object(sr, "evidence_from_record", return_value=(evidence, "VERDICT: FIX")), patch.object(sv, "card_head_matches", return_value=True):
+    evidence = {"head_sha": "d" * 40} if case == "head" else {}
+    if case in ("head", "reason"):
+        with patch.object(sr, "evidence_from_record", return_value=(evidence, "VERDICT: FIX")):
             seats, reasons = sr.eligible_records(dict(ITEM, pr_number=7), tmp_path)
     else:
         seats, reasons = sr.eligible_records(dict(ITEM, pr_number=7), tmp_path)
@@ -362,6 +344,8 @@ def test_round_two_binding(tmp_path, case):
         assert "item key mismatch" in " ".join(reasons)
     if case == "reason":
         assert "missing or not 40 hex chars" in " ".join(reasons)
+    if case == "head":
+        assert "head mismatch" in " ".join(reasons)
 
 
 @pytest.mark.parametrize("case", ["dry-gh", "bad-cache", "missing-cache", "timeout", "string-pr", "missing-key"])
@@ -385,12 +369,21 @@ def test_round_two_backfill(tmp_path, capsys, snapshot_shape, case):
         cache.unlink()
     args = SimpleNamespace(snapshot=snapshot, records_dir=tmp_path, backfill_apply=False,
                            backfill_dry_run=True, pr_lookup_gh=case == "dry-gh",
-                           pr_cache=cache if "cache" in case or case == "string-pr" else None)
+                           pr_cache=cache if "cache" in case or case == "string-pr" else None,
+                           format="json")
     lookup = (lambda sha: (_ for _ in ()).throw(subprocess.TimeoutExpired("fixture", 1))) if case == "timeout" else None
     with patch("subprocess.run", side_effect=AssertionError("network")):
         assert sr.backfill(args, lambda _: pytest.fail("poster"), lookup) == 0
-    out = capsys.readouterr().out
+    rows = json.loads(capsys.readouterr().out)
+    assert len(rows) == 2
+    assert rows[1]["status"] == "MISSING"
+    assert rows[1]["pr_number"] == (7 if case == "string-pr" else None)
     if case == "string-pr":
-        assert "demo:A\tELIGIBLE" in out
+        assert rows[0]["status"] == "ELIGIBLE"
+        assert rows[0]["pr_number"] == 7
+        assert rows[0]["reasons"] == []
     else:
-        assert "counts\titems=2" in out
+        assert rows[0]["status"] == "MISSING"
+        assert rows[0]["pr_number"] is None
+        expected = "snapshot item missing key" if case == "missing-key" else "no record"
+        assert expected in " ".join(rows[0]["reasons"])

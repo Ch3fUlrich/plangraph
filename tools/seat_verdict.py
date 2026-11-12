@@ -213,28 +213,53 @@ def send(url, token, payload):
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read(65536).decode("utf-8", "replace")
 
-
-def card_head_matches(run_dir, completion, merge, repo):
-    """Require a card-bound diff head and base, both ancestors of the merge."""
-    import subprocess
-    if not repo:
-        return False
-    try:
-        card = json.loads((run_dir / "card.json").read_text())
-        diff = card["diff_ref"]
-        def resolve(ref):
-            if not re.fullmatch(r"[0-9a-fA-F]{7,40}", str(ref)):
-                raise ValueError("invalid card ref")
-            return subprocess.check_output(["git", "rev-parse", "--verify", ref + "^{commit}"],
-                                           cwd=repo, text=True, stderr=subprocess.DEVNULL).strip()
-        base, head = resolve(diff["base"]), resolve(diff["head"])
-        return head == completion.lower() and all(subprocess.run(
-            ["git", "merge-base", "--is-ancestor", a, b], cwd=repo,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-            for a, b in ((base, head), (head, merge)))
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-        return False
-
+def apply_backfill(args, item, seat, poster, row):
+    """Use the forward outbox lock without waiting; ambiguous state never sends."""
+    from contextlib import redirect_stdout, redirect_stderr
+    from io import StringIO
+    from plangraph.spawner.notify import _verdict_outcome
+    from plangraph.spawner.private_io import atomic_write_private
+    directory, row["delivery"] = seat["seat_dir"], "skipped"
+    journal = directory / "verdict.json"
+    if journal.is_symlink() or Path(str(journal) + ".lock").is_symlink():
+        row["reasons"].append("ambiguous verdict journal")
+        return 0
+    with os.fdopen(os.open(str(journal) + ".lock", os.O_RDWR | os.O_CREAT, 0o600), "r+b") as lock:
+        reason = "verdict lock busy"
+        try:
+            if os.name == "nt":
+                import msvcrt
+                lock.write(b"0")
+                lock.flush()
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            reason = "ambiguous verdict journal"
+            previous = json.loads(journal.read_text()) if journal.exists() else {}
+            if (not isinstance(previous, dict) or journal.exists() and previous.get("status") not in
+                    ("sending", "delivered", "skipped", "retry")
+                    or type(previous.get("attempts", 0)) is not int
+                    or previous.get("attempts", 0) < 0):
+                raise ValueError(reason)
+        except (OSError, ValueError):
+            row["reasons"].append(reason)
+            return 0
+        if ((directory / "verdict.delivered").exists()
+                or previous.get("status") in ("sending", "delivered", "skipped")):
+            row["reasons"].append("verdict already terminal or sending")
+            return 0
+        atomic_write_private(journal, json.dumps(dict(status="sending",
+            attempts=previous.get("attempts", 0))) + "\n")
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            rc = poster(["--key", item["key"], "--seat-dir", str(directory), "--head", seat["head_sha"],
+                         "--writer-family", ",".join(item["writer_families"]), "--token-dir",
+                         str(args.token_dir), "--url", args.url])
+        _verdict_outcome(directory, "delivered" if rc == 0 else "skipped",
+                         "backfill verifier exit " + str(rc))
+        row.update(delivery="failed" if rc else "delivered", verifier_exit=rc)
+        return int(bool(rc))
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -268,16 +293,13 @@ def main(argv=None):
     if any(v is None for v in (args.key, args.seat_dir, args.writer_family, args.token_dir)):
         ap.error("single-record mode requires --key, --seat-dir, --writer-family, --token-dir")
     writer_families = parse_writer_families(args.writer_family)
-    from_record = False
-    if not (args.seat_dir / "evidence.json").exists() and \
-            (args.seat_dir / "record.json").exists():
+    from_record = not (args.seat_dir / "evidence.json").exists() and (args.seat_dir / "record.json").exists()
+    if from_record:
         try:
-            evidence, text = evidence_from_record(
-                args.seat_dir, cli_writer_families=writer_families)
+            evidence, text = evidence_from_record(args.seat_dir, cli_writer_families=writer_families)
         except ValueError as exc:
             print(f"seat_verdict: refused, record: {exc}", file=sys.stderr)
             return EXIT_REFUSED
-        from_record = True
     else:
         try:
             evidence = json.loads((args.seat_dir / "evidence.json").read_text("utf-8"))
@@ -294,8 +316,7 @@ def main(argv=None):
     if from_record and not args.head:
         print("seat_verdict: refused, record seats require --head", file=sys.stderr)
         return EXIT_REFUSED
-    if args.head and from_record and \
-            str(evidence.get("head_sha") or "").lower() != args.head.strip().lower():
+    if args.head and from_record and str(evidence.get("head_sha") or "").lower() != args.head.strip().lower():
         print(f"seat_verdict: refused, record head_sha {evidence.get('head_sha')!r} "
               f"does not match --head {args.head!r}", file=sys.stderr)
         return EXIT_REFUSED
@@ -304,8 +325,7 @@ def main(argv=None):
         return EXIT_REFUSED
     unknown_writers = [w for w in writer_families if w not in KNOWN_FAMILIES]
     if unknown_writers:
-        print(f"seat_verdict: refused, unknown writer families "
-              f"{unknown_writers!r}", file=sys.stderr)
+        print(f"seat_verdict: refused, unknown writer families {unknown_writers!r}", file=sys.stderr)
         return EXIT_REFUSED
     served = evidence.get("served_model")
     model = served or evidence.get("requested_model")
@@ -326,8 +346,7 @@ def main(argv=None):
     if (not served or served == "unwitnessed") and \
             evidence.get("witness_kind") == "request-side-opencode-store":
         candidate = evidence.get("request_side_model")
-        if (isinstance(candidate, str) and candidate.startswith("opencode/")
-                and candidate.endswith("-free")):
+        if isinstance(candidate, str) and candidate.startswith("opencode/") and candidate.endswith("-free"):
             witness_model = candidate
     elif from_record and evidence.get("witness_kind") == "record-chosen-leg":
         # D-3564: the record's chosen leg is the only witness; count the family
@@ -335,21 +354,16 @@ def main(argv=None):
         candidate = evidence.get("request_side_model")
         if isinstance(candidate, str) and candidate:
             witness_model = candidate
-    if witness_model is not None:
-        model = witness_model
+    model = witness_model or model
     family = model_family(model)
     if family is None:
-        print(f"seat_verdict: refused, family {family!r} of model {model!r} "
-              f"is unknown", file=sys.stderr)
+        print(f"seat_verdict: refused, family {family!r} of model {model!r} is unknown", file=sys.stderr)
         return EXIT_REFUSED
-    if family == "anthropic":
-        if "anthropic" in writer_families:
-            print(f"seat_verdict: refused, anthropic seat over writer families "
-                  f"{writer_families!r}", file=sys.stderr)
-            return EXIT_REFUSED
+    if family == "anthropic" and "anthropic" in writer_families:
+        print(f"seat_verdict: refused, anthropic seat over writer families {writer_families!r}", file=sys.stderr)
+        return EXIT_REFUSED
     elif all(writer == family for writer in writer_families):
-        print(f"seat_verdict: refused, family {family!r} of model {model!r} "
-              f"covers no listed writer", file=sys.stderr)
+        print(f"seat_verdict: refused, family {family!r} of model {model!r} covers no listed writer", file=sys.stderr)
         return EXIT_REFUSED
     ok, idx = parse_verdict(text)
     if ok is None:
@@ -362,9 +376,7 @@ def main(argv=None):
               file=sys.stderr)
         return EXIT_PASS_REFUSED
     covers = sorted({writer for writer in writer_families if writer != family})
-    payload = verdict_payload(args.key, ok,
-                              build_reason(evidence, ok, text, idx, covers,
-                                           witness=witness_model,
+    payload = verdict_payload(args.key, ok, build_reason(evidence, ok, text, idx, covers, witness=witness_model,
                                            witness_kind=evidence.get("witness_kind")))
     if args.dry_run:
         print(json.dumps({"url": (args.url or "").rstrip("/") + ROUTE, "family": family,
@@ -383,7 +395,6 @@ def main(argv=None):
     short = " ".join(reply.split())[:120]
     print(f"key={args.key} family={family} ok={ok} http={status} reply={short}")
     return 0 if 200 <= status < 300 else EXIT_IO
-
 
 if __name__ == "__main__":
     sys.exit(main())

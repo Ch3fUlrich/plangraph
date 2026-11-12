@@ -75,3 +75,36 @@ reviewer verdict.
 No live verdict application, seat spawning, merge, or deployment was performed
 for this diagnosis. The forward completion bridge remains implementation work;
 the existing discovery fallback is not evidence that it is live.
+
+## Round 1 fail-closed backfill corrections
+
+Historical records with `pin`, `pinned`, or `spawn_pin` indicators in the record,
+plan, or chosen leg are refused as `pinned seat`. The spawner's actual explicit
+selection witnesses (`plan.p_source: override` and `override_reason`) also refuse
+the seat. Successful completion and integer-zero exit status remain mandatory;
+new regressions cover failed, interrupted, running, and nonzero-exit records.
+Discovery derives independence from the evidence reader's witnessed served model,
+including the supported request-side free-leg witness, rather than a second raw
+model lookup. Missing strict verdicts and writer-family seats remain reasoned skips.
+
+When eligible seats disagree, a negative verdict always wins over an acceptance.
+The same negative seat stays selected on replay even when its outbox is terminal,
+ambiguous, or busy; acceptance is never a fallback. A corrupt, non-object, unknown,
+or invalid-attempts delivery journal is an `ambiguous verdict journal` skip for
+that item only. JSON apply rows report `delivery` separately from eligibility and
+include the verifier exit code on delivered or failed attempts; TSV reports the
+delivery result and skip reason too.
+
+The shared outbox lock uses nonblocking acquisition (`verdict lock busy`), and
+local Git and optional network PR subprocesses have 30-second timeouts. Symlinks
+within the records root are refused for both review and writer discovery, without
+rejecting unrelated symlinked system ancestors. Malformed evidence collections
+produce `no commit evidence` rather than aborting the snapshot. The unused
+`card_head_matches` helper and its decorative mock were removed: the production
+contract is exact completion-head equality, not an ancestry-based relaxation.
+
+At the supplied round 1 head, `tests/test_seat_backfill.py` already parsed and its
+record fixture already used `demo:A`; the reported redaction syntax and default
+item-key defects were not present. Completion/exit checks also already existed in
+the shared evidence reader. The baseline selected suite passed before changes;
+the new behavioral regressions were run failing before the production fixes.
