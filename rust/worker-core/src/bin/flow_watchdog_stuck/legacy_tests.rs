@@ -6,6 +6,7 @@ mod tests {
         let mut s = Snapshot {
             hosts: Vec::new(),
             stuck: Default::default(),
+            session_activity: Default::default(),
             pace: 65.0,
             budget: 66.0,
             ci_failed: 0,

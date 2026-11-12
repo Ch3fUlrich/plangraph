@@ -3,7 +3,7 @@ from pathlib import Path
 
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.route_policy import load_route_policy
-from plangraph.planner.routing import route_card
+from plangraph.planner.routing import plan_spawn, route_card
 
 
 def test_qoder_off_for_review_even_with_old_active_leg():
@@ -38,5 +38,8 @@ def test_review_route_never_offers_qwen_max():
 def test_glm_never_a_review_option():
     policy = load_route_policy(Path('src/plangraph/planner/route_policy.json'))
     assert 'glm' not in policy.review_allowed_families
-    route = route_card({'estimate_tokens': 1000}, role='review')
+    # The low-level route_card orders eligible legs; plan_spawn applies policy.
+    route = plan_spawn({'estimate_tokens': 1000}, role='review',
+                       writer_families=('gpt',), policy=policy, catalog_rows=())
     assert 'glm' not in {leg.family for leg in route.legs}
+    assert {s['leg']: s['reason'] for s in route.skipped}['opencode-big-pickle'] == 'off_family'

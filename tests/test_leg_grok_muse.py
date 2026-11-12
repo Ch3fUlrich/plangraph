@@ -1,4 +1,4 @@
-"""Manual-only Grok and D-4280 Muse contributor seats."""
+"""Manual-only Grok and D-5113 automatically admitted Muse contributor seats."""
 import asyncio
 import json
 import sys
@@ -96,12 +96,17 @@ def test_listing_accepts_nested_ids_not_non_ids(monkeypatch):
 
 @pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
 def test_muse_never_automatic_even_if_lifted(role):
-    legs = tuple(replace(BY_ID[mid], roles=(role,)) for mid in MUSE)
+    """Historical name retained: D-5113 admits Muse automatically unless policy bans it."""
+    legs = tuple(replace(BY_ID[mid], roles=(role,)) for mid in (*MUSE, 'omniroute-muse-spark'))
     policy = RoutePolicy(review_allowed_families=("muse",))
     for leg in legs:
-        assert policy.skip_reason(leg, role) == "off_family"
-    plan = plan_spawn(CARD, role=role, writer_families=("gpt",))
-    assert not any(l.family == "muse" for l in (*plan.legs, *plan.review_seats))
+        assert policy.skip_reason(leg, role) is None
+    plan = plan_spawn(CARD, role=role, writer_families=("gpt",), legs=legs, policy=policy,
+                      catalog_rows=())
+    assert set(plan.legs) == set(legs)
+    denied = plan_spawn(CARD, role=role, writer_families=("gpt",), legs=legs,
+                        policy=RoutePolicy(banned_families=("muse",)), catalog_rows=())
+    assert not denied.legs
 
 
 @pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])

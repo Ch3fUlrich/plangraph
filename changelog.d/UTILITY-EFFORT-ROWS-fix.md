@@ -2,4 +2,4 @@
 - Restore Python/Rust reconciliation fixture parity with the optional leg effort field, without changing the fixture contract test.
 - Explicitly forward operator JSON effort into the loaded leg and pin its end-to-end preservation in implement route and saved run records; cover every other validated leg field and accurately name the Sol-to-agy fallback regression.
 - Align worktree, CLI opt-in and overflow regression fixtures with the Sol xhigh default; plain Sol remains an explicit-only pick, and all worktree assertions and parameter cases are retained.
-- Preserve main's leg-probe diagnostics, live-serving protection and quota coverage for both explicit plain Sol and the automatic Sol xhigh writer; retain both parents' documentation mappings and sorted waiver entries.
+- Preserve main's leg-probe diagnostics, live-serving protection and quota coverage for both explicit plain Sol and the automatic Sol xhigh writer; use three-way shared-file merges, preserving main's waiver retirements and documentation order with only the planner mapping added (D-5278).
