@@ -1,8 +1,8 @@
 use serde_json::{json, Value};
 use std::{fs, path::Path, process::Command};
-
 const NOW: u64 = 10_000;
-
+const NO_ENDED_RUN: &str =
+    "session=\"session-1\" role=\"build\" quiet_age_seconds=1260 last_ended_run=none";
 fn snapshot() -> Value {
     json!({"pace":1,"budget":2,"ci_failed":0,"ci_total":0,
         "infra_failed":0,"review_age_hours":0,"review_rounds":0,
@@ -14,21 +14,17 @@ fn snapshot() -> Value {
                 {"run_id":"run-last","parent_session":"session-1","ended":9000},
                 {"run_id":"run-other","parent_session":"session-2","ended":null}]}})
 }
-
 fn rows<'a>(s: &'a mut Value, field: &str) -> &'a mut Vec<Value> {
     s["session_activity"][field].as_array_mut().unwrap()
 }
-
 fn add_session(s: &mut Value, id: &str) {
     let mut row = s["session_activity"]["sessions"][0].clone();
     row["session_id"] = id.into();
     rows(s, "sessions").push(row);
 }
-
 fn message(event: &Value) -> &str {
     event["message"].as_str().unwrap()
 }
-
 fn invoke(dir: &Path, snapshot: &Value) -> std::process::Output {
     let input = dir.join("input.json");
     fs::write(&input, snapshot.to_string()).unwrap();
@@ -40,7 +36,6 @@ fn invoke(dir: &Path, snapshot: &Value) -> std::process::Output {
         .output()
         .unwrap()
 }
-
 fn pass(dir: &Path, snapshot: &Value) -> Vec<Value> {
     let output = invoke(dir, snapshot);
     assert!(output.status.success(), "{output:?}");
@@ -48,11 +43,10 @@ fn pass(dir: &Path, snapshot: &Value) -> Vec<Value> {
         .map(|bytes| serde_json::from_slice(&bytes).unwrap())
         .unwrap_or_default()
 }
-
 fn events(snapshot: &Value) -> Vec<Value> {
-    pass(tempfile::tempdir().unwrap().path(), snapshot)
+    let dir = tempfile::tempdir().unwrap();
+    pass(dir.path(), snapshot)
 }
-
 fn line(events: &[Value]) -> &str {
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0]["kind"], "alert");
@@ -62,15 +56,44 @@ fn line(events: &[Value]) -> &str {
     assert!(line.starts_with("FLOW-WATCHDOG: busy-quiet "), "{line}");
     line
 }
-
 fn exact(events: &[Value], detail: &str) {
     assert_eq!(line(events), format!("FLOW-WATCHDOG: busy-quiet {detail}"));
 }
-
 fn active(dir: &Path) -> String {
     fs::read_to_string(dir.join("active")).unwrap_or_default()
 }
-
+#[test]
+fn busy_session_with_readable_empty_runs_alerts_without_a_last_ended_run() {
+    let mut s = snapshot();
+    s["session_activity"]["runs"] = json!([]);
+    exact(&events(&s), NO_ENDED_RUN);
+}
+#[test]
+fn busy_session_quiet_for_nineteen_minutes_with_all_runs_ended_does_not_alert() {
+    let mut s = snapshot();
+    s["session_activity"]["sessions"][0]["transcript_mtime"] = (NOW - 19 * 60).into();
+    s["session_activity"]["runs"][2]["ended"] = 9500.into();
+    assert_eq!(events(&s), Vec::<Value>::new());
+}
+#[test]
+fn busy_session_with_only_other_sessions_runs_alerts_without_a_last_ended_run() {
+    let mut s = snapshot();
+    rows(&mut s, "runs").retain(|run| run["parent_session"] != "session-1");
+    exact(&events(&s), NO_ENDED_RUN);
+}
+#[test]
+fn supported_reader_with_explicit_null_activity_reports_unknown_reader() {
+    let mut s = snapshot();
+    s["session_activity_supported"] = true.into();
+    s["session_activity"] = Value::Null;
+    exact(&events(&s), "unknown=reader");
+}
+#[test]
+fn idle_session_quiet_for_over_twenty_minutes_never_alerts_from_a_clean_state() {
+    let mut s = snapshot();
+    s["session_activity"]["sessions"][0]["busy"] = false.into();
+    assert_eq!(events(&s), Vec::<Value>::new());
+}
 #[test]
 fn latest_ended_run_is_own_and_ties_choose_greatest_id_in_either_order() {
     for (first, last, other) in [(8800, 9000, 9500), (9000, 9000, NOW), (8600, 8800, 9500)] {
@@ -84,7 +107,6 @@ fn latest_ended_run_is_own_and_ties_choose_greatest_id_in_either_order() {
         }
     }
 }
-
 #[test]
 fn idle_or_live_own_run_clears_identity_and_recovery_allows_first_or_repeat_alert() {
     for (already_alerted, live_run) in [(false, true), (true, true), (true, false)] {
@@ -111,7 +133,6 @@ fn idle_or_live_own_run_clears_identity_and_recovery_allows_first_or_repeat_aler
         assert_eq!(pass(dir.path(), &snapshot()), found);
     }
 }
-
 #[test]
 fn repeated_pass_with_increasing_age_keeps_the_same_quiet_period_deduplicated() {
     let dir = tempfile::tempdir().unwrap();
@@ -129,7 +150,6 @@ fn repeated_pass_with_increasing_age_keeps_the_same_quiet_period_deduplicated() 
     assert_eq!(next.len(), 2);
     assert!(message(&next[1]).contains("quiet_age_seconds=1261"));
 }
-
 #[test]
 fn unreadable_transcript_is_unknown_in_its_own_deduplicated_line() {
     for evidence in [
@@ -143,13 +163,11 @@ fn unreadable_transcript_is_unknown_in_its_own_deduplicated_line() {
     ] {
         let dir = tempfile::tempdir().unwrap();
         let mut s = snapshot();
+        let session = &mut rows(&mut s, "sessions")[0];
         if let Some(evidence) = evidence {
-            s["session_activity"]["sessions"][0]["transcript_mtime"] = evidence;
+            session["transcript_mtime"] = evidence;
         } else {
-            s["session_activity"]["sessions"][0]
-                .as_object_mut()
-                .unwrap()
-                .remove("transcript_mtime");
+            session.as_object_mut().unwrap().remove("transcript_mtime");
         }
         s["host_drift"] = true.into();
         let found = pass(dir.path(), &s);
@@ -164,7 +182,6 @@ fn unreadable_transcript_is_unknown_in_its_own_deduplicated_line() {
         assert_eq!(pass(dir.path(), &s), found);
     }
 }
-
 #[test]
 fn unreadable_run_records_never_count_as_ended_or_an_empty_list() {
     for runs in [
@@ -194,7 +211,6 @@ fn unreadable_run_records_never_count_as_ended_or_an_empty_list() {
         }
     }
 }
-
 #[test]
 fn malformed_runs_only_invalidate_their_known_parent() {
     for record in [
@@ -230,7 +246,6 @@ fn malformed_runs_only_invalidate_their_known_parent() {
         }
     }
 }
-
 #[test]
 fn missing_or_unreadable_run_block_is_unknown_even_without_busy_sessions() {
     for runs in [
@@ -248,19 +263,16 @@ fn missing_or_unreadable_run_block_is_unknown_even_without_busy_sessions() {
         for sessions in [json!([]), json!([{"busy":false}])] {
             let mut s = snapshot();
             s["session_activity"]["sessions"] = sessions;
+            let activity = &mut s["session_activity"];
             if let Some(runs) = &runs {
-                s["session_activity"]["runs"] = runs.clone();
+                activity["runs"] = runs.clone();
             } else {
-                s["session_activity"]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("runs");
+                activity.as_object_mut().unwrap().remove("runs");
             }
             exact(&events(&s), &format!("unknown=runs{diagnostic}"));
         }
     }
 }
-
 #[test]
 fn unreadable_session_list_or_clock_is_condition_local_unknown() {
     let cases = [
@@ -276,7 +288,6 @@ fn unreadable_session_list_or_clock_is_condition_local_unknown() {
     s["session_activity"] = Value::Null;
     exact(&events(&s), "unknown=reader");
 }
-
 #[test]
 fn unknown_evidence_recovers_to_a_real_alert_without_other_rule_changes() {
     let dir = tempfile::tempdir().unwrap();
@@ -290,7 +301,6 @@ fn unknown_evidence_recovers_to_a_real_alert_without_other_rule_changes() {
     assert_eq!(found.len(), 2);
     assert!(line(&found[1..]).contains("quiet_age_seconds=1260"));
 }
-
 #[test]
 fn a_second_session_gets_its_own_line_without_refiring_the_first() {
     let dir = tempfile::tempdir().unwrap();
@@ -304,7 +314,6 @@ fn a_second_session_gets_its_own_line_without_refiring_the_first() {
     assert!(line(&found[1..]).contains("session=\"session-3\""));
     assert_eq!(pass(dir.path(), &s), found);
 }
-
 #[test]
 fn identifiers_are_escaped_and_duplicate_session_rows_emit_one_line() {
     let mut s = snapshot();
@@ -323,14 +332,12 @@ fn identifiers_are_escaped_and_duplicate_session_rows_emit_one_line() {
         assert!(message.contains(text), "{message}");
     }
 }
-
 #[test]
 fn absent_reader_preserves_old_snapshots() {
     let mut s = snapshot();
     s.as_object_mut().unwrap().remove("session_activity");
     assert!(events(&s).is_empty());
 }
-
 #[test]
 fn capable_collectors_cannot_silently_omit_the_reader() {
     let mut s = snapshot();
@@ -343,7 +350,6 @@ fn capable_collectors_cannot_silently_omit_the_reader() {
     s["session_activity"] = snapshot()["session_activity"].clone();
     assert!(line(&events(&s)).contains("quiet_age_seconds=1260 "));
 }
-
 #[test]
 fn invalid_snapshots_preserve_quiet_identity_until_an_observed_recovery() {
     for (field, invalid) in [("pace", Value::Null), ("budget", json!(0))] {
@@ -367,7 +373,6 @@ fn invalid_snapshots_preserve_quiet_identity_until_an_observed_recovery() {
         assert_eq!(next[2], first[0]);
     }
 }
-
 #[test]
 fn outer_deserialization_and_validation_errors_supersede_quiet_evidence() {
     for (field, invalid) in [
