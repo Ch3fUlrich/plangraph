@@ -1,6 +1,9 @@
 """CLI end to end against a live in-process API, plus the unreachable fallback."""
 import json
 import os
+from pathlib import Path
+import subprocess
+import sys
 import threading
 
 import pytest
@@ -106,6 +109,30 @@ def test_cli_never_prints_the_token(live, capsys):
     captured = capsys.readouterr()
     assert token not in captured.out
     assert token not in captured.err
+
+
+def test_cli_whoami_without_fcntl(live):
+    _, _, tokens, _, _ = live
+    code = '''import builtins, runpy, sys
+original = builtins.__import__
+def blocked(name, *args, **kwargs):
+    if name == 'fcntl':
+        raise ModuleNotFoundError('fcntl unavailable')
+    return original(name, *args, **kwargs)
+builtins.__import__ = blocked
+sys.argv = ['plangraph.keeper.cli', 'whoami', '--json']
+try:
+    runpy.run_module('plangraph.keeper.cli', run_name='__main__')
+except SystemExit as exc:
+    assert exc.code == 0
+assert 'plangraph.keeper.db' not in sys.modules
+'''
+    env = dict(os.environ, PG_TOKEN_FILE=str(tokens['reader']),
+               PYTHONPATH=str(Path(__file__).resolve().parents[1] / 'src'))
+    result = subprocess.run([sys.executable, '-c', code], env=env,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)['name'] == 'reader'
 
 
 def test_cli_renders_snapshot_to_html(live, tmp_path, capsys):

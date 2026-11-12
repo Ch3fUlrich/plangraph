@@ -47,7 +47,7 @@ def admit(service, options, *, card=None):
             flags.extend(('--' + key.replace('_', '-'), str(options[key])))
     for family in options.get('writer_families', ()):
         flags.extend(('--writer-family', family))
-    for key in ('seats', 'no_fallthrough', 'require_bench'):
+    for key in ('seats', 'no_fallthrough', 'require_bench', 'run_worktree'):
         if options.get(key):
             flags.append('--' + key.replace('_', '-'))
     while True:
