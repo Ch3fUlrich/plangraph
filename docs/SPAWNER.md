@@ -189,11 +189,12 @@ Muse writes only after no eligible subscription writer remains untried.
 Subscription seats precede paid seats, and Muse precedes paid DeepSeek Flash
 even when DeepSeek has benchmark measurements and Muse does not.
 Failure promotion and host cooldowns preserve this boundary; paid writer pins
-refuse while a subscription writer is available on this host, even with an audited
-reason. Host-cooled-down subscriptions do not block an explicit paid writer pin.
+refuse while an eligible subscription writer exists, even with an audited
+reason or host-local cooldown. Provider-unavailable writers remain ineligible.
 Paid pins also require a reason when an eligible free leg is up; otherwise the
 service records its no-free-leg reason. Muse keeps `trains_on_data=True` and
-runtime `trains_on_prompts=1`, so privacy-sensitive risk tags skip it.
+runtime `trains_on_prompts=1`, so privacy-sensitive risk tags skip it. Every
+registered fallback row retains its leg's training metadata, including openrouter-free.
 No leg is removed or otherwise enabled for writing. Benchmark rows, the
 20-seat utility sample and witnessed runs remain slice 2.
 ```bash
@@ -302,7 +303,7 @@ import `plangraph.spawner` at runtime; the boundary is enforced by
 
 `planner.routing.plan_spawn(card, role="implement"|"review")` applies the
 canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
-D-5198/D-5240 writers try subscription Sol first, then paid Muse; `WRITER_ORDER` lives in `planner/legs.py`. Promotion to Muse exhausts untried subscription legs, without changing other failure promotions; provider failures still rotate within their tier, then wait. Review cost tiers precede within-tier preferences and measurements, so subscription seats always precede pay-as-you-go legs; banned/off families are skipped for writers too.
+D-5198/D-5240 writers try subscription Sol first, then paid Muse; `WRITER_ORDER` lives in `planner/legs.py`. Failure promotion exhausts untried subscription legs before any paid leg, even when Muse is absent; provider failures still rotate within their tier, then wait. Qualified catalog rows cannot reclassify Muse's paid tier or Sol's implement subscription tier. Review cost tiers precede within-tier preferences and measurements, so subscription seats always precede pay-as-you-go legs; banned/off families are skipped for writers too.
 Review seats start with Qoder Qwen, then what the route policy leaves; a no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat; Claude is no default writer or seat. A review without a writer family refuses (D-1533). The `claude` harness (Haiku review leg, D-3605) runs with an allowlisted env (`claude_env.py`: HOME, PATH, PWD, locale, XDG_*, proxies, `CLAUDE_CONFIG_DIR`; every other variable is dropped whatever its case), and a host without the `claude` binary skips the leg as `harness_missing: claude` (D-3649). A finished claude run's stdout (the record's `stdout_tail`) is the final text of its stream-json `result` event (else the last assistant text), so `tools/seat_verdict.py` finds the `VERDICT:` line; the raw stream is kept as `claude-stream.jsonl` beside the run's `live.log`, which still carries the raw activity feed.
 Claude 5.5 and effort-variant legs (operator 2026-11-09): `agy-claude-{sonnet,opus}-5-5-{low,medium,high}`
 (agy harness, review and implement), `agy-gemini-3.8-flash-{low,medium,high}` (review),

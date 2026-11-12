@@ -25,13 +25,13 @@ BY_ID = {leg.id: leg for leg in DEFAULT_LEGS}
 
 
 def test_writer_cost_contract_cannot_be_reclassified_by_catalog():
-    # Historical name: catalog costs project uniformly, never grant writer roles.
+    # Catalog costs cannot relabel the subscription writer or paid Muse as free.
     rows = [dict(id=leg.model if '/' in leg.model else 'agy/' + leg.model,
                  tier='free', available=1, active=True)
             for leg in DEFAULT_LEGS if leg.id in WRITER_ORDER]
     plan = plan_spawn(CARD, role='implement', catalog_rows=rows)
     assert tuple(leg.id for leg in plan.legs) == WRITER_ORDER
-    assert tuple(leg.tier for leg in plan.legs) == ('free', 'free')
+    assert tuple(leg.tier for leg in plan.legs) == ('subscription', 'paid')
     assert 'implement' not in BY_ID['agy-gemini-3.8-flash'].roles
 
 

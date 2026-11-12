@@ -203,13 +203,12 @@ def next_after_failure(route: Route, tried: Sequence[str], exit_class: str,
         return ("wait", None)
     if tier_attempts < route.attempt_budget:
         return ("retry", last)
+    for leg in route.legs:
+        if leg.tier == last.tier == "subscription" and leg.id not in spent:
+            return ("rotate", leg)
     rank = TIERS.index(last.tier)
     for leg in route.legs:
         if TIERS.index(leg.tier) > rank:
-            if leg.id == MUSE_AMBER:  # Only Muse promotion must exhaust subscriptions.
-                for subscription in route.legs:
-                    if subscription.tier == "subscription" and subscription.id not in spent:
-                        return ("rotate", subscription)
             return ("promote", leg)
     return ("park", None)
 

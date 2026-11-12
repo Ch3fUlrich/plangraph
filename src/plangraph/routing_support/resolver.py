@@ -224,7 +224,7 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
 
 # Registered seats are the authoritative offline routing surface. Legacy rows
 # remain visible for diagnostics but must not become new offline spawn routes.
-from plangraph.planner.legs import DEFAULT_LEGS, MUSE_AMBER
+from plangraph.planner.legs import DEFAULT_LEGS
 
 # OVH removed by operator, muse-spark-1.3-free gone D-1714, D-2655 G3.
 OPERATOR_REMOVED_MODELS = frozenset({
@@ -245,6 +245,8 @@ _fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS if leg.model in admissi
 from plangraph.registry_columns import INLINE_ONLY_MODELS as _INLINE_ONLY
 for _row in DEFAULT_FALLBACK_MODELS:
     _row['active'] = _row['id'] in _fallback_legs
+    if _row['active']:
+        _row['trains_on_prompts'] = int(_fallback_legs[_row['id']].trains_on_data)
     _row.setdefault('tool_mode', 'inline-only' if _row['id'] in _INLINE_ONLY else 'tools')
     if not _row['active']:
         _row['available'] = 0
@@ -252,11 +254,9 @@ for _leg in DEFAULT_LEGS:
     _model = _leg.model
     if not any(row['id'] == _model for row in DEFAULT_FALLBACK_MODELS):
         DEFAULT_FALLBACK_MODELS.append(dict(
-            id=_model, family=_leg.family, harness=_leg.harness,
-            tier=_leg.tier, available=int(_model in _fallback_legs),
-            active=_model in _fallback_legs, context_window=_leg.max_request_tokens,
-            tool_mode=_leg.tool_mode, aa_intelligence=0.0, combos=[],
-            **({'trains_on_prompts': int(_leg.trains_on_data)} if _leg.id == MUSE_AMBER else {})))
+            id=_model, family=_leg.family, harness=_leg.harness, tier=_leg.tier,
+            available=int(_model in _fallback_legs), active=_model in _fallback_legs, context_window=_leg.max_request_tokens,
+            tool_mode=_leg.tool_mode, aa_intelligence=0.0, combos=[], trains_on_prompts=int(_leg.trains_on_data)))
 
 _DEFAULT_CATALOG_DB: Any = None
 _MISSING = object()

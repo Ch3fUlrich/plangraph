@@ -289,15 +289,16 @@ def test_retry_until_budget_then_promote_free_sub_paid_park(route):
     route = dataclasses.replace(route, legs=tuple(l for l in route.legs if l.id != 'opencode-console-muse-spark'))
     q = "qodercli-qwen3.8-flash"
     for ec in ("check_fail", "stall", "timeout", "rebase_conflict", "worker_crash"):
-        a, leg = next_after_failure(route, [q], ec, 2)
-        assert (a, leg.id) == ("retry", q)
-    a, leg = next_after_failure(route, [q], "check_fail", 3)
-    assert (a, leg.id) == ("promote", "cx-gpt-6.1-sol")
-    a, leg = next_after_failure(route, [q, leg.id], "check_fail", 3)
-    assert (a, leg.id) == ("promote", "deepseek")
+        assert next_after_failure(route, [q], ec, 2) == ("retry", route.first_leg)
+        tried = [q]
+        assert next_after_failure(route, tried, ec, 3)[1].id == "cx-gpt-6.1-sol"
+        for expected in (l for l in route.legs if l.tier in ("subscription", "paid")):
+            action, leg = next_after_failure(route, tried, ec, 3)
+            assert (action, leg) == ("rotate" if len(tried) > 1 and expected.tier == "subscription" else "promote", expected)
+            tried.append(leg.id)
+        assert next_after_failure(route, tried, ec, 3) == ("park", None)
+    assert next_after_failure(route, [q], "check_fail", 0) == ("retry", route.first_leg)
     assert next_after_failure(route, [q, "mimo-v2.6-flash", "deepseek"], "stall", 3) == ("park", None)
-    assert next_after_failure(route, [q], "check_fail", 0)[0] == "retry"
-
 
 def test_promote_skips_absent_tier():
     r = route_card(card(), legs=tuple(l for l in DEFAULT_LEGS if l.tier != "subscription"))
