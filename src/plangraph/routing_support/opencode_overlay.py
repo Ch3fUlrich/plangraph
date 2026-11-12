@@ -111,8 +111,8 @@ def overlay_env(base_env):
         return env
     if providers is None:
         return env
-    from .clients import effective_gateway_base_url
-    gateway = effective_gateway_base_url(env)
+    from .clients import effective_child_base_url
+    gateway = effective_child_base_url(env)
 
     def merge(root, generated, path=()):
         result = copy.deepcopy(generated)

@@ -1,0 +1,1 @@
+- Fix MiMo OpenCode seats losing a config-only gateway URL during root overlay: preserve the resolved child endpoint and render both gateway providers through the same URL path, with the existing named refusal when unresolved and unchanged credential handling (D-5213).

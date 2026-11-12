@@ -35,6 +35,31 @@ def test_gateway_no_default_gateway_constant():
     assert not hasattr(g, "DEFAULT_GATEWAY")
 
 
+@pytest.mark.parametrize("model", ["mimo/mimo-v2.6-pro", "omniroute/cx-gpt-6.1-sol"])
+@pytest.mark.parametrize("has_root", [False, True])
+def test_opencode_gateway_without_url_has_named_refusal(monkeypatch, tmp_path, model, has_root):
+    from plangraph.routing_support.clients import build_child_env
+    from plangraph.routing_support.opencode_overlay import overlay_env
+    from plangraph.routing_support.opencode_render import REFUSAL_UNRESOLVED, render_gateway_providers
+
+    for name in (g.GATEWAY_ENV_VAR, "OMNIROUTE_BASE_URL", "PLANGRAPH_GATEWAY_URL",
+                 "AUTOOS_OMNIROUTE_URL", "OPENCODE_CONFIG_CONTENT"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path))
+    placeholder = "{env:" + g.GATEWAY_ENV_VAR + "}"
+    providers = {name: {"env": ["AUTOOS_OMNIROUTE_KEY"],
+                        "settings": {"baseURL": placeholder}}
+                 for name in ("mimo", "omniroute")}
+    if has_root:
+        (tmp_path / "opencode.jsonc").write_text(json.dumps({"providers": providers}))
+    env = overlay_env(build_child_env())
+    before = env["OPENCODE_CONFIG_CONTENT"]
+    reason = render_gateway_providers(env, model)
+    assert reason == REFUSAL_UNRESOLVED
+    assert "gateway_base_url_unresolved" in REFUSAL_UNRESOLVED
+    assert env["OPENCODE_CONFIG_CONTENT"] == before
+
+
 def _seat(tmp_path):
     d = tmp_path / "seat"
     d.mkdir()

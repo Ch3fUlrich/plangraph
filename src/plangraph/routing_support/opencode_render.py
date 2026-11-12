@@ -11,6 +11,7 @@ import urllib.parse
 from typing import Any
 
 from plangraph.mimo_policy import ACCEPTED_MIMO_IDS
+from .clients import effective_child_base_url
 
 REFUSAL_UNRESOLVED = (
     "not_served_on_host: gateway_base_url_unresolved "
@@ -134,12 +135,12 @@ def render_gateway_providers(
 
     # Step 4: Resolve base URL in I4 order
     resolved_url = None
-    for var in (
-        "OMNIROUTE_BASE_URL",
-        "PLANGRAPH_GATEWAY_URL",
-        "AUTOOS_OMNIROUTE_URL",  # transitional: drop with AO-SPAWNER-REMOVE (D-2800)
+    for cand in (
+        env.get("OMNIROUTE_BASE_URL"),
+        env.get("PLANGRAPH_GATEWAY_URL"),
+        env.get("AUTOOS_OMNIROUTE_URL"),  # transitional: drop with AO-SPAWNER-REMOVE (D-2800)
+        effective_child_base_url(env),  # Includes build_child_env's config-only gateway.
     ):
-        cand = env.get(var)
         if isinstance(cand, str) and cand.strip() and _is_valid_url(cand):
             resolved_url = _normalize_gateway_url(cand)
             break
