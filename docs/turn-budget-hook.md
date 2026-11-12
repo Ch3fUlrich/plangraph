@@ -168,7 +168,7 @@ Snapshot-command inspection also stops descending into shell bodies at depth 3.
 Further nesting can pass unclassified: sleep/read inside four nested substitutions,
 or a snapshot loop inside four nested shell bodies, is outside this static scan.
 Tests pin recognition at depth 3 and fail-open behaviour at depth 4.
-A `$`-leading command word counts as a poll check only inside a loop body;
+A `$`-leading command word counts as a poll check only inside a loop body, including nested substitutions, backticks and shell `-c`/`-lc` bodies within the shared depth limit;
 `sleep 5; $SCRIPT` and `sleep 5; MODE=x $RUNNER` pass as unclassified work.
 Literal assignment prefixes also do not hide snapshot loops. Regression tests
 make these deliberate fail-open parser limits visible rather than claiming a

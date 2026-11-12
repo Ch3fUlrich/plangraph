@@ -52,6 +52,36 @@ fn sleep_polling_shapes_are_refused() {
 }
 
 #[test]
+fn nested_loop_bodies_preserve_dollar_poll_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(&dir);
+    let escaped: Vec<_> = [
+        "while true; do bash -c 'sleep 1; $POLL'; done",
+        "while true; do echo \"$(sleep 1; $POLL)\"; done",
+        "while true; do echo `sleep 1; $POLL`; done",
+        "while true; do bash -lc 'echo \"$(sleep 1; $POLL)\"'; done",
+        "while true; do echo \"$(bash -c 'sleep 1; $POLL')\"; done",
+    ]
+    .into_iter()
+    .filter(|command| handle(&event(command, "PreToolUse"), &c, 1).is_none())
+    .collect();
+    assert!(escaped.is_empty(), "poll escaped: {escaped:?}");
+    for command in [
+        "bash -c 'sleep 1; $POLL'",
+        "echo \"$(sleep 1; $POLL)\"",
+        "echo `sleep 1; $POLL`",
+        "while build_next; do cargo test; done; echo \"$(sleep 1; $POLL)\"",
+        "echo \"$(sleep 1; $POLL)\"; while build_next; do cargo test; done",
+    ] {
+        assert_eq!(
+            handle(&event(command, "PreToolUse"), &c, 2),
+            None,
+            "{command}"
+        );
+    }
+}
+
+#[test]
 fn recognised_polling_survives_broken_transcript_and_missing_session_metadata() {
     let dir = tempfile::tempdir().unwrap();
     let c = config(&dir);

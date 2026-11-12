@@ -19,7 +19,7 @@ pub(super) struct Shell {
     finite_for: bool,
     inside_for: Vec<bool>,
     inside_loop: Vec<bool>,
-    expansions: Vec<String>,
+    expansions: Vec<(String, bool)>,
 }
 
 fn push_word(words: &mut Vec<String>, word: &mut String, quoted: &mut bool) {
@@ -57,7 +57,7 @@ fn parse_shell(s: &str, polling: bool) -> Option<Shell> {
                     if !polling {
                         return None;
                     }
-                    expansions.push(wrappers::skip_expansion(c, &mut chars));
+                    expansions.push((commands.len(), wrappers::skip_expansion(c, &mut chars)));
                     word.push('$');
                     continue;
                 }
@@ -76,13 +76,13 @@ fn parse_shell(s: &str, polling: bool) -> Option<Shell> {
             // No expansion or heredoc modelling: do not mistake their contents
             // for a known read-only check or a state-changing command.
             '`' if polling => {
-                expansions.push(wrappers::skip_expansion(c, &mut chars));
+                expansions.push((commands.len(), wrappers::skip_expansion(c, &mut chars)));
                 word.push('$');
             }
             '<' | '>' if polling => {
                 writes = true;
                 if c == '<' && chars.peek() == Some(&'<') {
-                    expansions.push(wrappers::skip_heredoc(&mut chars));
+                    expansions.push((commands.len(), wrappers::skip_heredoc(&mut chars)));
                 } else {
                     if word.chars().all(|c| c.is_ascii_digit()) {
                         word.clear();
@@ -96,7 +96,7 @@ fn parse_shell(s: &str, polling: bool) -> Option<Shell> {
                     if !polling {
                         return None;
                     }
-                    expansions.push(wrappers::skip_expansion(c, &mut chars));
+                    expansions.push((commands.len(), wrappers::skip_expansion(c, &mut chars)));
                     word.push('$');
                     continue;
                 }
@@ -162,6 +162,7 @@ fn parse_shell(s: &str, polling: bool) -> Option<Shell> {
     let mut inside_for = Vec::new();
     let mut loop_depth: usize = 0;
     let mut inside_loop = Vec::new();
+    let mut expansion_loops = Vec::new();
     for words in &mut commands {
         while words.first().is_some_and(|s| {
             matches!(
@@ -193,12 +194,14 @@ fn parse_shell(s: &str, polling: bool) -> Option<Shell> {
                 word.remove(0);
             }
         }
+        expansion_loops.push(loop_depth > 0);
         if let Some(first) = words.first_mut() {
             *first = first.rsplit('/').next()?.to_owned();
             inside_for.push(for_depth > 0);
             inside_loop.push(loop_depth > 0);
         }
     }
+    expansion_loops.push(loop_depth > 0); // A trailing redirection may have no command.
     commands.retain(|c| !c.is_empty());
     Some(Shell {
         commands,
@@ -208,15 +211,18 @@ fn parse_shell(s: &str, polling: bool) -> Option<Shell> {
         finite_for: finite_for && !looped,
         inside_for,
         inside_loop,
-        expansions,
+        expansions: expansions
+            .into_iter()
+            .map(|(i, body)| (body, expansion_loops[i]))
+            .collect(),
     })
 }
 
 pub fn sleep_poll(command: &str) -> bool {
-    sleep_poll_depth(command, 0)
+    sleep_poll_depth(command, 0, false)
 }
 
-fn sleep_poll_depth(command: &str, depth: usize) -> bool {
+fn sleep_poll_depth(command: &str, depth: usize, inside_loop: bool) -> bool {
     if depth > 3 {
         return false;
     }
@@ -228,7 +234,7 @@ fn sleep_poll_depth(command: &str, depth: usize) -> bool {
     if shell
         .expansions
         .iter()
-        .any(|s| sleep_poll_depth(s, depth + 1))
+        .any(|(s, in_loop)| sleep_poll_depth(s, depth + 1, inside_loop || *in_loop))
     {
         return true;
     }
@@ -269,18 +275,14 @@ fn sleep_poll_depth(command: &str, depth: usize) -> bool {
             && !(shell.finite_for && shell.inside_for[i])
             && commands
                 .get(i + 1)
-                .is_some_and(|c| poll_command(c, depth, shell.inside_loop[i + 1]))
+                .is_some_and(|c| poll_command(c, depth, inside_loop || shell.inside_loop[i + 1]))
         {
             return true;
         }
-        if matches!(c[0].as_str(), "bash" | "sh" | "dash" | "zsh") {
-            if let Some(index) = c.iter().position(|s| s == "-c" || s == "-lc") {
-                if c.get(index + 1)
-                    .is_some_and(|s| sleep_poll_depth(s, depth + 1))
-                {
-                    return true;
-                }
-            }
+        if wrappers::script(c)
+            .is_some_and(|s| sleep_poll_depth(s, depth + 1, inside_loop || shell.inside_loop[i]))
+        {
+            return true;
         }
     }
     false
