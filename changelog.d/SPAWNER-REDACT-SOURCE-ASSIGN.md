@@ -1,5 +1,7 @@
-- Preserve source expressions in Python and Rust prompt and output credential-assignment redaction,
-  including interpolated strings, calls, operators and lowercase dotted attribute paths in review diffs;
-  fail closed on bare lowercase credential values while keeping independent secret-pattern scrubbing.
-- Cover bare credential values in the shared Python/Rust parity table and verify review prompt
-  records and adapter payloads retain source expressions while masking a synthetic credential.
+- Fail closed on every Python and Rust credential-assignment value except four source forms:
+  prefixed strings containing braces, direct identifier calls/indexes, direct ++/--/!/~ identifier
+  prefixes, and quoted literals followed by symbolic operators, attributes or indexes.
+- Mask bare/dotted words, spaced/tight operators between bare words, word operators and bare
+  containers; keep independent secret-pattern scrubbing and supported review diff expressions.
+- Cover seven synthetic leak regressions and source-form boundaries in the required shared
+  Python/Rust parity table, including complete container masking and triple-quoted strings.

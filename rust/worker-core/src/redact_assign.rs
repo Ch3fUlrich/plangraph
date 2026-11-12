@@ -1,4 +1,11 @@
-//! Source-expression exclusions for the legacy credential-assignment rules.
+//! Credential assignments mask every RHS except exactly four source forms:
+//! f/b/r-prefixed strings containing both braces (including rf/fr and triple
+//! quotes); an identifier (dotted allowed) directly followed by `(` or `[`;
+//! `++`/`--`/`!`/`~` directly before an identifier; or a quoted literal followed
+//! by a symbolic operator, attribute or index (horizontal space allowed before
+//! the suffix). Bare/dotted words, operators between bare words (spaced or
+//! tight), word operators and/or/if/else/in/is, and bare container starts are
+//! not exempt. Independent secret-pattern rules still apply.
 
 use std::sync::OnceLock;
 
@@ -6,14 +13,9 @@ fn patterns() -> &'static [regex::Regex] {
     static RS: OnceLock<Vec<regex::Regex>> = OnceLock::new();
     RS.get_or_init(|| {
         [
-            r#"^(?i:([fbr]{1,2}))?("(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')"#,
-            r"^(?:[+*/%&|^<>=!?]|\.[A-Za-z_]|\[|-(?:[^-]|$)|\b(?:and|or|if)\b)",
-            r"^(?:[\[({]|(?:\+\+|--|[!~])[^\S\r\n]*[A-Za-z_]|[A-Za-z_][A-Za-z0-9_.]*[^\S\r\n]*[\[(])",
-            r"[^\S\r\n](?:[+\-*/%&|^<>=!]+|and|or|if|else|in|is)[^\S\r\n]",
-            r"^[a-z_][a-z0-9_]*$",
-            // A lone identifier is indistinguishable from a plaintext credential.
-            r"^[a-z_]+(?:\.[a-z_]+)+$",
-            r"^[a-z_]+[+*/%&|^<>=]+[a-z_]+$",
+            r#"^(?i:(fr|rf|br|rb|f|b|r))?("""(?:\\.|[^\\\r\n])*?"""|'''(?:\\.|[^\\\r\n])*?'''|"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')"#,
+            r"^(?:[+*/%&|^<>=!?]|\.[A-Za-z_]|\[|-(?:[^-]|$))",
+            r"^(?:(?:\+\+|--|[!~])[A-Za-z_]|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*[\[(])",
         ]
         .into_iter()
         .map(|pattern| regex::Regex::new(pattern).expect("assignment source pattern compiles"))
@@ -21,7 +23,7 @@ fn patterns() -> &'static [regex::Regex] {
     })
 }
 
-fn is_source(name: &str, separator: &str, value: &str) -> bool {
+fn is_source(value: &str) -> bool {
     if value.starts_with(super::REDACTED) {
         return false;
     }
@@ -31,17 +33,7 @@ fn is_source(name: &str, separator: &str, value: &str) -> bool {
         return (literal.get(1).is_some() && quoted.contains('{') && quoted.contains('}'))
             || rs[1].is_match(value[literal.get(0).unwrap().end()..].trim_start());
     }
-    if rs[2].is_match(value) || rs[3].is_match(value) {
-        return true;
-    }
-    let reference = value
-        .trim()
-        .strip_suffix(';')
-        .unwrap_or(value.trim())
-        .trim_end();
-    separator.contains('=')
-        && rs[4].is_match(name)
-        && (rs[5].is_match(reference) || rs[6].is_match(reference))
+    rs[2].is_match(value)
 }
 
 pub(super) fn replacement(caps: &regex::Captures<'_>, text: &str) -> String {
@@ -49,7 +41,7 @@ pub(super) fn replacement(caps: &regex::Captures<'_>, text: &str) -> String {
     // operator suffix. Inspect the full RHS without crossing a physical line.
     let start = caps.get(4).unwrap().start();
     let rhs = text[start..].split(['\r', '\n']).next().unwrap_or("");
-    if is_source(&caps[1], &caps[3], rhs) {
+    if is_source(rhs) {
         caps[0].to_string()
     } else {
         format!("{}{}{}{}", &caps[1], &caps[2], &caps[3], super::REDACTED)

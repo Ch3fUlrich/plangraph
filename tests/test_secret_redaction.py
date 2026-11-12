@@ -88,12 +88,23 @@ def test_dictionary_secret_keys_still_mask_expressions():
         'token': '[REDACTED]', 'idempotency_key': 'value'}
 
 
-def test_review_diff_preserved_and_secrets_scrubbed_at_record_and_adapter(tmp_path, monkeypatch):
-    secret = ''.join(('fake', 'review', 'password'))
+@pytest.mark.parametrize('name,separator,secret', [
+    ('password', ' = ', ''.join(('fake', 'review', 'password'))),
+    ('token', ' = ', 'fake.part'),
+    ('api_key', '=', 'fake+part'),
+    ('secret', ' = ', 'fake + part'),
+    ('password', ' = ', 'fake and part'),
+    ('password', ' = ', '(fake)'),
+    ('secret', ' = ', '{fake: part}'),
+    ('token', ' = ', '[fake]'),
+])
+def test_review_diff_preserved_and_secrets_scrubbed_at_record_and_adapter(
+        tmp_path, monkeypatch, name, separator, secret):
     source = ('Review this diff:\n+    pair_key = f"{left}:{right}"\n'
               '+  const token=++x;\n+token = os.environ["X"]\n')
-    prompt = source + '+password = ' + secret + '\n'
-    expected = source + '+password = [REDACTED]\n'
+    prefix = '+' + name + separator
+    prompt = source + prefix + secret + '\n'
+    expected = source + prefix + '[REDACTED]\n'
     received, path = [], tmp_path / 'prompt.txt'
 
     def dispatch(**kwargs):

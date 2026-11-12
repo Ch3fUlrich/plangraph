@@ -43,10 +43,13 @@ fn patterns() -> &'static [regex::Regex] {
             //     `&`, or a closing delimiter — so the rule is idempotent.
             //     An unquoted value may not start with `}`, `]`, `)`, or `&`
             //     after either separator. An unterminated quote falls back to
-            //     the rest of the line (no closing delimiter semantics). A
+            //     the rest of the line (no closing delimiter semantics).
+            //     Container starts and whitespace-separated calls/indexes
+            //     consume the full physical RHS, including closing delimiters,
+            //     rather than leaking a rejected expression's tail. A
             //     backslash before a line feed (or CRLF) continues the value
             //     onto the next line, quoted, unquoted, or unterminated.
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\][^\s,;"'}\])&]*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#,
+            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*|[A-Za-z0-9_]*_KEY|PG_DSN)(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\][^\s,;"'}\])&]*|(?:[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*[^\S\r\n]+)?[\[({][^\r\n]*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#,
             // 4b. Same assignment rule for `=` only: after `=` an unquoted
             //     value may start with `}`, `]`, or `)` only when at least one
             //     more character follows before the next delimiter. A bare
@@ -55,7 +58,7 @@ fn patterns() -> &'static [regex::Regex] {
             //     whitespace is horizontal Unicode whitespace only, never
             //     CR/LF. The tail class is unchanged; 4a runs first and handles
             //     the `[REDACTED]` placeholder and any glued tail after it.
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*=[^\S\r\n]*)([}\])][^\n\r}\])&]+)"#,
+            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*|[A-Za-z0-9_]*_KEY|PG_DSN)(["']?)([^\S\r\n]*=[^\S\r\n]*)([}\])][^\n\r}\])&]+)"#,
             // 5. Prefixed tokens share their body policy with wrapped joins.
             &tokens,
             // 6. JWT-like: three base64url segments, header always starts "eyJ".
@@ -78,12 +81,10 @@ fn patterns() -> &'static [regex::Regex] {
 /// Patterns 1–2 handle multi-line PEM blocks and are applied first, to the
 /// whole text, as are the remaining patterns; wrapped joins run before pattern 5.
 /// Idempotent: running already-redacted text through again changes nothing.
-/// Assignments mask literals/opaque tokens (including legacy spaced plaintext),
-/// but preserve f/b/r strings with braces, calls/indexing/containers, ++/--/!/~
-/// identifier prefixes, spaced operators and quoted-literal expression suffixes.
-/// For lowercase `=` names, digit-free lowercase dotted attribute paths and
-/// tight symbolic operations on those identifiers are source too; bare identifiers,
-/// digits and hyphens otherwise keep values opaque. Other secret rules remain independent.
+/// Assignments mask every RHS except the four source forms documented in
+/// [`assign`]: prefixed strings with braces, direct identifier calls/indexes,
+/// direct ++/--/!/~ identifier prefixes and quoted-literal expression suffixes.
+/// Other secret rules remain independent.
 pub fn redact(text: &str) -> String {
     let rs = patterns();
     let out = rs[0].replace_all(text, REDACTED).into_owned();
