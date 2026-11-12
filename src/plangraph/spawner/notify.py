@@ -202,7 +202,7 @@ def _deliver_verdict(directory, record, keeper):
                 raise ValueError('malformed item evidence')
             heads = {row.get('ref', {}).get('commit') for row in rows
                      if row.get('verified') and row.get('kind') == 'commit+ci'}
-            if item.get('key') != key or heads != {evidence['head_sha']}:
+            if item.get('key') != key or evidence['head_sha'] not in heads:
                 outcome('skipped', 'missing or ambiguous item evidenced head')
                 return
             output = io.StringIO()

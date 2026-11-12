@@ -90,6 +90,24 @@ def test_forward_failure_boundaries(tmp_path, monkeypatch, failure):
         assert len(calls) == (1 if failure in ('reject', 'post', 'post-value') else 0)
 
 
+@pytest.mark.parametrize('commits, forwarded', [(['a' * 40, 'd' * 40], 1), (['a' * 40, 'b' * 40], 0)])
+def test_verdict_head_needs_only_membership_among_verified_heads(tmp_path, monkeypatch, commits, forwarded):
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / 'tools'))
+    import seat_verdict as seat
+    from plangraph.spawner import notify
+    record = {'role': 'review', 'item_key': 'demo:A', 'given_writer_families': ['deepseek']}
+    monkeypatch.setattr(seat, 'evidence_from_record', lambda *a: (
+        {'served_model': 'opencode/mimo-v2.6-free', 'head_sha': 'd' * 40}, 'VERDICT: ACCEPT'))
+    monkeypatch.setenv('PG_REVIEWER_TOKEN_DIR', str(tmp_path))
+    calls = []
+    monkeypatch.setattr(seat, 'main', lambda *a: calls.append(a) or seat.EXIT_PASS_REFUSED)
+    endpoint = SimpleNamespace(url='unused', item=lambda key: {'key': key, 'evidence': [
+        {'kind': 'commit+ci', 'verified': True, 'ref': {'commit': c}} for c in commits]})
+    notify.deliver_verdict(tmp_path, record, endpoint)
+    assert len(calls) == forwarded
+
+
 def test_lock_failure_preserves_attempt_accounting(tmp_path, monkeypatch):
     from plangraph.spawner import notify
     journal = tmp_path / 'verdict.json'
