@@ -108,22 +108,8 @@ def memory_refusal(free_mb, reservation_mb, floor_mb):
     return f'memory: free {free_mb} MB, floor {floor_mb} MB, role {reservation_mb} MB'
 
 
-def admit_local(role):
-    reservation_mb, floor_mb = local_limits(registry_caps(), role)
-    free_mb = available_memory_mb()
-    return memory_refusal(free_mb, reservation_mb, floor_mb)
-
-
-def require_local_memory(service, role):
-    reason = admit_local(role)
-    if reason:
-        exc = cli.SpawnRefused(reason)
-        service.save_refusal(exc, role)
-        raise exc
-
-
-def decide(local_live, local_mem_mb, role_mb, floor_mb, ready_records, public, *,
-           remote_first=False, local_refusal=None):
+def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
+            remote_first=False, local_refusal=None):
     """Select from config-enriched readiness records; age is computed on read."""
     local_reason = local_refusal or memory_refusal(local_mem_mb, role_mb, floor_mb)
     if not local_reason and not remote_first:
@@ -329,8 +315,8 @@ def main(argv=None):
             return cli.main(['spawn', '--card', '@' + args.card,
                              Path(args.prompt).read_text(), *options])
         role_mb, floor_mb = local_limits(registry_caps(), args.role)
-        live, memory = local_resources()
-        if decide(live, memory, role_mb, floor_mb, {}, False).reason == 'local room':
+        _, memory = local_resources()
+        if decide(memory, role_mb, floor_mb, {}, False).reason == 'local room':
             return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
         public = str(Path(args.repo).resolve()) in [str(Path(p).expanduser().resolve())
                                                   for p in config.get('public_repos', [])]
@@ -339,10 +325,10 @@ def main(argv=None):
         if diff and Path(diff['repo']).resolve() != Path(args.repo).resolve():
             public = False
         prompt = Path(args.prompt).read_text()
-        records = ready_records(config) if args.role == 'implement' else ready_records(config, args.role)
+        records = ready_records(config, args.role)
         attempts = 0
         while True:
-            decision = decide(live, memory, role_mb, floor_mb, records, public)
+            decision = decide(memory, role_mb, floor_mb, records, public)
             if decision.host is None:
                 print(json.dumps({'overflow_reason': decision.reason}))
                 return 5

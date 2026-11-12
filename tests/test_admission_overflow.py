@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import os
 from types import SimpleNamespace
@@ -24,7 +25,8 @@ def setup(tmp_path, monkeypatch):
         for name in ('ash', 'birch')})
     remote = Mock(return_value={'run_id': 'run-remote', 'status': 'running'})
     monkeypatch.setattr(overflow, 'remote_spawn', remote)
-    service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(tmp_path)), _save=Mock())
+    service = SharedService()
+    service.runner, service._save, service.state = SimpleNamespace(default_cwd=str(tmp_path)), Mock(), tmp_path
     return service, path, remote
 
 
@@ -32,13 +34,13 @@ def setup(tmp_path, monkeypatch):
 def test_local_room_ignores_counts(setup, monkeypatch, memory):
     service, _, remote = setup
     monkeypatch.setattr(a, 'resources', lambda service: (100, memory))
-    assert a.admit(service, {}) is None
+    assert service.admit_spawn({}) is None
     remote.assert_not_called()
 
 
 def test_dry_run_preserves_local(setup):
     service, path, remote = setup
-    assert a.admit(service, {'dry_run': True}) is None
+    assert service.admit_spawn({'dry_run': True}) is None
     remote.assert_not_called()
     service._save.assert_not_called()
 
@@ -46,8 +48,8 @@ def test_dry_run_preserves_local(setup):
 def test_forward_options_and_save(setup):
     service, _, remote = setup
     card = {'diff_ref': {'repo': service.runner.default_cwd}}
-    result = a.admit(service, {'prompt': 'task', 'role': 'review', 'model': 'model',
-                              'writer_families': ['family'], 'seats': True}, card=card)
+    result = service.admit_spawn({'prompt': 'task', 'role': 'review', 'model': 'model',
+                                 'writer_families': ['family'], 'seats': True}, card=card)
     assert result['host'] == 'ash' and result['overflow_remote']
     assert remote.call_args.args[2:] == (card, 'task', [
         '--role', 'review', '--model', 'model', '--writer-family', 'family', '--seats'])
@@ -64,7 +66,7 @@ def test_forward_options_and_save(setup):
 def test_failures_queue_with_safe_reasons(setup, failure, reason):
     service, _, remote = setup
     remote.side_effect = failure
-    result = a.admit(service, {})
+    result = service.admit_spawn({})
     assert result['status'] == 'queued'
     assert reason in result['reason'] and '/secret' not in result['reason']
     assert remote.call_count == 2
@@ -72,14 +74,14 @@ def test_failures_queue_with_safe_reasons(setup, failure, reason):
 
 def test_private_card_never_copies(setup):
     service, _, remote = setup
-    result = a.admit(service, {}, card={'diff_ref': {'repo': '/private'}})
+    result = service.admit_spawn({}, card={'diff_ref': {'repo': '/private'}})
     assert result['status'] == 'queued' and 'not public' in result['reason']
     remote.assert_not_called()
 
 
 def test_benchmark_not_forwarded(setup):
     service, _, remote = setup
-    assert 'benchmark' in a.admit(service, {'benchmark': object()})['reason']
+    assert 'benchmark' in service.admit_spawn({'benchmark': object()})['reason']
     remote.assert_not_called()
 
 
@@ -88,13 +90,53 @@ class SharedService(SeatSpawnMixin):
         raise AssertionError('local spawn')
 
 
+@pytest.fixture
+def cli_mixin(monkeypatch):
+    from plangraph.spawner import cli
+    class Input(io.StringIO):
+        def close(self):
+            pass
+    class Supervisor:
+        def __init__(self, *args, **kwargs):
+            self.stdin, self.stdout = Input(), self
+        def readline(self):
+            payload = json.loads(self.stdin.getvalue())
+            service = cli.SpawnService(state=payload.pop('state'))
+            return json.dumps(asyncio.run(service.spawn(**payload))) + '\n'
+        def close(self):
+            pass
+    monkeypatch.setattr(cli, '_start_supervisor', Supervisor)
+
+
+def test_cli_mixin_admits_once(setup, monkeypatch, capsys, cli_mixin):
+    from plangraph.spawner import cli
+    service, path, remote = setup
+    shared = SharedService()
+    shared.runner, shared._save, shared.state = service.runner, service._save, path.parent
+    shared.route, shared.save_refusal = Mock(), Mock()
+    async def local_spawn(card=None, prompt='', **kwargs):
+        return {'run_id': 'run-local', 'status': 'completed', 'exit_code': 0}
+    monkeypatch.setattr(shared, '_spawn', local_spawn)
+    monkeypatch.setattr(a, 'resources', lambda service: (100, 6000))
+    admission = Mock(wraps=a.admit)
+    monkeypatch.setattr(a, 'admit', admission)
+    public_admission = Mock(wraps=shared.admit_spawn)
+    monkeypatch.setattr(shared, 'admit_spawn', public_admission)
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: shared)
+    assert cli.main(['spawn', '--card', '{"task":"test"}', 'Implement the requested change.']) == 0
+    assert json.loads(capsys.readouterr().out)['run_id'] == 'run-local'
+    admission.assert_called_once()
+    public_admission.assert_called_once()
+    remote.assert_not_called()
+
+
 @pytest.mark.parametrize('entry', ['seat', 'mcp', 'cli'])
-def test_no_config_below_floor_refuses_spawn(setup, monkeypatch, capsys, entry):
+def test_no_config_below_floor_refuses_spawn(setup, monkeypatch, capsys, cli_mixin, entry):
     service, path, remote = setup
     path.unlink()
     monkeypatch.setattr(overflow, 'ready_records', lambda config, role: {})
     shared = SharedService()
-    shared.runner, shared._save = service.runner, service._save
+    shared.runner, shared._save, shared.state = service.runner, service._save, path.parent
     shared.route = Mock()
     if entry == 'seat':
         result = asyncio.run(shared.spawn(prompt='Implement the requested change.'))
@@ -118,12 +160,11 @@ def test_no_config_below_floor_refuses_spawn(setup, monkeypatch, capsys, entry):
     shared._save.assert_called_once_with(result)
 
 
-def test_direct_cli_below_floor_attempts_overflow(setup, monkeypatch, capsys):
+def test_direct_cli_below_floor_attempts_overflow(setup, monkeypatch, capsys, cli_mixin):
     from plangraph.spawner import cli
     service, _, remote = setup
     service.route = Mock()
     monkeypatch.setattr(cli, 'SpawnService', lambda **kw: service)
-    monkeypatch.setattr(cli, '_start_supervisor', Mock(side_effect=AssertionError('local supervisor')))
     assert cli.main(['spawn', '--card', '{"task":"test"}',
                      'Implement the requested change.']) == 0
     assert json.loads(capsys.readouterr().out)['host'] == 'ash'
