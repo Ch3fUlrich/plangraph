@@ -1,0 +1,1 @@
+- WORKTREE-REAPER slice 1: add Rust pg-reap report-only classification, protective facts, porcelain parsing and deterministic TSV; no worktree actions.
