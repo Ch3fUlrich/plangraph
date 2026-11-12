@@ -2,3 +2,4 @@
 - Recover a missing watermark's ancestry baseline from accepted main (refusing an unverifiable baseline), and isolate shipped mirror commands from caller Git configuration.
 - Persist and read back named-file blob SHAs alongside accepted main; classify a missing historical baseline as a force-push refusal without publishing a rejected rebuilt clone, and retain crate-only mirror documentation mappings.
 - Eliminate local keeper startup port races: bind port zero and atomically publish the child's actual endpoint, preventing another keeper's health response from causing spurious token refusals in parallel CI.
+- Exercise stale ready files pointing at another live keeper in the local startup regression, checking port-zero launch and child-only health probes instead of an obsolete port-selection stub.
