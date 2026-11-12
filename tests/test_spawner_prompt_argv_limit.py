@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +15,9 @@ from plangraph.routing_support.clients import build_command, launch_stdin_payloa
 @pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux MAX_ARG_STRLEN regression')
 @pytest.mark.parametrize('size', [200 * 1024, 300 * 1024])
 def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner import leg_probe, resolver, runner as runner_module
     binary = tmp_path / 'agy'
     binary.write_text(
         f'#!{sys.executable}\n'
@@ -24,21 +28,36 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
         '"response":"VERDICT: ACCEPT " + hashlib.sha256(prompt.encode()).hexdigest()}}))\n'
     )
     binary.chmod(0o700)
-    monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
-    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '0')
-    monkeypatch.delenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', raising=False)
+    # No inherited PATH, gateway endpoint, state, credentials, or notification hook.
+    for name in list(os.environ):
+        monkeypatch.delenv(name)
+    monkeypatch.setenv('PATH', str(tmp_path))
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_OMNIROUTE_LEG_STATE', '0')
+    monkeypatch.setattr(runner_module, 'build_child_env', lambda *a, **kw: dict(PATH=str(tmp_path)))
+    async def no_probe(*a, **kw):
+        return None
+    monkeypatch.setattr(leg_probe, 'before_launch', no_probe)
+    async def fixed_plan(plan, **kw):
+        return plan
+    monkeypatch.setattr(resolver, 'plan_for_launch_async', fixed_plan)
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'agy-gemini-3.8-flash')
     prompt = 'review this change\n' + 'x' * (size - 20) + '\n\n'
 
     async def run():
         # Default process factory executes the real Python OOM child entry point.
         runner = SpawnerRunner(default_cwd=str(tmp_path))
-        service = spawn_service(runner, state=tmp_path / 'state')
+        sink = SimpleNamespace(deliver=lambda *a, **kw: None)
+        service = spawn_service(runner, state=tmp_path / 'state', completion_sink=sink, keeper_sink=sink)
+        monkeypatch.setattr(service, 'admit_spawn', lambda *a, **kw: None)
+        monkeypatch.setattr(service, '_route', lambda *a, **kw: SpawnPlan((leg,), (), 'test', (), ()))
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt=prompt,
-            role='review', leg='agy-gemini-3.8-flash', writer_families=['gpt'],
-            override_reason='hermetic prompt transport regression', wait_seconds=None)
+            role='review', writer_families=['gpt'], wait_seconds=None)
         assert record['status'] == 'completed', record.get('error')
         assert hashlib.sha256(prompt.encode()).hexdigest() in record['stdout_tail']
         assert record['attempts'][0]['status'] == 'completed'
+        assert runner.jobs[record['job_id']].command[0] == 'agy'
+        assert runner.jobs[record['job_id']].exit_code == 0
         assert service.result(record['run_id'])['status'] == 'completed'
     asyncio.run(run())
 

@@ -250,7 +250,7 @@ fn registered_job_with_card(dry: bool, card: Value) {
         }))
         .unwrap(),
     ));
-    let args = json!({"prompt":"p","card":card,"wait_seconds":1,"dry_run":dry});
+    let args = json!({"prompt":"p","card":card,"wait_seconds":10,"dry_run":dry});
     let result = runs
         .spawn_using(
             &dir.0,
@@ -340,6 +340,18 @@ fn env_prompt_and_missing_carrier() {
     assert!(store_prompt(&dir.0, &id, &mut launch, &mut base, false).is_err());
     assert!(!dir.0.join("runs").join(id).join("prompt.txt").exists());
     assert!(!base.to_string().contains(&raw));
+    // A valid stdin carrier must not hide a second, unsafe env carrier.
+    launch.stdin = Some(raw.clone());
+    for key in ["PROMPT", "OTHER_TASK_ENV"] {
+        launch.env = BTreeMap::from([(key.into(), raw.clone())]);
+        let error = store_prompt(&dir.0, &new_run_id(), &mut launch, &mut base, false)
+            .err()
+            .unwrap()
+            .into_error_data();
+        assert_eq!(error.message, "launch prompt must not be in argv or env");
+    }
+    launch.env.clear();
+    launch.stdin = None;
     launch.prompt = Some("absent".into());
     assert!(store_prompt(&dir.0, &new_run_id(), &mut launch, &mut base, false).is_err());
 }

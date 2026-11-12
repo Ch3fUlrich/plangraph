@@ -147,12 +147,21 @@ pub(crate) fn spawn(
         return Err(ToolError::Internal("route adapter returned no leg".into()));
     }
     match runs.spawn(state, args, host, role.clone(), plan) {
-        Err(ToolError::Refused { message, .. }) if message.contains("prompt_too_large:") => save(
-            state,
-            host,
-            json!({"role":role,"reason":"prompt_too_large","error":message,"exit_code":1}),
-            Status::Failed,
-        ),
+        Err(error) => {
+            if !matches!(&error, ToolError::Refused { message, .. } if message.contains("prompt_too_large:"))
+            {
+                return Err(error);
+            }
+            // LaunchAdapter only maps exit 2 to Refused; retain that error's status.
+            let error = error.into_error_data();
+            save(
+                state,
+                host,
+                json!({"role":role,"reason":"prompt_too_large","error":error.message,
+                    "exit_code":error.data.as_ref().and_then(|data| data.get("exit_code"))}),
+                Status::Failed,
+            )
+        }
         result => result,
     }
 }

@@ -191,5 +191,8 @@ fn oversized_prompt_records_named_reason() {
     let row = payload(f.spawn(2.0));
     assert_eq!(row["status"], "failed");
     assert_eq!(row["reason"], "prompt_too_large");
-    assert_eq!(row["exit_code"], 1);
+    assert_eq!(row["exit_code"], 2);
+    let saved = payload(f.call("result", json!({"run_id":row["run_id"]})));
+    assert_eq!(saved["exit_code"], 2);
+    assert_eq!(saved["reason"], "prompt_too_large");
 }

@@ -1,6 +1,8 @@
 import json
+import hashlib
 import shlex
 import subprocess
+import sys
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 
@@ -307,25 +309,37 @@ def test_local_limits_coerce_or_default(inputs, monkeypatch, key, value):
 def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
     stage = tmp_path / 'stage with spaces'
     stage.mkdir()
+    binary_dir = tmp_path / 'bin'
+    binary_dir.mkdir()
+    (binary_dir / 'python3').symlink_to(sys.executable)
+    policy = tmp_path / 'route-policy.json'
+    policy.write_text('{"banned_families": [], "off_families": [], "paused_harnesses": {}}')
+    env = dict(PATH=str(binary_dir), HOME=str(tmp_path), AUTOOS_ROOT=str(tmp_path),
+               XDG_STATE_HOME=str(tmp_path / 'state'), PLANGRAPH_OMNIROUTE_LEG_STATE='0',
+               PLANGRAPH_ROUTE_POLICY=str(policy))
     real_run = subprocess.run
     received = []
     def run(argv, **kwargs):
         if argv[0] == 'scp':
+            (stage / 'card.json').write_bytes(o.Path(argv[2]).read_bytes())
             (stage / 'prompt.txt').write_bytes(o.Path(argv[3]).read_bytes())
         if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
-            # Execute the actual generated shell, replacing only its spawn command.
-            command = argv[-1].replace('python3 -m plangraph.spawner.cli spawn',
-                                      shlex.join(['python3', '-c',
-                                                  'import pathlib, sys; print(repr(pathlib.Path(sys.argv[4]).read_text()))']))
-            result = real_run(['sh', '-c', command], capture_output=True, text=True)
+            # Only SSH/SCP are faked: the unchanged shell runs the real CLI parser,
+            # prompt-file reader, and dry-run launch path in an isolated environment.
+            result = real_run(['/bin/sh', '-c', argv[-1]], capture_output=True, text=True,
+                              env=env, timeout=30)
             assert result.returncode == 0, result.stderr
-            received.append(result.stdout.splitlines()[1])
-            return SimpleNamespace(returncode=0, stdout=bracket(argv[-1], '{"run_id":"run-r"}'))
+            received.append(json.loads('\n'.join(result.stdout.splitlines()[1:-1])))
+            return result
         return SimpleNamespace(returncode=0, stdout=str(stage) if argv[-1] == 'mktemp -d' else '{}')
     monkeypatch.setattr(o.subprocess, 'run', run)
-    host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src='src')
-    assert o.remote_spawn('invented', host, {}, prompt, []) == {'run_id': 'run-r'}
-    assert received == [repr(prompt)]
+    host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src=str(o.Path(o.__file__).resolve().parents[2]))
+    options = ['--role', 'review', '--leg', 'agy-gemini-3.8-flash', '--writer-family', 'gpt',
+               '--override-reason', 'hermetic prompt transport regression', '--dry-run', '--json']
+    record = o.remote_spawn('invented', host, {'estimate_tokens': 1000}, prompt, options)
+    assert received == [record]
+    assert record['status'] == 'dry_run'
+    assert record['prompt_sha256'] == hashlib.sha256(prompt.encode('utf-8')).hexdigest()
 
 
 @pytest.mark.parametrize('receipt', ['unreadable', '{}', '[]', '{"status":"running"}'])

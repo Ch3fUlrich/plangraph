@@ -112,6 +112,27 @@ def test_agy_stream_spec(request_data):
     assert json.loads(result['stdin'])['message']['content'] == result['prompt'] == request_data['prompt']
 
 
+@pytest.mark.parametrize('leg_id', ['agy-gemini-3.8-flash', 'qodercli-qwen3.8-flash', 'opencode-glm-5.3-flash-free'])
+@pytest.mark.parametrize('dry_run', [False, True])
+@pytest.mark.parametrize('size', [16, 200 * 1024], ids=['short', '200KiB'])
+def test_real_producer_prompt_stays_out_of_env(request_data, monkeypatch, leg_id, dry_run, size):
+    from plangraph.routing_support.clients import build_child_env
+    prompt = 'review payload\né\n' + 'x' * size + '\n\n'
+    request_data.update(prompt=prompt, leg={'id': leg_id}, dry_run=dry_run)
+    for name in ('PROMPT', 'prompt', 'PrOmPt'):
+        monkeypatch.setenv(name, prompt)
+    monkeypatch.setenv('PATH', request_data['cwd'])
+    # Use the real producer, not the fixture's synthetic child env. Exercise both
+    # inherited and explicitly supplied legacy prompt env carriers.
+    monkeypatch.setattr(spec.runner, 'build_child_env', build_child_env)
+    assert not any(name.upper() == 'PROMPT' for name in build_child_env({'PrOmPt': prompt}))
+    result = spec.build(request_data)
+    assert not any(name.upper() == 'PROMPT' for name in result['env'])
+    assert all(prompt not in value for value in [*result['argv'], *result['env'].values()])
+    payload = json.loads(result['stdin'])['message']['content'] if leg_id.startswith('agy-') else result['stdin']
+    assert payload == result['prompt'] == prompt
+
+
 def test_dry(request_data, monkeypatch):
     monkeypatch.setattr(spec, 'host_skip_reason_async', lambda *a, **kw: pytest.fail('host check'))
     request_data['dry_run'] = True

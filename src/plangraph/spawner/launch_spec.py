@@ -90,7 +90,9 @@ def build(request: dict) -> dict:
     leg = next((leg for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS) if leg.id == request['leg']['id']), None)
     if leg is None:
         raise LaunchRefused('unknown_leg', 'unknown leg id')
-    from .target import admit_leg
+    from .target import admit_leg, quota_paused
+    if quota_paused(request['state'], request['role'], leg):
+        raise LaunchRefused('quota_pause', 'quota pause')
     from plangraph.routing_errors import SpawnRefused
     try:
         admit_leg(leg)

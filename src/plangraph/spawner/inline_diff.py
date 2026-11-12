@@ -55,6 +55,6 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
     if not proc.stdout.strip():
         raise InlineDiffError("empty diff")
     if len(proc.stdout) > max_chars:
-        raise InlineDiffError(f"diff too large for leg: {len(proc.stdout)} > {max_chars} chars",
+        raise InlineDiffError(f"prompt_too_large: diff too large for leg: {len(proc.stdout)} > {max_chars} chars",
                               chars=len(proc.stdout), max_chars=max_chars)
     return prompt + HEADER.format(base=base, head=head) + proc.stdout + FOOTER
