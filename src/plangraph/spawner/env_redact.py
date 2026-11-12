@@ -6,19 +6,34 @@ from decimal import Decimal
 
 def redact(value):
     """Shared fail-closed output scrubber; never return raw text on failure."""
+    return _redact(value, source=False)
+
+
+def redact_source(value):
+    """Spawner-read source only: skip credential-name assignments, nothing else."""
+    return _redact(value, source=True)
+
+
+def _redact(value, *, source):
     try:
         if isinstance(value, dict):
             return {k: ('[REDACTED]' if k != 'idempotency_key' and re.search(
-                r'(?i)(key|authorization|token|secret)', k) else redact(v))
+                r'(?i)(key|authorization|token|secret)', k) else _redact(v, source=source))
                     for k, v in value.items()}
         if isinstance(value, (list, tuple)):
-            return [redact(v) for v in value]
+            return [_redact(v, source=source) for v in value]
         if isinstance(value, str):
+            # Complete PEM blocks first, then any header cut off before its END.
+            value = re.sub(r'(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----',
+                           '[REDACTED]', value)
+            value = re.sub(r'(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*', '[REDACTED]', value)
             value = re.sub(r'\b(?:x?sk)-[A-Za-z0-9_-]+', '[REDACTED]', value)
             value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
             # Greedily consume through the last @ within the quoted/space boundary.
             value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',
                            r'\1[REDACTED]\2', value)
+            if source:
+                return value
             return re.sub(
                 r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
                 r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
@@ -27,6 +42,56 @@ def redact(value):
                                   if m[0][len(m[1])] in '\"\x27' and
                                   m[0][-1] == m[0][len(m[1])] else '[REDACTED]'), value)
         return value
+    except Exception:
+        return '[autoos:redaction failed; output withheld]\n'
+
+
+class _SourcePrompt(str):
+    """Internal, non-serialized source spans; framing strings convey no trust."""
+    def __new__(cls, text, spans=()):
+        value = super().__new__(cls, text)
+        value.spans = tuple(spans)
+        return value
+
+    def __add__(self, other):
+        return _join_prompt((self, other))
+
+    def __radd__(self, other):
+        return _join_prompt((other, self))
+
+
+def _join_prompt(parts, separator=''):
+    texts, spans, offset = [], [], 0
+    for part in parts:
+        if texts:
+            texts.append(separator)
+            offset += len(separator)
+        if type(part) is _SourcePrompt:
+            spans.extend((start + offset, end + offset) for start, end in part.spans)
+        texts.append(str(part))
+        offset += len(part)
+    text = ''.join(texts)
+    return _SourcePrompt(text, spans) if spans else text
+
+
+def _source_block(text):
+    """Called only at the git-diff and tracked-context producers."""
+    text = redact_source(text)
+    return _SourcePrompt(text, ((0, len(text)),))
+
+
+def _redact_prompt(prompt, scrub):
+    """Full strength outside exact producer spans, including imitated framing."""
+    if type(prompt) is not _SourcePrompt:
+        return scrub(prompt)
+    try:
+        parts, offset = [], 0
+        for start, end in prompt.spans:
+            if not offset <= start <= end <= len(prompt):
+                raise ValueError('invalid source span')
+            parts.extend((scrub(prompt[offset:start]), redact_source(prompt[start:end])))
+            offset = end
+        return ''.join((*parts, scrub(prompt[offset:])))
     except Exception:
         return '[autoos:redaction failed; output withheld]\n'
 

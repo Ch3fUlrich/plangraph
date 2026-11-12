@@ -31,6 +31,8 @@ either a flag or symlink, or a missing, invalid, unreadable or unsearchable stat
 directory. Its home fallback is systemd `%h`, independent of the manager's `HOME`;
 redeploy the service template to apply the guard.
 
+Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; private-key blocks are masked in both modes, and token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
+
 ### Windows prompt delivery
 
 Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
