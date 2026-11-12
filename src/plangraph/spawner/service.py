@@ -124,7 +124,6 @@ class SpawnService(SeatSpawnMixin):
         except Exception as exc:
             self.save_refusal(exc, role)
             raise
-
     def _route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
         from plangraph.routing_support.leg_state_flag import service_plan, SpawnRefused
         families = list(writer_families)
@@ -142,7 +141,6 @@ class SpawnService(SeatSpawnMixin):
         from plangraph.planner.legs import leg_active
         live = lambda legs: tuple(leg for leg in legs if leg_active(leg))
         return replace(plan, legs=witness_order(card, role, live(plan.legs), measured_down(self.state)), review_seats=live(plan.review_seats))
-
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief
         gaps = remaining_gaps(output)
@@ -180,7 +178,7 @@ class SpawnService(SeatSpawnMixin):
             child['ended'] = time.time()
             self._save(child)
 
-    def save_refusal(self, exc, role='implement', *, card=None, **extra):
+    def save_refusal(self, exc, role='implement', *, card=None, placement=None, **extra):
         """Persist pre-service refusals using the same record contract (``extra``: seat fields)."""
         from plangraph.planner.routing import SpawnRefused, BenchmarkError, BenchRequired
         record = dict(run_id='run-' + uuid.uuid4().hex, role=role,
@@ -190,6 +188,8 @@ class SpawnService(SeatSpawnMixin):
                       refusal=type(exc).__name__, error=str(exc),
                       legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
                       evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [], **extra)
+        if placement is not None:
+            record.update(placement=placement, host=placement['host'])
         try:
             annotate_item(record, card)
             self._save(record)
@@ -202,7 +202,7 @@ class SpawnService(SeatSpawnMixin):
     async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                     review_of=None, model=None, leg=None, override_reason=None,
                     dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
-                    seats=False, _plan=None, run_worktree=False):
+                    seats=False, _plan=None, run_worktree=False, _placement=None):
         from plangraph.settings import admit_review_scope
         admit_review_scope(card, role, review_scope)
         from plangraph.planner.routing import hand_picked, SpawnRefused, SpawnPlan
@@ -214,7 +214,7 @@ class SpawnService(SeatSpawnMixin):
                 writer_families=writer_families, review_of=review_of, model=model, leg=leg,
                 dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=no_fallthrough,
                 benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
-                override_reason=override_reason, run_worktree=run_worktree)
+                override_reason=override_reason, run_worktree=run_worktree, _placement=_placement)
         if _plan is not None:
             plan = _plan
         elif model is not None or leg is not None or not card:
@@ -292,13 +292,13 @@ class SpawnService(SeatSpawnMixin):
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
         if plan.error or not plan.first_leg:
             raise SpawnRefused(plan.error or 'no eligible leg')
-        plan = replace(plan, legs=witness_gate_legs(card, role, plan.legs))  # before run artifacts
+        plan = replace(plan, legs=witness_gate_legs(card, role, plan.legs), placement=_placement or plan.placement)  # before run artifacts
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or (role == 'review' and (model is not None or leg is not None)) else None, served_model=None,
             served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
              started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
-            cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
+            cwd=getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
         pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
 
         async def execute():

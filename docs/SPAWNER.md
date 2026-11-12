@@ -31,6 +31,8 @@ either a flag or symlink, or a missing, invalid, unreadable or unsearchable stat
 directory. Its home fallback is systemd `%h`, independent of the manager's `HOME`;
 redeploy the service template to apply the guard.
 
+Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; private-key blocks are masked in both modes, and token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
+
 ### Windows prompt delivery
 
 Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
@@ -90,6 +92,11 @@ The S1c Rust docs-map gate reads `.docs-map` from the committed head and compare
 
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.
+Isolated OpenCode Go reviews accept credential rows with `active = 1` (legacy)
+or `active IS NULL` (v2 in use), never `active = 0`. Only the most recently updated
+eligible row is copied; ties prefer the most recently created row, then the smallest
+credential ID. This selection also applies to mixed legacy/v2 stores. A failed query or install reports
+`no row / inactive or store error`, not a login instruction; credentials stay out of logs and events.
 ### Doctor host source checks
 
 `python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust
@@ -100,6 +107,9 @@ a derived subprocess timeout: ten seconds plus three seconds per batch of up to
 local hosts registry entry replaces the inherited PATH for both pg-spawnd and
 harness discovery/children. Identity is `PLANGRAPH_HOST_NAME` or registry `self`,
 with case-insensitive id/alias lookup; absent configuration retains inherited PATH.
+Windows PATH keys are case-insensitive (`Path` is accepted).
+A present but unusable registry produces `host_path: fail`, distinguishing an identity mismatch from invalid
+configuration without printing registry or environment values. PATH is restored after checks, even on exceptions.
 There is no Python fallback for source checks; fresh release clones need no build.
 Fleet snapshots likewise delegate the read-only JSON projection to
 `pg-spawnd fleet-snapshot`; the Python loader supplies persisted registry and run
@@ -134,8 +144,8 @@ from the worker-core hosts registry (`$XDG_CONFIG_HOME/plangraph/hosts.json`,
 or `~/.config/plangraph/hosts.json`), the same location used by fleet-sync.
 Local identity is `PLANGRAPH_HOST_NAME` when set, otherwise registry `self`;
 IDs and aliases resolve case-insensitively. Routing and the public-repository
-allowlist still come from `overflow-hosts.json`, but its legacy run/floor caps
-and local limit overrides are ignored. Missing/unreadable registry or missing,
+allowlist still come from `overflow-hosts.json`; legacy run/floor caps and local
+limit overrides are ignored except the orchestration thresholds below. Missing registry or
 malformed caps exclude that host from overflow. Local admission instead uses
 conservative defaults of floor 3000 MB and role 2048 MB, with a logged reason.
 The independent OOM guard (D-5057/D-5075) remains unchanged.
@@ -147,6 +157,15 @@ excluded for that spawn; when none can accept, a queued record lists safe
 refusal reasons. Without overflow config, admitted local runs have no annotation;
 below-floor runs queue with matching `reason` and `overflow_reason`. Dry runs do not overflow.
 Local benchmark databases cannot be forwarded. CLI/MCP use public `admit_spawn` once in the shared wrapper, not the CLI parent; the service persists queued/remote records.
+Per-host `orchestration_only: true` in `hosts.json` (or the local overflow hosts entry; default false)
+makes implement/review/research remote-first: rank MemAvailable minus floor, then config order; no run-count caps.
+Local fallback requires RAM admission, `local_min_available_mb` (overflow config, default 4096) and
+`local_max_swap_used_pct` (default 90); below/above respectively refuses with that name, exit 2, never queues.
+Spawn/refusal records carry `placement: {host, reason, free_mb}`: sampled MemAvailable and
+`remote_most_free_ram`, `local_fallback_no_remote`, `local_benchmark_database`, or refusal.
+Route planning never samples admission resources: absent a supplied placement snapshot,
+it reports `placement_not_evaluated` with null host/free RAM. Missing or unreadable swap
+readings refuse local fallback as `local_swap_unavailable`; see [placement rules](placement-rules.md).
 
 SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel
 lines around the remote spawn JSON. Only the single bracketed JSON receipt is
@@ -160,7 +179,7 @@ selected host; they are never refused or retried.
 
 Install the package on each host, then use `python -m plangraph.spawner.cli`
 (or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
-or Temporal service is required for this slice. **Grok and manual-only Muse:** `omniroute-grok-4.7` uses `omniroute/gc/grok-4.7` for review only (catalog `grok`, seat `xai`). `opencode-console-muse-spark` uses `console-meta/muse-spark-1.3-contributor`; like `opencode-go-muse-spark`, its catalog family is `muse` (seat `meta`). Neither Muse leg routes automatically, even with a review policy lift. Use `--leg` with an audited `--override-reason` of at least ten characters, for scrubbed or public material only; host checks still apply. Runtime rows derive from `DEFAULT_LEGS`, not AA seeds. Policy `review_allowed_families` lifts bans, not an allowlist; Grok needs no JSON exemption.
+or Temporal service is required for this slice. **Grok and Muse:** `omniroute-grok-4.7` uses `omniroute/gc/grok-4.7` for review only (catalog `grok`, seat `xai`) and remains manual-only. D-5113 admits Muse routes automatically unless policy excludes them; their catalog family is `muse` (seat `meta`). Explicit `--leg` picks still need an audited `--override-reason` of at least ten characters; host checks still apply. Runtime rows derive from `DEFAULT_LEGS`, not AA seeds. Routing carries qualified catalog tiers through utility inputs and CLI JSON, retaining declared tiers when no qualified row exists. `plan_spawn(catalog_rows=...)` injects the same snapshot for tier projection and admission. Free precedes subscription and paid even with partial benchmarks; no new family preference list is added. An `agy/` effort-model override resolves to its explicit effort leg even when a routed leg shares that model.
 ```bash
 python -m plangraph.spawner.cli route --card @card.json --role implement --json
 python -m plangraph.spawner.cli spawn --card @card.json --role implement "Implement the card"
@@ -238,6 +257,18 @@ The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md]
 
 CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
 A probe with its harness binary missing reports `host-not-ready` and books no leg event.
+Failed probes retain a scrubbed, single-line excerpt of the last 400 stderr
+characters in their result, output line and leg-state event. A `running` record
+on the same model/harness with a nonempty `live.log` grown within
+`LIVE_RUN_WRITE_WINDOW_S` (120 seconds) overrides only the probe failure:
+`probe_failed_leg_serving` records the diagnostic without a retry/down-until
+time and does not block dispatch. Stale, empty or missing logs do not override.
+Real quota/usage-limit evidence from `exit_outcome` still books the leg down;
+serving evidence never clears that provider signal. Probes share the owning
+service's resolved state directory, with no environment fallback; pre/post size
+snapshots reject touches of old logs, truncations, replacements and read races.
+Only the explicit stderr excerpt extends the legacy 300-character reason bound.
+Ordinary probe JSON omits `state`; it is never emitted as null.
 CLI `launch-spec` (placement R6a-3d; nothing calls it yet): one JSON request on stdin, one launch spec on stdout (argv, cwd, the complete child env, stdin, warnings, events) for pg-spawnd; optional request `leg.explicit` must be boolean: only `true` permits document review without `diff_ref`, absent/false still refuses; it reuses the spawn prep and never launches; exit 2 = one redacted refusal line, exit 1 = internal error (type name only).
 MCP `route`, `spawn`, `ps`, `result`, `status`, `cancel` (with `plangraph_agent_` prefix) share these records. Spawn requires
 `card` and `prompt` in its schema; model_or_combo requires override_reason.
@@ -269,7 +300,7 @@ the plan as `explicit_only` skips, so `route` shows them; `plan_spawn` itself do
 it for a claude writer, given or via `review_of`; with mixed writers the D-3084 per-part rule
 admits a seat that covers another writer part. The Claude and sol-effort writers are
 `EXPLICIT_WRITERS`, which the spawn service admits for `implement`. The catalog spelling
-`agy/<model>` (MCP `model_or_combo`) resolves to the agy leg that holds the bare model. A cx
+`agy/<model>` (MCP `model_or_combo`) resolves to a seat-capable agy leg holding the bare model, never an orchestrate-only alias. A cx
 effort model is not declared in the AutoOS root opencode config, so `render_gateway_providers`
 adds `providers.omniroute.models["cx-<m>-<effort>"]` (`modelID` `cx/<m>-<effort>`, the base
 model's limit) for that run only; without it opencode answers `provider.no-route`.

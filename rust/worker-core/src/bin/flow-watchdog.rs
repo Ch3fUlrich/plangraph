@@ -1,5 +1,7 @@
 #[path = "flow_watchdog_hosts/mod.rs"]
 mod hosts;
+#[path = "flow_watchdog_quiet/mod.rs"]
+mod quiet;
 #[path = "flow_watchdog_stuck/mod.rs"]
 mod stuck;
 include!("flow_watchdog_stuck/legacy_tests.rs");
@@ -17,6 +19,8 @@ struct Snapshot {
     hosts: Vec<hosts::Host>,
     #[serde(flatten)]
     stuck: stuck::Snapshot,
+    #[serde(flatten)]
+    session_activity: quiet::Reader,
     pace: f64,
     budget: f64,
     ci_failed: u64,
@@ -30,6 +34,18 @@ struct Snapshot {
     host_drift: bool,
     closes_recent: u64,
     closes_previous: u64,
+}
+struct Alert {
+    message: String,
+    active: String,
+}
+impl From<String> for Alert {
+    fn from(message: String) -> Self {
+        Self {
+            active: message.clone(),
+            message,
+        }
+    }
 }
 fn pace(s: &Snapshot) -> bool {
     s.pace > s.budget
@@ -146,9 +162,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !legacy.is_empty() {
                 messages.insert(0, legacy);
             }
-            messages
+            let mut alerts: Vec<Alert> = messages.into_iter().map(Alert::from).collect();
+            alerts.extend(s.session_activity.alerts());
+            alerts
         }
-        Err(_) => vec!["invalid snapshot".to_owned()],
+        Err(_) => vec![Alert::from("invalid snapshot".to_owned())],
     };
     if let Some(state) = std::env::var_os("PLANGRAPH_TURN_BUDGET_STATE_DIR") {
         let now = std::env::var("PLANGRAPH_TURN_BUDGET_NOW")
@@ -160,21 +178,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or_default()
                     .as_secs()
             });
-        messages.extend(pg_worker_core::turn_budget::read_alerts(
-            Path::new(&state),
-            now,
-        ));
+        messages.extend(
+            pg_worker_core::turn_budget::read_alerts(Path::new(&state), now)
+                .into_iter()
+                .map(Alert::from),
+        );
     }
-    let active = messages.join("\n");
+    let previous = fs::read_to_string(dir.join("active")).unwrap_or_default();
+    let active = messages
+        .iter()
+        .map(|alert| alert.active.as_str())
+        // Validation failure is not an observed recovery for quiet sessions.
+        .chain(
+            previous
+                .lines()
+                .filter(|line| validated.is_err() && line.starts_with("busy-quiet ")),
+        )
+        .collect::<Vec<_>>()
+        .join("\n");
     let queue_path = dir.join("queue.json");
     let mut queue: Vec<serde_json::Value> = match fs::read(&queue_path) {
         Ok(bytes) => serde_json::from_slice(&bytes)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e.into()),
     };
-    let previous = fs::read_to_string(dir.join("active")).unwrap_or_default();
     if active != previous {
-        for message in &messages {
+        for alert in &messages {
+            let message = &alert.active;
             if let Some(identity) = budget_identity(message) {
                 if queue.iter().any(|event| {
                     event["active"].as_str().and_then(budget_identity) == Some(identity)
@@ -217,7 +247,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let line = if message.starts_with("TURN-BUDGET ") {
                 message.clone()
             } else {
-                format!("FLOW-WATCHDOG: {message}")
+                format!("FLOW-WATCHDOG: {}", alert.message)
             };
             queue.push(serde_json::json!({"kind":"alert", "recipient":"routing",
                 "message":line, "active":message}));
