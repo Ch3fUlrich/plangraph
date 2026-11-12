@@ -1,5 +1,9 @@
 use serde_json::{json, Value};
 use std::{fs, path::Path, process::Command};
+
+#[path = "flow_watchdog_quiet/runs.rs"]
+mod runs;
+
 const NOW: u64 = 10_000;
 const NO_ENDED_RUN: &str =
     "session=\"session-1\" role=\"build\" quiet_age_seconds=1260 last_ended_run=none";
@@ -177,87 +181,6 @@ fn unreadable_transcript_is_unknown_in_its_own_deduplicated_line() {
     }
 }
 #[test]
-fn unreadable_run_records_never_count_as_ended_or_an_empty_list() {
-    let cases = json!([null, {"error":"unreadable"}, [null], [{"run_id":"broken","ended":9000}],
-        [{"run_id":"broken","parent_session":"","ended":9000}],
-        [{"run_id":"broken","parent_session":null,"ended":9000}],
-        [{"run_id":"broken","parent_session":17,"ended":9000}]]);
-    for runs in cases.as_array().unwrap() {
-        let diagnostic = ["", " run_record_index=0"][usize::from(runs.is_array())];
-        let mut s = snapshot();
-        add_session(&mut s, "session-2");
-        s["session_activity"]["runs"] = runs.clone();
-        let found = events(&s);
-        assert_eq!(found.len(), 2, "{found:?}");
-        for (event, id) in found.iter().zip(["session-1", "session-2"]) {
-            let detail = format!("session={id:?} role=\"build\" unknown=runs{diagnostic}");
-            exact(std::slice::from_ref(event), &detail);
-        }
-    }
-}
-#[test]
-fn malformed_runs_only_invalidate_their_known_parent() {
-    let cases = json!([{"ended":9000}, {"run_id":"","ended":9000}, {"run_id":17,"ended":9000},
-        {"run_id":"broken"}, {"run_id":"broken","ended":"bad"},
-        {"run_id":"broken","ended":NOW + 1}, {"run_id":"broken","ended":-1},
-        {"run_id":"broken","ended":true}]);
-    for record in cases.as_array().unwrap() {
-        for (parent, other) in [("session-1", "session-2"), ("session-2", "session-1")] {
-            let mut s = snapshot();
-            add_session(&mut s, "session-2");
-            s["session_activity"]["runs"][2]["ended"] = 9500.into();
-            let mut record = record.clone();
-            record["parent_session"] = parent.into();
-            rows(&mut s, "runs").push(record);
-            let found = events(&s);
-            assert_eq!(found.len(), 2, "{found:?}");
-            let affected = found
-                .iter()
-                .find(|e| message(e).contains(&format!("session={parent:?} ")))
-                .unwrap();
-            let reason = "unknown=runs run_record_index=3";
-            assert!(message(affected).ends_with(reason), "{found:?}");
-            assert!(found
-                .iter()
-                .any(|e| message(e).contains("quiet_age_seconds=1260 ")));
-            rows(&mut s, "runs").last_mut().unwrap()["ended"] = Value::Null;
-            let live = events(&s);
-            let detail = format!("session={other:?} role=\"build\" quiet_age_seconds=1260 ");
-            assert!(line(&live).contains(&detail));
-        }
-    }
-}
-#[test]
-fn missing_or_unreadable_run_block_is_unknown_even_without_busy_sessions() {
-    let cases = json!([null, {"error":"unreadable"}, [{"run_id":"broken"}],
-        [{"parent_session":"session-1","ended":"bad"}]]);
-    for runs in std::iter::once(None).chain(cases.as_array().unwrap().iter().map(Some)) {
-        let indexed = runs.is_some_and(Value::is_array);
-        let diagnostic = ["", " run_record_index=0"][usize::from(indexed)];
-        for sessions in [json!([]), json!([{"busy":false}])] {
-            let mut s = snapshot();
-            s["session_activity"]["sessions"] = sessions;
-            let activity = &mut s["session_activity"];
-            if let Some(runs) = runs {
-                activity["runs"] = runs.clone();
-            } else {
-                activity.as_object_mut().unwrap().remove("runs");
-            }
-            exact(&events(&s), &format!("unknown=runs{diagnostic}"));
-            if indexed {
-                let dir = tempfile::tempdir().unwrap();
-                let first = pass(dir.path(), &s);
-                let valid = json!({"run_id":"other","parent_session":"other","ended":9000});
-                rows(&mut s, "runs").insert(0, valid);
-                assert_eq!(pass(dir.path(), &s), first);
-                assert_eq!(first[0]["active"], "busy-quiet unknown=runs");
-                assert_eq!(active(dir.path()), "busy-quiet unknown=runs");
-                exact(&events(&s), "unknown=runs run_record_index=1");
-            }
-        }
-    }
-}
-#[test]
 fn unreadable_session_list_or_clock_is_condition_local_unknown() {
     let cases = [
         ("sessions", "sessions", Value::Null),
@@ -289,18 +212,27 @@ fn unknown_evidence_recovers_to_a_real_alert_without_other_rule_changes() {
 fn a_second_session_gets_its_own_line_without_refiring_the_first() {
     let quiet = "role=\"build\" quiet_age_seconds=1260 last_ended_run=\"run-last\"";
     for field in ["collector_note", "busy", "role"] {
-        let detail = ["unknown=sessions", quiet][usize::from(field == "collector_note")];
+        let detail = if field == "collector_note" {
+            quiet
+        } else {
+            "unknown=sessions"
+        };
         let dir = tempfile::tempdir().unwrap();
         let mut s = snapshot();
         s["session_activity"]["sessions"][0][field] = Value::Null;
         let first = pass(dir.path(), &s);
         exact(&first, &format!("session=\"session-1\" {detail}"));
+        // add_session clones row 0, so session-3 inherits the nulled field.
         add_session(&mut s, "session-3");
         let found = pass(dir.path(), &s);
         assert_eq!(found.len(), 2);
         assert_eq!(found[0], first[0]);
         let no_runs = NO_ENDED_RUN.split_once(' ').unwrap().1;
-        let detail = [detail, no_runs][usize::from(field == "collector_note")];
+        let detail = if field == "collector_note" {
+            no_runs
+        } else {
+            detail
+        };
         exact(&found[1..], &format!("session=\"session-3\" {detail}"));
         if field != "collector_note" {
             let identity = "busy-quiet session=\"session-3\" unknown=sessions";
