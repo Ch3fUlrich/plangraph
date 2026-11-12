@@ -227,6 +227,9 @@ def authenticate(conn, token, *, now=None) -> Principal:
     """
     if not token:
         raise Refused("forbidden", "missing token")
+    from .store_host_samples import PREFIX, authenticate_host
+    if isinstance(token, str) and token.startswith(PREFIX):
+        return authenticate_host(conn, token)
     row = conn.execute(
         "SELECT name,role,projects,family FROM principals"
         " WHERE token_sha256=? AND active=1", (hash_token(token),)).fetchone()

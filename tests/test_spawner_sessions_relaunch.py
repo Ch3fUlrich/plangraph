@@ -22,7 +22,8 @@ def test_relaunch_keeps_name_and_uses_handoff(site):
     assert res["name"] == "alpha" and res["session_id"] == UUID2
     launches = run.launch_calls()
     assert len(launches) == 2
-    assert launches[1][-1] == f"Restart from handoff {hf.resolve()}.\n\n" + PROMPT
+    assert launches[1][-1] == ''
+    assert [kw['input'] for _, kw in run.calls if 'input' in kw][1] == f"Restart from handoff {hf.resolve()}.\n\n" + PROMPT
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
     assert rec["name"] == "alpha" and rec["session_id"] == UUID2
     assert rec["handoff"] == str(hf.resolve()) and rec["children"] == []

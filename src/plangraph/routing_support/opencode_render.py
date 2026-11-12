@@ -132,14 +132,17 @@ def render_gateway_providers(
     if "mimo" not in providers and model_clean in ACCEPTED_MIMO_IDS:
         providers["mimo"] = _mimo_template()
 
-    # Step 4: Resolve base URL in I4 order
+    # Step 4: Honour the already-configured child endpoint before env fallbacks.
+    # Read the parsed config directly: no clients import or eager fallback call.
+    omniroute = providers.get("omniroute")
+    child_settings = omniroute.get("settings") if isinstance(omniroute, dict) else None
     resolved_url = None
-    for var in (
-        "OMNIROUTE_BASE_URL",
-        "PLANGRAPH_GATEWAY_URL",
-        "AUTOOS_OMNIROUTE_URL",  # transitional: drop with AO-SPAWNER-REMOVE (D-2800)
+    for cand in (
+        child_settings.get("baseURL") if isinstance(child_settings, dict) else None,
+        env.get("OMNIROUTE_BASE_URL"),
+        env.get("PLANGRAPH_GATEWAY_URL"),
+        env.get("AUTOOS_OMNIROUTE_URL"),  # transitional: drop with AO-SPAWNER-REMOVE (D-2800)
     ):
-        cand = env.get(var)
         if isinstance(cand, str) and cand.strip() and _is_valid_url(cand):
             resolved_url = _normalize_gateway_url(cand)
             break

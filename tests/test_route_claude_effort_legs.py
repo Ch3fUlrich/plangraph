@@ -97,7 +97,7 @@ def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
     explicit = {s['leg'] for s in routed.skipped if s['reason'] == 'explicit_only'}
     assert explicit == set(listed)
     if role == 'implement':
-        assert routed.legs[0].id == LEAD_WRITER
+        assert routed.legs[0].id == 'openrouter-free'
 
 
 @pytest.mark.parametrize('role', ['review', 'implement'])
@@ -140,7 +140,7 @@ def test_other_writers_still_refused(tmp_path):
     with pytest.raises(SpawnRefused, match='D-3828'):
         asyncio.run(_svc(tmp_path).spawn(
             card={'estimate_tokens': 20000}, prompt='Implement public code', role='implement',
-            leg='agy-gemini-3.8-flash', dry_run=True,
+            leg='agy-gpt-oss-120b', dry_run=True,
             override_reason='operator 2026-11-09 explicit writer'))
 
 
@@ -180,10 +180,12 @@ def test_service_route_lists_explicit_legs(tmp_path):
 
 
 def test_agy_command_passes_the_served_model():
-    from plangraph.routing_support.clients import build_command
+    from plangraph.routing_support.clients import build_command, launch_stdin_payload
     cmd = build_command('hi', 'claude-opus-5-5-high', role='review', client='agy')
     assert cmd == ['agy', '--dangerously-skip-permissions', '--model',
-                   'claude-opus-5-5-high', '-p', 'hi']
+                   'claude-opus-5-5-high', '-p', '', '--input-format', 'stream-json', '--output-format', 'stream-json']
+    assert json.loads(launch_stdin_payload(cmd, 'hi', 'agy')) == {
+        'event': 'user', 'message': {'role': 'user', 'content': 'hi'}}
 
 
 def _render(model, models=None):

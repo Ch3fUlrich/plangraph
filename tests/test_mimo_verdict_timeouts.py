@@ -267,7 +267,7 @@ def test_inline_diff_boundary_preserves_main_contract(monkeypatch, extra):
         with pytest.raises(InlineDiffError) as exc:
             inline_diff_prompt('review', {'repo': '.', 'base': 'a', 'head': 'b'},
                                max_chars=max_chars, timeout=3)
-        assert str(exc.value) == 'diff too large for leg: 8 > 7 chars'
+        assert str(exc.value) == 'prompt_too_large: diff too large for leg: 8 > 7 chars'
         assert (exc.value.chars, exc.value.max_chars) == (8, 7)
         return
     packaged = inline_diff_prompt('review', {'repo': '.', 'base': 'a', 'head': 'b'},

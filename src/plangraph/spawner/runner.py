@@ -46,7 +46,7 @@ IMPLEMENT_HEADER = ("You run as the opencode build agent: git commit is allowed 
 _keeper_unconfigured_last_warned = None
 
 
-from .env_redact import first_reason, redact
+from .env_redact import first_reason, redact, redact_output, _redact_prompt
 from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
@@ -328,7 +328,7 @@ class SpawnerRunner:
         # REMOVE-AT-R10: capture the final prompt before command construction.
         if prepare_launch and not dry_run:  # REMOVE-AT-R10
             raise ValueError('launch preparation requires dry run')
-        prompt = redact(prompt)  # REMOVE-AT-R10
+        prompt = _redact_prompt(prompt, redact)  # REMOVE-AT-R10
         if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
             from .private_io import atomic_write_private
             path, record, save = prompt_record
@@ -473,11 +473,7 @@ class SpawnerRunner:
                     else:
                         from plangraph.routing_errors import SpawnRefused
                         raise SpawnRefused('no admitted legs for combo: ' + model_or_combo)
-                stdin_note = (
-                    f" [stdin: {len(prompt.encode('utf-8'))} bytes]"
-                    if cmd[0] in STDIN_PROMPT_HARNESSES
-                    else ""
-                )
+                stdin_note = f" [stdin: {len(prompt.encode('utf-8'))} bytes]"
                 job = JobInfo(
                     job_id=job_id,
                     status="dry_run",
@@ -525,20 +521,16 @@ class SpawnerRunner:
                 job.events.append(tools_event)
 
             if render_reason:
-                job.status = 'failed'
-                job.exit_code = 1
-                job.stderr = render_reason
-                job.end_time = time.time()
+                job.status, job.exit_code = 'failed', 1
+                job.stderr, job.end_time = render_reason, time.time()
                 job.events.append({'event': 'render_refused', 'reason': render_reason})
                 return job
 
             from .resolver import host_skip_reason_async
             unavailable = await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
             if unavailable:
-                job.status = 'failed'
-                job.exit_code = 1
-                job.stderr = unavailable
-                job.end_time = time.time()
+                job.status, job.exit_code = 'failed', 1
+                job.stderr, job.end_time = unavailable, time.time()
                 return job
             from .resolver import admitted_by_render
             if admitted_by_render(model_or_combo):  # trace a later launch failure to D-2869
@@ -546,14 +538,16 @@ class SpawnerRunner:
 
             import shutil
             resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
-            from plangraph.routing_support.clients import launch_stdin_payload
-            payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
+            from plangraph.routing_support.clients import PromptTransportError, launch_stdin_payload
+            try:
+                payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
+            except PromptTransportError as exc:
+                job.status, job.exit_code, job.stderr, job.end_time = 'failed', 1, str(exc), time.time()
+                return job
             resolved_exe, launch_refusal = _resolve_launch(resolved_exe, cmd[1:], is_nt=_is_nt())
             if launch_refusal:
-                job.status = 'failed'
-                job.exit_code = 1
-                job.stderr = launch_refusal
-                job.end_time = time.time()
+                job.status, job.exit_code = 'failed', 1
+                job.stderr, job.end_time = launch_refusal, time.time()
                 return job
 
             if payload is not None:
@@ -729,8 +723,8 @@ class SpawnerRunner:
             env = self._child_envs.get(job_id, os.environ)
             from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer
             decoded, stderr_text, exit_code = native_answer(job, answer_text(stdout_text) if is_opencode(job) else stdout_text, stderr_text, exit_code)
-            job.stdout = redact(redact_env_values(decoded, env))
-            job.stderr = redact(redact_env_values(stderr_text, env))
+            job.stdout = redact_output(redact_env_values(decoded, env))
+            job.stderr = redact_output(redact_env_values(stderr_text, env))
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
@@ -786,7 +780,7 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-claude-stream'
                 # D-3649: the review text (VERDICT line) is the stream's final result, not the raw stream.
                 await asyncio.to_thread(render_review_output, job, stdout_text,
-                                        lambda text: redact(redact_env_values(text, env)))
+                                        lambda text: redact_output(redact_env_values(text, env)))
 
             await witness_native(self, job_id, job, stdout_text, requested_model)
             # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
@@ -901,6 +895,7 @@ def spawn_service(*args, **kwargs):
             self.keeper_sink = keeper_sink or KeeperSink()
             self._running_records = {}
             if hasattr(self.runner, '__dict__'):
+                self.runner.state = self.state  # probes share this service's run directory
                 self.runner.on_sample = lambda jid: self._save(self._running_records[jid]) if jid in self._running_records else None
 
         async def cancel(self, run_id):   # D-3505: the leg loop of the supervisor stops on this marker
@@ -1010,7 +1005,7 @@ def spawn_service(*args, **kwargs):
         async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
-                        seats=False, _plan=None, run_worktree=False):
+                        seats=False, _plan=None, run_worktree=False, _placement=None):
             from .private_io import SAVE_READ_ATTEMPTS
             from .run_watchdog import terminal_status, thresholds
             from .question_bridge import rounds_exhausted
@@ -1024,7 +1019,7 @@ def spawn_service(*args, **kwargs):
                     review_of=review_of, model=model, leg=leg, override_reason=override_reason,
                     dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=not seats or no_fallthrough,
                     benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
-                    seats=seats, run_worktree=run_worktree,
+                    seats=seats, run_worktree=run_worktree, _placement=_placement,
                 )
             from plangraph.settings import admit_review_scope
             admit_review_scope(card, role, review_scope)
@@ -1035,14 +1030,14 @@ def spawn_service(*args, **kwargs):
             plan = _plan if _plan is not None else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
             from .resolver import plan_for_launch_async
             if hasattr(plan, '__dataclass_fields__'):
-                plan = await plan_for_launch_async(plan, dry_run=dry_run)
+                plan = await plan_for_launch_async(replace(plan, placement=_placement or plan.placement), dry_run=dry_run)
             run_id = 'run-' + uuid.uuid4().hex
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
                 role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
                 served_family=None, request_side_model=None, witness_kind=None,
                 writer_family=None, status='running', started=time.time(),
                 given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
-                ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
+                ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
             from .context_pack import annotate
             from .item_key import annotate_item
             pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
@@ -1056,8 +1051,8 @@ def spawn_service(*args, **kwargs):
 
             if not plan.legs or plan.error:
                 host_skips = [s for s in plan.skipped if any(marker in str(s) for marker in ('not_served_on_host', 'harness_missing'))]
-                exhausted = not plan.legs and (not plan.error or
-                    bool(plan.skipped) and all(s['reason'] == 'limited' for s in plan.skipped))
+                from plangraph.routing_support.liveness import provider_exhausted
+                exhausted = not plan.legs and (not plan.error or provider_exhausted(plan.skipped))
                 record.update(status='failed' if host_skips else 'limited' if exhausted else 'refused',
                               exit_code=1 if host_skips else 4 if exhausted else 2, ended=time.time(),
                               error='; '.join(s.get('skip_reason') or s.get('reason', '') for s in host_skips) if host_skips else plan.error,
@@ -1167,7 +1162,7 @@ def spawn_service(*args, **kwargs):
                             return
                         current = plan if unavailable else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         if hasattr(current, '__dataclass_fields__'):
-                            current = restrict(await plan_for_launch_async(current, dry_run=dry_run))
+                            current = restrict(await plan_for_launch_async(replace(current, placement=_placement or current.placement), dry_run=dry_run))
                         for skipped in current.to_dict()['skipped']:
                             if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')) and skipped not in record.setdefault('skipped', []):
                                 record['skipped'].append(skipped)

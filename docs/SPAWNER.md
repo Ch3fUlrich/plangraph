@@ -1,17 +1,71 @@
 # Plangraph Spawner & Model Routing Architecture
 
-### Windows prompt delivery
+### QUOTA-PAUSE-GATE
 
-Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
-argv guard (32,000 characters, or 8,000 for batch shims). This uses the existing
-per-job stdin payload path, not a temporary prompt file. Qoder retains an explicit
-empty `-p` value with `--input-format text`; missing prompt flags fail with
-`stdin_prompt_flag_missing`. Oversized Windows agy
-commands use `--input-format stream-json --output-format stream-json -p ""`, with
+The usage owner creates `quota-pause` in the spawner state directory at usage
+>=95% and unlinks it at reset. Presence alone (including a dangling symlink)
+pauses admission: no second meter, expiry or automatic clearing. Flag read errors
+also pause admission.
+An empty/unset state falls back to `PLANGRAPH_SPAWN_STATE`, then
+`$XDG_STATE_HOME/plangraph`; an empty/unset XDG root uses
+`~/.local/state/plangraph`.
+Session `launch` and `relaunch` refuse with `quota pause` before invoking the
+action or stopping an existing session, without a model filter. Dry runs do not
+bypass the quota check or write audit records.
+Leg-aware checks in launch-spec, pre-launch probing and seat prompt assembly
+pause legs whose `id` or `model` starts with `claude-`, accepting object or mapping
+metadata. Known other providers are unaffected; missing provider metadata is
+unknown-provider and cannot bypass a pause.
+`basic-analysis` is the sole exempt role. After stripping one trailing `-<digits>`
+counter, a role or session name must equal `basic-analysis` or end in `-basic-analysis`.
+Thus `<host>-L1-` + `basic-analysis-0412` is exempt; `basic-analysis-helper-0001`,
+`not-basic-analysisx-0001` and empty names are not.
+Seat mixins accept `state` or `_state`. Probes check runner roots (`state`,
+`_state`, `state_root`) or environment defaults before resolving the probe store,
+then check its `state_root` or database parent if no runner root was configured.
+Launch-spec retains its required `state` and `role` request fields; quota refusals
+use reason code `quota_pause`. Omitted required fields remain invalid requests,
+not environment-defaulted builds.
+The deployed ctx-watchdog skips its external router call with one alert line for
+either a flag or symlink, or a missing, invalid, unreadable or unsearchable state
+directory. Its home fallback is systemd `%h`, independent of the manager's `HOME`;
+redeploy the service template to apply the guard.
+
+Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; private-key blocks are masked in both modes, and token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
+Both modes apply complete/truncated PEM, Bearer, wrapped prefixed tokens, URL userinfo,
+the Rust token catalog (OpenAI, GitHub, Slack, AWS and Google prefixes), and JWT rules.
+Wrapped bodies share the catalog's alphabets/floors and bounded 4096-byte LF/CRLF joins.
+Source spans must start and end on line boundaries; invalid spans withhold the prompt.
+Only child-produced output text additionally uses `redact_output`: long hex (32+)
+then base64/url-safe blobs (40+, mixing letters and digits), before tail truncation.
+These broad rules never run on prompts or record structures: commit SHAs and hashes
+must stay readable there, including run IDs, card hashes and prompt SHA-256 fields.
+Stored stdout/stderr tails have already passed the output scrubber at collection.
+A tail therefore masks commit SHAs and long slash paths: take SHAs from git or the run record, never from a tail.
+
+### Prompt delivery
+
+Every harness and helper receives the prompt by stdin or file, never argv, for
+all prompt sizes on every OS (D-5233). Python's Linux OOM child inherits the stdin
+pipe; pg-spawnd uses the same launch-spec transport.
+Child env construction drops only known legacy task carriers (`PROMPT`, `PROMPT_TEXT`,
+`PROMPT_SUFFIX`, `TASK_PROMPT`, `PLANGRAPH_TASK_PROMPT`, case-insensitive), including
+overlays; unrelated shell/theme/template configuration survives. Rust refuses exact
+prompt carriers and embedded prompts of at least 16 bytes in argv/env, without
+mistaking short incidental substrings of flags or model names for task transport.
+SSH overflow passes a staged UTF-8 file to the real spawn CLI's `--prompt-file`
+option, preserving trailing newlines without shell command substitution.
+Request-budget refusals keep the launch adapter's exit status in their run record;
+pre-exec refusals without an exit code also retain the named `prompt_too_large` reason.
+Qoder retains an explicit empty `-p` value with `--input-format text`; missing prompt flags fail with
+`stdin_prompt_flag_missing` in launch-spec refusals and Python run records. All agy commands use
+`--input-format stream-json --output-format stream-json -p ""`, with
 one UTF-8 NDJSON user event on stdin followed by EOF. The last result's
 `response` supplies the answer and verdict; an ERROR or missing result fails
 explicitly, without publishing an unsuccessful response as an answer.
-Short agy prompts and Linux launches retain their existing argv form; see [background review launches and deadlines](spawner-operations.md) for Windows console suppression and bounded prompt packaging.
+OpenCode, Claude, Gemini and Qwen read text stdin; Codex uses `exec -`. Fleet sessions
+also read stdin; SSH overflow uses `--prompt-file` without shell expansion. Assembled
+prompts exceeding the leg budget (three chars/token) record `prompt_too_large`.
 Rejected stdin input or an unavailable/closed input pipe fails the run explicitly;
 the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.
@@ -27,9 +81,11 @@ value keeps the default 90-minute wall, and a positive numeric value sets second
 The package-wide `inline_diff_prompt` bound change was dropped to preserve main's
 cost-context contract: `max_chars` measures only the diff and exact-fit diffs pass.
 Oversized diffs keep `InlineDiffError`'s `diff too large for leg` text and diff-only
-size; strict mode maps that refusal to `inline_diff_oversized`. The separate
-opt-in `PLANGRAPH_CONTEXT_STRICT=1` whole-prompt bound retains
-`inline_prompt_oversized` for oversized instructions/framing. Neither truncates;
+size, prefixed with `prompt_too_large`. Seat assembly maps that refusal to
+`PromptBoundError` (`ContextError` and `InlineDiffError`) with `inline_diff_oversized`;
+the base `InlineDiffError` is not itself a context/bound error. Whole-prompt admission retains `inline_prompt_oversized`
+for oversized instructions/framing, both under the named `prompt_too_large`
+reason regardless of `PLANGRAPH_CONTEXT_STRICT`. Neither truncates;
 missing diff references, empty diffs and failed `git diff` calls fail explicitly.
 
 In `opencode_answer.final_answer`, `allow_unfinished=True` accepts pending text
@@ -54,20 +110,34 @@ bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
 and no publish/push is attempted. Changed tracked files use the Python CI gate's
 400-line rule, exemptions, binary detection, splitlines counting and baseline
 ratchet. CI still runs unchanged `tools/check_file_size.py` over all tracked files.
-The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI entry/skip-trailer rule, returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. The `.docs-map` gate moves into Rust in slice S1c. Doc-only and empty commits do not require skip reasons; section boundaries include indented headings in both Rust and CI.
+The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI entry/skip-trailer rule, returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. Doc-only and empty commits do not require skip reasons; section boundaries include indented headings in both Rust and CI.
+The S1c Rust docs-map gate reads `.docs-map` from the committed head and compares changed paths over `merge-base(base, head)..head`. Each matching rule needs at least one mapped doc in that range; failures return `HOLD gate docs-map:` with unmatched `source -> doc` pairs before export/content gates or publication. Missing maps pass; malformed rules/dates hold. `# enforce-after:` begins enforcement inclusively on that local calendar date (earlier missing-doc matches do not hold); entries have no expiry syntax. CI retains its stricter union of merge-base and head policies, so removing head rules cannot disable CI enforcement. Shared JSON cases exercise Rust/Python parsing and glob parity.
 
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.
+Isolated OpenCode Go reviews accept credential rows with `active = 1` (legacy)
+or `active IS NULL` (v2 in use), never `active = 0`. Only the most recently updated
+eligible row is copied; ties prefer the most recently created row, then the smallest
+credential ID. This selection also applies to mixed legacy/v2 stores. A failed query or install reports
+`no row / inactive or store error`, not a login instruction; credentials stay out of logs and events.
 ### Doctor host source checks
 
 `python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust
 `pg-spawnd doctor-sources` subcommand. `doctor.py` resolves it on the host's
 `PATH`, never from checkout build artifacts, and reads its JSON check rows with
-a ten-second subprocess timeout. Before any checks, optional `env.PATH` from the
+a derived subprocess timeout: ten seconds plus three seconds per batch of up to
+16 configured hosts (at least ten seconds). Before any checks, optional `env.PATH` from the
 local hosts registry entry replaces the inherited PATH for both pg-spawnd and
 harness discovery/children. Identity is `PLANGRAPH_HOST_NAME` or registry `self`,
 with case-insensitive id/alias lookup; absent configuration retains inherited PATH.
+Windows PATH keys are case-insensitive (`Path` is accepted).
+A present but unusable registry produces `host_path: fail`, distinguishing an identity mismatch from invalid
+configuration without printing registry or environment values. PATH is restored after checks, even on exceptions.
 There is no Python fallback for source checks; fresh release clones need no build.
+Fleet snapshots likewise delegate the read-only JSON projection to
+`pg-spawnd fleet-snapshot`; the Python loader supplies persisted registry and run
+records without probing, and projection failures preserve the existing
+`fleet: null` fallback.
 
 The Rust command reads `plangraph/ps-hosts.json` under `XDG_CONFIG_HOME` (or
 `~/.config`), checking valid entries with `src` or `win_src` in parallel with
@@ -97,8 +167,8 @@ from the worker-core hosts registry (`$XDG_CONFIG_HOME/plangraph/hosts.json`,
 or `~/.config/plangraph/hosts.json`), the same location used by fleet-sync.
 Local identity is `PLANGRAPH_HOST_NAME` when set, otherwise registry `self`;
 IDs and aliases resolve case-insensitively. Routing and the public-repository
-allowlist still come from `overflow-hosts.json`, but its legacy run/floor caps
-and local limit overrides are ignored. Missing/unreadable registry or missing,
+allowlist still come from `overflow-hosts.json`; legacy run/floor caps and local
+limit overrides are ignored except the orchestration thresholds below. Missing registry or
 malformed caps exclude that host from overflow. Local admission instead uses
 conservative defaults of floor 3000 MB and role 2048 MB, with a logged reason.
 The independent OOM guard (D-5057/D-5075) remains unchanged.
@@ -110,6 +180,15 @@ excluded for that spawn; when none can accept, a queued record lists safe
 refusal reasons. Without overflow config, admitted local runs have no annotation;
 below-floor runs queue with matching `reason` and `overflow_reason`. Dry runs do not overflow.
 Local benchmark databases cannot be forwarded. CLI/MCP use public `admit_spawn` once in the shared wrapper, not the CLI parent; the service persists queued/remote records.
+Per-host `orchestration_only: true` in `hosts.json` (or the local overflow hosts entry; default false)
+makes implement/review/research remote-first: rank MemAvailable minus floor, then config order; no run-count caps.
+Local fallback requires RAM admission, `local_min_available_mb` (overflow config, default 4096) and
+`local_max_swap_used_pct` (default 90); below/above respectively refuses with that name, exit 2, never queues.
+Spawn/refusal records carry `placement: {host, reason, free_mb}`: sampled MemAvailable and
+`remote_most_free_ram`, `local_fallback_no_remote`, `local_benchmark_database`, or refusal.
+Route planning never samples admission resources: absent a supplied placement snapshot,
+it reports `placement_not_evaluated` with null host/free RAM. Missing or unreadable swap
+readings refuse local fallback as `local_swap_unavailable`; see [placement rules](placement-rules.md).
 
 SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel
 lines around the remote spawn JSON. Only the single bracketed JSON receipt is
@@ -123,7 +202,7 @@ selected host; they are never refused or retried.
 
 Install the package on each host, then use `python -m plangraph.spawner.cli`
 (or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
-or Temporal service is required for this slice. **Grok and manual-only Muse:** `omniroute-grok-4.7` uses `omniroute/gc/grok-4.7` for review only (catalog `grok`, seat `xai`). `opencode-console-muse-spark` uses `console-meta/muse-spark-1.3-contributor`; like `opencode-go-muse-spark`, its catalog family is `muse` (seat `meta`). Neither Muse leg routes automatically, even with a review policy lift. Use `--leg` with an audited `--override-reason` of at least ten characters, for scrubbed or public material only; host checks still apply. Runtime rows derive from `DEFAULT_LEGS`, not AA seeds. Policy `review_allowed_families` lifts bans, not an allowlist; Grok needs no JSON exemption.
+or Temporal service is required for this slice. **Grok and Muse:** `omniroute-grok-4.7` uses `omniroute/gc/grok-4.7` for review only (catalog `grok`, seat `xai`) and remains manual-only. D-5113 admits Muse routes automatically unless policy excludes them; their catalog family is `muse` (seat `meta`). Explicit `--leg` picks still need an audited `--override-reason` of at least ten characters; host checks still apply. Runtime rows derive from `DEFAULT_LEGS`, not AA seeds. Routing carries qualified catalog tiers through utility inputs and CLI JSON, retaining declared tiers when no qualified row exists. `plan_spawn(catalog_rows=...)` injects the same snapshot for tier projection and admission. Free precedes subscription and paid even with partial benchmarks; no new family preference list is added. An `agy/` effort-model override resolves to its explicit effort leg even when a routed leg shares that model.
 ```bash
 python -m plangraph.spawner.cli route --card @card.json --role implement --json
 python -m plangraph.spawner.cli spawn --card @card.json --role implement "Implement the card"
@@ -201,6 +280,18 @@ The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md]
 
 CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
 A probe with its harness binary missing reports `host-not-ready` and books no leg event.
+Failed probes retain a scrubbed, single-line excerpt of the last 400 stderr
+characters in their result, output line and leg-state event. A `running` record
+on the same model/harness with a nonempty `live.log` grown within
+`LIVE_RUN_WRITE_WINDOW_S` (120 seconds) overrides only the probe failure:
+`probe_failed_leg_serving` records the diagnostic without a retry/down-until
+time and does not block dispatch. Stale, empty or missing logs do not override.
+Real quota/usage-limit evidence from `exit_outcome` still books the leg down;
+serving evidence never clears that provider signal. Probes share the owning
+service's resolved state directory, with no environment fallback; pre/post size
+snapshots reject touches of old logs, truncations, replacements and read races.
+Only the explicit stderr excerpt extends the legacy 300-character reason bound.
+Ordinary probe JSON omits `state`; it is never emitted as null.
 CLI `launch-spec` (placement R6a-3d; nothing calls it yet): one JSON request on stdin, one launch spec on stdout (argv, cwd, the complete child env, stdin, warnings, events) for pg-spawnd; optional request `leg.explicit` must be boolean: only `true` permits document review without `diff_ref`, absent/false still refuses; it reuses the spawn prep and never launches; exit 2 = one redacted refusal line, exit 1 = internal error (type name only).
 MCP `route`, `spawn`, `ps`, `result`, `status`, `cancel` (with `plangraph_agent_` prefix) share these records. Spawn requires
 `card` and `prompt` in its schema; model_or_combo requires override_reason.
@@ -218,21 +309,26 @@ import `plangraph.spawner` at runtime; the boundary is enforced by
 
 `planner.routing.plan_spawn(card, role="implement"|"review")` applies the
 canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
-Writers put eligible free legs first, then subscriptions in `WRITER_ORDER` (`planner/legs.py`), headed by `omniroute/cx-gpt-6.1-sol`; banned/off families are skipped for writers too.
-Review seats start with Qoder Qwen, then what the route policy leaves; a no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat; Claude is no default writer or seat. A review without a writer family refuses (D-1533). The `claude` harness (Haiku review leg, D-3605) runs with an allowlisted env (`claude_env.py`: HOME, PATH, PWD, locale, XDG_*, proxies, `CLAUDE_CONFIG_DIR`; every other variable is dropped whatever its case), and a host without the `claude` binary skips the leg as `harness_missing: claude` (D-3649). A finished claude run's stdout (the record's `stdout_tail`) is the final text of its stream-json `result` event (else the last assistant text), so `tools/seat_verdict.py` finds the `VERDICT:` line; the raw stream is kept as `claude-stream.jsonl` beside the run's `live.log`, which still carries the raw activity feed.
+Every role puts eligible free inputs before subscriptions and paid inputs (D-5092); main's writer preference remains a tie-breaker within one tier, never across tiers or ahead of measured utility. Catalog cost tiers project onto registered legs without changing their roles, safety exclusions, or family metadata. Sonnet, main's Opus registration, high-effort Opus, gateway DeepSeek/Muse, personal Argon, and Big Pickle remain registered (D-5113). Grok's manual-only gate, both Zen free legs' exact permanent D-4196/D-3828 disables, and Qoder's stop remain enforced; Muse retains main's automatic admission, and Big Pickle retains its GLM family. Sonnet retains orchestration/review, high-effort Opus review only, and medium-effort Opus review/orchestration. No Claude-family leg may enter an automatic implement route, including custom role-bearing tables; explicitly audited effort-variant writer picks remain available.
+
+`plan_spawn` shares one catalog snapshot for admission and tier projection.
+Callers may supply `catalog_rows` explicitly for deterministic offline planning;
+an empty snapshot uses the registered leg tiers and still rejects unknown models.
+Exact-order tests pin this input and isolate benchmark discovery from host files. Role-neutral keeper routes over the default table retain main's D-3828 readiness admission; S5's implementation fallbacks apply to role-bearing routes, not readiness. Custom tables remain explicit inputs.
+Review ordering preserves main's cost-first, per-leg measurement gate: measured rows precede missing rows within the same tier; unmeasured rows retain MiMo's existing role preference and Haiku's last-within-tier fallback. Provider-qualified tier identities win over unrelated bare names. Neither Haiku nor a measured paid row crosses a cheaper tier. A no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat. A review without a writer family refuses (D-1533). The `claude` harness (Haiku review leg, D-3605) runs with an allowlisted env (`claude_env.py`: HOME, PATH, PWD, locale, XDG_*, proxies, `CLAUDE_CONFIG_DIR`; every other variable is dropped whatever its case), and a host without the `claude` binary skips the leg as `harness_missing: claude` (D-3649). A finished claude run's stdout (the record's `stdout_tail`) is the final text of its stream-json `result` event (else the last assistant text), so `tools/seat_verdict.py` finds the `VERDICT:` line; the raw stream is kept as `claude-stream.jsonl` beside the run's `live.log`, which still carries the raw activity feed.
 Claude 5.5 and effort-variant legs (operator 2026-11-09): `agy-claude-{sonnet,opus}-5-5-{low,medium,high}`
 (agy harness, review and implement), `agy-gemini-3.8-flash-{low,medium,high}` (review),
 `cx-gpt-6-luna-{low,medium,high,xhigh,max}` (inline-only review) and
 `cx-gpt-6.1-sol-{low,medium,high,xhigh,max}` (implement). The ids are what `agy models` and
 OmniRoute `/v1/models` served that day; agy serves no Sonnet xhigh and cx serves no `-ultra`, so neither is a leg.
-They live in `EXPLICIT_LEGS`, not `DEFAULT_LEGS`: an explicit `--leg` pick (or the model
-override) spawns them, and no route, keeper plan or role order changes (D-3605: Claude is no
-default writer or seat; D-3828: no writer fallback). `SpawnService.route` appends them to
+These effort-variant ids live in `EXPLICIT_LEGS`: an explicit `--leg` pick (or the model
+override) spawns them; their explicit-only status is unchanged by D-5113's separate default registrations.
+`SpawnService.route` appends them to
 the plan as `explicit_only` skips, so `route` shows them; `plan_spawn` itself does not list them. A Claude leg is claude-family: the fence refuses
 it for a claude writer, given or via `review_of`; with mixed writers the D-3084 per-part rule
 admits a seat that covers another writer part. The Claude and sol-effort writers are
-`EXPLICIT_WRITERS`, which the spawn service admits for `implement`. The catalog spelling
-`agy/<model>` (MCP `model_or_combo`) resolves to the agy leg that holds the bare model. A cx
+`EXPLICIT_WRITERS`; explicit implementation admission uses each registered leg's roles. The catalog spelling
+`agy/<model>` (MCP `model_or_combo`) resolves to a seat-capable agy leg holding the bare model, never an orchestrate-only alias. A cx
 effort model is not declared in the AutoOS root opencode config, so `render_gateway_providers`
 adds `providers.omniroute.models["cx-<m>-<effort>"]` (`modelID` `cx/<m>-<effort>`, the base
 model's limit) for that run only; without it opencode answers `provider.no-route`.
@@ -251,7 +347,7 @@ say `benchmark data absent` (the legacy `no benchmark p` reason remains compatib
 `SpawnRefused("benchmark rows missing: <legs>")`. This is the routing hook for the
 production CLI's `--require-bench`.
 
-Operator rules and `route_card` tier order come first; U_core only permutes within a tier, and only for review/orchestrate: implement keeps the writer order (D-2683), so a writer route shows `u_core` without applying it.
+Operator safety rules and `route_card` tier order come first; U_core permutes measured inputs within a tier for every role, including implement (D-5092). Same-family review inputs keep table order; free inputs never move behind subscriptions. The generic resolver retains its utility/epsilon-band algorithm without a model-name or post-ranking tier pin.
 CLI route/spawn and MCP load an existing `PLANGRAPH_CATALOG_DB` (default `~/.cache/plangraph/spawner_catalog.db`), unless `--bench-db`/`bench_db` overrides it.
 Route JSON `candidates` exposes each leg's tier, `u_core` (null without a row), `p_source` (`prior`/`measured`), and skip reason/evidence; live limited legs are skipped.
 
@@ -259,8 +355,8 @@ Route JSON `candidates` exposes each leg's tier, `u_core` (null without a row), 
 read-only mode; it never creates a missing database. It accepts `catalog_benchmarks`
 or OmniRoute `model_benchmarks` (catalog takes precedence if both exist).
 `BENCHMARK_COLUMNS` documents the small column alias map. Missing/unreadable files,
-missing tables and malformed model IDs return an empty mapping with explicit errors.
-Duplicate model rows expose `benchmark_row_count`; the first row supplies metrics.
+missing tables and malformed model IDs return an empty mapping with explicit errors. Shared default registrations do not change explicit effort-model alias resolution.
+Duplicate model rows expose `benchmark_row_count`; the first row supplies metrics. Bare harness model ids also resolve exact provider-qualified benchmark rows; explicit bare rows win, missing rows remain gaps, and the Opus high-effort leg maps to `agy/claude-opus-5-5-high`. No probe latency is treated as a benchmark measurement.
 
 ### Required benchmark release/swap gate (D-2576)
 
@@ -491,3 +587,7 @@ The SSH ps endpoint serializes only running and queued records. Terminal history
 does not consume the 1 MiB transport budget; malformed terminal fields do not
 hide live runs. Malformed live replies and oversized replies name the queried
 host as unknown rather than silently omitting it.
+Rust source-filter tests and pytest's real `configured_hosts` checks consume
+`tests/fixtures/doctor_sources.json`, binding both validators and probe limits
+to the same accepted/rejected cases. Rust embeds JSON, never Python source or
+an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.

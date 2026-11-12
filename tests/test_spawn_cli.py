@@ -133,11 +133,9 @@ def test_harness_quota_falls_through(tmp_path, monkeypatch):
 
 
 def test_replan_and_all_limited(tmp_path, monkeypatch):
+    from plangraph.planner.routing import plan_spawn
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, 'catalog_rows', ())
     install_fallthrough_legs(monkeypatch)
-    from plangraph.spawner import resolver
-    rows = resolver.get_catalog_models()
-    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
-        dict(row, available=1, active=True) for row in rows])
     async def run():
         store = LegStateStore(tmp_path / 'legs.sqlite')
         runner = SpawnerRunner()
@@ -151,14 +149,16 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         runner.process_factory = factory
         service = spawn_service(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
-        models = [a['leg']['model'] for a in record['attempts']]
+        models = [a['leg']['model'] for a in record['attempts'] if isinstance(a['leg'], dict)]
         assert 'error' not in record, record.get('error')
-        assert len(models) == 8, record   # D-3817: Sonnet no longer implements
+        assert len(models) == 12, record  # Non-Claude utility inputs, including main's admitted Muse.
         assert len(runner.jobs) == 3
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
-        assert models[:4] == ['omniroute/cx-gpt-6.1-sol',
-                              'opencode/deepseek-v4.1-flash-free',
-                              'opencode/glm-5.3-flash-free', 'openrouter/free']
+        assert next(a for a in record['attempts'] if isinstance(a['leg'], dict)
+                    and a['leg']['model'] == 'opencode/big-pickle')['skip_reason'] == 'earlier_leg_succeeded'
+        assert models[:4] == ['opencode/deepseek-v4.1-flash-free',
+                              'opencode/glm-5.3-flash-free', 'openrouter/free', 'gemini-3.8-flash']
+        attempted_ids = {a['leg']['id'] for a in record['attempts']}
         for leg in service.route({'estimate_tokens': 1000}).legs:
                 store.record_provider_response(leg.model if '/' in leg.model else 'agy/' + leg.model,
                     429, 'provider quota exhausted', {}, 'test')
@@ -166,7 +166,8 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         assert record['exit_code'] == 4
         assert record['evidence']
-        assert len(record["attempts"]) == 8   # D-3817: Sonnet no longer implements
+        assert len(record["attempts"]) == 12
+        assert {a['leg'] for a in record['attempts']} == attempted_ids
         assert all(a['status'] == 'skipped' and a['skip_reason'] == 'limited'
                    for a in record['attempts'])
         assert len(runner.jobs) == count
@@ -245,7 +246,8 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
     assert final['status'] == 'completed', {k: final.get(k) for k in ('exit_code', 'reason', 'error', 'events')}
 
 
-def test_records_and_review(tmp_path):
+def test_records_and_review(tmp_path, monkeypatch):
+    install_fallthrough_legs(monkeypatch)  # Known writer families in this mechanics table.
     async def run():
         service = SpawnService(state=tmp_path)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', dry_run=True)
@@ -273,15 +275,14 @@ def test_transport_only_fallthrough(tmp_path, provider_stop, monkeypatch):
         runner.process_factory = factory
         service = SpawnService(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
-        assert len(record["attempts"]) == 8   # D-3817: Sonnet no longer implements
+        assert len(record["attempts"]) == 12
         launched = [a for a in record['attempts'] if a['status'] != 'skipped']
-        assert len(launched) == (2 if provider_stop else 1)
-        assert len(runner.jobs) == len(launched)
-        assert all(a['skip_reason'] == 'earlier_leg_succeeded'
-                   for a in record['attempts'][len(launched):])
+        assert (len(launched), len(runner.jobs)) == ((2, 2) if provider_stop else (1, 1))
+        spares = [a for a in record['attempts'] if a['status'] == 'skipped']
+        assert all(isinstance(a['leg'], dict) for a in spares)
+        assert all(a['skip_reason'] == 'earlier_leg_succeeded' for a in spares)
         first_model = list(runner.jobs.values())[0].model_or_combo
-        first_key = first_model if '/' in first_model else 'agy/' + first_model
-        assert store.leg_status(first_key)['state'] == ('limited' if provider_stop else 'ok')
+        assert store.leg_status(first_model if '/' in first_model else 'agy/' + first_model)['state'] == ('limited' if provider_stop else 'ok')
         if provider_stop:
             assert service.route({'estimate_tokens': 1000}).first_leg.model != first_model
     asyncio.run(run())
