@@ -239,6 +239,13 @@ def real_served_models():
     return _real_served_models
 
 
+@pytest.fixture
+def fixed_catalog_rows(monkeypatch):
+    """Exact-order probes use declared leg tiers, never ambient catalog rows."""
+    from plangraph.planner.routing import plan_spawn
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, 'catalog_rows', ())
+
+
 @pytest.fixture(autouse=True)
 def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     """UNKNOWN host; tests may opt into config with monkeypatch.setenv('AUTOOS_ROOT', ...)."""
@@ -247,6 +254,9 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     state = tmp_path_factory.mktemp('xdg-state')  # never the production spawner/leg state (D-2844)
     monkeypatch.setenv('XDG_STATE_HOME', str(state))
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
+    monkeypatch.setenv('PLANGRAPH_CATALOG_DB', str(state / 'absent-catalog.db'))
+    from plangraph.routing_support import catalog_db
+    monkeypatch.setattr(catalog_db, 'DEFAULT_DB_PATH', state / 'absent-catalog.db')
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '0')
     # Services remain default-on, but never construct the production adapter.
     from plangraph.routing_support import leg_state_flag

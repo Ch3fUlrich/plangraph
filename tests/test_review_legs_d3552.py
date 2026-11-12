@@ -98,8 +98,10 @@ def test_implement_route_still_skips_banned_and_off(tmp_path):
     from plangraph.spawner.service import SpawnService
     plan = plan_spawn(CARD, role="implement")
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
-    assert reasons == {}  # Review-only legs never enter implement skip accounting.
-    assert [leg.id for leg in plan.legs] == ['cx-gpt-6.1-sol']
+    assert reasons['opencode-deepseek-v4.1-flash-free'].startswith('disabled: D-4196')
+    assert reasons['opencode-glm-5.3-flash-free'].startswith('disabled: D-4196')
+    assert reasons['omniroute-deepseek-flash'] == 'banned_family'
+    assert plan.first_leg.id == 'openrouter-free'
     for leg_id in ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.2"):
         expected = r"leg disabled: .*D-3605" if "glm" in leg_id else r"writer disabled \(D-3828\)"
         with pytest.raises(SpawnRefused, match=expected):
@@ -115,10 +117,10 @@ def test_review_route_keeps_lifted_families():
     assert "opencode-go-deepseek-v4-flash" in ids
     assert not {leg.family for leg in plan.legs} & {"glm"}
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
-    assert not (set(NEW_IDS) - {"opencode-go-muse-spark", "opencode-go-qwen3.8-max", "opencode-go-glm-5.2"}) & set(reasons)
+    assert not (set(NEW_IDS) - {"opencode-go-qwen3.8-max", "opencode-go-glm-5.2"}) & set(reasons)
     assert reasons["opencode-go-glm-5.2"].startswith("disabled:")
     assert reasons["opencode-go-qwen3.8-max"].startswith("disabled")
-    assert reasons["opencode-go-muse-spark"] == "off_family"
+    assert "opencode-go-muse-spark" in ids  # D-5113 lifts Muse admission.
 
 
 def test_review_xiaomi_writer_yields_two_new_leg_seat_families():
