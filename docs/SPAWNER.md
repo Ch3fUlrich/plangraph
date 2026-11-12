@@ -34,6 +34,9 @@ The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and t
 
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.
+Isolated OpenCode Go reviews accept credential rows with `active = 1` (legacy)
+or `active IS NULL` (v2 in use), never `active = 0`. A failed query or install reports
+`no row / inactive or store error`, not a login instruction; credentials stay out of logs and events.
 ### Doctor host source checks
 
 `python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust

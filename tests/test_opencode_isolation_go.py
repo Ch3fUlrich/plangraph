@@ -8,12 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.spawner import resolver
-from plangraph.spawner.opencode_isolation import install_go_credential
+from plangraph.spawner.opencode_isolation import GO_ABSENT_REASON, install_go_credential
 from plangraph.spawner.runner import SpawnerRunner, _opencode_tools_denied
 from fake_pid import FAKE_PID
 
 
-def source_store(path):
+def source_store(path, active=1):
     with sqlite3.connect(path) as db:
         db.execute('CREATE TABLE migration(id TEXT PRIMARY KEY, time_completed INTEGER)')
         db.execute('CREATE TABLE credential(id TEXT PRIMARY KEY, integration_id TEXT, label TEXT, '
@@ -21,17 +21,18 @@ def source_store(path):
                    'time_created INTEGER, time_updated INTEGER)')
         for provider in ('opencode-go', 'other'):
             db.execute('INSERT INTO credential VALUES(?,?,?,?,?,?,?,?,?)',
-                       (provider, provider, 'test', 'synthetic-private-value', None, None, 1, 0, 0))
+                       (provider, provider, 'test', 'synthetic-private-value', None, None, active, 0, 0))
 
 
 @pytest.mark.usefixtures('fake_ownership')
 @pytest.mark.parametrize('present', [True, False])
+@pytest.mark.parametrize('active', [1, None, 0], ids=['active', 'null', 'inactive'])
 @pytest.mark.parametrize('model', ['opencode-go/gemini-4-argon', 'opencode-go-gemini-4-argon',
                                    'go-test-combo', 'aliases/go-test-combo'])
-def test_review_provider_only(tmp_path, monkeypatch, caplog, present, model):
+def test_review_provider_only(tmp_path, monkeypatch, caplog, present, active, model):
     source = tmp_path / 'source.db'
     if present:
-        source_store(source)
+        source_store(source, active)
     monkeypatch.setenv('PLANGRAPH_OPENCODE_GO_AUTH_DB', str(source))
     async def probe(*args, **kwargs):
         return None
@@ -63,12 +64,51 @@ def test_review_provider_only(tmp_path, monkeypatch, caplog, present, model):
             await runner._tasks[job.job_id]
         return job
     job = asyncio.run(run())
-    assert bool(seen) == present
+    usable = present and active != 0
+    assert bool(seen) == usable
     assert 'synthetic-private-value' not in repr(seen) + repr(job.events) + job.stderr + caplog.text
-    if present:
+    if usable:
         assert not Path(seen[0]['HOME']).exists()
     else:
-        assert 'not_served' in job.stderr
+        assert GO_ABSENT_REASON in job.stderr
+
+
+@pytest.mark.parametrize('active', [1, None, 0], ids=['active', 'null', 'inactive'])
+def test_credential_selection_excludes_inactive_and_other_providers(tmp_path, active):
+    source = tmp_path / 'source.db'
+    source_store(source, active)
+    with sqlite3.connect(source) as db:
+        db.execute("UPDATE credential SET active = NULL WHERE integration_id = 'other'")
+        db.execute('INSERT INTO credential VALUES(?,?,?,?,?,?,?,?,?)',
+                   ('inactive-go', 'opencode-go', 'test', 'synthetic-inactive-value',
+                    None, None, 0, 0, 0))
+    job = tmp_path / 'job'
+    assert install_go_credential(job, source) is (active != 0)
+    destination = job / 'opencode' / 'opencode.db'
+    if active == 0:
+        assert not destination.exists()
+    else:
+        with sqlite3.connect(destination) as db:
+            assert db.execute('SELECT id, integration_id, active FROM credential').fetchall() == [
+                ('opencode-go', 'opencode-go', active)]
+    with sqlite3.connect(source) as db:
+        assert db.execute('SELECT id, active FROM credential ORDER BY id').fetchall() == [
+            ('inactive-go', 0), ('opencode-go', active), ('other', None)]
+
+
+@pytest.mark.parametrize('inactive', [False, True], ids=['no-row', 'inactive'])
+def test_refusal_names_credential_query_not_login(tmp_path, monkeypatch, inactive):
+    from plangraph.spawner.opencode_isolation import review_credential_reason
+    source = tmp_path / 'source.db'
+    source_store(source, active=0)
+    if not inactive:
+        with sqlite3.connect(source) as db:
+            db.execute("DELETE FROM credential WHERE integration_id = 'opencode-go'")
+    monkeypatch.setenv('PLANGRAPH_OPENCODE_GO_AUTH_DB', str(source))
+    reason = review_credential_reason('opencode-go/test-model', str(tmp_path / 'job'), {})
+    assert reason == GO_ABSENT_REASON
+    assert 'query' in reason and 'no row' in reason and 'inactive' in reason
+    assert 'login' not in reason.lower() and 'log in' not in reason.lower()
 
 
 def test_missing_store_is_clean(tmp_path):

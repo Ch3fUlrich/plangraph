@@ -1,0 +1,1 @@
+- Fix isolated OpenCode Go credential selection for v2 rows with NULL activity while retaining legacy active rows and refusing inactive rows; refusal reasons identify failed queries or installs rather than implying a missing login (D-5234).

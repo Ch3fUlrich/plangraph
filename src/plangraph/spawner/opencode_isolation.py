@@ -33,7 +33,8 @@ GO_AUTH_DB_ENV = 'PLANGRAPH_OPENCODE_GO_AUTH_DB'
 
 #: The clean refusal when no credential can be installed; shaped for
 #: env_redact.unavailable_reason so the run ends not_served, never a crash.
-GO_ABSENT_REASON = 'not_served_on_host: opencode-go credential absent (D-4196)'
+GO_ABSENT_REASON = ('not_served_on_host: opencode-go credential query or install failed '
+                    '(no row / inactive or store error; D-4196)')
 
 
 def go_source_db(environ=None):
@@ -61,7 +62,8 @@ def install_go_credential(job_dir, source=None):
     isolation prevents, so this writes a *fresh, job-owned* store at
     ``<job_dir>/opencode/opencode.db`` (the review child's
     ``XDG_DATA_HOME/opencode``) holding the schema and only the selected provider auth
-    row -- the active opencode-go one.  Nothing else is copied: no accounts,
+    row -- opencode-go with active 1 (legacy) or NULL (v2 in use), never 0.
+    Nothing else is copied: no accounts,
     no sessions, no other provider's credential, no host key material.  The
     file is 0600 inside the job dir the spawner already removes with the job.
 
@@ -96,7 +98,8 @@ def install_go_credential(job_dir, source=None):
             creds = read.execute(
                 'SELECT id, integration_id, label, value, connector_id, method_id,'
                 ' active, time_created, time_updated FROM credential'
-                ' WHERE integration_id = ? AND active = 1', (GO_PROVIDER,)).fetchall()
+                ' WHERE integration_id = ? AND (active = 1 OR active IS NULL)',
+                (GO_PROVIDER,)).fetchall()
             if not creds:
                 return False
             fd, name = tempfile.mkstemp(prefix='pg-auth-', suffix='.db', dir=dst_dir)
