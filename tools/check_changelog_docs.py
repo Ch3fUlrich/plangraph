@@ -352,9 +352,13 @@ def main(argv: list[str] | None = None) -> int:
         enforce_after = None if None in enforce_dates else min(d for d in enforce_dates if d is not None)
         is_enforced = (enforce_after is None) or (today >= enforce_after)
         compiled = [(glob_to_regex(g), g, d) for _, g, d in rules]
+        # Shared workspace metadata follows head mappings, not retired crate rules.
+        head_rules = {(g, tuple(d)) for _, g, d in parse_docs_map(map_text or "")[1]}
         for path in raw_paths:
             for rx, glob_pat, target_docs in compiled:
                 if rx.match(path):
+                    if path in ("rust/Cargo.toml", "rust/Cargo.lock") and (glob_pat, tuple(target_docs)) not in head_rules:
+                        continue
                     if not any(d in raw_paths for d in target_docs):
                         docs_str = ", ".join(target_docs)
                         if is_enforced:

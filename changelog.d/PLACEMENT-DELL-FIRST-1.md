@@ -1,0 +1,1 @@
+- Remote-first RAM placement for orchestration-only spawner hosts, with configurable local memory/swap refusal thresholds and durable placement reasons (D-5188); preserve legacy local-first overflow and run-count-independent admission.
