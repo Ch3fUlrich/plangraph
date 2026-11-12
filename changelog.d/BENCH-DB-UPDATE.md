@@ -1,0 +1,1 @@
+- D-5173: add lossless benchmark provenance migration and active leg/effort coverage guard; source URL/date are visible in catalog queries. Published scores land in separate leg-group commits; unmeasured exact variants remain disabled/explicit-only, never deleted.

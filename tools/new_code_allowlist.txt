@@ -1,4 +1,6 @@
 # Exceptions for Python regression tests of existing modules and the thin gate.
+src/plangraph/routing_support/catalog_benchmarks.py | D-5173 rule 9.14: existing Python catalog schema/data owner; no Rust crate owns it
+tests/test_bench_rows_complete.py | D-5173 rule 9.14: Python catalog coverage regression
 # A single * matches only within a directory; ** matches recursively.
 tests/test_*.py | Regression tests for existing Python modules
 tools/check_new_code_lang.py | D-4691 gate script, thin

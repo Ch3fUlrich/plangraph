@@ -15,6 +15,7 @@ import sys
 from typing import Any, Sequence
 
 from plangraph import registry_columns
+from .catalog_benchmarks import migrate as migrate_benchmarks
 from .catalog_seed import (SEED_BENCHMARKS, SEED_CLIENTS, SEED_MODELS, SEED_PROVIDERS,
                            SEED_QUOTA_POOLS, SEED_ROUTE_LEGS, SEED_ROUTES, TIER_RUNG)
 
@@ -28,10 +29,7 @@ def default_db_path() -> Path:
 
 
 DEFAULT_DB_PATH: Path = default_db_path()
-
 SCHEMA_PATH: Path = Path(__file__).parent / "catalog_schema.sql"
-
-
 class CatalogDB:
     """SQLite-backed model, provider, quota-pool, and routing catalog."""
 
@@ -75,38 +73,27 @@ class CatalogDB:
         schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
         self.conn.executescript(schema_sql)
         registry_columns.migrate(self.conn)
+        migrate_benchmarks(self.conn)
 
-        # 1. Quota pools
         self._insert_records("catalog_quota_pools", SEED_QUOTA_POOLS)
-
-        # 2. Providers
         self._insert_records("catalog_providers", SEED_PROVIDERS)
-
-        # 3. Clients
         self._insert_records("catalog_clients", SEED_CLIENTS)
-
-        # 4. Models
-        self._insert_records("catalog_models", SEED_MODELS)
-
-        # 5. Benchmarks
-        self._insert_records("catalog_benchmarks", SEED_BENCHMARKS)
-
-        # 6. Routes
+        self._insert_records("catalog_models", SEED_MODELS, seed=True)
+        self._insert_records("catalog_benchmarks", SEED_BENCHMARKS, seed=True)
         self._insert_records("catalog_routes", SEED_ROUTES)
-
-        # 7. Route legs
         self._insert_records("catalog_route_legs", SEED_ROUTE_LEGS)
 
         registry_columns.derive(self.conn)
         self.conn.commit()
 
-    def _insert_records(self, table_name: str, records: list[dict[str, Any]]) -> int:
+    def _insert_records(self, table_name: str, records: list[dict[str, Any]], *, seed=False) -> int:
         if not records:
             return 0
-        cols = list(records[0].keys())
+        cols = list(dict.fromkeys(c for row in records for c in row))
         col_list = ", ".join(cols)
         placeholders = ", ".join(["?"] * len(cols))
-        sql = f"INSERT OR REPLACE INTO {table_name} ({col_list}) VALUES ({placeholders})"
+        mode = "IGNORE" if seed else "REPLACE"
+        sql = f"INSERT OR {mode} INTO {table_name} ({col_list}) VALUES ({placeholders})"
         cursor = self.conn.cursor()
         for r in records:
             values = [r.get(c) for c in cols]
@@ -143,7 +130,7 @@ class CatalogDB:
             b.ttft_seconds,
             b.cost_per_task_usd,
             b.cache_hit_rate,
-            b.benchmark_source
+            b.benchmark_source, b.source_url, b.source_date
         FROM catalog_models m
         JOIN catalog_providers p ON m.provider_id = p.provider_id
         LEFT JOIN catalog_quota_pools qp ON m.quota_pool_id = qp.pool_id
@@ -225,7 +212,7 @@ class CatalogDB:
             b.ttft_seconds,
             b.cost_per_task_usd,
             b.cache_hit_rate,
-            b.benchmark_source
+            b.benchmark_source, b.source_url, b.source_date
         FROM catalog_models m
         JOIN catalog_providers p ON m.provider_id = p.provider_id
         LEFT JOIN catalog_quota_pools qp ON m.quota_pool_id = qp.pool_id
@@ -322,7 +309,7 @@ class CatalogDB:
             b.ttft_seconds,
             b.cost_per_task_usd,
             b.cache_hit_rate,
-            b.benchmark_source
+            b.benchmark_source, b.source_url, b.source_date
         FROM catalog_route_legs rl
         JOIN catalog_models m ON rl.model_id = m.model_id
         JOIN catalog_providers p ON m.provider_id = p.provider_id

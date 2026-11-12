@@ -1,5 +1,8 @@
 # enforce-after: 2026-11-08
 # Docs mapping for plangraph (rule D-653)
+src/plangraph/routing_support/catalog* -> docs/benchmark-catalog.md
+src/plangraph/catalog_data.py -> docs/benchmark-catalog.md
+src/plangraph/planner/legs.py -> docs/benchmark-catalog.md
 tools/** -> CONTRIBUTING.md
 src/plangraph/fleet_sync/** -> docs/fleet-sync.md
 src/plangraph/spawner/** -> docs/SPAWNER.md
