@@ -45,6 +45,13 @@ Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
 the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
 
+CI suite selection in `tools/ci_select.py` treats `docs/schemas/**` and its
+`RUST_INPUTS` list as Rust inputs even when they are documentation. These inputs
+select both `rust` and `rust-windows` via the shared `rust` output without changing
+other suites. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
+literals, manifest-relative reads and paths leaving `rust/`; new repository
+inputs must be added to `RUST_INPUTS`, not inline to the workflow.
+
 ## Lanes
 
 Completed Rust ports remove only their own Python waiver from
@@ -59,6 +66,9 @@ One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `m
 The RUN-WORKTREE Python regression exception (D-5062) retires with SPAWNER-RUST-PORT.
 Work that covers two plan items is two lanes.
 A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) only for the item's latest verified head; interrupted sends are not blindly replayed.
+Seat records bind manual `tools/seat_verdict.py --key` posting to their recorded `item_key`; a different key or an explicit null is refused before token reads or network I/O. Older records without the field remain usable through the manual CLI. Card/environment identity validation never infers a target from prompt text.
+The `evidence.json` path applies the same refusal to every supplied `item_key` or `key`, including explicit nulls and conflicting aliases; evidence without either identity field retains the legacy manual path. Reviewer tokens belong to the seat's model family, not the `--writer-family` being reviewed.
+When evidence and a record coexist, the record's `item_key` remains binding even if evidence omits or replaces it; an unreadable or malformed companion record is refused. The record identity check also runs independently of evidence derivation on the record-only path. `--key` is required for all manual invocations, including legacy records; omitting it exits 2 before seat/token reads or network I/O.
 
 Historical seat discovery uses `python3 tools/seat_verdict.py --snapshot plan.snapshot.json --records-dir RECORDS` (equivalently, `--backfill-dry-run`). It is local and read-only by default; `--format json` emits structured outcomes, and `--pr-cache CACHE` supplies evidenced-commit-to-PR mappings without network access. Keeper writes require `--backfill-apply --url URL --token-dir TOKENS`; only apply may enable network PR lookup with `--pr-lookup-gh`. Backfill retains the existing verdict parser, exact-head binding, independent reviewer family and PASS safety gates. It shares the spawner's locked `verdict.json` / `verdict.delivered` outbox, so completed or ambiguous sends are never blindly replayed, including when the forward path already handled the record. A nonzero verifier result is terminal for automatic backfill replay; reconcile an ambiguous delivery before any operator-authorized retry. See [the historical backfill diagnosis](docs/seat-verdict-backfill-diagnosis.md) for the original observations; Slice A has since supplied the forward completion bridge.
 

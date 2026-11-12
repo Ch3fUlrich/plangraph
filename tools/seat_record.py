@@ -99,6 +99,8 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         raise ValueError(f"chosen_leg.family {leg_family!r} does not match "
                          f"family {_canon_family(chosen)!r} of chosen_leg.model {chosen!r}")
     evidence = {"head_sha": head_sha, "source": "record.json", "run_id": run_id}
+    if "item_key" in record:
+        evidence["item_key"] = record["item_key"]
     # F3: finish_reason is only ever recorded; never hard-coded.  With no
     # record finish field the key is omitted, so a PASS is refused downstream.
     finish = record.get("finish_reason")

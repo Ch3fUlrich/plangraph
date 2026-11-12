@@ -74,6 +74,8 @@ collapse to one; conflicting rows produce one `busy-quiet session="..." unknown=
 identity, independent of row order, rather than retaining multiple quiet periods.
 Groups whose rows are all explicitly idle remain skipped without validating details.
 
+Malformed rows with a readable session ID intentionally use `busy-quiet session="..." unknown=sessions` for both message and active identity instead of `busy-quiet unknown=sessions`. On upgrade, a standing unknown may re-key and alert once per affected session; downstream matchers must accept the session-qualified form.
+
 Each firing session queues one routing line, with JSON-escaped identifiers:
 `FLOW-WATCHDOG: busy-quiet session="session-1" role="build" quiet_age_seconds=1260 last_ended_run="run-1"`.
 `quiet_age_seconds` rounds fractional silence up to the next whole second, so
@@ -99,7 +101,7 @@ and run evidence produce the condition's own `busy-quiet ... unknown=transcript`
 `unknown=runs`, or `unknown=transcript,runs` line for each affected busy session, never a
 healthy result or the unrelated `invalid snapshot` rule. A malformed run record
 with a readable, nonempty `parent_session` invalidates run evidence only for that
-parent, including a missing/invalid run ID or a bad/future end timestamp; other
+parent, including a missing/invalid ended-run ID or a bad/future end timestamp; other
 sessions retain their own run evidence. A record with an unreadable parent, or
 a missing/null/malformed run list, invalidates run evidence for every session.
 Missing/null/bad
@@ -147,5 +149,8 @@ checkpointed independently. Each standing active identity is suppressed until
 recovery or a new identity; delivery is at-least-once across a crash during acknowledgement.
 Systemd prevents concurrent ticks of this service; do not run manual concurrent
 instances against its state directory. Routing advances despite pending push;
-the queue retains its head and newest 255 events, reporting overflow on stderr. Collectors, freshness and host integration
-are deployment prerequisites, not supplied by this checker.
+the queue retains its head and newest 255 events, reporting overflow on stderr.
+
+## Collectors, freshness and host integration
+
+Collectors, freshness and host integration are deployment prerequisites, not supplied by this checker.

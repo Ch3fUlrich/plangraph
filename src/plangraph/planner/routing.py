@@ -105,11 +105,12 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
                unavailable: Collection[str] = (), exclude_families: Collection[str] = (),
                overflow: bool = False, role: str | None = None, now=None) -> Route:
     """Route ``card`` (keeper card dict) over ``legs``; see module docstring.
-
     ``role`` falls back to ``card["role"]``; absent roles retain keeper admission.
+    Implement uses Sol xhigh then Gemini before cost tiers (D-5206/D-5212).
     ``overflow`` marks a context-overflow failure: the window class grows by one.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
+    from .route_policy import implement_family_excluded
     effective_role = role if role is not None else card.get("role")
     exclude_fams = set(exclude_families)
     legs = tuple(READINESS_LEGS if effective_role is None and legs is DEFAULT_LEGS else legs)
@@ -141,9 +142,8 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     for pos, leg in enumerate(legs):
         if not leg_active(leg, now=now):
             why = "disabled"
-        elif effective_role == "implement" and (
-                leg.claude_family or leg.family in ("claude", "anthropic")):
-            why = "claude_implementer"
+        elif effective_role == "implement" and implement_family_excluded(leg):
+            why = "excluded_family"
         elif leg.id in unavailable:
             why = "unavailable"
         elif leg.family in exclude_fams:
@@ -243,8 +243,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                 legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, placement=None,
                 catalog_rows=None) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
-
-    Every role ranks measured inputs within cost tiers.
+    Measured inputs rank within cost tiers; implement writer priority is final.
     ``exclude_families`` excludes the specified family names from candidate legs.
     ``policy`` (default :func:`load_route_policy`) skips banned/off families and
     paused harnesses.  A review leg whose family is ANY writer family is
@@ -340,8 +339,6 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     skipped = []
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
-    # Route each leg through the same canonical eligibility rules to retain
-    # individual exclusion reasons even when there is no eligible route.
     for leg in candidates:
         reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
         if reason:
@@ -393,6 +390,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                 ordered[i] = leg
             if positions:
                 source = "benchmark"
+    if role == "implement":
+        from .route_policy import implement_key
+        order = {leg.id: i for i, leg in enumerate(ordered)}
+        ordered.sort(key=lambda leg: implement_key(leg, TIERS.index(leg.tier), order[leg.id]))
     if role == "review":
         # Benchmarks rank families, not interchangeable seats within a family.
         # Restore table order only in each family's measured slots, retaining
@@ -429,8 +430,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     candidate_details.sort(key=lambda c: order.get(c['leg'], len(order)))
     from plangraph.routing_support.fixer import split_findings
     from plangraph.settings import admit_fixer_threshold
-    # plan_spawn receives no store-derived keeper item, so the trusted layers
-    # are global (R2); the card's project/phase layers may only tighten (R3).
+    # No store-derived item: global R2 applies; card project/phase may only tighten (R3).
     threshold = admit_fixer_threshold(card=card)
     groups = split_findings(card.get('findings', ()), limit=threshold) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
