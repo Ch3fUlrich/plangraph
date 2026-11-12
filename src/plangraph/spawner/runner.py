@@ -46,7 +46,7 @@ IMPLEMENT_HEADER = ("You run as the opencode build agent: git commit is allowed 
 _keeper_unconfigured_last_warned = None
 
 
-from .env_redact import first_reason, redact, _redact_prompt
+from .env_redact import first_reason, redact, redact_output, _redact_prompt
 from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
@@ -723,8 +723,8 @@ class SpawnerRunner:
             env = self._child_envs.get(job_id, os.environ)
             from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer
             decoded, stderr_text, exit_code = native_answer(job, answer_text(stdout_text) if is_opencode(job) else stdout_text, stderr_text, exit_code)
-            job.stdout = redact(redact_env_values(decoded, env))
-            job.stderr = redact(redact_env_values(stderr_text, env))
+            job.stdout = redact_output(redact_env_values(decoded, env))
+            job.stderr = redact_output(redact_env_values(stderr_text, env))
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
@@ -780,7 +780,7 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-claude-stream'
                 # D-3649: the review text (VERDICT line) is the stream's final result, not the raw stream.
                 await asyncio.to_thread(render_review_output, job, stdout_text,
-                                        lambda text: redact(redact_env_values(text, env)))
+                                        lambda text: redact_output(redact_env_values(text, env)))
 
             await witness_native(self, job_id, job, stdout_text, requested_model)
             # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
