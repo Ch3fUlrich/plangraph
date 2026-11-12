@@ -1,4 +1,4 @@
 [workspace]
 resolver = "2"
-members = ["worker-core", "pg-jail", "pg-spawnd", "og-memory", "pg-ctx"]
+members = ["worker-core", "pg-jail", "pg-spawnd", "og-memory", "pg-ctx", "pg-probe"]
 exclude = ["spikes"]

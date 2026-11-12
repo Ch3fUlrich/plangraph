@@ -1,0 +1,1 @@
+- CONTEXT-PROBES slice 1: add the Rust `pg-probe` JSONL fixture loader, five planner-proposed sample probes, and deterministic offline accuracy/currency/path scores carrying the complete run configuration; live launch and baseline recording remain deferred.

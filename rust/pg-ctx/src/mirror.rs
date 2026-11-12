@@ -119,8 +119,28 @@ impl Mirror {
                     clone.to_str().ok_or(Alarm::FetchFailed)?,
                 ],
             )?)?;
+            // Do not publish an empty clone that cannot supply an ancestry baseline.
+            checked(git(
+                &clone,
+                &["rev-parse", "--verify", "refs/heads/main^{commit}"],
+            )?)?;
             fs::rename(clone, &dir).map_err(failed)?;
         }
+        // A missing watermark must not erase the mirror's accepted history.
+        // Refuse an existing mirror without main rather than guess a baseline.
+        let baseline = match &old {
+            Some(watermark) => watermark.main_head.clone(),
+            None => {
+                let output = checked(git(
+                    &dir,
+                    &["rev-parse", "--verify", "refs/heads/main^{commit}"],
+                )?)?;
+                String::from_utf8(output.stdout)
+                    .map_err(|_| Alarm::FetchFailed)?
+                    .trim()
+                    .to_owned()
+            }
+        };
         // A private candidate ref lets us inspect rewrites without moving accepted main.
         checked(git(
             &dir,
@@ -141,16 +161,11 @@ impl Mirror {
             .map_err(|_| Alarm::FetchFailed)?
             .trim()
             .to_owned();
-        if let Some(old) = &old {
-            let ancestry = git(
-                &dir,
-                &["merge-base", "--is-ancestor", &old.main_head, &head],
-            )?;
-            match ancestry.status.code() {
-                Some(0) => {}
-                Some(1) => return Err(Alarm::ForcePush),
-                _ => return Err(Alarm::FetchFailed),
-            }
+        let ancestry = git(&dir, &["merge-base", "--is-ancestor", &baseline, &head])?;
+        match ancestry.status.code() {
+            Some(0) => {}
+            Some(1) => return Err(Alarm::ForcePush),
+            _ => return Err(Alarm::FetchFailed),
         }
         checked(git(&dir, &["update-ref", "refs/heads/main", &head])?)?;
         let watermark = Watermark {
@@ -166,10 +181,10 @@ impl Mirror {
 
 fn git(dir: &Path, args: &[&str]) -> Result<Output, Alarm> {
     let mut command = git_command(dir);
-    #[cfg(test)]
-    command
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", dir.join("absent-config"));
+    command.env("GIT_CONFIG_NOSYSTEM", "1").env(
+        "GIT_CONFIG_GLOBAL",
+        if cfg!(windows) { "NUL" } else { "/dev/null" },
+    );
     command.args(args).output().map_err(|_| Alarm::FetchFailed)
 }
 

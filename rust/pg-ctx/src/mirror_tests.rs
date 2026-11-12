@@ -115,6 +115,40 @@ fn mirror_rewind_and_divergence_never_replace_the_watermark() {
 }
 
 #[test]
+fn mirror_without_watermark_refuses_rewind_and_divergence() {
+    let f = Fixture::new();
+    let a = f.commit(None);
+    let b = f.commit(Some(&a));
+    f.mirror.fetch("demo").unwrap();
+    let dir = f.mirror.mirror_dir("demo").unwrap();
+    fs::remove_file(dir.with_file_name("watermark.json")).unwrap();
+    git(&f.origin, &["update-ref", "refs/heads/main", &a]);
+    for _ in 0..2 {
+        assert_eq!(f.mirror.fetch("demo"), Err(Alarm::ForcePush));
+        assert_eq!(git(&dir, &["rev-parse", "main"]), b);
+        assert_eq!(f.mirror.watermark("demo").unwrap(), None);
+    }
+    f.commit(Some(&a));
+    assert_eq!(f.mirror.fetch("demo"), Err(Alarm::ForcePush));
+    assert_eq!(git(&dir, &["rev-parse", "main"]), b);
+    assert_eq!(f.mirror.watermark("demo").unwrap(), None);
+    let c = f.commit(Some(&b));
+    assert_eq!(f.mirror.fetch("demo").unwrap().main_head, c);
+}
+
+#[test]
+fn mirror_without_watermark_or_main_ref_refuses_fetch() {
+    let f = Fixture::new();
+    f.commit(None);
+    f.mirror.fetch("demo").unwrap();
+    let dir = f.mirror.mirror_dir("demo").unwrap();
+    fs::remove_file(dir.with_file_name("watermark.json")).unwrap();
+    git(&dir, &["update-ref", "-d", "refs/heads/main"]);
+    assert_eq!(f.mirror.fetch("demo"), Err(Alarm::FetchFailed));
+    assert_eq!(f.mirror.watermark("demo").unwrap(), None);
+}
+
+#[test]
 fn mirror_unreachable_and_deleted_main_keep_old_bytes() {
     let f = Fixture::new();
     f.commit(None);
@@ -141,6 +175,7 @@ fn mirror_config_validation_and_failed_clone_retry() {
     assert!(!f.mirror.mirror_dir("demo").unwrap().exists());
     fs::rename(offline, &f.origin).unwrap();
     assert_eq!(f.mirror.fetch("demo"), Err(Alarm::FetchFailed));
+    assert!(!f.mirror.mirror_dir("demo").unwrap().exists());
     assert_eq!(f.mirror.watermark("demo").unwrap(), None);
     f.commit(None);
     assert!(f.mirror.fetch("demo").is_ok());

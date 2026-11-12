@@ -15,5 +15,14 @@ timestamps cannot decrease even if the clock rolls back. `watermark(name)` reads
 the last accepted state; `age()` saturates at zero and `is_stale()` is true at
 300 seconds. Unchanged successful fetches refresh freshness.
 
+If `watermark.json` is missing, the mirror's own `refs/heads/main` supplies the
+ancestry baseline before fetching. Rewinds and divergence still return
+`Alarm::ForcePush`, leaving accepted main untouched and the watermark absent;
+a missing or unreadable main ref returns `Alarm::FetchFailed` rather than
+accepting an unverified update. A fast-forward recreates the watermark.
+All mirror Git commands ignore system/global Git configuration (including URL
+rewrites and protocol overrides) in production as well as tests; inherited
+`GIT_*` variables are cleared by the shared command builder.
+
 Run `cd rust && cargo test -p pg-ctx mirror` for local-only bare-origin tests.
 Keeper scheduling, HTTP/blob APIs, alarm delivery and a gix backend are deferred.

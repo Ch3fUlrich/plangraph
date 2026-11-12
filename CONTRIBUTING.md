@@ -43,10 +43,18 @@ Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
 the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
 
+The shared Rust workspace is defined by `rust/Cargo.toml` and `rust/Cargo.lock`;
+these cover all member crates, not one feature. Map their documentation updates
+here in `.docs-map`, while crate-specific paths keep their own feature guides.
+Run `cargo test -p <crate>` from `rust/` for each affected crate.
+
 ## Lanes
 
 One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `main`.
 Work that covers two plan items is two lanes.
+A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) only for the item's latest verified head; interrupted sends are not blindly replayed.
+
+New production code must be Rust unless explicitly listed in `tools/new_code_allowlist.txt`; the host-readiness source-probe helper is a single-file exception for the pre-gate lane, retired by `SPAWNER-RUST-PORT`.
 
 ## File size
 

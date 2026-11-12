@@ -1,0 +1,62 @@
+"""Probe the source paths actually configured for spawner and remote ps."""
+import shlex
+
+from .remote_ps import configured_hosts
+
+
+def check_sources(name, config, command, fail):
+    sources = [(config['ssh'], config['spawner_src'], True)]
+    ok = True
+    matched = False
+    seen_hosts = []
+    try:
+        for host in configured_hosts():
+            if host['name'] != name:
+                continue
+            matched = True
+            if host in seen_hosts:
+                continue
+            seen_hosts.append(host)
+            if host.get('invalid') or 'win_src' in host or 'wsl_distro' in host:
+                fail('src_config', 'unsupported_or_invalid')
+                ok = False
+                continue
+            sources.append((host['target'], host.get('src'), False))
+    except (OSError, ValueError, KeyError, TypeError):
+        fail('src_config', 'unreadable')
+        ok = False
+    else:
+        if not matched:
+            fail('src_config', 'missing_ps_host')
+            ok = False
+    seen = []  # Invalid paths may be unhashable; deduplicate before validating.
+    for target, source, checkout in sources:
+        key = (target, source, checkout)
+        if key in seen:
+            continue
+        seen.append(key)
+        if not isinstance(source, str) or not source or not isinstance(target, str):
+            fail('src_config', 'route_or_path_unknown')
+            ok = False
+            continue
+        if target != config['ssh']:
+            fail('src_config', f"ps target={target!r} and overflow ssh={config['ssh']!r} "
+                 'must be the same string')
+            ok = False
+            continue
+        # Expand only the conventional home prefix, never shell syntax from config.
+        path = ('"$HOME"/' + shlex.quote(source[2:]) if source.startswith('~/')
+                else shlex.quote(source))
+        import_path = path + '/src' if checkout else path
+        script = (f'if [ ! -d {path} ]; then echo src_missing; '
+                  f'elif (cd / && PYTHONPATH={import_path} python3 -c '
+                  + shlex.quote('import plangraph') +
+                  ') >/dev/null 2>&1; then echo ok; else echo src_import; fi')
+        result = command('src', script)
+        if result is None:
+            ok = False
+        elif result.strip() != 'ok':
+            label = result.strip() if result.strip() in ('src_missing', 'src_import') else 'src'
+            fail(label, 'failed')
+            ok = False
+    return ok
