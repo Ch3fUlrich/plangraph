@@ -253,7 +253,8 @@ def terminal_reason(record, job=None):
     if reason in TERMINAL_REASONS:
         return
     if record.get('status') in ('failed', 'refused'):
-        diagnostic = (record.get('error') or '') + '\n' + (record.get('stderr_tail') or '')
+        diagnostic = '\n'.join(record.get(key) or '' for key in ('error', 'stderr', 'stderr_tail'))
+        diagnostic += '\n' + (getattr(job, 'stderr', '') or '')
         for named in ('prompt_too_large', 'stdin_prompt_flag_missing'):
             if named + ':' in diagnostic:
                 record['reason'] = named

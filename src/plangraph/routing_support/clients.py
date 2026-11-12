@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from plangraph.routing_support.claude_seat import claude_access_args
-from plangraph.routing_support.review_mode import is_prompt_only_command, leg_tool_mode, prompt_only_command, review_prompt
+from plangraph.routing_support.review_mode import leg_tool_mode, prompt_only_command, review_prompt
 
 #: Environment variable naming the model gateway base URL (see ``gateway_url``).
 GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
@@ -28,6 +28,12 @@ OMNIROUTE_BASE_URL_ENV_VAR = "OMNIROUTE_BASE_URL"
 
 #: Harnesses whose prompts are delivered via stdin instead of argv (I9).
 STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode", "claude", "agy", "qodercli", "codex", "gemini", "qwen")
+
+
+def without_prompt_env(env):
+    """Remove known legacy task carriers, not shell/theme/template configuration."""
+    carriers = {'PROMPT', 'PROMPT_TEXT', 'PROMPT_SUFFIX', 'TASK_PROMPT', 'PLANGRAPH_TASK_PROMPT'}
+    return {key: value for key, value in env.items() if key.upper() not in carriers}
 
 
 def gateway_url(env: Mapping[str, str] | None = None,
@@ -161,12 +167,8 @@ def build_child_env(
     ``gateway_url`` key).  When no source names one, no ``baseURL`` key is
     written at all -- this module ships no default endpoint.
 
-    On Windows (os.name == 'nt'), ALWAYS preserves:
-      - SystemRoot / SYSTEMROOT
-      - COMSPEC
-      - PATHEXT
-      - TEMP (and TMP)
-    preventing the Windows opencode serve port-in-use crash (D-2090 BUG-B).
+    Windows process basics (SystemRoot, COMSPEC, PATHEXT, TEMP/TMP) are preserved
+    to prevent the opencode serve port-in-use crash (D-2090 BUG-B).
 
     An ``extra_env`` value of ``None`` *removes* the inherited variable instead
     of setting it (D-3465): the probe must be able to strip caller git
@@ -242,10 +244,7 @@ def build_child_env(
             else:
                 env[key] = value
     for name in ("PLANGRAPH_GATEWAY_LOG_TOKEN", "PLANGRAPH_GATEWAY_LOG_TOKEN_FILE"): env.pop(name, None)  # spawner-only, after extra_env
-    for name in tuple(env):  # Include Windows' case-insensitive environment spellings.
-        if "PROMPT" in name.upper(): env.pop(name)  # Task content belongs on stdin.
-
-    return env
+    return without_prompt_env(env)  # Case-insensitive legacy task carriers, after extra_env.
 
 
 def build_routing_envelope_headers(
@@ -356,7 +355,7 @@ def launch_stdin_payload(cmd, prompt, exe, *, is_nt=False):
             raise PromptTransportError('stdin_prompt_flag_missing: expected -p with an empty value')
     if cmd[0] == 'agy':
         return (json.dumps({'event': 'user', 'message': {'role': 'user', 'content': prompt}}, ensure_ascii=False) + '\n').encode('utf-8')
-    return prompt.encode('utf-8') if cmd[0] in STDIN_PROMPT_HARNESSES or is_prompt_only_command(cmd) else None
+    return prompt.encode('utf-8')
 
 
 def build_command(

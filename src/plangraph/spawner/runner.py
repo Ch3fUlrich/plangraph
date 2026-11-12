@@ -473,11 +473,7 @@ class SpawnerRunner:
                     else:
                         from plangraph.routing_errors import SpawnRefused
                         raise SpawnRefused('no admitted legs for combo: ' + model_or_combo)
-                stdin_note = (
-                    f" [stdin: {len(prompt.encode('utf-8'))} bytes]"
-                    if cmd[0] in STDIN_PROMPT_HARNESSES
-                    else ""
-                )
+                stdin_note = f" [stdin: {len(prompt.encode('utf-8'))} bytes]"
                 job = JobInfo(
                     job_id=job_id,
                     status="dry_run",

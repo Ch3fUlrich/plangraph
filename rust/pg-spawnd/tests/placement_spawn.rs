@@ -195,6 +195,14 @@ fn oversized_prompt_records_named_reason() {
     let saved = payload(f.call("result", json!({"run_id":row["run_id"]})));
     assert_eq!(saved["exit_code"], 2);
     assert_eq!(saved["reason"], "prompt_too_large");
+    assert_eq!(saved["plan"]["first_leg"]["id"], "leg");
+    assert_eq!(saved["attempts"][0]["status"], "failed");
+    assert_eq!(saved["attempts"][0]["skip_reason"], "prompt_too_large");
+    assert_eq!(saved["attempts"][0]["stderr_tail"], saved["stderr_tail"]);
+    assert_eq!(
+        saved["stderr_tail"],
+        "inline_diff_failed: prompt_too_large: request limit"
+    );
 }
 
 #[test]
@@ -208,4 +216,15 @@ fn malformed_prompt_transport_records_named_reason() {
     assert_eq!(row["exit_code"], 2);
     let saved = payload(f.call("result", json!({"run_id":row["run_id"]})));
     assert_eq!(saved["reason"], "stdin_prompt_flag_missing");
+    assert_eq!(saved["plan"]["first_leg"]["id"], "leg");
+    assert_eq!(saved["attempts"][0]["status"], "failed");
+    assert_eq!(
+        saved["attempts"][0]["skip_reason"],
+        "stdin_prompt_flag_missing"
+    );
+    assert_eq!(saved["attempts"][0]["stderr_tail"], saved["stderr_tail"]);
+    assert_eq!(
+        saved["stderr_tail"],
+        "stdin_prompt_flag_missing: expected -p with an empty value"
+    );
 }

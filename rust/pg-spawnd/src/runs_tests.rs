@@ -135,6 +135,36 @@ fn embedded_prompt_and_distinct_stdin() {
 }
 
 #[test]
+fn short_prompt_substrings_are_not_carriers() {
+    let dir = Dir(std::env::temp_dir().join(new_run_id()));
+    for raw in ["gemini", "p", "-", "é"] {
+        let mut launch = crate::launch::LaunchSpec {
+            argv: vec![
+                "agy".into(),
+                "--dangerously-skip-permissions".into(),
+                "--model".into(),
+                "gemini-3.8-flash".into(),
+            ],
+            cwd: dir.0.clone(),
+            env: BTreeMap::from([("MODEL".into(), "gemini-3.8-flash-é".into())]),
+            stdin: Some(raw.into()),
+            prompt: Some(raw.into()),
+            warnings: None,
+            events: None,
+        };
+        assert!(
+            store_prompt(&dir.0, &new_run_id(), &mut launch, &mut json!({}), false).is_ok(),
+            "short incidental substring was treated as a prompt carrier"
+        );
+        launch.argv.push(raw.into());
+        assert!(store_prompt(&dir.0, &new_run_id(), &mut launch, &mut json!({}), false).is_err());
+        launch.argv.pop();
+        launch.env.insert("TASK".into(), raw.into());
+        assert!(store_prompt(&dir.0, &new_run_id(), &mut launch, &mut json!({}), false).is_err());
+    }
+}
+
+#[test]
 fn stream_prompt_snapshot_is_text_not_transport() {
     let dir = std::env::temp_dir().join(new_run_id());
     let raw = format!("{}\né\n\n", "x".repeat(300 * 1024));

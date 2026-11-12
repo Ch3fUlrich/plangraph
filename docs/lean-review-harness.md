@@ -15,8 +15,9 @@ argv or an `env` command. A portable Python launcher sets `OPENCODE_CONFIG`,
 removes inherited `OPENCODE_CONFIG_CONTENT`, forwards prompt stdin and exit status,
 and deletes the file after exit; unlaunched commands are cleaned at parent exit.
 Config size does not grow the command line, including on Windows.
-Every native harness uses stdin for task content, and child environments discard
-inherited or explicitly overlaid `PROMPT` entries before launch-spec serialization.
+Every native or legacy harness command uses stdin for task content, and child
+environments discard known inherited or overlaid legacy task-prompt carriers before
+launch-spec serialization, while retaining unrelated prompt-template/theme settings.
 
 `tools/judge_prompt.py` assembles offline findings, diff, CI and whole file
 bodies, prioritizing cited files under the byte budget. Its default prompt-only

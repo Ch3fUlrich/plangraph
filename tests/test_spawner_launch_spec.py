@@ -122,13 +122,19 @@ def test_real_producer_prompt_stays_out_of_env(request_data, monkeypatch, leg_id
     carriers = ('PROMPT', 'prompt', 'PrOmPt', 'PROMPT_TEXT', 'PLANGRAPH_TASK_PROMPT', 'prompt_suffix')
     for name in carriers:
         monkeypatch.setenv(name, prompt)
+    settings = dict(SHELL_PROMPT_THEME='minimal', CLIENT_PROMPT_TEMPLATE_FILE='template.txt')
+    for name, value in settings.items():
+        monkeypatch.setenv(name, value)
     monkeypatch.setenv('PATH', request_data['cwd'])
     # Use the real producer, not the fixture's synthetic child env. Exercise both
     # inherited and explicitly supplied legacy prompt env carriers.
     monkeypatch.setattr(spec.runner, 'build_child_env', build_child_env)
-    assert not any('PROMPT' in name.upper() for name in build_child_env(dict.fromkeys(carriers, prompt)))
+    env = build_child_env(dict.fromkeys(carriers, prompt) | settings)
+    assert not set(carriers).intersection(env)
+    assert {name: env[name] for name in settings} == settings
     result = spec.build(request_data)
-    assert not any('PROMPT' in name.upper() for name in result['env'])
+    assert not set(carriers).intersection(result['env'])
+    assert {name: result['env'][name] for name in settings} == settings
     assert all(prompt not in value for value in [*result['argv'], *result['env'].values()])
     payload = json.loads(result['stdin'])['message']['content'] if leg_id.startswith('agy-') else result['stdin']
     assert payload == result['prompt'] == prompt

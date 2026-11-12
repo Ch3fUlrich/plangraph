@@ -50,8 +50,7 @@ impl Runs {
         plan: Value,
         launch: impl FnOnce(&Path, &Value) -> Result<crate::launch::LaunchSpec, ToolError>,
     ) -> Result<Value, ToolError> {
-        let run_id = new_run_id();
-        let job_id = new_job_id();
+        let (run_id, job_id) = (new_run_id(), new_job_id());
         let dry = args.get("dry_run") == Some(&json!(true));
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;
@@ -200,8 +199,9 @@ pub(crate) fn store_prompt(
     let missing = || internal("launch prompt missing");
     let raw = launch.prompt.as_ref().ok_or_else(missing)?;
     let argv = &launch.argv;
-    let carriers = argv.iter().chain(launch.env.values());
-    let exposed = carriers.clone().any(|s| s.contains(raw));
+    // Short substrings of flags/model names are not evidence of a task carrier.
+    let mut carriers = argv.iter().chain(launch.env.values());
+    let exposed = carriers.any(|s| s == raw || (raw.len() >= 16 && s.contains(raw)));
     if !raw.is_empty() && exposed {
         return Err(internal("launch prompt must not be in argv or env"));
     }

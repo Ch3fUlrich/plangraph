@@ -80,12 +80,18 @@ def test_total_bound_including_original_and_review_framing(sandbox, monkeypatch)
 
 @pytest.mark.parametrize('enabled', [None, '0'])
 def test_inline_bound_disabled_preserves_prompt_and_warning(sandbox, monkeypatch, enabled):
+    """Disabled strict context preserves in-budget text/advisories, not oversize permission."""
     root, seat, _ = sandbox
     if enabled is not None:
         monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', enabled)
     prompt = 'edit large.py\n' + 'x' * 1000
     calls = []
-    assert cp.annotate({}, prompt, {}, root).warnings
+    record = dispatch(seat, root, prompt, {}, SimpleNamespace(
+        tool_mode='inline-only', max_request_tokens=400), calls)
+    assert calls == [prompt]
+    assert record['warnings'] == [
+        'big_file_unsliced: large.py 1000 lines; name one function per slice in card.context']
+    calls.clear()
     with pytest.raises(cp.PromptBoundError, match='prompt_too_large'):
         dispatch(seat, root, prompt, {}, SimpleNamespace(
             tool_mode='inline-only', max_request_tokens=200), calls)

@@ -62,7 +62,7 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize('harness', ['opencode', 'agy', 'qodercli', 'codex', 'claude', 'gemini', 'qwen'])
+@pytest.mark.parametrize('harness', ['opencode', 'agy', 'qoder', 'qodercli', 'codex', 'claude', 'gemini', 'qwen'])
 @pytest.mark.parametrize('prompt', ['short\n\né', 'x' * (300 * 1024)], ids=['short', '300KiB'])
 def test_every_harness_uses_stdin(harness, prompt):
     cmd = build_command(prompt, 'fixture/model', client=harness)
@@ -72,6 +72,21 @@ def test_every_harness_uses_stdin(harness, prompt):
         assert json.loads(payload)['message']['content'] == prompt
     else:
         assert payload == prompt.encode()
+
+
+@pytest.mark.parametrize('command', [['gateway-client', 'run'], ['legacy-client', '-p', '']])
+def test_legacy_commands_do_not_drop_stdin(command):
+    prompt = 'review payload\né\n' + 'x' * (300 * 1024)
+    assert launch_stdin_payload(command, prompt, command[0]) == prompt.encode()
+
+
+@pytest.mark.parametrize('field', ['error', 'stderr', 'stderr_tail'])
+@pytest.mark.parametrize('named', ['prompt_too_large', 'stdin_prompt_flag_missing'])
+def test_persisted_diagnostic_keys_keep_named_reason(field, named):
+    from plangraph.spawner.exit_outcome import terminal_reason
+    record = dict(status='failed', exit_code=1, **{field: named + ': refused before exec'})
+    terminal_reason(record)
+    assert record['reason'] == named
 
 
 @pytest.mark.parametrize('exit_code', [None, 0, 1])
@@ -86,21 +101,44 @@ def test_pre_exec_prompt_refusal_has_named_reason(exit_code, previous):
 
 @pytest.mark.parametrize('harness', ['agy', 'qodercli'])
 @pytest.mark.parametrize('tail', [[], ['-p'], ['-p', 'private task']])
-def test_runner_transport_refusal_is_named(tmp_path, monkeypatch, harness, tail):
+@pytest.mark.parametrize('routed', [False, True])
+def test_runner_transport_refusal_is_named(tmp_path, monkeypatch, harness, tail, routed):
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import SpawnPlan
     from plangraph.spawner import runner as module
-    from plangraph.spawner.exit_outcome import terminal_reason
+    from plangraph.spawner import leg_probe, resolver, service as base
     from unittest.mock import AsyncMock
     monkeypatch.setattr(module, 'build_command', lambda **kw: [harness, *tail])
     monkeypatch.setattr('plangraph.spawner.resolver.host_skip_reason_async', AsyncMock(return_value=None))
     factory = AsyncMock()
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
     monkeypatch.setattr('plangraph.planner.routing.validate_model', lambda model: model)
-    model = 'gemini-3.8-flash' if harness == 'agy' else 'fixture-qoder-model'
-    job = asyncio.run(runner.spawn('private task', model, role='review', client=harness))
-    assert job.status == 'failed'
-    record = dict(status=job.status, exit_code=job.exit_code, stderr_tail=job.stderr)
-    terminal_reason(record, job)
-    assert record['reason'] == 'stdin_prompt_flag_missing'
+    from plangraph.planner import legs
+    leg = replace(next(l for l in DEFAULT_LEGS if l.harness == harness and 'inline' not in l.tool_mode), disabled=None)
+    monkeypatch.setattr(legs, 'DEFAULT_LEGS', (leg,))
+    monkeypatch.setattr(leg_probe, 'before_launch', AsyncMock(return_value=None))
+    async def fixed_plan(plan, **kw):
+        return plan
+    monkeypatch.setattr(resolver, 'plan_for_launch_async', fixed_plan)
+
+    async def run():
+        sink = SimpleNamespace(deliver=lambda *a, **kw: None)
+        service = (spawn_service(runner, state=tmp_path, completion_sink=sink, keeper_sink=sink)
+                   if routed else base.SpawnService(runner, state=tmp_path))
+        service.completion_sink = service.keeper_sink = sink
+        monkeypatch.setattr(service, 'admit_spawn', lambda *a, **kw: None)
+        monkeypatch.setattr(service, '_route', lambda *a, **kw: SpawnPlan((leg,), (), 'test', (), ()))
+        record = await service.spawn(card={'estimate_tokens': 100}, prompt='private task',
+            role='review', writer_families=['gpt'], wait_seconds=None)
+        assert 'job_id' in record, record
+        job = runner.jobs[record['job_id']]
+        assert job.status == record['status'] == 'failed'
+        assert 'stdin_prompt_flag_missing:' in job.stderr
+        assert record['reason'] == 'stdin_prompt_flag_missing'
+        assert record['attempts'][0]['stderr_tail'] == job.stderr
+        assert service.result(record['run_id'])['reason'] == 'stdin_prompt_flag_missing'
+    asyncio.run(run())
     factory.assert_not_called()
 
 

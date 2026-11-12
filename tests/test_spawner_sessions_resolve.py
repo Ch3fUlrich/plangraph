@@ -13,6 +13,8 @@ def test_argv_linux_is_list_no_shell(site, monkeypatch):
     carriers = ('PROMPT', 'PROMPT_TEXT', 'PLANGRAPH_TASK_PROMPT', 'prompt_suffix')
     for name in carriers:
         monkeypatch.setenv(name, PROMPT)
+    monkeypatch.setenv('SHELL_PROMPT_THEME', 'minimal')
+    monkeypatch.setenv('CLIENT_PROMPT_TEMPLATE_FILE', 'template.txt')
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
     res = go(site, s)
@@ -28,7 +30,9 @@ def test_argv_linux_is_list_no_shell(site, monkeypatch):
     assert kw["cwd"] == str(site.proj.resolve())
     assert kw["env"]["FLEET_SESSION_NAME"] == "alpha"
     assert kw["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "400000"
-    assert not any('PROMPT' in name.upper() for name in kw['env'])
+    assert not set(carriers).intersection(kw['env'])
+    assert kw['env']['SHELL_PROMPT_THEME'] == 'minimal'
+    assert kw['env']['CLIENT_PROMPT_TEMPLATE_FILE'] == 'template.txt'
     # style_text is appended via --append-system-prompt when configured
     cfg2 = site.tmp_path / "sessions2.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_text": "be terse"}))

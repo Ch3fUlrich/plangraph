@@ -38,9 +38,11 @@ Source mode skips only credential-name assignment masking, for spawner-generated
 Every harness and helper receives the prompt by stdin or file, never argv, for
 all prompt sizes on every OS (D-5233). Python's Linux OOM child inherits the stdin
 pipe; pg-spawnd uses the same launch-spec transport.
-Child env construction drops inherited and overlaid entries containing `PROMPT`
-(case-insensitive, including `PROMPT_TEXT` and `PLANGRAPH_TASK_PROMPT`); Rust still
-refuses any launch spec exposing its prompt in argv or environment values.
+Child env construction drops only known legacy task carriers (`PROMPT`, `PROMPT_TEXT`,
+`PROMPT_SUFFIX`, `TASK_PROMPT`, `PLANGRAPH_TASK_PROMPT`, case-insensitive), including
+overlays; unrelated shell/theme/template configuration survives. Rust refuses exact
+prompt carriers and embedded prompts of at least 16 bytes in argv/env, without
+mistaking short incidental substrings of flags or model names for task transport.
 SSH overflow passes a staged UTF-8 file to the real spawn CLI's `--prompt-file`
 option, preserving trailing newlines without shell command substitution.
 Request-budget refusals keep the launch adapter's exit status in their run record;
@@ -70,7 +72,8 @@ The package-wide `inline_diff_prompt` bound change was dropped to preserve main'
 cost-context contract: `max_chars` measures only the diff and exact-fit diffs pass.
 Oversized diffs keep `InlineDiffError`'s `diff too large for leg` text and diff-only
 size, prefixed with `prompt_too_large`. Seat assembly maps that refusal to
-`inline_diff_oversized`; whole-prompt admission retains `inline_prompt_oversized`
+`PromptBoundError` (`ContextError` and `InlineDiffError`) with `inline_diff_oversized`;
+the base `InlineDiffError` is not itself a context/bound error. Whole-prompt admission retains `inline_prompt_oversized`
 for oversized instructions/framing, both under the named `prompt_too_large`
 reason regardless of `PLANGRAPH_CONTEXT_STRICT`. Neither truncates;
 missing diff references, empty diffs and failed `git diff` calls fail explicitly.
