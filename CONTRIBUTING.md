@@ -29,6 +29,7 @@ Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so t
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
 with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
+The D-5504/D-5506 `mcp_tools.py` exception only splits schema data out of the full Python MCP transport; it also retires with MCP-RUST.
 
 ```bash
 python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
@@ -238,3 +239,14 @@ guards block subprocess entry points, `os.system`/`os.popen`, socket constructio
 and connection/server helpers, `urllib.request.urlopen` and verdict posting.
 Real dependency calls retain the scoped file/environment/clock guards. Tests
 isolate each live door table and verify the refusal disappears without it.
+
+## Turn-budget hook development
+
+The standalone Rust `turn-budget-hook` lives in `rust/worker-core`, beside the
+existing watchdog binaries; `tools/hooks/install_hooks.sh` remains Python-only.
+Build, registration examples, injectable state paths and the polling-recognition
+boundary are documented in [Turn-budget hook](docs/turn-budget-hook.md).
+Run its hermetic contracts with `cargo test --manifest-path rust/Cargo.toml -p
+pg-worker-core --test turn_budget_hook --test turn_budget_poll --test
+turn_budget_alert --test turn_budget_watchdog`. Tests never install hooks, read
+live session state, or change permissions/settings files.
