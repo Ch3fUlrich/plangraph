@@ -4,15 +4,15 @@ use std::process::{Command, Stdio};
 
 struct Fake(&'static str);
 impl Hook for Fake {
-    fn run(&self, event_json: &str, env: &Env) -> Result<HookOutput, HookError> {
-        assert_eq!(event_json, "{not json\n");
+    fn run(&self, event_json: &[u8], env: &Env) -> Result<HookOutput, HookError> {
+        assert_eq!(event_json, b"{not json\n");
         assert!(env.contains_key(std::ffi::OsStr::new("HOME")));
         match self.0 {
             "error" => Err(HookError::Failed("test error".into())),
             "panic" => panic!("test panic"),
             _ => Ok(HookOutput {
                 exit_code: if self.0 == "same" { 7 } else { 0 },
-                stdout: event_json.into(),
+                stdout: String::from_utf8(event_json.to_vec()).unwrap(),
                 stderr: String::new(),
             }),
         }
@@ -26,7 +26,7 @@ fn python(script: &std::path::Path) -> Command {
 }
 fn python_executable() -> std::path::PathBuf {
     let output = Command::new("python3")
-        .args(["-c", "import sys; print(sys.executable)"])
+        .args(["-I", "-c", "import sys; print(sys.executable)"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -96,7 +96,7 @@ fn registry_has_exactly_five_unimplemented_entries() {
     );
     for hook in hooks.values() {
         assert_eq!(
-            observe(*hook, "", &Env::new()),
+            observe(*hook, b"", &Env::new()),
             serde_json::json!({"status": "NotImplemented"})
         );
     }
@@ -145,7 +145,7 @@ fn shadow_cli_returns_python_and_appends_not_implemented() {
 fn signal_exit_codes_match_the_logged_python_status() {
     struct Signaled;
     impl Hook for Signaled {
-        fn run(&self, _: &str, _: &Env) -> Result<HookOutput, HookError> {
+        fn run(&self, _: &[u8], _: &Env) -> Result<HookOutput, HookError> {
             Ok(HookOutput {
                 exit_code: 143,
                 stdout: String::new(),
@@ -217,8 +217,13 @@ fn shadow_cli_fails_open_for_usage_and_python_spawn_errors() {
         .unwrap();
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
-    assert_eq!(output.stderr, b"pg-hook: Python hook could not run\n");
-    assert!(!log.exists());
+    assert_eq!(output.stderr, b"pg-hook: Python spawn failed\n");
+    let record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&log).unwrap()).unwrap();
+    assert!(record["same"].is_null());
+    assert!(record["py"].is_null());
+    assert_eq!(record["rust"]["status"], "NotImplemented");
+    assert_eq!(record["harness"]["error"], "Python spawn failed");
 
     // Diagnostics are also best effort when stderr is not writable.
     let diagnostic = tmp.path().join("diagnostic");
@@ -226,6 +231,7 @@ fn shadow_cli_fails_open_for_usage_and_python_spawn_errors() {
     for args in [vec![], vec!["shadow", "bash_guard", "log", "hook.py"]] {
         let output = Command::new(env!("CARGO_BIN_EXE_pg-hook"))
             .args(args)
+            .current_dir(tmp.path())
             .env_clear()
             .env("PATH", tmp.path())
             .stderr(std::fs::File::open(&diagnostic).unwrap())
@@ -260,7 +266,12 @@ fn shadow_cli_fails_open_for_stdin_read_errors() {
         .unwrap();
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
-    assert_eq!(output.stderr, b"pg-hook: Python hook could not run\n");
-    assert!(!log.exists());
+    assert_eq!(output.stderr, b"pg-hook: stdin read failed\n");
+    let record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&log).unwrap()).unwrap();
+    assert!(record["same"].is_null());
+    assert!(record["py"].is_null());
+    assert!(record["rust"].is_null());
+    assert_eq!(record["harness"]["error"], "stdin read failed");
     assert!(!script.with_extension("py.ran").exists());
 }
