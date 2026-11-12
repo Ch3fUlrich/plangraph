@@ -901,6 +901,7 @@ def spawn_service(*args, **kwargs):
             self.keeper_sink = keeper_sink or KeeperSink()
             self._running_records = {}
             if hasattr(self.runner, '__dict__'):
+                self.runner.state = self.state  # probes share this service's run directory
                 self.runner.on_sample = lambda jid: self._save(self._running_records[jid]) if jid in self._running_records else None
 
         async def cancel(self, run_id):   # D-3505: the leg loop of the supervisor stops on this marker
