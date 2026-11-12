@@ -1,11 +1,5 @@
 # enforce-after: 2026-11-08
 # Docs mapping for plangraph (rule D-653)
-src/plangraph/routing_support/catalog* -> docs/benchmark-catalog.md
-src/plangraph/catalog_data.py -> docs/benchmark-catalog.md
-src/plangraph/registry_columns.py -> docs/benchmark-catalog.md
-src/plangraph/routing_support/resolver.py -> docs/benchmark-catalog.md
-src/plangraph/spawner/bench_entry.py -> docs/benchmark-catalog.md
-src/plangraph/spawner/mcp.py -> docs/benchmark-catalog.md
 rust/pg-mcp/** -> docs/keeper/mcp-rust.md
 rust/pg-probe/** -> docs/context-probes.md
 rust/pg-reap/** -> docs/pg-reap.md
@@ -23,3 +17,9 @@ src/plangraph/routing_support/leg_state.py -> docs/spawner-leg-state.md
 # Shared rust/Cargo.toml and rust/Cargo.lock are not owned by a single crate.
 src/plangraph/routing_support/opencode_render.py -> docs/opencode-gateway.md
 src/plangraph/routing_support/opencode_overlay.py -> docs/opencode-gateway.md
+src/plangraph/routing_support/catalog* -> docs/benchmark-catalog.md
+src/plangraph/catalog_data.py -> docs/benchmark-catalog.md
+src/plangraph/registry_columns.py -> docs/benchmark-catalog.md
+src/plangraph/routing_support/resolver.py -> docs/benchmark-catalog.md
+src/plangraph/spawner/bench_entry.py -> docs/benchmark-catalog.md
+src/plangraph/spawner/mcp.py -> docs/benchmark-catalog.md

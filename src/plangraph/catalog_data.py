@@ -17,9 +17,9 @@ def model_rows(rows):
     for row in json.loads(path.read_text(encoding="utf-8")):
         if row["model_id"] in by_id:
             raise ValueError("duplicate benchmark catalog identity: " + row["model_id"])
-        by_id[row["model_id"]] = dict(row, benchmark_only=1, available=0,
-                                    unavailable_reason=row.get("unavailable_reason") or
-                                    "Benchmark-only identity; not admitted for automatic routing")
+        if row["available"] != 0 or not row.get("unavailable_reason"):
+            raise ValueError("benchmark-only identity must declare unavailability: " + row["model_id"])
+        by_id[row["model_id"]] = dict(row, benchmark_only=1)
     # Registry defaults apply uniformly; explicit asset overrides survive.
     result = []
     for row in by_id.values():
@@ -315,9 +315,9 @@ SEED_MODELS: list[dict[str, Any]] = model_rows([
     {
         "model_id": "deepseek/deepseek-v4-flash-max",
         "provider_id": "deepseek",
-        "upstream_id": "deepseek-v4-flash-max",
+        "upstream_id": "deepseek-v4-flash",
         "family": "deepseek",
-        "parameter_effort": None,
+        "parameter_effort": "max",
         "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 128000,
         "max_output_tokens": 64000,
@@ -506,7 +506,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows([
         "parameter_effort": None,
         "max_safe_effort": None,
         "effort_warning": None,
-        "context_tokens": 900000,
+        "context_tokens": 872000,
         "max_output_tokens": 128000,
         "price_cliff_tokens": None,
         "quota_pool_id": "cxa-sub",
@@ -544,7 +544,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows([
         "parameter_effort": None,
         "max_safe_effort": None,
         "effort_warning": None,
-        "context_tokens": 128000,
+        "context_tokens": 1048576,
         "max_output_tokens": 65536,
         "price_cliff_tokens": None,
         "quota_pool_id": "gemini-api-paid",

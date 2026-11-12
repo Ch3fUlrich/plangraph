@@ -217,8 +217,21 @@ def assert_live_source(model, content):
                 number = f"{value:g}" if key != "cost_per_task_usd" else f"{value:.2f}"
                 assert re.search(re.escape(number) + r"\s*" + re.escape(label), visible), (model, key)
         if metrics.get("scicode") is not None:
-            match = re.search(r'scicode\\?":([\d.]+)', text)
-            assert match and float(match[1]) * 100 == pytest.approx(metrics["scicode"]), model
+            import json
+            decoded = "".join(json.loads(m[1]) for m in re.finditer(
+                r'self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)', text))
+            slug = evidence["source_url"].rsplit("/", 1)[-1]
+            if '"currentModel":' in decoded:
+                start = decoded.index('"currentModel":') + len('"currentModel":')
+            else:
+                match = re.search(r'\{"id":"[^"\n]+","slug":"' + re.escape(slug) + '"', decoded)
+                assert match, model
+                start = match.start()
+            component, _ = json.JSONDecoder().raw_decode(decoded[start:].lstrip())
+            frozen = json.loads(evidence["component_excerpt"])
+            for key in ("id", "slug", "name", "effort", "scicode"):
+                assert component.get(key) == frozen.get(key), (model, key)
+            assert component["scicode"] * 100 == pytest.approx(metrics["scicode"]), model
 
 
 def test_live_publisher_verification_rejects_unrelated_success_page():

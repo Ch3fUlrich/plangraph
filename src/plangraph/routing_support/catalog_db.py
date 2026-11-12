@@ -91,13 +91,14 @@ class CatalogDB:
     def _insert_records(self, table_name: str, records: list[dict[str, Any]], *, seed=False) -> int:
         if not records:
             return 0
-        mode = "IGNORE" if seed else "REPLACE"
+        mode = "" if seed else "OR REPLACE "
+        conflict = " ON CONFLICT(model_id) DO NOTHING" if seed else ""
         cursor = self.conn.cursor()
         for r in records:
             cols = list(r)
             col_list = ", ".join(cols)
             placeholders = ", ".join(["?"] * len(cols))
-            sql = f"INSERT OR {mode} INTO {table_name} ({col_list}) VALUES ({placeholders})"
+            sql = f"INSERT {mode}INTO {table_name} ({col_list}) VALUES ({placeholders}){conflict}"
             values = [r.get(c) for c in cols]
             cursor.execute(sql, values)
             if seed and table_name == "catalog_models":

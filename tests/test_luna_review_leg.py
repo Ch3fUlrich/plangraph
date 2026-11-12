@@ -58,7 +58,8 @@ def test_catalog_seeds_luna_with_opencode_harness():
     assert len(rows) == 1
     row = rows[0]
     assert row["harness"] == "opencode" and row["family"] == "gpt"
-    assert row["context_tokens"] == 900000 and row["trains_on_prompts"] == 0
+    assert row["context_tokens"] == 872000 and row["trains_on_prompts"] == 0
+    assert row["context_tokens"] == db.get_model("cxa/gpt-6-luna-high")["context_tokens"]
 
 
 def test_catalog_registers_kimi_with_opencode_harness():

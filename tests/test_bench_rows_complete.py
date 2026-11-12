@@ -88,8 +88,9 @@ def assert_provenance(row):
             match = re.search(pattern, evidence["excerpt"])
             assert row[key] == (float(match[1]) if match else None), (model, key)
         if row["scicode"] is not None and "scicode" in evidence["metrics"]:
-            match = re.search(r'scicode\\?":([\d.]+)', evidence["component_excerpt"])
-            assert match and row["scicode"] == pytest.approx(float(match[1]) * 100)
+            component = json.loads(evidence["component_excerpt"])
+            assert component["slug"] == urlsplit(row["source_url"]).path.rsplit("/", 1)[-1]
+            assert row["scicode"] == pytest.approx(component["scicode"] * 100)
     assert evidence["excerpt"]
 
 

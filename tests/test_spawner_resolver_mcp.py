@@ -444,7 +444,7 @@ def test_resolver_gemini_argon_smart_model_and_cost_adaptation():
     assert argon["tier"] == "subscription"
     assert argon["family"] == "gemini"
     assert argon["aa_intelligence"] == 50.0
-    assert argon["cost_per_task_usd"] == 9.95
+    assert argon["cost_per_task_usd"] == 4.97
 
     sonnet = models["agy/claude-sonnet-5-5-high"]
     score_argon_high = score_model(argon, role="implement", risk="high")

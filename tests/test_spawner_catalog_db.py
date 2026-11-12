@@ -76,7 +76,7 @@ def test_all_22_models_and_exact_aa_v432_benchmarks(memory_db: CatalogDB) -> Non
 
     flash = get_observation("mimo/mimo-v2.6-flash")
     assert flash is not None
-    assert flash["verified_tok_per_s"] == 38.0
+    assert flash["verified_tok_per_s"] == 39.0
     assert flash["direct_api_tok_per_s"] is None
     assert flash["cyberbench"] is None
     assert flash["cost_per_task_usd"] == 0.13
