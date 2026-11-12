@@ -1,0 +1,1 @@
+- RUN-WORKTREE slice 1: opt-in spawns create fresh per-attempt worktrees under a host root and `.lock`, fetch origin/main, refuse unmerged finished dependencies, resume lane tips for continuations, and persist path/branch/base evidence before launch; default cwd behavior and worktree retention remain unchanged.

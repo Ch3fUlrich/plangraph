@@ -108,6 +108,28 @@ its timeout stops waiting, not the writer.
 `--no-fallthrough` disables automatic advancement after a captured provider stop.
 Plain stdout, including text saying 429, is never provider evidence.
 
+### Opt-in per-attempt worktrees (RUN-WORKTREE slice 1)
+
+CLI `spawn --run-worktree` / service `spawn(run_worktree=True)` creates a fresh
+`attempt-<uuid>` directory before each launch, including sequential fallthroughs
+and fixer continuations. The trusted `PLANGRAPH_SETTINGS` JSON/TOML top-level
+`worktree_root` config key overrides the per-host default `<state>/worktrees`.
+Creation holds the exclusive file lock **`<root>/.lock`** across fetch, dependency
+checks and `git worktree add`; this exact name is reserved for WORKTREE-REAPER.
+New lanes use the fetched `origin/main` head, never the caller's HEAD. Optional
+card `lane_branch` names the branch (default `lane/<run_id>`); `continuation: true`
+resumes that existing local branch's tip instead. Card `finished_dependencies`
+lists full commit SHAs: a new lane refuses with `RunWorktreeDependencyNotMerged`
+(`run_worktree_dependency_not_merged`) if any is not an ancestor of fetched main,
+including missing commits. Continuations are sequential handoffs, not concurrent
+writers on one branch; retained earlier directories must no longer be used.
+The private run record saves `run_worktree: {path, branch, base_sha}` before launch
+and retains ordered creation evidence in `worktree_attempts`; `base_sha` is the
+attempt's starting commit (main head or continuation tip). Runner `JobInfo.cwd`,
+process cwd and child PWD use that path. With the flag off, cwd is unchanged;
+dry runs create nothing. No worktrees are removed, no pg-reap lock sharing is
+implemented, and enabling by default and the Rust port remain later slices.
+
 Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
 chosen leg, served model/family with witness kind (a structured claude `system/init` model is a native witness; a mismatch with the requested leg sets `served_model_mismatch`), writer family, status, started/ended timestamps,
 attempts with provider stop details, job id, pid, and stdout tail.

@@ -3,7 +3,7 @@ from __future__ import annotations
 from .env_redact import first_reason
 from .gateway_witness import witness_order, witness_gate_legs
 from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
-from .git_guard import writer_launch
+from .git_guard import prepare_worktree, writer_launch
 from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
 from dataclasses import asdict, replace
@@ -164,8 +164,10 @@ class SpawnService(SeatSpawnMixin):
         self._save(child)
         try:
             chosen = child['chosen_leg']
+            if record.get('run_worktree'): child['run_worktree'] = record['run_worktree']
+            worktree = await prepare_worktree(self, child, {}, bool(record.get('run_worktree')), continuation=True)
             job = await self.runner.spawn(prompt=render_fixer_brief([{'text': g} for g in gaps]),
-                model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=child['cwd'], wake_variant='fixer',  # REMOVE-AT-R10
+                model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=worktree.get('cwd', child['cwd']), wake_variant='fixer',  # REMOVE-AT-R10
                 prompt_record=(self._path(child['run_id']).with_name('prompt.txt'), child, self._save))  # REMOVE-AT-R10
             child['job_id'] = job.job_id
             self._save(child)
@@ -198,11 +200,10 @@ class SpawnService(SeatSpawnMixin):
             logging.getLogger(__name__).warning('refusal_save_failed: %s', type(storage_error).__name__)
             exc.add_note('Refusal record could not be persisted: ' + type(storage_error).__name__)
         return record
-
     async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                     review_of=None, model=None, leg=None, override_reason=None,
                     dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
-                    seats=False, _plan=None):
+                    seats=False, _plan=None, run_worktree=False):
         from plangraph.settings import admit_review_scope
         admit_review_scope(card, role, review_scope)
         from plangraph.planner.routing import hand_picked, SpawnRefused, SpawnPlan
@@ -214,7 +215,7 @@ class SpawnService(SeatSpawnMixin):
                 writer_families=writer_families, review_of=review_of, model=model, leg=leg,
                 dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=no_fallthrough,
                 benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
-                override_reason=override_reason)
+                override_reason=override_reason, run_worktree=run_worktree)
         if _plan is not None:
             plan = _plan
         elif model is not None or leg is not None or not card:
@@ -292,7 +293,6 @@ class SpawnService(SeatSpawnMixin):
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
         if plan.error or not plan.first_leg:
             raise SpawnRefused(plan.error or 'no eligible leg')
-        from dataclasses import replace
         plan = replace(plan, legs=witness_gate_legs(card, role, plan.legs))  # before run artifacts
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
@@ -320,8 +320,9 @@ class SpawnService(SeatSpawnMixin):
                         continue
                     launched = True
                     leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, record['run_id'])
+                    worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
                     job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                        role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env,
+                        role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
                         prompt_record=(self._path(record['run_id']).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                     self._running_records[job.job_id] = record
                     record['job_id'] = job.job_id
@@ -395,6 +396,5 @@ class SpawnService(SeatSpawnMixin):
             except asyncio.TimeoutError:
                 pass
         return self.result(record['run_id'], attempts=SAVE_READ_ATTEMPTS)
-
     async def cancel(self, run_id):
         return await cancel_recorded(self, run_id)

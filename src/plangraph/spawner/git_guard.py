@@ -13,9 +13,104 @@ rewritten from a snapshot.  Errors listing the config only record a warning
 event: the run is neither failed nor restored.
 """
 from pathlib import Path
+from contextlib import contextmanager
+import os
 import re
 import subprocess
 import tempfile
+import time
+import uuid
+
+from plangraph.routing_errors import SpawnRefused
+
+
+class RunWorktreeDependencyNotMerged(SpawnRefused):
+    """A declared finished dependency is absent from the fetched main history."""
+
+    code = reason = 'run_worktree_dependency_not_merged'
+
+
+@contextmanager
+def run_worktree_lock(root):
+    """Host-wide creation lock; WORKTREE-REAPER's reserved name is exactly .lock."""
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (root / '.lock').open('a+b') as lock:
+        if os.name == 'nt':
+            import msvcrt
+            if os.fstat(lock.fileno()).st_size == 0:
+                lock.write(b'0'); lock.flush()
+            lock.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError as exc:
+                    if exc.errno not in (13, 36):
+                        raise
+                    time.sleep(0.05)  # LK_LOCK retries for only ten seconds.
+        else:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == 'nt':
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def create(root, repo, lane_branch, continuation=False, *, finished_dependencies=()):
+    """Create one attempt without resetting a branch or removing an earlier worktree.
+
+    Continuations are sequential handoffs: --force permits the existing branch
+    to remain attached in the retained, no-longer-running attempt directory.
+    """
+    root = Path(root).expanduser().resolve()
+    def git(*args, check=True):
+        return subprocess.run(['git', '-C', str(repo), *args], check=check,
+                              capture_output=True, text=True, timeout=120)
+    with run_worktree_lock(root):
+        git('check-ref-format', 'refs/heads/' + lane_branch)
+        if lane_branch.startswith('-'):
+            raise SpawnRefused('run_worktree_invalid_branch')
+        git('fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main')
+        main = git('rev-parse', '--verify', 'refs/remotes/origin/main^{commit}').stdout.strip()
+        if not continuation:
+            for sha in finished_dependencies:
+                if (not isinstance(sha, str) or not re.fullmatch(r'[0-9a-fA-F]{40,64}', sha)
+                        or git('merge-base', '--is-ancestor', sha, main, check=False).returncode):
+                    raise RunWorktreeDependencyNotMerged('run_worktree_dependency_not_merged')
+        base = main
+        if continuation:
+            base = git('rev-parse', '--verify', 'refs/heads/' + lane_branch + '^{commit}').stdout.strip()
+        path = root / ('attempt-' + uuid.uuid4().hex)
+        if continuation:
+            git('worktree', 'add', '--force', str(path), lane_branch)
+        else:
+            git('worktree', 'add', '-b', lane_branch, str(path), base)
+        return dict(path=str(path), branch=lane_branch, base_sha=base)
+
+
+async def prepare_worktree(service, record, card, enabled, *, continuation=False):
+    """Persist creation evidence before launch; off/dry-run callers do no Git I/O."""
+    if not enabled:
+        return {}
+    import asyncio
+    from plangraph.settings import _policy_data
+    repo = getattr(service.runner, 'default_cwd', None) or os.getcwd()
+    config = _policy_data(repo) or {}
+    root = config.get('worktree_root') or service.state / 'worktrees'
+    previous = record.get('run_worktree')
+    branch = previous['branch'] if previous else card.get('lane_branch') or 'lane/' + record['run_id']
+    continuation = continuation or bool(previous) or bool(card.get('continuation'))
+    metadata = await asyncio.to_thread(create, root, repo, branch, continuation,
+                                      finished_dependencies=card.get('finished_dependencies', ()))
+    record.update(run_worktree=metadata, cwd=metadata['path'])
+    record.setdefault('worktree_attempts', []).append(metadata)
+    service._save(record)
+    return dict(cwd=metadata['path'])
 
 # Denylist of dangerous keys (git prints section and key lower-cased, so the
 # pattern is matched against the lower-cased key; the original spelling is

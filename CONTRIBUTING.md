@@ -46,6 +46,7 @@ systemd user scope. Use `affected` or `full` to measure each separately.
 ## Lanes
 
 One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `main`.
+The RUN-WORKTREE Python regression exception (D-5062) retires with SPAWNER-RUST-PORT.
 Work that covers two plan items is two lanes.
 
 ## File size
