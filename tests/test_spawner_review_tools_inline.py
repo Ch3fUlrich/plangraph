@@ -91,13 +91,15 @@ def test_tools_invalid_diff_ref_refused(diff_ref):
     ('already-capped', 1, True), ('stderr-error', 2, True),
     ('zero-exit', 2, True), ('cancelled', 1, False),
     ('timeout', 1, False), ('retry-timeout', 2, False), ('deadline', 1, True),
-    ('provider-stop', 2, True),
+    ('provider-stop', 2, True), ('thin-budget', 1, True),
 ])
 def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scenario, launches, terminal):
     """Use real spawn/render/monitor/record paths; only transport and witnesses are fake."""
     import asyncio
     import json
+    import time
     from dataclasses import replace
+    from unittest.mock import AsyncMock
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.routing import SpawnPlan
     from plangraph.spawner.runner import SpawnerRunner, spawn_service
@@ -116,21 +118,28 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     verdict = '\n'.join(json.dumps(e) for e in [
         {'type': 'text', 'part': {'text': good}},
         {'type': 'step_finish', 'part': {'reason': 'stop', 'tokens': {'output': 20, 'reasoning': 0}}}])
-    calls = []
+    calls, clock = [], []
+    monkeypatch.setattr('plangraph.spawner.seat_spawn.time',
+                        SimpleNamespace(time=lambda: clock[0] if clock else time.time()))
 
     async def factory(*args, **kwargs):
         calls.append((args, kwargs))
         return SimpleNamespace(pid=None, returncode=0 if scenario in ('normal', 'zero-exit') or len(calls) == 2 and scenario == 'verdict' else 1)
 
     async def collect(runner, jid, proc):
+        child_env = runner._child_envs[jid]
+        assert child_env is calls[-1][1]['env']
+        config = json.loads(child_env['OPENCODE_CONFIG_CONTENT'])
+        if scenario == 'already-capped':
+            assert config['providers']['mimo']['models']['mimo-v2.6-flash']['body']['thinking'] == {'type': 'disabled'}
         successful = scenario == 'normal' or len(calls) == 2 and scenario == 'verdict'
         if scenario == 'cancelled':
             runner.jobs[jid].status = 'cancelled'
         if scenario == 'timeout' or scenario == 'retry-timeout' and len(calls) == 2:
             runner.jobs[jid].status, runner.jobs[jid].exit_code = 'timeout', 124
             runner.jobs[jid].events.append({'event': 'watchdog_timeout', 'rule': 'max'})
-        if scenario == 'deadline':
-            service._running_records[jid]['started'] -= 2000
+        if scenario in ('deadline', 'thin-budget'):
+            clock[:] = [time.time() + (2000 if scenario == 'deadline' else 1475)]
         if scenario == 'provider-stop':
             runner.provider_responses[jid] = {'status': 429}
         if scenario == 'stderr-error':
@@ -163,6 +172,8 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     runner = SpawnerRunner(default_cwd=diff_ref['repo'], process_factory=factory)
     monkeypatch.setattr(runner, '_reap_process', reap)
     service = (SpawnService if dispatch == 'base' else spawn_service)(runner=runner, state=tmp_path / 'state')
+    continuation = AsyncMock(wraps=service._continue_writer)
+    monkeypatch.setattr(service, '_continue_writer', continuation)
     monkeypatch.setattr(service, '_route', lambda *a, **kw: plan)
     options = {'leg': chosen.id, 'override_reason': 'hermetic reasoning retry test'} if dispatch == 'explicit' else {}
     card = {'estimate_tokens': 1000, **({'diff_ref': diff_ref} if role == 'review' else {})}
@@ -172,8 +183,7 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     assert service.result(record['run_id']) == record
     assert (record.get('reason') == 'reasoning_output_limit') == terminal
     real = [a for a in record['attempts'] if a['status'] != 'skipped']
-    # The base service's existing watchdog branch records events, not an attempt row.
-    assert len(real) == launches - int(dispatch != 'routed' and scenario in ('timeout', 'retry-timeout'))
+    assert len(real) == launches
     if launches == 2:
         first, second = [json.loads(c[1]['env']['OPENCODE_CONFIG_CONTENT']) for c in calls]
         model = chosen.model.split('/', 1)[1]
@@ -192,6 +202,9 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
         assert record.get('reason') is None
     if terminal:
         assert record['status'] == 'failed' and record['exit_code'] != 0
+        assert continuation.await_count == 0
+        assert all(any(e['event'] == 'opencode_reasoning_exhausted' for e in a['events']) for a in real)
+        assert any(e['event'] == 'reasoning_output_limit' for e in record['events'])
     if scenario == 'cancelled':
         assert record['status'] == 'cancelled'
     if scenario == 'non-review':
@@ -199,3 +212,165 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
                        for e in record['events'])
     if scenario in ('timeout', 'retry-timeout'):
         assert record['status'] == 'timed_out' and record['reason'] == 'timeout'
+
+
+@pytest.fixture
+def launch_leg_case(tmp_path):
+    """Observe the shared launch boundary independently of caller final saves."""
+    import json
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.spawner.runner import JobInfo
+
+    chosen = next(l for l in DEFAULT_LEGS if l.id == 'mimo-v2.6-flash')
+    jobs = [JobInfo(name, 'failed', 'review', chosen.model, role='review', exit_code=1,
+                   events=[dict(event='opencode_reasoning_exhausted', cap_available=True)])
+            for name in ('first', 'second')]
+    calls = []
+    seat = SeatSpawnMixin()
+    seat.runner = SimpleNamespace(_processes={}, _tasks={}, _owned={}, default_cwd=str(tmp_path))
+    seat._running_records = {}
+    seat._path = lambda run_id: tmp_path / 'record.json'
+    seat._save = lambda record: seat._path(record['run_id']).write_text(json.dumps(record))
+    record = dict(run_id='run-test', role='review', status='running', started=100,
+                  attempts=[], events=[], writer_family='original')
+
+    async def spawn(**options):
+        job = jobs[len(calls)]
+        calls.append(options)
+        return job
+
+    seat.runner.spawn = spawn
+    return seat, record, chosen, jobs, calls
+
+
+@pytest.mark.parametrize('scenario', ['no-cap', 'already-retried', 'twice', 'render-refused'])
+def test_reasoning_terminal_saved_at_launch_boundary(launch_leg_case, monkeypatch, scenario):
+    import asyncio
+    import json
+
+    seat, record, chosen, jobs, calls = launch_leg_case
+    monkeypatch.setattr('plangraph.spawner.seat_spawn.time', SimpleNamespace(time=lambda: 101))
+    if scenario == 'no-cap':
+        jobs[0].events[0]['cap_available'] = False
+    if scenario == 'already-retried':
+        record['reasoning_retry'] = 1
+    if scenario == 'render-refused':
+        jobs[1].events = [dict(event='render_refused', reason='reasoning_output_limit: unavailable')]
+    job = asyncio.run(seat._launch_leg(record, chosen, prompt_record=None, watchdog={'max_s': 100}))
+    saved = json.loads(seat._path(record['run_id']).read_text())
+    assert saved['status'] == job.status == 'failed'
+    assert saved['reason'] == 'reasoning_output_limit' and saved['exit_code'] != 0
+    assert len(saved['attempts']) == len(calls) == (2 if scenario in ('twice', 'render-refused') else 1)
+    assert all(a['events'] for a in saved['attempts'])
+    assert saved['events'][-1] == {'event': 'reasoning_output_limit'}
+
+
+@pytest.mark.parametrize('remaining', [0, 0.01, 30, 30.01])
+def test_reasoning_retry_needs_useful_budget(launch_leg_case, monkeypatch, remaining):
+    import asyncio
+
+    seat, record, chosen, jobs, calls = launch_leg_case
+    monkeypatch.setattr('plangraph.spawner.seat_spawn.time',
+                        SimpleNamespace(time=lambda: 200 - remaining))
+    asyncio.run(seat._launch_leg(record, chosen, prompt_record=None, watchdog={'max_s': 100, 'hard_max': True}))
+    assert len(calls) == (2 if remaining > 30 else 1)
+    if remaining > 30:
+        assert calls[1]['watchdog'] == {'max_s': pytest.approx(remaining), 'hard_max': True}
+
+
+@pytest.mark.parametrize('guard', ['timeout', 'timed_out', 'stalled', 'cancelled', 'watchdog'])
+def test_reasoning_retry_respects_late_terminal_mapping(launch_leg_case, monkeypatch, guard):
+    import asyncio
+
+    seat, record, chosen, jobs, calls = launch_leg_case
+    monkeypatch.setattr('plangraph.spawner.seat_spawn.time', SimpleNamespace(time=lambda: 101))
+    if guard == 'watchdog':
+        jobs[0].events.append(dict(event='watchdog_timeout', rule='max'))
+    else:
+        record.update(status=guard, reason=guard)
+    asyncio.run(seat._launch_leg(record, chosen, prompt_record=None, watchdog={'max_s': 100}))
+    assert len(calls) == 1 and record.get('reason') != 'reasoning_output_limit'
+
+
+@pytest.mark.parametrize('guard', ['cancelled', 'timed_out', 'kill_incomplete'])
+def test_retry_render_refusal_cannot_override_terminal_guard(launch_leg_case, monkeypatch, guard):
+    import asyncio
+
+    seat, record, chosen, jobs, calls = launch_leg_case
+    monkeypatch.setattr('plangraph.spawner.seat_spawn.time', SimpleNamespace(time=lambda: 101))
+    jobs[1].events = [dict(event='render_refused', reason='reasoning_output_limit: unavailable')]
+    original = seat.runner.spawn
+
+    async def spawn(**options):
+        job = await original(**options)
+        if options.get('reasoning_cap'):
+            if guard == 'cancelled':
+                seat._path(record['run_id']).with_name('cancelled').touch()
+            elif guard == 'kill_incomplete':
+                job.survivors = [123]
+            else:
+                record.update(status=guard, reason=guard)
+        return job
+
+    seat.runner.spawn = spawn
+    asyncio.run(seat._launch_leg(record, chosen, prompt_record=None, watchdog={'max_s': 100}))
+    assert len(calls) == 2 and record.get('reason') != 'reasoning_output_limit'
+
+
+@pytest.mark.parametrize('exhausted', [False, True])
+def test_cancel_marker_only_changes_exhausted_leg(launch_leg_case, exhausted):
+    import asyncio
+
+    seat, record, chosen, jobs, calls = launch_leg_case
+    if not exhausted:
+        jobs[0].events = []
+    seat._path(record['run_id']).with_name('cancelled').touch()
+    job = asyncio.run(seat._launch_leg(record, chosen, prompt_record=None))
+    assert job.status == ('cancelled' if exhausted else 'failed')
+    assert len(calls) == 1 and record.get('reason') != 'reasoning_output_limit'
+
+
+def test_normal_base_launch_keeps_original_schema(launch_leg_case):
+    import asyncio
+
+    seat, record, chosen, jobs, calls = launch_leg_case
+    record['role'], jobs[0].events = 'orchestrate', []
+    seat.runner._owned['first'] = dict(pid=1, pid_start=2, job_object=True,
+                                     job_name='owned', escapees=[], extra_owned='private')
+    before = dict(record)
+    asyncio.run(seat._launch_leg(record, chosen, prompt_record=None))
+    assert record == dict(before, job_id='first', pid=None, pid_start=2, job_name='owned',
+                          escapees=[], cwd=seat.runner.default_cwd)
+
+
+@pytest.mark.parametrize('cancel', ['outer', 'inner'])
+def test_base_launch_preserves_shield_cancellation(launch_leg_case, cancel):
+    import asyncio
+
+    seat, record, chosen, jobs, calls = launch_leg_case
+    record['role'], jobs[0].events = 'orchestrate', []
+
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def monitor():
+            entered.set()
+            await release.wait()
+
+        task = seat.runner._tasks['first'] = asyncio.create_task(monitor())
+        launch = asyncio.create_task(seat._launch_leg(record, chosen, prompt_record=None))
+        await entered.wait()
+        # A save means launch has reached the monitor await, without timing sleeps.
+        while not seat._path(record['run_id']).exists():
+            await asyncio.sleep(0)
+        (launch if cancel == 'outer' else task).cancel()
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(launch, 1)
+            if cancel == 'outer':
+                assert not task.done()
+        finally:
+            release.set()
+            await asyncio.gather(task, launch, return_exceptions=True)
+
+    asyncio.run(run())

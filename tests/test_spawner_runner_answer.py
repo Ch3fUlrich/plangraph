@@ -291,6 +291,19 @@ def test_later_answer_recovers_reasoning_exhaustion(tmp_path, monkeypatch):
     assert not any(e['event'] == 'opencode_reasoning_exhausted' for e in job.events)
 
 
+@pytest.mark.parametrize('framing', ['plain', 'mixed', 'text'])
+def test_display_answer_prevents_reasoning_retry(tmp_path, monkeypatch, framing):
+    from plangraph.spawner.opencode_answer import answer_text
+    verdict = 'Review complete\nTEST-GAMING: no - searched tests\nVERDICT: ACCEPT'
+    diagnostic = stream(('step_finish', {'reason': 'length', 'tokens': {'output': 0}}))
+    output = (stream(('text', {'text': verdict})) if framing == 'text' else verdict)
+    if framing != 'plain':
+        output = diagnostic + '\n' + output
+    job = _monitor(tmp_path, monkeypatch, output, stderr='Error: output-limit', denied=True)
+    assert job.stdout == answer_text(output) and verdict in job.stdout
+    assert not any(e['event'] == 'opencode_reasoning_exhausted' for e in job.events)
+
+
 @pytest.mark.parametrize('config', [None, [], {'providers': []}, {'providers': {'mimo': None}},
     {'providers': {'mimo': {'package': '@opencode/ai/providers/openai-compatible',
                           'models': {'mimo-v2.6-flash': {'body': []}}}}}])

@@ -323,8 +323,14 @@ class SpawnService(SeatSpawnMixin):
                     job = await self._launch_leg(record, chosen, prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
                         prompt_record=(self._path(record['run_id']).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
+                    if record.get('reason') == 'reasoning_output_limit':
+                        break
                     stop = self.runner.provider_responses.get(job.job_id)
                     if terminal_record(record, job):
+                        record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
+                            served_model=job.served_model, served_family=job.served_family,
+                            served_witness_reason=job.served_witness_reason,
+                            stdout_tail=job.stdout, stderr_tail=job.stderr, events=job.events))
                         break
                     unavailable = fallthrough_reason(self, chosen, job, record)
                     if unavailable:
@@ -351,7 +357,7 @@ class SpawnService(SeatSpawnMixin):
                         stdout_tail=record.get('stdout_tail', '') + job.stdout,
                         stderr_tail=record.get('stderr_tail', '') + job.stderr, events=record.get('events', []) + getattr(job, 'events', []))
                     self._save(record)
-                    if record.get('reason') == 'reasoning_output_limit' or (not stop and not unavailable) or no_fallthrough or dry_run:
+                    if (not stop and not unavailable) or no_fallthrough or dry_run:
                         if not dry_run:
                             await self._continue_writer(record, job.stdout)
                         break

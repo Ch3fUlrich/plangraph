@@ -1099,9 +1099,11 @@ def spawn_service(*args, **kwargs):
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
                         worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
-                        job = await self._launch_leg(record, chosen, prompt=leg_prompt, model_or_combo=chosen.model,
+                        job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
                             role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
-                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
+                            prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
+                        if record.get('reason') == 'reasoning_output_limit':
+                            return
                         if job.survivors:   # kill_incomplete: terminal, no fall-through leg, no second writer
                             record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason='kill_incomplete'))
                             record.update(status='failed', exit_code=1, reason='kill_incomplete', survivors=job.survivors,
@@ -1152,7 +1154,7 @@ def spawn_service(*args, **kwargs):
                             stdout_tail=record.get('stdout_tail', '') + job.stdout,
                             stderr_tail=record.get('stderr_tail', '') + job.stderr,
                             events=record.get('events', []) + getattr(job, 'events', []))
-                        if job.status == 'needs_input' or record.get('reason') == 'reasoning_output_limit' or (not stop and not unavailable) or no_fallthrough or dry_run:
+                        if job.status == 'needs_input' or (not stop and not unavailable) or no_fallthrough or dry_run:
                             if not dry_run and job.status != 'needs_input':
                                 await self._continue_writer(record, job.stdout)
                             return

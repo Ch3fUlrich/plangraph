@@ -9,7 +9,8 @@ def record_steps(job, stdout, stderr, env):
     from .exit_outcome import is_opencode
     if not is_opencode(job) or job.role != 'review':
         return
-    steps, output_limit, saw_text = [], False, False
+    steps, output_limit = [], False
+    saw_text = bool(answer_text(stdout, raw_fallback=False).strip())
     for line in stdout.splitlines():
         try:
             event = json.loads(line)
@@ -18,9 +19,7 @@ def record_steps(job, stdout, stderr, env):
         if not isinstance(event, dict):
             continue
         part = event.get('part')
-        if event.get('type') == 'text' and isinstance(part, dict):
-            saw_text |= bool(str(part.get('text') or '').strip())
-        elif event.get('type') == 'step_finish' and isinstance(part, dict):
+        if event.get('type') == 'step_finish' and isinstance(part, dict):
             tokens = part.get('tokens')
             tokens = tokens if isinstance(tokens, dict) else {}
             usage = {key + '_tokens': value if type(value) is int and value >= 0 else None
@@ -41,6 +40,7 @@ def record_steps(job, stdout, stderr, env):
     if not saw_text and not any((s['output_tokens'] or 0) > 0 for s in steps) and (
             steps and steps[-1]['finish_reason'] == 'length' and steps[-1]['output_tokens'] == 0
             or output_limit):
+        # Probe the first child's isolated config on a copy; only the retry mutates its own env.
         job.events.append(dict(event='opencode_reasoning_exhausted',
                                cap_available=cap_reasoning(dict(env), job.model_or_combo)))
 
@@ -128,8 +128,8 @@ def final_answer(stdout, *, allow_unfinished=False):
     return '\n'.join(pending) if allow_unfinished and pending and not truncated else complete
 
 
-def answer_text(stdout):
-    """Decode display text without treating unframed/unfinished text as completion."""
+def answer_text(stdout, *, raw_fallback=True):
+    """Decode display text; raw_fallback=False excludes diagnostic-only JSON, not plain text."""
     complete = final_answer(stdout)
     if complete is not None:
         return complete
@@ -146,7 +146,7 @@ def answer_text(stdout):
             text = part.get('text')
             if isinstance(text, str):
                 texts.append(text)
-    return '\n'.join(texts) if texts else stdout
+    return '\n'.join(texts) if texts else stdout if raw_fallback else ''
 
 
 def terminated_after_answer(job, stdout, stderr, exit_code):

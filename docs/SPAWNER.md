@@ -82,6 +82,7 @@ Structured `output-limit` errors and the matching OpenCode stderr diagnostic
 add `opencode_output_limit`. These are diagnostic events, not served-model witnesses.
 A final `length` step with output zero, or that error with no text/output,
 adds `opencode_reasoning_exhausted`; later completed output is not retried.
+Display-text decoding also protects plain/mixed stdout answers; diagnostic-only JSON is not answer text.
 The monitor's events reach `record.json` through either dispatch path.
 
 For an OpenCode inline `review`, shared `SeatSpawnMixin._launch_leg` retries
@@ -92,9 +93,11 @@ An already-disabled or unsupported control is unavailable, not an unchanged retr
 The failed attempt and its events stay in the record, with `reasoning_retry=1`
 saved before the retry. Tool denial, fresh job isolation and the original review
 wall deadline remain in force. No new retry loop or provider-health booking is added.
+The retry requires more than 30 seconds of remaining wall budget. Base-service launches keep their original shielded monitor cancellation and ownership fields.
 Repeated zero-output exhaustion, an unavailable cap, or no remaining retry budget
 ends the run `failed` with terminal `reason: reasoning_output_limit`; no spare leg
 or writer continuation runs. Cancellation, timeout and kill-incomplete still win.
+Terminal status, reason, attempts and events are saved at the shared launch boundary before either caller returns; watchdog exits retain an attempt row in both dispatch paths.
 Normal output, nonzero-output truncation and non-review roles retain existing behavior.
 Hermetic coverage is in `tests/test_spawner_review_tools_inline.py` and
 `tests/test_spawner_runner_answer.py`; the live #768 seat is an after-merge operator check.
