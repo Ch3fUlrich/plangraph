@@ -63,15 +63,21 @@ HTTP `POST /v1/close_merged` and MCP `close_merged` take
 `{key, decision_id, families}`. The keeper resolves `merged_on_default`
 Plan-Item commits to their introducing default-ref merge's second parent
 (the PR head), never a later direct follow-up or caller-supplied head.
-Missing or unknown proof refuses `evidence_unverified: merged_on_default_missing`.
+Missing, unknown or failing Git proof refuses `evidence_unverified: merged_on_default_missing`.
 The existing decisions index must verify the D-id; only its DECISION cell
-authorizes, beginning with `GO <head>` (8+ hex prefix, optional backticks,
-not a negated or quoted GO), uniquely bound to an actual merged PR head.
+authorizes, beginning with `GO <head>` (8+ hex prefix, optional backticks) or
+`GO #PR ... GO-HEAD <sha40>`, optionally prefixed by `(HH:MMZ, date -u)`.
+The latter requires exactly one full-length GO-HEAD binding; later review
+narrative is not a verdict. A negated or quoted leading GO never authorizes;
+the head must uniquely match an actual merged PR head.
 
-Standard needs at least one known non-Anthropic seat family; high needs at
+Standard needs at least one known cross-writer-family seat; high needs at
 least two distinct families, each backed by a successful finished `record_run`
 seat. Model aliases normalize. Duplicates and any recorded writer family
 (commit writers, writer model, owner/claimant/delegate and run writers) refuse.
+An Anthropic-family seat counts when no Claude family wrote (D-5529).
+Cards tagged `auth` or `secrets` require two non-Anthropic seat families,
+even if their item has standard tier; an Anthropic seat cannot replace either.
 Checks repeat inside the write lock; changed proof-bearing item/head refuses
 `conflict`, while lease touches do not.
 

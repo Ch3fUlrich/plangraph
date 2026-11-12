@@ -162,8 +162,9 @@ def test_head_in_another_cell_cannot_authorize_close(w):
     (["google"], "coverage", "insufficient_seat_families"),
     (["google", " Google "], "same_family", "duplicate_seat_family"),
     (["google", "gemini-test"], "same_family", "duplicate_seat_family"),
-    (["google", "Anthropic"], "same_family", "anthropic_seat_family"),
-    (["google", "claude-sonnet"], "same_family", "anthropic_seat_family"),
+    (["google", "Anthropic"], "same_family", "writer_seat_family"),
+    (["google", "claude-sonnet"], "same_family", "writer_seat_family"),
+    (["Anthropic", "claude-sonnet"], "same_family", "duplicate_seat_family"),
     (["google", " "], "family_unknown", "seat_family_empty"),
     (["google", "foo"], "family_unknown", "seat_family_unknown"),
     (["google", "gpt-claude"], "family_unknown", "seat_family_unknown"),
@@ -173,6 +174,8 @@ def test_head_in_another_cell_cannot_authorize_close(w):
     ("google", "validation", "families must be a list"),
 ])
 def test_invalid_seat_families_refuse(w, families, code, reason):
+    if reason == "writer_seat_family":
+        w.conn.execute("UPDATE items SET writer_model='claude-sonnet' WHERE key='demo:H'")
     _refused(w, code, reason, key="demo:H", families=families)
 
 

@@ -1,0 +1,1 @@
+- Fix router merged-review closes to accept timestamped GO decisions bound by GO-HEAD sha40, count Anthropic seats only across writer families (D-5529) while retaining two non-Anthropic families for auth/secrets cards, and audit Git discovery failures as named refusals.
