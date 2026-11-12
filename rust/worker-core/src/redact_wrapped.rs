@@ -1,8 +1,32 @@
 //! Join incomplete prefixed tokens, consuming full bodies before testing floors.
 use std::sync::OnceLock;
 
+/// P: join untouched values without crossing or eating a credential name.
+pub(crate) fn join_shielded_assignments(text: &str, rules: &[regex::Regex]) -> String {
+    if text.contains(['\u{e000}', '\u{e001}']) {
+        return text.to_owned();
+    }
+    let mut names = Vec::new();
+    let shielded = rules.iter().fold(text.to_owned(), |out, rule| {
+        rule.replace_all(&out, |m: &regex::Captures| {
+            let index = names.len();
+            names.push(format!("{}{}{}", &m[1], &m[2], &m[3]));
+            format!("\u{e000}{index}\u{e001}{}", &m[4])
+        })
+        .into_owned()
+    });
+    static SHIELD: OnceLock<regex::Regex> = OnceLock::new();
+    SHIELD
+        .get_or_init(|| regex::Regex::new(r"\x{e000}([0-9]+)\x{e001}").unwrap())
+        .replace_all(&redact_wrapped(&shielded), |m: &regex::Captures| {
+            names[m[1].parse::<usize>().unwrap()].clone()
+        })
+        .into_owned()
+}
+
 pub(crate) fn redact_wrapped(text: &str) -> String {
-    let re = super::redact_tokens::prefix_regex();
+    static PREFIX: OnceLock<regex::Regex> = OnceLock::new();
+    let re = PREFIX.get_or_init(prefix_regex);
     static BODIES: OnceLock<Vec<regex::Regex>> = OnceLock::new();
     let bodies = BODIES.get_or_init(|| {
         super::redact_tokens::SPECS
@@ -79,6 +103,15 @@ pub(crate) fn redact_wrapped(text: &str) -> String {
     out
 }
 
+fn prefix_regex() -> regex::Regex {
+    let prefixes = super::redact_tokens::SPECS
+        .iter()
+        .map(|s| format!("({})", s.prefix))
+        .collect::<Vec<_>>()
+        .join("|");
+    regex::Regex::new(&format!(r"\b(?:{prefixes})")).unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,7 +174,7 @@ mod tests {
     #[test]
     fn prefix_capture_indices_identify_specs() {
         assert_eq!(
-            crate::redact_tokens::prefix_regex().captures_len(),
+            prefix_regex().captures_len(),
             crate::redact_tokens::SPECS.len() + 1
         );
     }

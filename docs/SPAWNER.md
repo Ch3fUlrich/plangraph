@@ -32,10 +32,14 @@ directory. Its home fallback is systemd `%h`, independent of the manager's `HOME
 redeploy the service template to apply the guard.
 
 Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; private-key blocks are masked in both modes, and token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
-Python and Rust order: complete/truncated PEM, Bearer, (A) assignments except values
-starting with a catalog prefix after an optional quote, (B) wrapped prefixed tokens,
-(C) full assignments again, then URL userinfo, token catalog and JWT. Source mode
-skips A/C; plain mode masks other values before a join can consume their names.
+Python and Rust order: complete/truncated PEM, Bearer, then plain-mode pre-pass P:
+shield every matched assignment's name/quote/separator with an indexed marker
+`U+E000 + decimal index + U+E001`, leaving values untouched; run the wrapped join,
+then restore the names.
+P is skipped entirely if either shield character already occurs in the text.
+Then main's order runs: full assignments, wrapped prefixed tokens, URL userinfo,
+token catalog and JWT. The shielded join cannot cross/eat a credential name while
+its value is unmasked. Source mode skips P and assignments; its order is unchanged.
 The catalog covers OpenAI, GitHub, Slack, AWS and Google prefixes; wrapped bodies
 share its alphabets/floors and bounded 4096-byte LF/CRLF joins.
 Source spans must start and end on line boundaries; invalid spans (even empty ones) withhold the prompt.

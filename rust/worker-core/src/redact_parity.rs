@@ -111,54 +111,148 @@ fn redact_prefixed_line_before_my_secret_retains_main_assignment_scope() {
 
 #[test]
 fn redact_plain_order_never_reveals_pieces_masked_by_old_order() {
-    fn old_order(text: &str) -> String {
-        // Main's assignment-then-wrapped order; these inputs need no PEM/Bearer/URL rules.
-        let rs = super::patterns();
-        let out = rs[3..5].iter().fold(text.to_owned(), |out, rule| {
-            rule.replace_all(&out, "$1$2$3[REDACTED]").into_owned()
-        });
-        let out = crate::redact_wrapped::redact_wrapped(&out);
-        rs[5..7].iter().fold(out, |out, rule| {
-            rule.replace_all(&out, "[REDACTED]").into_owned()
-        })
-    }
-
     let first = "A9".repeat(7);
     let rest = "B8".repeat(8);
     let value = ["hunter", "2value"].concat();
+    let tiny_body = format!("{}D", "D6".repeat(4));
+    let extra = "C7".repeat(3);
     let short = ["gh", "p_", &first].concat();
-    let full = format!("{short}{}", "C7".repeat(3));
+    let full = format!("{short}{extra}");
+    let tiny = ["gh", "p_", &tiny_body].concat();
+    let full_body = format!("{first}{extra}");
+    let pieces = [&first, &full_body, &extra, &rest, &tiny_body, &value];
     let mut inputs = Vec::new();
+    let mut defects = Vec::new();
     for nl in ["\n", "\r\n"] {
-        inputs.extend([
-            format!("x {short}{nl}API_KEY={value}"),
-            format!("x {short}{nl}PASSWORD={value}"),
-            format!("x {short}{nl}MY_SECRET: {value}"),
+        for line1 in [
+            short.clone(),
+            full.clone(),
+            format!("API_KEY={short}"),
+            format!("API_KEY=\"{short}"),
+            "ordinary".to_owned(),
+        ] {
+            for line2 in [
+                rest.clone(),
+                format!("PASSWORD={tiny}"),
+                format!("PASSWORD=\"{tiny}\""),
+                format!("PASSWORD={value}"),
+                "next line of prose".to_owned(),
+            ] {
+                for line3 in [
+                    String::new(),
+                    format!("{nl}next retained"),
+                    format!("{nl}{rest}"),
+                ] {
+                    inputs.push(format!("{line1}{nl}{line2}{line3}"));
+                }
+            }
+        }
+        defects.extend([
             format!("API_KEY={short}{nl}{rest}{nl}next"),
             format!("API_KEY=\"{short}{nl}{rest}\"{nl}next retained"),
-            format!("API_KEY='{short}{nl}{rest}'{nl}next retained"),
-            format!("API_KEY={short}{nl}PASSWORD={value}"),
-            format!("API_KEY={short}{nl}PASSWORD=[REDACTED]"),
-            format!("API_KEY=abc{nl}next line of prose"),
-            format!("PASSWORD={rest}{nl}next line of prose"),
-            format!("{full}{nl}API_KEY={value}"),
-            format!("{full}{nl}API_KEY=[REDACTED]"),
-            format!("API_KEY={short}{nl}next retained"),
-            format!("API_KEY=\"{short}\"{nl}next retained"),
-            format!("API_KEY=abc {short}{nl}next retained"),
         ]);
     }
-    assert!(inputs.len() >= 12);
-    let mut guarded = [false; 4];
-    for text in inputs {
-        let old = old_order(&text);
-        let new = redact(&text);
-        for (i, piece) in [&first, &rest, &full, &value].into_iter().enumerate() {
+    assert!(inputs.len() >= 40);
+    let mut guarded = [false; 6];
+    for text in inputs.iter().chain(&defects) {
+        let old = main_order(text);
+        let new = redact(text);
+        for (i, piece) in pieces.into_iter().enumerate() {
             if text.contains(piece) && !old.contains(piece) {
                 guarded[i] = true;
                 assert!(!new.contains(piece), "{text:?}: old {old:?}, new {new:?}");
             }
         }
+        if defects.contains(text) {
+            assert!(!new.contains(&rest), "{text:?}: {new:?}");
+        }
     }
     assert!(guarded.into_iter().all(|tested| tested));
+}
+
+fn main_order(text: &str) -> String {
+    // Main's primitives/order, without P; inputs need no PEM/Bearer/blob rules.
+    let rs = super::patterns();
+    let out = rs[3..5].iter().fold(text.to_owned(), |out, rule| {
+        rule.replace_all(&out, "$1$2$3[REDACTED]").into_owned()
+    });
+    let out = crate::redact_wrapped::redact_wrapped(&out);
+    let out = crate::redact_tokens::redact_url_userinfo(&out);
+    rs[5..8].iter().fold(out, |out, rule| {
+        rule.replace_all(&out, "[REDACTED]").into_owned()
+    })
+}
+
+#[test]
+fn redact_shield_markers_skip_prepass_and_equal_main() {
+    for marker in ["\u{e000}", "\u{e001}", "\u{e000}0\u{e001}"] {
+        for nl in ["\n", "\r\n"] {
+            let text = format!(
+                "{marker} API_KEY={}{}{nl}{}{nl}next",
+                ["gh", "p_"].concat(),
+                "A9".repeat(7),
+                "B8".repeat(8)
+            );
+            assert_eq!(
+                crate::redact_wrapped::join_shielded_assignments(&text, &super::patterns()[3..5]),
+                text
+            );
+            assert_eq!(redact(&text), main_order(&text));
+        }
+    }
+}
+
+#[test]
+fn redact_shielded_join_preserves_all_names_separators_and_values() {
+    let join = |text: &str| {
+        crate::redact_wrapped::join_shielded_assignments(text, &super::patterns()[3..5])
+    };
+    let text = (0..12)
+        .map(|i| format!("\"API_KEY\" : value{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(join(&text), text);
+    // Exercise both assignment regexes; values are untouched in P, including 4b's closers.
+    for value in [
+        ")abc",
+        "]abc",
+        "}abc",
+        "[REDACTED]=[REDACTED]",
+        "\"a\";retained",
+    ] {
+        let text = format!("API_KEY=\u{a0}{value}\nPASSWORD=plain");
+        assert_eq!(join(&text), text);
+    }
+    for nl in ["\n", "\r\n"] {
+        let text = format!(
+            "API_KEY={}{}{nl}{}{nl}next retained",
+            ["gh", "p_"].concat(),
+            "A9".repeat(7),
+            "B8".repeat(8)
+        );
+        assert_eq!(join(&text), format!("API_KEY=[REDACTED]{nl}next retained"));
+    }
+}
+
+#[test]
+fn redact_earlier_short_token_cannot_expose_below_floor_assignment() {
+    let short = ["gh", "p_", &"A9".repeat(7)].concat();
+    let tiny_body = format!("{}D", "D6".repeat(4));
+    let tiny = ["gh", "p_", &tiny_body].concat();
+    for nl in ["\n", "\r\n"] {
+        for quote in ["", "\"", "'"] {
+            for (lead, name, ending) in [
+                ("x ", "API_KEY", String::new()),
+                ("x ", "API_KEY", format!("{nl}end")),
+                ("", "PASSWORD", String::new()),
+            ] {
+                let text = format!("{lead}{short}{nl}{name}={quote}{tiny}{quote}{ending}");
+                let expected = format!("{lead}[REDACTED]=[REDACTED]{ending}");
+                // Rust's main assignment rule drops value quotes; Python retains them.
+                assert_eq!(redact(&text), expected);
+                assert_eq!(redact(&text), main_order(&text));
+                assert!(!redact(&text).contains(&tiny_body));
+            }
+        }
+    }
 }

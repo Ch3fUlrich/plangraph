@@ -72,32 +72,6 @@ pub(crate) fn pattern() -> String {
         .join("|")
 }
 
-pub(crate) fn prefix_regex() -> &'static regex::Regex {
-    static PREFIX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    PREFIX.get_or_init(|| {
-        let prefixes = SPECS
-            .iter()
-            .map(|s| format!("({})", s.prefix))
-            .collect::<Vec<_>>()
-            .join("|");
-        regex::Regex::new(&format!(r"\b(?:{prefixes})")).unwrap()
-    })
-}
-
-pub(crate) fn redact_assignments(text: &str, rules: &[regex::Regex], skip_tokens: bool) -> String {
-    rules.iter().fold(text.to_owned(), |out, rule| {
-        rule.replace_all(&out, |m: &regex::Captures| {
-            let value = m[4].strip_prefix(['"', '\'']).unwrap_or(&m[4]);
-            if skip_tokens && prefix_regex().find(value).is_some_and(|p| p.start() == 0) {
-                m[0].to_owned()
-            } else {
-                format!("{}{}{}{}", &m[1], &m[2], &m[3], crate::redact::REDACTED)
-            }
-        })
-        .into_owned()
-    })
-}
-
 pub(crate) fn redact_url_userinfo(text: &str) -> String {
     static URL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     URL.get_or_init(|| {

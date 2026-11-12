@@ -60,40 +60,69 @@ def test_prefixed_line_before_my_secret_retains_main_assignment_scope():
         assert redact(text) == 'x [REDACTED]: ' + value
 
 
-def test_plain_order_never_reveals_pieces_masked_by_old_order():
-    def old_order(text):
-        # Main's assignment-then-wrapped order; these inputs need no PEM/Bearer/URL rules.
-        text = env_redact._redact_assignments(text)
-        return JWT.sub('[REDACTED]', TOKENS.sub('[REDACTED]', redact_wrapped(text)))
+def main_order(text):
+    """Main's primitives/order, without P; inputs need no PEM/Bearer rules."""
+    text = redact_wrapped(env_redact._redact_assignments(text))
+    text = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',
+                  r'\1[REDACTED]\2', text)
+    return JWT.sub('[REDACTED]', TOKENS.sub('[REDACTED]', text))
 
+
+def test_plain_order_never_reveals_pieces_masked_by_old_order():
     first, rest, value = 'A9' * 7, 'B8' * 8, 'hunter' + '2value'
+    tiny_body, extra = 'D6' * 4 + 'D', 'C7' * 3
     short = 'gh' + 'p_' + first
-    full = short + 'C7' * 3
-    inputs = []
+    full, tiny = short + extra, 'gh' + 'p_' + tiny_body
+    pieces = (first, first + extra, extra, rest, tiny_body, value)
+    inputs, defects = [], []
     for nl in ('\n', '\r\n'):
-        inputs.extend([
-            'x ' + short + nl + 'API_KEY=' + value,
-            'x ' + short + nl + 'PASSWORD=' + value,
-            'x ' + short + nl + 'MY_SECRET: ' + value,
-            'API_KEY=' + short + nl + rest + nl + 'next',
-            'API_KEY="' + short + nl + rest + '"' + nl + 'next retained',
-            "API_KEY='" + short + nl + rest + "'" + nl + 'next retained',
-            'API_KEY=' + short + nl + 'PASSWORD=' + value,
-            'API_KEY=' + short + nl + 'PASSWORD=[REDACTED]',
-            'API_KEY=abc' + nl + 'next line of prose',
-            'PASSWORD=' + rest + nl + 'next line of prose',
-            full + nl + 'API_KEY=' + value,
-            full + nl + 'API_KEY=[REDACTED]',
-            'API_KEY=' + short + nl + 'next retained',
-            'API_KEY="' + short + '"' + nl + 'next retained',
-            'API_KEY=abc ' + short + nl + 'next retained',
-        ])
-    assert len(inputs) >= 12
+        for line1 in (short, full, 'API_KEY=' + short, 'API_KEY="' + short, 'ordinary'):
+            for line2 in (rest, 'PASSWORD=' + tiny, 'PASSWORD="' + tiny + '"',
+                          'PASSWORD=' + value, 'next line of prose'):
+                for line3 in ('', nl + 'next retained', nl + rest):
+                    inputs.append(line1 + nl + line2 + line3)
+        defects.extend(['API_KEY=' + short + nl + rest + nl + 'next',
+                        'API_KEY="' + short + nl + rest + '"' + nl + 'next retained'])
+    assert len(inputs) >= 40
     guarded = set()
-    for text in inputs:
-        old, new = old_order(text), redact(text)
-        for piece in (first, rest, full, value):
+    for text in inputs + defects:
+        old, new = main_order(text), redact(text)
+        for piece in pieces:
             if piece in text and piece not in old:
                 guarded.add(piece)
                 assert piece not in new, (text, old, new)
-    assert guarded == {first, rest, full, value}
+        if text in defects:
+            assert rest not in new, (text, new)
+    assert guarded == set(pieces)
+
+
+@pytest.mark.parametrize('marker', ['\ue000', '\ue001', '\ue0000\ue001'])
+@pytest.mark.parametrize('nl', ['\n', '\r\n'])
+def test_shield_markers_skip_prepass_and_equal_main(marker, nl):
+    first, rest = 'A9' * 7, 'B8' * 8
+    text = marker + ' API_KEY=' + 'gh' + 'p_' + first + nl + rest + nl + 'next'
+    assert env_redact.join_shielded_assignments(text, env_redact._ASSIGNMENT) == text
+    assert redact(text) == main_order(text)
+
+
+def test_shielded_join_preserves_all_names_separators_and_values():
+    # Distinct indices (including two digits), Unicode and quoted names restore exactly.
+    text = '\n'.join('"API_KEY" : value' + str(i) for i in range(12))
+    assert env_redact.join_shielded_assignments(text, env_redact._ASSIGNMENT) == text
+    for nl in ('\n', '\r\n'):
+        text = 'API_KEY=' + 'gh' + 'p_' + 'A9' * 7 + nl + 'B8' * 8 + nl + 'next retained'
+        assert env_redact.join_shielded_assignments(text, env_redact._ASSIGNMENT) == (
+            'API_KEY=[REDACTED]' + nl + 'next retained')
+
+
+@pytest.mark.parametrize('nl', ['\n', '\r\n'])
+@pytest.mark.parametrize('quote', ['', '"', "'"])
+def test_earlier_short_token_cannot_expose_below_floor_assignment(nl, quote):
+    first, tiny_body = 'A9' * 7, 'D6' * 4 + 'D'
+    short, tiny = 'gh' + 'p_' + first, 'gh' + 'p_' + tiny_body
+    for lead, name, ending in [('x ', 'API_KEY', ''), ('x ', 'API_KEY', nl + 'end'),
+                               ('', 'PASSWORD', '')]:
+        text = lead + short + nl + name + '=' + quote + tiny + quote + ending
+        expected = lead + '[REDACTED]=' + quote + '[REDACTED]' + quote + ending
+        assert redact(text) == main_order(text) == expected
+        assert tiny_body not in env_redact.redact_output(text)

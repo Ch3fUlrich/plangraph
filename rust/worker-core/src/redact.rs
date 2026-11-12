@@ -32,8 +32,8 @@ fn patterns() -> &'static [regex::Regex] {
             //     only, never CR/LF, so it never crosses a newline. Complete
             //     quoted values are preferred. Both they and the placeholder
             //     consume only a GLUED tail G = [^\s,;"'}\])&]* — directly
-            //     attached (placeholders atomic), stopping at whitespace, comma, quotes,
-            //     `&`, or a closing delimiter — so the rule is idempotent.
+            //     attached (placeholders atomic), stopping at whitespace, comma,
+            //     semicolon, quotes, `&`, or a closing delimiter — so the rule is idempotent.
             //     An unquoted value may not start with `}`, `]`, `)`, or `&`
             //     after either separator. An unterminated quote falls back to
             //     the rest of the line (no closing delimiter semantics). A
@@ -81,18 +81,19 @@ fn redact_inner(text: &str, assignments: bool) -> String {
     let out = rs[0].replace_all(text, REDACTED).into_owned();
     let out = rs[1].replace_all(&out, REDACTED).into_owned();
     let out = rs[2].replace_all(&out, "Bearer [REDACTED]").into_owned();
-    let assignments = if assignments { &rs[3..5] } else { &[] };
-    // A protects names; only catalog-prefixed values wait for the join (B).
-    let out = super::redact_tokens::redact_assignments(&out, assignments, true);
+    let out = if assignments {
+        let out = super::redact_wrapped::join_shielded_assignments(&out, &rs[3..5]);
+        let out = rs[3].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
+        rs[4].replace_all(&out, "$1$2$3[REDACTED]").into_owned()
+    } else {
+        out
+    };
     let out = super::redact_wrapped::redact_wrapped(&out);
-    // C also masks deferred values whose join stayed below its floor.
-    let out = super::redact_tokens::redact_assignments(&out, assignments, false);
     let out = super::redact_tokens::redact_url_userinfo(&out);
     let out = rs[5].replace_all(&out, REDACTED).into_owned();
     let out = rs[6].replace_all(&out, REDACTED).into_owned();
     let out = rs[7].replace_all(&out, REDACTED).into_owned();
-    // 8. Long blobs — but only runs mixing digits and letters, so plain long
-    // words and letter-only paths survive.
+    // 8. Long blobs must mix digits and letters; plain words and paths survive.
     rs[8]
         .replace_all(&out, |m: &regex::Captures| {
             let t = m.get(0).unwrap().as_str();
