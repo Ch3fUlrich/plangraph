@@ -9,12 +9,26 @@ METRICS = (
     "cpu_percent", "ram_available_bytes", "gpu_percent",
     "network_rx_bytes_per_s", "network_tx_bytes_per_s", "disk_free_bytes",
 )
+PG_SPAWND_MISSING = 'pg-spawnd binary missing (build the release helper)'
+
+
+def _projection_binary():
+    import shutil
+
+    release = Path(__file__).resolve().parents[2] / 'rust/target/release'
+    for name in ('pg-spawnd', 'pg-spawnd.exe'):
+        binary = release / name
+        if binary.is_file():
+            return str(binary)
+    binary = shutil.which('pg-spawnd')
+    if binary is None:
+        raise RuntimeError(PG_SPAWND_MISSING)
+    return binary
 
 
 def build_fleet(registry, samples=None, runs=None):
     """Project persisted inputs through the spawner's private Rust subcommand."""
     import json
-    import shutil
     import subprocess
 
     def finite(value):
@@ -26,8 +40,7 @@ def build_fleet(registry, samples=None, runs=None):
             return [finite(item) for item in value]
         return value
 
-    binary = Path(__file__).resolve().parents[2] / 'rust/target/release/pg-spawnd'
-    binary = str(binary) if binary.is_file() else (shutil.which('pg-spawnd') or 'pg-spawnd')
+    binary = _projection_binary()
     try:
         # Opaque class/caps metadata stays in Python, with its original types.
         registry = list(registry)
@@ -51,13 +64,13 @@ def build_fleet(registry, samples=None, runs=None):
                  'samples', 'running_agents')} for row in data['hosts']]
         for row in rows:
             row['sample'] = {key: row['sample'][key] for key in METRICS}
-        metadata = {row.get('id') or row.get('host_id') or row.get('host'): row
-                    for row in registry}
-        for row in rows:
-            original = metadata[row['host_id']]
+        for row, projected in zip(rows, data['hosts']):
+            original = registry[projected['registry_index']]
             row.update({key: original.get(key) for key in ('class', 'caps')})
         return dict(hosts=rows, running_agents=data['running_agents'])
-    except (OSError, subprocess.TimeoutExpired, KeyError, TypeError,
+    except FileNotFoundError:
+        raise RuntimeError(PG_SPAWND_MISSING) from None
+    except (OSError, subprocess.TimeoutExpired, KeyError, IndexError, TypeError,
             AttributeError, json.JSONDecodeError, UnicodeError):
         raise RuntimeError('fleet projection failed') from None
 

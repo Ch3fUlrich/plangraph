@@ -39,9 +39,17 @@ Old snapshots without `fleet` retain the unavailable message. The SQLite-to-
 snapshot-to-page integration test exercises this path. Registry aliases shared
 by different hosts (including canonical ids) are refused, never last-wins.
 Aliases must be a list or tuple of nonempty strings; other containers are refused.
-The pytest CI lanes build the release `pg-spawnd` helper using the shared Cargo
-cache; projection tests never skip when it is missing. The private protocol
-returns fixed registry validation errors in JSON, not subprocess stderr. Opaque
-registry class/caps metadata remains in Python without JSON coercion.
+The helper lookup checks `rust/target/release/pg-spawnd`, then
+`rust/target/release/pg-spawnd.exe`, then `pg-spawnd` on PATH. A missing binary
+makes `build_fleet` fail closed with `RuntimeError` and the named reason
+`pg-spawnd binary missing (build the release helper)`. Tests that need the binary
+use one shared helper: when `CI` is set (as in GitHub Actions), they fail with
+that same reason; outside CI, they skip with that reason. This includes fleet
+bridge tests. The two pytest CI lanes already build the release helper using
+the shared Cargo cache; any other lane invoking these tests must also provide it.
+The private protocol returns fixed registry validation errors in JSON, not
+subprocess stderr. Rust alone selects and validates host ids, including malformed
+and duplicate keys (`ValueError`); its private registry indices let Python attach
+opaque class/caps metadata without reselecting ids or JSON-coercing the metadata.
 The fleet projection port is complete: only serialization, opaque metadata and
 persisted-input loading remain in Python, so its new-code allowlist waiver is removed.

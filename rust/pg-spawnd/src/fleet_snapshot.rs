@@ -24,7 +24,12 @@ fn metric(v: &Value, key: &str) -> Value {
 pub(crate) fn build(data: &Value) -> Result<Value, String> {
     let mut hosts = BTreeMap::new();
     let mut aliases = HashMap::new();
-    for row in data["registry"].as_array().ok_or("invalid registry")? {
+    for (index, row) in data["registry"]
+        .as_array()
+        .ok_or("invalid registry")?
+        .iter()
+        .enumerate()
+    {
         let host = ["id", "host_id", "host"]
             .iter()
             .map(|k| &row[k])
@@ -34,7 +39,7 @@ pub(crate) fn build(data: &Value) -> Result<Value, String> {
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .ok_or("registry host needs an id")?;
-        if hosts.insert(host, row).is_some() {
+        if hosts.insert(host, (index, row)).is_some() {
             return Err("duplicate registry host".into());
         }
         let extra = match row.get("aliases") {
@@ -93,11 +98,12 @@ pub(crate) fn build(data: &Value) -> Result<Value, String> {
             samples.insert(*host, &pair[1]);
         }
     }
-    let rows: Vec<_> = hosts.into_iter().map(|(host, row)| {
+    let rows: Vec<_> = hosts.into_iter().map(|(host, (index, row))| {
         let sample = samples.get(host).copied().unwrap_or(&Value::Null);
         let metrics: serde_json::Map<String, Value> = METRICS.iter()
             .map(|key| (key.to_string(), metric(&sample[key], key))).collect();
-        json!({"host_id":host, "class":row["class"], "caps":row["caps"], "sample":metrics,
+        json!({"host_id":host, "registry_index":index,
+            "class":row["class"], "caps":row["caps"], "sample":metrics,
             "samples":if sample.is_object() {"available"} else {"unavailable"},
             "running_agents":if known {json!(counts.get(host).copied().unwrap_or(0))} else {Value::Null}})
     }).collect();

@@ -1,5 +1,26 @@
 use super::*;
 #[test]
+fn registry_indices_follow_rust_selected_ids() {
+    let result = build(&json!({"registry":[{"host":"z"},{"id":"a","host_id":"z"}]})).unwrap();
+    assert_eq!(result["hosts"][0]["host_id"], "a");
+    assert_eq!(result["hosts"][0]["registry_index"], 1);
+    assert_eq!(result["hosts"][1]["host_id"], "z");
+    assert_eq!(result["hosts"][1]["registry_index"], 0);
+}
+#[test]
+fn invalid_and_duplicate_registry_keys_are_validation_errors() {
+    for id in [json!(true), json!([]), json!({}), json!(1)] {
+        assert_eq!(
+            build(&json!({"registry":[{"id":id,"host_id":"a"}]})).unwrap_err(),
+            "registry host needs an id"
+        );
+    }
+    assert_eq!(
+        build(&json!({"registry":[{"id":"a"},{"host_id":"a"}]})).unwrap_err(),
+        "duplicate registry host"
+    );
+}
+#[test]
 fn zero_ids_fall_back() {
     for id in [json!(0), json!(0.0), json!(-0.0), json!(false), json!("")] {
         let result = build(&json!({"registry":[{"id":id,"host_id":"a"}]})).unwrap();
