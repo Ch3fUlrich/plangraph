@@ -147,5 +147,7 @@ checkpointed independently. Each standing active identity is suppressed until
 recovery or a new identity; delivery is at-least-once across a crash during acknowledgement.
 Systemd prevents concurrent ticks of this service; do not run manual concurrent
 instances against its state directory. Routing advances despite pending push;
-the queue retains its head and newest 255 events, reporting overflow on stderr. Collectors, freshness and host integration
+the queue retains its head and newest 255 events, reporting overflow on stderr.
+
+## Collectors, freshness and host integration
 are deployment prerequisites, not supplied by this checker.
