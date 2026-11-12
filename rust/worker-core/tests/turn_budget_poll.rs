@@ -25,6 +25,9 @@ fn sleep_polling_shapes_are_refused() {
         "sleep 2\ngh pr checks 42",
         "bash -c 'while true; do sleep 1; git status; done'",
         "while true; do /bin/sleep 1; done",
+        "while ! test -f \"$ready\"; do sleep 1; done",
+        "until [ -f \"$ready\" ]; do sleep 1; done",
+        "sleep 1; cat \"$status\"",
     ] {
         let line = handle(&event(command, "PreToolUse"), &c, 1).unwrap();
         assert!(line.contains("run_in_background=true"), "{command}: {line}");

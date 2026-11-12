@@ -82,6 +82,8 @@ cat/head/tail/grep/rg/ls/stat/test/ps. Recognised mutations include file operati
 shell syntax, variable expansion, aliases, heredocs and arbitrary custom checks
 are not a sandbox: they fail open rather than being guessed read-only. The
 existing security-focused `bash_guard.py` remains independent and unchanged.
+Simple variable arguments do not hide an otherwise recognised sleep loop or
+sleep-then-read chain; command substitutions remain outside this narrow parser.
 
 Use `python -m plangraph.spawner.cli wait <run_id> --timeout 3600` with Bash
 `run_in_background=true`: one command that exits, then its completion notification.

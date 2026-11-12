@@ -11,6 +11,7 @@ struct Shell {
     commands: Vec<Vec<String>>,
     looped: bool,
     writes: bool,
+    dynamic: bool,
 }
 
 /// Quoted text stays a word; comments and whitespace never become commands.
@@ -22,10 +23,14 @@ fn parse(s: &str) -> Option<Shell> {
     let mut chars = s.chars().peekable();
     let mut quote = None;
     let mut writes = false;
+    let mut dynamic = false;
     while let Some(c) = chars.next() {
         if let Some(q) = quote {
             if q == '"' && matches!(c, '$' | '`') {
-                return None;
+                if c == '`' || chars.peek() == Some(&'(') {
+                    return None;
+                }
+                dynamic = true;
             }
             if c == q {
                 quote = None;
@@ -39,7 +44,14 @@ fn parse(s: &str) -> Option<Shell> {
         match c {
             // No expansion or heredoc modelling: do not mistake their contents
             // for a known read-only check or a state-changing command.
-            '$' | '`' | '<' => return None,
+            '`' | '<' => return None,
+            '$' => {
+                if chars.peek() == Some(&'(') {
+                    return None;
+                }
+                dynamic = true;
+                word.push(c);
+            }
             '\'' | '"' => quote = Some(c),
             '\\' => word.push(chars.next()?),
             '#' if word.is_empty() => {
@@ -96,6 +108,7 @@ fn parse(s: &str) -> Option<Shell> {
         commands,
         looped,
         writes,
+        dynamic,
     })
 }
 
@@ -163,7 +176,10 @@ pub fn read_only(command: &str) -> bool {
     let Some(shell) = parse(command) else {
         return false;
     };
-    !shell.writes && !shell.commands.is_empty() && shell.commands.iter().all(|c| read_command(c))
+    !shell.writes
+        && !shell.dynamic
+        && !shell.commands.is_empty()
+        && shell.commands.iter().all(|c| read_command(c))
 }
 
 pub fn fingerprint(command: &str, cwd: &str) -> String {
@@ -193,6 +209,9 @@ pub fn changed_state(payload: &Value, command: Option<&str>) -> bool {
     let Some(shell) = command.and_then(parse) else {
         return false;
     };
+    if shell.dynamic {
+        return false;
+    }
     shell.writes
         || shell.commands.iter().any(|c| {
             matches!(
