@@ -1,5 +1,19 @@
 # Plangraph Spawner & Model Routing Architecture
 
+### QUOTA-PAUSE-GATE
+
+The usage owner creates `quota-pause` in the spawner state directory at usage
+>=95% and unlinks it at reset. Presence alone (including a dangling symlink)
+pauses admission: there is no second meter, expiry or automatic clearing.
+State is explicit when supplied, otherwise `PLANGRAPH_SPAWN_STATE`, then
+`$XDG_STATE_HOME/plangraph` (default `~/.local/state/plangraph`).
+Session `launch` and `relaunch` refuse with `quota pause` before invoking the
+action, without a model filter. Leg-aware checks in launch-spec, pre-launch
+probing and seat prompt assembly refuse only when the leg's `id` or `model`
+starts with `claude-`; other legs are unaffected. `basic-analysis` is the sole
+exempt role, also for session names with a trailing four-digit suffix such as
+`basic-analysis-0001`. Dry runs do not bypass the quota check.
+
 ### Windows prompt delivery
 
 Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
