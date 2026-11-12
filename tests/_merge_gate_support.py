@@ -1,4 +1,4 @@
-"""Shared shadow-gate evidence and scoped effect guards, registered by conftest."""
+"""Shared shadow-gate evidence and explicitly requested effect-guard fixtures."""
 import builtins
 import copy
 import datetime
@@ -14,6 +14,19 @@ import pytest
 SHA = "a" * 40
 
 
+@pytest.fixture
+def core(tools_importable):
+    import merge_gate_core
+    return merge_gate_core
+
+
+@pytest.fixture
+def merge_gate(core):
+    import merge_gate
+    return merge_gate
+
+
+@pytest.fixture
 def facts():
     required = ["ci-gate", "select", "scrub", "file-size", "new-code-lang",
                 "changelog-docs", "pytest", "pytest-postgres", "rust", "rust-worker", "rust-spike"]
@@ -28,15 +41,19 @@ def facts():
                 preflight_present=True, main_changed_production_paths=[])
 
 
-def refuse(core, facts, code):
-    before = copy.deepcopy(facts)
-    result = core.decide(facts)
-    assert result.outcome == "REFUSE" and result.code == code
-    assert result.detail and len(result.detail.splitlines()) == 1
-    assert facts == before
+@pytest.fixture
+def refuse(core):
+    def check(facts, code):
+        before = copy.deepcopy(facts)
+        result = core.decide(facts)
+        assert result.outcome == "REFUSE" and result.code == code
+        assert result.detail and len(result.detail.splitlines()) == 1
+        assert facts == before
+    return check
 
 
-def no_effects(monkeypatch, core, merge_gate):
+@pytest.fixture
+def merge_gate_guards(monkeypatch, core, merge_gate):
     def forbidden(*args, **kwargs):
         pytest.fail("shadow decision attempted an external effect")
     for module, names in (

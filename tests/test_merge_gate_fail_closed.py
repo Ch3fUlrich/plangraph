@@ -13,6 +13,10 @@ import urllib.request
 
 import pytest
 
+from _merge_gate_support import core, facts, merge_gate, merge_gate_guards, refuse
+
+pytestmark = pytest.mark.usefixtures("merge_gate_guards")
+
 
 @pytest.mark.parametrize("scope,code", [
     (None, "ci_pending"), ("ci_checks", "ci_pending"), ("seats", "seat_missing")])

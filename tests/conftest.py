@@ -375,34 +375,3 @@ def fake_ownership(monkeypatch):
     born = real_stat(os.getpid())[4]   # only processes started after this test session exist for the stubbed view
     monkeypatch.setattr(proc_kill, '_stat', lambda pid, root='/proc': (lambda st: st if st and st[4] >= born else None)(real_stat(pid, root)))
     monkeypatch.setattr(SpawnerRunner, 'identity_provider', staticmethod(lambda pid, **k: real_identity(pid, **k) or 'fake-token'))
-
-import _merge_gate_support
-
-
-@pytest.fixture
-def core(tools_importable):
-    import merge_gate_core
-    return merge_gate_core
-
-
-@pytest.fixture
-def merge_gate(core):
-    import merge_gate
-    return merge_gate
-
-
-@pytest.fixture
-def facts():
-    return _merge_gate_support.facts()
-
-
-@pytest.fixture
-def refuse(core):
-    return lambda facts, code: _merge_gate_support.refuse(core, facts, code)
-
-
-@pytest.fixture(autouse=True)
-def no_effects(request, monkeypatch):
-    if request.node.path.name in ("test_merge_gate.py", "test_merge_gate_fail_closed.py"):
-        _merge_gate_support.no_effects(monkeypatch, request.getfixturevalue("core"),
-                                       request.getfixturevalue("merge_gate"))

@@ -2,10 +2,20 @@
 import copy
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
+from _merge_gate_support import core, facts, merge_gate, merge_gate_guards, refuse
+
+pytestmark = pytest.mark.usefixtures("merge_gate_guards")
+
 SHA = "a" * 40
+
+
+def test_explicit_fixture_refuses_guarded_call(merge_gate_guards):
+    with pytest.raises(pytest.fail.Exception, match="external effect"):
+        subprocess.run([])
 
 
 def test_go(facts, core):
