@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from plangraph.routing_support.claude_seat import claude_access_args
-from plangraph.routing_support.review_mode import leg_tool_mode, prompt_only_command, review_prompt
+from plangraph.routing_support.review_mode import is_prompt_only_command, leg_tool_mode, prompt_only_command, review_prompt
 
 #: Environment variable naming the model gateway base URL (see ``gateway_url``).
 GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
@@ -357,7 +357,7 @@ def launch_stdin_payload(cmd, prompt, exe, *, is_nt=False):
             return (json.dumps({'event': 'user', 'message': {'role': 'user', 'content': prompt}}, ensure_ascii=False) + '\n').encode('utf-8')
         cmd.extend(['--input-format', 'text'])
         return prompt.encode('utf-8')
-    return prompt.encode('utf-8') if cmd[0] in STDIN_PROMPT_HARNESSES else None
+    return prompt.encode('utf-8') if cmd[0] in STDIN_PROMPT_HARNESSES or is_prompt_only_command(cmd) else None
 
 
 def build_command(

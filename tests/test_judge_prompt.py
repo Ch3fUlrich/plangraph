@@ -1,6 +1,8 @@
 """Offline fixtures for complete findings and explicit file cuts."""
 import subprocess
 
+import pytest
+
 from tools.judge_prompt import build_judge_prompt, cited_paths, collect_files, main
 
 
@@ -72,6 +74,26 @@ def test_judge_seat_mode():
     assert "Read" not in prompt and "Grep" not in prompt
     tools = build_judge_prompt("F1", "diff", {}, {}, tool_mode="tools")
     assert "Read/Grep/Glob" in tools
+
+
+@pytest.mark.parametrize(("mode", "capability"), [
+    ("tools", "You may Read/Grep/Glob for cut files; deleted files may remain unavailable."),
+    ("inline-only", "Read only the spawner-inlined diff. No tools are available."),
+    ("prompt-only", "Cut files are unavailable; judge only supplied evidence. No tools are available."),
+])
+def test_capability_line_per_seat_mode(mode, capability):
+    prompt = build_judge_prompt("F1", "diff", {}, {}, tool_mode=mode)
+    assert prompt.splitlines()[1] == capability
+
+
+def test_token_probe_documentation_agrees():
+    from pathlib import Path
+
+    for path in ("docs/lean-review-harness.md", "changelog.d/REVIEW-HARNESS-LEAN.md"):
+        text = " ".join(Path(path).read_text().split())
+        assert "Live startup-token savings: not measured." in text
+        assert "Open step: three-run before/after token probe with recorded run IDs" in text
+        assert "measured at least 25k" not in text
 
 
 def test_citations_and_priority():

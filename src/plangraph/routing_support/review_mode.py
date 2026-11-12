@@ -1,6 +1,11 @@
 """Review mode lookup and standalone OpenCode prompt-only isolation."""
+import atexit
 import json
 import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 
 
 def inline_config():
@@ -35,7 +40,8 @@ def prompt_only_command(cmd):
     """One model step: OpenCode removes tools on the final step (V2 agents).
 
     `run` accepts a message, not interactive slash commands. Deny MCP, skills
-    and plugins regardless of discovered project configuration as well.
+    and plugins regardless of discovered project configuration as well. Carry
+    the overlay in a private file, never argv; the launcher retains prompt stdin.
     """
     config = inline_config()
     if config is None:
@@ -48,5 +54,31 @@ def prompt_only_command(cmd):
     config.setdefault("policies", []).extend(
         {"action": action, "resource": "*", "effect": "deny"}
         for action in ("tool.use", "mcp.use", "skill.use", "plugin.use"))
-    return ["env", "OPENCODE_CONFIG_CONTENT=" + json.dumps(config),
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".json",
+                                     prefix="lean-review-", delete=False) as stream:
+        path = Path(stream.name)
+        atexit.register(path.unlink, missing_ok=True)  # Also clean unlaunched/dry-run commands.
+        json.dump(config, stream)
+    return [sys.executable, str(Path(__file__).resolve()), str(path),
             *cmd, "--agent", "lean-review"]
+
+
+def is_prompt_only_command(cmd):
+    """Recognize our launcher so callers deliver review evidence through stdin."""
+    return len(cmd) > 3 and cmd[:2] == [sys.executable, str(Path(__file__).resolve())]
+
+
+def main(argv=None):
+    """Run with file-backed config, inheriting stdio and removing the file on exit."""
+    path, *cmd = sys.argv[1:] if argv is None else argv
+    env = dict(os.environ)
+    env.pop("OPENCODE_CONFIG_CONTENT", None)
+    env["OPENCODE_CONFIG"] = path
+    try:
+        return subprocess.run(cmd, env=env).returncode
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

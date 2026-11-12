@@ -1,6 +1,7 @@
 """Hermetic argv contracts for the lean Claude review harness."""
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -62,13 +63,16 @@ def test_clients_explicit_mode_overrides_leg(monkeypatch):
     assert cmd[cmd.index("--tools") + 1] == "Read,Grep,Glob,Bash"
 
 
-def test_gateway_prompt_only(monkeypatch):
+def test_gateway_prompt_only(monkeypatch, tmp_path):
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     monkeypatch.setenv("OPENCODE_CONFIG_CONTENT", '{"providers":{"fixture":{}}}')
     cmd = build_command("/not-a-command", "test/unregistered", role="review",
                         client="opencode", tool_mode="prompt-only")
-    assert cmd[0] == "env"
-    config = json.loads(cmd[1].split("=", 1)[1])
-    assert cmd[2:] == ["opencode", "run", "--standalone", "--model",
+    assert cmd[0] == sys.executable
+    config = json.loads(Path(cmd[2]).read_text())
+    assert cmd[3:] == ["opencode", "run", "--standalone", "--model",
                        "test/unregistered", "--agent", "lean-review"]
     agent = config["agents"]["lean-review"]
     assert agent["steps"] == 1  # OpenCode final step removes tools entirely.
