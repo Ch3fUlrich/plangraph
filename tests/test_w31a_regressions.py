@@ -119,7 +119,7 @@ def test_supervisor_secret_straddles_old_boundary(tmp_path, monkeypatch, capsys)
 ])
 def test_explicit_leg_error_rule(tmp_path, monkeypatch, rc, stderr, expected):
     from plangraph.spawner.service import SpawnService
-    leg = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol')
+    leg = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-xhigh')
     job = JobInfo('j', expected, 'x', leg.model, exit_code=rc, stderr=stderr)
     async def spawn(**kw):
         return job

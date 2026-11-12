@@ -157,16 +157,16 @@ import `plangraph.spawner` at runtime; the boundary is enforced by
 
 `planner.routing.plan_spawn(card, role="implement"|"review")` applies the
 canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
-Writers put eligible free legs first, then subscriptions in `WRITER_ORDER` (`planner/legs.py`), headed by `omniroute/cx-gpt-6.1-sol`; banned/off families are skipped for writers too.
+Writers use Sol xhigh then agy Gemini Flash (`WRITER_ORDER`); plain Sol is explicit-only. See [implement route defaults](routing.md); banned/off families are skipped for writers too.
 Review seats start with Qoder Qwen, then what the route policy leaves; a no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat; Claude is no default writer or seat. A review without a writer family refuses (D-1533). The `claude` harness (Haiku review leg, D-3605) runs with an allowlisted env (`claude_env.py`: HOME, PATH, PWD, locale, XDG_*, proxies, `CLAUDE_CONFIG_DIR`; every other variable is dropped whatever its case), and a host without the `claude` binary skips the leg as `harness_missing: claude` (D-3649). A finished claude run's stdout (the record's `stdout_tail`) is the final text of its stream-json `result` event (else the last assistant text), so `tools/seat_verdict.py` finds the `VERDICT:` line; the raw stream is kept as `claude-stream.jsonl` beside the run's `live.log`, which still carries the raw activity feed.
 Claude 5.5 and effort-variant legs (operator 2026-11-09): `agy-claude-{sonnet,opus}-5-5-{low,medium,high}`
 (agy harness, review and implement), `agy-gemini-3.8-flash-{low,medium,high}` (review),
 `cx-gpt-6-luna-{low,medium,high,xhigh,max}` (inline-only review) and
 `cx-gpt-6.1-sol-{low,medium,high,xhigh,max}` (implement). The ids are what `agy models` and
 OmniRoute `/v1/models` served that day; agy serves no Sonnet xhigh and cx serves no `-ultra`, so neither is a leg.
-They live in `EXPLICIT_LEGS`, not `DEFAULT_LEGS`: an explicit `--leg` pick (or the model
-override) spawns them, and no route, keeper plan or role order changes (D-3605: Claude is no
-default writer or seat; D-3828: no writer fallback). `SpawnService.route` appends them to
+Except Sol xhigh (automatic, D-5206), these and plain Sol live in `EXPLICIT_LEGS`, not
+`DEFAULT_LEGS`: an audited `--leg` or model override spawns them. Claude never enters
+automatic implement routes. `SpawnService.route` appends explicit-only legs to
 the plan as `explicit_only` skips, so `route` shows them; `plan_spawn` itself does not list them. A Claude leg is claude-family: the fence refuses
 it for a claude writer, given or via `review_of`; with mixed writers the D-3084 per-part rule
 admits a seat that covers another writer part. The Claude and sol-effort writers are

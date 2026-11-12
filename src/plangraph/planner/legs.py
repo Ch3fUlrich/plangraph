@@ -59,6 +59,7 @@ class Leg:
     roles: tuple[str, ...] = ("orchestrate",)
     tool_mode: str = "tools"
     disabled: str | None = None
+    effort: str | None = None
 
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
@@ -153,21 +154,22 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# D-3828: retain every leg and its review order, but never fall back writers.
+# D-5206: retain every leg and review order; only Sol and agy Gemini write automatically.
 DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
                              disabled=leg.disabled or (
                                  'D-3828: writer disabled; no retained review or orchestrate role'
                                  if leg.roles == ('implement',) else None))
-                     if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
+                     if leg.id not in ('cx-gpt-6.1-sol', 'agy-gemini-3.8-flash') else leg for leg in DEFAULT_LEGS)
 WRITER_ORDER: tuple[str, ...] = (
-    "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
+    "cx-gpt-6.1-sol-xhigh",  # D-5206: effort-qualified default, then agy fallback
+    "agy-gemini-3.8-flash",
 )
-LEAD_WRITER = "cx-gpt-6.1-sol"
+LEAD_WRITER = WRITER_ORDER[0]
 
 #: Operator 2026-11-09: Claude 5.5 seats and effort variants, spawnable by an
 #: explicit ``--leg`` pick (or the model override) only.  They are NOT in
-#: DEFAULT_LEGS, so no route, keeper plan or role order changes (D-3605: Claude is
-#: no default writer or seat; D-3828: no writer fallback); ``SpawnService.route``
+#: DEFAULT_LEGS, except Sol xhigh promoted below (D-5206); Claude is never an
+#: automatic writer; ``SpawnService.route``
 #: appends them as ``explicit_only`` skips, ``plan_spawn`` does not.  Model ids are what ``agy models`` and OmniRoute
 #: /v1/models served that day (agy serves no Sonnet xhigh, cx no -ultra).  Claude
 #: legs are claude-family, so the D-2511 fence keeps them off claude-written work.
@@ -181,13 +183,18 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
           "gemini", ("128k", "256k", "1m"), 900000, False, roles=("review",))
       for e in ("low", "medium", "high")),
     *(Leg(f"cx-gpt-6.1-sol-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6.1-sol-{e}",
-          "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",))
+          "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",), effort=e)
       for e in CX_EFFORTS),
     *(Leg(f"cx-gpt-6-luna-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6-luna-{e}",
           "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
           tool_mode="inline-only")
       for e in CX_EFFORTS),
 )
+# Promote the existing effort leg; retain plain Sol as an active explicit-only pick.
+_plain_sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
+_sol_xhigh = next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER)
+DEFAULT_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in DEFAULT_LEGS)
+EXPLICIT_LEGS = (_plain_sol, *(leg for leg in EXPLICIT_LEGS if leg.id != LEAD_WRITER))
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
     leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)
@@ -252,6 +259,8 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         problems.append(f"{where}.tool_mode: {raw['tool_mode']!r} not in {TOOL_MODES}")
     windows = raw.get("windows")
     disabled = raw.get("disabled")
+    if raw.get("effort") is not None and raw["effort"] not in CX_EFFORTS:
+        problems.append(f"{where}.effort: must be one of {CX_EFFORTS} or null")
     if disabled is not None and (not isinstance(disabled, str) or not disabled.strip()):
         problems.append(f"{where}.disabled: must be a non-empty reason string")
     roles = raw.get("roles", ("orchestrate",))

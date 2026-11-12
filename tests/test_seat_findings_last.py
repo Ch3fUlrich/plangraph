@@ -10,7 +10,7 @@ from plangraph.spawner.service import SpawnService
 
 
 def test_live_skip_precedes_typed_disabled_entries():
-    live = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol')
+    live = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-xhigh')
     disabled_writer = replace(live, id='disabled-test-writer', disabled='synthetic disable')
     evidence = {'status': 429}
     plan = plan_spawn({'estimate_tokens': 1000}, role='implement', legs=(live, disabled_writer), leg_reader=lambda model, **kw: {

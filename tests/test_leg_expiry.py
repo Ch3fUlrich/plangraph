@@ -12,14 +12,14 @@ from plangraph.planner.routing import plan_spawn
 
 def test_d3605_sol_routes_implement_never_review():
     card = {"estimate_tokens": 20000, "risk_tags": []}
-    assert plan_spawn(card, role="implement").first_leg.id == "cx-gpt-6.1-sol"
+    assert plan_spawn(card, role="implement").first_leg.id == "cx-gpt-6.1-sol-xhigh"
     review = plan_spawn(card, role="review", writer_families=("mimo",))
-    assert "cx-gpt-6.1-sol" not in [leg.id for leg in review.legs]
+    assert not {"cx-gpt-6.1-sol", "cx-gpt-6.1-sol-xhigh"} & {leg.id for leg in review.legs}
 
 
 @pytest.mark.parametrize("expires", ["2000-01-01", "invalid", None, 123])
 def test_load_legs_ignores_legacy_expires(tmp_path, expires):
-    raw = dataclasses.asdict(next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.1-sol"))
+    raw = dataclasses.asdict(next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.1-sol-xhigh"))
     raw["expires"] = expires
     path = tmp_path / "legs.json"
     path.write_text(json.dumps({"legs": [raw]}))
@@ -40,7 +40,7 @@ def test_omniroute_expired_or_down_no_route_or_override(tmp_path, state):
     from plangraph.spawner.service import SpawnService
     from plangraph.spawner.runner import SpawnerRunner
 
-    leg = next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.1-sol")
+    leg = next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.1-sol-xhigh")
     def reader(model, **kwargs):
         return {"state": state if model == leg.model else "ok", "evidence": None}
     card = {"estimate_tokens": 1000}

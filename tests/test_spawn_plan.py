@@ -17,14 +17,14 @@ def test_writer_live_limit_reset_and_scope(tmp_path, monkeypatch):
     install_fallthrough_legs(monkeypatch)
     store = LegStateStore(tmp_path / "state.sqlite")
     p = plan_spawn(CARD, role="implement", leg_reader=store, now=100)
-    assert p.first_leg.model == "omniroute/cx-gpt-6.1-sol"  # D-3745
+    assert p.first_leg.model == "omniroute/cx-gpt-6.1-sol-xhigh"  # D-5206
     nxt = next_leg_after_provider_stop(p, p.first_leg.id, 429, "quota exhausted",
                                        {"Retry-After": "60"}, "test", store=store,
                                        now=100, account="A")
     assert nxt.id == "opencode-deepseek-v4.1-flash-free"  # Synthetic WRITER_ORDER fallback.
     limited = plan_spawn(dict(CARD, account="A"), role="implement", leg_reader=store, now=101)
     assert limited.first_leg == nxt
-    assert next(s for s in limited.skipped if s["leg"] == "cx-gpt-6.1-sol")["evidence"]["status"] == 429
+    assert next(s for s in limited.skipped if s["leg"] == "cx-gpt-6.1-sol-xhigh")["evidence"]["status"] == 429
     assert plan_spawn(dict(CARD, account="B"), role="implement", leg_reader=store, now=101).first_leg == p.first_leg
     assert plan_spawn(dict(CARD, account="A"), role="implement", leg_reader=store, now=160).first_leg == p.first_leg
     json.dumps(limited.to_dict())
@@ -67,7 +67,7 @@ def test_seats_and_impossible_fence():
 
 def test_operator_order_and_roles_roundtrip(tmp_path):
     assert [l.id for l in DEFAULT_LEGS if "implement" in l.roles] == [
-        "cx-gpt-6.1-sol"]
+        "cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash"]
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
         "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
@@ -86,9 +86,9 @@ def test_benchmark_within_tier_only(monkeypatch):
     rows = {l.model: {"aa_intelligence": 40 + i * 10, "cost_per_task_usd": 0,
                       "pool_burn_weight": 0} for i, l in enumerate(writer)}
     p = plan_spawn(CARD, role="implement", benchmark=rows)
-    assert p.first_leg.id == "cx-gpt-6.1-sol"  # D-3745
+    assert p.first_leg.id == "cx-gpt-6.1-sol-xhigh"  # D-5206
     assert [l.id for l in p.legs] == [
-        'cx-gpt-6.1-sol', 'opencode-deepseek-v4.1-flash-free',
+        'cx-gpt-6.1-sol-xhigh', 'opencode-deepseek-v4.1-flash-free',
         'opencode-glm-5.3-flash-free', 'openrouter-free', 'agy-gemini-3.8-flash',
         'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek']
     assert p.legs[-1].tier == 'paid'

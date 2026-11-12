@@ -18,7 +18,7 @@ def test_luna_leg_in_default_legs():
     assert (leg.family, leg.harness, leg.model, leg.roles) == (
         "gpt", "opencode", "omniroute/cx-gpt-6-luna", ("review",))
     ids = [leg.id for leg in DEFAULT_LEGS]
-    assert ids[ids.index("cx-gpt-6.1-sol") + 1] == LUNA
+    assert ids[ids.index("cx-gpt-6.1-sol-xhigh") + 1] == LUNA
 
 
 def test_luna_never_writes():

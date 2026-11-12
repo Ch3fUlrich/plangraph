@@ -156,7 +156,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         assert len(models) == 8, record   # D-3817: Sonnet no longer implements
         assert len(runner.jobs) == 3
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
-        assert models[:4] == ['omniroute/cx-gpt-6.1-sol',
+        assert models[:4] == ['omniroute/cx-gpt-6.1-sol-xhigh',
                               'opencode/deepseek-v4.1-flash-free',
                               'opencode/glm-5.3-flash-free', 'openrouter/free']
         for leg in service.route({'estimate_tokens': 1000}).legs:
