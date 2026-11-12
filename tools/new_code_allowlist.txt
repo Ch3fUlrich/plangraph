@@ -7,10 +7,8 @@ tests/**/test_*.py | Regression tests at any depth (D-4691: tests allowed)
 src/plangraph/web/*.js | browser UI glue (D-4808, D-4811)
 configuration/opencode/plugins/**/*.mjs | OpenCode plugin byte copy from AutoOS (interim, D-4844)
 tests/**/_*.py | test-only helper modules imported by tests/**/test_*.py (D-4821, D-4870)
-src/plangraph/spawner/ps_host_doctor.py | lane started before the gate (D-5062, rule 9.14), retired by SPAWNER-RUST-PORT
 tools/preflight.py | CI/tool helper (D-5062, rule 9.14), tools exception
 tools/preflight_private_scrub.py | CI/tool helper (D-5062, rule 9.14), tools exception
-src/plangraph/fleet_snapshot.py | snapshot-only fleet projection (D-5062), retired by SPAWNER-RUST-PORT
 src/plangraph/fleet_sync/__init__.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
 src/plangraph/fleet_sync/__main__.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
 src/plangraph/fleet_sync/advance.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
@@ -21,5 +19,7 @@ src/plangraph/keeper/cli_output_verbs.py | lane started before the gate (D-5062,
 src/plangraph/keeper/crit_path_stall.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
 src/plangraph/keeper/run_records.py | Python area unblock (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
 src/plangraph/keeper/store_decision_close.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
+src/plangraph/routing_support/review_mode.py | lane started before the gate (D-5062, rule 9.14), retired by REVIEW-HARNESS-RUST
 src/plangraph/spawner/host_ready_source.py | lane started before the gate (D-5062, rule 9.14), retired by SPAWNER-RUST-PORT
 tools/crit_path_stall.py | CI/tool helper (D-5062, rule 9.14), tools exception
+tools/judge_prompt.py | CI/tool helper (D-5062, rule 9.14), tools exception

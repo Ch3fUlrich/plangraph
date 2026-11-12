@@ -188,3 +188,19 @@ def test_workspace_docs_map_requires_more_than_feature_documentation(test_repo, 
     assert result.returncode == 1, result.stdout
     assert "CONTRIBUTING.md" in result.stdout
     assert "docs-map 0 warning(s)/1 error(s)" in result.stdout
+
+
+def test_writer_docs_map_shared_parity():
+    import json
+    from pathlib import Path
+
+    from tools.check_changelog_docs import glob_to_regex, parse_docs_map
+
+    cases = json.loads((Path(__file__).parent / "fixtures/writer_docs_map.json").read_text())
+    for pattern, path, matches in cases["globs"]:
+        assert bool(glob_to_regex(pattern).match(path)) == matches, (pattern, path)
+    for text, date, entries, error_classes in cases["maps"]:
+        parsed_date, rules, errors = parse_docs_map(text)
+        assert (parsed_date.isoformat() if parsed_date else None) == date, text
+        assert [[line, glob, docs] for line, glob, docs in rules] == entries, text
+        assert [error.split(": ", 1)[1].split(":", 1)[0] for error in errors] == error_classes

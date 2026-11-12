@@ -1,6 +1,7 @@
 # Context probes: offline slice 1
 
 `rust/pg-probe` is the offline CONTEXT-PROBES library (PH-CTX-TRUTH T1).
+The shared `rust/Cargo.toml` keeps all workspace members, including `pg-probe` and `pg-spawnd`, in alphabetical order.
 Check: `cd rust && cargo test -p pg-probe`. No sessions, processes or network calls.
 Shared `rust/Cargo.toml` and `rust/Cargo.lock` changes follow the Rust workspace
 guidance in [CONTRIBUTING.md](../CONTRIBUTING.md); this guide covers `pg-probe` only.
