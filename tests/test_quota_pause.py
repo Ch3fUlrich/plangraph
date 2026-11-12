@@ -1,5 +1,6 @@
 """Hermetic quota admission checks; no model processes are started."""
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -9,7 +10,8 @@ from plangraph.spawner.seat_spawn import SeatSpawnMixin
 
 
 @pytest.mark.parametrize('action', ['launch', 'relaunch'])
-def test_session_pause_and_reset(tmp_path, monkeypatch, action):
+@pytest.mark.parametrize('dry', [False, True])
+def test_session_pause_and_reset(tmp_path, monkeypatch, action, dry):
     sessions = Sessions(state_root=tmp_path)
     monkeypatch.setattr(sessions, '_names_mode', lambda: 'free')
     calls = []
@@ -17,6 +19,8 @@ def test_session_pause_and_reset(tmp_path, monkeypatch, action):
     monkeypatch.setattr(sessions, '_relaunch_inner', lambda *a: calls.append(a) or {'ok': True})
 
     def launch(name):
+        if dry:
+            return sessions._action(action, name, lambda: calls.append(name) or {'ok': True}, dry=True)
         if action == 'relaunch':
             return sessions.relaunch(name)
         return sessions.launch(name=name, cwd=str(tmp_path), model='test', effort='low',
@@ -27,16 +31,22 @@ def test_session_pause_and_reset(tmp_path, monkeypatch, action):
     with pytest.raises(ParameterRefused, match='quota pause'):
         launch('implement-0001')
     assert not calls
+    if dry:
+        assert not sessions._sessions.exists()
     assert launch('basic-analysis-0001')['ok']
     flag.unlink()
     assert launch('implement-0001')['ok']
     assert len(calls) == 2
 
 
-def test_claude_seat_pause_and_reset(tmp_path, monkeypatch):
+@pytest.mark.parametrize('state_attr', ['state', '_state', None])
+def test_claude_seat_pause_and_reset(tmp_path, monkeypatch, state_attr):
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path / 'unrelated'))
     service = SeatSpawnMixin()
-    service.state = tmp_path
+    if state_attr:
+        setattr(service, state_attr, tmp_path)
+    else:
+        monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
     leg = SimpleNamespace(id='claude-test', model='claude-test', tool_mode='tools')
     flag = tmp_path / 'quota-pause'
     flag.touch()
@@ -49,35 +59,133 @@ def test_claude_seat_pause_and_reset(tmp_path, monkeypatch):
     assert service._leg_prompt('test', {}, 'review', leg) == 'test'
 
 
-def test_watchdog_skips_with_one_alert(tmp_path):
-    import os
-    from pathlib import Path
+@pytest.mark.parametrize('source', ['state', 'xdg', 'home', 'empty'])
+@pytest.mark.parametrize('kind', ['file', 'directory', 'dangling-link', 'link-loop'])
+def test_watchdog_skips_with_one_alert(tmp_path, source, kind):
     import shlex
     import subprocess
+    from pathlib import Path
+    home = tmp_path / 'manager-home'
+    root = {'state': tmp_path / 'explicit state', 'xdg': tmp_path / 'xdg/plangraph',
+            'home': home / '.local/state/plangraph', 'empty': home / '.local/state/plangraph'}[source]
+    root.mkdir(parents=True)
     unit = (Path(__file__).resolve().parents[1] /
             'deploy/ctx-watchdog/ctx-watchdog.service.in').read_text()
     condition = next(line.split('=', 1)[1] for line in unit.splitlines()
                      if line.startswith('ExecCondition='))
-    command = shlex.split(condition.replace('$$', '$'))
-    env = dict(os.environ, PLANGRAPH_SPAWN_STATE=str(tmp_path))
-    flag = tmp_path / 'quota-pause'
-    flag.touch()
-    result = subprocess.run(command, env=env, capture_output=True, text=True)
+    command = shlex.split(condition.replace('$$', '$').replace('%h', str(home)))
+    env = {'PATH': '/usr/bin:/bin'}  # HOME absent: systemd %h is authoritative.
+    if source == 'state':
+        env.update(PLANGRAPH_SPAWN_STATE=str(root), XDG_STATE_HOME=str(tmp_path / 'wrong'))
+    elif source == 'xdg':
+        env.update(PLANGRAPH_SPAWN_STATE='', XDG_STATE_HOME=str(tmp_path / 'xdg'))
+    elif source == 'empty':
+        env.update(PLANGRAPH_SPAWN_STATE='', XDG_STATE_HOME='', HOME=str(tmp_path / 'wrong'))
+    flag = root / 'quota-pause'
+    if kind == 'directory':
+        flag.mkdir()
+    elif kind in ('dangling-link', 'link-loop'):
+        flag.symlink_to(tmp_path / 'missing' if kind == 'dangling-link' else flag)
+    else:
+        flag.touch()
+    result = subprocess.run(command, env=env, cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 1
     assert result.stdout.splitlines() == ['ctx-watchdog: quota pause; relaunch skipped']
-    flag.unlink()
-    result = subprocess.run(command, env=env, capture_output=True, text=True)
+    assert not result.stderr
+    flag.rmdir() if kind == 'directory' else flag.unlink()
+    result = subprocess.run(command, env=env, cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0
-    assert not result.stdout
+    assert not result.stdout and not result.stderr
 
 
-def test_claude_judge_admission_before_probe(tmp_path):
+def test_claude_judge_admission_before_probe(tmp_path, monkeypatch):
     import asyncio
-    from plangraph.spawner.leg_probe import before_launch
+    from plangraph.spawner import leg_probe
+    store = SimpleNamespace(leg_status=Mock(return_value={'state': 'ok'}),
+                            last_probe_ts=Mock(return_value=None))
+    monkeypatch.setattr(leg_probe, '_store_for', lambda runner: store)
+    probe = AsyncMock(return_value={'ok': True})
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
     runner = SimpleNamespace(state=tmp_path)
     leg = SimpleNamespace(id='claude-test', model='claude-test')
     (tmp_path / 'quota-pause').touch()
-    assert asyncio.run(before_launch(runner, leg, 'review', False)) == 'quota pause'
-    assert asyncio.run(before_launch(runner, leg, 'basic-analysis', True)) is None
+    for dry in (False, True):
+        assert asyncio.run(leg_probe.before_launch(runner, leg, 'review', dry)) == 'quota pause'
+        assert asyncio.run(leg_probe.before_launch(runner, leg, 'implement', dry)) == 'quota pause'
+    store.leg_status.assert_not_called()
+    probe.assert_not_awaited()
+    assert asyncio.run(leg_probe.before_launch(runner, leg, 'basic-analysis', False)) is None
+    store.leg_status.assert_called_once_with('claude-test')
     (tmp_path / 'quota-pause').unlink()
-    assert asyncio.run(before_launch(runner, leg, 'review', True)) is None
+    assert asyncio.run(leg_probe.before_launch(runner, leg, 'review', False)) is None
+    assert store.leg_status.call_count == 2
+    assert asyncio.run(leg_probe.before_launch(runner, leg, 'implement', False)) is None
+    probe.assert_awaited_once_with(runner, leg, store=store)
+
+
+@pytest.mark.parametrize('dry', [False, True])
+@pytest.mark.parametrize('source', ['state', '_state', 'state_root', 'store-root', 'store-path', 'adapter'])
+def test_judge_uses_configured_state(tmp_path, monkeypatch, dry, source):
+    import asyncio
+    from plangraph.spawner import leg_probe
+    from plangraph.routing_support.leg_state import LegStateStore
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path / 'unrelated'))
+    store = LegStateStore(tmp_path / 'leg-state.sqlite')
+    if source == 'store-root':
+        store.state_root = tmp_path
+    reader = SimpleNamespace(enabled=True, store=store, record_probe_fail=Mock()) if source == 'adapter' else store
+    runner = SimpleNamespace(leg_reader=reader)
+    if source in ('state', '_state', 'state_root'):
+        setattr(runner, source, tmp_path)
+        runner.leg_reader = SimpleNamespace(record_probe_fail=Mock())
+    monkeypatch.setattr(leg_probe, 'probe', AsyncMock(side_effect=AssertionError('probe while paused')))
+    (tmp_path / 'quota-pause').touch()
+    leg = SimpleNamespace(id='claude-test', model='claude-test')
+    assert asyncio.run(leg_probe.before_launch(runner, leg, 'review', dry)) == 'quota pause'
+    assert not store.path.exists()
+
+
+def test_public_session_dry_run_refuses(tmp_path, monkeypatch):
+    sessions = Sessions(state_root=tmp_path)
+    monkeypatch.setattr(sessions, '_names_mode', lambda: 'free')
+    inner = Mock(side_effect=AssertionError('dry launch bypassed quota gate'))
+    monkeypatch.setattr(sessions, '_launch_inner', inner)
+    (tmp_path / 'quota-pause').touch()
+    with pytest.raises(ParameterRefused, match='quota pause'):
+        sessions.launch(name='implement-0001', cwd=str(tmp_path), model='test', effort='low',
+                        permission_mode='default', mcp_config='test', prompt='test', dry_run=True)
+    inner.assert_not_called()
+    assert not sessions._sessions.exists()
+
+
+def test_paused_relaunch_preserves_running_session(tmp_path, monkeypatch):
+    """Exercise the real relaunch body so a gate moved after stop cannot pass."""
+    sessions = Sessions(state_root=tmp_path)
+    prompt = tmp_path / 'prompt.txt'
+    prompt.write_text('test')
+    record = dict(name='implement-0001', session_id='old-session', state='running',
+                  prompt_file=str(prompt), cwd=str(tmp_path), model='test', effort='low',
+                  permission_mode='default', mcp='test')
+    sessions._write_record(record['name'], record)
+    monkeypatch.setattr(sessions, '_names_mode', lambda: 'free')
+    monkeypatch.setattr(sessions, '_load_config', lambda: {'session_names': 'free'})
+    monkeypatch.setattr(sessions, '_relaunch_handoff', lambda *a: None)
+    monkeypatch.setattr(sessions, '_check_cwd', lambda *a: tmp_path)
+    monkeypatch.setattr(sessions, '_check_choice', lambda value, *a: value)
+    monkeypatch.setattr(sessions, '_check_mcp', lambda *a: tmp_path)
+    monkeypatch.setattr(sessions, '_style_text', lambda *a: '')
+    monkeypatch.setattr(sessions, '_build_argv', lambda *a: (['claude', 'test'], {}))
+    stop, start = Mock(return_value='old-session'), Mock(return_value=('new-session', None))
+    monkeypatch.setattr(sessions, '_ensure_stopped', stop)
+    monkeypatch.setattr(sessions, '_start', start)
+    (tmp_path / 'quota-pause').touch()
+    with pytest.raises(ParameterRefused, match='quota pause'):
+        sessions.relaunch(record['name'])
+    stop.assert_not_called()
+    start.assert_not_called()
+    assert sessions._find_record(record['name'], None) == record
+    (tmp_path / 'quota-pause').unlink()
+    assert sessions.relaunch(record['name'])['session_id'] == 'new-session'
+    stop.assert_called_once_with(record, record['name'])
+    start.assert_called_once()

@@ -238,13 +238,17 @@ _INFLIGHT = {}
 
 async def before_launch(runner, leg, role, dry_run):
     from .target import quota_paused
-    if quota_paused(getattr(runner, 'state', None), role, leg):
-        return 'quota pause'
-    if dry_run:
-        return None
     state = _store_for(runner)
     adapter = state if getattr(state, 'enabled', False) else None
     state = adapter.store if adapter else state
+    root = (getattr(runner, 'state', None) or getattr(runner, '_state', None)
+            or getattr(runner, 'state_root', None) or getattr(state, 'state_root', None))
+    if not root and (path := getattr(state, 'path', None)):
+        root = Path(path).parent
+    if quota_paused(root, role, leg):
+        return 'quota pause'
+    if dry_run:
+        return None
 
     def admission():
         if adapter:

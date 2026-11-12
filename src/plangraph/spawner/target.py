@@ -1,4 +1,5 @@
 """Resolve explicit spawn targets before admission or provider rendering."""
+from collections.abc import Mapping
 import os
 from pathlib import Path
 import re
@@ -13,18 +14,27 @@ def quota_paused(state=None, role=None, leg=None):
     """The usage owner creates quota-pause at USAGE >=95%, unlinks at reset.
 
     Presence alone is authoritative: no second meter, expiry, or auto-clear.
-    A numbered session name carries its role; legs gate only Claude targets.
+    Numbered names carry their role; unknown leg providers cannot bypass a pause.
     """
-    role = re.sub(r'-[0-9]{4}$', '', role or '')
+    role = re.sub(r'-[0-9]+$', '', role or '')
     if role in QUOTA_EXEMPT_ROLES:
         return False
-    if leg is not None and not any(str(getattr(leg, k, '')).startswith('claude-')
-                                   for k in ('id', 'model')):
-        return False
-    if state is None:
+    if leg is not None:
+        values = [leg.get(k) if isinstance(leg, Mapping) else getattr(leg, k, None)
+                  for k in ('id', 'model')]
+        targets = [value for value in values if isinstance(value, str) and value]
+        if targets and not any(value.startswith('claude-') for value in targets):
+            return False
+    if not state:
         state = os.environ.get('PLANGRAPH_SPAWN_STATE') or (
-            Path(os.environ.get('XDG_STATE_HOME', str(Path.home() / '.local/state'))) / 'plangraph')
-    return os.path.lexists(Path(state) / 'quota-pause')
+            Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'plangraph')
+    try:
+        os.lstat(Path(state) / 'quota-pause')  # Unlike lexists, preserves read errors.
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return True
+    return True
 
 
 def admit_leg(leg):
