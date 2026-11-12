@@ -24,6 +24,22 @@ import seat_verdict as sv  # noqa: E402
 from test_seat_verdict import run  # noqa: E402
 
 
+@pytest.mark.parametrize('text,want', [
+    ('VERDICT: ACCEPT', True), ('**Verdict** accept', True),
+    ('Verdict **accept**.', True), ('Verdict _pass_!', True),
+    ('Verdict `REQUEST_CHANGES`', False),
+    ('Verdict pass criteria were not met', None),
+    ('Verdict accepted by consensus', None),
+    ('Verdict pass the gate once coverage lands', None),
+])
+def test_colonless_decision_is_not_prose(text, want):
+    from plangraph.review import verdict
+    assert sv._VERDICT_LINE.pattern == verdict._VERDICT_LINE.pattern
+    assert sv._VERDICT_LINE.flags == verdict._VERDICT_LINE.flags
+    assert sv.parse_verdict(text)[0] is want
+    assert verdict.parse_verdict(text) == {True: 'pass', False: 'fix', None: None}[want]
+
+
 @pytest.mark.parametrize("text", [
     "VERDICT: REQUEST_CHANGES",
     "VERDICT: request-changes",

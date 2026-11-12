@@ -171,6 +171,9 @@ def _deliver_verdict(directory, record, keeper):
             if journal.exists() and json.loads(journal.read_text()).get('status') in ('skipped', 'delivered'):
                 atomic_write_private(marker, 'terminal\n')
                 return
+            if journal.exists() and json.loads(journal.read_text()).get('status') == 'sending':
+                outcome('skipped', 'ambiguous send, not retried')
+                return
             key = record.get('item_key')
             if not valid_item(key):
                 outcome('skipped', 'missing item key')
@@ -200,12 +203,17 @@ def _deliver_verdict(directory, record, keeper):
                     (row.get('verified') and row.get('kind') == 'commit+ci' and
                      not isinstance(row.get('ref'), dict)) for row in rows):
                 raise ValueError('malformed item evidence')
-            heads = {row.get('ref', {}).get('commit') for row in rows
-                     if row.get('verified') and row.get('kind') == 'commit+ci'}
+            heads = [row.get('ref', {}).get('commit') for row in rows
+                     if row.get('verified') and row.get('kind') == 'commit+ci']
             if item.get('key') != key or evidence['head_sha'] not in heads:
                 outcome('skipped', 'missing or ambiguous item evidenced head')
                 return
+            if evidence['head_sha'] != heads[-1]:
+                outcome('skipped', 'superseded head')
+                return
             output = io.StringIO()
+            atomic_write_private(journal, json.dumps(dict(status='sending',
+                attempts=json.loads(journal.read_text()).get('attempts', 0) if journal.exists() else 0)) + '\n')
             with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
                 verifier_started = True
                 rc = seat.main(['--key', key, '--seat-dir', str(directory),

@@ -90,8 +90,9 @@ def test_forward_failure_boundaries(tmp_path, monkeypatch, failure):
         assert len(calls) == (1 if failure in ('reject', 'post', 'post-value') else 0)
 
 
-@pytest.mark.parametrize('commits, forwarded', [(['a' * 40, 'd' * 40], 1), (['a' * 40, 'b' * 40], 0)])
-def test_verdict_head_needs_only_membership_among_verified_heads(tmp_path, monkeypatch, commits, forwarded):
+@pytest.mark.parametrize('commits, forwarded', [(['a' * 40, 'd' * 40], 1),
+    (['d' * 40, 'b' * 40], 0), (['a' * 40, 'b' * 40], 0)])
+def test_verdict_head_must_be_latest_verified_head(tmp_path, monkeypatch, commits, forwarded):
     from pathlib import Path
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / 'tools'))
     import seat_verdict as seat
@@ -106,6 +107,40 @@ def test_verdict_head_needs_only_membership_among_verified_heads(tmp_path, monke
         {'kind': 'commit+ci', 'verified': True, 'ref': {'commit': c}} for c in commits]})
     notify.deliver_verdict(tmp_path, record, endpoint)
     assert len(calls) == forwarded
+    if commits == ['d' * 40, 'b' * 40]:
+        assert json.loads((tmp_path / 'verdict.json').read_text())['reason'] == 'superseded head'
+
+
+@pytest.mark.parametrize('writers,forwarded', [(['deepseek'], True),
+    (['deepseek', 'anthropic'], False)])
+def test_haiku_forward_gate_and_crash_intent(tmp_path, monkeypatch, writers, forwarded):
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / 'tools'))
+    import seat_verdict as seat
+    from plangraph.spawner import notify
+    record = dict(role='review', item_key='demo:A', given_writer_families=writers)
+    monkeypatch.setattr(seat, 'evidence_from_record', lambda *a: (
+        dict(served_model='anthropic/claude-haiku-4-5', head_sha='d' * 40), 'VERDICT: ACCEPT'))
+    monkeypatch.setenv('PG_REVIEWER_TOKEN_DIR', str(tmp_path))
+    calls = []
+    def killed(*args):
+        calls.append(args)
+        assert json.loads((tmp_path / 'verdict.json').read_text())['status'] == 'sending'
+        raise SystemExit('killed after POST')
+    monkeypatch.setattr(seat, 'main', killed)
+    keeper = SimpleNamespace(url='unused', item=lambda key: dict(key=key, evidence=[
+        dict(kind='commit+ci', verified=True, ref=dict(commit='d' * 40))]))
+    if forwarded:
+        with pytest.raises(SystemExit):
+            notify.deliver_verdict(tmp_path, record, keeper)
+    else:
+        notify.deliver_verdict(tmp_path, record, keeper)
+    notify.deliver_verdict(tmp_path, record, keeper)
+    assert len(calls) == int(forwarded)
+    journal = json.loads((tmp_path / 'verdict.json').read_text())
+    assert journal['status'] == 'skipped'
+    assert journal['reason'] == ('ambiguous send, not retried' if forwarded else
+        'unwitnessed family or invalid/overlapping writer families')
 
 
 def test_lock_failure_preserves_attempt_accounting(tmp_path, monkeypatch):
