@@ -52,11 +52,15 @@ def test_opencode_gateway_without_url_has_named_refusal(monkeypatch, tmp_path, m
                  for name in ("mimo", "omniroute")}
     if has_root:
         (tmp_path / "opencode.jsonc").write_text(json.dumps({"providers": providers}))
+    else:
+        monkeypatch.setenv("OPENCODE_CONFIG_CONTENT", json.dumps({"providers": providers}))
     env = overlay_env(build_child_env())
     before = env["OPENCODE_CONFIG_CONTENT"]
+    overlaid = json.loads(before)["providers"]
+    assert overlaid[model.split("/", 1)[0]]["settings"]["baseURL"] == placeholder
     reason = render_gateway_providers(env, model)
     assert reason == REFUSAL_UNRESOLVED
-    assert "gateway_base_url_unresolved" in REFUSAL_UNRESOLVED
+    assert reason.startswith("not_served_on_host: gateway_base_url_unresolved")
     assert env["OPENCODE_CONFIG_CONTENT"] == before
 
 

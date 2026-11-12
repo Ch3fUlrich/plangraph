@@ -111,9 +111,13 @@ def overlay_env(base_env):
         return env
     if providers is None:
         return env
-    from .clients import effective_child_base_url, effective_gateway_base_url
+    from plangraph.review.gateway import GATEWAY_ENV_VAR
+    from .clients import effective_gateway_base_url
     gateway = effective_gateway_base_url(env)
-    child_gateway = effective_child_base_url(env)
+    child = existing.get('providers', {})
+    child = child.get('omniroute', {}) if isinstance(child, dict) else {}
+    settings = child.get('settings') if isinstance(child, dict) else None
+    child_gateway = settings.get('baseURL') if isinstance(settings, dict) else None
 
     def merge(root, generated, path=()):
         result = copy.deepcopy(generated)
@@ -128,7 +132,7 @@ def overlay_env(base_env):
             elif location in (('settings', 'baseURL'), ('options', 'baseURL')) and gateway and generated[key] == gateway:
                 pass  # Only the resolved per-run gateway displaces root URLs.
             elif (location in (('settings', 'baseURL'), ('options', 'baseURL'))
-                  and isinstance(value, str) and value.startswith('{env:') and value.endswith('}')
+                  and value == '{env:' + GATEWAY_ENV_VAR + '}'
                   and child_gateway and generated[key] == child_gateway):
                 pass  # A config-only child gateway replaces a root placeholder, not a concrete URL.
             elif isinstance(value, dict) and isinstance(generated[key], dict) and location != ('models',):

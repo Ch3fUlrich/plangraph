@@ -1,13 +1,16 @@
 # OpenCode gateway provider URLs
 
 The per-run overlay and renderer route both `mimo` and `omniroute` through
-the configured gateway. `OMNIROUTE_BASE_URL` takes precedence over
-`PLANGRAPH_GATEWAY_URL`; the transitional `AUTOOS_OMNIROUTE_URL` remains
-supported by the renderer. When none of these variables supplies a valid URL,
-the renderer also considers the child OmniRoute provider URL, including a
+the configured gateway. The renderer first honours a valid child OmniRoute
+provider URL already present in `OPENCODE_CONFIG_CONTENT`, including a
 `gateway_url` supplied to `build_child_env` in the spawner/keeper config.
-The overlay preserves that resolved child URL instead of replacing it with a
-root config's environment placeholder. Concrete root URLs still take precedence
+Only when no valid child URL is present does it consider `OMNIROUTE_BASE_URL`,
+`PLANGRAPH_GATEWAY_URL`, then the transitional `AUTOOS_OMNIROUTE_URL`.
+When building a new child config, `OMNIROUTE_BASE_URL` takes precedence over
+`PLANGRAPH_GATEWAY_URL`, then the config's `gateway_url`.
+The overlay preserves that resolved child URL instead of replacing it with the
+root config's exact `{env:PLANGRAPH_REVIEW_URL}` placeholder. Other environment
+placeholders retain their root precedence. Concrete root URLs still take precedence
 over generic generated values; only an explicit per-run gateway override
 displaces them. A generated URL alone is not evidence of such an override.
 
@@ -23,4 +26,6 @@ gateway provider, rendering returns the same named refusal for MiMo and
 OmniRoute: `not_served_on_host: gateway_base_url_unresolved`. Unresolved
 environment placeholders do not count as URLs; there is no localhost default.
 Credential handling is unchanged: config contains environment references, not
-credential values, and rendering does not read or log keys.
+credential values, and rendering does not read or log keys. The shared validator
+refuses URL userinfo, queries, fragments (including bare delimiters), and
+non-HTTP(S) schemes; a refusal leaves the caller's config unchanged.
