@@ -64,11 +64,16 @@ Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pendin
 `python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust
 `pg-spawnd doctor-sources` subcommand. `doctor.py` resolves it on the host's
 `PATH`, never from checkout build artifacts, and reads its JSON check rows with
-a ten-second subprocess timeout. Before any checks, optional `env.PATH` from the
+a derived subprocess timeout: ten seconds plus three seconds per batch of up to
+16 configured hosts (at least ten seconds). Before any checks, optional `env.PATH` from the
 local hosts registry entry replaces the inherited PATH for both pg-spawnd and
 harness discovery/children. Identity is `PLANGRAPH_HOST_NAME` or registry `self`,
 with case-insensitive id/alias lookup; absent configuration retains inherited PATH.
 There is no Python fallback for source checks; fresh release clones need no build.
+Fleet snapshots likewise delegate the read-only JSON projection to
+`pg-spawnd fleet-snapshot`; the Python loader supplies persisted registry and run
+records without probing, and projection failures preserve the existing
+`fleet: null` fallback.
 
 The Rust command reads `plangraph/ps-hosts.json` under `XDG_CONFIG_HOME` (or
 `~/.config`), checking valid entries with `src` or `win_src` in parallel with
@@ -492,3 +497,7 @@ The SSH ps endpoint serializes only running and queued records. Terminal history
 does not consume the 1 MiB transport budget; malformed terminal fields do not
 hide live runs. Malformed live replies and oversized replies name the queried
 host as unknown rather than silently omitting it.
+Rust source-filter tests and pytest's real `configured_hosts` checks consume
+`tests/fixtures/doctor_sources.json`, binding both validators and probe limits
+to the same accepted/rejected cases. Rust embeds JSON, never Python source or
+an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
