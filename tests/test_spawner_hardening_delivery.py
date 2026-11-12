@@ -279,7 +279,7 @@ def test_tree_killer_invoked_on_exit(exit_code):
         pid = FAKE_PID
         returncode = exit_code
 
-        async def communicate(self):
+        async def communicate(self, input=None):
             return b'stdout', b'stderr'
 
     async def fake_factory(*args, **kwargs):
@@ -312,7 +312,7 @@ def test_tree_killer_invoked_once_on_timeout_no_double_kill(monkeypatch):
         def __init__(self):
             self._unblock = asyncio.Event()
 
-        async def communicate(self):
+        async def communicate(self, input=None):
             await self._unblock.wait()
             return b'stdout', b'stderr'
 
@@ -345,7 +345,7 @@ def test_tree_killer_process_lookup_error_tolerated():
         pid = FAKE_PID
         returncode = 0
 
-        async def communicate(self):
+        async def communicate(self, input=None):
             return b'stdout', b'stderr'
 
     async def fake_factory(*args, **kwargs):
@@ -376,7 +376,7 @@ def test_tree_killer_permission_error_tolerated():
         pid = FAKE_PID
         returncode = 0
 
-        async def communicate(self):
+        async def communicate(self, input=None):
             return b'stdout', b'stderr'
 
     async def fake_factory(*args, **kwargs):
@@ -410,7 +410,7 @@ def test_reap_failure_recorded_not_swallowed():
         pid = FAKE_PID
         returncode = 0
 
-        async def communicate(self):
+        async def communicate(self, input=None):
             return b'stdout', b'stderr'
 
     async def fake_factory(*args, **kwargs):

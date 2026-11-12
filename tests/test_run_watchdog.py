@@ -224,7 +224,7 @@ def test_output_scrubbed_once_and_live_log_batched(tmp_path, monkeypatch):
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
         output, _ = await collect(runner, 'j', proc)
         total = len(output)
-        assert output.endswith(b'x' * 1023 + b'\n')
+        assert output.endswith(b'x' * 1023 + os.linesep.encode())
         assert len(job.stdout) <= 4096                     # bounded tail
         assert scrubbed_len <= 3 * total                   # linear, not O(n^2)
         assert len(appends) <= 2 * (total // 16384) + 4    # batched, not per line

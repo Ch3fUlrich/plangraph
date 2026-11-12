@@ -1,0 +1,1 @@
+- **FLOW-WATCHDOG:** a code-driven systemd timer (`flow-watchdog`) prints one alert line to routing per flow regression, with a durable pending/queue state so alerts are neither lost nor repeated.

@@ -7,6 +7,12 @@ description = "Engine-free core of a worker that runs coding-agent attempts for 
 [lib]
 name = "pg_worker_core"
 
+[[bin]]
+name = "live_probe_child"
+path = "tests/support/live_probe_child.rs"
+test = false
+required-features = ["test-support"]
+
 [features]
 test-support = []
 
@@ -34,5 +40,6 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+pg-worker-core = { path = ".", package = "pg-worker-core", features = ["test-support"] }
 tempfile = "3"
 serial_test = "3"

@@ -1,5 +1,19 @@
 # Placement rule loader (R8B A)
 
+## Python spawn overflow (HOST-RUN-CAPS slice 2)
+
+Default CLI/MCP admission and SSH target selection use the registry role RAM
+reservation above `caps.mem_floor_mb`; live run counts do not limit admission.
+Healthy, fresh targets are ranked by available RAM above their floor, then name.
+The overflow routing file supplies `hosts` and the `public_repos` allowlist only;
+legacy local limit overrides are ignored. A repository absent from the allowlist
+queues without copying. Exhausted targets produce per-host safe refusal reasons.
+No overflow config file preserves local admission without overflow annotations.
+Missing or unreadable receipt IDs produce `acknowledged_unknown=true`,
+`status=unknown` records on the selected host, never a refusal or retry.
+See docs/SPAWNER.md for registry defaults and receipt boundaries. This Python
+integration does not change the Rust placement-rule rollout gates below.
+
 ## Operator view: local Rust rule source
 
 `placement_rule_store::RuleSource` accepts a configured env-file path (or None),

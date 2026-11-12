@@ -16,6 +16,7 @@ def test_argv_linux_is_list_no_shell(site):
     assert res["session_id"] == UUID1
     argv, kw = run.calls[0]
     assert argv == ["claude", "--bg", "--strict-mcp-config", "--mcp-config", str(site.mcp.resolve()),
+                    "--settings", '{"enabledPlugins":{"superpowers@superpowers-marketplace":false}}',
                     "--remote-control", "alpha", "-n", "alpha", "--model", MODEL, "--effort", EFFORT,
                     "--permission-mode", MODE, PROMPT]
     assert all(isinstance(a, str) for a in argv)

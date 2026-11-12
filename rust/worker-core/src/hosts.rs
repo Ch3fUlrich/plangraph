@@ -66,12 +66,25 @@ pub struct Warmup {
 #[serde(deny_unknown_fields)]
 pub struct RepoEntry {
     pub root: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_checks: Option<RepoHealthChecks>,
     pub worktrees_root: String,
     pub remote: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub python: Option<String>,
     pub import_roots: Vec<String>,
     pub cache_env: BTreeMap<String, String>,
+}
+
+/// Argv commands used to verify a candidate live checkout.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepoHealthChecks {
+    pub doctor: Vec<String>,
+    pub whoami: Vec<String>,
+    pub spawn: Vec<String>,
 }
 
 /// Policy label; admission still uses the host's existing caps.

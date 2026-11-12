@@ -1,7 +1,93 @@
 # Plangraph Spawner & Model Routing Architecture
+
+### Windows prompt delivery
+
+Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
+argv guard (32,000 characters, or 8,000 for batch shims). This uses the existing
+per-job stdin payload path, not a temporary prompt file. Qoder retains an explicit
+empty `-p` value with `--input-format text`; missing prompt flags fail with
+`stdin_prompt_flag_missing`. Oversized Windows agy
+commands use `--input-format stream-json --output-format stream-json -p ""`, with
+one UTF-8 NDJSON user event on stdin followed by EOF. The last result's
+`response` supplies the answer and verdict; an ERROR or missing result fails
+explicitly, without publishing an unsuccessful response as an answer.
+Short agy prompts and Linux launches retain their existing argv form; see [background review launches and deadlines](spawner-operations.md) for Windows console suppression and bounded prompt packaging.
+Rejected stdin input or an unavailable/closed input pipe fails the run explicitly;
+the watchdog never retries a rejected payload as an empty prompt. Gateway config
+size refusal leaves the caller's environment unchanged.
+
+### Writer result finalization
+
+`worker-core::writer_result::check_result` runs the mandatory Rust file-size
+gate before returning a checked result; export rechecks it before content gates,
+bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
+and no publish/push is attempted. Changed tracked files use the Python CI gate's
+400-line rule, exemptions, binary detection, splitlines counting and baseline
+ratchet. CI still runs unchanged `tools/check_file_size.py` over all tracked files.
+The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI entry/skip-trailer rule, returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. The `.docs-map` gate moves into Rust in slice S1c. Doc-only and empty commits do not require skip reasons; section boundaries include indented headings in both Rust and CI.
+
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.
+### Doctor host source checks
+
+`python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust
+`pg-spawnd doctor-sources` subcommand. `doctor.py` prefers the checkout's
+`rust/target/release/pg-spawnd`, otherwise resolves `pg-spawnd` on `PATH`, and
+reads its JSON check rows with a ten-second subprocess timeout. There is no
+Python fallback for these checks.
+
+The Rust command reads `plangraph/ps-hosts.json` under `XDG_CONFIG_HOME` (or
+`~/.config`), checking valid entries with `src` or `win_src` in parallel with
+at most 16 workers. SSH uses batch mode, a two-second connection timeout and
+a three-second probe deadline; source checks support POSIX, WSL and Windows
+paths. SSH output and diagnostics are discarded. A missing config or no
+eligible entries produces no source check rows; unreadable or malformed
+configuration produces `ps_hosts: fail` with `invalid configuration`.
+
+Each `ps_host_<name>` row passes with `ok` on SSH exit 0; exit 44 reports
+`src missing`, exit 255 or an SSH launch/I/O error reports `unreachable`, and
+a timeout or other exit reports `host query failed`. If the Rust binary is
+missing, Python adds `ps_hosts: fail` with `unavailable`; a nonzero subcommand
+exit, invalid JSON/non-list response, timeout or other invocation error instead
+reports `host query failed`. Any failed check makes doctor exit 1.
+
 ## Spawn by card
+Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged.
+
+CLI and overflow admission use the worker-core memory rule:
+`effective_free_mb - reservation_mb >= mem_floor_mb`, with MemAvailable as
+free memory and `warmup.ramp_mb[role]` as the reservation (an unknown role
+uses that host's largest positive ramp). Live run/writer counts never limit
+admission. Overflow ranks hosts by free RAM above their floor.
+Admission reads `caps.mem_floor_mb` and `warmup.ramp_mb` for each host
+from the worker-core hosts registry (`$XDG_CONFIG_HOME/plangraph/hosts.json`,
+or `~/.config/plangraph/hosts.json`), the same location used by fleet-sync.
+Local identity is `PLANGRAPH_HOST_NAME` when set, otherwise registry `self`;
+IDs and aliases resolve case-insensitively. Routing and the public-repository
+allowlist still come from `overflow-hosts.json`, but its legacy run/floor caps
+and local limit overrides are ignored. Missing/unreadable registry or missing,
+malformed caps exclude that host from overflow. Local admission instead uses
+conservative defaults of floor 3000 MB and role 2048 MB, with a logged reason.
+The independent OOM guard (D-5057/D-5075) remains unchanged.
+
+Default CLI and MCP spawns try healthy SSH overflow hosts when local RAM
+admission refuses, only for repositories in the `public_repos` allowlist.
+Private or unknown repositories queue without copying. Failed targets are
+excluded for that spawn; when none can accept, a queued record lists safe
+refusal reasons. With no overflow config file, ordinary local admission is
+unchanged and no overflow annotation is added. Dry runs do not overflow.
+Local benchmark databases cannot be forwarded.
+
+SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel
+lines around the remote spawn JSON. Only the single bracketed JSON receipt is
+accepted; shell-init banners, env-file echoes and JSON after the end are ignored.
+Missing, repeated or reversed sentinel pairs report `receipt_unbracketed` without
+retrying an already acknowledged spawn. Remote stderr stays private, and the
+existing credential-shape masking helper masks receipts before stdout exposure.
+Unreadable receipts or receipts without a nonblank remote run ID produce a
+local tracking ID, `acknowledged_unknown=true` and `status=unknown` on the
+selected host; they are never refused or retried.
+
 Install the package on each host, then use `python -m plangraph.spawner.cli`
 (or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
 or Temporal service is required for this slice. **Grok and manual-only Muse:** `omniroute-grok-4.7` uses `omniroute/gc/grok-4.7` for review only (catalog `grok`, seat `xai`). `opencode-console-muse-spark` uses `console-meta/muse-spark-1.3-contributor`; like `opencode-go-muse-spark`, its catalog family is `muse` (seat `meta`). Neither Muse leg routes automatically, even with a review policy lift. Use `--leg` with an audited `--override-reason` of at least ten characters, for scrubbed or public material only; host checks still apply. Runtime rows derive from `DEFAULT_LEGS`, not AA seeds. Policy `review_allowed_families` lifts bans, not an allowlist; Grok needs no JSON exemption.
@@ -73,6 +159,22 @@ import `plangraph.spawner` at runtime; the boundary is enforced by
 canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
 Writers put eligible free legs first, then subscriptions in `WRITER_ORDER` (`planner/legs.py`), headed by `omniroute/cx-gpt-6.1-sol`; banned/off families are skipped for writers too.
 Review seats start with Qoder Qwen, then what the route policy leaves; a no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat; Claude is no default writer or seat. A review without a writer family refuses (D-1533). The `claude` harness (Haiku review leg, D-3605) runs with an allowlisted env (`claude_env.py`: HOME, PATH, PWD, locale, XDG_*, proxies, `CLAUDE_CONFIG_DIR`; every other variable is dropped whatever its case), and a host without the `claude` binary skips the leg as `harness_missing: claude` (D-3649). A finished claude run's stdout (the record's `stdout_tail`) is the final text of its stream-json `result` event (else the last assistant text), so `tools/seat_verdict.py` finds the `VERDICT:` line; the raw stream is kept as `claude-stream.jsonl` beside the run's `live.log`, which still carries the raw activity feed.
+Claude 5.5 and effort-variant legs (operator 2026-11-09): `agy-claude-{sonnet,opus}-5-5-{low,medium,high}`
+(agy harness, review and implement), `agy-gemini-3.8-flash-{low,medium,high}` (review),
+`cx-gpt-6-luna-{low,medium,high,xhigh,max}` (inline-only review) and
+`cx-gpt-6.1-sol-{low,medium,high,xhigh,max}` (implement). The ids are what `agy models` and
+OmniRoute `/v1/models` served that day; agy serves no Sonnet xhigh and cx serves no `-ultra`, so neither is a leg.
+They live in `EXPLICIT_LEGS`, not `DEFAULT_LEGS`: an explicit `--leg` pick (or the model
+override) spawns them, and no route, keeper plan or role order changes (D-3605: Claude is no
+default writer or seat; D-3828: no writer fallback). `SpawnService.route` appends them to
+the plan as `explicit_only` skips, so `route` shows them; `plan_spawn` itself does not list them. A Claude leg is claude-family: the fence refuses
+it for a claude writer, given or via `review_of`; with mixed writers the D-3084 per-part rule
+admits a seat that covers another writer part. The Claude and sol-effort writers are
+`EXPLICIT_WRITERS`, which the spawn service admits for `implement`. The catalog spelling
+`agy/<model>` (MCP `model_or_combo`) resolves to the agy leg that holds the bare model. A cx
+effort model is not declared in the AutoOS root opencode config, so `render_gateway_providers`
+adds `providers.omniroute.models["cx-<m>-<effort>"]` (`modelID` `cx/<m>-<effort>`, the base
+model's limit) for that run only; without it opencode answers `provider.no-route`.
 Leg notes ("after its Friday-evening reset") are static text: availability is the leg state (`limited` after a provider stop), not a schedule.
 Two review seats must differ in family from every writer and each other; an impossible fence returns fewer seats and an explicit plan error, not a fallback.
 
@@ -387,7 +489,7 @@ The SQLite catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py
 
 ---
 
-Continue with [review protocol, interfaces, and operations](spawner-operations.md).
+Continue with [review protocol, interfaces, and operations](spawner-operations.md); see [OOM policy](../deploy/oom-policy.md) for repository checks versus live-pressure evidence.
 See [spawner prompt rules](operations/spawner-prompt-rules.md) for fixer reports and retry bounds.
 The served-model probe cache has a five-minute freshness bound,
 not a five-minute completion or delivery SLA; see the operations guide for details.

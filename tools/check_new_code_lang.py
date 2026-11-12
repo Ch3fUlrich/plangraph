@@ -55,6 +55,7 @@ def blocked(path, revision):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", help="default: $NEWCODE_BASE or origin/main")
+    parser.add_argument("--head", default="HEAD")
     args = parser.parse_args()
     root = git("rev-parse", "--show-toplevel")
     if root.returncode:
@@ -66,7 +67,7 @@ def main():
     if resolved.returncode:
         print(f"check-new-code-lang: base {base} does not resolve; fetch the base")
         return 1
-    if resolved.stdout.strip() == git("rev-parse", "HEAD").stdout.strip():
+    if resolved.stdout.strip() == git("rev-parse", args.head).stdout.strip():
         print(f"check-new-code-lang: base {base} is HEAD itself")
         return 1
     allowed, errors = [], []
@@ -86,12 +87,12 @@ def main():
             allowed.append(pattern.strip())
     changes = git("diff", "--find-renames", "--find-copies", "--find-copies-harder",
                   "--diff-filter=ARC", "--name-status",
-                  "-z", f"{resolved.stdout.strip()}...HEAD", "--")
+                  "-z", f"{resolved.stdout.strip()}...{args.head}", "--")
     if changes.returncode:
         print(f"check-new-code-lang: git diff failed: {changes.stderr.strip()}")
         return 1
     fields = iter(changes.stdout.rstrip("\0").split("\0"))
-    old_revision = git("merge-base", resolved.stdout.strip(), "HEAD").stdout.strip()
+    old_revision = git("merge-base", resolved.stdout.strip(), args.head).stdout.strip()
     for status in fields:
         if not status:
             continue
@@ -99,7 +100,7 @@ def main():
         path = next(fields) if status[0] in "RC" else old
         if status[0] == "R" and blocked(old, old_revision):
             continue
-        if (blocked(path, "HEAD")
+        if (blocked(path, args.head)
                 and not any(matches(path, glob) for glob in allowed)):
             errors.append(f"FAIL {path}: new code must be Rust (D-4691); "
                           f"blocked suffixes: {', '.join(sorted(BLOCKED))}; "
