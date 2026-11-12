@@ -203,8 +203,8 @@ class SeatSpawnMixin:
 
     async def _launch_leg(self, record, chosen, **options):
         """One normal launch, at most one capped review retry; never recurse or reroute."""
-        async def launch(**kwargs):
-            job = await self.runner.spawn(**kwargs)
+        async def launch(prompt_record, **kwargs):
+            job = await self.runner.spawn(prompt_record=prompt_record, **kwargs)
             self._running_records[job.job_id] = record
             process = self.runner._processes.get(job.job_id)
             record.update(job_id=job.job_id, pid=process.pid if process else None,
