@@ -129,7 +129,7 @@ fn finalize_changelog_pass_cases() {
                 ("docs/guide.txt", "docs"),
                 ("README.md", "docs"),
                 ("LICENSE", "license"),
-                (".docs-map", "mapping"),
+                (".docs-map", "# mapping"),
             ],
             "",
         ),

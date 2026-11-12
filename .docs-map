@@ -4,3 +4,5 @@ tools/** -> CONTRIBUTING.md
 src/plangraph/fleet_sync/** -> docs/fleet-sync.md
 src/plangraph/spawner/** -> docs/SPAWNER.md
 src/plangraph/keeper/** -> docs/KEEPER.md
+rust/worker-core/src/writer_* -> docs/SPAWNER.md
+tests/test_check_changelog_docs.py -> CONTRIBUTING.md

@@ -1,6 +1,8 @@
 use super::*;
 #[path = "writer_changelog_tests.rs"]
 mod finalize_changelog;
+#[path = "writer_docs_map_tests.rs"]
+mod finalize_docs_map;
 #[path = "writer_file_size_tests.rs"]
 mod finalize_file_size;
 #[test]
