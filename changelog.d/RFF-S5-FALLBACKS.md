@@ -1,1 +1,2 @@
 Restore catalog implement eligibility and measured implement ranking so unavailable legs fall back automatically without a writer pin. Cover limited and failed legs for implement, review, and orchestrate.
+Consolidated S2-S5 follow-up: retain free-first cost tiers and policy-safe fallbacks for every role while applying measured implementation utility. Pin-era assertion changes are recorded in docs/rff-s2-5-assertions.md (D-5092/D-5113/D-5114); no tests were deleted or skipped.

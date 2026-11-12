@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import time
 import math
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,6 +62,7 @@ class Leg:
     tool_mode: str = "tools"
     disabled: str | None = None
     expires: float | None = None
+
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
          note=""):
@@ -166,7 +167,7 @@ DEFAULT_LEGS = (
 
 # Catalog roles are eligibility inputs, not a single-writer pin.
 WRITER_ORDER: tuple[str, ...] = (
-    "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
+    "cx-gpt-6.1-sol",   # Legacy compatibility, not a routing preference (D-5092).
 )
 LEAD_WRITER = "cx-gpt-6.1-sol"
 
@@ -240,7 +241,7 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         except MimoPathError as exc:
             problems.append(f"{where}.model: {exc}")
     for key in raw:
-        if key not in _FIELDS and key != "expires":
+        if key not in _FIELDS:
             problems.append(f"{where}: unknown field {key!r}")
     for key in _REQUIRED:
         if key not in raw:

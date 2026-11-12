@@ -28,6 +28,15 @@ def test_go_usage_limit_leaves_personal_free_available(store):
     assert available == [personal]
 
 
+def test_provider_exhaustion_keeps_static_policy_refusals_separate():
+    from plangraph.routing_support.liveness import provider_exhausted
+    policy = [{'reason': 'off_family'}, {'reason': 'disabled: operator stop'}]
+    assert not provider_exhausted(policy)
+    for state in ('limited', 'down', 'expired'):
+        assert provider_exhausted([*policy, {'reason': state}])
+        assert not provider_exhausted([{'reason': state}, {'reason': 'window_class'}])
+
+
 @pytest.mark.parametrize('role', ('implement', 'review', 'orchestrate'))
 @pytest.mark.parametrize('state', ('limited', 'down'))
 def test_role_automatically_falls_back(role, state, monkeypatch):
@@ -67,6 +76,18 @@ def test_catalog_tiers_preserve_roles():
     assert next(l for l in updated if l.id == 'agy-gemini-3.8-flash').tier == 'free'
     assert [l.roles for l in updated] == [l.roles for l in DEFAULT_LEGS]
     assert next(l for l in updated if l.id == 'deepseek').tier == 'paid'
+
+
+def test_catalog_tiers_do_not_leak_between_harnesses():
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.review_order import catalog_tiers
+    base = replace(DEFAULT_LEGS[0], model='shared', tier='subscription')
+    legs = (replace(base, harness='agy'), replace(base, harness='opencode'))
+    assert [l.tier for l in catalog_tiers(legs, [{'id': 'agy/shared', 'tier': 'free'}])] == [
+        'free', 'subscription']
+    assert [l.tier for l in catalog_tiers(legs, [{'id': 'shared', 'tier': 'paid'},
+        {'id': 'agy/shared', 'tier': 'free'}])] == ['paid', 'paid']
 
 
 def test_manual_disable_expiry():

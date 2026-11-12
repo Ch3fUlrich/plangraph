@@ -34,6 +34,8 @@ def test_missing_legs_registered_for_utility(lid, model):
     from plangraph.planner.legs import DEFAULT_LEGS, leg_active
     from plangraph.spawner.resolver import DEFAULT_FALLBACK_MODELS
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == lid)
-    assert (leg.model, leg_active(leg), set(leg.roles)) == (model, True, {'review', 'implement'})
+    expected_roles = {'review', 'implement'} | ({'orchestrate'} if lid in {
+        'agy-sonnet-5.5', 'omniroute-deepseek-flash', 'omniroute-muse-spark'} else set())
+    assert (leg.model, leg_active(leg), set(leg.roles)) == (model, True, expected_roles)
     row = next(row for row in DEFAULT_FALLBACK_MODELS if row['id'] == model)
     assert (row['active'], row['family'], row['harness']) == (True, leg.family, leg.harness)

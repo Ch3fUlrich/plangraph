@@ -75,13 +75,13 @@ def test_absent_explicit_operator_order():
     p = plan()
     assert p.legs == WRITERS
     assert p.p_source == "operator-order"
-    assert {g["leg"] for g in p.gaps} == {l.id for l in WRITERS}
+    assert {g["leg"] for g in p.gaps} == {l.id for l in POLICY if 'implement' in l.roles and not l.disabled}
     assert "benchmark data absent" in p.reasons
 
 
 @pytest.mark.parametrize("data", [None, rows(WRITERS[1:])])
 def test_strict_names_missing(data):
-    with pytest.raises(routing.SpawnRefused, match="benchmark rows missing: .*cx-gpt-6.1-sol"):  # D-3745
+    with pytest.raises(routing.SpawnRefused, match="benchmark rows missing: .*opencode-deepseek-v4.1-flash-free"):
         plan(benchmark=data, strict=True)
 
 

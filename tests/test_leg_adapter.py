@@ -96,6 +96,11 @@ def test_catalog_policy_is_not_mutated(tmp_path):
     # New review seats extend the catalog, never reorder the existing entries.
     expected = MAIN_ORDER.copy()
     expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'gpt-oss-120b-medium')
+    expected[expected.index('mimo/mimo-v2.6-flash'):expected.index('mimo/mimo-v2.6-flash')] = [
+        'gemini-4-argon-high', 'opencode/big-pickle']
+    expected[expected.index('opencode-go/glm-5.2'):expected.index('opencode-go/glm-5.2')] = [
+        'claude-opus-5-5-high', 'omniroute/deepseek-flash',
+        'omniroute/muse-spark-1.3-contributor', 'claude-opus-5-5-medium', 'opencode/gemini-4-argon']
     expected.insert(expected.index('omniroute/deepseek-direct-flash'), 'omniroute/gc/grok-4.7')
     expected.insert(expected.index('omniroute/deepseek-direct-flash'),
                     'console-meta/muse-spark-1.3-contributor')

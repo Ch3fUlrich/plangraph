@@ -19,7 +19,8 @@ DISABLED_FREE = {"opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-fr
 ACTIVE_FREE = ["openrouter-free"]
 SUBS = ["cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]   # D-3667: Sol heads the subscription tier
 WRITERS = [FREE[0], "openrouter-free", "opencode-big-pickle", SUBS[0],
-           "agy-gemini-3.8-flash", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro", "deepseek"]
+           "agy-gemini-3.8-flash", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
+           "agy-sonnet-5.5", "agy-opus-5.5", "omniroute-deepseek-flash", "deepseek"]
 
 
 @pytest.fixture(autouse=True)
@@ -82,8 +83,8 @@ def test_cli_route_implement_gpt_first_no_claude_writer(tmp_path, capsys):
     plan = json.loads(capsys.readouterr().out)
     ids = [leg["id"] for leg in plan["legs"]]
     assert ids == WRITERS  # D-5092
-    assert "agy-sonnet-5.5" not in ids
-    assert [leg["id"] for leg in plan["legs"] if leg["claude_family"]] == []
+    assert "agy-sonnet-5.5" in ids
+    assert [leg["id"] for leg in plan["legs"] if leg["claude_family"]] == ["agy-sonnet-5.5", "agy-opus-5.5"]
 
 
 def test_route_and_refusal(tmp_path, capsys):
@@ -107,7 +108,7 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     path.write_text(json.dumps({"banned_families": ["deepseek"], "off_families": ["glm"]}))
     monkeypatch.setenv("PLANGRAPH_ROUTE_POLICY", str(path))
     imp = plan_spawn(CARD, role="implement")
-    assert [leg.id for leg in imp.legs] == [id for id in WRITERS if id not in (FREE[0], "deepseek")]
+    assert [leg.id for leg in imp.legs] == [id for id in WRITERS if id not in (FREE[0], "deepseek", "omniroute-deepseek-flash")]
     rev = plan_spawn(CARD, role="review", writer_families=("claude",))
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
     assert reasons[FREE[0]] == "banned_family"
@@ -171,8 +172,9 @@ def test_fixed_review_order():
 def test_no_anthropic_implement_leg_removes_sonnet():
     from plangraph.planner.legs import DEFAULT_LEGS
     assert all(leg.id != "opencode-console-sonnet-5.5" for leg in DEFAULT_LEGS)
-    assert all("implement" not in leg.roles for leg in DEFAULT_LEGS
-                if leg.claude_family or leg.family in ("claude", "anthropic"))
+    assert {leg.id for leg in DEFAULT_LEGS if "implement" in leg.roles
+            and (leg.claude_family or leg.family in ("claude", "anthropic"))} == {
+                "agy-sonnet-5.5", "agy-opus-5.5"}
 
 
 def test_renamed_and_second_haiku_remain_last():
@@ -223,8 +225,7 @@ def test_writer_order_d2683_implement_first_seven(monkeypatch):
     # disabled-leg eligibility is independently asserted above and in Go tests.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="implement")
-    expected = [FREE[0], FREE[1], "openrouter-free", "opencode-big-pickle", SUBS[0],
-                "agy-gemini-3.8-flash", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro", "deepseek"]
+    expected = [FREE[0], FREE[1], *WRITERS[1:]]
     assert [leg.id for leg in plan.legs] == expected
 
 
@@ -234,7 +235,7 @@ def test_main_policy_gpt_first_and_retained_routes():
     clear = lambda *a, **k: {"state": "ok", "evidence": None}
     implement = plan_spawn(CARD, role="implement", policy=policy, leg_reader=clear)
     assert implement.first_leg.id == "openrouter-free"
-    assert [leg.id for leg in implement.legs] == [id for id in WRITERS if id not in (FREE[0], "deepseek")]
+    assert [leg.id for leg in implement.legs] == [id for id in WRITERS if id not in (FREE[0], "deepseek", "omniroute-deepseek-flash")]
     for writers in (("mimo",), ("gpt",), ("claude",), ("gpt", "mimo")):
         review = plan_spawn(CARD, role="review", writer_families=writers,
                             policy=policy, leg_reader=clear)
@@ -246,7 +247,7 @@ def test_main_policy_gpt_first_and_retained_routes():
         assert "glm" not in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {
         "qodercli-qwen3.8-flash", *FREE, *SUBS, "cx-gpt-6-luna", "agy-sonnet-5.5", "agy-gemini-4-argon", "opencode-big-pickle",
-        "agy-opus", "omniroute-deepseek-flash", "omniroute-muse-spark", "opencode-gemini-4-argon",
+        "agy-opus", "agy-opus-5.5", "omniroute-deepseek-flash", "omniroute-muse-spark", "opencode-gemini-4-argon",
         "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
         "omniroute-grok-4.7", "opencode-console-muse-spark",
         "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek", "claude-haiku-5.5", "omniroute-gemini-3.8-flash",

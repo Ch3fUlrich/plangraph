@@ -12,7 +12,7 @@ def admit_leg(leg):
 
 def resolve_target(target, *, chosen=None):
     """Resolve and admit a target; override cannot enable a disabled leg."""
-    from plangraph.planner.legs import spawnable_legs
+    from plangraph.planner.legs import EXPLICIT_LEGS, spawnable_legs
     SPAWNABLE_LEGS = spawnable_legs()   # call time: callers rebind DEFAULT_LEGS
     if chosen is not None and target != chosen.model:
         raise SpawnRefused('model and leg disagree')
@@ -25,9 +25,10 @@ def resolve_target(target, *, chosen=None):
     if leg is None and target.startswith('agy/'):
         # The catalog spells agy models "agy/<model>"; an agy leg holds the bare
         # model the agy CLI takes (leg_probe/measured_down add the same prefix).
-        # The orchestrate-only agy-sonnet-5.5 shares its model with a seat leg; prefer the seat.
+        # Qualified effort aliases retain their explicit leg even when defaults share the model.
         same = [l for l in SPAWNABLE_LEGS if l.harness == 'agy' and l.model == target[len('agy/'):]]
-        leg = next((l for l in same if l.roles != ('orchestrate',)), same[0] if same else None)
+        leg = next((l for l in same if l in EXPLICIT_LEGS),
+                   next((l for l in same if l.roles != ('orchestrate',)), same[0] if same else None))
     if leg is None:
         from .resolver import get_catalog_models, catalog_row_admitted
         row = next((r for r in get_catalog_models()
