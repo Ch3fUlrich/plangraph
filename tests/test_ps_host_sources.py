@@ -9,6 +9,33 @@ import pytest
 
 from plangraph.spawner import doctor, remote_ps
 
+SOURCE_GOLDENS = json.loads(
+    (Path(__file__).parent / 'fixtures/doctor_sources.json').read_text(encoding='utf-8'))
+
+
+def test_doctor_source_probe_limits_match_goldens():
+    assert remote_ps.MAX_WORKERS == SOURCE_GOLDENS['max_workers']
+    assert remote_ps.TIMEOUT == SOURCE_GOLDENS['timeout_secs']
+
+
+@pytest.mark.parametrize('field,value,accepted', [
+    (case['field'], value, accepted)
+    for case in SOURCE_GOLDENS['cases']
+    for kind, accepted in [('accepted', True), ('rejected', False)]
+    for value in case[kind]
+])
+def test_configured_hosts_match_rust_goldens(tmp_path, monkeypatch, field, value, accepted):
+    host = dict(SOURCE_GOLDENS['base'])
+    if field == 'win_src':
+        del host['src']
+    host[field] = value
+    config = tmp_path / 'plangraph'
+    config.mkdir()
+    (config / 'ps-hosts.json').write_text(json.dumps(dict(hosts=[host])), encoding='utf-8')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    assert remote_ps.configured_hosts() == (
+        [host] if accepted else [dict(name='invalid-config', invalid=True)])
+
 
 @pytest.mark.parametrize('identity,path_key', [(None, 'PATH'), ('ALIAS', 'PATH'), ('ALIAS', 'Path')])
 def test_doctor_fresh_clone_uses_host_path(tmp_path, monkeypatch, identity, path_key):
@@ -152,12 +179,27 @@ def test_doctor_rust_sources(monkeypatch, mode, detail):
     async def mcp(*args):
         return 'pass', 'ok'
     monkeypatch.setattr(doctor.subprocess, 'run', run)
+    monkeypatch.setattr(remote_ps, 'configured_hosts', lambda: [])
     monkeypatch.setattr(doctor, 'mcp', mcp)
     monkeypatch.setattr(doctor.shutil, 'which', lambda name: None)
     result = asyncio.run(doctor.diagnose())['checks'][0]
     assert result == ({key: rows[0][key] for key in ('name', 'status', 'detail')}
         if mode in ('ok', 'extra') else
         dict(name='ps_hosts', status='fail', detail=detail))
+
+
+def test_doctor_deadline_many_hosts(monkeypatch):
+    import asyncio
+    monkeypatch.setattr(remote_ps, 'configured_hosts', lambda: [{}] * 65)
+    def run(command, **kwargs):
+        assert kwargs['timeout'] == 5 * remote_ps.TIMEOUT + doctor.TIMEOUT
+        return subprocess.CompletedProcess(command, 0, '[]')
+    async def mcp(*args):
+        return 'pass', 'ok'
+    monkeypatch.setattr(doctor.subprocess, 'run', run)
+    monkeypatch.setattr(doctor, 'mcp', mcp)
+    monkeypatch.setattr(doctor.shutil, 'which', lambda name: None)
+    asyncio.run(doctor.diagnose())
 
 
 def test_stderr_does_not_control_result(ssh):

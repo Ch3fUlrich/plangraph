@@ -1,0 +1,1 @@
+- Writer finalization now enforces the Rust docs-map gate against committed head mappings and the run-base range, reporting HOLD with unmatched source-to-doc pairs before export; shared Rust/Python cases cover parsing and path globs.

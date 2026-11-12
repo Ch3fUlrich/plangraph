@@ -14,6 +14,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import pytest
 from pathlib import Path
 from pgtest_shm import _sweep_dead_pgtest_dirs
@@ -51,6 +52,47 @@ def pytest_oom_configure(config):
         event = raise_oom_score()
         if event['event'] == 'oom_score_adj_denied':
             warnings.warn('oom_score_adj_denied: EACCES raising pytest worker to 500')
+
+
+@pytest.fixture
+def bounded_shutdown_cleanup(monkeypatch):
+    """Finish cleanup before a mocked exit can close the database."""
+    from plangraph.keeper import daemon
+    real_run = daemon.run
+
+    def run(*args, **kwargs):
+        record_exit = os._exit  # the test has installed its recorder by now
+        preexisting = set(threading.enumerate())
+
+        def exit_and_join(code):
+            # Real _exit never returns. Give this run's cleanup a five-second
+            # join backstop before the recorder can permit conn.close().
+            cleaners = [t for t in threading.enumerate()
+                        if t not in preexisting and t.name == "keeper-shutdown"]
+            for thread in cleaners:
+                thread.join(timeout=5)
+                assert not thread.is_alive(), "keeper shutdown did not finish"
+            record_exit(code)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "_exit", exit_and_join)
+            return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(daemon, "run", run)
+    yield
+
+
+@pytest.fixture
+def keeper_thread_guard():
+    from _keeper_threads import guard_new_threads
+    return guard_new_threads
+
+
+@pytest.fixture(autouse=True)
+def no_leaked_keeper_threads(keeper_thread_guard):
+    """Bounded-join keeper-owned starts, not session-runtime executor threads."""
+    with keeper_thread_guard():
+        yield
 
 
 @pytest.fixture
