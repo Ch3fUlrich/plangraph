@@ -105,7 +105,8 @@
      "default": "implement",
      "enum": [
       "implement",
-      "review"
+      "review",
+      "research"
      ],
      "type": "string"
     },

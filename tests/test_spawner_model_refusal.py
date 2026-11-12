@@ -81,8 +81,11 @@ def test_no_booking_even_for_limit_text():
     assert fallthrough_reason(service, DEFAULT_LEGS[0], job, {}) is None
 
 
-@pytest.mark.parametrize('harness', ['claude', 'opencode'])
-def test_route_is_terminal_only_for_claude(tmp_path, monkeypatch, harness):
+@pytest.mark.parametrize('harness, tool_mode', [
+    pytest.param('claude', 'prompt-only', id='claude'),
+    pytest.param('opencode', 'tools', id='opencode'),
+])
+def test_route_is_terminal_only_for_claude(tmp_path, monkeypatch, harness, tool_mode):
     lines, _ = stream('partial')
     calls, notifications = [], []
     async def run():
@@ -94,7 +97,7 @@ def test_route_is_terminal_only_for_claude(tmp_path, monkeypatch, harness):
         sink = SimpleNamespace(deliver=lambda recipient, event: notifications.append(event))
         service = spawn_service(runner, tmp_path / 'state', completion_sink=sink, keeper_sink=sink)
         leg = next(l for l in DEFAULT_LEGS if l.harness == harness and not l.disabled
-                   and 'review' in l.roles and l.tool_mode == 'tools')
+                   and 'review' in l.roles and l.tool_mode == tool_mode)
         legs = (leg, replace(leg, id='second-leg'))
         monkeypatch.setattr(service, '_route', lambda *a, **k: SpawnPlan(legs, (), 'test', (), ()))
         async def continuation(*a):
@@ -112,6 +115,7 @@ def test_route_is_terminal_only_for_claude(tmp_path, monkeypatch, harness):
     record = asyncio.run(run())
     assert len(calls) == 1, record
     if harness == 'claude':
+        assert calls[0][calls[0].index('--tools') + 1] == ''
         assert record['reason'] == 'model_refusal'
         assert any(e.get('run_id') == record['run_id'] and 'model_refusal' in json.dumps(e) for e in notifications)
     else:

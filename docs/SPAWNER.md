@@ -1,5 +1,36 @@
 # Plangraph Spawner & Model Routing Architecture
 
+### QUOTA-PAUSE-GATE
+
+The usage owner creates `quota-pause` in the spawner state directory at usage
+>=95% and unlinks it at reset. Presence alone (including a dangling symlink)
+pauses admission: no second meter, expiry or automatic clearing. Flag read errors
+also pause admission.
+An empty/unset state falls back to `PLANGRAPH_SPAWN_STATE`, then
+`$XDG_STATE_HOME/plangraph`; an empty/unset XDG root uses
+`~/.local/state/plangraph`.
+Session `launch` and `relaunch` refuse with `quota pause` before invoking the
+action or stopping an existing session, without a model filter. Dry runs do not
+bypass the quota check or write audit records.
+Leg-aware checks in launch-spec, pre-launch probing and seat prompt assembly
+pause legs whose `id` or `model` starts with `claude-`, accepting object or mapping
+metadata. Known other providers are unaffected; missing provider metadata is
+unknown-provider and cannot bypass a pause.
+`basic-analysis` is the sole exempt role. After stripping one trailing `-<digits>`
+counter, a role or session name must equal `basic-analysis` or end in `-basic-analysis`.
+Thus `<host>-L1-` + `basic-analysis-0412` is exempt; `basic-analysis-helper-0001`,
+`not-basic-analysisx-0001` and empty names are not.
+Seat mixins accept `state` or `_state`. Probes check runner roots (`state`,
+`_state`, `state_root`) or environment defaults before resolving the probe store,
+then check its `state_root` or database parent if no runner root was configured.
+Launch-spec retains its required `state` and `role` request fields; quota refusals
+use reason code `quota_pause`. Omitted required fields remain invalid requests,
+not environment-defaulted builds.
+The deployed ctx-watchdog skips its external router call with one alert line for
+either a flag or symlink, or a missing, invalid, unreadable or unsearchable state
+directory. Its home fallback is systemd `%h`, independent of the manager's `HOME`;
+redeploy the service template to apply the guard.
+
 ### Windows prompt delivery
 
 Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
@@ -16,6 +47,30 @@ Rejected stdin input or an unavailable/closed input pipe fails the run explicitl
 the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.
 
+### MiMo seat timeouts and verdict packaging (MIMO-VERDICT-TIMEOUTS)
+
+For MiMo seats and all other `review` runs, `run_watchdog_limits.thresholds` sets
+`hard_max=True`, including default caps: reviews never wait for a writer's first
+edit and ignore a valid `hard_first_edit` opt-in. Card limits must be positive,
+finite numbers (not booleans); invalid limits refuse the spawn. Without a card
+`max_min`, an unset `PLANGRAPH_SPAWN_RUN_TIMEOUT` gives a 25-minute cap, an empty
+value keeps the default 90-minute wall, and a positive numeric value sets seconds.
+The package-wide `inline_diff_prompt` bound change was dropped to preserve main's
+cost-context contract: `max_chars` measures only the diff and exact-fit diffs pass.
+Oversized diffs keep `InlineDiffError`'s `diff too large for leg` text and diff-only
+size; strict mode maps that refusal to `inline_diff_oversized`. The separate
+opt-in `PLANGRAPH_CONTEXT_STRICT=1` whole-prompt bound retains
+`inline_prompt_oversized` for oversized instructions/framing. Neither truncates;
+missing diff references, empty diffs and failed `git diff` calls fail explicitly.
+
+In `opencode_answer.final_answer`, `allow_unfinished=True` accepts pending text
+with no finish frame or after `tool-calls`, unless an earlier finish blocked it.
+Reasons other than `stop` or `tool-calls`, including missing or unknown reasons,
+fail closed: pending text is discarded and unfinished tails stay ineligible.
+Only a `stop` with non-blank pending text clears that block; empty or
+whitespace-only stops and tool calls cannot launder truncation into a verdict.
+A completed `stop` answer remains eligible.
+
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:
 - `verdict.json` audits outcomes; `verdict.delivered` stops replay.
@@ -30,17 +85,26 @@ bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
 and no publish/push is attempted. Changed tracked files use the Python CI gate's
 400-line rule, exemptions, binary detection, splitlines counting and baseline
 ratchet. CI still runs unchanged `tools/check_file_size.py` over all tracked files.
-The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI entry/skip-trailer rule, returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. The `.docs-map` gate moves into Rust in slice S1c. Doc-only and empty commits do not require skip reasons; section boundaries include indented headings in both Rust and CI.
+The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI entry/skip-trailer rule, returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. Doc-only and empty commits do not require skip reasons; section boundaries include indented headings in both Rust and CI.
+The S1c Rust docs-map gate reads `.docs-map` from the committed head and compares changed paths over `merge-base(base, head)..head`. Each matching rule needs at least one mapped doc in that range; failures return `HOLD gate docs-map:` with unmatched `source -> doc` pairs before export/content gates or publication. Missing maps pass; malformed rules/dates hold. `# enforce-after:` begins enforcement inclusively on that local calendar date (earlier missing-doc matches do not hold); entries have no expiry syntax. CI retains its stricter union of merge-base and head policies, so removing head rules cannot disable CI enforcement. Shared JSON cases exercise Rust/Python parsing and glob parity.
 
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.
 ### Doctor host source checks
 
 `python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust
-`pg-spawnd doctor-sources` subcommand. `doctor.py` prefers the checkout's
-`rust/target/release/pg-spawnd`, otherwise resolves `pg-spawnd` on `PATH`, and
-reads its JSON check rows with a ten-second subprocess timeout. There is no
-Python fallback for these checks.
+`pg-spawnd doctor-sources` subcommand. `doctor.py` resolves it on the host's
+`PATH`, never from checkout build artifacts, and reads its JSON check rows with
+a derived subprocess timeout: ten seconds plus three seconds per batch of up to
+16 configured hosts (at least ten seconds). Before any checks, optional `env.PATH` from the
+local hosts registry entry replaces the inherited PATH for both pg-spawnd and
+harness discovery/children. Identity is `PLANGRAPH_HOST_NAME` or registry `self`,
+with case-insensitive id/alias lookup; absent configuration retains inherited PATH.
+There is no Python fallback for source checks; fresh release clones need no build.
+Fleet snapshots likewise delegate the read-only JSON projection to
+`pg-spawnd fleet-snapshot`; the Python loader supplies persisted registry and run
+records without probing, and projection failures preserve the existing
+`fleet: null` fallback.
 
 The Rust command reads `plangraph/ps-hosts.json` under `XDG_CONFIG_HOME` (or
 `~/.config`), checking valid entries with `src` or `win_src` in parallel with
@@ -70,8 +134,8 @@ from the worker-core hosts registry (`$XDG_CONFIG_HOME/plangraph/hosts.json`,
 or `~/.config/plangraph/hosts.json`), the same location used by fleet-sync.
 Local identity is `PLANGRAPH_HOST_NAME` when set, otherwise registry `self`;
 IDs and aliases resolve case-insensitively. Routing and the public-repository
-allowlist still come from `overflow-hosts.json`, but its legacy run/floor caps
-and local limit overrides are ignored. Missing/unreadable registry or missing,
+allowlist still come from `overflow-hosts.json`; legacy run/floor caps and local
+limit overrides are ignored except the orchestration thresholds below. Missing registry or
 malformed caps exclude that host from overflow. Local admission instead uses
 conservative defaults of floor 3000 MB and role 2048 MB, with a logged reason.
 The independent OOM guard (D-5057/D-5075) remains unchanged.
@@ -83,6 +147,15 @@ excluded for that spawn; when none can accept, a queued record lists safe
 refusal reasons. Without overflow config, admitted local runs have no annotation;
 below-floor runs queue with matching `reason` and `overflow_reason`. Dry runs do not overflow.
 Local benchmark databases cannot be forwarded. CLI/MCP use public `admit_spawn` once in the shared wrapper, not the CLI parent; the service persists queued/remote records.
+Per-host `orchestration_only: true` in `hosts.json` (or the local overflow hosts entry; default false)
+makes implement/review/research remote-first: rank MemAvailable minus floor, then config order; no run-count caps.
+Local fallback requires RAM admission, `local_min_available_mb` (overflow config, default 4096) and
+`local_max_swap_used_pct` (default 90); below/above respectively refuses with that name, exit 2, never queues.
+Spawn/refusal records carry `placement: {host, reason, free_mb}`: sampled MemAvailable and
+`remote_most_free_ram`, `local_fallback_no_remote`, `local_benchmark_database`, or refusal.
+Route planning never samples admission resources: absent a supplied placement snapshot,
+it reports `placement_not_evaluated` with null host/free RAM. Missing or unreadable swap
+readings refuse local fallback as `local_swap_unavailable`; see [placement rules](placement-rules.md).
 
 SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel
 lines around the remote spawn JSON. Only the single bracketed JSON receipt is
@@ -113,6 +186,34 @@ the waiting shell itself. Wait reads atomic run records, not process names;
 its timeout stops waiting, not the writer.
 `--no-fallthrough` disables automatic advancement after a captured provider stop.
 Plain stdout, including text saying 429, is never provider evidence.
+
+### Opt-in per-attempt worktrees (RUN-WORKTREE slice 1)
+
+CLI `spawn --run-worktree` / service `spawn(run_worktree=True)` creates a fresh
+`attempt-<uuid>` directory before each launch, including sequential fallthroughs
+and fixer continuations. The trusted `PLANGRAPH_SETTINGS` JSON/TOML top-level
+`worktree_root` config key overrides the per-host default `<state>/worktrees`.
+Fetch has a 30-second timeout outside the exclusive **`<root>/.lock`**; the fetched
+SHA is pinned before locked dependency checks and `git worktree add`. This exact
+lock name is reserved for WORKTREE-REAPER, not held during network waits.
+New lanes use the fetched `origin/main` head, never the caller's HEAD. Optional
+card `lane_branch` names the branch (default `lane/<run_id>`); `continuation: true`
+resumes that existing local branch's tip instead. Card `finished_dependencies`
+lists exactly 40- or 64-hex commit SHAs: a new lane refuses with `RunWorktreeDependencyNotMerged`
+(`run_worktree_dependency_not_merged`) if any is not an ancestor of fetched main,
+including missing commits. Continuations are sequential handoffs, not concurrent
+writers on one branch; retained earlier directories must no longer be used.
+Git failures become `SpawnRefused` codes: `run_worktree_invalid_branch`,
+`run_worktree_branch_exists`, `run_worktree_branch_missing`, `run_worktree_fetch_failed`,
+`run_worktree_fetch_timeout`, `run_worktree_base_unavailable`,
+`run_worktree_git_timeout` or `run_worktree_create_failed`, without raw Git diagnostics.
+The private run record saves `run_worktree: {path, branch, base_sha}` before launch
+and retains ordered creation evidence in `worktree_attempts`; `base_sha` is the
+attempt's starting commit (main head or continuation tip). A failed fixer creation
+records no worktree and a null cwd, never its parent's path. Runner `JobInfo.cwd`,
+process cwd and child PWD use that path. With the flag off, cwd is unchanged;
+dry runs create nothing. No worktrees are removed, no pg-reap lock sharing is
+implemented, and enabling by default and the Rust port remain later slices.
 
 Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
 chosen leg, served model/family with witness kind (a structured claude `system/init` model is a native witness; a mismatch with the requested leg sets `served_model_mismatch`), writer family, status, started/ended timestamps,
@@ -146,6 +247,18 @@ The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md]
 
 CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
 A probe with its harness binary missing reports `host-not-ready` and books no leg event.
+Failed probes retain a scrubbed, single-line excerpt of the last 400 stderr
+characters in their result, output line and leg-state event. A `running` record
+on the same model/harness with a nonempty `live.log` grown within
+`LIVE_RUN_WRITE_WINDOW_S` (120 seconds) overrides only the probe failure:
+`probe_failed_leg_serving` records the diagnostic without a retry/down-until
+time and does not block dispatch. Stale, empty or missing logs do not override.
+Real quota/usage-limit evidence from `exit_outcome` still books the leg down;
+serving evidence never clears that provider signal. Probes share the owning
+service's resolved state directory, with no environment fallback; pre/post size
+snapshots reject touches of old logs, truncations, replacements and read races.
+Only the explicit stderr excerpt extends the legacy 300-character reason bound.
+Ordinary probe JSON omits `state`; it is never emitted as null.
 CLI `launch-spec` (placement R6a-3d; nothing calls it yet): one JSON request on stdin, one launch spec on stdout (argv, cwd, the complete child env, stdin, warnings, events) for pg-spawnd; optional request `leg.explicit` must be boolean: only `true` permits document review without `diff_ref`, absent/false still refuses; it reuses the spawn prep and never launches; exit 2 = one redacted refusal line, exit 1 = internal error (type name only).
 MCP `route`, `spawn`, `ps`, `result`, `status`, `cancel` (with `plangraph_agent_` prefix) share these records. Spawn requires
 `card` and `prompt` in its schema; model_or_combo requires override_reason.
@@ -436,3 +549,7 @@ The SSH ps endpoint serializes only running and queued records. Terminal history
 does not consume the 1 MiB transport budget; malformed terminal fields do not
 hide live runs. Malformed live replies and oversized replies name the queried
 host as unknown rather than silently omitting it.
+Rust source-filter tests and pytest's real `configured_hosts` checks consume
+`tests/fixtures/doctor_sources.json`, binding both validators and probe limits
+to the same accepted/rejected cases. Rust embeds JSON, never Python source or
+an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
