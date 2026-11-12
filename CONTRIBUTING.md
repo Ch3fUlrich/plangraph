@@ -29,7 +29,7 @@ Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so t
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 
 ```bash
-python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist
+python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
 python tools/affected_tests.py --base origin/main --run -n auto  # writers / PR / L2
 python -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
@@ -51,6 +51,16 @@ Work that covers two plan items is two lanes.
 A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) only for the item's latest verified head; interrupted sends are not blindly replayed.
 
 New production code must be Rust unless explicitly listed in `tools/new_code_allowlist.txt`; the host-readiness source-probe helper is a single-file exception for the pre-gate lane, retired by `SPAWNER-RUST-PORT`.
+
+For an offline judge brief, run `python3 tools/judge_prompt.py --findings findings.txt
+--base origin/main --head HEAD --ci-summary ci.json --output judge.md`, with
+`ci.json` mapping job names to conclusion strings. The prompt includes complete
+findings and diff; `--byte-budget` limits whole file bodies and lists explicit cuts.
+See [Lean review harness](docs/lean-review-harness.md) for seat tool modes.
+Only `--tool-mode tools` advertises follow-up reads; `inline-only` reads the
+spawner-inlined diff without tools, and `prompt-only` uses supplied evidence.
+Gateway prompt-only config is file-backed via a portable launcher, never argv.
+New Python files require a reasoned rule 9.14 entry in `tools/new_code_allowlist.txt`.
 
 ## File size
 
