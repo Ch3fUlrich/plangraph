@@ -1,0 +1,4 @@
+- Isolate effort roundtrip and exact-route tests from ambient catalog data; keep the shared family resolver unchanged by scoping Anthropic/Fable aliases to implement eligibility.
+- Restore non-writer tier-position coverage across all writer tiers and report excluded opaque operator legs through CLI skips and exhausted-route diagnostics.
+- Merge main's expiry, catalog and measured-utility behavior without losing the Sol xhigh default, automatic Gemini fallback, retained explicit legs or review registrations (D-5206/D-5212).
+- Fix CI reconciliation: preserve every #763 fallback role and strict benchmark gap, prove renamed Big Pickle's family from its registered model, and synchronize keeper readiness to the promoted Sol id without lifting admission. Keep Sol/Gemini priority ahead of utility-ranked cost tiers and emit a valid agy success frame in the watchdog job-release regression.

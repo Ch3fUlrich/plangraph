@@ -10,6 +10,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
+
 from plangraph.catalog_data import SEED_MODELS
 from plangraph.planner.legs import DEFAULT_LEGS, Leg
 from plangraph.planner.route_policy import RoutePolicy, load_route_policy
@@ -101,7 +103,7 @@ def test_implement_route_still_skips_banned_and_off(tmp_path):
     assert reasons['opencode-deepseek-v4.1-flash-free'].startswith('disabled: D-4196')
     assert reasons['opencode-glm-5.3-flash-free'].startswith('disabled: D-4196')
     assert reasons['omniroute-deepseek-flash'] == 'banned_family'
-    assert plan.first_leg.id == 'openrouter-free'
+    assert plan.first_leg.id == 'cx-gpt-6.1-sol-xhigh'
     for leg_id in ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.2"):
         expected = r"leg disabled: .*D-3605" if "glm" in leg_id else r"writer disabled \(D-3828\)"
         with pytest.raises(SpawnRefused, match=expected):

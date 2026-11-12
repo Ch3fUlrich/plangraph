@@ -119,7 +119,7 @@ class SpawnService(SeatSpawnMixin):
                                benchmark=benchmark, require_bench=require_bench)
             from plangraph.planner.routing import SpawnRefused, explicit_only_skips
             if plan.error:
-                raise SpawnRefused(plan.error)
+                raise SpawnRefused("\n".join([plan.error, *(f"skip {row['leg']}: {row['reason']}" for row in plan.skipped)]))
             return replace(plan, skipped=type(plan.skipped)((*plan.skipped, *explicit_only_skips(role))))
         except Exception as exc:
             self.save_refusal(exc, role)
