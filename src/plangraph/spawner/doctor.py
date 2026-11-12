@@ -41,7 +41,7 @@ def load_watchdog_env():
 
 
 def clean(value):
-    from .runner import redact
+    from .env_redact import redact_output
     from .env_redact import redact_env_values
     text = redact_env_values(str(value), os.environ)
     # Also scrub unstructured subprocess/HTTP errors, including opaque tokens.
@@ -55,7 +55,7 @@ def clean(value):
             text = text.replace(secret, '[REDACTED]')
     except (KeyError, OSError, UnicodeError):
         pass
-    return ' '.join(redact(text).split())[:600]
+    return ' '.join(redact_output(text).split())[:600]
 
 
 async def mcp(module, command=None):
