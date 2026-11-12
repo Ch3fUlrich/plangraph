@@ -21,6 +21,8 @@ from plangraph.routing_support import leg_state
 BY_ID = {leg.id: leg for leg in spawnable_legs()}
 CLAUDE = {f"agy-claude-{m}-5-5-{e}": f"claude-{m}-5-5-{e}"
           for m in ("sonnet", "opus") for e in ("low", "medium", "high")}
+CLAUDE.update({f"agy-claude-fable-5-2-{e}": f"claude-fable-5-2-{e}"
+               for e in ("low", "medium", "high")})
 SOL = {f"cx-gpt-6.1-sol-{e}": f"omniroute/cx-gpt-6.1-sol-{e}"
        for e in ("low", "medium", "high", "xhigh", "max")}
 LUNA = {f"cx-gpt-6-luna-{e}": f"omniroute/cx-gpt-6-luna-{e}"
@@ -114,7 +116,8 @@ def _svc(tmp_path):
     return SpawnService(SpawnerRunner(), state=tmp_path)
 
 
-@pytest.mark.parametrize('leg_id', ['agy-claude-sonnet-5-5-high', 'agy-claude-opus-5-5-high'])
+@pytest.mark.parametrize('leg_id', ['agy-claude-sonnet-5-5-high', 'agy-claude-opus-5-5-high',
+                                  'agy-claude-fable-5-2-high'])
 def test_explicit_claude_review_seat(tmp_path, leg_id):
     result = asyncio.run(_svc(tmp_path).spawn(
         card={'estimate_tokens': 20000}, prompt='Review public code', role='review',

@@ -127,3 +127,19 @@ def test_migrate_original_not_null_schema_without_data_loss():
         migrate(db.conn)
         assert dict(db.conn.execute("SELECT * FROM catalog_benchmarks").fetchone()) == before
         db.conn.execute("UPDATE catalog_benchmarks SET aa_intelligence=NULL,cost_per_task_usd=NULL")
+
+
+def test_query_catalog_tool_returns_provenance(tmp_path, monkeypatch):
+    import asyncio
+
+    from plangraph.spawner import mcp
+    with CatalogDB() as db:
+        db.init_and_seed()
+        monkeypatch.setattr(mcp, "get_catalog_models", db.list_models)
+        server = mcp.MCPSpawnerServer(state=tmp_path)
+        result = asyncio.run(server.call_tool("plangraph_agent_query_catalog", {}))
+        assert result["count"]
+        for row in result["models"]:
+            assert_provenance(row)
+        filtered = asyncio.run(server.call_tool("plangraph_agent_query_catalog", {"min_intelligence": 40}))
+        assert all(row["aa_intelligence"] >= 40 for row in filtered["models"])
