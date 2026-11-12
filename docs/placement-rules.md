@@ -1,5 +1,21 @@
 # Placement rule loader (R8B A)
 
+## Python spawn overflow (HOST-RUN-CAPS slice 2)
+
+Default CLI/MCP admission and SSH target selection use the registry role RAM
+reservation above `caps.mem_floor_mb`; live run counts do not limit admission.
+Healthy, fresh targets are ranked by available RAM above their floor, then name.
+The overflow routing file supplies `hosts` and the `public_repos` allowlist only;
+legacy local limit overrides are ignored. A repository absent from the allowlist
+queues without copying. Exhausted targets produce per-host safe refusal reasons.
+Without an overflow config, local admission still applies: admitted local runs
+have no overflow annotation; below-floor queued records carry matching `reason`
+and `overflow_reason` with the memory refusal and absent/unknown allowlist reason.
+Missing or unreadable receipt IDs produce `acknowledged_unknown=true`,
+`status=unknown` records on the selected host, never a refusal or retry.
+See docs/SPAWNER.md for registry defaults and receipt boundaries. This Python
+integration does not change the Rust placement-rule rollout gates below.
+
 ## Operator view: local Rust rule source
 
 `placement_rule_store::RuleSource` accepts a configured env-file path (or None),
@@ -226,3 +242,45 @@ restore plan, never silently introduce revision zero alongside retained history.
 SQLite rollback is service/config rollback retaining tables. C4 owns transaction
 behavior and forward audit rollback; C6 owns routes. Mandatory ephemeral PG CI
 must pass before merge; C3 storage alone does not close the item.
+# Host readiness consumer contract
+
+`python3 -m plangraph.spawner.host_ready` checks each overflow host, including
+its configured spawner source and matching `ps-hosts.json` source. Every overflow
+host requires a matching ps entry; an absent entry (including a missing ps config)
+fails with `src_config missing_ps_host`, never readiness success. Source entries
+are deduplicated before validation, so repeated invalid entries report once.
+Unreadable or malformed ps configuration reports only `src_config unreadable`,
+not a contradictory missing-host reason. Source paths must be nonempty strings,
+exist and import `plangraph` with that path as
+`PYTHONPATH`; non-string paths fail with `src_config`, not a traceback. The ps
+entry's `target` and overflow `ssh` must be the same string: different aliases for
+the same machine are still rejected. The `src_config` mismatch line names both
+values and says they must be the same string. Unsupported source transports fail
+closed. A session probe must be configured.
+
+After fetching origin/main, `behind_main` reports the number of commits in
+`HEAD..origin/main`; unreadable or unreachable means JSON `null`, never zero.
+SHA equality is checked separately, so divergent or ahead checkouts also fail.
+Memory, disk, doctor, keeper reach, session and capacity remain independent checks.
+
+For routerctl to grep (no private-repository change required), every failure is
+one stable line: `HOST-NOT-READY <host> <check> <reason>`. These lines go to stdout
+normally and stderr with `--json`, preserving machine-readable JSON stdout.
+Source checks for routerctl's grep set are `src_missing` (absent path),
+`src_import` (import failed), `src_config` (invalid, unsupported or unreadable
+configuration, or unknown route/path), and `src` (probe failure or unexpected
+response). The spawner source is probed even if ps-hosts configuration is invalid.
+Pre-probe configuration errors use `config`, not `unreachable`.
+Ordinary per-host configuration/probe exceptions and state-write failures also
+produce failure lines without aborting other hosts' reports; exception text is
+not exposed. Resource exhaustion (`MemoryError`, `RecursionError`) and
+process-control exceptions propagate instead of being relabelled as config errors.
+Lag uses `behind_main` and reason
+`N behind`; unreadable lag emits a `behind_main` failure line. Unreachable hosts
+report `unreachable`, leaving other values unknown.
+All-green hosts emit no such line. Reasons never include raw transport output.
+
+Live acceptance remains a deployment obligation: demonstrate both hosts green,
+merge/CI success and a non-writer-family review seat. Hermetic tests do not claim
+that evidence. Named defect: configured source checkout deleted while remote ps
+continued using its stale configured path; the source probe now detects this.

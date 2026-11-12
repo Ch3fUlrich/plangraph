@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 import shutil
 import stat
+import subprocess
 import sys
 import urllib.request
 
@@ -146,11 +147,41 @@ async def harness(name):
 
 
 async def diagnose(probe=False):
+    from plangraph.fleet_sync.genconfig import config_dir
     from plangraph.planner.legs import HARNESSES
     from .service import SpawnService
     from .leg_probe import probe_many
     checks, plans = [], {}
-    from .ps_host_doctor import source_checks
+    try:
+        registry = json.loads((config_dir() / 'hosts.json').read_text())
+        name = (os.environ.get('PLANGRAPH_HOST_NAME') or registry['self']).casefold()
+        host = next(h for h in registry['hosts']
+                    if name in [s.casefold() for s in [h['id'], *h.get('aliases', [])]])
+        path = host.get('env', {}).get('PATH')
+        if isinstance(path, str) and path:
+            os.environ['PATH'] = path
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, StopIteration):
+        pass
+    def source_checks():
+        binary = shutil.which('pg-spawnd') or 'pg-spawnd'
+        detail = 'host query failed'
+        try:
+            result = subprocess.run([binary, 'doctor-sources'], check=False,
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, timeout=TIMEOUT)
+            rows = json.loads(result.stdout)
+            if (result.returncode == 0 and isinstance(rows, list)
+                    and all(isinstance(row, dict)
+                            and all(isinstance(row.get(key), str)
+                                    for key in ('name', 'status', 'detail'))
+                            for row in rows)):
+                return [{key: row[key] for key in ('name', 'status', 'detail')}
+                        for row in rows]
+        except FileNotFoundError:
+            detail = 'unavailable'
+        except (OSError, subprocess.TimeoutExpired, ValueError, UnicodeError):
+            pass
+        return [dict(name='ps_hosts', status='fail', detail=detail)]
     checks.extend(await asyncio.to_thread(source_checks))
 
     async def check(name, operation):

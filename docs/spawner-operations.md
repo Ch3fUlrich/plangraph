@@ -79,6 +79,23 @@ Run stdio MCP server:
 python -m plangraph.spawner.mcp
 ```
 
+On Windows, background agent/supervisor processes, Git diff packaging and model
+probes use `CREATE_NO_WINDOW`; session owners retain a new process group. Git and
+model probes close stdin so they cannot consume the MCP transport. Read-only
+reviews skip writer edit/CPU scans, while retaining their wall-clock deadline.
+Prompt packaging runs off the RPC loop; its Git timeout and await are bounded by
+the remaining review budget. Invalid, empty or oversized diffs still refuse.
+
+The canonical `gemini-3.8-flash` route is translated only at the native AGY command
+boundary to `gemini-3.8-flash-high`. Explicit effort-qualified SKUs are preserved.
+After changing server source or configured environment forwarding, reconnect the
+MCP client before treating a live review as validation of the update. A fresh
+stdio test server and a previously connected client can be running different
+versions of the same source. A dry run is never a completed review; inspect the
+terminal result, exit code, verdict and served-model witness separately. Gateway
+review witnessing needs `PLANGRAPH_GATEWAY_LOG_TOKEN` in the MCP server environment;
+the management token must not be forwarded to the reviewer child.
+
 #### Available MCP Tools
 
 1. `plangraph_agent_spawn`:

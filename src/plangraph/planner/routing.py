@@ -1,13 +1,4 @@
-"""Keeper-side routing (design 4.3, 5; D25): pick a window class and an ordered leg plan.
-
-``route_card`` turns a card into a :class:`Route`: the window class (the card's own, or
-the smallest class that holds the effective estimate at 55% of the window), the eligible
-legs (tier order, then ``legs.py`` order) and the review level.  ``next_after_failure``
-walks the plan after a failed attempt (design 4.5): rotate inside a tier on a provider
-problem, retry on the same leg while the tier budget lasts, then promote to the next
-tier, else park.  The window class only grows on a context overflow.  Pure functions,
-no I/O.
-"""
+"""Keeper routing and spawner boundary (design 4.3, 5; D25)."""
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
@@ -23,7 +14,7 @@ from plangraph.routing_errors import RouteError, SpawnRefused
 
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
                          BenchRequired, benchmark_rows_from_db)
-from .legs import DEFAULT_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active
+from .legs import DEFAULT_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
 from .provider_stop import next_leg_after_provider_stop
 from .review_order import review_key
 from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts  # noqa: F401
@@ -31,7 +22,7 @@ from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
            "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
             "SpawnRefused", "SpawnPlan", "plan_spawn",
-             "hand_picked", "next_leg_after_provider_stop", "benchmark_rows_from_db"]
+              "hand_picked", "next_leg_after_provider_stop", "benchmark_rows_from_db"]
 
 #: Window sizes in tokens.
 WINDOW_TOKENS = {"128k": 131072, "256k": 262144, "1m": 1048576}
@@ -443,14 +434,15 @@ def validate_model(model, *, allow_inactive=False):
     from plangraph.routing_support.resolver import (get_catalog_models, catalog_row_admitted,
                                            OPERATOR_REMOVED_MODELS)
     from plangraph.mimo_policy import check_mimo_path
-    from .legs import DEFAULT_LEGS
+    from . import legs as _legs   # read at call time: explicit legs are registered too
     if not isinstance(model, str) or not model:
         raise SpawnRefused('model must be a nonempty string')
     check_mimo_path(model)
     rows = get_catalog_models()
     inactive = {row['id'] for row in rows if not catalog_row_admitted(row)} if not allow_inactive else set()
     allowed = ({row['id'] for row in rows if catalog_row_admitted(row)} |
-               {leg.model for leg in DEFAULT_LEGS}) - inactive - OPERATOR_REMOVED_MODELS
+               {leg.model for leg in (*_legs.DEFAULT_LEGS, *_legs.EXPLICIT_LEGS)}
+               ) - inactive - OPERATOR_REMOVED_MODELS
     if model not in allowed:
         raise SpawnRefused('unknown model: ' + str(model))
     return model

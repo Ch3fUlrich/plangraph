@@ -3,7 +3,8 @@
 # files split across workers (test_zz_coverage). Lift once xdist catches up.
 pytest<9.2
 pytest-xdist
-jsonschema
+# Offline OpenCode review config contract uses Draft 2020-12 validation.
+jsonschema>=4
 pyyaml
 cryptography>=41.0.7
 temporalio

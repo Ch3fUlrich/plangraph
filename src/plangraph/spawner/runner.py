@@ -35,8 +35,9 @@ from plangraph.spawner.claude_env import claude_child_env
 from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
 from plangraph.spawner.resolver import MODEL_FAMILIES, detect_model_family
 from plangraph.spawner.mimo_policy import check_mimo_path
-from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
 from plangraph.spawner.winjob import WinJobApi  # re-export: tests patch runner.WinJobApi
+from plangraph.routing_support import background_process_options
 
 _KEEPER_UNCONFIGURED_WARN_S = 600
 # D-2966: writers commit in their clone; AutoOS leaf-agent profiles they may read must not fence that.
@@ -47,7 +48,7 @@ _keeper_unconfigured_last_warned = None
 
 from .env_redact import first_reason, redact
 from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
-from .git_guard import writer_launch
+from .git_guard import prepare_worktree, writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
@@ -83,7 +84,8 @@ def _resolve_launch(
 
     is_opencode = exe_path.stem.lower() == "opencode"
     if not is_opencode:
-        limit = 8000 if is_batch else 32000
+        from plangraph.routing_support.clients import WINDOWS_ARGV_LIMIT, WINDOWS_BATCH_ARGV_LIMIT
+        limit = WINDOWS_BATCH_ARGV_LIMIT if is_batch else WINDOWS_ARGV_LIMIT
         cmdline = subprocess.list2cmdline([exe, *argv])
         if len(cmdline) > limit:
             return exe, f"command_line_too_long: {len(cmdline)} chars"
@@ -229,7 +231,7 @@ class SpawnerRunner:
         self.on_sample = None
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
-        self.process_factory = process_factory or asyncio.create_subprocess_exec
+        self.process_factory = process_factory or proc_kill.oom_process_factory
         self.tree_killer = tree_killer or self._own_kill
         self.platform = None   # tests inject 'nt'
         self.provider_responses = {}
@@ -459,7 +461,7 @@ class SpawnerRunner:
             if dry_run:
                 served_model = model_or_combo
                 served_family = detect_model_family(model_or_combo)
-                if "/" not in model_or_combo and not any(l.model == model_or_combo for l in DEFAULT_LEGS):
+                if "/" not in model_or_combo and not any(l.model == model_or_combo for l in (*DEFAULT_LEGS, *EXPLICIT_LEGS)):
                     from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
                     combo_legs = [
                         m for m in get_catalog_models()
@@ -518,7 +520,7 @@ class SpawnerRunner:
             from .run_watchdog import thresholds, edit_signature
             job._watchdog_limits = watchdog or thresholds(role=role)
             job._live_log = live_log
-            job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir)
+            job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir) if role in ('implement', 'fix') else None
             if tools_event:
                 job.events.append(tools_event)
 
@@ -544,6 +546,8 @@ class SpawnerRunner:
 
             import shutil
             resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
+            from plangraph.routing_support.clients import launch_stdin_payload
+            payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
             resolved_exe, launch_refusal = _resolve_launch(resolved_exe, cmd[1:], is_nt=_is_nt())
             if launch_refusal:
                 job.status = 'failed'
@@ -552,8 +556,8 @@ class SpawnerRunner:
                 job.end_time = time.time()
                 return job
 
-            if cmd[0] in STDIN_PROMPT_HARNESSES:
-                self._stdin_payloads[job_id] = prompt.encode("utf-8")
+            if payload is not None:
+                self._stdin_payloads[job_id] = payload
             self._adapter_tokens[job_id] = object()
             if role in ("implement", "fix"):
                 guard = self._init_git_config_guard(work_dir)
@@ -569,12 +573,8 @@ class SpawnerRunner:
                     env=child_env,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    stdin=(
-                        asyncio.subprocess.PIPE
-                        if cmd[0] in STDIN_PROMPT_HARNESSES
-                        else asyncio.subprocess.DEVNULL
-                    ),
-                    **({"start_new_session": True} if os.name != "nt" else {}),
+                    stdin=asyncio.subprocess.PIPE if payload is not None else asyncio.subprocess.DEVNULL,
+                    **background_process_options(new_session=True, platform='nt' if self._nt() else 'posix'),
                 )
             except Exception as exc:
                 self._adapter_tokens.pop(job_id, None)
@@ -702,15 +702,15 @@ class SpawnerRunner:
             exit_code = self.jobs[job_id].exit_code if (self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled')
                                                         or self.jobs[job_id].survivors
                                                         or getattr(self.jobs[job_id], 'refusal', None)) else proc.returncode
-
             job = self.jobs[job_id]
-            # Only the fork's exact stderr transport envelope is evidence.
             for line in stderr_text.splitlines():
                 try:
                     envelope = json.loads(line)
                 except (ValueError, TypeError):
                     continue
                 if not isinstance(envelope, dict) or set(envelope) != {'autoos_provider_response'}:
+                    from .proc_kill import record_oom_envelope
+                    record_oom_envelope(job.events, envelope)
                     continue
                 response = envelope['autoos_provider_response']
                 if not isinstance(response, dict) or response.get('nonce') != self._nonces.get(job_id) or not self._nonces.get(job_id):
@@ -727,8 +727,8 @@ class SpawnerRunner:
                                            nonce=self._nonces[job_id])
             from .env_redact import redact_env_values
             env = self._child_envs.get(job_id, os.environ)
-            from .opencode_answer import answer_text, final_answer, terminated_after_answer
-            decoded = answer_text(stdout_text) if is_opencode(job) else stdout_text
+            from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer
+            decoded, stderr_text, exit_code = native_answer(job, answer_text(stdout_text) if is_opencode(job) else stdout_text, stderr_text, exit_code)
             job.stdout = redact(redact_env_values(decoded, env))
             job.stderr = redact(redact_env_values(stderr_text, env))
             job.exit_code = exit_code
@@ -933,6 +933,7 @@ def spawn_service(*args, **kwargs):
             if changed:
                 super()._save(record)
             if terminal:
+                from .notify import deliver_verdict; deliver_verdict(self._path(record['run_id']).parent, record, self.keeper_sink)
                 for recipient, sink in (('parent', self.completion_sink), ('keeper', self.keeper_sink)):
                     marker = self._path(record['run_id']).parent / (recipient + '.delivered')
                     if marker.exists():
@@ -968,13 +969,11 @@ def spawn_service(*args, **kwargs):
         def retry_completions(self):
             """Re-drive durable terminal records after a supervisor/bridge outage."""
             for record in self.ps()['runs']:
-                recipients = ['parent', 'keeper']
+                recipients = ['parent', 'keeper', 'verdict'] if record.get('role') == 'review' else ['parent', 'keeper']
                 markers = [r + '.delivered' for r in recipients]
                 if os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD'):
-                    markers += [r + '.hook.delivered' for r in recipients]
-                pending = 'completion' not in record or any(
-                    not (self._path(record['run_id']).parent / marker).exists()
-                    for marker in markers)
+                    markers += [r + '.hook.delivered' for r in ('parent', 'keeper')]
+                pending = any(not (self._path(record['run_id']).parent / m).exists() for m in markers)
                 if record.get('ended') is not None and record.get('status') != 'running' and pending:
                     try:
                         self._save(record, retry=True)
@@ -1011,7 +1010,7 @@ def spawn_service(*args, **kwargs):
         async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
-                        seats=False, _plan=None):
+                        seats=False, _plan=None, run_worktree=False):
             from .private_io import SAVE_READ_ATTEMPTS
             from .run_watchdog import terminal_status, thresholds
             from .question_bridge import rounds_exhausted
@@ -1025,7 +1024,7 @@ def spawn_service(*args, **kwargs):
                     review_of=review_of, model=model, leg=leg, override_reason=override_reason,
                     dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=not seats or no_fallthrough,
                     benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
-                    seats=seats,
+                    seats=seats, run_worktree=run_worktree,
                 )
             from plangraph.settings import admit_review_scope
             admit_review_scope(card, role, review_scope)
@@ -1038,7 +1037,6 @@ def spawn_service(*args, **kwargs):
             if hasattr(plan, '__dataclass_fields__'):
                 plan = await plan_for_launch_async(plan, dry_run=dry_run)
             run_id = 'run-' + uuid.uuid4().hex
-            import hashlib
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
                 role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
                 served_family=None, request_side_model=None, witness_kind=None,
@@ -1089,14 +1087,15 @@ def spawn_service(*args, **kwargs):
                             continue
                         from .inline_diff import InlineDiffError
                         try:
-                            leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run)
+                            leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run, deadline=record['started'] + limits['max_s'] if role == 'review' else None)
                         except InlineDiffError as exc:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
+                        worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
                         job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env,
+                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                         self._running_records[job.job_id] = record
                         process = self.runner._processes.get(job.job_id)

@@ -25,6 +25,34 @@ if str(_SRC) not in sys.path:
 _TOOLS = Path(__file__).resolve().parents[1] / "tools"
 
 
+def _oom_worker_count(count, meminfo=Path('/proc/meminfo')):
+    override = os.environ.get('PYTEST_XDIST_AUTO_NUM_WORKERS')
+    try:
+        count = min(count, max(1, int(override))) if override else count
+    except ValueError:
+        pass
+    try:
+        total = int(re.search(r'^MemTotal:\s+(\d+)', meminfo.read_text(), re.M)[1])
+    except (OSError, TypeError, ValueError):
+        return min(count, 4)  # Unknown capacity is not permission for unbounded workers.
+    return max(1, min(count, 4, total // (1024 * 1024)))
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_auto_num_workers(config):
+    return _oom_worker_count(os.cpu_count() or 1)
+
+
+@pytest.hookimpl(specname='pytest_configure')
+def pytest_oom_configure(config):
+    if sys.platform.startswith('linux'):
+        from plangraph.spawner.proc_kill import raise_oom_score
+        import warnings
+        event = raise_oom_score()
+        if event['event'] == 'oom_score_adj_denied':
+            warnings.warn('oom_score_adj_denied: EACCES raising pytest worker to 500')
+
+
 @pytest.fixture
 def w(tmp_path):
     from keeper_util import World

@@ -170,7 +170,7 @@ def test_every_harness_client_is_launched_with_the_explicit_cwd(
     async def factory(*args, **kwargs):
         captured['argv'], captured['kwargs'] = args, kwargs
 
-        async def communicate():
+        async def communicate(input=None):
             return b'', b''
         return SimpleNamespace(pid=FAKE_PID, returncode=0, communicate=communicate)
 

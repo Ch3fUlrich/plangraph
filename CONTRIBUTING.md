@@ -1,5 +1,26 @@
 # Contributing
 
+Run `python3 tools/preflight.py --base origin/main --head HEAD` before pushing:
+it blocks on scrub, CI policy (including commit trailers), changed-crate Rust checks,
+and affected tests, in that order. Each family ends with a timed PASS/FAIL/SKIP/INFRA
+summary; failed checks with HTTP 5xx output in any family (including policy) are
+inferred as INFRA and retried once; persistent INFRA exits 3, other failures exit 1.
+Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
+affected pytest has 900 seconds. The hook has no additional overall preflight bound.
+Use `--keep-going` to collect all failures or `--fast`
+to skip affected tests. The existing pre-push hook runs preflight too; set
+`PREFLIGHT_FAST=1` for its fast mode or `PREFLIGHT_SKIP=1` to bypass only that hook
+invocation (not the existing scrub/ref/file-size gates or direct CLI runs). Private
+scrub words come from `PLANGRAPH_SCRUB_WORDS` or `~/.config/plangraph/scrub-words.txt`;
+when neither is present, public rules still run but scrub reports SKIP with a reason.
+`PREFLIGHT_TOOLS_DIR` overrides tool paths for tests.
+The revision controls `FILESIZE_REQUIRE_BASE`, `NEWCODE_BASE` and `CHANGELOG_BASE`
+are scoped to policy checks. Other families receive none of these controls,
+including inherited values, so nested Git test fixtures own their revision bases.
+Affected tests also clear Git's repository-local environment reported by
+`git rev-parse --local-env-vars`, including indexed configuration pairs. Policy
+checks retain the caller's Git context; test repositories keep their own hooks.
+
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
 ## Setup and tests
@@ -8,7 +29,7 @@ Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so t
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 
 ```bash
-python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist
+python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
 python tools/affected_tests.py --base origin/main --run -n auto  # writers / PR / L2
 python -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
@@ -16,6 +37,8 @@ python -m pytest -q -n auto tests            # main merge + nightly full suite
 The affected selector falls back to the full suite for unmapped Python source,
 shared fixtures and suite configuration; documentation/status/build artifacts do
 not trigger a full run. Do not bypass a conservative fallback on PRs.
+Pass `--head <revision>` for a committed-only comparison, excluding staged,
+worktree and untracked changes; omit it to include checkout changes.
 Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
 the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
@@ -23,7 +46,21 @@ systemd user scope. Use `affected` or `full` to measure each separately.
 ## Lanes
 
 One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `main`.
+The RUN-WORKTREE Python regression exception (D-5062) retires with SPAWNER-RUST-PORT.
 Work that covers two plan items is two lanes.
+A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) only for the item's latest verified head; interrupted sends are not blindly replayed.
+
+New production code must be Rust unless explicitly listed in `tools/new_code_allowlist.txt`; the host-readiness source-probe helper is a single-file exception for the pre-gate lane, retired by `SPAWNER-RUST-PORT`.
+
+For an offline judge brief, run `python3 tools/judge_prompt.py --findings findings.txt
+--base origin/main --head HEAD --ci-summary ci.json --output judge.md`, with
+`ci.json` mapping job names to conclusion strings. The prompt includes complete
+findings and diff; `--byte-budget` limits whole file bodies and lists explicit cuts.
+See [Lean review harness](docs/lean-review-harness.md) for seat tool modes.
+Only `--tool-mode tools` advertises follow-up reads; `inline-only` reads the
+spawner-inlined diff without tools, and `prompt-only` uses supplied evidence.
+Gateway prompt-only config is file-backed via a portable launcher, never argv.
+New Python files require a reasoned rule 9.14 entry in `tools/new_code_allowlist.txt`.
 
 ## File size
 
@@ -36,6 +73,7 @@ counts, and CI refuses an entry added or raised against the change's base (`orig
 on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
 (today only `CHANGELOG.md`, an append-only ledger).
+The file-size gate refuses malformed Git batch headers with a single reason line.
 
 ## Changelog and documentation
 

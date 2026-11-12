@@ -95,6 +95,32 @@ def merged_pr_for(adapter, project, merge_sha, target_ref):
     return None
 
 
+def non_pr_merge(ctx, project, merge_sha, target_ref):
+    """Opt-in local topology proof; repository policy is router-owned config."""
+    from .evidence_git import valid_ref
+
+    entries = getattr(ctx.git, "_repos", {})
+    entry = entries.get(project) if isinstance(entries, Mapping) else None
+    if not isinstance(entry, Mapping) or entry.get("non_pr") is not True:
+        return False
+    if not valid_commit_ref(merge_sha) or not valid_ref(target_ref):
+        return False
+    configured_ref = entry.get("ref")
+    if not valid_ref(configured_ref) or target_ref != configured_ref:
+        return False
+    # This exception proves only merge provenance, never a CI exemption.
+    if ctx.ci.mode(project) in (None, "none", ""):
+        return False
+    repo = ctx.git.repo_path(project)
+    parents = ctx.git._run(
+        repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", merge_sha])
+    tokens = parents.stdout.split()
+    return (parents.returncode == 0 and len(tokens) >= 3
+            and tokens[0] == merge_sha
+            and all(valid_commit_ref(parent) for parent in tokens[1:])
+            and ctx.git.is_ancestor(repo, merge_sha, target_ref))
+
+
 def validate_merge(ctx, project, merge_info, target_ref, ref):
     """Preserve principal policy, then require proof from the injected adapter."""
     merge_sha, email = merge_info
@@ -105,10 +131,13 @@ def validate_merge(ctx, project, merge_info, target_ref, ref):
             return Result(False,
                           f"merge commit committer {email!r} is not an allowed merge principal", ref)
     try:
+        proven = non_pr_merge(ctx, project, merge_sha, target_ref)
         lookup = getattr(ctx.ci, "merged_pr_for", None)
-        proven = valid_commit_ref(merge_sha) and callable(lookup) and lookup(
-            project, merge_sha, target_ref)
+        if not proven:
+            proven = valid_commit_ref(merge_sha) and callable(lookup) and lookup(
+                project, merge_sha, target_ref)
         if proven:
+            # Provenance only: the caller still enforces floor and CI guards.
             return None
     except Exception:  # Never expose sensitive text from adapter errors.
         pass

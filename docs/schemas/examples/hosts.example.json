@@ -7,14 +7,16 @@
       "class": "worker",
       "aliases": ["devbox"],
       "transport": "local",
+      "ssh_target": "worker.example.invalid",
+      "env": { "PATH": "/opt/fleet/bin:/usr/bin:/bin" },
       "os": "linux",
       "state_dir": "/srv/fleet/code/state",
       "caps": {
-        "max_runs": 4,
-        "max_writers": 2,
+        "max_runs": 10,
+        "max_writers": 8,
         "max_seats": 3,
         "max_sessions": 8,
-        "mem_floor_mb": 512
+        "mem_floor_mb": 4096
       },
       "warmup": {
         "warmup_s": 30,
@@ -25,6 +27,12 @@
       "repos": {
         "plangraph": {
           "root": "/srv/fleet/code/repos/plangraph",
+          "live_dir": "/srv/fleet/live/plangraph/current",
+          "health_checks": {
+            "doctor": ["python3", "-m", "plangraph.spawner", "doctor"],
+            "whoami": ["pg", "keeper", "whoami"],
+            "spawn": ["python3", "-m", "plangraph.spawner", "spawn", "--dry-run"]
+          },
           "worktrees_root": "/srv/fleet/code/worktrees/plangraph",
           "remote": "git@placeholder.invalid:fleet/plangraph.git",
           "python": "/srv/fleet/venvs/plangraph/bin/python",
@@ -44,11 +52,11 @@
       "os": "windows",
       "state_dir": "C:\\fleet\\workstation\\state",
       "caps": {
-        "max_runs": 2,
-        "max_writers": 1,
+        "max_runs": 12,
+        "max_writers": 8,
         "max_seats": 2,
         "max_sessions": 4,
-        "mem_floor_mb": 1024
+        "mem_floor_mb": 8192
       },
       "warmup": {
         "warmup_s": 45,
@@ -69,6 +77,32 @@
           }
         }
       }
+    },
+    {
+      "id": "compact",
+      "class": "worker",
+      "aliases": [],
+      "transport": "ssh",
+      "os": "linux",
+      "state_dir": "/srv/fleet/compact/state",
+      "caps": {
+        "max_runs": 3,
+        "max_writers": 2,
+        "max_seats": 2,
+        "max_sessions": 4,
+        "mem_floor_mb": 2048
+      },
+      "warmup": {
+        "warmup_s": 30,
+        "ramp_mb": {
+          "implement": 256
+        }
+      },
+      "session_mb": 2048,
+      "roles": [
+        "implement"
+      ],
+      "repos": {}
     }
   ]
 }

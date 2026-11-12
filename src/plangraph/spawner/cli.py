@@ -1,6 +1,5 @@
 """Card-only per-host agent CLI: python -m plangraph.spawner.cli."""
 from __future__ import annotations
-
 import argparse
 import asyncio
 import json
@@ -10,11 +9,10 @@ import os
 import subprocess
 import time
 import uuid
-
 _start_supervisor = subprocess.Popen
-
 from .runner import spawn_service as SpawnService, redact
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
+from plangraph.routing_support import background_process_options
 
 
 def _drain_chunks(chunks, write, observe=lambda size: None):
@@ -124,10 +122,10 @@ def main(argv=None):
             p.add_argument('--leg')
             p.add_argument('--override-reason')
             p.add_argument('--dry-run', action='store_true')
+            p.add_argument('--run-worktree', action='store_true', help='isolate each attempt from origin/main')
             p.add_argument('--wait', type=float, default=0)
             p.add_argument('--no-fallthrough', action='store_true')
-            p.add_argument('--seats', action='store_true',
-                           help='role review: spawn every seat route picks (per writer part)')
+            p.add_argument('--seats', action='store_true', help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps')
     commands.add_parser('catalog')
     commands.add_parser('launch-spec')
@@ -191,24 +189,24 @@ def main(argv=None):
             from .prompt_input import resolve_prompt
             try:
                 prompt = resolve_prompt(args.prompt, args.prompt_file)
+                from .prompt_guard import admit_prompt
+                if args.role == 'implement': admit_prompt(prompt, SpawnRefused)
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise
             payload = dict(card=args.card, prompt=prompt, role=args.role,
                 writer_families=args.writer_family, review_of=args.review_of, model=args.model,
-                review_scope=args.review_scope,
+                review_scope=args.review_scope, run_worktree=args.run_worktree,
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
                 no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
-            # Validate before detaching so refusals are reported synchronously.
             from plangraph.settings import admit_review_scope
             try:
                 admit_review_scope(args.card, args.role, args.review_scope)
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise
+            # Explicit model/leg overrides intentionally bypass routing, not admission.
             if not args.model and not args.leg:
-                if not args.card:
-                    raise ValueError('spawn by card; card required')
                 # service.route saves the refusal record itself (one record per route error).
                 service.route(args.card, args.role, args.writer_family, args.review_of, **options)
             if args.dry_run:
@@ -318,8 +316,7 @@ raise SystemExit(code)
                 with os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
                     child = _start_supervisor([sys.executable, '-c', bootstrap, str(log_path)],
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
-                        env=env, text=True, encoding="utf-8", errors="replace", **({'start_new_session': True} if os.name != 'nt' else
-                                      {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}))
+                        env=env, text=True, encoding="utf-8", errors="replace", **background_process_options(new_session=True, platform=os.name))
                     try:
                         child.stdin.write(json.dumps(dict(payload, state=str(service.state))) + '\n')
                         child.stdin.close()

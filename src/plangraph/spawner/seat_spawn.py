@@ -9,7 +9,70 @@ import asyncio
 from dataclasses import replace
 import json
 import os
+import time
 import uuid
+from pathlib import Path
+
+
+def resources(service):
+    from .overflow import available_memory_mb
+    return 0, available_memory_mb()
+
+
+def admit(service, options, *, card=None):
+    """Enforce RAM admission even without an overflow configuration."""
+    if options.get('dry_run'):
+        return None
+    from . import overflow
+    path = Path(os.environ.get('PLANGRAPH_OVERFLOW_HOSTS',
+                              '~/.config/plangraph/overflow-hosts.json')).expanduser()
+    try:
+        config = json.loads(path.read_text())
+        if not isinstance(config, dict):
+            config = {}
+    except (OSError, ValueError):
+        config = {}
+    role = options.get('role', 'implement')
+    role_mb, floor = overflow.local_limits(overflow.registry_caps(), role)
+    _, memory = resources(service)
+    if not overflow.memory_refusal(memory, role_mb, floor):
+        return None
+    repo = Path(((card or {}).get('diff_ref') or {}).get('repo') or
+                getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
+    public = str(repo) in [str(Path(p).expanduser().resolve()) for p in config.get('public_repos', [])]
+    rows = overflow.ready_records(config, role)
+    flags = []
+    for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope'):
+        if options.get(key) is not None:
+            flags.extend(('--' + key.replace('_', '-'), str(options[key])))
+    for family in options.get('writer_families', ()):
+        flags.extend(('--writer-family', family))
+    for key in ('seats', 'no_fallthrough', 'require_bench', 'run_worktree'):
+        if options.get(key):
+            flags.append('--' + key.replace('_', '-'))
+    while True:
+        decision = overflow.decide(memory, role_mb, floor, rows, public)
+        if options.get('benchmark') is not None and decision.host is not None:
+            decision = overflow.Decision(None, 'local benchmark database cannot be forwarded')
+        if decision.host is None:
+            record = {'run_id': 'run-' + uuid.uuid4().hex, 'status': 'queued',
+                      'reason': decision.reason, 'overflow_reason': decision.reason, 'exit_code': 5}
+            break
+        name = decision.host
+        try:
+            result = overflow.remote_spawn(name, config['hosts'][name], card or {},
+                                           options.get('prompt', ''), flags)
+            refusal = 'remote spawn failed'
+        except overflow.RemoteRefusal as exc:
+            result, refusal = None, str(exc)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            result, refusal = None, overflow.failure_reason(exc)
+        if result is not None:
+            record = dict(result, host=name, overflow_reason=decision.reason, overflow_remote=True)
+            record.setdefault('status', 'unknown')
+            break
+        rows[name]['refusal'] = refusal
+    return record
 
 
 # These children expose skill tools, but no repository/shell tools (D-4681).
@@ -41,7 +104,14 @@ def _refuse_oversized_diff(exc, leg):
 
 
 class SeatSpawnMixin:
-    """Needs ``_spawn``, ``_route``, ``save_refusal`` and ``state`` from the service."""
+    """Needs ``_spawn``, ``_route``, ``_save``, ``save_refusal`` and ``state`` from the service."""
+
+    def admit_spawn(self, options, *, card=None):
+        """Check admission and persist any queued or remote run through the service."""
+        record = admit(self, options, card=card)
+        if record is not None:
+            self._save(record)
+        return record
 
     async def spawn(self, *args, **kwargs):
         try:
@@ -53,6 +123,9 @@ class SeatSpawnMixin:
             from plangraph.planner.routing import SpawnRefused
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
+            admitted = self.admit_spawn(options, card=card)
+            if admitted is not None:
+                return admitted
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief
                 from plangraph.settings import admit_fixer_threshold
@@ -82,15 +155,30 @@ class SeatSpawnMixin:
             annotate_review_warning(record)
         return pack
 
-    def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):
+    async def _prepare_leg_prompt(self, prompt, card, role, leg, pack=None,
+                                  document_review=False, deadline=None):
+        """Keep Git/context packaging off the RPC loop and inside the review budget."""
+        from .inline_diff import InlineDiffError
+        remaining = None if deadline is None else deadline - time.time()
+        if remaining is not None and remaining <= 0:
+            raise InlineDiffError('review prompt packaging deadline exceeded')
+        work = asyncio.to_thread(self._leg_prompt, prompt, card, role, leg, pack,
+                                 document_review=document_review,
+                                 diff_timeout=60 if remaining is None else min(60, remaining))
+        try:
+            return await asyncio.wait_for(work, timeout=remaining)
+        except asyncio.TimeoutError:
+            raise InlineDiffError('review prompt packaging deadline exceeded') from None
+
+    def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
         """Assemble one leg's payload, then apply opt-in whole-prompt admission."""
         from . import context_pack
-        prompt = self._unbounded_leg_prompt(prompt, card, role, leg, pack, document_review)
+        prompt = self._unbounded_leg_prompt(prompt, card, role, leg, pack, document_review, diff_timeout)
         if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1':
             return context_pack.bound_prompt(prompt, leg.max_request_tokens)
         return prompt
 
-    def _unbounded_leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):
+    def _unbounded_leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
         """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff.
 
         ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
@@ -104,7 +192,7 @@ class SeatSpawnMixin:
             from .inline_diff import InlineDiffError, inline_diff_prompt
             try:
                 prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
-                                            allow_document=document_review)
+                                            allow_document=document_review, timeout=diff_timeout)
             except InlineDiffError as exc:
                 _refuse_oversized_diff(exc, leg)
                 raise
