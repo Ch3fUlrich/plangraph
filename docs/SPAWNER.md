@@ -164,8 +164,8 @@ Claude 5.5 and effort-variant legs (operator 2026-11-09): `agy-claude-{sonnet,op
 OmniRoute `/v1/models` served that day; agy serves no Sonnet xhigh and cx serves no `-ultra`, so neither is a leg.
 They live in `EXPLICIT_LEGS`, not `DEFAULT_LEGS`: an explicit `--leg` pick (or the model
 override) spawns them, and no route, keeper plan or role order changes (D-3605: Claude is no
-default writer or seat; D-3828: no writer fallback). `plan_spawn` lists them as
-`explicit_only` skips, so `route` shows them. A Claude leg is claude-family: the fence refuses
+default writer or seat; D-3828: no writer fallback). `SpawnService.route` appends them to
+the plan as `explicit_only` skips, so `route` shows them; `plan_spawn` itself does not list them. A Claude leg is claude-family: the fence refuses
 it for a claude writer, given or via `review_of`; with mixed writers the D-3084 per-part rule
 admits a seat that covers another writer part. The Claude and sol-effort writers are
 `EXPLICIT_WRITERS`, which the spawn service admits for `implement`. The catalog spelling
