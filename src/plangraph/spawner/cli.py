@@ -209,12 +209,6 @@ def main(argv=None):
             if not args.model and not args.leg:
                 # service.route saves the refusal record itself (one record per route error).
                 service.route(args.card, args.role, args.writer_family, args.review_of, **options)
-            if not args.dry_run:
-                from .seat_spawn import admit
-                admitted = admit(service, payload, card=args.card)
-                if admitted is not None:
-                    print(json.dumps(admitted, indent=2))
-                    return admitted.get('exit_code', 0)
             if args.dry_run:
                 result = asyncio.run(service.spawn(**payload, wait_seconds=None))
             else:
