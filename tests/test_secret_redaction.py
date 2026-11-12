@@ -72,6 +72,40 @@ def test_quoted_secret_preserves_structure(quote, separator):
     assert env_redact.redact(text) == expected
 
 
+@pytest.mark.parametrize('text,expected', [
+    ('API_KEY="fake value"', 'API_KEY="[REDACTED]"'),
+    ("TOKEN: 'fake value'", "TOKEN: '[REDACTED]'"),
+    ('API_KEY=fake-token-123', 'API_KEY=[REDACTED]'),
+    ('token=fake-token-123', 'token=[REDACTED]'),
+    ('TOKEN=fake_value', 'TOKEN=[REDACTED]'),
+])
+def test_assignment_literals_still_masked(text, expected):
+    assert env_redact.redact(text) == expected
+
+
+def test_dictionary_secret_keys_still_mask_expressions():
+    assert env_redact.redact({'token': 'get_token()', 'idempotency_key': 'value'}) == {
+        'token': '[REDACTED]', 'idempotency_key': 'value'}
+
+
+def test_review_diff_reaches_prompt_record_and_adapter_verbatim(tmp_path, monkeypatch):
+    prompt = ('Review this diff:\n+    pair_key = f"{left}:{right}"\n'
+              '+  const token=++x;\n+token = os.environ["X"]\n')
+    received, path = [], tmp_path / 'prompt.txt'
+
+    def dispatch(**kwargs):
+        received.append(kwargs['prompt'])
+        raise RuntimeError('dispatch')
+
+    monkeypatch.setattr(runner_mod, 'build_command', dispatch)
+    with pytest.raises(RuntimeError, match='dispatch'):
+        runner = runner_mod.SpawnerRunner(default_cwd=str(tmp_path))
+        asyncio.run(runner.spawn(prompt=prompt, role='review',
+            prompt_record=(path, {}, lambda record: None)))
+    assert received == [prompt]
+    assert path.read_bytes() == prompt.encode()
+
+
 @pytest.mark.parametrize('payload', ['dsn', 'reserved_dsn', 'json', 'escaped_json'])
 @pytest.mark.parametrize('split', [False, True])
 @pytest.mark.parametrize('failure', [False, True])

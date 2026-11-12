@@ -19,6 +19,7 @@ fn redact_shared_parity_table() {
         .iter()
         .filter_map(|row| {
             let actual = redact(&row.input);
+            assert_eq!(redact(&actual), actual, "not idempotent: {:?}", row.input);
             (actual != row.expected).then(|| {
                 format!(
                     "input {:?}: expected {:?}, got {:?}",

@@ -4,8 +4,56 @@ import re
 from decimal import Decimal
 
 
+_ASSIGN_LITERAL = re.compile(
+    r'''(?i:([fbr]{1,2}))?("(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')''')
+_ASSIGN_SUFFIX = re.compile(r'^(?:[+*/%&|^<>=!?]|\.[A-Za-z_]|\[|-(?:[^-]|$)|\b(?:and|or|if)\b)')
+_ASSIGN_SYNTAX = re.compile(
+    r'^(?:[\[({]|(?:\+\+|--|[!~])[^\S\r\n]*[A-Za-z_]|'
+    r'[A-Za-z_][A-Za-z0-9_.]*[^\S\r\n]*[\[(])')
+_ASSIGN_OPERATOR = re.compile(r'[^\S\r\n](?:[+\-*/%&|^<>=!]+|and|or|if|else|in|is)[^\S\r\n]')
+_ASSIGN_REFERENCE = re.compile(r'[a-z_]+(?:\.[a-z_]+)*')
+_ASSIGN_TIGHT_OPERATOR = re.compile(r'[a-z_]+[+*/%&|^<>=]+[a-z_]+')
+
+
+def _assignment_is_source(name, separator, value):
+    if value.startswith('[REDACTED]'):
+        return False
+    literal = _ASSIGN_LITERAL.match(value)
+    if literal:
+        return bool((literal[1] and '{' in literal[2] and '}' in literal[2])
+                    or _ASSIGN_SUFFIX.match(value[literal.end():].lstrip()))
+    if _ASSIGN_SYNTAX.match(value) or _ASSIGN_OPERATOR.search(value):
+        return True
+    reference = value.strip().removesuffix(';').rstrip()
+    return bool(separator == '=' and re.fullmatch(r'[a-z_][a-z0-9_]*', name) and (
+        _ASSIGN_REFERENCE.fullmatch(reference) or _ASSIGN_TIGHT_OPERATOR.fullmatch(reference)))
+
+
+def _redact_assignment(match):
+    # Inspect the whole RHS: regex matches can end before a call's closing
+    # delimiter or before an operator following a complete quoted literal.
+    rhs = re.split(r'[\r\n]', match.string[match.end(1):], maxsplit=1)[0]
+    if _assignment_is_source(match['name'], match['separator'], rhs):
+        return match[0]
+    value = match[0][len(match[1]):]
+    replacement = (value[0] + '[REDACTED]' + value[-1]
+                   if value[0] in '\"\x27' and value[-1] == value[0] else '[REDACTED]')
+    return match[1] + replacement
+
+
 def redact(value):
-    """Shared fail-closed output scrubber; never return raw text on failure."""
+    """Shared fail-closed prompt/output scrubber; withhold text on failure.
+
+    Credential-name assignments mask plain quoted literals and opaque tokens
+    (including legacy plaintext with spaces), not recognizable source RHSs:
+    f/b/r-prefixed literals containing both braces, calls/indexing/containers,
+    ++/--/!/~ identifier prefixes, spaced symbolic or Python word operators,
+    or quoted literals followed by an operator, attribute or index. For a
+    lowercase name with '=', digit-free lowercase identifier/attribute paths
+    and tight symbolic binary operations on such identifiers are also source;
+    digits and hyphens otherwise keep a bare value opaque. Other secret rules
+    and recursive dictionary-key masking still apply independently.
+    """
     try:
         if isinstance(value, dict):
             return {k: ('[REDACTED]' if k != 'idempotency_key' and re.search(
@@ -20,12 +68,10 @@ def redact(value):
             value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',
                            r'\1[REDACTED]\2', value)
             return re.sub(
-                r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
-                r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
+                r'(?im)((?:["\x27])?\b(?P<name>\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
+                r'(?:["\x27])?[^\S\r\n]*(?P<separator>[=:])[^\S\r\n]*)(?:"(?:\\.|[^"\\\r\n])*"'
                 r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)",
-                lambda m: m[1] + (m[0][len(m[1])] + '[REDACTED]' + m[0][-1]
-                                  if m[0][len(m[1])] in '\"\x27' and
-                                  m[0][-1] == m[0][len(m[1])] else '[REDACTED]'), value)
+                _redact_assignment, value)
         return value
     except Exception:
         return '[autoos:redaction failed; output withheld]\n'

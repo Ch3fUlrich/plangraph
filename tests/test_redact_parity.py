@@ -15,4 +15,6 @@ TABLE = json.loads(
 
 @pytest.mark.parametrize("row", TABLE, ids=lambda row: row["input"])
 def test_redact_parity(row):
-    assert redact(row["input"]) == row["expected"]
+    actual = redact(row["input"])
+    assert actual == row["expected"]
+    assert redact(actual) == actual
