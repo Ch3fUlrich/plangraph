@@ -894,13 +894,14 @@ def spawn_service(*args, **kwargs):
                 return await super()._continue_writer(record, output)
 
         def __init__(self, *args, completion_sink=None, keeper_sink=None, **kwargs):
-            super().__init__(*args, **kwargs); self.runner.state = self.state  # probes share this run directory
+            super().__init__(*args, **kwargs)
             from .notify import FileInbox
             self.completion_sink = completion_sink or FileInbox(self.state)
             from .notify import KeeperSink
             self.keeper_sink = keeper_sink or KeeperSink()
             self._running_records = {}
             if hasattr(self.runner, '__dict__'):
+                self.runner.state = self.state  # probes share this service's run directory
                 self.runner.on_sample = lambda jid: self._save(self._running_records[jid]) if jid in self._running_records else None
 
         async def cancel(self, run_id):   # D-3505: the leg loop of the supervisor stops on this marker

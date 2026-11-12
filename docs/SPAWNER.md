@@ -151,12 +151,16 @@ CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `
 A probe with its harness binary missing reports `host-not-ready` and books no leg event.
 Failed probes retain a scrubbed, single-line excerpt of the last 400 stderr
 characters in their result, output line and leg-state event. A `running` record
-on the same model/harness with a nonempty `live.log` written within
+on the same model/harness with a nonempty `live.log` grown within
 `LIVE_RUN_WRITE_WINDOW_S` (120 seconds) overrides only the probe failure:
 `probe_failed_leg_serving` records the diagnostic without a retry/down-until
 time and does not block dispatch. Stale, empty or missing logs do not override.
 Real quota/usage-limit evidence from `exit_outcome` still books the leg down;
-serving evidence never clears that provider signal.
+serving evidence never clears that provider signal. Probes share the owning
+service's resolved state directory, with no environment fallback; pre/post size
+snapshots reject touches of old logs, truncations, replacements and read races.
+Only the explicit stderr excerpt extends the legacy 300-character reason bound.
+Ordinary probe JSON omits `state`; it is never emitted as null.
 CLI `launch-spec` (placement R6a-3d; nothing calls it yet): one JSON request on stdin, one launch spec on stdout (argv, cwd, the complete child env, stdin, warnings, events) for pg-spawnd; optional request `leg.explicit` must be boolean: only `true` permits document review without `diff_ref`, absent/false still refuses; it reuses the spawn prep and never launches; exit 2 = one redacted refusal line, exit 1 = internal error (type name only).
 MCP `route`, `spawn`, `ps`, `result`, `status`, `cancel` (with `plangraph_agent_` prefix) share these records. Spawn requires
 `card` and `prompt` in its schema; model_or_combo requires override_reason.

@@ -58,6 +58,7 @@ def test_commit_probe_and_timeout(monkeypatch, success):
     result = asyncio.run(probe(runner, leg, timeout_s=3 if success else .3))
     assert result['ok'] is success
     assert result['reason'] == ('' if success else 'timeout')
+    assert 'state' not in result
     assert leg_state.leg_status(key(leg))['state'] == ('ok' if success else 'reprobe')
     assert roots and not Path(roots[0]).exists()
     if not success:
@@ -151,8 +152,10 @@ def test_probe_stderr_excerpt_and_output(failed_probe, monkeypatch, capsys):
     expected = ' '.join(_redact(redact(redact_env_values(runner.stderr, os.environ)), limit=None)[-400:].splitlines())
     result = asyncio.run(leg_probe.probe_many(runner, [leg.id]))['probes'][0]
     assert result['stderr_excerpt'] == expected and len(expected) == 400
+    assert expected.endswith('[REDACTED] [autoos:redacted] final failure')
     assert 'discarded' not in result['reason'] and expected in result['reason']
     assert 'synthetic-probe-credential' not in result['reason'] and 'sk-example' not in result['reason']
+    assert '[REDACTED]' in result['reason']  # the mask is evidence of scrubbing, not a credential
     with store._connect() as db:
         assert db.execute('SELECT body_excerpt FROM leg_events').fetchone()[0] == result['reason']
     monkeypatch.setattr(cli, 'SpawnService', lambda **kw: SimpleNamespace(runner=runner))
@@ -234,3 +237,138 @@ def test_probe_serving_uses_current_attempt(failed_probe):
     log.write_text('writing')
     os.utime(log, (1000, 1000))
     assert leg_probe._leg_serving(runner, leg)
+
+
+@pytest.mark.parametrize('serving', [False, True])
+def test_probe_failure_legacy_excerpt_bound(tmp_path, serving):
+    from plangraph.routing_support.leg_state import _redact
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    reason = 'detail ' * 100 + 'Bearer sk-example'
+    store.record_probe_fail('agy/model', reason, 'test', serving=serving)
+    with store._connect() as db:
+        assert db.execute('SELECT body_excerpt FROM leg_events').fetchone()[0] == _redact(reason)
+
+
+def test_probe_output_omits_state_without_serving(failed_probe):
+    from plangraph.spawner import leg_probe
+    runner, leg, store = failed_probe
+    result = asyncio.run(leg_probe.probe_many(runner, [leg.id]))['probes'][0]
+    assert not result['ok']
+    assert 'state' not in result
+
+
+@pytest.mark.parametrize('explicit_state', [False, True])
+def test_probe_does_not_scan_environment_state(failed_probe, monkeypatch, tmp_path, explicit_state):
+    from dataclasses import asdict
+    from plangraph.spawner import leg_probe
+    runner, leg, store = failed_probe
+    directory = tmp_path / 'foreign' / 'runs' / 'run-live'
+    directory.mkdir(parents=True)
+    (directory / 'record.json').write_text(json.dumps(dict(status='running', chosen_leg=asdict(leg))))
+    log = directory / 'live.log'
+    log.write_text('writing')
+    os.utime(log, (1000, 1000))
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(directory.parents[1]))
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'foreign-xdg'))
+    if not explicit_state:
+        del runner.state
+    assert not leg_probe._leg_serving(runner, leg)
+
+
+@pytest.mark.parametrize('change,serving', [('touch', False), ('append', True), ('stale_append', False), ('truncate', False), ('replace', False), ('finish', False)])
+def test_probe_touched_log_is_not_growth(failed_probe, change, serving):
+    from dataclasses import asdict
+    from plangraph.spawner import leg_probe
+    runner, leg, store = failed_probe
+    directory = runner.state / 'runs' / 'run-live'
+    directory.mkdir(parents=True)
+    (directory / 'record.json').write_text(json.dumps(dict(status='running', chosen_leg=asdict(leg))))
+    log = directory / 'live.log'
+    log.write_text('old output')
+    os.utime(log, (800, 800))
+    spawn = runner.spawn
+    async def touch(**kwargs):
+        if change in ('append', 'stale_append'):
+            with log.open('a') as stream:
+                stream.write(' new output')
+        elif change == 'truncate':
+            log.write_text('x')
+        elif change == 'replace':
+            replacement = directory / 'replacement'
+            replacement.write_text('new output in another file')
+            replacement.replace(log)
+        elif change == 'finish':
+            (directory / 'record.json').write_text(json.dumps(dict(status='completed', chosen_leg=asdict(leg))))
+        stamp = 879 if change == 'stale_append' else 1000
+        os.utime(log, (stamp, stamp))
+        return await spawn(**kwargs)
+    runner.spawn = touch
+    store.record_probe_fail(leg_probe.key(leg), 'earlier failure', 'test', now=999)
+    result = asyncio.run(leg_probe.probe(runner, leg, store=store))
+    if serving:
+        assert result['state'] == 'probe_failed_leg_serving'
+    else:
+        assert 'state' not in result
+    assert store.leg_status(leg_probe.key(leg))['state'] == ('ok' if serving else 'down')
+
+
+@pytest.mark.parametrize('shape', ['default', 'positional', 'keyword', 'plain'])
+def test_dispatch_service_state_wiring(tmp_path, shape):
+    from plangraph.spawner.runner import SpawnerRunner, spawn_service
+    runner = object() if shape == 'plain' else SpawnerRunner()
+    if shape == 'default':
+        service = spawn_service(state=tmp_path)
+    elif shape == 'positional':
+        service = spawn_service(runner, state=tmp_path)
+    else:
+        service = spawn_service(runner=runner, state=tmp_path)
+    assert service.state == tmp_path
+    if shape != 'plain':
+        assert service.runner.state == tmp_path
+    else:
+        assert service.runner is runner
+
+
+@pytest.mark.parametrize('race', ['record_removed', 'record_changed', 'log_removed', 'log_replaced', 'malformed'])
+def test_probe_run_snapshot_races_fail_closed(failed_probe, monkeypatch, race):
+    from dataclasses import asdict
+    from plangraph.spawner import leg_probe
+    runner, leg, store = failed_probe
+    directory = runner.state / 'runs' / 'run-live'
+    directory.mkdir(parents=True)
+    record = directory / 'record.json'
+    record.write_text(json.dumps(dict(status='running', chosen_leg=asdict(leg))))
+    log = directory / 'live.log'
+    log.write_text('writing')
+    os.utime(log, (1000, 1000))
+    original = Path.read_text
+    def read(path, *args, **kwargs):
+        text = original(path, *args, **kwargs)
+        if path == record:
+            if race == 'record_removed':
+                record.unlink()
+            elif race == 'record_changed':
+                record.write_text(json.dumps(dict(status='completed', chosen_leg=asdict(leg))))
+            elif race == 'log_removed':
+                log.unlink()
+            elif race == 'log_replaced':
+                replacement = directory / 'replacement'
+                replacement.write_text('')
+                replacement.replace(log)
+            else:
+                return '{invalid'
+        return text
+    monkeypatch.setattr(Path, 'read_text', read)
+    assert not leg_probe._leg_serving(runner, leg)
+
+
+@pytest.mark.parametrize('serving', [False, True])
+def test_probe_event_explicit_stderr_bound(tmp_path, serving):
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    store.record_probe_fail('agy/model', 'reason ' * 100, 'test', serving=serving,
+                            stderr_excerpt='Bearer sk-example ' + 'diagnostic ' * 100)
+    with store._connect() as db:
+        excerpt = db.execute('SELECT body_excerpt FROM leg_events').fetchone()[0]
+    assert len(excerpt) == 702  # 300 reason + separator + 400 stderr
+    assert excerpt[300:312] == ': [REDACTED]'
+    assert 'sk-example' not in excerpt

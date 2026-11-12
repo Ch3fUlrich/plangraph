@@ -35,16 +35,37 @@ CHILD_ISOLATION = {**GIT_ISOLATION, **dict.fromkeys(GIT_REDIRECT_VARS)}
 LIVE_RUN_WRITE_WINDOW_S = 120
 
 
-def _leg_serving(runner, leg):
-    """A nonempty append-only live log's mtime is its last growth evidence."""
-    root = Path(getattr(runner, 'state', None) or os.environ.get('PLANGRAPH_SPAWN_STATE',
-                Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
-    now = time.time()
-    for path in (root / 'runs').glob('run-*/record.json'):
+def _run_logs(runner):
+    """Read stable running records/log identities only from the owning service."""
+    root = getattr(runner, 'state', None)
+    snapshots = {}
+    if root is None:
+        return snapshots
+    try:
+        paths = list((Path(root) / 'runs').glob('run-*/record.json'))
+    except OSError:
+        return snapshots
+    for path in paths:
         try:
-            record = json.loads(path.read_text())
+            text = path.read_text(encoding='utf-8')
+            record = json.loads(text)
             if record.get('status') != 'running':
                 continue
+            with path.with_name('live.log').open('rb') as stream:
+                log = os.fstat(stream.fileno())
+            if log != path.with_name('live.log').stat() or text != path.read_text(encoding='utf-8'):
+                continue  # replaced/removed log or concurrent record save: no serving claim
+            snapshots[path] = record, log
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return snapshots
+
+
+def _leg_serving(runner, leg, previous=None):
+    """Observe size growth across the probe; touching an old log is not growth."""
+    now = time.time()
+    for path, (record, log) in _run_logs(runner).items():
+        try:
             current = record.get('chosen_leg') or record.get('leg')
             if not current:
                 tried = {a['leg']['id'] if isinstance(a.get('leg'), dict) else a.get('leg')
@@ -52,10 +73,17 @@ def _leg_serving(runner, leg):
                 current = next((l for l in record.get('plan', {}).get('legs', ()) if l['id'] not in tried), {})
             matches = (current.get('model') == leg.model and current.get('harness') == leg.harness
                        if isinstance(current, dict) else current == getattr(leg, 'id', None))
-            log = path.with_name('live.log').stat()
-            if matches and log.st_size > 0 and 0 <= now - log.st_mtime <= LIVE_RUN_WRITE_WINDOW_S:
+            last_growth = log.st_mtime  # first observation of an append log
+            if previous is not None and path in previous:
+                old_record, old = previous[path]
+                if (log.st_dev, log.st_ino) != (old.st_dev, old.st_ino) or log.st_size < old.st_size:
+                    continue
+                last_growth = log.st_mtime if log.st_size > old.st_size else old.st_mtime
+                if log.st_size == old.st_size and record != old_record:
+                    continue
+            if matches and log.st_size > 0 and 0 <= now - last_growth <= LIVE_RUN_WRITE_WINDOW_S:
                 return True
-        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        except (TypeError, KeyError, AttributeError):
             continue
     return False
 
@@ -180,6 +208,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
                     reason='host-not-ready: harness missing: ' + leg.harness,
                     infra=True, seconds=time.monotonic() - start)
     deadline = start + timeout
+    previous = await asyncio.to_thread(_run_logs, runner)
     root = tempfile.mkdtemp(prefix='plangraph-leg-probe-')
     job = None
     stderr = ''
@@ -254,15 +283,17 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
             env = dict(os.environ)
             env.update(getattr(runner, '_child_envs', {}).get(getattr(diagnostic, 'job_id', None), {}))
             excerpt = ' '.join(leg_state._redact(redact(redact_env_values(stderr, env)), limit=None)[-400:].splitlines())
-            reason += ': ' + excerpt if excerpt else ''
-            serving = await asyncio.to_thread(_leg_serving, runner, leg)
+            serving = await asyncio.to_thread(_leg_serving, runner, leg, previous)
         if not infra:
             if ok:
                 state.record_probe_pass(key(leg), caller='leg-probe')
             else:
-                state.record_probe_fail(key(leg), reason, caller='leg-probe', serving=serving)
-        return dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start,
-                    stderr_excerpt=excerpt, state='probe_failed_leg_serving' if serving else None)
+                state.record_probe_fail(key(leg), reason, caller='leg-probe', serving=serving, stderr_excerpt=excerpt)
+        reason += ': ' + excerpt if excerpt else ''
+        result = dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start, stderr_excerpt=excerpt)
+        if serving:
+            result['state'] = 'probe_failed_leg_serving'
+        return result
     finally:
         from .probe_cleanup import cleanup
         cleanup_task = asyncio.create_task(cleanup(runner, spawn_task, job, root, owned_ids))

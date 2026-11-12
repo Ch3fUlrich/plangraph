@@ -175,14 +175,14 @@ class LegStateStore:
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, 200, "", None, None, time.time() if now is None else now, caller, "provider-probe"))
 
-    def record_probe_fail(self, leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False):
+    def record_probe_fail(self, leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt=''):
         if not leg or not caller or not reason:
             raise LegStateError('requires leg, reason and caller')
         now = time.time() if now is None else now
         down_s = None if serving else _down_seconds(down_s)  # capped at RESET_CAP_S
         with self._connect() as db:
             db.execute('INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)',
-                       (leg, account, combo, 503, _redact(reason, 500), down_s,
+                       (leg, account, combo, 503, _redact(reason) + (': ' + _redact(stderr_excerpt, 400) if stderr_excerpt else ''), down_s,
                         None if serving else now + down_s, now, caller,
                         'probe_failed_leg_serving' if serving else 'liveness-probe'))
 
@@ -307,8 +307,8 @@ def leg_status(leg, now=None, account=None, combo=None):
     return _default_store().leg_status(leg, now, account, combo)
 
 
-def record_probe_fail(leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False):
-    return _default_store().record_probe_fail(leg, reason, caller, now, down_s, account, combo, serving=serving)
+def record_probe_fail(leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt=''):
+    return _default_store().record_probe_fail(leg, reason, caller, now, down_s, account, combo, serving=serving, stderr_excerpt=stderr_excerpt)
 
 
 def last_probe_ts(leg):
