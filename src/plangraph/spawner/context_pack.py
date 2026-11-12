@@ -18,8 +18,8 @@ Safety, in order of strength:
 * Refused per entry (a ``context_path_refused`` warning, the file is never read): a secret-looking name
   (``DENY``, case-insensitive on every path part, a superset of the repo's own fences in opencode.jsonc),
   a ``.git`` path part, an untracked file.
-* Every slice goes through ``redact_source`` before packing, and a slice that still holds a private-key
-  block is dropped (``context_path_refused`` ... ``secret-looking content``).
+* A slice holding a private-key block is dropped before masking (``context_path_refused`` ...
+  ``secret-looking content``); every remaining slice goes through ``redact_source`` before packing.
 
 Cost: ``build`` runs once per spawn.  It lists the tracked files with one ``git ls-files``, reads each
 sliced file once (streaming, stopping at its last wanted line, holding at most the char cap per slice) and
@@ -250,10 +250,10 @@ def _slices(root: Path, ents, files: frozenset[str], cap: int):
                 notes[i].append(f'context_range_past_eof: {raw}:{start}-{end} (file has {total} lines; clamped)')
                 end = total
             if text is not None:
-                text = redact_source(text)
                 if _PRIVATE_KEY.search(text):
                     notes[i].append(f'context_path_refused: {raw} (secret-looking content)')
                     continue
+                text = redact_source(text)
             found[i] = (path, raw, start, end, text)
     return [found[i] for i in sorted(found)], [w for per in notes for w in per]
 

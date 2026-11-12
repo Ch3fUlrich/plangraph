@@ -23,6 +23,10 @@ def _redact(value, *, source):
         if isinstance(value, (list, tuple)):
             return [_redact(v, source=source) for v in value]
         if isinstance(value, str):
+            # Complete PEM blocks first, then any header cut off before its END.
+            value = re.sub(r'(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----',
+                           '[REDACTED]', value)
+            value = re.sub(r'(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*', '[REDACTED]', value)
             value = re.sub(r'\b(?:x?sk)-[A-Za-z0-9_-]+', '[REDACTED]', value)
             value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
             # Greedily consume through the last @ within the quoted/space boundary.

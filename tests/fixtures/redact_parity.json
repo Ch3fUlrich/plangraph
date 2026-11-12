@@ -19,5 +19,7 @@
   {"input_parts": ["API_", "KEY=ordinary_expression()"], "source": "API_KEY=ordinary_expression()"},
   {"input_parts": ["sk", "-synthetic123 xsk", "-synthetic456"], "source": "[REDACTED] [REDACTED]"},
   {"input_parts": ["Bear", "er synthetic789"], "source": "Bearer [REDACTED]"},
-  {"input_parts": ["db", "://u:synthetic-pass@example.invalid/x"], "source": "db://u:[REDACTED]@example.invalid/x"}
+  {"input_parts": ["db", "://u:synthetic-pass@example.invalid/x"], "source": "db://u:[REDACTED]@example.invalid/x"},
+  {"input_parts": ["before\n-----BEGIN ", "TEST PRIVATE KEY-----\nsynthetic-pem-body\n-----END ", "TEST PRIVATE KEY-----\nafter\n"], "expected": "before\n[REDACTED]\nafter\n", "source": "before\n[REDACTED]\nafter\n"},
+  {"input_parts": ["before\n-----BEGIN ", "TEST PRIVATE KEY-----\nsynthetic-pem-body\n"], "expected": "before\n[REDACTED]", "source": "before\n[REDACTED]"}
 ]

@@ -19,14 +19,20 @@ def tokens():
             'Bear' + 'er synthetic789', 'db' + '://u:synthetic-pass@example.invalid/x']
 
 
+def pem_block(complete):
+    text = '-----BEGIN ' + 'TEST PRIVATE KEY-----\nsynthetic-pem-body\n'
+    return text + ('-----END ' + 'TEST PRIVATE KEY-----\n' if complete else '')
+
+
 class Seat(SeatSpawnMixin):
     def __init__(self, cwd):
         self.runner = SimpleNamespace(default_cwd=str(cwd))
 
 
-def diff_prompt(monkeypatch, tmp_path, caller='review', pack=None, inline=False):
+def diff_prompt(monkeypatch, tmp_path, caller='review', pack=None, inline=False, extra=''):
     diff = '+change\n' + ''.join('+' + line + '\n' for line in CODE.splitlines())
     diff += ''.join('+' + value + '\n' for value in tokens())
+    diff += ''.join('+' + line + '\n' for line in extra.splitlines())
     monkeypatch.setattr(inline_diff.subprocess, 'run', lambda *a, **k:
                         SimpleNamespace(stdout=diff, stderr='', returncode=0))
     leg = SimpleNamespace(tool_mode='inline-only' if inline else 'tools',
@@ -59,6 +65,21 @@ def test_token_shapes_still_masked_in_source_diff(monkeypatch, tmp_path):
     out = capture(monkeypatch, tmp_path, diff_prompt(monkeypatch, tmp_path))
     assert all(value not in out for value in tokens())
     assert 'Bearer [REDACTED]' in out and 'u:[REDACTED]@example.invalid/x' in out
+
+
+@pytest.mark.parametrize('complete', [True, False])
+@pytest.mark.parametrize('in_diff', [True, False])
+def test_private_key_masked_in_final_review_prompt_and_record(monkeypatch, tmp_path, complete, in_diff):
+    block = pem_block(complete)
+    prompt = diff_prompt(monkeypatch, tmp_path, extra=block) if in_diff else block
+    out = capture(monkeypatch, tmp_path, prompt)
+    assert 'PRIVATE KEY' not in out and 'synthetic-pem-body' not in out
+    assert '[REDACTED]' in out
+    if in_diff:
+        assert '+[REDACTED]' in out
+        assert '+    pair_key = tuple(sorted((left, right)))' in out
+    else:
+        assert out == '[REDACTED]' + ('\n' if complete else '')
 
 
 @pytest.mark.parametrize('framed', [False, True])
@@ -116,10 +137,12 @@ def test_packed_source_assignments_readable_tokens_masked(monkeypatch, tmp_path,
     assert 'tuple(sorted' not in out.split('=== CONTEXT PACK ===')[0]
 
 
-def test_packed_private_key_still_refused(monkeypatch, tmp_path):
-    (tmp_path / 'sample.py').write_text('-----BEGIN ' + 'TEST PRIVATE KEY-----\nfake\n')
+@pytest.mark.parametrize('complete', [True, False])
+def test_packed_private_key_still_refused(monkeypatch, tmp_path, complete):
+    block = pem_block(complete)
+    (tmp_path / 'sample.py').write_text(block)
     monkeypatch.setattr(context_pack, 'tracked', lambda root: frozenset({'sample.py'}))
-    pack = context_pack.build('', {'context': ['sample.py:1-2']}, tmp_path)
+    pack = context_pack.build('', {'context': [f'sample.py:1-{len(block.splitlines())}']}, tmp_path)
     assert not pack.text
     assert any('secret-looking content' in warning for warning in pack.warnings)
 
