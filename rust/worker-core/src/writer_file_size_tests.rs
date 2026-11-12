@@ -5,7 +5,7 @@ fn record(f: &Fixture, path: &str, text: &str) {
     std::fs::create_dir_all(full.parent().unwrap()).unwrap();
     std::fs::write(full, text).unwrap();
     git(&f.tree, &["add", "--", path]).unwrap();
-    f.commit("fixture\n\nWriter: test");
+    f.commit("fixture\n\nChangelog: skip (file-size fixture)\nWriter: test");
 }
 
 #[test]
@@ -107,11 +107,11 @@ fn invalid_utf8_content_uses_replacement_and_splitlines() {
     record(&f, "invalid.rs", "initial");
     std::fs::write(f.tree.join("invalid.rs"), b"\xff\r\n".repeat(400)).unwrap();
     git(&f.tree, &["add", "."]).unwrap();
-    f.commit("fixture\n\nWriter: test");
+    f.commit("fixture\n\nChangelog: skip (file-size fixture)\nWriter: test");
     assert!(check_result(&f.repo, &f.tree, &f.ws).is_ok());
     std::fs::write(f.tree.join("invalid.rs"), b"\xff\r\n".repeat(401)).unwrap();
     git(&f.tree, &["add", "."]).unwrap();
-    f.commit("fixture\n\nWriter: test");
+    f.commit("fixture\n\nChangelog: skip (file-size fixture)\nWriter: test");
     assert_hold(&f, "invalid.rs 401");
 }
 

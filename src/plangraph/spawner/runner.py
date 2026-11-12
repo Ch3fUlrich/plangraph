@@ -35,8 +35,9 @@ from plangraph.spawner.claude_env import claude_child_env
 from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
 from plangraph.spawner.resolver import MODEL_FAMILIES, detect_model_family
 from plangraph.spawner.mimo_policy import check_mimo_path
-from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
 from plangraph.spawner.winjob import WinJobApi  # re-export: tests patch runner.WinJobApi
+from plangraph.routing_support import background_process_options
 
 _KEEPER_UNCONFIGURED_WARN_S = 600
 # D-2966: writers commit in their clone; AutoOS leaf-agent profiles they may read must not fence that.
@@ -83,7 +84,8 @@ def _resolve_launch(
 
     is_opencode = exe_path.stem.lower() == "opencode"
     if not is_opencode:
-        limit = 8000 if is_batch else 32000
+        from plangraph.routing_support.clients import WINDOWS_ARGV_LIMIT, WINDOWS_BATCH_ARGV_LIMIT
+        limit = WINDOWS_BATCH_ARGV_LIMIT if is_batch else WINDOWS_ARGV_LIMIT
         cmdline = subprocess.list2cmdline([exe, *argv])
         if len(cmdline) > limit:
             return exe, f"command_line_too_long: {len(cmdline)} chars"
@@ -459,7 +461,7 @@ class SpawnerRunner:
             if dry_run:
                 served_model = model_or_combo
                 served_family = detect_model_family(model_or_combo)
-                if "/" not in model_or_combo and not any(l.model == model_or_combo for l in DEFAULT_LEGS):
+                if "/" not in model_or_combo and not any(l.model == model_or_combo for l in (*DEFAULT_LEGS, *EXPLICIT_LEGS)):
                     from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
                     combo_legs = [
                         m for m in get_catalog_models()
@@ -518,7 +520,7 @@ class SpawnerRunner:
             from .run_watchdog import thresholds, edit_signature
             job._watchdog_limits = watchdog or thresholds(role=role)
             job._live_log = live_log
-            job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir)
+            job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir) if role in ('implement', 'fix') else None
             if tools_event:
                 job.events.append(tools_event)
 
@@ -544,6 +546,8 @@ class SpawnerRunner:
 
             import shutil
             resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
+            from plangraph.routing_support.clients import launch_stdin_payload
+            payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
             resolved_exe, launch_refusal = _resolve_launch(resolved_exe, cmd[1:], is_nt=_is_nt())
             if launch_refusal:
                 job.status = 'failed'
@@ -552,8 +556,8 @@ class SpawnerRunner:
                 job.end_time = time.time()
                 return job
 
-            if cmd[0] in STDIN_PROMPT_HARNESSES:
-                self._stdin_payloads[job_id] = prompt.encode("utf-8")
+            if payload is not None:
+                self._stdin_payloads[job_id] = payload
             self._adapter_tokens[job_id] = object()
             if role in ("implement", "fix"):
                 guard = self._init_git_config_guard(work_dir)
@@ -569,12 +573,8 @@ class SpawnerRunner:
                     env=child_env,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    stdin=(
-                        asyncio.subprocess.PIPE
-                        if cmd[0] in STDIN_PROMPT_HARNESSES
-                        else asyncio.subprocess.DEVNULL
-                    ),
-                    **({"start_new_session": True} if os.name != "nt" else {}),
+                    stdin=asyncio.subprocess.PIPE if payload is not None else asyncio.subprocess.DEVNULL,
+                    **background_process_options(new_session=True, platform='nt' if self._nt() else 'posix'),
                 )
             except Exception as exc:
                 self._adapter_tokens.pop(job_id, None)
@@ -727,8 +727,8 @@ class SpawnerRunner:
                                            nonce=self._nonces[job_id])
             from .env_redact import redact_env_values
             env = self._child_envs.get(job_id, os.environ)
-            from .opencode_answer import answer_text, final_answer, terminated_after_answer
-            decoded = answer_text(stdout_text) if is_opencode(job) else stdout_text
+            from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer
+            decoded, stderr_text, exit_code = native_answer(job, answer_text(stdout_text) if is_opencode(job) else stdout_text, stderr_text, exit_code)
             job.stdout = redact(redact_env_values(decoded, env))
             job.stderr = redact(redact_env_values(stderr_text, env))
             job.exit_code = exit_code
@@ -1088,7 +1088,7 @@ def spawn_service(*args, **kwargs):
                             continue
                         from .inline_diff import InlineDiffError
                         try:
-                            leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run)
+                            leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run, deadline=record['started'] + limits['max_s'] if role == 'review' else None)
                         except InlineDiffError as exc:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))

@@ -23,7 +23,7 @@ def test_untrusted_output_cannot_witness_family():
 
     class Process:
         returncode = 0
-        async def communicate(self):
+        async def communicate(self, input=None):
             return forged.encode(), b''
 
     asyncio.run(runner._monitor_process('j', Process(), 'test/model'))

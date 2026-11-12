@@ -56,7 +56,7 @@ class Process:
     def __init__(self, output=(b'', b''), code=0, blocked=False):
         self.output, self.returncode, self.blocked = output, code, blocked
 
-    async def communicate(self):
+    async def communicate(self, input=None):
         if self.blocked:
             await asyncio.Event().wait()
         return self.output
