@@ -1,15 +1,16 @@
 //! Bare repository fetches and monotonic watermarks.
-use pg_worker_core::{
-    lockfile, run::record_io::atomic_write_private, workspace_resolver::git_command,
-};
+use pg_worker_core::{lockfile, run::record_io::atomic_write_private};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs, io,
     path::{Path, PathBuf},
-    process::Output,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[path = "mirror_backend.rs"]
+mod backend;
+use backend::{copy_repository, open, set_main};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Alarm {
@@ -113,91 +114,95 @@ impl Mirror {
         paths: Option<&[&str]>,
         now: u64,
     ) -> Result<Watermark, Alarm> {
+        let started = Instant::now();
+        self.fetch_named_with_wait(repo, paths, now, || started.elapsed(), std::thread::sleep)
+    }
+    fn fetch_named_with_wait(
+        &self,
+        repo: &str,
+        paths: Option<&[&str]>,
+        now: u64,
+        elapsed: impl FnMut() -> Duration,
+        sleep: impl FnMut(Duration),
+    ) -> Result<Watermark, Alarm> {
         let failed = |_| Alarm::FetchFailed;
         let accepted_dir = self.mirror_dir(repo).map_err(failed)?;
         let parent = accepted_dir.parent().unwrap();
         fs::create_dir_all(parent).map_err(failed)?;
-        let _lock = loop {
-            if let Some(lock) =
-                lockfile::try_lock(&parent.join("fetch.lock")).map_err(|_| Alarm::FetchFailed)?
+        let _lock = fetch_lock_wait(
+            || lockfile::try_lock(&parent.join("fetch.lock")).map_err(|_| Alarm::FetchFailed),
+            elapsed,
+            sleep,
+        )?;
+        // Only sweep our own abandoned quarantine directories, under the writer lock.
+        for entry in fs::read_dir(parent).map_err(failed)? {
+            let entry = entry.map_err(failed)?;
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(STAGING_PREFIX)
+                && entry.file_type().map_err(failed)?.is_dir()
             {
-                break lock;
+                fs::remove_dir_all(entry.path()).map_err(failed)?;
             }
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        };
+        }
         let old = self.watermark(repo).map_err(failed)?;
-        // Quarantine every fetch, not just rebuilt clones: even rejected objects
-        // must never enter the accepted repository's object database or refs.
-        let staging = tempfile::tempdir_in(parent).map_err(failed)?;
+        let staging = tempfile::Builder::new()
+            .prefix(STAGING_PREFIX)
+            .tempdir_in(parent)
+            .map_err(failed)?;
         let dir = staging.path().join("mirror.git");
-        if accepted_dir.exists() {
+        let existed = accepted_dir.exists();
+        if existed {
             copy_repository(&accepted_dir, &dir).map_err(failed)?;
         } else {
-            checked(git(
-                parent,
-                &[
-                    "clone",
-                    "--bare",
-                    "--",
-                    &self.repos[repo],
-                    dir.to_str().ok_or(Alarm::FetchFailed)?,
-                ],
-            )?)?;
-            // Do not publish an empty clone that cannot supply an ancestry baseline.
-            checked(git(
-                &dir,
-                &["rev-parse", "--verify", "refs/heads/main^{commit}"],
-            )?)?;
+            backend::init(&dir)?;
         }
-        // A missing watermark must not erase the mirror's accepted history.
-        // Refuse an existing mirror without main rather than guess a baseline.
-        let baseline = match &old {
-            Some(watermark) => watermark.main_head.clone(),
-            None => {
-                let output = checked(git(
-                    &dir,
-                    &["rev-parse", "--verify", "refs/heads/main^{commit}"],
-                )?)?;
-                String::from_utf8(output.stdout)
-                    .map_err(|_| Alarm::FetchFailed)?
-                    .trim()
-                    .to_owned()
-            }
-        };
-        // A private candidate ref lets us inspect rewrites without moving accepted main.
-        checked(git(
-            &dir,
-            &[
-                "fetch",
-                "--prune",
-                "--no-tags",
-                "--",
-                &self.repos[repo],
-                "+refs/heads/main:refs/pg-ctx/main",
-            ],
-        )?)?;
-        let output = checked(git(
-            &dir,
-            &["rev-parse", "--verify", "refs/pg-ctx/main^{commit}"],
-        )?)?;
-        let head = String::from_utf8(output.stdout)
-            .map_err(|_| Alarm::FetchFailed)?
-            .trim()
-            .to_owned();
-        // A rebuilt mirror can recover the baseline through the fetched ancestry.
-        // If it is still absent, no fast-forward can be proven: refuse as a history
-        // rewrite, not a transient transport failure, and never publish the clone.
-        if !git(&dir, &["cat-file", "-e", &format!("{baseline}^{{commit}}")])?
-            .status
-            .success()
+        let repository = open(&dir)?;
+        // Missing watermarks cannot erase accepted history. A rebuilt clone can
+        // recover a watermark's missing baseline from the fetched ancestry.
+        let mut baselines =
+            match &old {
+                Some(w) => vec![gix::ObjectId::from_hex(w.main_head.as_bytes())
+                    .map_err(|_| Alarm::FetchFailed)?],
+                None if existed => vec![backend::main_head(&repository)?],
+                None => Vec::new(),
+            };
+        // Publication may have completed just before a crash writing watermark.
+        // Neither that accepted main nor the persisted watermark may be rewound.
+        if existed
+            && old.is_some()
+            && repository
+                .try_find_reference("refs/heads/main")
+                .map_err(|_| Alarm::FetchFailed)?
+                .is_some()
         {
-            return Err(Alarm::ForcePush);
+            let accepted = backend::main_head(&repository)?;
+            if !baselines.contains(&accepted) {
+                baselines.push(accepted);
+            }
         }
-        let ancestry = git(&dir, &["merge-base", "--is-ancestor", &baseline, &head])?;
-        match ancestry.status.code() {
-            Some(0) => {}
-            Some(1) => return Err(Alarm::ForcePush),
-            _ => return Err(Alarm::FetchFailed),
+        let head = backend::fetch(&repository, &self.repos[repo])?;
+        for baseline in baselines {
+            if repository.find_commit(baseline).is_err() {
+                return Err(Alarm::ForcePush);
+            }
+            let mut found = false;
+            for ancestor in repository
+                .find_commit(head)
+                .map_err(|_| Alarm::FetchFailed)?
+                .ancestors()
+                .all()
+                .map_err(|_| Alarm::FetchFailed)?
+            {
+                if ancestor.map_err(|_| Alarm::FetchFailed)?.id == baseline {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Err(Alarm::ForcePush);
+            }
         }
         let names = paths.map_or_else(
             || {
@@ -207,6 +212,10 @@ impl Mirror {
             },
             |paths| paths.to_vec(),
         );
+        let tree = repository
+            .find_commit(head)
+            .and_then(|c| c.tree())
+            .map_err(|_| Alarm::FetchFailed)?;
         let mut blob_shas = BTreeMap::new();
         for name in names {
             if name.contains(['\\', '\0', '\n', '\r'])
@@ -214,34 +223,29 @@ impl Mirror {
             {
                 return Err(Alarm::FetchFailed);
             }
-            let output = checked(git(
-                &dir,
-                &["rev-parse", "--verify", &format!("{head}:{name}")],
-            )?)?;
-            let sha = String::from_utf8(output.stdout).map_err(|_| Alarm::FetchFailed)?;
-            let sha = sha.trim();
-            let kind = checked(git(&dir, &["cat-file", "-t", sha])?)?;
-            if kind.stdout != b"blob\n" {
-                return Err(Alarm::FetchFailed);
-            }
-            blob_shas.insert(name.into(), sha.into());
+            let entry = tree
+                .lookup_entry_by_path(name)
+                .map_err(|_| Alarm::FetchFailed)?
+                .ok_or(Alarm::FetchFailed)?;
+            repository
+                .find_blob(entry.object_id())
+                .map_err(|_| Alarm::FetchFailed)?;
+            blob_shas.insert(name.into(), entry.object_id().to_string());
         }
-        checked(git(&dir, &["update-ref", "refs/heads/main", &head])?)?;
-        checked(git(&dir, &["update-ref", "-d", "refs/pg-ctx/main"])?)?;
-        let previous = staging.path().join("previous.git");
-        let had_accepted = accepted_dir.exists();
-        if had_accepted {
-            fs::rename(&accepted_dir, &previous).map_err(failed)?;
+        set_main(&repository, head)?;
+        // No candidate refs survive publication, including a no-change fetch.
+        if let Some(reference) = repository
+            .try_find_reference("refs/pg-ctx/main")
+            .map_err(|_| Alarm::FetchFailed)?
+        {
+            reference.delete().map_err(|_| Alarm::FetchFailed)?;
         }
-        if let Err(error) = fs::rename(&dir, &accepted_dir) {
-            if had_accepted {
-                fs::rename(&previous, &accepted_dir).map_err(failed)?;
-            }
-            return Err(failed(error));
-        }
+        drop(tree);
+        drop(repository);
+        publish_with(&dir, &accepted_dir, || Ok(())).map_err(failed)?;
         let watermark = Watermark {
             repo: repo.into(),
-            main_head: head,
+            main_head: head.to_string(),
             blob_shas,
             fetched_at: now.max(old.map_or(0, |w| w.fetched_at)),
         };
@@ -251,35 +255,54 @@ impl Mirror {
     }
 }
 
-fn copy_repository(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::create_dir(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let target = destination.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_repository(&entry.path(), &target)?;
-        } else {
-            fs::copy(entry.path(), target)?;
+const STAGING_PREFIX: &str = ".pg-ctx-fetch-";
+const FETCH_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn fetch_lock_wait<T>(
+    mut attempt: impl FnMut() -> Result<Option<T>, Alarm>,
+    mut elapsed: impl FnMut() -> Duration,
+    mut sleep: impl FnMut(Duration),
+) -> Result<T, Alarm> {
+    let mut delay = Duration::from_millis(5);
+    loop {
+        if let Some(lock) = attempt()? {
+            return Ok(lock);
         }
+        let remaining = FETCH_LOCK_TIMEOUT.saturating_sub(elapsed());
+        if remaining.is_zero() {
+            return Err(Alarm::FetchFailed);
+        }
+        sleep(delay.min(remaining));
+        delay = (delay * 2).min(Duration::from_millis(100));
     }
-    Ok(())
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<Output, Alarm> {
-    let mut command = git_command(dir);
-    command.env("GIT_CONFIG_NOSYSTEM", "1").env(
-        "GIT_CONFIG_GLOBAL",
-        if cfg!(windows) { "NUL" } else { "/dev/null" },
-    );
-    command.args(args).output().map_err(|_| Alarm::FetchFailed)
-}
-
-fn checked(output: Output) -> Result<Output, Alarm> {
-    if output.status.success() {
-        Ok(output)
+fn publish_with(
+    dir: &Path,
+    accepted: &Path,
+    after_switch: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
+    if accepted.exists() {
+        // One syscall: lockless readers see old or new, never an absent mirror.
+        // On failure (including unsupported filesystems) old remains accepted.
+        #[cfg(target_os = "linux")]
+        rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            dir,
+            rustix::fs::CWD,
+            accepted,
+            rustix::fs::RenameFlags::EXCHANGE,
+        )?;
+        #[cfg(not(target_os = "linux"))]
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "atomic directory exchange required",
+        ));
     } else {
-        Err(Alarm::FetchFailed)
+        fs::rename(dir, accepted)?;
     }
+    // Failure/unwind here only drops the old generation, not accepted history.
+    after_switch()
 }
 
 #[cfg(test)]

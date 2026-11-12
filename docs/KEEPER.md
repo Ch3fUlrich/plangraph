@@ -16,11 +16,11 @@ Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12
 | `store_close.py` | `CloseMixin`: the router-only `close_on_decision` verb for tier-`none` items (X7b, "Legacy and decision closes") |
 | `evidence.py` | pluggable verifiers (below) |
 | `importer.py` | YAML dir → router-attributed batch; `export_yaml(conn, dir)` for round trip |
-| `api.py` / `daemon.py` | HTTP JSON server around `Store` / daemon startup: `daemon --port 0 --ready-file PATH` atomically publishes a private `{host, port}` JSON file after binding. The contract harness probes its own child's endpoint, never a released guessed port that another keeper could occupy. |
+| `api.py` | HTTP JSON server around `Store` |
 | `cli.py` (`python -m plangraph.keeper.cli` / entry `pg`) | thin client of the API; `cli_admin` and oversight's `db` import are lazy, so remote `whoami` works without POSIX `fcntl` on Windows; local DB commands still require the keeper host; `oversight-check` and `oversight-audit --out-dir DIR --cursor FILE --router-log FILE` live in `cli_oversight.py` |
 | `mcp.py` | stdio MCP server (hand-written JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`; no SDK), same verbs, calls the API; unchanged by the [Rust schema-only slice](keeper/mcp-rust.md) |
 
-Critical-path stall alerts notify owners and routing without mutating keeper state; see [configuration and delivery semantics](keeper/crit-path-stall.md).
+Critical-path stall alerts notify owners and routing without mutating keeper state; see [configuration and delivery semantics](keeper/crit-path-stall.md). [Repository mirrors](repo-mirror.md) are a standalone `pg-ctx` Rust slice; keeper mirror wiring and scheduling/timers are later slices, not daemon startup.
 
 ## Tables (all in one SQLite file)
 `principals(name PK, role, projects json, family, token_sha256, active)` ·

@@ -7,8 +7,8 @@ paths for local remotes. Each repository gets `root/<name>/mirror.git` (bare,
 never a worktree), `fetch.lock`, and an atomically replaced `watermark.json`.
 
 `fetch_named(name, &["README.md", "docs/guide.md"])` names the files whose blob
-SHAs must be recorded. It clones with `git clone --bare` initially, then fetches
-only main with `--prune` into a candidate ref in a private staging copy. It checks
+SHAs must be recorded. It initializes a bare repository through `gix`, then fetches
+only main into a private quarantine. It checks
 ancestry and resolves each named path at that exact commit before updating accepted main or
 `{repo, main_head, blob_shas, fetched_at}` (Unix seconds). `blob_shas` maps each
 repository-relative path to its Git blob object ID; missing files, directories
@@ -20,7 +20,8 @@ Rewinds/divergence return
 `Alarm::ForcePush`; Git, storage and lock errors return `Alarm::FetchFailed`.
 Both leave the prior watermark unchanged. Rejected refs and objects are discarded
 with staging, never published in the accepted mirror; successful publication also
-removes the candidate ref. A per-repo lock waits for overlapping writers;
+removes the candidate ref. A per-repo lock waits at most five seconds for overlapping
+writers, with capped exponential backoff, then returns `Alarm::FetchFailed`;
 timestamps cannot decrease even if the clock rolls back. `watermark(name)` reads
 the last accepted state; `age()` saturates at zero and `is_stale()` is true only
 after 300 seconds. Unchanged successful fetches refresh freshness.
@@ -35,35 +36,47 @@ restore it through main's history. If it remains absent, return `Alarm::ForcePus
 the upstream history cannot prove a fast-forward. Preserve the watermark and
 keep every fetch in staging until all ancestry/blob checks pass. Restoring
 upstream history permits the next fetch without deleting the watermark.
-All mirror Git commands ignore system/global Git configuration (including URL
-rewrites and protocol overrides) in production as well as tests; inherited
-`GIT_*` variables are cleared by the shared command builder. Subprocess tests
+All mirror operations use isolated `gix` options, ignoring system/global Git
+configuration (including URL rewrites and protocol overrides) and inherited
+`GIT_*` variables in production as well as tests. Subprocess tests
 inject `GIT_DIR`, `GIT_COMMON_DIR`, worktree/object/index overrides, and indexed
 configuration (`GIT_CONFIG_COUNT`/`KEY_0`/`VALUE_0`) as well as HOME/XDG config.
-The parent requires a completion file written after both fetches, so an exact
-test filter matching zero tests cannot silently pass. Direct child-test runs
-without the fixture execute the full isolated parent test instead of doing nothing.
+The parent removes any prior completion file and requires new evidence written
+after both fetches; a zero-test child launch therefore fails the parent. Arbitrary
+external test filters can still match zero tests and exit successfully. Direct
+child-test runs create their own fixture and exercise fetches without re-running
+or spawning the parent. The configured child has an empty executable search path,
+proving local mirror operations do not invoke Git or git-upload-pack.
 
 Run `cd rust && cargo test -p pg-ctx` for local-only bare-origin tests.
 Slice 1 is this one crate's bare fetch and watermark (main head plus named blob
 SHAs). Keeper wiring, scheduling/timers and other repositories are later slices.
 
-## Blocking slice-1 requirement
+## Storage and transport
 
-The no-Git-subprocess requirement is **not met** by the current backend. The
-evaluated `gix` 0.90.0 uses `gix-transport` 0.62.0's
-`client::blocking_io::file::connect` for local clone/fetch; that function explicitly
-spawns `git-upload-pack` (with a `git upload-pack` fallback). Its fetch API also
-does not implement pruning (`Remote::prune` is commented out). A subprocess-free
-local clone/fetch equivalent is unavailable in that version, so the backend swap
-is blocked, not deferred to a sanctioned later slice. No unused dependency or
-partial backend claiming to satisfy that requirement is added. The existing Git
-backend remains explicit here until that blocker is resolved.
+The single `pg-ctx` implementation uses `gix` for objects, refs and ancestry.
+Local paths/file URLs transfer only missing reachable objects in-process, not
+gix's helper-spawning file transport. HTTP(S) and Git protocol use native gix
+fetch; SSH, external helpers and credential-helper fallback are refused with
+`Alarm::FetchFailed`. Only main
+is fetched, no tags or other refs are retained, and a deleted main is refused.
+No mirror code starts a Git subprocess; tests use Git only to construct/inspect
+their disposable local bare remotes.
 
-The pre-existing lane also includes keeper ready-file startup work in
-`daemon.py`, the contract harness, its startup regression, `KEEPER.md`, and two
-changelog bullets. That scope finding remains unresolved: removing the startup
-implementation would break the existing startup regression, while removing or
-weakening that test is forbidden in this round. No keeper mirror wiring is added.
-The reported `ready` signature mismatch does not apply: `daemon.run` already
-accepts `ready` on main. The documentation now attributes startup to `daemon.py`.
+Quarantines hardlink immutable loose objects and pack/index/bitmap/reverse-index
+files on the same filesystem; mutable refs/config/metadata are copied privately.
+Symlinks/special files are refused, never dereferenced. Publication exchanges the
+accepted directory and quarantine in one atomic Linux rename-exchange syscall;
+failure leaves the old mirror in place, interruption after exchange leaves the
+new accepted mirror readable, including the prior watermark's objects. There is
+no restore rename or accepted-directory deletion window. Unsupported platforms
+or filesystems fail closed on replacement. The next locked fetch sweeps only
+named `.pg-ctx-fetch-*` quarantines abandoned by an aborted process.
+If publication completed before an interrupted watermark write, the next fetch
+must fast-forward both accepted main and the older watermark; it cannot silently
+rewind the newly accepted mirror back to the watermark's head.
+
+Keeper ready-file startup code, its contract harness, startup regression and
+changelog bullets predate this fix round and are unchanged. They are not mirror
+wiring. The unrelated keeper table attribution edit has been removed; keeper
+mirror wiring remains a later slice.

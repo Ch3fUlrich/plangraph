@@ -17,8 +17,7 @@ fn fixture_git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
 
-#[test]
-fn mirror_ignores_caller_git_configuration() {
+fn fixture() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let origin = root.join("origin.git");
@@ -33,6 +32,13 @@ fn mirror_ignores_caller_git_configuration() {
         serde_json::to_vec(&serde_json::json!({"demo": origin})).unwrap(),
     )
     .unwrap();
+    tmp
+}
+
+#[test]
+fn mirror_ignores_caller_git_configuration() {
+    let tmp = fixture();
+    let root = tmp.path();
     let home = root.join("home");
     let xdg = root.join("xdg");
     fs::create_dir(&home).unwrap();
@@ -41,6 +47,10 @@ fn mirror_ignores_caller_git_configuration() {
         [url \"/missing-mirror-remote/\"]\n\tinsteadOf = /\n";
     fs::write(home.join(".gitconfig"), hostile).unwrap();
     fs::write(xdg.join("git/config"), hostile).unwrap();
+    let completion = root.join("exercised");
+    // Require fresh evidence even if fixture construction ever starts reusing roots.
+    fs::write(&completion, "stale completion").unwrap();
+    fs::remove_file(&completion).unwrap();
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "mirror_configuration_child", "--nocapture"])
         .env("PG_CTX_CONFIG_FIXTURE", root)
@@ -56,6 +66,9 @@ fn mirror_ignores_caller_git_configuration() {
         .env("GIT_CONFIG_COUNT", "1")
         .env("GIT_CONFIG_KEY_0", "protocol.file.allow")
         .env("GIT_CONFIG_VALUE_0", "never")
+        // The fixture is already built: mirror clone/fetch must not find git
+        // or git-upload-pack, even indirectly through gix's file transport.
+        .env("PATH", root.join("no-executables"))
         .output()
         .unwrap();
     assert!(
@@ -72,12 +85,16 @@ fn mirror_ignores_caller_git_configuration() {
 
 #[test]
 fn mirror_configuration_child() {
-    let Some(root) = std::env::var_os("PG_CTX_CONFIG_FIXTURE") else {
-        // Direct test runs exercise the parent too, rather than passing vacuously.
-        mirror_ignores_caller_git_configuration();
-        return;
+    let owned;
+    let root = match std::env::var_os("PG_CTX_CONFIG_FIXTURE") {
+        Some(root) => std::path::PathBuf::from(root),
+        None => {
+            // Exercise clone/fetch directly, without running/spawning the parent again.
+            owned = fixture();
+            owned.path().to_owned()
+        }
     };
-    let root = Path::new(&root);
+    let root = root.as_path();
     let mirror = Mirror::from_repos(&root.join("repos.json"), &root.join("mirrors")).unwrap();
     let expected = fs::read_to_string(root.join("head")).unwrap();
     assert_eq!(mirror.fetch("demo").unwrap().main_head, expected);

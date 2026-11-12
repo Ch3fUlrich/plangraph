@@ -2,6 +2,9 @@ use super::*;
 use pg_worker_core::workspace_resolver::git_command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "mirror_safety_tests.rs"]
+mod safety;
+
 static COMMIT: AtomicU64 = AtomicU64::new(0);
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -275,29 +278,73 @@ fn mirror_age_stale_boundary_and_clock_rollback() {
 
 #[test]
 fn mirror_overlapping_fetch_waits_for_the_writer() {
-    use std::{sync::mpsc, thread, time::Duration};
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
     let f = Fixture::new();
     let head = f.commit(None);
     let dir = f.mirror.root.join("demo");
     fs::create_dir_all(&dir).unwrap();
-    let lock = lockfile::try_lock(&dir.join("fetch.lock"))
-        .unwrap()
+    let path = dir.join("fetch.lock");
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "mirror::tests::safety::mirror_lock_holder_child",
+            "--nocapture",
+        ])
+        .env("PG_CTX_LOCK_FIXTURE", &path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
         .unwrap();
-    thread::scope(|scope| {
-        let (tx, rx) = mpsc::channel();
-        let mirror = &f.mirror;
-        scope.spawn(move || tx.send(mirror.fetch("demo")).unwrap());
-        assert!(matches!(
-            rx.recv_timeout(Duration::from_millis(100)),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ));
-        drop(lock);
-        assert_eq!(
-            rx.recv_timeout(Duration::from_secs(10))
-                .unwrap()
-                .unwrap()
-                .main_head,
-            head
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    loop {
+        let mut line = String::new();
+        assert!(
+            output.read_line(&mut line).unwrap() > 0,
+            "lock child exited before acquiring lock"
         );
-    });
+        if line.trim() == "locked" {
+            break;
+        }
+    }
+    // Drive the real fetch path to its deadline without wall-clock sleeps.
+    let elapsed = std::cell::Cell::new(Duration::ZERO);
+    assert_eq!(
+        f.mirror.fetch_named_with_wait(
+            "demo",
+            None,
+            now(),
+            || elapsed.get(),
+            |delay| elapsed.set(elapsed.get() + delay),
+        ),
+        Err(Alarm::FetchFailed),
+    );
+    assert_eq!(elapsed.get(), FETCH_LOCK_TIMEOUT);
+    assert_eq!(f.mirror.watermark("demo").unwrap(), None);
+    let mut contended = false;
+    let watermark = f
+        .mirror
+        .fetch_named_with_wait(
+            "demo",
+            None,
+            now(),
+            || Duration::ZERO,
+            |_| {
+                assert!(!contended, "writer must release before retry");
+                contended = true;
+                child
+                    .stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(b"release\n")
+                    .unwrap();
+                assert!(child.wait().unwrap().success());
+            },
+        )
+        .unwrap();
+    // Always reap the helper, including an unexpectedly non-contending lock impl.
+    child.kill().ok();
+    assert!(child.wait().unwrap().success());
+    assert!(contended, "another process must hold the writer lock");
+    assert_eq!(watermark.main_head, head);
 }
