@@ -1,6 +1,6 @@
 # Plangraph Spawner & Model Routing Architecture
 ### Writer result finalization
-
+Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged.
 `worker-core::writer_result::check_result` runs the mandatory Rust file-size
 gate before returning a checked result; export rechecks it before content gates,
 bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
