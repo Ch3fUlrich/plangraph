@@ -222,6 +222,7 @@ class SpawnPlan:
     candidates: tuple[dict, ...] = ()
     writer_groups: tuple = ()
     seat_coverage: tuple[dict, ...] = ()
+    placement: dict | None = None
 
     @property
     def first_leg(self) -> Leg | None:
@@ -229,10 +230,8 @@ class SpawnPlan:
 
     def to_dict(self):
         result = asdict(self)
-        if not self.writer_groups:
-            result.pop('writer_groups')
-        if not self.seat_coverage:
-            result.pop('seat_coverage')
+        for field in ('writer_groups', 'seat_coverage', 'placement'):
+            if not getattr(self, field): result.pop(field)
         result["first_leg"] = asdict(self.first_leg) if self.first_leg else None
         return result
 
@@ -275,6 +274,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             policy = load_route_policy()
         except ValueError as exc:
             raise SpawnRefused(str(exc)) from None
+    role = 'orchestrate' if role == 'research' else role
     if role not in ("implement", "review", "orchestrate"):
         raise ValueError("role must be implement|review|orchestrate")
     from plangraph.routing_support.risk import evaluate_risk

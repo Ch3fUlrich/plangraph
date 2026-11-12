@@ -5,14 +5,37 @@
 Default CLI/MCP admission and SSH target selection use the registry role RAM
 reservation above `caps.mem_floor_mb`; live run counts do not limit admission.
 Healthy, fresh targets are ranked by available RAM above their floor, then name.
-The overflow routing file supplies `hosts` and the `public_repos` allowlist only;
-legacy local limit overrides are ignored. A repository absent from the allowlist
+The overflow routing file supplies `hosts`, the `public_repos` allowlist and
+the orchestration thresholds below; legacy local limit overrides are ignored. A repository absent from the allowlist
 queues without copying. Exhausted targets produce per-host safe refusal reasons.
 No overflow config file preserves local admission without overflow annotations.
 Missing or unreadable receipt IDs produce `acknowledged_unknown=true`,
 `status=unknown` records on the selected host, never a refusal or retry.
 See docs/SPAWNER.md for registry defaults and receipt boundaries. This Python
 integration does not change the Rust placement-rule rollout gates below.
+
+### Remote-first orchestration (D-5188, slice 1)
+
+An optional per-host `orchestration_only: true` in `hosts.json` (or the local
+entry in `overflow-hosts.json`) changes unnamed implement/review/research spawns
+to remote-first; absence defaults to false and preserves local-first overflow.
+Eligible remotes still require fresh healthy readiness, SSH, registry RAM caps
+and an allowlisted public repository. Rank by `MemAvailable - mem_floor_mb`,
+breaking ties in overflow hosts configuration order, never by run counts.
+Only when no remote admits may a healthy local host run the task. Research uses
+the existing orchestrate model policy; its RAM reservation keeps the research role.
+
+The overflow config's `local_min_available_mb` defaults to **4096** and
+`local_max_swap_used_pct` to **90**. Local fallback refuses below the minimum
+MemAvailable (`local_min_available_mb`) or above the swap-used percentage
+(`local_max_swap_used_pct`); equality is healthy, and no configured swap is 0%.
+Registry role reservation/floor admission still applies. Refusals are explicit
+`status=refused`, exit 2, never queued; private repositories are never copied.
+Route previews and durable spawn/refusal records include
+`placement: {host, reason, free_mb}`. Reasons are `remote_most_free_ram`,
+`local_fallback_no_remote`, either threshold name, or a RAM refusal. `free_mb`
+is the selected host's sampled MemAvailable, not its headroom. Remote launch
+failures exclude that target before trying the next target or local fallback.
 
 ## Operator view: local Rust rule source
 

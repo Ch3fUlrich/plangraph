@@ -19,7 +19,7 @@ def resources(service):
     return 0, available_memory_mb()
 
 
-def admit(service, options, *, card=None):
+def admit(service, options, *, card=None, preview=False):
     """Enforce RAM admission even without an overflow configuration."""
     if options.get('dry_run'):
         return None
@@ -33,14 +33,24 @@ def admit(service, options, *, card=None):
     except (OSError, ValueError):
         config = {}
     role = options.get('role', 'implement')
-    role_mb, floor = overflow.local_limits(overflow.registry_caps(), role)
+    registry = overflow.registry_caps()
+    local, remote_first = overflow.placement_policy(registry, config)
+    if preview and not remote_first:
+        return None
+    role_mb, floor = overflow.local_limits(registry, role)
     live, memory = resources(service)
-    if not overflow.memory_refusal(memory, role_mb, floor):
+    if not remote_first and not overflow.memory_refusal(memory, role_mb, floor):
         return None
     repo = Path(((card or {}).get('diff_ref') or {}).get('repo') or
                 getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
     public = str(repo) in [str(Path(p).expanduser().resolve()) for p in config.get('public_repos', [])]
+    if remote_first and options.get('benchmark') is not None:
+        public = False  # A local-only database makes every remote ineligible.
     rows = overflow.ready_records(config, role)
+    if remote_first:
+        rows = {name: row for name, row in rows.items()
+                if name != local and overflow.host_config(registry, name).get('id') != local}
+    health = overflow.local_health_refusal(config, memory) if remote_first else None
     flags = []
     for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope'):
         if options.get(key) is not None:
@@ -51,12 +61,23 @@ def admit(service, options, *, card=None):
         if options.get(key):
             flags.append('--' + key.replace('_', '-'))
     while True:
-        decision = overflow.decide(live, memory, role_mb, floor, rows, public)
+        decision = overflow.decide(live, memory, role_mb, floor, rows, public,
+                                   remote_first=remote_first, local_refusal=health)
         if options.get('benchmark') is not None and decision.host is not None:
             decision = overflow.Decision(None, 'local benchmark database cannot be forwarded')
+        placement = dict(host=decision.host or local, reason=decision.reason,
+                         free_mb=rows[decision.host]['mem_available_mb'] if decision.host else memory)
+        if preview:
+            return placement
+        if remote_first:
+            options['_placement'] = placement
+            if decision.host is None and decision.reason == 'local_fallback_no_remote':
+                return None
         if decision.host is None:
-            record = {'run_id': 'run-' + uuid.uuid4().hex, 'status': 'queued',
-                      'reason': decision.reason, 'overflow_reason': decision.reason, 'exit_code': 5}
+            record = {'run_id': 'run-' + uuid.uuid4().hex,
+                      'status': 'refused' if remote_first else 'queued',
+                      'reason': decision.reason, 'overflow_reason': decision.reason,
+                      'exit_code': 2 if remote_first else 5}
             break
         name = decision.host
         try:
@@ -72,6 +93,8 @@ def admit(service, options, *, card=None):
             record.setdefault('status', 'unknown')
             break
         rows[name]['refusal'] = refusal
+    if remote_first:
+        record.update(host=placement['host'], placement=placement)
     service._save(record)
     return record
 
@@ -108,6 +131,7 @@ class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``save_refusal`` and ``state`` from the service."""
 
     async def spawn(self, *args, **kwargs):
+        options = {}
         try:
             import inspect
             bound = inspect.signature(self._spawn).bind(*args, **kwargs)
@@ -135,10 +159,13 @@ class SeatSpawnMixin:
                     return {'writers': await asyncio.gather(*(dispatch(g, b) for g, b in zip(groups, briefs)))}
                 options['prompt'] = briefs[0]
                 return await self._spawn(**options)
+            if '_placement' in options:
+                kwargs['_placement'] = options['_placement']
             return await self._spawn(*args, **kwargs)
         except Exception as exc:
             self.save_refusal(exc, kwargs.get('role', args[2] if len(args) > 2 else 'implement'),
-                              card=kwargs.get('card', args[0] if args else None))
+                              card=kwargs.get('card', args[0] if args else None),
+                              **({'placement': options['_placement']} if options.get('_placement') else {}))
             raise
 
     def _annotate_spawn(self, record, prompt, card, cwd, plan, explicit):
