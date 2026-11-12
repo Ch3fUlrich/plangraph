@@ -14,7 +14,7 @@ from plangraph.planner.routing import (RouteError, effective_estimate,
 
 DEFAULT_LEGS = tuple(dataclasses.replace(leg, disabled=None) for leg in DEFAULT_LEGS)  # mechanics probes ignore live policy
 route_card = functools.partial(route_card, legs=DEFAULT_LEGS)
-
+plan_spawn = functools.partial(plan_spawn, catalog_rows=())
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
     "openrouter-free", "cx-gpt-6.1-sol", "cx-gpt-6-luna",
@@ -389,9 +389,9 @@ def test_no_implement_plan_leg_has_claude_family():
         assert {leg.id for leg in plan.legs if leg.claude_family} == set()
         from plangraph.planner.route_policy import DEFAULT_POLICY_PATH, load_route_policy
         for diff in ({"diff_ref": {"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}}, {}):
-            review = plan_spawn({"estimate_tokens": estimate, **diff}, role="review", writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH))
-            if estimate == 100000: assert [leg.id for leg in review.review_seats] == (["agy-gemini-3.8-flash", "mimo-v2.6-flash"] if diff else ["agy-gemini-3.8-flash", "agy-sonnet-5.5"])
-            assert not any(leg.claude_family for leg in (review.review_seats[:-1] if estimate == 100000 and not diff else review.review_seats))
+            review = plan_spawn({"estimate_tokens": estimate, **diff}, role="review", writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH), catalog_rows=())
+            assert [leg.id for leg in review.review_seats] == (["agy-gemini-3.8-flash", "mimo-v2.6-flash"] if diff else ["agy-gemini-3.8-flash", "agy-sonnet-5.5"])
+            assert not any(leg.claude_family for leg in (review.review_seats[:-1] if not diff else review.review_seats))
 def test_alternate_limit_lookup_restricted_to_agy_harness(monkeypatch):
     from mechanics_legs import install_fallthrough_legs
     install_fallthrough_legs(monkeypatch)
@@ -407,8 +407,8 @@ def test_alternate_limit_lookup_restricted_to_agy_harness(monkeypatch):
         return {"state": "available", "evidence": None}
 
     c_rev = {"estimate_tokens": 20000, "risk_tags": []}
-    plan_rev = plan_spawn(c_rev, role="review", writer_families=("claude",), leg_reader=qoder_mock_reader, legs=tuple(dataclasses.replace(l, disabled=None) if l.family == "qwen" else l for l in DEFAULT_LEGS))
-    assert [l.id for l in plan_rev.legs][:2] == ["agy-gemini-3.8-flash", "qodercli-qwen3.8-flash"]
+    plan_rev = plan_spawn(c_rev, role="review", writer_families=("claude",), leg_reader=qoder_mock_reader, catalog_rows=(), legs=tuple(dataclasses.replace(l, disabled=None) if l.family == "qwen" else l for l in DEFAULT_LEGS))
+    assert [l.id for l in plan_rev.legs][:2] == ["qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free"]
     assert not any(s["leg"] == "qodercli-qwen3.8-flash" for s in plan_rev.skipped)
 
     # agy-gemini-3.8-flash (model gemini-3.8-flash, harness agy) IS skipped

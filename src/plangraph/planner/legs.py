@@ -110,7 +110,7 @@ DEFAULT_LEGS = (
     Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-high",
         "gemini", ("128k", "256k", "1m"), 900000, False, roles=("implement", "review")),
     Leg("opencode-big-pickle", "free", "opencode", "opencode/big-pickle",
-        "pickle", ("128k",), 100000, True, roles=("implement", "review")),
+        "glm", ("128k",), 100000, True, roles=("implement", "review")),
     Leg("agy-gpt-oss-120b", "subscription", "agy", "gpt-oss-120b-medium",
         "openai", ("128k",), 100000, False, roles=("review",)),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),

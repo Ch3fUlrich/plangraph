@@ -19,7 +19,7 @@ def test_route_free_first_keys():
 def test_catalog_tiers_preserve_roles():
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.review_order import catalog_tiers
-    rows = [{'id': 'gemini-3.8-flash', 'tier': 'free'}]
+    rows = [{'id': 'agy/gemini-3.8-flash', 'tier': 'free'}]
     updated = catalog_tiers(DEFAULT_LEGS, rows)
     assert next(l for l in updated if l.id == 'agy-gemini-3.8-flash').tier == 'free'
     assert [l.roles for l in updated] == [l.roles for l in DEFAULT_LEGS]
@@ -34,7 +34,7 @@ def test_registered_pool_seats_exclude_claude_writers():
     legs = tuple(leg for leg in DEFAULT_LEGS if leg.id in ids)
     assert {leg.id for leg in legs} == ids
     plan = plan_spawn({'estimate_tokens': 1000}, role='review', legs=legs,
-                      writer_families=('claude',),
+                      writer_families=('claude',), catalog_rows=(),
                       leg_reader=lambda *a, **k: {'state': 'ok', 'evidence': None})
     assert [leg.id for leg in plan.legs] == ['omniroute-deepseek-flash', 'omniroute-muse-spark']
     assert [leg.id for leg in plan.review_seats] == ['omniroute-deepseek-flash', 'omniroute-muse-spark']
@@ -96,11 +96,24 @@ def test_catalog_tier_survives_planning_and_cli(tier, role, monkeypatch, tmp_pat
 
 def test_old_limit_evidence_reprobes(store):
     store.record_provider_response('test/leg', 429, 'quota', {'Retry-After': '86400'}, 'test', now=100)
+    assert ls.EVIDENCE_TTL_S == 6 * 60 * 60
+    assert store.leg_status('test/leg', now=100 + ls.EVIDENCE_TTL_S - 1)['state'] == 'limited'
     assert store.leg_status('test/leg', now=100 + 21600)['state'] == 'reprobe'
     # Also exercise a legacy row whose recorded reset exceeds the new cap.
     with store._connect() as db:
         db.execute('UPDATE leg_events SET reset_at=?', (100 + 86400,))
     assert store.leg_status('test/leg', now=100 + 21600)['state'] == 'reprobe'
+
+
+def test_probe_failures_do_not_extend_hidden_limit_evidence(store):
+    store.record_provider_response('test/leg', 429, 'quota', {'Retry-After': '86400'}, 'test', now=100)
+    store.record_probe_fail('test/leg', 'timeout', 'probe', now=200, down_s=ls.RESET_CAP_S)
+    assert store.leg_status('test/leg', now=100 + ls.EVIDENCE_TTL_S - 1)['state'] == 'limited'
+    assert store.leg_status('test/leg', now=100 + ls.EVIDENCE_TTL_S)['state'] == 'reprobe'
+    store.record_probe_fail('test/down', 'timeout', 'probe', now=100, down_s=ls.RESET_CAP_S)
+    store.record_probe_fail('test/down', 'timeout', 'probe', now=101, down_s=ls.RESET_CAP_S)
+    assert store.leg_status('test/down', now=101 + ls.EVIDENCE_TTL_S - 1)['state'] == 'down'
+    assert store.leg_status('test/down', now=101 + ls.EVIDENCE_TTL_S)['state'] == 'reprobe'
 
 
 @pytest.fixture

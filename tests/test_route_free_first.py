@@ -5,6 +5,8 @@ import json
 import dataclasses
 from pathlib import Path
 
+import pytest
+
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import plan_spawn
 from plangraph.spawner.cli import main
@@ -17,6 +19,12 @@ DISABLED_FREE = {"opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-fr
 # D-4196: retain Zen rows for explicit-table probes, but never route them by default.
 ACTIVE_FREE = ["openrouter-free"]
 SUBS = ["cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]   # D-3667: Sol heads the subscription tier
+
+
+@pytest.fixture(autouse=True)
+def fixed_catalog(monkeypatch):
+    """Exact-order probes use declared tiers, never the host's catalog snapshot."""
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, "catalog_rows", ())
 
 
 def test_default_qwen_disabled_and_gpt_review_families():
@@ -88,7 +96,7 @@ def test_route_and_refusal(tmp_path, capsys):
 def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
-    assert ids[:3] == ["agy-gemini-3.8-flash", "opencode-big-pickle", "agy-gemini-4-argon"]
+    assert ids[:3] == ["agy-gemini-3.8-flash", "opencode-big-pickle", "mimo-v2.6-flash"]
     assert not DISABLED_FREE & set(ids)
 
 
@@ -102,7 +110,8 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
     for leg_id in DISABLED_FREE:
         assert reasons[leg_id].startswith("disabled: D-4196 ")
-    assert [leg.id for leg in rev.legs][:2] == ["agy-gemini-3.8-flash", "opencode-big-pickle"]
+    assert [leg.id for leg in rev.legs][:2] == ["agy-gemini-3.8-flash", "mimo-v2.6-flash"]
+    assert reasons["opencode-big-pickle"] == "off_family"
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
     assert reasons["opencode-go-glm-5.2"].startswith("disabled:")
@@ -129,7 +138,7 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    assert ids[:3] == ["agy-gemini-3.8-flash", "opencode-big-pickle", "agy-gemini-4-argon"]
+    assert ids[:3] == ["agy-gemini-3.8-flash", "opencode-big-pickle", "mimo-v2.6-flash"]
     assert not DISABLED_FREE & set(ids)
     assert ids.index("agy-gemini-3.8-flash") == 0
 

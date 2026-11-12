@@ -30,8 +30,8 @@ _KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_
 
 
 def review_priority(leg) -> int:
-    """Gemini and MiMo occupy the preferred cross-family review seats."""
-    return {"gemini": 0, "mimo": 1}.get(leg.family, 3 if "haiku" in leg.model.lower() else 2)
+    """D-4147 role order within a cost tier; no new family preferences."""
+    return 2 if "haiku" in leg.model.lower() else 0 if leg.family == "mimo" else 1
 
 
 def implement_key(leg, tier_idx, pos):

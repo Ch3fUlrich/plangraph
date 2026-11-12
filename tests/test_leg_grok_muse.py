@@ -96,7 +96,7 @@ def test_listing_accepts_nested_ids_not_non_ids(monkeypatch):
 
 @pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
 def test_muse_never_automatic_even_if_lifted(role):
-    # Historical test name retained: D-5113 lifts the old manual-only fence.
+    """Historical name retained: D-5113 admits Muse automatically unless policy bans it."""
     legs = tuple(replace(BY_ID[mid], roles=(role,)) for mid in (*MUSE, 'omniroute-muse-spark'))
     policy = RoutePolicy(review_allowed_families=("muse",))
     for leg in legs:

@@ -12,6 +12,11 @@ from plangraph.spawner.leg_state import LegStateStore
 CARD = {"estimate_tokens": 1000}
 
 
+@pytest.fixture(autouse=True)
+def fixed_catalog(monkeypatch):
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, "catalog_rows", ())
+
+
 def test_writer_live_limit_reset_and_scope(tmp_path, monkeypatch):
     from mechanics_legs import install_fallthrough_legs
     install_fallthrough_legs(monkeypatch)
@@ -50,19 +55,19 @@ def test_seats_and_impossible_fence():
     legs = tuple(dataclasses.replace(l, disabled=None) if l.family == "qwen" else l
                  for l in DEFAULT_LEGS)
     p = plan_spawn(CARD, role="review", writer_families=("gpt",), legs=legs)
-    # Free Gemini precedes Qwen; Claude review legs retain their family flag.
-    assert [l.family for l in p.review_seats] == ["gemini", "qwen"]
+    # Equal-cost seats retain table order; Claude review legs retain their family flag.
+    assert [l.family for l in p.review_seats] == ["qwen", "gemini"]
     assert all(l.claude_family for l in p.legs if l.family == "claude")
     assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "gemini"
     # With all other automatic families fenced, only Claude remains.
     p = plan_spawn(CARD, role="review",
                    writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo", "muse"),
-                   exclude_families=("pickle", "openai"), legs=legs)
+                   exclude_families=("openai",), legs=legs)
     assert [l.family for l in p.review_seats] == ["claude"]
     assert p.error == "two distinct review families unavailable"
     # Impossible fence: every family but the single writer's is excluded.
     p = plan_spawn(CARD, role="review", writer_families=("qwen",),
-                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude", "grok", "pickle"))
+                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude", "grok"))
     assert not p.review_seats and p.error
 
 
