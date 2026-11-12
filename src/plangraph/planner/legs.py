@@ -176,12 +176,7 @@ READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'i
                                    if leg.roles == ('implement',) else None))
                        if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
 
-# D-5206: retain every leg and review order; only Sol and agy Gemini write automatically.
-DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
-                             disabled=leg.disabled or (
-                                 'D-3828: writer disabled; no retained review or orchestrate role'
-                                 if leg.roles == ('implement',) else None))
-                     if leg.id not in ('cx-gpt-6.1-sol', 'agy-gemini-3.8-flash') else leg for leg in DEFAULT_LEGS)
+# D-5206/D-5212 change writer priority, not the registered fallback roles.
 WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol-xhigh",  # D-5206: effort-qualified default, then agy fallback
     "agy-gemini-3.8-flash",
@@ -217,6 +212,8 @@ _plain_sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
 _sol_xhigh = next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER)
 DEFAULT_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in DEFAULT_LEGS)
 EXPLICIT_LEGS = (_plain_sol, *(leg for leg in EXPLICIT_LEGS if leg.id != LEAD_WRITER))
+# Keeper readiness keeps its existing admission, but uses the current routed id.
+READINESS_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in READINESS_LEGS)
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
     leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)

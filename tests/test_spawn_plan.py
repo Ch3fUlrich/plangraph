@@ -80,7 +80,9 @@ def test_seats_and_impossible_fence():
 
 def test_operator_order_and_roles_roundtrip(tmp_path):
     assert [l.id for l in DEFAULT_LEGS if "implement" in l.roles] == [
-        "cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash"]
+        "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "openrouter-free",
+        "cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "agy-gemini-4-argon", "opencode-big-pickle",
+        "mimo-v2.6-flash", "mimo-v2.6-pro", "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
         "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
@@ -103,9 +105,10 @@ def test_benchmark_within_tier_only(monkeypatch):
     p = plan_spawn(CARD, role="implement", benchmark=rows)
     assert p.first_leg.id == "cx-gpt-6.1-sol-xhigh"  # D-5206
     assert [l.id for l in p.legs] == [
-        'cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash', 'openrouter-free',
-        'opencode-glm-5.3-flash-free', 'opencode-deepseek-v4.1-flash-free',
-        'mimo-v2.6-pro', 'mimo-v2.6-flash', 'deepseek']
+        'cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash', 'opencode-big-pickle',
+        'openrouter-free', 'opencode-glm-5.3-flash-free', 'opencode-deepseek-v4.1-flash-free',
+        'omniroute-muse-spark', 'omniroute-deepseek-flash', 'mimo-v2.6-pro', 'mimo-v2.6-flash',
+        'agy-gemini-4-argon', 'deepseek']
     assert p.legs[-1].tier == 'paid'
     assert p.p_source == "benchmark"
     assert "no benchmark p" in plan_spawn(CARD, role="implement").reasons

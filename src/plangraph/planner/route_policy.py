@@ -55,7 +55,10 @@ def implement_model_family(value):
 def implement_family_excluded(leg):
     """No Claude identity or unidentified family may write automatically, even renamed."""
     from plangraph.routing_support.resolver import MODEL_FAMILIES
-    identities = {implement_model_family(value) for value in (leg.id, leg.family, leg.model, leg.harness)}
+    from .legs import spawnable_legs
+    registered = {l.family for l in spawnable_legs() if l.model == leg.model}
+    identities = {implement_model_family(value) for value in
+                  (leg.id, leg.family, leg.model, leg.harness, *registered)}
     return (leg.claude_family or "claude" in identities
             or not identities.intersection(MODEL_FAMILIES | {"grok", "openrouter"}))
 

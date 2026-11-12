@@ -353,11 +353,12 @@ def test_writer_order_d2683_writer_family_exclusion():
     assert plan_imp.first_leg.id == "cx-gpt-6.1-sol-xhigh" and "gemini" not in {l.family for l in plan_imp.legs}
     # F2: writer_families does not exclude implement legs
     plan_wf = plan_spawn(c, role="implement", writer_families=("gemini",))
-    assert [l.id for l in plan_wf.legs] == ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash"]
+    from test_route_free_first import WRITERS
+    assert [l.id for l in plan_wf.legs] == WRITERS
 
 
 def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
-    # D-5092: measured subscription utility cannot jump ahead of the free tier.
+    # D-5212 pins the two writers; D-5092 ranks all other inputs inside their tiers.
     rows = {
         "omniroute/cx-gpt-6.1-sol-xhigh": {"model_id": "omniroute/cx-gpt-6.1-sol-xhigh", "aa_intelligence": 999, "cost_per_task_usd": 0, "pool_burn_weight": 0},
         "gemini-3.8-flash": {"model_id": "gemini-3.8-flash", "aa_intelligence": 1, "cost_per_task_usd": 0, "pool_burn_weight": 0},
@@ -379,7 +380,8 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
     review = plan_spawn(dict(c, diff_ref={"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}), role="review", writer_families=("gpt",), benchmark=rows, leg_reader=reader)
     assert {s["leg"]: s["reason"] for s in review.skipped}["mimo-v2.6-pro"] == "limited"
-    assert [l.id for l in plan.legs] == ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash"]
+    from test_route_free_first import WRITERS, FREE
+    assert [l.id for l in plan.legs] == [*WRITERS[:2], FREE[0], FREE[1], *WRITERS[2:6], *WRITERS[7:]]
 
 
 def test_no_implement_plan_leg_has_claude_family():

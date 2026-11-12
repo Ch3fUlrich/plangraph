@@ -97,7 +97,8 @@ def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
     explicit = {s['leg'] for s in routed.skipped if s['reason'] == 'explicit_only'}
     assert explicit == set(listed)
     if role == 'implement':
-        assert [leg.id for leg in routed.legs] == [LEAD_WRITER, 'agy-gemini-3.8-flash']
+        from test_route_free_first import WRITERS
+        assert [leg.id for leg in routed.legs] == WRITERS
 
 
 @pytest.mark.parametrize('role', ['review', 'implement'])
@@ -140,7 +141,7 @@ def test_other_writers_still_refused(tmp_path):
     with pytest.raises(SpawnRefused, match='D-3828'):
         asyncio.run(_svc(tmp_path).spawn(
             card={'estimate_tokens': 20000}, prompt='Implement public code', role='implement',
-            leg='mimo-v2.6-pro', dry_run=True,
+            leg='agy-gpt-oss-120b', dry_run=True,
             override_reason='operator 2026-11-09 explicit writer'))
 
 

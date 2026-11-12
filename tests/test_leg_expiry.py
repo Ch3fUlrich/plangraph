@@ -53,12 +53,11 @@ def test_temporary_stop_uses_planner_clock_and_has_one_state():
 
 def test_registered_implement_override_is_not_a_legacy_writer_pin(tmp_path):
     import asyncio
-    from plangraph.planner.routing import SpawnRefused
     from plangraph.spawner.service import SpawnService
-    with pytest.raises(SpawnRefused, match=r"writer disabled \(D-3828\)"):
-        asyncio.run(SpawnService(state=tmp_path).spawn(
-            card={"estimate_tokens": 1000}, role="implement", leg="opencode-big-pickle",
-            override_reason="D-5206 retained review-only leg", dry_run=True))
+    result = asyncio.run(SpawnService(state=tmp_path).spawn(
+        card={"estimate_tokens": 1000}, role="implement", leg="opencode-big-pickle",
+        override_reason="D-5092 eligible free writer", dry_run=True))
+    assert result["chosen_leg"]["id"] == "opencode-big-pickle"
 
 
 @pytest.mark.parametrize("state", ["expired", "down"])

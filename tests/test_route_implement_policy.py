@@ -13,7 +13,9 @@ from plangraph.spawner.cli import main
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 CARD = {"estimate_tokens": 20000, "risk_tags": [],
         "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
-WRITERS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash"]
+WRITERS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "openrouter-free",
+           "opencode-big-pickle", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
+           "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
 
 
 @pytest.fixture(autouse=True)
@@ -34,6 +36,8 @@ def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card,
     service = SpawnService(state=tmp_path, leg_reader=reader)
     plan = service.route(card, role="implement")
     expected = WRITERS if state == "available" else WRITERS[1:]
+    if card.get("risk_tags"):
+        expected = [lid for lid in expected if not next(l for l in DEFAULT_LEGS if l.id == lid).trains_on_data]
     assert [leg.id for leg in plan.legs] == expected
     assert all(not leg.claude_family and leg.family not in ("claude", "anthropic")
                and not any(name in leg.model.lower() for name in ("claude", "fable", "opus", "sonnet", "haiku"))
@@ -49,7 +53,7 @@ def test_implement_family_exclusion_over_all_catalog_rows():
     from plangraph.planner.routing import route_card
     from plangraph.routing_support.resolver import DEFAULT_FALLBACK_MODELS
     template, fallback = (next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
-                          for leg_id in WRITERS)
+                          for leg_id in WRITERS[:2])
     for row in [*SEED_MODELS, *DEFAULT_FALLBACK_MODELS]:
         # Make every catalog row otherwise eligible, including inactive rows.
         model = row.get("model_id", row.get("id"))
@@ -67,7 +71,7 @@ def test_implement_claude_aliases_use_canonical_family(monkeypatch, alias, sourc
     from plangraph.planner.routing import route_card
     from plangraph.routing_support import resolver
     template, fallback = (next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
-                          for leg_id in WRITERS)
+                          for leg_id in WRITERS[:2])
     fields = dict(id="catalog-writer", model="catalog/opaque-model",
                   family="distinct-family", claude_family=False)
     fields[source] = alias.upper() + effort if source == "family" else "catalog/" + alias + "-next" + effort
@@ -90,7 +94,7 @@ def test_implement_renamed_operator_claude_fails_closed(tmp_path, monkeypatch, c
     from plangraph.planner.route_policy import RoutePolicy
     from plangraph.planner.routing import RouteError, route_card
     template, fallback = (next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
-                          for leg_id in WRITERS)
+                          for leg_id in WRITERS[:2])
     row = dict(dataclasses.asdict(template), id="operator-writer", model="provider/some-model",
                family="unidentified-high" if identity == "unknown" else "gpt", claude_family=identity == "flag",
                harness="claude" if identity == "harness" else "opencode")
@@ -142,6 +146,16 @@ def test_implement_alias_detection_does_not_change_shared_resolver(alias):
     from plangraph.routing_support.resolver import detect_model_family
     assert detect_model_family(alias) == alias
     assert detect_model_family("catalog/" + alias + "-next-high") == "catalog"
+
+
+@pytest.mark.parametrize("family", ["pickle", "claude", "fable"])
+def test_registered_model_proves_family_without_lifting_claude_aliases(family):
+    from plangraph.planner.routing import route_card
+    template = next(leg for leg in DEFAULT_LEGS if leg.id == "opencode-big-pickle")
+    fallback = next(leg for leg in DEFAULT_LEGS if leg.id == WRITERS[1])
+    candidate = dataclasses.replace(template, id="renamed", family=family, roles=("implement",))
+    route = route_card(CARD, legs=(candidate, fallback), role="implement")
+    assert (candidate in route.legs) == (family == "pickle")
 
 
 @pytest.mark.parametrize("refusal", ['{"type":"error","error":{"status":402}}',

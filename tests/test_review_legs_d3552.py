@@ -100,8 +100,10 @@ def test_implement_route_still_skips_banned_and_off(tmp_path):
     from plangraph.spawner.service import SpawnService
     plan = plan_spawn(CARD, role="implement")
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
-    assert reasons == {}  # Review-only legs never enter implement skip accounting.
-    assert [leg.id for leg in plan.legs] == ['cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash']
+    assert reasons['opencode-deepseek-v4.1-flash-free'].startswith('disabled: D-4196')
+    assert reasons['opencode-glm-5.3-flash-free'].startswith('disabled: D-4196')
+    assert reasons['omniroute-deepseek-flash'] == 'banned_family'
+    assert plan.first_leg.id == 'cx-gpt-6.1-sol-xhigh'
     for leg_id in ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.2"):
         expected = r"leg disabled: .*D-3605" if "glm" in leg_id else r"writer disabled \(D-3828\)"
         with pytest.raises(SpawnRefused, match=expected):
