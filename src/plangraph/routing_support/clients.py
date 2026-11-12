@@ -29,6 +29,7 @@ OMNIROUTE_BASE_URL_ENV_VAR = "OMNIROUTE_BASE_URL"
 #: Harnesses whose prompts are delivered via stdin instead of argv (I9).
 STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode", "claude")   # D-3605
 
+
 def gateway_url(env: Mapping[str, str] | None = None,
                 config: Mapping[str, Any] | None = None) -> str | None:
     """Base URL of the model gateway, or ``None`` when no source names one.
@@ -44,6 +45,7 @@ def gateway_url(env: Mapping[str, str] | None = None,
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
     return None
+
 
 def effective_gateway_base_url(env: Mapping[str, str] | None = None,
                                config: Mapping[str, Any] | None = None) -> str | None:
@@ -64,6 +66,7 @@ def effective_gateway_base_url(env: Mapping[str, str] | None = None,
 #: No child-side ``settings`` node exists to honour: no ``OPENCODE_CONFIG_CONTENT``,
 #: unparsable content, or a provider block ``build_child_env`` builds from scratch.
 _ABSENT = object()
+
 
 def _child_settings(env: Mapping[str, str]) -> Any:
     """The ``providers.omniroute.settings`` node the child's config already holds.
@@ -244,26 +247,12 @@ def build_child_env(
 
 
 def build_routing_envelope_headers(
-    role: str = "implement",
-    risk: str = "normal",
-    min_intelligence: float | int = 44.0,
-    required_context: int = 32000,
-    exclude_families: Sequence[str] | str = (),
-    effort: str = "medium",
-    author_model: str | None = None,
-    nonce: str | None = None,
+    role: str = "implement", risk: str = "normal",
+    min_intelligence: float | int = 44.0, required_context: int = 32000,
+    exclude_families: Sequence[str] | str = (), effort: str = "medium",
+    author_model: str | None = None, nonce: str | None = None,
 ) -> dict[str, str]:
-    """Build structured routing envelope headers for OmniRoute ACP/Gateway.
-
-    Headers:
-      - X-OmniRoute-Task-Role: 'implement' | 'review' | 'orchestrate' | 'drive'
-      - X-OmniRoute-Risk: 'low' | 'normal' | 'high' | 'critical'
-      - X-OmniRoute-Min-Intelligence: str(min_intelligence)
-      - X-OmniRoute-Required-Context: str(required_context)
-      - X-OmniRoute-Exclude-Family: ','.join(exclude_families) (when non-empty)
-      - X-OmniRoute-Effort: effort ('low' | 'medium' | 'high' | 'xhigh')
-      - X-OmniRoute-Author-Model: author_model (when set)
-    """
+    """Build structured routing envelope headers for OmniRoute ACP/Gateway."""
     headers: dict[str, str] = {
         "X-OmniRoute-Task-Role": str(role),
         "X-OmniRoute-Risk": str(risk),
@@ -290,14 +279,11 @@ def build_routing_envelope_headers(
 
 
 def build_opencode_command(
-    prompt: str,
-    model_or_combo: str,
-    serve_port: int | None = None,
-    headers: Mapping[str, str] | None = None,
-    extra_flags: Sequence[str] = (),
-    tool_mode: str = "tools",
+    prompt: str, model_or_combo: str, serve_port: int | None = None,
+    headers: Mapping[str, str] | None = None, extra_flags: Sequence[str] = (), tool_mode: str = "tools",
 ) -> list[str]:
     """Build opencode command for execution via OmniRoute ACP/Gateway."""
+    # --standalone: the shared background service ignores the child's config overlay
     cmd = ["opencode", "run", "--standalone", "--model", model_or_combo]
     if serve_port is not None:
         cmd.extend(["--port", str(serve_port)])
@@ -325,18 +311,15 @@ def detect_client_for_model(model_id: str) -> str:
 
 
 def build_standalone_fallback_command(
-    client_name: str,
-    prompt: str,
-    model: str | None = None,
-    role: str = "implement",
-    tool_mode: str = "tools",
+    client_name: str, prompt: str, model: str | None = None,
+    role: str = "implement", tool_mode: str = "tools",
 ) -> list[str]:
     """Build direct CLI command as offline emergency fallback when gateway is offline."""
     cname = client_name.lower()
     if cname == "agy":
         cmd = ["agy", "--dangerously-skip-permissions"]
         if model:
-            cmd.extend(["--model", model])
+            cmd.extend(["--model", {"gemini-3.8-flash": "gemini-3.8-flash-high"}.get(model, model)])
         cmd.extend(["-p", prompt])
         return cmd
     if cname in ("qoder", "qodercli"):
@@ -355,6 +338,26 @@ def build_standalone_fallback_command(
     if model:
         cmd.extend(["--model", model])
     return prompt_only_command(cmd) if role == "review" and tool_mode == "prompt-only" else cmd
+
+
+WINDOWS_ARGV_LIMIT, WINDOWS_BATCH_ARGV_LIMIT = 32000, 8000
+
+
+def launch_stdin_payload(cmd, prompt, exe, *, is_nt=False):
+    """Move oversized native prompts off Windows argv; never use a prompt file."""
+    import subprocess
+    limit = WINDOWS_BATCH_ARGV_LIMIT if exe.lower().endswith(('.cmd', '.bat')) else WINDOWS_ARGV_LIMIT
+    if (is_nt and cmd[0] in ('qodercli', 'agy')
+            and len(subprocess.list2cmdline([exe, *cmd[1:]])) > limit):
+        if '-p' not in cmd or cmd.index('-p') + 1 >= len(cmd) or cmd[cmd.index('-p') + 1].startswith('--'):
+            raise RuntimeError('stdin_prompt_flag_missing: expected -p with a prompt value')
+        cmd[cmd.index('-p') + 1] = ''
+        if cmd[0] == 'agy':
+            cmd.extend(['--input-format', 'stream-json', '--output-format', 'stream-json'])
+            return (json.dumps({'event': 'user', 'message': {'role': 'user', 'content': prompt}}, ensure_ascii=False) + '\n').encode('utf-8')
+        cmd.extend(['--input-format', 'text'])
+        return prompt.encode('utf-8')
+    return prompt.encode('utf-8') if cmd[0] in STDIN_PROMPT_HARNESSES else None
 
 
 def build_command(
@@ -380,21 +383,18 @@ def build_command(
             raise ValueError(f"unknown harness: {client}")
         if client != "opencode":
             return build_standalone_fallback_command(client, prompt, model_or_combo, role=role, tool_mode=tool_mode)
+    # 1. Gateway route (first priority)
     if gateway and gateway_online:
         return build_opencode_command(
-            prompt=prompt,
-            model_or_combo=model_or_combo,
-            serve_port=serve_port,
-            headers=headers,
+            prompt=prompt, model_or_combo=model_or_combo,
+            serve_port=serve_port, headers=headers,
             extra_flags=extra_flags,
             tool_mode=tool_mode if role == "review" else "tools",
         )
 
+    # 2. Offline emergency fallback
     resolved_client = client or detect_client_for_model(model_or_combo)
     return build_standalone_fallback_command(
-        client_name=resolved_client,
-        prompt=prompt,
-        model=model_or_combo,
-        role=role,
+        client_name=resolved_client, prompt=prompt, model=model_or_combo, role=role,
         tool_mode=tool_mode,
     )
