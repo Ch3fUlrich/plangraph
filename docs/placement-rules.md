@@ -231,8 +231,11 @@ must pass before merge; C3 storage alone does not close the item.
 `python3 -m plangraph.spawner.host_ready` checks each overflow host, including
 its configured spawner source and matching `ps-hosts.json` source. Every overflow
 host requires a matching ps entry; an absent entry (including a missing ps config)
-fails with `src_config missing_ps_host`, never readiness success. Source paths
-must be nonempty strings, exist and import `plangraph` with that path as
+fails with `src_config missing_ps_host`, never readiness success. Source entries
+are deduplicated before validation, so repeated invalid entries report once.
+Unreadable or malformed ps configuration reports only `src_config unreadable`,
+not a contradictory missing-host reason. Source paths must be nonempty strings,
+exist and import `plangraph` with that path as
 `PYTHONPATH`; non-string paths fail with `src_config`, not a traceback. The ps
 entry's `target` and overflow `ssh` must be the same string: different aliases for
 the same machine are still rejected. The `src_config` mismatch line names both
@@ -252,9 +255,10 @@ Source checks for routerctl's grep set are `src_missing` (absent path),
 configuration, or unknown route/path), and `src` (probe failure or unexpected
 response). The spawner source is probed even if ps-hosts configuration is invalid.
 Pre-probe configuration errors use `config`, not `unreachable`.
-Unexpected per-host configuration/probe exceptions and state-write failures also
+Ordinary per-host configuration/probe exceptions and state-write failures also
 produce failure lines without aborting other hosts' reports; exception text is
-not exposed.
+not exposed. Resource exhaustion (`MemoryError`, `RecursionError`) and
+process-control exceptions propagate instead of being relabelled as config errors.
 Lag uses `behind_main` and reason
 `N behind`; unreadable lag emits a `behind_main` failure line. Unreachable hosts
 report `unreachable`, leaving other values unknown.

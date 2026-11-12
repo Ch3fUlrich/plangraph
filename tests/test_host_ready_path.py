@@ -11,7 +11,7 @@ import pytest
 @pytest.mark.parametrize('mode', [
     'green', 'missing', 'behind', 'unreachable', 'unreadable', 'unlisted', 'alias',
     'src_int', 'src_bool', 'spawner_int', 'spawner_bool', 'session_int', 'ps_shape',
-    'no_ps', 'empty_ps',
+    'no_ps', 'empty_ps', 'ps_bad_json', 'ps_unreadable',
 ])
 def test_host_ready_stub_binaries(tmp_path, mode):
     binary = tmp_path / 'bin'
@@ -66,7 +66,11 @@ esac
         ps_hosts[0]['src'] = 123 if mode == 'src_int' else True
     elif mode == 'empty_ps':
         ps_hosts = []
-    if mode != 'no_ps':
+    if mode == 'ps_unreadable':
+        (ps / 'ps-hosts.json').mkdir()
+    elif mode == 'ps_bad_json':
+        (ps / 'ps-hosts.json').write_text('{')
+    elif mode != 'no_ps':
         (ps / 'ps-hosts.json').write_text(json.dumps(
             [] if mode == 'ps_shape' else {'hosts': ps_hosts}))
     env = dict(os.environ, HOME=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path),
@@ -99,14 +103,16 @@ esac
     elif mode == 'alias':
         assert ("HOST-NOT-READY host-a src_config ps target='host-a-alias' and "
                 "overflow ssh='host-a' must be the same string") in result.stderr
-    elif mode == 'ps_shape':
+    elif mode in ('ps_shape', 'ps_bad_json', 'ps_unreadable'):
         assert all(not r['ok'] and r['src_ok'] is False for r in rows)
-        for row in rows:
-            assert f"HOST-NOT-READY {row['host']} src_config unreadable" in result.stderr
+        assert result.stderr.splitlines() == [
+            f"HOST-NOT-READY {row['host']} src_config unreadable" for row in rows]
+        assert all(r['failures'] == ['src_config: unreadable'] for r in rows)
     elif mode in ('no_ps', 'empty_ps'):
         assert all(not r['ok'] and r['src_ok'] is False for r in rows)
-        for row in rows:
-            assert f"HOST-NOT-READY {row['host']} src_config missing_ps_host" in result.stderr
+        assert result.stderr.splitlines() == [
+            f"HOST-NOT-READY {row['host']} src_config missing_ps_host" for row in rows]
+        assert all(r['failures'] == ['src_config: missing_ps_host'] for r in rows)
     elif mode.startswith(('src_', 'spawner_')):
         assert 'HOST-NOT-READY host-a src_config ' in result.stderr
         assert rows[0]['src_ok'] is False and rows[1]['ok']

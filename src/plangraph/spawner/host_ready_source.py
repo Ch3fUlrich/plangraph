@@ -8,11 +8,15 @@ def check_sources(name, config, command, fail):
     sources = [(config['ssh'], config['spawner_src'], True)]
     ok = True
     matched = False
+    seen_hosts = []
     try:
         for host in configured_hosts():
             if host['name'] != name:
                 continue
             matched = True
+            if host in seen_hosts:
+                continue
+            seen_hosts.append(host)
             if host.get('invalid') or 'win_src' in host or 'wsl_distro' in host:
                 fail('src_config', 'unsupported_or_invalid')
                 ok = False
@@ -21,11 +25,16 @@ def check_sources(name, config, command, fail):
     except (OSError, ValueError, KeyError, TypeError):
         fail('src_config', 'unreadable')
         ok = False
-    if not matched:
-        fail('src_config', 'missing_ps_host')
-        ok = False
-    seen = set()
+    else:
+        if not matched:
+            fail('src_config', 'missing_ps_host')
+            ok = False
+    seen = []  # Invalid paths may be unhashable; deduplicate before validating.
     for target, source, checkout in sources:
+        key = (target, source, checkout)
+        if key in seen:
+            continue
+        seen.append(key)
         if not isinstance(source, str) or not source or not isinstance(target, str):
             fail('src_config', 'route_or_path_unknown')
             ok = False
@@ -35,10 +44,6 @@ def check_sources(name, config, command, fail):
                  'must be the same string')
             ok = False
             continue
-        key = (target, source, checkout)
-        if key in seen:
-            continue
-        seen.add(key)
         # Expand only the conventional home prefix, never shell syntax from config.
         path = ('"$HOME"/' + shlex.quote(source[2:]) if source.startswith('~/')
                 else shlex.quote(source))
