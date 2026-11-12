@@ -237,7 +237,7 @@ class SpawnService(SeatSpawnMixin):
             writers = writer_parts(writer_families) if role == 'review' else set()
             if role == 'review' and not writers and not reviewed:
                 raise SpawnRefused('review needs a writer family (writer_families or review_of)')
-            from plangraph.planner.legs import NO_VERDICT_SEATS, EXPLICIT_WRITERS, LEAD_WRITER
+            from plangraph.planner.legs import NO_VERDICT_SEATS
             from plangraph.routing_support.liveness import require_available
             if role == 'review' and target in NO_VERDICT_SEATS:
                 raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
@@ -269,7 +269,7 @@ class SpawnService(SeatSpawnMixin):
             if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             require_available(chosen, self.leg_reader, card)
-            if role == 'implement' and chosen.id != LEAD_WRITER and chosen.id not in EXPLICIT_WRITERS:
+            if role == 'implement' and role not in chosen.roles:
                 raise SpawnRefused('writer disabled (D-3828): ' + chosen.id)
             if chosen.tier == 'paid':
                 available = self._route(card, role, writer_families, review_of,

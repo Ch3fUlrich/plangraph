@@ -75,8 +75,17 @@ def test_document_review_exception_preserved(diff_ref):
 
 @pytest.mark.parametrize('mode', ['tools', 'inline-only'])
 def test_same_diff_cap(diff_ref, mode):
-    with pytest.raises(InlineDiffError, match='diff too large'):
+    from plangraph.spawner.context_pack import ContextError, PromptBoundError
+    assert issubclass(PromptBoundError, ContextError)
+    assert issubclass(PromptBoundError, InlineDiffError)
+    with pytest.raises(PromptBoundError, match='prompt_too_large') as caught:
         prompt(diff_ref, mode=mode, max_tokens=1)
+    assert isinstance(caught.value, InlineDiffError)
+    assert isinstance(caught.value, ContextError)
+    assert isinstance(caught.value, PromptBoundError)
+    with pytest.raises(InlineDiffError, match='prompt_too_large: diff too large') as direct:
+        inline_diff_prompt('review this', diff_ref, max_chars=3)
+    assert direct.value.chars > direct.value.max_chars == 3
 
 
 def test_tools_invalid_diff_ref_refused(diff_ref):
