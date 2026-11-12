@@ -37,10 +37,13 @@ Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pendin
 ### Doctor host source checks
 
 `python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust
-`pg-spawnd doctor-sources` subcommand. `doctor.py` prefers the checkout's
-`rust/target/release/pg-spawnd`, otherwise resolves `pg-spawnd` on `PATH`, and
-reads its JSON check rows with a ten-second subprocess timeout. There is no
-Python fallback for these checks.
+`pg-spawnd doctor-sources` subcommand. `doctor.py` resolves it on the host's
+`PATH`, never from checkout build artifacts, and reads its JSON check rows with
+a ten-second subprocess timeout. Before any checks, optional `env.PATH` from the
+local hosts registry entry replaces the inherited PATH for both pg-spawnd and
+harness discovery/children. Identity is `PLANGRAPH_HOST_NAME` or registry `self`,
+with case-insensitive id/alias lookup; absent configuration retains inherited PATH.
+There is no Python fallback for source checks; fresh release clones need no build.
 
 The Rust command reads `plangraph/ps-hosts.json` under `XDG_CONFIG_HOME` (or
 `~/.config`), checking valid entries with `src` or `win_src` in parallel with

@@ -1,10 +1,55 @@
 import json
 import os
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
 from plangraph.spawner import doctor, remote_ps
+
+
+@pytest.mark.parametrize('identity', [None, 'ALIAS'])
+def test_doctor_fresh_clone_uses_host_path(tmp_path, monkeypatch, identity):
+    import asyncio
+    from types import SimpleNamespace
+    from plangraph.spawner import service
+    source = Path(__file__).resolve().parents[1]
+    clone = tmp_path / 'release'
+    subprocess.run(['git', 'clone', '--quiet', '--local', '--no-hardlinks', str(source), str(clone)],
+                   check=True, capture_output=True)
+    assert not (clone / 'rust/target').exists()
+    monkeypatch.chdir(clone)
+    monkeypatch.setattr(doctor, '__file__', str(clone / 'src/plangraph/spawner/doctor.py'))
+    config = tmp_path / 'config/plangraph'
+    config.mkdir(parents=True)
+    tools = tmp_path / 'tools'
+    tools.mkdir()
+    for name, output in [('pg-spawnd', '[{"name":"ps_hosts","status":"pass","detail":"ok"}]'),
+                         ('fake', 'fake version 1')]:
+        binary = tools / name
+        binary.write_text(f'#!{sys.executable}\nprint({output!r})\n')
+        binary.chmod(0o755)
+    (config / 'hosts.json').write_text(json.dumps({'self': 'host-a', 'hosts': [
+        {'id': 'host-a', 'aliases': ['alias'], 'env': {'PATH': str(tools)}}]}))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(config.parent))
+    monkeypatch.setenv('PATH', os.defpath)
+    monkeypatch.delenv('PLANGRAPH_HOST_NAME', raising=False)
+    if identity:
+        monkeypatch.setenv('PLANGRAPH_HOST_NAME', identity)
+    from plangraph.planner import legs
+    monkeypatch.setattr(legs, 'HARNESSES', ('fake',))
+    async def mcp(*args):
+        return 'pass', 'ok'
+    monkeypatch.setattr(doctor, 'mcp', mcp)
+    monkeypatch.setattr(doctor, 'whoami', lambda: ('pass', 'ok'))
+    monkeypatch.setattr(doctor, 'completion', lambda: ('pass', 'ok'))
+    monkeypatch.setattr(service, 'SpawnService', lambda: SimpleNamespace(
+        route=lambda *a, **k: SimpleNamespace(legs=[])))
+    rows = {row['name']: row for row in asyncio.run(doctor.diagnose())['checks']}
+    assert rows['ps_hosts']['status'] == 'pass'
+    assert rows['harness_fake']['status'] == 'pass'
+    assert 'harness_any' not in rows
 
 
 @pytest.fixture
