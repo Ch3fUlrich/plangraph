@@ -64,11 +64,17 @@ fn mirror_ignores_caller_git_configuration() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(
+        fs::read(root.join("exercised")).unwrap(),
+        b"clone and fetch"
+    );
 }
 
 #[test]
 fn mirror_configuration_child() {
     let Some(root) = std::env::var_os("PG_CTX_CONFIG_FIXTURE") else {
+        // Direct test runs exercise the parent too, rather than passing vacuously.
+        mirror_ignores_caller_git_configuration();
         return;
     };
     let root = Path::new(&root);
@@ -76,4 +82,5 @@ fn mirror_configuration_child() {
     let expected = fs::read_to_string(root.join("head")).unwrap();
     assert_eq!(mirror.fetch("demo").unwrap().main_head, expected);
     assert_eq!(mirror.fetch("demo").unwrap().main_head, expected);
+    fs::write(root.join("exercised"), "clone and fetch").unwrap();
 }

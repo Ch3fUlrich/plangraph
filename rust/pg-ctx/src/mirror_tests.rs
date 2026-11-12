@@ -1,4 +1,5 @@
 use super::*;
+use pg_worker_core::workspace_resolver::git_command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static COMMIT: AtomicU64 = AtomicU64::new(0);
@@ -108,6 +109,20 @@ fn mirror_rewind_and_divergence_never_replace_the_watermark() {
     assert_eq!(f.mirror.watermark("demo").unwrap(), Some(old));
     let dir = f.mirror.mirror_dir("demo").unwrap();
     assert_eq!(git(&dir, &["rev-parse", "main"]), b);
+    assert!(git(
+        &dir,
+        &["for-each-ref", "--format=%(objectname)", "refs/pg-ctx"]
+    )
+    .is_empty());
+    assert!(
+        !git_command(&dir)
+            .args(["cat-file", "-e", &divergent])
+            .output()
+            .unwrap()
+            .status
+            .success(),
+        "rejected objects must remain outside the accepted mirror"
+    );
     git(&f.origin, &["update-ref", "refs/heads/main", &b]);
     let c = f.commit(Some(&b));
     assert_eq!(f.mirror.fetch_at("demo", 100).unwrap().main_head, c);
@@ -254,6 +269,35 @@ fn mirror_age_stale_boundary_and_clock_rollback() {
     assert_eq!(w.age_at(999), 0);
     assert_eq!(w.age_at(1299), 299);
     assert!(!w.is_stale_at(1299));
-    assert!(w.is_stale_at(1300));
+    assert!(!w.is_stale_at(1300));
     assert!(w.is_stale_at(1301));
+}
+
+#[test]
+fn mirror_overlapping_fetch_waits_for_the_writer() {
+    use std::{sync::mpsc, thread, time::Duration};
+    let f = Fixture::new();
+    let head = f.commit(None);
+    let dir = f.mirror.root.join("demo");
+    fs::create_dir_all(&dir).unwrap();
+    let lock = lockfile::try_lock(&dir.join("fetch.lock"))
+        .unwrap()
+        .unwrap();
+    thread::scope(|scope| {
+        let (tx, rx) = mpsc::channel();
+        let mirror = &f.mirror;
+        scope.spawn(move || tx.send(mirror.fetch("demo")).unwrap());
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(lock);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(10))
+                .unwrap()
+                .unwrap()
+                .main_head,
+            head
+        );
+    });
 }

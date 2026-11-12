@@ -37,7 +37,7 @@ impl Watermark {
         now.saturating_sub(self.fetched_at)
     }
     fn is_stale_at(&self, now: u64) -> bool {
-        self.age_at(now) >= 300
+        self.age_at(now) > 300
     }
 }
 
@@ -117,20 +117,22 @@ impl Mirror {
         let accepted_dir = self.mirror_dir(repo).map_err(failed)?;
         let parent = accepted_dir.parent().unwrap();
         fs::create_dir_all(parent).map_err(failed)?;
-        let _lock = lockfile::try_lock(&parent.join("fetch.lock"))
-            .map_err(|_| Alarm::FetchFailed)?
-            .ok_or(Alarm::FetchFailed)?;
-        let old = self.watermark(repo).map_err(failed)?;
-        let staging = if !accepted_dir.exists() {
-            Some(tempfile::tempdir_in(parent).map_err(failed)?)
-        } else {
-            None
+        let _lock = loop {
+            if let Some(lock) =
+                lockfile::try_lock(&parent.join("fetch.lock")).map_err(|_| Alarm::FetchFailed)?
+            {
+                break lock;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
         };
-        let dir = staging.as_ref().map_or_else(
-            || accepted_dir.clone(),
-            |stage| stage.path().join("mirror.git"),
-        );
-        if staging.is_some() {
+        let old = self.watermark(repo).map_err(failed)?;
+        // Quarantine every fetch, not just rebuilt clones: even rejected objects
+        // must never enter the accepted repository's object database or refs.
+        let staging = tempfile::tempdir_in(parent).map_err(failed)?;
+        let dir = staging.path().join("mirror.git");
+        if accepted_dir.exists() {
+            copy_repository(&accepted_dir, &dir).map_err(failed)?;
+        } else {
             checked(git(
                 parent,
                 &[
@@ -225,8 +227,17 @@ impl Mirror {
             blob_shas.insert(name.into(), sha.into());
         }
         checked(git(&dir, &["update-ref", "refs/heads/main", &head])?)?;
-        if staging.is_some() {
-            fs::rename(&dir, &accepted_dir).map_err(failed)?;
+        checked(git(&dir, &["update-ref", "-d", "refs/pg-ctx/main"])?)?;
+        let previous = staging.path().join("previous.git");
+        let had_accepted = accepted_dir.exists();
+        if had_accepted {
+            fs::rename(&accepted_dir, &previous).map_err(failed)?;
+        }
+        if let Err(error) = fs::rename(&dir, &accepted_dir) {
+            if had_accepted {
+                fs::rename(&previous, &accepted_dir).map_err(failed)?;
+            }
+            return Err(failed(error));
         }
         let watermark = Watermark {
             repo: repo.into(),
@@ -238,6 +249,20 @@ impl Mirror {
         atomic_write_private(&parent.join("watermark.json"), &bytes).map_err(failed)?;
         Ok(watermark)
     }
+}
+
+fn copy_repository(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::create_dir(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_repository(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<Output, Alarm> {
