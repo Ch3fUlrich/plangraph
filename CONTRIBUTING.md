@@ -49,6 +49,7 @@ Completed Rust ports remove only their own Python waiver from
 `tools/new_code_allowlist.txt`; preserve unrelated exceptions when merging main.
 Routing-only synchronization merges retain each distinct allowlist line from both
 parents once; waiver retirement remains the owning Rust-port lane's responsibility.
+Keep waiver lines sorted and main's documentation mappings before lane additions.
 SPAWNER-RUST-PORT slice 2 also removes the stale doctor-source waiver retired by
 slice 1; its changelog fragment accounts for all four named Python waivers.
 Doctor source-filter goldens live in `tests/fixtures/doctor_sources.json` and run

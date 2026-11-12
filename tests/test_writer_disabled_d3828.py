@@ -24,3 +24,13 @@ def test_sol_xhigh_then_agy_fallback_and_all_limited_refused():
     limited = plan_spawn({'estimate_tokens': 100}, role='implement',
                          leg_reader=lambda *a, **kw: {'state': 'limited', 'evidence': {'status': 429}})
     assert not limited.legs
+
+
+def test_sol_only_and_no_fallback():
+    # Keep main's test name and exhaustion coverage under the merged writer order.
+    assert WRITER_ORDER == ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash')
+    plan = plan_spawn({'estimate_tokens': 100}, role='implement')
+    assert [l.id for l in plan.legs] == list(WRITER_ORDER)
+    limited = plan_spawn({'estimate_tokens': 100}, role='implement',
+                         leg_reader=lambda *a, **kw: {'state': 'limited', 'evidence': {'status': 429}})
+    assert not limited.legs
