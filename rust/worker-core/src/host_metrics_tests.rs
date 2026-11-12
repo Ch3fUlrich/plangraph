@@ -13,6 +13,8 @@ fn registry() -> HostRegistry {
                 class: HostClass::Worker,
                 aliases: vec![format!("{id}-alias")],
                 transport: Transport::Local,
+                ssh_target: None,
+                env: BTreeMap::new(),
                 os: Os::Linux,
                 state_dir: String::new(),
                 caps: Caps {
