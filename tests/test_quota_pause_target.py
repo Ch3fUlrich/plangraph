@@ -25,12 +25,22 @@ def test_empty_state_defaults(tmp_path, monkeypatch, state, source):
     assert not quota_paused(tmp_path / 'unrelated', 'review')
 
 
-@pytest.mark.parametrize('suffix', ['', '-1', '-001', '-0001', '-00012'])
-def test_exempt_numbered_roles(tmp_path, suffix):
+@pytest.mark.parametrize('prefix', ['', 'work' 'st-L1-', 'host-with-hyphens-L2-'])
+@pytest.mark.parametrize('suffix', ['', '-1', '-001', '-0001', '-00012', '-0412'])
+def test_exempt_numbered_roles(tmp_path, prefix, suffix):
     (tmp_path / 'quota-pause').touch()
-    assert not quota_paused(tmp_path, 'basic-analysis' + suffix)
-    assert quota_paused(tmp_path, 'implement' + suffix)
-    assert quota_paused(tmp_path, 'basic-analysis-0001-extra')
+    assert not quota_paused(tmp_path, prefix + 'basic-analysis' + suffix)
+    assert quota_paused(tmp_path, prefix + 'implement' + suffix)
+
+
+@pytest.mark.parametrize('name', [
+    None, '', 'basic-analysis-helper-0001', 'not-basic-analysisx-0001',
+    'basic-analysis-0001-extra', 'notbasic-analysis-0001',
+    'work' 'st-L1-' 'basic-analysis-helper-0001', 'work' 'st-L1-' 'not-basic-analysisx-0001',
+])
+def test_non_exempt_names_refused(tmp_path, name):
+    (tmp_path / 'quota-pause').touch()
+    assert quota_paused(tmp_path, name)
 
 
 @pytest.mark.parametrize('kind', ['file', 'directory', 'dangling-link', 'link-loop'])

@@ -16,8 +16,10 @@ Leg-aware checks in launch-spec, pre-launch probing and seat prompt assembly
 pause legs whose `id` or `model` starts with `claude-`, accepting object or mapping
 metadata. Known other providers are unaffected; missing provider metadata is
 unknown-provider and cannot bypass a pause.
-`basic-analysis` is the sole exempt role, including session names with any trailing
-numeric suffix (`basic-analysis-001`, `basic-analysis-00012`).
+`basic-analysis` is the sole exempt role. After stripping one trailing `-<digits>`
+counter, a role or session name must equal `basic-analysis` or end in `-basic-analysis`.
+Thus `<host>-L1-` + `basic-analysis-0412` is exempt; `basic-analysis-helper-0001`,
+`not-basic-analysisx-0001` and empty names are not.
 Seat mixins accept `state` or `_state`. Probes check runner roots (`state`,
 `_state`, `state_root`) or environment defaults before resolving the probe store,
 then check its `state_root` or database parent if no runner root was configured.

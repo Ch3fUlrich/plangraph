@@ -15,7 +15,11 @@ from plangraph.spawner.seat_spawn import SeatSpawnMixin
 
 @pytest.mark.parametrize('action', ['launch', 'relaunch'])
 @pytest.mark.parametrize('dry', [False, True])
-def test_session_pause_and_reset(tmp_path, monkeypatch, action, dry):
+@pytest.mark.parametrize('exempt_name', [
+    'basic-analysis', 'basic-analysis-3', 'basic-analysis-0001',
+    'work' 'st-L1-' 'basic-analysis-0412',
+])
+def test_session_pause_and_reset(tmp_path, monkeypatch, action, dry, exempt_name):
     sessions = Sessions(state_root=tmp_path)
     monkeypatch.setattr(sessions, '_names_mode', lambda: 'free')
     calls = []
@@ -32,12 +36,13 @@ def test_session_pause_and_reset(tmp_path, monkeypatch, action, dry):
 
     flag = tmp_path / 'quota-pause'
     flag.touch()
-    with pytest.raises(ParameterRefused, match='quota pause'):
-        launch('implement-0001')
+    for name in ('implement-0001', 'basic-analysis-helper-0001', 'not-basic-analysisx-0001'):
+        with pytest.raises(ParameterRefused, match='quota pause'):
+            launch(name)
     assert not calls
     if dry:
         assert not sessions._sessions.exists()
-    assert launch('basic-analysis-0001')['ok']
+    assert launch(exempt_name)['ok']
     flag.unlink()
     assert launch('implement-0001')['ok']
     assert len(calls) == 2

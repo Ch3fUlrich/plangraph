@@ -14,10 +14,11 @@ def quota_paused(state=None, role=None, leg=None):
     """The usage owner creates quota-pause at USAGE >=95%, unlinks at reset.
 
     Presence alone is authoritative: no second meter, expiry, or auto-clear.
-    Numbered names carry their role; unknown leg providers cannot bypass a pause.
+    Accept a bare role or host/level-prefixed session name with a numeric counter.
+    Unknown leg providers cannot bypass a pause.
     """
     role = re.sub(r'-[0-9]+$', '', role or '')
-    if role in QUOTA_EXEMPT_ROLES:
+    if any(role == exempt or role.endswith('-' + exempt) for exempt in QUOTA_EXEMPT_ROLES):
         return False
     if leg is not None:
         values = [leg.get(k) if isinstance(leg, Mapping) else getattr(leg, k, None)
