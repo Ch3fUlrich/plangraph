@@ -7,6 +7,9 @@ pub struct Facts {
     pub idle_hours: u64,
     pub clean: bool,
     pub merged_into_main: bool,
+    /// Every commit reachable from HEAD is present on a remote; no unpushed commits.
+    pub pushed: bool,
+    pub failed: bool,
     pub has_claim: bool,
     pub live_run: bool,
     pub open_pr: bool,
@@ -21,11 +24,21 @@ pub enum Classification {
     Protected { reason: &'static str },
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum State {
+    Merged,
+    Failed,
+    Abandoned,
+    Live,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Worktree {
     pub path: String,
     pub head: String,
     pub branch: Option<String>,
+    /// The first porcelain entry remains the main worktree after sorting.
+    pub is_main: bool,
     pub protection: Option<&'static str>,
 }
 
@@ -86,6 +99,7 @@ pub fn parse_porcelain(text: &str) -> Result<Vec<Worktree>, String> {
         }
         let mut w = Worktree {
             path,
+            is_main: trees.is_empty(),
             ..Worktree::default()
         };
         let (mut bare, mut detached) = (false, false);
@@ -117,14 +131,16 @@ pub fn parse_porcelain(text: &str) -> Result<Vec<Worktree>, String> {
         }
         trees.push(w);
     }
+    if trees.is_empty() {
+        return Err("empty porcelain inventory".into());
+    }
     Ok(trees)
 }
 
-/// Facts and the complete inventory belong to one repository; no I/O or clock reads.
-pub fn classify(w: &Worktree, f: &Facts, inventory: &[Worktree]) -> Classification {
+fn live_protection(w: &Worktree, f: &Facts, inventory: &[Worktree]) -> Option<&'static str> {
     let same_branch = |other: &Worktree| other.path != w.path && other.branch == w.branch;
     let duplicate = w.branch.is_some() && inventory.iter().any(same_branch);
-    let reason = [
+    [
         (f.is_clone_path, "clone-path"),
         (f.in_use_by_process, "process-in-use"),
         (f.in_use_by_unit, "unit-in-use"),
@@ -135,16 +151,37 @@ pub fn classify(w: &Worktree, f: &Facts, inventory: &[Worktree]) -> Classificati
     ]
     .into_iter()
     .find_map(|(p, r)| p.then_some(r))
-    .or(w.protection);
+    .or(w.protection)
+    .or_else(|| w.is_main.then_some("main-worktree"))
+}
+
+/// Lifecycle labels are descriptive, not permission to reap an unmerged branch.
+pub fn state(w: &Worktree, f: &Facts, inventory: &[Worktree]) -> State {
+    if live_protection(w, f, inventory).is_some() {
+        State::Live
+    } else if f.merged_into_main {
+        State::Merged
+    } else if f.failed {
+        State::Failed
+    } else if f.idle_hours >= 72 {
+        State::Abandoned
+    } else {
+        State::Live
+    }
+}
+
+/// Facts and the complete inventory belong to one repository; no I/O or clock reads.
+pub fn classify(w: &Worktree, f: &Facts, inventory: &[Worktree]) -> Classification {
+    let reason = live_protection(w, f, inventory)
+        .or_else(|| (!f.merged_into_main).then_some("unmerged-commits"))
+        .or_else(|| (!f.pushed).then_some("unpushed-commits"));
     if let Some(reason) = reason {
         return Classification::Protected { reason };
     }
     let (hours, rule, reason) = if !f.clean {
         (168, "dirty-7d-needs-backup", "idle-below-7d")
-    } else if f.merged_into_main {
-        (24, "merged-clean-24h", "idle-below-24h")
     } else {
-        (72, "unmerged-clean-72h", "idle-below-72h")
+        (24, "merged-clean-24h", "idle-below-24h")
     };
     if f.idle_hours >= hours {
         Classification::Eligible { rule }
@@ -162,17 +199,33 @@ fn tsv(s: &str) -> String {
 
 /// Returns all rows, including protected paths. Nothing is written, even on errors.
 pub fn report(repos: &[Repository]) -> Result<String, String> {
-    let mut output = String::from("repo\tpath\tbranch\tstatus\treason\tneeds_backup\n");
+    let mut output = String::from("repo\tpath\tbranch\tstate\tstatus\treason\tneeds_backup\n");
     let mut repos: Vec<_> = repos.iter().collect();
     repos.sort_by_key(|r| &r.repo);
     let mut seen = BTreeSet::new();
+    let mut seen_paths = BTreeSet::new();
     for repo in repos {
         if !seen.insert(&repo.repo) {
             return Err("duplicate repository".into());
         }
         let mut trees = parse_porcelain(&repo.porcelain)?;
+        let paths: BTreeSet<_> = trees.iter().map(|w| &w.path).collect();
+        if repo.facts.keys().any(|path| !paths.contains(path)) {
+            return Err("facts path absent from repository inventory".into());
+        }
+        for path in paths {
+            if !seen_paths.insert(path.clone()) {
+                return Err("duplicate worktree path across repositories".into());
+            }
+        }
         trees.sort_by(|a, b| a.path.cmp(&b.path));
         for w in &trees {
+            let state = match repo.facts.get(&w.path).map(|f| state(w, f, &trees)) {
+                Some(State::Merged) => "merged",
+                Some(State::Failed) => "failed",
+                Some(State::Abandoned) => "abandoned",
+                Some(State::Live) | None => "live",
+            };
             let missing = Classification::Protected {
                 reason: "missing-facts",
             };
@@ -189,7 +242,7 @@ pub fn report(repos: &[Repository]) -> Result<String, String> {
             };
             let branch = w.branch.as_deref().unwrap_or("-");
             output += &format!(
-                "{}\t{}\t{}\t{status}\t{reason}\t{backup}\n",
+                "{}\t{}\t{}\t{state}\t{status}\t{reason}\t{backup}\n",
                 tsv(&repo.repo),
                 tsv(&w.path),
                 tsv(branch)

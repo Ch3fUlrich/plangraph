@@ -1,1 +1,2 @@
 - WORKTREE-REAPER slice 1: add Rust pg-reap report-only classification, protective facts, porcelain parsing and deterministic TSV; no worktree actions.
+- WORKTREE-REAPER slice 1 fix: require merged and pushed commits before eligibility, preserve intrinsic main-worktree protection, reject empty inventories and foreign/duplicate paths, pin protection precedence, and report merged/failed/abandoned/live labels separately from eligibility; hermetic regressions, no deletion.
