@@ -1,4 +1,5 @@
 # Exceptions for Python regression tests of existing modules and the thin gate.
+tests/test_spawner_run_worktree.py | RUN-WORKTREE regression coverage (D-5062), retired by SPAWNER-RUST-PORT
 # A single * matches only within a directory; ** matches recursively.
 tests/test_*.py | Regression tests for existing Python modules
 tools/check_new_code_lang.py | D-4691 gate script, thin
