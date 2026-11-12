@@ -330,7 +330,9 @@ def test_orchestration_real_remote_launch(orchestration, monkeypatch, tmp_path):
                'for path in sys.argv[2:4]: shutil.copy(path, shlex.split(sys.argv[4].split(":", 1)[1])[0])\n',
         'python3': f'#!{sys.executable}\nimport json, pathlib, sys\n'
                    'assert json.loads(pathlib.Path(sys.argv[5][1:]).read_text()) == {"task": "test"}\n'
-                   'assert sys.argv[6] == "task"\n'
+                   'assert sys.argv[6] == "--prompt-file"\n'
+                   'assert pathlib.Path(sys.argv[7]).read_text() == "task"\n'
+                   'assert "task" not in sys.argv\n'
                    'print(json.dumps({"run_id": "run-real", "status": "running"}))\n',
     }
     for name, script in scripts.items():

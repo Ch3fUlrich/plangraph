@@ -473,11 +473,7 @@ class SpawnerRunner:
                     else:
                         from plangraph.routing_errors import SpawnRefused
                         raise SpawnRefused('no admitted legs for combo: ' + model_or_combo)
-                stdin_note = (
-                    f" [stdin: {len(prompt.encode('utf-8'))} bytes]"
-                    if cmd[0] in STDIN_PROMPT_HARNESSES
-                    else ""
-                )
+                stdin_note = f" [stdin: {len(prompt.encode('utf-8'))} bytes]"
                 job = JobInfo(
                     job_id=job_id,
                     status="dry_run",
@@ -525,20 +521,16 @@ class SpawnerRunner:
                 job.events.append(tools_event)
 
             if render_reason:
-                job.status = 'failed'
-                job.exit_code = 1
-                job.stderr = render_reason
-                job.end_time = time.time()
+                job.status, job.exit_code = 'failed', 1
+                job.stderr, job.end_time = render_reason, time.time()
                 job.events.append({'event': 'render_refused', 'reason': render_reason})
                 return job
 
             from .resolver import host_skip_reason_async
             unavailable = await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
             if unavailable:
-                job.status = 'failed'
-                job.exit_code = 1
-                job.stderr = unavailable
-                job.end_time = time.time()
+                job.status, job.exit_code = 'failed', 1
+                job.stderr, job.end_time = unavailable, time.time()
                 return job
             from .resolver import admitted_by_render
             if admitted_by_render(model_or_combo):  # trace a later launch failure to D-2869
@@ -546,14 +538,16 @@ class SpawnerRunner:
 
             import shutil
             resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
-            from plangraph.routing_support.clients import launch_stdin_payload
-            payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
+            from plangraph.routing_support.clients import PromptTransportError, launch_stdin_payload
+            try:
+                payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
+            except PromptTransportError as exc:
+                job.status, job.exit_code, job.stderr, job.end_time = 'failed', 1, str(exc), time.time()
+                return job
             resolved_exe, launch_refusal = _resolve_launch(resolved_exe, cmd[1:], is_nt=_is_nt())
             if launch_refusal:
-                job.status = 'failed'
-                job.exit_code = 1
-                job.stderr = launch_refusal
-                job.end_time = time.time()
+                job.status, job.exit_code = 'failed', 1
+                job.stderr, job.end_time = launch_refusal, time.time()
                 return job
 
             if payload is not None:

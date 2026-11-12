@@ -33,18 +33,29 @@ redeploy the service template to apply the guard.
 
 Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; private-key blocks are masked in both modes, and token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
 
-### Windows prompt delivery
+### Prompt delivery
 
-Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
-argv guard (32,000 characters, or 8,000 for batch shims). This uses the existing
-per-job stdin payload path, not a temporary prompt file. Qoder retains an explicit
-empty `-p` value with `--input-format text`; missing prompt flags fail with
-`stdin_prompt_flag_missing`. Oversized Windows agy
-commands use `--input-format stream-json --output-format stream-json -p ""`, with
+Every harness and helper receives the prompt by stdin or file, never argv, for
+all prompt sizes on every OS (D-5233). Python's Linux OOM child inherits the stdin
+pipe; pg-spawnd uses the same launch-spec transport.
+Child env construction drops only known legacy task carriers (`PROMPT`, `PROMPT_TEXT`,
+`PROMPT_SUFFIX`, `TASK_PROMPT`, `PLANGRAPH_TASK_PROMPT`, case-insensitive), including
+overlays; unrelated shell/theme/template configuration survives. Rust refuses exact
+prompt carriers and embedded prompts of at least 16 bytes in argv/env, without
+mistaking short incidental substrings of flags or model names for task transport.
+SSH overflow passes a staged UTF-8 file to the real spawn CLI's `--prompt-file`
+option, preserving trailing newlines without shell command substitution.
+Request-budget refusals keep the launch adapter's exit status in their run record;
+pre-exec refusals without an exit code also retain the named `prompt_too_large` reason.
+Qoder retains an explicit empty `-p` value with `--input-format text`; missing prompt flags fail with
+`stdin_prompt_flag_missing` in launch-spec refusals and Python run records. All agy commands use
+`--input-format stream-json --output-format stream-json -p ""`, with
 one UTF-8 NDJSON user event on stdin followed by EOF. The last result's
 `response` supplies the answer and verdict; an ERROR or missing result fails
 explicitly, without publishing an unsuccessful response as an answer.
-Short agy prompts and Linux launches retain their existing argv form; see [background review launches and deadlines](spawner-operations.md) for Windows console suppression and bounded prompt packaging.
+OpenCode, Claude, Gemini and Qwen read text stdin; Codex uses `exec -`. Fleet sessions
+also read stdin; SSH overflow uses `--prompt-file` without shell expansion. Assembled
+prompts exceeding the leg budget (three chars/token) record `prompt_too_large`.
 Rejected stdin input or an unavailable/closed input pipe fails the run explicitly;
 the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.
@@ -60,9 +71,11 @@ value keeps the default 90-minute wall, and a positive numeric value sets second
 The package-wide `inline_diff_prompt` bound change was dropped to preserve main's
 cost-context contract: `max_chars` measures only the diff and exact-fit diffs pass.
 Oversized diffs keep `InlineDiffError`'s `diff too large for leg` text and diff-only
-size; strict mode maps that refusal to `inline_diff_oversized`. The separate
-opt-in `PLANGRAPH_CONTEXT_STRICT=1` whole-prompt bound retains
-`inline_prompt_oversized` for oversized instructions/framing. Neither truncates;
+size, prefixed with `prompt_too_large`. Seat assembly maps that refusal to
+`PromptBoundError` (`ContextError` and `InlineDiffError`) with `inline_diff_oversized`;
+the base `InlineDiffError` is not itself a context/bound error. Whole-prompt admission retains `inline_prompt_oversized`
+for oversized instructions/framing, both under the named `prompt_too_large`
+reason regardless of `PLANGRAPH_CONTEXT_STRICT`. Neither truncates;
 missing diff references, empty diffs and failed `git diff` calls fail explicitly.
 
 In `opencode_answer.final_answer`, `allow_unfinished=True` accepts pending text
