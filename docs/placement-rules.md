@@ -8,7 +8,9 @@ Healthy, fresh targets are ranked by available RAM above their floor, then name.
 The overflow routing file supplies `hosts` and the `public_repos` allowlist only;
 legacy local limit overrides are ignored. A repository absent from the allowlist
 queues without copying. Exhausted targets produce per-host safe refusal reasons.
-No overflow config file preserves local admission without overflow annotations.
+Without an overflow config, local admission still applies: admitted local runs
+have no overflow annotation; below-floor queued records carry matching `reason`
+and `overflow_reason` with the memory refusal and absent/unknown allowlist reason.
 Missing or unreadable receipt IDs produce `acknowledged_unknown=true`,
 `status=unknown` records on the selected host, never a refusal or retry.
 See docs/SPAWNER.md for registry defaults and receipt boundaries. This Python
