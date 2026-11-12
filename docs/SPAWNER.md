@@ -52,6 +52,8 @@ exit, invalid JSON/non-list response, timeout or other invocation error instead
 reports `host query failed`. Any failed check makes doctor exit 1.
 
 ## Spawn by card
+Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged.
+
 CLI and overflow admission use the worker-core memory rule:
 `effective_free_mb - reservation_mb >= mem_floor_mb`, with MemAvailable as
 free memory and `warmup.ramp_mb[role]` as the reservation (an unknown role
