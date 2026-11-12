@@ -214,6 +214,22 @@ def send(url, token, payload):
         return exc.code, exc.read(65536).decode("utf-8", "replace")
 
 
+def read_record_identity(seat_dir):
+    """Read binding identity independently of evidence; absent fields are legacy."""
+    record_path = seat_dir / "record.json"
+    try:
+        record = json.loads(record_path.read_text("utf-8"))
+    except FileNotFoundError as exc:
+        if record_path.is_symlink():
+            raise ValueError("cannot read record identity") from exc
+        return {}
+    except (OSError, ValueError) as exc:
+        raise ValueError("cannot read record identity") from exc
+    if not isinstance(record, dict):
+        raise ValueError("cannot read record identity")
+    return {"item_key": record["item_key"]} if "item_key" in record else {}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--key", required=True, help="item key to review")
@@ -228,6 +244,14 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
     writer_families = parse_writer_families(args.writer_family)
+    try:
+        record_identity = read_record_identity(args.seat_dir)
+    except ValueError as exc:
+        print(f"seat_verdict: refused, {exc}", file=sys.stderr)
+        return EXIT_REFUSED
+    if "item_key" in record_identity and record_identity["item_key"] != args.key:
+        print("seat_verdict: refused, record item_key does not match --key", file=sys.stderr)
+        return EXIT_REFUSED
     from_record = False
     if not (args.seat_dir / "evidence.json").exists() and \
             (args.seat_dir / "record.json").exists():
@@ -248,6 +272,11 @@ def main(argv=None):
         if not isinstance(evidence, dict):
             print("seat_verdict: evidence.json is not an object", file=sys.stderr)
             return EXIT_IO
+    for field in ("item_key", "key"):
+        if field in evidence and evidence[field] != args.key:
+            source = "record" if from_record else "evidence"
+            print(f"seat_verdict: refused, {source} {field} does not match --key", file=sys.stderr)
+            return EXIT_REFUSED
     if args.head and not from_record:
         print("seat_verdict: refused, --head only for record seats", file=sys.stderr)
         return EXIT_REFUSED
