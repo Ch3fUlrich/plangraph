@@ -220,17 +220,23 @@ def test_poster_accepts_matching_record_key(tmp_path, capsys):
 
 @pytest.mark.parametrize('key', [KEY, None])
 def test_terminal_save_uses_only_verdict_outbox(tmp_path, monkeypatch, key):
+    import ast
+    import inspect
+    import textwrap
     from plangraph.spawner import notify
-    root = Path(__file__).resolve().parents[1]
-    flag = 'PLANGRAPH_SEAT_AUTOPOST'
-    assert all(flag not in path.read_text() for directory in
-               (root / 'src', root / 'tools') for path in directory.rglob('*.py'))
+    from plangraph.spawner.service import SpawnService
     monkeypatch.delenv('PLANGRAPH_SPAWN_NOTIFY_CMD', raising=False)
     monkeypatch.setenv('PLANGRAPH_SEAT_AUTOPOST', '1')
     calls = []
     monkeypatch.setattr(notify, 'deliver_verdict', lambda directory, record, keeper:
                         calls.append((directory, record['item_key'])))
     service = spawn_service(_Runner(), state=tmp_path, keeper_sink=notify.FileInbox(tmp_path))
+    for save, expected in ((service._save, 1), (SpawnService._save, 0)):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(save)))
+        call_names = [getattr(node.func, 'id', getattr(node.func, 'attr', None))
+                      for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        assert call_names.count('deliver_verdict') == expected
+        assert not {'autopost', 'schedule_autopost', '_post_verdict'} & set(call_names)
     record = dict(run_id='run-outcome', role='review', status='completed', ended=1,
                   item_key=key, completion={'event_id': 'run-outcome:completion'})
     service._save(record)
@@ -243,20 +249,46 @@ def test_terminal_save_uses_only_verdict_outbox(tmp_path, monkeypatch, key):
 
 
 @pytest.mark.parametrize('dispatch', [False, True])
-def test_spawn_missing_seat_identity_is_persisted(tmp_path, monkeypatch, dispatch):
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_spawn_missing_seat_identity_is_persisted(tmp_path, monkeypatch, dispatch, dry_run):
+    from plangraph.spawner import notify, seat_spawn
+    monkeypatch.delenv('PLANGRAPH_SPAWN_NOTIFY_CMD', raising=False)
     service = _service(tmp_path, monkeypatch)
     if dispatch:
-        service = spawn_service(_Runner(), state=tmp_path)
+        service = spawn_service(_Runner(), state=tmp_path,
+                                keeper_sink=notify.FileInbox(tmp_path))
+    monkeypatch.setattr(seat_spawn, 'admit', lambda *a, **kw: None)
+    spawn = service.runner.spawn
+    launch_event = dict(event='fake_launch')
+
+    async def completed(**kwargs):
+        job = await spawn(**kwargs)
+        job.exit_code = 0
+        job.stdout = 'VERDICT: FIX\n'
+        job.events.append(launch_event)
+        return job
+
+    async def prepare(prompt, *args, **kwargs):
+        return prompt
+
+    monkeypatch.setattr(service.runner, 'spawn', completed)
+    monkeypatch.setattr(service, '_prepare_leg_prompt', prepare)
     result = asyncio.run(service.spawn(card={'estimate_tokens': 100},
         prompt=f'Review {KEY} now', role='review', writer_families=('google',),
-        dry_run=True, wait_seconds=5))
+        dry_run=dry_run, wait_seconds=5))
+    assert result['status'] == ('dry_run' if dry_run else 'completed')
+    assert result['exit_code'] == 0
+    assert len(service.runner.calls) == 1
+    assert service.runner.calls[0]['dry_run'] is dry_run
     assert result['role'] == 'review'
     assert result['item_key'] is None
     assert result['events'].count(MISSING_EVENT) == 1
+    assert launch_event in result['events']
     stored = json.loads(service._path(result['run_id']).read_text())
     assert stored['role'] == 'review'
     assert stored['item_key'] is None
     assert stored['events'].count(MISSING_EVENT) == 1
+    assert stored['events'] == result['events']
 
 
 @pytest.mark.parametrize('positional', [False, True])
