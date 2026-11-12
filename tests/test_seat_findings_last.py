@@ -37,7 +37,7 @@ def test_explicit_client_mismatch_refused(tmp_path):
 
 @pytest.mark.parametrize('reason', [None, 'operator override'])
 def test_disabled_override_matches_runner(tmp_path, reason):
-    leg = next(l for l in DEFAULT_LEGS if l.disabled and 'D-4196' in l.disabled)
+    leg = next(l for l in DEFAULT_LEGS if l.id == 'opencode-glm-5.3-flash-free')
     service = SpawnService(state=tmp_path)
     with pytest.raises(SpawnRefused) as service_error:
         asyncio.run(service._spawn(card={'estimate_tokens': 1000}, leg=leg.id,

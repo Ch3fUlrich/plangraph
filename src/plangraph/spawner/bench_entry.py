@@ -14,6 +14,7 @@ LEG_BENCHMARK_MODEL = {
     "agy-sonnet-5.5": "agy/claude-sonnet-5-5-medium",
     "mimo-v2.6-pro": "mimo/mimo-v2.6-pro",
     "mimo-v2.6-flash": "mimo/mimo-v2.6-flash",
+    "agy-opus-5.5": "agy/claude-opus-5-5-high",
     # Unsuffixed cx routing uses the envelope's medium effort default.
     "cx-gpt-6.1-sol": "omniroute/cx-gpt-6.1-sol-medium",
     "cx-gpt-6-luna": "omniroute/cx-gpt-6-luna-medium",
