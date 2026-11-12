@@ -14,7 +14,7 @@ from plangraph.routing_errors import RouteError, SpawnRefused
 
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
                          BenchRequired, benchmark_rows_from_db)
-from .legs import DEFAULT_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
+from .legs import DEFAULT_LEGS, READINESS_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
 from .provider_stop import next_leg_after_provider_stop
 from .review_order import review_key, catalog_tiers
 from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts  # noqa: F401
@@ -106,13 +106,13 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
                overflow: bool = False, role: str | None = None, now=None) -> Route:
     """Route ``card`` (keeper card dict) over ``legs``; see module docstring.
 
-    ``role`` falls back to ``card["role"]``; cost tiers precede role preferences.
+    ``role`` falls back to ``card["role"]``; absent roles retain keeper admission.
     ``overflow`` marks a context-overflow failure: the window class grows by one.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
     effective_role = role if role is not None else card.get("role")
     exclude_fams = set(exclude_families)
-    legs = tuple(legs)
+    legs = tuple(READINESS_LEGS if effective_role is None and legs is DEFAULT_LEGS else legs)
     effective = effective_estimate(card.get("estimate_tokens"), subtasks)
     tags = list(card.get("risk_tags") or [])
     bad = [t for t in tags if t not in RISK_TAGS]

@@ -168,6 +168,14 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
+# Preserve main's role-neutral keeper admission separately from S5's workers.
+# This is the existing D-3828 policy, not a new route preference order.
+READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
+                               disabled=leg.disabled or (
+                                   'D-3828: writer disabled; no retained review or orchestrate role'
+                                   if leg.roles == ('implement',) else None))
+                       if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
+
 # Catalog roles are eligibility inputs, not a single-writer pin.
 WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol",   # Main's unmeasured same-tier tie-breaker; never a cross-tier pin.

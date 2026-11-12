@@ -8,6 +8,38 @@ evidence, explicit effort variants, and generic utility/epsilon algorithm remain
 
 ## Merge round replan-0438 (authoritative)
 
+The four planner-service failures are a lane admission regression, not S1 tier
+propagation: main's `b619bf1e` passes the whole file unchanged. S5 removed the
+D-3828 transformation of `DEFAULT_LEGS`, admitting the implement-only OpenRouter
+and paid DeepSeek rows to role-neutral keeper routes as well as worker routes.
+`READINESS_LEGS` retains that existing transformation for role-neutral calls
+using the default table; role-bearing calls and custom tables retain the slices.
+The common `route_card` boundary covers gate, route-for-card and shadow callers,
+without adding a preference list or changing the cost-tier algorithm.
+
+- `test_ready_card_moves_to_ready`: unchanged `("agy", "free")`; readiness must
+  preserve main's admission, not silently enable implementation-only fallbacks.
+- `test_route_for_card_prefers_qodercli`: unchanged `("agy", "free")`; the
+  historical name still verifies disabled Qoder yields to free Antigravity.
+- `test_exact_tier_checks_inject_leg_table[gate_card]`: unchanged injected-table
+  and no-ambient-catalog assertions, including the readiness expectation above.
+- `test_exact_tier_checks_inject_leg_table[route_for_card]`: unchanged input and
+  catalog assertions, including the route-for-card expectation above.
+- Added `test_keeper_readiness_does_not_enable_implementation_fallbacks` for both
+  entry points: exact Gemini first, only Sol remaining implement-only, explicit
+  worker routing still OpenRouter first and paid DeepSeek last. Both cases failed
+  first on `openrouter-free` versus `agy-gemini-3.8-flash` before the code fix.
+
+Verification: main's unchanged planner-service file: `20 passed in 44.19s`;
+lane before fix: `4 failed, 16 passed in 56.15s`; new regressions before fix:
+`2 failed in 3.88s`. After fix, the whole file: `22 passed in 45.52s` (SQLite),
+`22 passed in 30.91s` (isolated Postgres). The affected selector conservatively
+chooses the full suite for the existing lane fragments/shared fixture; the run
+was explicitly bounded to all lane test files plus routing/shadow/liveness
+consumers, never the full suite: `771 passed in 89.32s (0:01:29)`. All test names
+from main and the four slice heads remain; no existing planner-service test or
+helper changed.
+
 Main's reviewed S1 tier propagation, free-first ordering and placement are retained:
 provider-qualified catalog identities beat unrelated bare names; partial review
 measurements stay ahead of missing rows inside their own tier; Haiku cannot cross
