@@ -100,7 +100,7 @@ DEFAULT_LEGS = (
         disabled="D-4196 opencode zen never worked, use opencode go; never remove (D-3828)"),
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
-    Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol-xhigh",
+    Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",),
         note="D-3605: operator implement leg (ChatGPT subscription via OmniRoute cx)"),
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",

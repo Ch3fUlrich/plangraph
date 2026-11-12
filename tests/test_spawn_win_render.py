@@ -117,7 +117,7 @@ def test_sentinel_key_never_leaks(tmp_path, monkeypatch):
     async def run():
         record = await service.spawn(
             card={"estimate_tokens": 1000},
-            model="omniroute/cx-gpt-6.1-sol-xhigh",  # D-5240 approved Sol writer
+            model="omniroute/cx-gpt-6.1-sol",
             override_reason="testing manual model override",
             prompt="task",
             dry_run=True,
@@ -253,7 +253,7 @@ def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch):
     async def run():
         record = await service.spawn(
             card={"estimate_tokens": 1000},
-            model="omniroute/cx-gpt-6.1-sol-xhigh",  # D-5240 approved Sol writer
+            model="omniroute/cx-gpt-6.1-sol",
             override_reason="testing manual model override",
             prompt="task",
             wait_seconds=None,

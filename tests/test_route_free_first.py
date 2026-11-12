@@ -84,7 +84,7 @@ def test_cli_route_implement_gpt_first_no_claude_writer(tmp_path, capsys):
 def test_route_and_refusal(tmp_path, capsys):
     assert main(['--state', str(tmp_path), 'route', '--card', '{"estimate_tokens":1000}', '--role', 'implement', '--json']) == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.1-sol-xhigh'  # D-5240
+    assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.1-sol'  # D-3745
     assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates'}
     assert main(['--state', str(tmp_path), 'spawn', 'task']) == 2
     assert 'spawn by card' in capsys.readouterr().err
@@ -142,7 +142,7 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
 def test_route_sol_unavailable_keeps_tier_writer_order():
     # D-3745: an ineligible lead does not change the fallback ordering.
     def reader(model, **kwargs):
-        return {"state": "down" if model == "omniroute/cx-gpt-6.1-sol-xhigh" else "available", "evidence": None}
+        return {"state": "down" if model == "omniroute/cx-gpt-6.1-sol" else "available", "evidence": None}
     plan = plan_spawn(CARD, role="implement", leg_reader=reader)
     assert [leg.id for leg in plan.legs] == ["agy-gemini-3.8-flash", "opencode-console-muse-spark"]  # D-5240
     assert {s["leg"]: s["reason"] for s in plan.skipped}[SUBS[0]] == "down"

@@ -90,28 +90,67 @@ def test_muse_amber_paid_pin_checks_free_availability(tmp_path, monkeypatch, pin
     assert amber.model in (tmp_path / 'spawn-overrides.jsonl').read_text()
 
 
+@pytest.mark.parametrize('pin', ['leg', 'model'])
+@pytest.mark.parametrize('subscriptions_up', [legs.WRITER_ORDER[:2], legs.WRITER_ORDER[:1], legs.WRITER_ORDER[1:2], ()])
+@pytest.mark.parametrize('reason', [None, 'Audited public writer override'])
+def test_muse_writer_pin_cannot_bypass_available_subscriptions(tmp_path, pin, subscriptions_up, reason):
+    writers = {leg.id: leg for leg in legs.DEFAULT_LEGS if leg.id in legs.WRITER_ORDER}
+    amber = writers[legs.MUSE_AMBER]
+    unavailable = {leg.model for mid, leg in writers.items() if mid != amber.id and mid not in subscriptions_up}
+    runner = fake_runner(tmp_path, status='dry_run')
+    service = SpawnService(runner=runner, state=tmp_path, leg_reader=lambda model, **kw:
+        {'state': 'down' if model in unavailable else 'available', 'evidence': None})
+    options = dict(card={'estimate_tokens': 1000}, role='implement', dry_run=True,
+                   override_reason=reason, **{pin: amber.id if pin == 'leg' else amber.model})
+    if subscriptions_up:
+        with pytest.raises(SpawnRefused, match='subscription writers available: ' + ', '.join(subscriptions_up)):
+            asyncio.run(service.spawn(**options))
+        assert not runner.calls
+        assert not (tmp_path / 'spawn-overrides.jsonl').exists()
+    else:
+        record = asyncio.run(service.spawn(**options))
+        assert record['chosen_leg']['id'] == amber.id
+        assert [call['model_or_combo'] for call in runner.calls] == [amber.model]
+
+
+@pytest.mark.parametrize('down_ids', [legs.WRITER_ORDER[:1], legs.WRITER_ORDER[:2]])
+@pytest.mark.parametrize('role', ['implement', 'review'])
+def test_measured_down_subscriptions_still_precede_paid_muse(tmp_path, monkeypatch, down_ids, role):
+    import time
+    writers = tuple(leg for leg in legs.DEFAULT_LEGS if leg.id in legs.WRITER_ORDER)
+    table = tuple(replace(leg, roles=(role,)) for leg in writers)
+    use_table(monkeypatch, table)
+    service = SpawnService(state=tmp_path, leg_reader=lambda *a, **kw: {'state': 'available', 'evidence': None})
+    service._save(dict(run_id='run-subscriptions', status='failed', ended=time.time(),
+        attempts=[dict(leg={'id': mid}, status='failed', down_reason='usage_limit') for mid in down_ids]))
+    plan = service.route({'estimate_tokens': 1000}, role=role, writer_families=['qwen'])
+    expected = sorted(legs.WRITER_ORDER[:2], key=lambda mid: mid in down_ids) + [legs.MUSE_AMBER]
+    assert [leg.id for leg in plan.legs] == expected
+
+
 @pytest.mark.parametrize('reason', ['credit usage limit', 'model not available',
     'Free usage limit reached', 'not_served_on_host'])
 def test_recorded_down_route(tmp_path, monkeypatch, reason):
     import time
     free = replace(legs.DEFAULT_LEGS[1], id='free-test', tool_mode='tools', disabled=None)
     other = replace(free, id='other', model='test/other', tier='paid', family='glm')
-    monkeypatch.setattr(legs, 'DEFAULT_LEGS', (free, other))
+    up = replace(free, id='up-free', model='test/up')
+    monkeypatch.setattr(legs, 'DEFAULT_LEGS', (free, up, other))
     import plangraph.planner.routing as routing
     original = routing.plan_spawn
-    monkeypatch.setattr(routing, 'plan_spawn', lambda *a, **kw: original(*a, **dict(kw, legs=(free, other))))
+    monkeypatch.setattr(routing, 'plan_spawn', lambda *a, **kw: original(*a, **dict(kw, legs=(free, up, other))))
     service = SpawnService(state=tmp_path, leg_reader=lambda *a, **k: {'state': 'available'})
     service._save(dict(run_id='run-evidence', status='failed', ended=time.time(),
         attempts=[dict(leg={'id': free.id}, status='failed', skip_reason=reason,
                        down_reason='not_served_on_host')]))
     plan = service.route({'estimate_tokens': 100}, role='review', writer_families=['gpt'])
-    assert [l.id for l in plan.legs] == ['other', 'free-test']
+    assert [l.id for l in plan.legs] == ['up-free', 'free-test', 'other']
     from plangraph.planner import measured_down
     evidence = measured_down.measured_down(tmp_path)
     assert evidence[free.id]['reason'] == 'not_served_on_host'
     monkeypatch.setattr(measured_down.time, 'time', lambda: evidence[free.id]['time'] + measured_down.LEG_DOWN_WINDOW_S)
     plan = service.route({'estimate_tokens': 100}, role='review', writer_families=['gpt'])
-    assert [l.id for l in plan.legs] == ['free-test', 'other']
+    assert [l.id for l in plan.legs] == ['free-test', 'up-free', 'other']
 
 
 @pytest.mark.parametrize('mode', ['expired', 'test failure', 'timeout', 'other-host', 'missing', 'corrupt'])

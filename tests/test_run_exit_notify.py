@@ -140,7 +140,7 @@ def test_real_child_exit(tmp_path, monkeypatch, script, rc):
     runner = SpawnerRunner()
     service = spawn_service(runner=runner, state=tmp_path, keeper_sink=FileInbox(tmp_path))
     async def run():
-        job = await runner.spawn('test', model_or_combo='omniroute/cx-gpt-6.1-sol-xhigh')  # D-5240
+        job = await runner.spawn('test', model_or_combo='omniroute/cx-gpt-6.1-sol')
         await runner._tasks[job.job_id]
         assert job.exit_code == rc
         record = dict(run_id='run-child', status=job.status, exit_code=job.exit_code, started=1, ended=job.end_time)

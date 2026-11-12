@@ -17,7 +17,7 @@ def test_writer_live_limit_reset_and_scope(tmp_path, monkeypatch):
     install_fallthrough_legs(monkeypatch)
     store = LegStateStore(tmp_path / "state.sqlite")
     p = plan_spawn(CARD, role="implement", leg_reader=store, now=100)
-    assert p.first_leg.model == "omniroute/cx-gpt-6.1-sol-xhigh"  # D-5240
+    assert p.first_leg.model == "omniroute/cx-gpt-6.1-sol"  # D-3745
     nxt = next_leg_after_provider_stop(p, p.first_leg.id, 429, "quota exhausted",
                                        {"Retry-After": "60"}, "test", store=store,
                                        now=100, account="A")

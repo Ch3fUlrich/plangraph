@@ -291,11 +291,11 @@ def test_retry_until_budget_then_promote_free_sub_paid_park(route):
     a, leg = next_after_failure(route, [q], "check_fail", 3)
     assert (a, leg.id) == ("promote", "cx-gpt-6.1-sol")
     a, leg = next_after_failure(route, [q, leg.id], "check_fail", 3)
+    assert (a, leg.id) == ("rotate", "cx-gpt-6-luna")
+    a, leg = next_after_failure(route, [q, *(l.id for l in route.legs if l.tier == "subscription")], "check_fail", 3)
     assert (a, leg.id) == ("promote", "opencode-console-muse-spark")
-    assert next_after_failure(route, [q, "mimo-v2.6-flash", "deepseek"],
-                              "stall", 3) == ("park", None)
+    assert next_after_failure(route, [q, "mimo-v2.6-flash", "deepseek"], "stall", 3) == ("park", None)
     assert next_after_failure(route, [q], "check_fail", 0)[0] == "retry"
-
 
 def test_promote_skips_absent_tier():
     r = route_card(card(), legs=tuple(l for l in DEFAULT_LEGS if l.tier != "subscription"))
@@ -357,7 +357,7 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     # F1 new test: implement plan_spawn with benchmark rows that score cx-gpt-6.1-sol
     # highest still returns D-3745 lead-first order, and a limited leg is still skipped.
     rows = {
-        "omniroute/cx-gpt-6.1-sol-xhigh": {"model_id": "omniroute/cx-gpt-6.1-sol-xhigh", "aa_intelligence": 999, "cost_per_task_usd": 0, "pool_burn_weight": 0},
+        "omniroute/cx-gpt-6.1-sol": {"model_id": "omniroute/cx-gpt-6.1-sol", "aa_intelligence": 999, "cost_per_task_usd": 0, "pool_burn_weight": 0},
         "gemini-3.8-flash": {"model_id": "gemini-3.8-flash", "aa_intelligence": 1, "cost_per_task_usd": 0, "pool_burn_weight": 0},
         "mimo/mimo-v2.6-pro": {"model_id": "mimo/mimo-v2.6-pro", "aa_intelligence": 1, "cost_per_task_usd": 0, "pool_burn_weight": 0},
     }

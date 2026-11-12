@@ -244,8 +244,7 @@ class SpawnService(SeatSpawnMixin):
             chosen = chosen or next((l for l in spawnable_legs() if l.model == target), None)
             if chosen is None:
                 from .resolver import get_catalog_models, detect_model_family
-                from plangraph.planner.legs import Leg
-                from plangraph.planner.legs import HARNESSES, TOOL_MODES
+                from plangraph.planner.legs import Leg, HARNESSES, TOOL_MODES
                 row = next((r for r in get_catalog_models() if r['id'] == target), None)
                 # Harness is a catalog column (SPAWNER-REGISTRY-ROUTE), never inferred.
                 missing = ('catalog row' if row is None else
@@ -274,11 +273,12 @@ class SpawnService(SeatSpawnMixin):
             if chosen.tier == 'paid':
                 available = self._route(card, role, writer_families, review_of,
                     benchmark=benchmark, require_bench=require_bench)
+                if role == 'implement' and (subscriptions := [c.id for c in available.legs if c.tier == 'subscription']):
+                    raise SpawnRefused('paid writer pin refused; subscription writers available: ' + ', '.join(subscriptions))
                 from plangraph.planner.measured_down import measured_down
                 down = measured_down(self.state)
                 free = [candidate.id for candidate in available.legs if candidate.tier == 'free' and candidate.id not in down]
-                if override_reason is None and not free:
-                    override_reason = 'No eligible free leg is up on this host'
+                if override_reason is None and not free: override_reason = 'No eligible free leg is up on this host'
                 if not isinstance(override_reason, str) or len(override_reason.strip()) < 10:
                     raise SpawnRefused('paid pin refused; free legs up: ' + ', '.join(free) +
                         '; --override-reason required (D-4382: no free leg witnesses is a valid reason)')

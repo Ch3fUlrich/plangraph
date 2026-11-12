@@ -291,11 +291,11 @@ def review_child_env():
 
 
 def witness_order(card, role, legs, down):
-    """Sort using the same child config and capability predicate as the gate."""
+    """Keep paid legs last, then apply witness capability and host-local cooldown."""
     need = bool(role == 'review' and card and card.get('witness_required'))
     env = review_child_env() if need else None
     return tuple(sorted(legs, key=lambda leg: (
-        need and not gateway_leg(leg.model, env), leg.id in down)))
+        getattr(leg, 'tier', None) == 'paid', need and not gateway_leg(leg.model, env), leg.id in down)))
 
 
 def witness_gate_legs(card, role, legs):
