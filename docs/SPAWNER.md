@@ -30,7 +30,8 @@ bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
 and no publish/push is attempted. Changed tracked files use the Python CI gate's
 400-line rule, exemptions, binary detection, splitlines counting and baseline
 ratchet. CI still runs unchanged `tools/check_file_size.py` over all tracked files.
-The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI entry/skip-trailer rule, returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. The `.docs-map` gate moves into Rust in slice S1c. Doc-only and empty commits do not require skip reasons; section boundaries include indented headings in both Rust and CI.
+The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI entry/skip-trailer rule, returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. Doc-only and empty commits do not require skip reasons; section boundaries include indented headings in both Rust and CI.
+The S1c Rust docs-map gate reads `.docs-map` from the committed head and compares changed paths over `merge-base(base, head)..head`. Each matching rule needs at least one mapped doc in that range; failures return `HOLD gate docs-map:` with unmatched `source -> doc` pairs before export/content gates or publication. Missing maps pass; malformed rules/dates hold. `# enforce-after:` begins enforcement inclusively on that local calendar date (earlier missing-doc matches do not hold); entries have no expiry syntax. CI retains its stricter union of merge-base and head policies, so removing head rules cannot disable CI enforcement. Shared JSON cases exercise Rust/Python parsing and glob parity.
 
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.
@@ -121,6 +122,34 @@ the waiting shell itself. Wait reads atomic run records, not process names;
 its timeout stops waiting, not the writer.
 `--no-fallthrough` disables automatic advancement after a captured provider stop.
 Plain stdout, including text saying 429, is never provider evidence.
+
+### Opt-in per-attempt worktrees (RUN-WORKTREE slice 1)
+
+CLI `spawn --run-worktree` / service `spawn(run_worktree=True)` creates a fresh
+`attempt-<uuid>` directory before each launch, including sequential fallthroughs
+and fixer continuations. The trusted `PLANGRAPH_SETTINGS` JSON/TOML top-level
+`worktree_root` config key overrides the per-host default `<state>/worktrees`.
+Fetch has a 30-second timeout outside the exclusive **`<root>/.lock`**; the fetched
+SHA is pinned before locked dependency checks and `git worktree add`. This exact
+lock name is reserved for WORKTREE-REAPER, not held during network waits.
+New lanes use the fetched `origin/main` head, never the caller's HEAD. Optional
+card `lane_branch` names the branch (default `lane/<run_id>`); `continuation: true`
+resumes that existing local branch's tip instead. Card `finished_dependencies`
+lists exactly 40- or 64-hex commit SHAs: a new lane refuses with `RunWorktreeDependencyNotMerged`
+(`run_worktree_dependency_not_merged`) if any is not an ancestor of fetched main,
+including missing commits. Continuations are sequential handoffs, not concurrent
+writers on one branch; retained earlier directories must no longer be used.
+Git failures become `SpawnRefused` codes: `run_worktree_invalid_branch`,
+`run_worktree_branch_exists`, `run_worktree_branch_missing`, `run_worktree_fetch_failed`,
+`run_worktree_fetch_timeout`, `run_worktree_base_unavailable`,
+`run_worktree_git_timeout` or `run_worktree_create_failed`, without raw Git diagnostics.
+The private run record saves `run_worktree: {path, branch, base_sha}` before launch
+and retains ordered creation evidence in `worktree_attempts`; `base_sha` is the
+attempt's starting commit (main head or continuation tip). A failed fixer creation
+records no worktree and a null cwd, never its parent's path. Runner `JobInfo.cwd`,
+process cwd and child PWD use that path. With the flag off, cwd is unchanged;
+dry runs create nothing. No worktrees are removed, no pg-reap lock sharing is
+implemented, and enabling by default and the Rust port remain later slices.
 
 Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
 chosen leg, served model/family with witness kind (a structured claude `system/init` model is a native witness; a mismatch with the requested leg sets `served_model_mismatch`), writer family, status, started/ended timestamps,

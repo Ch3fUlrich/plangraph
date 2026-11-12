@@ -29,7 +29,7 @@ Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so t
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 
 ```bash
-python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist
+python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
 python tools/affected_tests.py --base origin/main --run -n auto  # writers / PR / L2
 python -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
@@ -54,10 +54,21 @@ through both Rust unit tests and `tests/test_ps_host_sources.py`; update both
 consumers rather than matching Python source text or spawning Python from Rust.
 
 One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `main`.
+The RUN-WORKTREE Python regression exception (D-5062) retires with SPAWNER-RUST-PORT.
 Work that covers two plan items is two lanes.
 A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) only for the item's latest verified head; interrupted sends are not blindly replayed.
 
 New production code must be Rust unless explicitly listed in `tools/new_code_allowlist.txt`; the host-readiness source-probe helper is a single-file exception for the pre-gate lane, retired by `SPAWNER-RUST-PORT`.
+
+For an offline judge brief, run `python3 tools/judge_prompt.py --findings findings.txt
+--base origin/main --head HEAD --ci-summary ci.json --output judge.md`, with
+`ci.json` mapping job names to conclusion strings. The prompt includes complete
+findings and diff; `--byte-budget` limits whole file bodies and lists explicit cuts.
+See [Lean review harness](docs/lean-review-harness.md) for seat tool modes.
+Only `--tool-mode tools` advertises follow-up reads; `inline-only` reads the
+spawner-inlined diff without tools, and `prompt-only` uses supplied evidence.
+Gateway prompt-only config is file-backed via a portable launcher, never argv.
+New Python files require a reasoned rule 9.14 entry in `tools/new_code_allowlist.txt`.
 
 ## File size
 
@@ -75,6 +86,8 @@ The file-size gate refuses malformed Git batch headers with a single reason line
 ## Changelog and documentation
 
 Every change touching non-documentation paths requires an entry (rule D-653), either as a new or edited fragment that adds an entry line against the merge-base in `changelog.d/<ITEM-KEY>.md` (several parts of one item: `<ITEM-KEY>-<n>.md`) holding the entry line, or as a new non-heading line under `## Unreleased` in `CHANGELOG.md`. Fragment PRs keep open lanes mergeable because each PR adds its own file; `python3 tools/changelog_fold.py` folds all fragments under `## Unreleased` newest first, then deletes only fragments whose entry lines were folded. Fragments must be direct children (no nested paths); README.md is excluded. Uncommitted fragments sort newest by mtime with filename ties, before committed fragments ordered by first-commit date. Empty or heading-only fragments remain in place and are reported; `--check` writes nothing and exits 1 while fragments remain. An empty fragment or deleting the changelog or editing whitespace does not count. A non-doc change may waive this only when every commit that touches non-doc paths carries its own `Changelog: skip (<reason>)` line in its trailer block (last paragraph; merge commits do not count), with a non-empty reason (for typos or format-only edits). Furthermore, repository documentation mappings in `.docs-map` pair path globs with their corresponding doc files; changes touching a mapped path must update at least one of its listed docs. Globs: `*` stays inside one path segment, `**` spans segments; the `# enforce-after:` date is the first day the mapping is an error (earlier days warn). `python3 tools/check_changelog_docs.py` (range `merge-base(base, --head)..head`) verifies this in CI and runs with `--warn-only` on each pushed sha in the pre-push hook.
+
+`tests/fixtures/writer_docs_map.json` is the shared glob/parser case table for Rust writer finalization and `test_writer_docs_map_shared_parity` in `tests/test_check_changelog_docs.py`; run the latter with `python3 -m pytest -q -n 2 tests/test_check_changelog_docs.py`. Rust reads the head map; CI additionally retains merge-base rules (see [writer finalization](docs/SPAWNER.md#writer-result-finalization)).
 
 ## Commits
 
