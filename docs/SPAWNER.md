@@ -120,18 +120,24 @@ CLI `spawn --run-worktree` / service `spawn(run_worktree=True)` creates a fresh
 `attempt-<uuid>` directory before each launch, including sequential fallthroughs
 and fixer continuations. The trusted `PLANGRAPH_SETTINGS` JSON/TOML top-level
 `worktree_root` config key overrides the per-host default `<state>/worktrees`.
-Creation holds the exclusive file lock **`<root>/.lock`** across fetch, dependency
-checks and `git worktree add`; this exact name is reserved for WORKTREE-REAPER.
+Fetch has a 30-second timeout outside the exclusive **`<root>/.lock`**; the fetched
+SHA is pinned before locked dependency checks and `git worktree add`. This exact
+lock name is reserved for WORKTREE-REAPER, not held during network waits.
 New lanes use the fetched `origin/main` head, never the caller's HEAD. Optional
 card `lane_branch` names the branch (default `lane/<run_id>`); `continuation: true`
 resumes that existing local branch's tip instead. Card `finished_dependencies`
-lists full commit SHAs: a new lane refuses with `RunWorktreeDependencyNotMerged`
+lists exactly 40- or 64-hex commit SHAs: a new lane refuses with `RunWorktreeDependencyNotMerged`
 (`run_worktree_dependency_not_merged`) if any is not an ancestor of fetched main,
 including missing commits. Continuations are sequential handoffs, not concurrent
 writers on one branch; retained earlier directories must no longer be used.
+Git failures become `SpawnRefused` codes: `run_worktree_invalid_branch`,
+`run_worktree_branch_exists`, `run_worktree_branch_missing`, `run_worktree_fetch_failed`,
+`run_worktree_fetch_timeout`, `run_worktree_base_unavailable`,
+`run_worktree_git_timeout` or `run_worktree_create_failed`, without raw Git diagnostics.
 The private run record saves `run_worktree: {path, branch, base_sha}` before launch
 and retains ordered creation evidence in `worktree_attempts`; `base_sha` is the
-attempt's starting commit (main head or continuation tip). Runner `JobInfo.cwd`,
+attempt's starting commit (main head or continuation tip). A failed fixer creation
+records no worktree and a null cwd, never its parent's path. Runner `JobInfo.cwd`,
 process cwd and child PWD use that path. With the flag off, cwd is unchanged;
 dry runs create nothing. No worktrees are removed, no pg-reap lock sharing is
 implemented, and enabling by default and the Rust port remain later slices.

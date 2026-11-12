@@ -68,23 +68,38 @@ def create(root, repo, lane_branch, continuation=False, *, finished_dependencies
     to remain attached in the retained, no-longer-running attempt directory.
     """
     root = Path(root).expanduser().resolve()
-    def git(*args, check=True):
-        return subprocess.run(['git', '-C', str(repo), *args], check=check,
-                              capture_output=True, text=True, timeout=120)
+    def git(*args, check=True, failure='run_worktree_create_failed'):
+        try:
+            return subprocess.run(['git', '-C', str(repo), *args], check=check,
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+        except subprocess.TimeoutExpired:
+            raise SpawnRefused('run_worktree_fetch_timeout' if args[0] == 'fetch'
+                               else 'run_worktree_git_timeout') from None
+        except (OSError, subprocess.CalledProcessError):
+            raise SpawnRefused(failure) from None
+    if not isinstance(lane_branch, str) or lane_branch.startswith('-'):
+        raise SpawnRefused('run_worktree_invalid_branch')
+    git('check-ref-format', 'refs/heads/' + lane_branch, failure='run_worktree_invalid_branch')
+    if not continuation and any(not isinstance(sha, str) or not re.fullmatch(
+            r'(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})', sha) for sha in finished_dependencies):
+        raise RunWorktreeDependencyNotMerged('run_worktree_dependency_not_merged')
+    # Network latency must not monopolize the host's creation/reaper lock.
+    git('fetch', '--no-write-fetch-head', 'origin', '+refs/heads/main:refs/remotes/origin/main',
+        failure='run_worktree_fetch_failed')
+    main = git('rev-parse', '--verify', 'refs/remotes/origin/main^{commit}',
+               failure='run_worktree_base_unavailable').stdout.strip()
     with run_worktree_lock(root):
-        git('check-ref-format', 'refs/heads/' + lane_branch)
-        if lane_branch.startswith('-'):
-            raise SpawnRefused('run_worktree_invalid_branch')
-        git('fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main')
-        main = git('rev-parse', '--verify', 'refs/remotes/origin/main^{commit}').stdout.strip()
+        if not continuation and not git('show-ref', '--verify', '--quiet', 'refs/heads/' + lane_branch,
+                                        check=False).returncode:
+            raise SpawnRefused('run_worktree_branch_exists')
         if not continuation:
             for sha in finished_dependencies:
-                if (not isinstance(sha, str) or not re.fullmatch(r'[0-9a-fA-F]{40,64}', sha)
-                        or git('merge-base', '--is-ancestor', sha, main, check=False).returncode):
+                if git('merge-base', '--is-ancestor', sha, main, check=False).returncode:
                     raise RunWorktreeDependencyNotMerged('run_worktree_dependency_not_merged')
         base = main
         if continuation:
-            base = git('rev-parse', '--verify', 'refs/heads/' + lane_branch + '^{commit}').stdout.strip()
+            base = git('rev-parse', '--verify', 'refs/heads/' + lane_branch + '^{commit}',
+                       failure='run_worktree_branch_missing').stdout.strip()
         path = root / ('attempt-' + uuid.uuid4().hex)
         if continuation:
             git('worktree', 'add', '--force', str(path), lane_branch)

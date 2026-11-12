@@ -9,7 +9,6 @@ from plangraph.routing_errors import ParameterRefused
 from dataclasses import asdict, replace
 from pathlib import Path
 import asyncio, hashlib, json, os, socket, time, uuid
-from . import context_pack
 from .runner import SpawnerRunner
 from .cancel_recorded import cancel_recorded
 from .seat_spawn import SeatSpawnMixin
@@ -155,7 +154,7 @@ class SpawnService(SeatSpawnMixin):
         if reason != 'remaining_gaps' or record.get('continuation_run_id'):
             return
         child = dict(run_id='run-' + uuid.uuid4().hex, parent_run_id=record['run_id'],
-                     continuation=1, role='implement', cwd=record['cwd'],
+                     continuation=1, role='implement', cwd=None if record.get('run_worktree') else record['cwd'],
                      chosen_leg=record['chosen_leg'], started=time.time(), ended=None,
                      status='running', exit_code=None, gaps=gaps)
         record['continuation_run_id'] = child['run_id']
@@ -164,8 +163,7 @@ class SpawnService(SeatSpawnMixin):
         self._save(child)
         try:
             chosen = child['chosen_leg']
-            if record.get('run_worktree'): child['run_worktree'] = record['run_worktree']
-            worktree = await prepare_worktree(self, child, {}, bool(record.get('run_worktree')), continuation=True)
+            worktree = await prepare_worktree(self, child, {'lane_branch': (record.get('run_worktree') or {}).get('branch')}, bool(record.get('run_worktree')), continuation=True)
             job = await self.runner.spawn(prompt=render_fixer_brief([{'text': g} for g in gaps]),
                 model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=worktree.get('cwd', child['cwd']), wake_variant='fixer',  # REMOVE-AT-R10
                 prompt_record=(self._path(child['run_id']).with_name('prompt.txt'), child, self._save))  # REMOVE-AT-R10
@@ -200,6 +198,7 @@ class SpawnService(SeatSpawnMixin):
             logging.getLogger(__name__).warning('refusal_save_failed: %s', type(storage_error).__name__)
             exc.add_note('Refusal record could not be persisted: ' + type(storage_error).__name__)
         return record
+
     async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                     review_of=None, model=None, leg=None, override_reason=None,
                     dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
@@ -396,5 +395,6 @@ class SpawnService(SeatSpawnMixin):
             except asyncio.TimeoutError:
                 pass
         return self.result(record['run_id'], attempts=SAVE_READ_ATTEMPTS)
+
     async def cancel(self, run_id):
         return await cancel_recorded(self, run_id)

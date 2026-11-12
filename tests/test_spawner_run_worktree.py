@@ -77,11 +77,11 @@ def test_concurrent_creates_hold_exact_shared_lock(repository, monkeypatch):
     _, repo, root = repository
     run = subprocess.run
     entered, release, second_started = threading.Event(), threading.Event(), threading.Event()
-    fetches = []
+    creates = []
     def observed(args, **kwargs):
-        if 'fetch' in args:
-            fetches.append(args)
-            if len(fetches) == 1:
+        if 'worktree' in args and 'add' in args:
+            creates.append(args)
+            if len(creates) == 1:
                 entered.set()
                 assert release.wait(10)
         return run(args, **kwargs)
@@ -100,24 +100,26 @@ def test_concurrent_creates_hold_exact_shared_lock(repository, monkeypatch):
                 with (root / '.lock').open('rb') as lock:
                     with pytest.raises(BlockingIOError):
                         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            assert len(fetches) == 1
+            assert len(creates) == 1
         finally:
             release.set()
         assert one.result()['path'] != two.result()['path']
-    assert len(fetches) == 2
+    assert len(creates) == 2
 
 
 @pytest.mark.parametrize('hardened', [False, True])
 @pytest.mark.parametrize('enabled', [None, False, True])
 @pytest.mark.parametrize('dry_run', [False, True])
-def test_run_record_and_runner_cwd(repository, tmp_path, monkeypatch, hardened, enabled, dry_run):
+@pytest.mark.parametrize('configured_root', [False, True])
+def test_run_record_and_runner_cwd(repository, tmp_path, monkeypatch, hardened, enabled, dry_run, configured_root):
     from plangraph.spawner.runner import SpawnerRunner, spawn_service
     from plangraph.spawner.service import SpawnService
     from plangraph.planner.routing import SpawnPlan
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.spawner import resolver, seat_spawn
-    origin, repo, root = repository
-    monkeypatch.setattr(seat_spawn, 'admit', lambda *a, **k: None)
+    origin, repo, configured = repository
+    root = configured if configured_root else tmp_path / 'state' / 'worktrees'
+    monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 1000000))
     async def available(*a, **k):
         return None
     monkeypatch.setattr(resolver, 'host_skip_reason_async', available)
@@ -140,9 +142,10 @@ def test_run_record_and_runner_cwd(repository, tmp_path, monkeypatch, hardened, 
         service = (spawn_service if hardened else SpawnService)(runner=runner, state=tmp_path / 'state')
         chosen = next(leg for leg in DEFAULT_LEGS if leg.id == 'cx-gpt-6.1-sol')
         service._route = lambda *a, **k: SpawnPlan((chosen,), (), 'test', (), ())
-        settings = tmp_path / 'settings.json'
-        settings.write_text(json.dumps({'worktree_root': str(root)}))
-        monkeypatch.setenv('PLANGRAPH_SETTINGS', str(settings))
+        if configured_root:
+            settings = tmp_path / 'settings.json'
+            settings.write_text(json.dumps({'worktree_root': str(root)}))
+            monkeypatch.setenv('PLANGRAPH_SETTINGS', str(settings))
         result = await service.spawn(card={'estimate_tokens': 100, 'lane_branch': 'lane/record'},
             prompt='Implement a tested change', dry_run=dry_run, wait_seconds=None,
             **({} if enabled is None else {'run_worktree': enabled}))
@@ -158,6 +161,7 @@ def test_run_record_and_runner_cwd(repository, tmp_path, monkeypatch, hardened, 
             assert result['worktree_attempts'] == [metadata]
         else:
             assert 'run_worktree' not in result and not root.exists()
+            assert not (service.state / 'worktrees').exists()
         assert result['cwd'] == expected
         if not dry_run:
             assert calls[0]['cwd'] == calls[0]['env']['PWD'] == expected
@@ -196,18 +200,64 @@ def test_default_root_and_declared_continuation(repository, tmp_path):
 
 def test_cli_flag_is_opt_in(tmp_path, monkeypatch, capsys):
     from plangraph.spawner import cli
-    received = []
-    class Service:
-        def __init__(self, **kwargs):
-            pass
-        async def spawn(self, **kwargs):
-            received.append(kwargs)
-            return {'status': 'dry_run', 'exit_code': 0}
-    monkeypatch.setattr(cli, 'SpawnService', Service)
+    from plangraph.spawner.service import SpawnService
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.planner.legs import DEFAULT_LEGS
+    chosen = next(leg for leg in DEFAULT_LEGS if leg.id == 'cx-gpt-6.1-sol')
+    monkeypatch.setattr(SpawnService, '_route', lambda *a, **k: SpawnPlan((chosen,), (), 'test', (), ()))
     for flag in ([], ['--run-worktree']):
         assert cli.main(['--state', str(tmp_path), 'spawn', '--card', '{"estimate_tokens":100}',
-            '--model', 'mimo/mimo-v2.6-flash', '--dry-run', 'Implement a tested change', *flag]) == 0
-        assert received[-1]['run_worktree'] == bool(flag)
+            '--dry-run', 'Implement a tested change', *flag]) == 0
+        record = json.loads(capsys.readouterr().out)
+        assert record['status'] == 'dry_run' and 'run_worktree' not in record
+        assert not (tmp_path / 'worktrees').exists()
+
+
+@pytest.mark.parametrize('enabled', [None, False, True])
+def test_cli_overflow_forwards_worktree_flag(repository, tmp_path, monkeypatch, capsys, enabled):
+    import io
+    from plangraph.spawner import cli, overflow, seat_spawn
+    from plangraph.spawner.service import SpawnService
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.planner.legs import DEFAULT_LEGS
+    _, repo, _ = repository
+    monkeypatch.chdir(repo)
+    config = tmp_path / 'overflow.json'
+    config.write_text(json.dumps({'public_repos': [str(repo)], 'hosts': {'invented': {}}}))
+    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 4000))
+    monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
+    monkeypatch.setattr(overflow, 'local_limits', lambda *a: (2048, 3000))
+    monkeypatch.setattr(overflow, 'ready_records', lambda *a: {'invented': dict(
+        ssh='invented', ok=True, fresh=True, live_runs=0, mem_available_mb=6000, role_mb=2048, floor_mb=3000)})
+    monkeypatch.setenv('PLANGRAPH_HOST', 'invented-local')
+    chosen = next(leg for leg in DEFAULT_LEGS if leg.id == 'cx-gpt-6.1-sol')
+    monkeypatch.setattr(SpawnService, '_route', lambda *a, **k: SpawnPlan((chosen,), (), 'test', (), ()))
+    received = []
+    def remote(name, host, card, prompt, flags):
+        received.append(flags)
+        return dict(run_id='run-remote', status='running', exit_code=0)
+    monkeypatch.setattr(overflow, 'remote_spawn', remote)
+    class Input(io.StringIO):
+        def close(self):
+            pass
+    class Supervisor:
+        def __init__(self, *args, **kwargs):
+            self.stdin, self.stdout = Input(), self
+        def readline(self):
+            payload = json.loads(self.stdin.getvalue())
+            service = cli.SpawnService(state=payload.pop('state'))
+            assert payload['run_worktree'] == (enabled is True)
+            return json.dumps(asyncio.run(service.spawn(**payload))) + '\n'
+        def close(self):
+            pass
+    monkeypatch.setattr(cli, '_start_supervisor', Supervisor)
+    flags = ['--run-worktree'] if enabled else []
+    assert cli.main(['--state', str(tmp_path / 'state'), 'spawn', '--card', '{"estimate_tokens":100}',
+                     'Implement a tested change', *flags]) == 0
+    assert json.loads(capsys.readouterr().out)['overflow_remote']
+    assert len(received) == 1
+    assert ('--run-worktree' in received[0]) == (enabled is True)
 
 
 def test_fixer_continuation_records_new_worktree(repository, tmp_path):
