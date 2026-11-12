@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS catalog_benchmarks (
     terminal_bench REAL,
     deepswe REAL,
     swe_bench_verified REAL,
+    swe_atlas_qna REAL,
     frontier_code REAL,
     scicode REAL,
     cyberbench REAL,

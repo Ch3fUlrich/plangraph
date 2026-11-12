@@ -1,16 +1,17 @@
 """Plangraph Spawner Catalog Seed Data.
 
 Contains the canonical 5-rung tier ladder, provider, client, quota pool, model,
-Artificial Analysis v4.3.2 benchmark, and role route seed definitions.
+exact-identity benchmark snapshots, upgrades, and role route seed definitions.
 """
 
+import hashlib
+import json
+from pathlib import Path
 from typing import Any
 
 # SEED_MODELS moved to plangraph.catalog_data (neutral module); re-exported
 # here so spawner importers keep working unchanged.
 from plangraph.catalog_data import SEED_MODELS as SEED_MODELS
-
-from .catalog_benchmarks import benchmark_rows
 
 # 5-rung tier ladder ordering contract:
 # trial (0) < free (1) < credit (2) < subscription (3) < paid (4)
@@ -319,502 +320,79 @@ SEED_CLIENTS: list[dict[str, Any]] = [
 ]
 
 
-# Canonical 22 Model Benchmarks from Artificial Analysis v4.3.2
-SEED_BENCHMARKS: list[dict[str, Any]] = [
-    {
-        "model_id": "agy/claude-opus-5-5-high",
-        "master_rank": 1,
-        "aa_intelligence": 57.6,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": 60.0,
-        "deepswe": 74.2,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 98.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 1.82,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "gemini/gemini-4-argon-high",
-        "master_rank": 2,
-        "aa_intelligence": 53.0,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": 57.0,
-        "deepswe": 77.9,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 115.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 1.99,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "opencode-go/gemini-4-argon",
-        "master_rank": 2,
-        "aa_intelligence": 53.0,
-        "coding_index": 78.4,
-        "agentic_index": 75.0,
-        "terminal_bench": 57.0,
-        "deepswe": 77.9,
-        "frontier_code": None,
-        "scicode": 42.0,
-        "cyberbench": None,
-        "verified_tok_per_s": 115.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.50,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "cxa/gpt-6-astra-max",
-        "master_rank": 3,
-        "aa_intelligence": 53.0,
-        "coding_index": 62.0,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 69.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 3.26,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "agy/claude-sonnet-5-5-xhigh",
-        "master_rank": 4,
-        "aa_intelligence": 51.9,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": 70.6,
-        "deepswe": None,
-        "frontier_code": 52.1,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 114.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 1.12,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "cxa/gpt-6-sol-max",
-        "master_rank": 5,
-        "aa_intelligence": 52.0,
-        "coding_index": 60.0,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 60.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.72,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "cxa/gpt-6-sol-xhigh",
-        "master_rank": 6,
-        "aa_intelligence": 51.0,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 56.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.39,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "cxa/gpt-6-sol-high",
-        "master_rank": 7,
-        "aa_intelligence": 50.0,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 51.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.32,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "opencode-go/muse-spark-1.3-contributor",
-        "master_rank": 8,
-        "aa_intelligence": 45.0,
-        "coding_index": 75.8,
-        "agentic_index": 55.5,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 287.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 1.37,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "cxa/gpt-6-sol-medium",
-        "master_rank": 9,
-        "aa_intelligence": 48.0,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 47.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.21,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "agy/claude-sonnet-5-5-high",
-        "master_rank": 10,
-        "aa_intelligence": 46.8,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 100.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 1.12,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "mimo/mimo-v2.6-pro",
-        "master_rank": 11,
-        "aa_intelligence": 46.0,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 51.0,
-        "direct_api_tok_per_s": 29.0,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.13,
-        "cache_hit_rate": 0.924,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "opencode-go/qwen3.8-max",
-        "master_rank": 12,
-        "aa_intelligence": 45.4,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 85.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.45,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "opencode-go/deepseek-v4.1-flash",
-        "master_rank": 13,
-        "aa_intelligence": 45.0,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 231.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": 380.0,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.26,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "deepseek/deepseek-v4-flash-max",
-        "master_rank": 13,
-        "aa_intelligence": 45.0,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 231.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.26,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "opencode-go/glm-5.2",
-        "master_rank": 14,
-        "aa_intelligence": 45.0,
-        "coding_index": 71.5,
-        "agentic_index": 50.9,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": 52.0,
-        "cyberbench": None,
-        "verified_tok_per_s": 90.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": 170.0,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.18,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "opencode-go/kimi-k3.1-pro",
-        "master_rank": 15,
-        "aa_intelligence": 44.0,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 43.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 2.00,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "claude/claude-haiku-4-5",
-        "master_rank": 16,
-        "aa_intelligence": 43.4,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": 39.2,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 130.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.21,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "cxa/gpt-6-sol-low",
-        "master_rank": 17,
-        "aa_intelligence": 42.0,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 46.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.13,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "agy/gemini-3.8-flash-tiered-high",
-        "master_rank": 18,
-        "aa_intelligence": 41.0,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 158.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 1.24,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "agy/claude-sonnet-5-5-medium",
-        "master_rank": 19,
-        "aa_intelligence": 40.8,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 105.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.55,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "qoder/qwen3.8-flash-next",
-        "master_rank": 20,
-        "aa_intelligence": 40.0,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 300.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.00,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "cxa/gpt-6-luna-high",
-        "master_rank": 21,
-        "aa_intelligence": 38.4,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": None,
-        "verified_tok_per_s": 180.0,
-        "direct_api_tok_per_s": None,
-        "alt_provider_tok_per_s": None,
-        "ttft_seconds": None,
-        "cost_per_task_usd": 0.07,
-        "cache_hit_rate": None,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "mimo/mimo-v2.6-flash",
-        "master_rank": 22,
-        "aa_intelligence": 37.9,
-        "coding_index": None,
-        "agentic_index": None,
-        "terminal_bench": None,
-        "deepswe": None,
-        "frontier_code": None,
-        "scicode": None,
-        "cyberbench": 75.4,
-        "verified_tok_per_s": 54.0,
-        "direct_api_tok_per_s": 29.0,
-        "alt_provider_tok_per_s": 66.5,
-        "ttft_seconds": 2.10,
-        "cost_per_task_usd": 0.04,
-        "cache_hit_rate": 0.924,
-        "benchmark_source": "AA-v4.3.2-2026-10",
-        "updated_at": "2026-10-19T00:00:00Z",
-    },
-    {
-        "model_id": "omniroute/cx-gpt-6-luna",
-        "master_rank": None,
-        "aa_intelligence": 38.4,
-        "verified_tok_per_s": 180.0,
-        "cost_per_task_usd": 0.07,
-        "benchmark_source": "AA-v4.3.2-2026-10 (gpt-6-luna, as cxa/gpt-6-luna-high)",
-        "updated_at": "2026-10-26T00:00:00Z",
-    },
-]
+def snapshot_data():
+    """Frozen upstream observations and historical upgrade fingerprints."""
+    return json.loads(Path(__file__).with_name("catalog_benchmark_sources.json").read_text(encoding="utf-8"))
 
-# Published metrics overlay historical fields; untouched rows retain their
-# versioned seed citation, not a newly invented upstream measurement.
-SEED_BENCHMARKS = benchmark_rows(SEED_BENCHMARKS)
+
+def published_rows():
+    """Only current, exact-identity observations enter the benchmark seed."""
+    rows = json.loads(Path(__file__).with_name("catalog_benchmarks.json").read_text(encoding="utf-8"))
+    if len({row["model_id"] for row in rows}) != len(rows):
+        raise ValueError("duplicate benchmark model/effort")
+    return rows
+
+
+def migrate(conn):
+    """Add nullable provenance/components and preserve every operator value."""
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(catalog_benchmarks)")}
+    for column, kind in (("source_url", "TEXT"), ("source_date", "TEXT"),
+                         ("swe_bench_verified", "REAL"), ("swe_atlas_qna", "REAL")):
+        if column not in columns:
+            conn.execute(f"ALTER TABLE catalog_benchmarks ADD COLUMN {column} {kind}")
+    model_columns = {r[1] for r in conn.execute("PRAGMA table_info(catalog_models)")}
+    if "benchmark_only" not in model_columns:
+        conn.execute("ALTER TABLE catalog_models ADD COLUMN benchmark_only INTEGER NOT NULL DEFAULT 0")
+    info = list(conn.execute("PRAGMA table_info(catalog_benchmarks)"))
+    nullable = {"aa_intelligence", "verified_tok_per_s", "cost_per_task_usd"}
+    if any(r[3] and r[1] in nullable for r in info):
+        sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='catalog_benchmarks'").fetchone()[0]
+        for column in nullable:
+            sql = sql.replace(column + " REAL NOT NULL", column + " REAL")
+        conn.execute("ALTER TABLE catalog_benchmarks RENAME TO catalog_benchmarks_legacy")
+        conn.execute(sql)
+        names = ", ".join('"' + r[1] + '"' for r in info)
+        conn.execute(f"INSERT INTO catalog_benchmarks ({names}) SELECT {names} FROM catalog_benchmarks_legacy")
+        conn.execute("DROP TABLE catalog_benchmarks_legacy")
+
+
+def backfill_provenance(conn, seeds):
+    """Refresh exact old seeds (including PR self-citations), never operator edits."""
+    conn.execute("UPDATE catalog_models SET upstream_id='muse-spark-1.3-contributor',parameter_effort='max' "
+                 "WHERE model_id='opencode-go/muse-spark-1.3-contributor' "
+                 "AND upstream_id='muse-spark-1.3' AND parameter_effort='xhigh'")
+    snapshot = snapshot_data()
+    previous = {model: evidence["metrics"] for model, evidence in snapshot["legacy"].items()}
+    for seed in seeds:
+        raw = conn.execute("SELECT * FROM catalog_benchmarks WHERE model_id=?", (seed["model_id"],)).fetchone()
+        if raw is None:
+            continue
+        row = dict(raw)
+        legacy = previous.get(seed["model_id"])
+        # Fingerprints retain upgrade recognition without keeping misleading URLs
+        # in a second set of source-looking records. Extra operator fields change it.
+        normalized = {key: float(value) if type(value) in (int, float) else value
+                      for key, value in row.items() if value is not None}
+        fingerprint = hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+        legacy_provenance = (row["source_url"] is None and row["source_date"] is None
+                             or "/git/blobs/" in (row["source_url"] or ""))
+        if (legacy and legacy_provenance and all(row[key] == value for key, value in legacy.items())
+                and all(value is None for key, value in row.items()
+                        if key not in legacy and key not in {"source_url", "source_date"})):
+            fields = {key: seed.get(key) for key in row if key != "model_id"}
+        elif fingerprint == snapshot["prior_pr"].get(seed["model_id"]):
+            fields = {key: seed.get(key) for key in row if key != "model_id"}
+        elif row["source_url"] is None and row["source_date"] is None and all(
+                row[key] == value for key, value in seed.items() if key not in {"source_url", "source_date"}):
+            fields = {key: seed[key] for key in ("source_url", "source_date")}
+        else:
+            continue
+        assignments = ", ".join(key + "=?" for key in fields)
+        conn.execute(f"UPDATE catalog_benchmarks SET {assignments} WHERE model_id=?",
+                     (*fields.values(), seed["model_id"]))
+
+
+SEED_BENCHMARKS = published_rows()
 # The 4 Role Routes
 SEED_ROUTES: list[dict[str, Any]] = [
     {

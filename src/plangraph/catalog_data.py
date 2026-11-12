@@ -4,10 +4,21 @@ Canonical 22-model SEED_MODELS table (Artificial Analysis v4.3.2), shared by the
 spawner catalog and the review gateway. Imports nothing from plangraph.spawner.
 """
 
+import json
+from pathlib import Path
 from typing import Any
-
 from plangraph.registry_columns import tag_seed_rows
-from plangraph.routing_support.catalog_benchmarks import model_rows
+
+
+def model_rows(rows):
+    """Catalog-only identities never grant automatic resolver admission."""
+    path = Path(__file__).parent / "routing_support/catalog_benchmark_models.json"
+    by_id = {row["model_id"]: row for row in rows}
+    for row in json.loads(path.read_text(encoding="utf-8")):
+        if row["model_id"] in by_id:
+            raise ValueError("duplicate benchmark catalog identity: " + row["model_id"])
+        by_id[row["model_id"]] = dict(row, benchmark_only=1)
+    return list(by_id.values())
 
 # Historical identities plus exact served effort variants (D-5173).
 SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
@@ -38,8 +49,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "gemini-4-argon",
         "family": "gemini",
         "parameter_effort": "high",
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 1000000,
         "max_output_tokens": 65536,
         "price_cliff_tokens": None,
@@ -80,8 +90,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "gpt-6-astra",
         "family": "gpt",
         "parameter_effort": "max",
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 400000,
         "max_output_tokens": 128000,
         "price_cliff_tokens": None,
@@ -122,8 +131,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "gpt-6-sol",
         "family": "gpt",
         "parameter_effort": "max",
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 400000,
         "max_output_tokens": 128000,
         "price_cliff_tokens": None,
@@ -143,8 +151,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "gpt-6-sol",
         "family": "gpt",
         "parameter_effort": "xhigh",
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 400000,
         "max_output_tokens": 128000,
         "price_cliff_tokens": None,
@@ -164,8 +171,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "gpt-6-sol",
         "family": "gpt",
         "parameter_effort": "high",
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 400000,
         "max_output_tokens": 128000,
         "price_cliff_tokens": None,
@@ -182,11 +188,10 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
     {
         "model_id": "opencode-go/muse-spark-1.3-contributor",
         "provider_id": "opencode-go",
-        "upstream_id": "muse-spark-1.3",
+        "upstream_id": "muse-spark-1.3-contributor",
         "family": "muse",
-        "parameter_effort": "xhigh",
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "parameter_effort": "max",
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 200000,
         "max_output_tokens": 64000,
         "price_cliff_tokens": None,
@@ -206,8 +211,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "gpt-6-sol",
         "family": "gpt",
         "parameter_effort": "medium",
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 400000,
         "max_output_tokens": 128000,
         "price_cliff_tokens": None,
@@ -248,8 +252,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "mimo-v2.6-pro",
         "family": "mimo",
         "parameter_effort": None,
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 1000000,
         "max_output_tokens": 65536,
         "price_cliff_tokens": None,
@@ -269,8 +272,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "qwen3.8-max",
         "family": "qwen",
         "parameter_effort": None,
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 1000000,
         "max_output_tokens": 65536,
         "price_cliff_tokens": None,
@@ -290,8 +292,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "deepseek-v4.1-flash",
         "family": "deepseek",
         "parameter_effort": None,
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 128000,
         "max_output_tokens": 64000,
         "price_cliff_tokens": None,
@@ -311,8 +312,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "deepseek-v4-flash-max",
         "family": "deepseek",
         "parameter_effort": None,
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 128000,
         "max_output_tokens": 64000,
         "price_cliff_tokens": None,
@@ -332,8 +332,7 @@ SEED_MODELS: list[dict[str, Any]] = model_rows(tag_seed_rows([
         "upstream_id": "glm-5.2",
         "family": "glm",
         "parameter_effort": None,
-        "max_safe_effort": None,
-        "effort_warning": None,
+        "max_safe_effort": None, "effort_warning": None,
         "context_tokens": 200000,
         "max_output_tokens": 64000,
         "price_cliff_tokens": None,

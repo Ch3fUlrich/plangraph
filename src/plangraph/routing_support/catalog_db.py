@@ -15,9 +15,9 @@ import sys
 from typing import Any, Sequence
 
 from plangraph import registry_columns
-from .catalog_benchmarks import backfill_provenance, migrate as migrate_benchmarks
 from .catalog_seed import (SEED_BENCHMARKS, SEED_CLIENTS, SEED_MODELS, SEED_PROVIDERS,
-                           SEED_QUOTA_POOLS, SEED_ROUTE_LEGS, SEED_ROUTES, TIER_RUNG)
+                           SEED_QUOTA_POOLS, SEED_ROUTE_LEGS, SEED_ROUTES, TIER_RUNG,
+                           backfill_provenance, migrate as migrate_benchmarks)
 
 def default_db_path() -> Path:
     """Catalog DB path, resolved at call time so PLANGRAPH_CATALOG_DB wins (D3)."""
@@ -122,7 +122,7 @@ class CatalogDB:
             b.coding_index,
             b.agentic_index,
             b.terminal_bench,
-            b.deepswe, b.swe_bench_verified,
+            b.deepswe, b.swe_bench_verified, b.swe_atlas_qna,
             b.frontier_code,
             b.scicode,
             b.cyberbench,
@@ -204,7 +204,7 @@ class CatalogDB:
             b.coding_index,
             b.agentic_index,
             b.terminal_bench,
-            b.deepswe, b.swe_bench_verified,
+            b.deepswe, b.swe_bench_verified, b.swe_atlas_qna,
             b.frontier_code,
             b.scicode,
             b.cyberbench,
@@ -301,7 +301,7 @@ class CatalogDB:
             b.coding_index,
             b.agentic_index,
             b.terminal_bench,
-            b.deepswe, b.swe_bench_verified,
+            b.deepswe, b.swe_bench_verified, b.swe_atlas_qna,
             b.frontier_code,
             b.scicode,
             b.cyberbench,

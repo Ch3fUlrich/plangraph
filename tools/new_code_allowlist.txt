@@ -22,8 +22,6 @@ src/plangraph/keeper/crit_path_stall.py | lane started before the gate (D-5062, 
 src/plangraph/keeper/run_records.py | Python area unblock (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
 src/plangraph/keeper/store_decision_close.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
 src/plangraph/routing_support/review_mode.py | lane started before the gate (D-5062, rule 9.14), retired by REVIEW-HARNESS-RUST
-src/plangraph/routing_support/catalog_benchmarks.py | D-5173 rule 9.14: existing Python catalog schema/data owner; no Rust crate owns it
-tests/test_bench_rows_complete.py | D-5173 rule 9.14: Python catalog coverage regression
 src/plangraph/spawner/host_ready_source.py | lane started before the gate (D-5062, rule 9.14), retired by SPAWNER-RUST-PORT
 tools/crit_path_stall.py | CI/tool helper (D-5062, rule 9.14), tools exception
 tools/judge_prompt.py | CI/tool helper (D-5062, rule 9.14), tools exception

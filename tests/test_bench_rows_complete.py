@@ -13,7 +13,7 @@ from plangraph.catalog_data import SEED_MODELS
 from plangraph.planner import legs
 from plangraph.planner.benchmarks import benchmark_rows_from_db
 from plangraph.routing_support.catalog_db import CatalogDB
-from plangraph.routing_support import catalog_benchmarks
+from plangraph.routing_support import catalog_seed as catalog_benchmarks
 from plangraph.spawner.bench_entry import BENCHMARK_MODEL_ALIASES, LEG_BENCHMARK_MODEL
 
 # No composite or component evaluation for these exact served variants.
@@ -22,8 +22,9 @@ UNMEASURED = {
 }
 SOURCES_PATH = Path(catalog_benchmarks.__file__).with_name("catalog_benchmark_sources.json")
 SOURCES = json.loads(SOURCES_PATH.read_text(encoding="utf-8"))
-UNVERIFIABLE = {"claude-haiku-5-5", "omniroute/gc/grok-4.7", "opencode/big-pickle",
-                "claude-opus-4-6-thinking", "omniroute/deepseek-flash"}
+UNVERIFIABLE = {"omniroute/gc/grok-4.7", "claude-opus-4-6-thinking", "omniroute/deepseek-flash",
+                "muse-amber", "claude/claude-haiku-4-5", "omniroute/cx-gpt-6-luna",
+                "openrouter/free", "omniroute/deepseek-direct-flash"}
 SLUGS = {
     "agy/gemini-3.8-flash-tiered-high": "gemini-3-8-flash",
     "gemini-3.8-flash-high": "gemini-3-8-flash",
@@ -35,31 +36,34 @@ SLUGS = {
 def assert_provenance(row):
     assert date.fromisoformat(row["source_date"]).isoformat() == row["source_date"]
     model = row["model_id"]
-    if model in SOURCES["legacy"]:
-        historical = SOURCES["legacy"][model]
-        provenance = historical["provenance"]
-        assert row["source_url"] == catalog_benchmarks.blob_url(provenance["source_oid"], provenance["source_line"])
-        assert row["source_date"] == historical["provenance"]["source_date"]
-        assert row["source_url"].startswith("https://api.github.com/repositories/1407069640/git/blobs/")
-        assert urlsplit(row["source_url"]).fragment.startswith("L")
-        for key, value in historical["metrics"].items():
-            if key != "updated_at":
-                assert row[key] == value, (model, key)
-        return
     evidence = SOURCES["published"][model]
     assert row["source_url"] == evidence["source_url"]
-    assert row["source_date"] == evidence["source_date"] == SOURCES["observed_on"]
+    assert row["source_date"] == evidence["source_date"]
+    assert row["source_date"] == ("2026-08-11" if model == "opencode/big-pickle" else SOURCES["observed_on"])
     for key, value in evidence["metrics"].items():
         assert row[key] == value, (model, key)
+    if model in UNVERIFIABLE:
+        assert row["source_url"] is None  # Never disguise a sibling URL as measurement evidence.
+        assert row["benchmark_source"].startswith("UNMEASURED:")
+        assert evidence["excerpt"].startswith("UNMEASURED:")
+        assert all(row[k] is None for k in ("aa_intelligence", "scicode", "deepswe"))
+        return
+    assert urlsplit(row["source_url"]).scheme == "https"
+    assert "/git/blobs/" not in row["source_url"]
+    if model == "opencode/big-pickle":
+        assert row["source_url"] == "https://github.com/PhillipChaffee/big-pickle-swe-atlas"
+        assert row["swe_atlas_qna"] == 50.81 and row["swe_bench_verified"] is None
+        assert "Self-reported single trial" in evidence["excerpt"] and "63/124" in evidence["excerpt"]
+        return
+    if model == "claude-haiku-5-5":
+        assert row["source_url"] == "https://opencode.ai/data/anthropic/claude-haiku-5-5.json"
+        assert row["terminal_bench"] == 39.2 and row["aa_intelligence"] is None
+        assert '"version": "4.0"' in evidence["excerpt"]
+        return
     if model == "gpt-oss-120b-medium":
         assert row["source_url"] == "https://arxiv.org/html/2508.10925v1#S2.T3"
         assert row["swe_bench_verified"] == 52.6 and row["deepswe"] is None
         assert "47.9 / 52.6 / 62.4" in evidence["excerpt"]
-        return
-    if model in UNVERIFIABLE:
-        assert row["benchmark_source"].startswith("UNMEASURED:")
-        assert evidence["excerpt"].startswith("UNMEASURED:")
-        assert all(row[k] is None for k in ("aa_intelligence", "scicode", "deepswe"))
         return
     slug = model.rsplit("/", 1)[-1].removeprefix("cx-").replace(".", "-")
     effort = next((e for e in legs.CX_EFFORTS if slug.endswith("-" + e)), None)
@@ -89,6 +93,12 @@ def assert_provenance(row):
 
 
 def test_raw_rows_match_frozen_upstream_sources():
+    from plangraph.routing_support.catalog_seed import SEED_BENCHMARKS
+    seeded = {row["model_id"]: row for row in SEED_BENCHMARKS}
+    for model, evidence in SOURCES["published"].items():
+        assert model in seeded, model
+        for key, value in evidence["metrics"].items():
+            assert seeded[model].get(key) == value, (model, key)
     path = Path(catalog_benchmarks.__file__).with_name("catalog_benchmarks.json")
     for row in json.loads(path.read_text(encoding="utf-8")):
         evidence = SOURCES["published"][row["model_id"]]
@@ -121,6 +131,7 @@ def test_bench_rows_complete(tmp_path):
             model = LEG_BENCHMARK_MODEL.get(leg.id, leg.model)
             assert model in rows, (leg.id, model)
             assert_provenance(rows[model])
+        assert "muse-amber" in models and "muse-amber" in rows
         for seed in SEED_MODELS:
             model = seed["model_id"]
             if model in UNMEASURED:
@@ -134,7 +145,7 @@ def test_bench_rows_complete(tmp_path):
         for row in rows.values():
             assert_provenance(row)
             assert (any(row.get(key) is not None for key in
-                        ("aa_intelligence", "scicode", "deepswe", "swe_bench_verified"))
+                        ("aa_intelligence", "scicode", "deepswe", "swe_bench_verified", "swe_atlas_qna", "terminal_bench"))
                     or row["model_id"] in UNVERIFIABLE
                     and row["benchmark_source"].startswith("UNMEASURED:"))
     loaded, errors = benchmark_rows_from_db(path)
@@ -205,15 +216,15 @@ def test_exact_effort_scores_and_components(tmp_path):
             assert row["aa_intelligence"] == score
             assert row["available"] == 1 and row["benchmark_only"] == 1
         muse = db.get_model("opencode-go/muse-spark-1.3-contributor")
-        assert muse["aa_intelligence"] == 45 and muse["verified_tok_per_s"] == 287
-        assert muse["cost_per_task_usd"] == 1.37
+        assert muse["deepswe"] == 75.4 and muse["aa_intelligence"] is None
+        assert muse["verified_tok_per_s"] is None and muse["cost_per_task_usd"] is None
     ranked = benchmark_options(False, str(path))["benchmark"]
-    assert muse["model_id"] in ranked
+    assert muse["model_id"] not in ranked  # Component-only evidence is not a utility input.
     assert "gemini-3.8-flash-low" not in ranked  # published score, unknown task cost
 
 
 def test_migrate_original_not_null_schema_without_data_loss(tmp_path):
-    from plangraph.routing_support.catalog_benchmarks import migrate
+    from plangraph.routing_support.catalog_seed import migrate
     from plangraph.routing_support.catalog_db import SCHEMA_PATH
     with CatalogDB(tmp_path / "original.db") as db:
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
@@ -233,9 +244,10 @@ def test_query_catalog_tool_returns_provenance(tmp_path, monkeypatch):
     import asyncio
 
     from plangraph.spawner import mcp
+    from plangraph.routing_support import resolver
     with CatalogDB(tmp_path / "mcp.db") as db:
         db.init_and_seed()
-        monkeypatch.setattr(mcp, "get_catalog_models", lambda **kw: db.list_models())
+        monkeypatch.setattr(resolver, "_get_default_catalog_db", lambda: db)
         server = mcp.MCPSpawnerServer(state=tmp_path)
         result = asyncio.run(server.call_tool("plangraph_agent_query_catalog", {}))
         assert result["count"]
@@ -254,7 +266,7 @@ def test_query_catalog_tool_returns_provenance(tmp_path, monkeypatch):
     ("gemini-3.8-flash-high", {"source_date": "2026-11-11"}),
     ("omniroute/cx-gpt-6.1-sol-medium", {"model_id": "omniroute/cx-gpt-6.1-sol"}),
     ("console-meta/muse-spark-1.3-contributor", {"scicode": 59.722222}),
-    ("deepseek/deepseek-v4-flash-max", {"source_url": "https://artificialanalysis.ai/models/deepseek-v4-flash"}),
+    ("deepseek/deepseek-v4-flash-max", {"source_url": "https://artificialanalysis.ai/models/deepseek-v4-1-flash"}),
 ])
 def test_provenance_rejects_live_mismatched_or_changed_evidence(tmp_path, model, change):
     with CatalogDB(tmp_path / "invalid.db") as db:
@@ -279,21 +291,26 @@ assert not any(m == 'plangraph.planner' or m.startswith('plangraph.planner.') fo
 
 
 def test_benchmark_refresh_preserves_main_scores_and_routing(tmp_path):
-    """Adding effort coverage must not silently retune main's reviewed routes."""
+    """Refresh exact main seeds, preserving routes and operator measurements."""
+    from plangraph.routing_support.catalog_seed import SEED_ROUTE_LEGS
     with CatalogDB(tmp_path / "main-scores.db") as db:
         db.init_and_seed()
+        routes = [dict(row) for row in db.conn.execute("SELECT * FROM catalog_route_legs")]
+        assert routes == SEED_ROUTE_LEGS
         for model, evidence in SOURCES["legacy"].items():
-            actual = db.get_model(model)
-            for key, value in evidence["metrics"].items():
-                if key != "updated_at":
-                    assert actual[key] == value, (model, key)
+            db.conn.execute("DELETE FROM catalog_benchmarks WHERE model_id=?", (model,))
+            db._insert_records("catalog_benchmarks", [evidence["metrics"]])
+        db.init_and_seed()
+        for model in SOURCES["legacy"]:
+            assert_provenance(db.get_model(model))
+        assert [dict(row) for row in db.conn.execute("SELECT * FROM catalog_route_legs")] == routes
         for row in db.list_models(active_only=True):
             assert row["model_id"] in SOURCES["legacy"] or row["benchmark_only"], row["model_id"]
 
 
 def test_published_rows_cite_the_actual_upstream():
     rows = catalog_benchmarks.published_rows()
-    assert not ({row["model_id"] for row in rows} & SOURCES["legacy"].keys())
+    assert SOURCES["legacy"].keys() <= {row["model_id"] for row in rows}
     for row in rows:
         assert row["source_url"] == SOURCES["published"][row["model_id"]]["source_url"]
 
@@ -340,10 +357,18 @@ def test_explicit_catalog_providers_and_reader_aliases(tmp_path):
     with CatalogDB(path) as db:
         db.init_and_seed()
         assert "omniroute/cx-gpt-6.1-sol" not in SOURCES["published"]
-        assert "omniroute/cx-gpt-6-luna" not in SOURCES["published"]
+        assert SOURCES["published"]["omniroute/cx-gpt-6-luna"]["source_url"] is None
         assert "gemini-3.8-flash" not in SOURCES["published"]
         rows = benchmark_options(False, str(path))["benchmark"]
+        for model, row in benchmark_rows_from_db(path)[0].items():
+            if row.get("aa_intelligence") is not None and row.get("cost_per_task_usd") is not None:
+                assert rows[model]["model_id"] == model
+                assert rows[model]["aa_intelligence"] == row["aa_intelligence"]
         for alias, canonical in BENCHMARK_MODEL_ALIASES.items():
+            if alias == "omniroute/cx-gpt-6-luna":
+                assert alias not in rows  # Its unmeasured DB identity must not become medium.
+                assert rows["cx-gpt-6-luna"] is rows[canonical]
+                continue
             assert rows[alias] is rows[canonical]
             assert rows[alias]["model_id"] == canonical
             assert_provenance(rows[alias])

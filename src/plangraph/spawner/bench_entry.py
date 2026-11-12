@@ -36,10 +36,12 @@ def benchmark_options(require_bench=False, bench_db=None):
     rows = None
     if paths:
         rows = {}
+        measured_ids = set()
         for path in paths:
             found, errors = benchmark_rows_from_db(path)
             if errors:
                 raise BenchDataError('; '.join(errors))
+            measured_ids.update(found)
             # Old benchmark tables may omit cost entirely; main supports those.
             # An explicitly unknown score/cost is evidence, not a utility input.
             rows.update({key: row for key, row in found.items()
@@ -49,7 +51,7 @@ def benchmark_options(require_bench=False, bench_db=None):
         # (rows.get(leg.model, rows.get(leg.id))) reaches them.
         for leg_id, model_id in (LEG_BENCHMARK_MODEL | BENCHMARK_MODEL_ALIASES).items():
             row = rows.get(model_id)
-            if row is not None and (leg_id not in rows or leg_id in BENCHMARK_MODEL_ALIASES):
+            if row is not None and leg_id not in rows and leg_id not in measured_ids:
                 rows[leg_id] = row
     return dict(benchmark=rows, require_bench=bool(require_bench) or
                 os.environ.get('PLANGRAPH_REQUIRE_BENCH') == '1')
