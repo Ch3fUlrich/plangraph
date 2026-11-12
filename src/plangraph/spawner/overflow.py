@@ -109,7 +109,7 @@ def memory_refusal(free_mb, reservation_mb, floor_mb):
 
 
 def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
-            remote_first=False, local_refusal=None):
+            remote_first=False, local_refusal=None, host_order=()):
     """Select from config-enriched readiness records; age is computed on read."""
     local_reason = local_refusal or memory_refusal(local_mem_mb, role_mb, floor_mb)
     if not local_reason and not remote_first:
@@ -140,6 +140,8 @@ def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
         if reason:
             refused.append(f'{name}: {reason}')
         else:
+            if remote_first:
+                index = host_order.index(name) if name in host_order else len(host_order)
             candidates.append((-(row['mem_available_mb'] - row['floor_mb']), index, name))
     if candidates:
         return Decision(min(candidates)[2], 'remote_most_free_ram' if remote_first else local_reason)
@@ -210,10 +212,13 @@ def available_memory_mb():
 
 
 def swap_used_pct():
-    values = {line.split(':')[0]: int(line.split()[1])
-              for line in Path('/proc/meminfo').read_text().splitlines()
-              if line.startswith(('SwapTotal:', 'SwapFree:'))}
-    total, free = values['SwapTotal'], values['SwapFree']
+    try:
+        values = {line.split(':')[0]: int(line.split()[1])
+                  for line in Path('/proc/meminfo').read_text().splitlines()
+                  if line.startswith(('SwapTotal:', 'SwapFree:'))}
+        total, free = values['SwapTotal'], values['SwapFree']
+    except (KeyError, IndexError, ValueError) as exc:
+        raise ValueError('swap readings missing or malformed') from exc
     if not 0 <= free <= total:
         raise ValueError('invalid swap readings')
     return 100 * (total - free) / total if total else 0
@@ -222,7 +227,11 @@ def swap_used_pct():
 def local_health_refusal(config, memory):
     if memory < config.get('local_min_available_mb', 4096):
         return 'local_min_available_mb'
-    if swap_used_pct() > config.get('local_max_swap_used_pct', 90):
+    try:
+        swap = swap_used_pct()
+    except (OSError, ValueError):
+        return 'local_swap_unavailable'
+    if swap > config.get('local_max_swap_used_pct', 90):
         return 'local_max_swap_used_pct'
     return None
 

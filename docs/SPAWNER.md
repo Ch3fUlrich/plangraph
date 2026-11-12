@@ -87,8 +87,11 @@ Per-host `orchestration_only: true` in `hosts.json` (or the local overflow hosts
 makes implement/review/research remote-first: rank MemAvailable minus floor, then config order; no run-count caps.
 Local fallback requires RAM admission, `local_min_available_mb` (overflow config, default 4096) and
 `local_max_swap_used_pct` (default 90); below/above respectively refuses with that name, exit 2, never queues.
-Route/spawn/refusal records carry `placement: {host, reason, free_mb}`: sampled MemAvailable and
-`remote_most_free_ram`, `local_fallback_no_remote`, or refusal; see [placement rules](placement-rules.md).
+Spawn/refusal records carry `placement: {host, reason, free_mb}`: sampled MemAvailable and
+`remote_most_free_ram`, `local_fallback_no_remote`, `local_benchmark_database`, or refusal.
+Route planning never samples admission resources: absent a supplied placement snapshot,
+it reports `placement_not_evaluated` with null host/free RAM. Missing or unreadable swap
+readings refuse local fallback as `local_swap_unavailable`; see [placement rules](placement-rules.md).
 
 SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel
 lines around the remote spawn JSON. Only the single bracketed JSON receipt is

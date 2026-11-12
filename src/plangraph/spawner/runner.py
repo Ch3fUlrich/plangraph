@@ -1035,7 +1035,7 @@ def spawn_service(*args, **kwargs):
             plan = _plan if _plan is not None else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
             from .resolver import plan_for_launch_async
             if hasattr(plan, '__dataclass_fields__'):
-                plan = await plan_for_launch_async(plan, dry_run=dry_run)
+                plan = await plan_for_launch_async(replace(plan, placement=_placement or plan.placement), dry_run=dry_run)
             run_id = 'run-' + uuid.uuid4().hex
             import hashlib
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
@@ -1167,7 +1167,7 @@ def spawn_service(*args, **kwargs):
                             return
                         current = plan if unavailable else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         if hasattr(current, '__dataclass_fields__'):
-                            current = restrict(await plan_for_launch_async(current, dry_run=dry_run))
+                            current = restrict(await plan_for_launch_async(replace(current, placement=_placement or current.placement), dry_run=dry_run))
                         for skipped in current.to_dict()['skipped']:
                             if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')) and skipped not in record.setdefault('skipped', []):
                                 record['skipped'].append(skipped)

@@ -33,11 +33,19 @@ MemAvailable (`local_min_available_mb`) or above the swap-used percentage
 (`local_max_swap_used_pct`); equality is healthy, and no configured swap is 0%.
 Registry role reservation/floor admission still applies. Refusals are explicit
 `status=refused`, exit 2, never queued; private repositories are never copied.
-Route previews and durable spawn/refusal records include
-`placement: {host, reason, free_mb}`. Reasons are `remote_most_free_ram`,
-`local_fallback_no_remote`, either threshold name, or a RAM refusal. `free_mb`
+Durable spawn/refusal records include `placement: {host, reason, free_mb}`.
+Reasons are `remote_most_free_ram`, `local_fallback_no_remote`, either threshold
+name, or a RAM refusal. A local-only benchmark database uses the distinct reason
+`local_benchmark_database`; it does not imply that healthy remotes are absent.
+Missing, malformed or unreadable swap readings refuse local fallback as
+`local_swap_unavailable`, without preventing an eligible remote launch. `free_mb`
 is the selected host's sampled MemAvailable, not its headroom. Remote launch
 failures exclude that target before trying the next target or local fallback.
+Planning is separate from admission: `plan_spawn` accepts an optional placement
+snapshot and always serializes the field, including error plans. Without a
+snapshot, plans and route previews explicitly report
+`{host: null, reason: "placement_not_evaluated", free_mb: null}`; `route()` never
+performs readiness/health probing or reads local memory/swap for placement.
 
 ## Operator view: local Rust rule source
 

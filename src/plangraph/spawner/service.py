@@ -121,9 +121,7 @@ class SpawnService(SeatSpawnMixin):
             from plangraph.planner.routing import SpawnRefused, explicit_only_skips
             if plan.error:
                 raise SpawnRefused(plan.error)
-            from .seat_spawn import admit
-            return replace(plan, skipped=type(plan.skipped)((*plan.skipped, *explicit_only_skips(role))),
-                           placement=admit(self, {'role': role, 'benchmark': benchmark}, card=card, preview=True))
+            return replace(plan, skipped=type(plan.skipped)((*plan.skipped, *explicit_only_skips(role))))
         except Exception as exc:
             self.save_refusal(exc, role)
             raise
@@ -180,7 +178,7 @@ class SpawnService(SeatSpawnMixin):
             child['ended'] = time.time()
             self._save(child)
 
-    def save_refusal(self, exc, role='implement', *, card=None, **extra):
+    def save_refusal(self, exc, role='implement', *, card=None, placement=None, **extra):
         """Persist pre-service refusals using the same record contract (``extra``: seat fields)."""
         from plangraph.planner.routing import SpawnRefused, BenchmarkError, BenchRequired
         record = dict(run_id='run-' + uuid.uuid4().hex, role=role,
@@ -190,6 +188,8 @@ class SpawnService(SeatSpawnMixin):
                       refusal=type(exc).__name__, error=str(exc),
                       legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
                       evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [], **extra)
+        if placement is not None:
+            record.update(placement=placement, host=placement['host'])
         try:
             annotate_item(record, card)
             self._save(record)
@@ -293,7 +293,7 @@ class SpawnService(SeatSpawnMixin):
         if plan.error or not plan.first_leg:
             raise SpawnRefused(plan.error or 'no eligible leg')
         from dataclasses import replace
-        plan = replace(plan, legs=witness_gate_legs(card, role, plan.legs))  # before run artifacts
+        plan = replace(plan, legs=witness_gate_legs(card, role, plan.legs), placement=_placement or plan.placement)  # before run artifacts
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or (role == 'review' and (model is not None or leg is not None)) else None, served_model=None,

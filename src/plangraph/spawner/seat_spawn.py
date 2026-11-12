@@ -44,7 +44,8 @@ def admit(service, options, *, card=None, preview=False):
     repo = Path(((card or {}).get('diff_ref') or {}).get('repo') or
                 getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
     public = str(repo) in [str(Path(p).expanduser().resolve()) for p in config.get('public_repos', [])]
-    if remote_first and options.get('benchmark') is not None:
+    benchmark_local = remote_first and options.get('benchmark') is not None
+    if benchmark_local:
         public = False  # A local-only database makes every remote ineligible.
     rows = overflow.ready_records(config, role)
     if remote_first:
@@ -62,7 +63,10 @@ def admit(service, options, *, card=None, preview=False):
             flags.append('--' + key.replace('_', '-'))
     while True:
         decision = overflow.decide(memory, role_mb, floor, rows, public,
-                                   remote_first=remote_first, local_refusal=health)
+                                   remote_first=remote_first, local_refusal=health,
+                                   host_order=tuple(config.get('hosts', {})))
+        if benchmark_local and decision.reason == 'local_fallback_no_remote':
+            decision = overflow.Decision(None, 'local_benchmark_database')
         if options.get('benchmark') is not None and decision.host is not None:
             decision = overflow.Decision(None, 'local benchmark database cannot be forwarded')
         placement = dict(host=decision.host or local, reason=decision.reason,
@@ -71,7 +75,7 @@ def admit(service, options, *, card=None, preview=False):
             return placement
         if remote_first:
             options['_placement'] = placement
-            if decision.host is None and decision.reason == 'local_fallback_no_remote':
+            if decision.host is None and decision.reason in ('local_fallback_no_remote', 'local_benchmark_database'):
                 return None
         if decision.host is None:
             record = {'run_id': 'run-' + uuid.uuid4().hex,
@@ -169,8 +173,8 @@ class SeatSpawnMixin:
                 kwargs['_placement'] = options['_placement']
             return await self._spawn(*args, **kwargs)
         except Exception as exc:
-            self.save_refusal(exc, kwargs.get('role', args[2] if len(args) > 2 else 'implement'),
-                              card=kwargs.get('card', args[0] if args else None),
+            self.save_refusal(exc, options.get('role', kwargs.get('role', args[2] if len(args) > 2 else 'implement')),
+                              card=options.get('card', kwargs.get('card', args[0] if args else None)),
                               **({'placement': options['_placement']} if options.get('_placement') else {}))
             raise
 
