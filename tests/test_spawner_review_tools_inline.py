@@ -91,6 +91,7 @@ def test_tools_invalid_diff_ref_refused(diff_ref):
     ('already-capped', 1, True), ('stderr-error', 2, True),
     ('zero-exit', 2, True), ('cancelled', 1, False),
     ('timeout', 1, False), ('retry-timeout', 2, False), ('deadline', 1, True),
+    ('provider-stop', 2, True),
 ])
 def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scenario, launches, terminal):
     """Use real spawn/render/monitor/record paths; only transport and witnesses are fake."""
@@ -130,6 +131,8 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
             runner.jobs[jid].events.append({'event': 'watchdog_timeout', 'rule': 'max'})
         if scenario == 'deadline':
             service._running_records[jid]['started'] -= 2000
+        if scenario == 'provider-stop':
+            runner.provider_responses[jid] = {'status': 429}
         if scenario == 'stderr-error':
             return b'', b'Error: output-limit: Response still truncated after two output token limit continuations'
         return (verdict if successful else exhausted).encode(), b''
@@ -191,5 +194,8 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
         assert record['status'] == 'failed' and record['exit_code'] != 0
     if scenario == 'cancelled':
         assert record['status'] == 'cancelled'
+    if scenario == 'non-review':
+        assert not any(e['event'].startswith(('opencode_step_finish', 'opencode_reasoning', 'reasoning_'))
+                       for e in record['events'])
     if scenario in ('timeout', 'retry-timeout'):
         assert record['status'] == 'timed_out' and record['reason'] == 'timeout'

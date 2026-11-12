@@ -7,7 +7,7 @@ from .env_redact import normalize
 def record_steps(job, stdout, stderr, env):
     """Retain diagnostic step usage before stdout becomes display text, not a witness."""
     from .exit_outcome import is_opencode
-    if not is_opencode(job):
+    if not is_opencode(job) or job.role != 'review':
         return
     steps, output_limit, saw_text = [], False, False
     for line in stdout.splitlines():

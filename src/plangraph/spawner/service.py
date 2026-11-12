@@ -351,7 +351,7 @@ class SpawnService(SeatSpawnMixin):
                         stdout_tail=record.get('stdout_tail', '') + job.stdout,
                         stderr_tail=record.get('stderr_tail', '') + job.stderr, events=record.get('events', []) + getattr(job, 'events', []))
                     self._save(record)
-                    if (not stop and not unavailable) or no_fallthrough or dry_run:
+                    if record.get('reason') == 'reasoning_output_limit' or (not stop and not unavailable) or no_fallthrough or dry_run:
                         if not dry_run:
                             await self._continue_writer(record, job.stdout)
                         break

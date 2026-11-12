@@ -1152,7 +1152,7 @@ def spawn_service(*args, **kwargs):
                             stdout_tail=record.get('stdout_tail', '') + job.stdout,
                             stderr_tail=record.get('stderr_tail', '') + job.stderr,
                             events=record.get('events', []) + getattr(job, 'events', []))
-                        if job.status == 'needs_input' or (not stop and not unavailable) or no_fallthrough or dry_run:
+                        if job.status == 'needs_input' or record.get('reason') == 'reasoning_output_limit' or (not stop and not unavailable) or no_fallthrough or dry_run:
                             if not dry_run and job.status != 'needs_input':
                                 await self._continue_writer(record, job.stdout)
                             return
