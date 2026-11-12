@@ -177,14 +177,14 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
         assert policy.skip_reason(by_id[leg_id], role) == reason
         if role == "implement":
             assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
-            assert reasons["opencode-glm-5.3-flash-free"].startswith("disabled: D-3605")
+            assert reasons["opencode-glm-5.3-flash-free"] == "off_family"
             assert plan.first_leg.id == 'openrouter-free'
             from plangraph.planner.routing import SpawnRefused
             from plangraph.spawner.service import SpawnService
-            if leg_id == "opencode-glm-5.3-flash-free":
-                with pytest.raises(SpawnRefused, match=r"leg disabled: .*D-3605"):
-                    asyncio.run(SpawnService(state=tmp_path).spawn(
-                        card=CARD, leg=leg_id, override_reason="policy regression", dry_run=True))
+            with pytest.raises(SpawnRefused, match=r"leg disabled: .*D-4196"):
+                asyncio.run(SpawnService(state=tmp_path).spawn(
+                    card=CARD, leg=leg_id, override_reason="policy regression", dry_run=True))
+            assert not (tmp_path / "spawn-overrides.jsonl").exists()
 
 
 def test_route_skips_paused_harness_per_role():
@@ -208,8 +208,8 @@ def test_route_skips_paused_harness_per_role():
     assert paused_ids.isdisjoint({leg.id for leg in paused.legs})
     reasons = {s["leg"]: s["reason"] for s in paused.skipped}
     assert {leg_id: reasons[leg_id] for leg_id in paused_ids} == {
-        leg_id: "disabled: D-3605 operator: glm not acceptable" if leg_id == "opencode-glm-5.3-flash-free"
-        else "off_family" if leg_id == "omniroute-muse-spark" else "paused_harness" for leg_id in paused_ids}
+        leg_id: "off_family" if leg_id == "omniroute-muse-spark"
+        else "paused_harness" for leg_id in paused_ids}
     assert [leg.id for leg in paused.legs] == ["agy-gemini-3.8-flash", "agy-gemini-4-argon"]
 
 
@@ -217,7 +217,7 @@ def test_explicit_policy_argument_wins():
     open_policy = RoutePolicy(banned_families=(), off_families=(), paused_harnesses={})
     plan = plan_spawn(CARD, role="review", writer_families=("mimo",), policy=open_policy)
     assert "opencode-deepseek-v4.1-flash-free" in [leg.id for leg in plan.legs]
-    assert {s['leg']: s['reason'] for s in plan.skipped}["opencode-glm-5.3-flash-free"].startswith("disabled: D-3605")
+    assert "opencode-glm-5.3-flash-free" in [leg.id for leg in plan.legs]
 
 
 # --- 4. seats per writer part --------------------------------------------------

@@ -81,7 +81,7 @@ def test_absent_explicit_operator_order():
 
 @pytest.mark.parametrize("data", [None, rows(WRITERS[1:])])
 def test_strict_names_missing(data):
-    with pytest.raises(routing.SpawnRefused, match="benchmark rows missing: .*opencode-deepseek-v4.1-flash-free"):
+    with pytest.raises(routing.SpawnRefused, match="benchmark rows missing: .*openrouter-free"):
         plan(benchmark=data, strict=True)
 
 

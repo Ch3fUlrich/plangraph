@@ -4,6 +4,8 @@ import re
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
+
 from plangraph.planner.legs import DEFAULT_LEGS, load_legs
 from plangraph.planner.routing import (SpawnRefused, hand_picked, plan_spawn,
                                       next_leg_after_provider_stop)

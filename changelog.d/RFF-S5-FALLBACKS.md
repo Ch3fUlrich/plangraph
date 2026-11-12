@@ -1,2 +1,8 @@
 Restore catalog implement eligibility and measured implement ranking so unavailable legs fall back automatically without a writer pin. Cover limited and failed legs for implement, review, and orchestrate.
 Consolidated S2-S5 follow-up: retain free-first cost tiers and policy-safe fallbacks for every role while applying measured implementation utility. Pin-era assertion changes are recorded in docs/rff-s2-5-assertions.md (D-5092/D-5113/D-5114); no tests were deleted or skipped.
+
+Exact-order tests pin catalog rows and isolate benchmark paths; each plan shares one catalog snapshot for tier projection and admission. Personal Argon and Go Argon keep distinct provider keys so Go quota cannot poison personal credentials. The paid direct DeepSeek identity remains unchanged; roles, privacy, availability, and permanent disables still govern eligibility before utility.
+
+Historical S5 probes recorded Sonnet passing (7.36s), Opus passing (9.36s after correcting its model identity), gateway DeepSeek/Muse failing (exit 1), and personal Argon/Go DeepSeek failing (exit 7); limited Go Argon was skipped. Earlier host route listings preceded restoration of main's Zen disables and are not the current contract. Successful personal service after Go 429 and observation of subsequent production spawns remain live operational follow-ups, not invented benchmark evidence or claims of validation here.
+
+One fragment per slice replaces duplicate casing/spelling. A tracked-tree regression refuses case-only duplicate paths for portable Windows/macOS checkouts. Fallthrough tests now pin manual-policy skip reasons as well as routed spare reasons.

@@ -97,7 +97,7 @@ def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
     explicit = {s['leg'] for s in routed.skipped if s['reason'] == 'explicit_only'}
     assert explicit == set(listed)
     if role == 'implement':
-        assert routed.legs[0].id == 'opencode-deepseek-v4.1-flash-free'
+        assert routed.legs[0].id == 'openrouter-free'
 
 
 @pytest.mark.parametrize('role', ['review', 'implement'])

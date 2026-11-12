@@ -179,8 +179,7 @@ class LegStateStore:
         if not leg or not caller or not reason:
             raise LegStateError('requires leg, reason and caller')
         now = time.time() if now is None else now
-        # _down_seconds is capped at RESET_CAP_S (D-3685): the booked down
-        # window never parks a leg past the 24 h reset cap.
+        # D-3685: _down_seconds caps every booked down window at 24 h.
         down_s = _down_seconds(down_s)
         with self._connect() as db:
             db.execute('INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)',
@@ -209,8 +208,7 @@ class LegStateStore:
     def record_harness_limit(self, leg, line, caller, now=None, account=None, combo=None, down_s=None):
         if not leg or not caller or not line.strip():
             raise LegStateError('requires leg, quota line and caller')
-        # An explicitly elapsed cooldown is not missing reset information:
-        # neither the fallback booking nor a reset-less limit row is valid.
+        # An elapsed cooldown permits neither fallback booking nor a reset-less row.
         if _elapsed_cooldown({}, line):
             return
         now = time.time() if now is None else now
@@ -226,12 +224,9 @@ class LegStateStore:
 
     def leg_status(self, leg, now=None, account=None, combo=None):
         now = time.time() if now is None else now
-        if not self.path.exists():
+        if not self.path.exists() or self.path.stat().st_size == 0:
             return {"state": "ok", "evidence": None}
-        if self.path.stat().st_size == 0:
-            return {"state": "ok", "evidence": None}
-        # Read-only: querying state never creates a database or mutates expiry.
-        try:
+        try:  # Read-only: no database creation or expiry mutation.
             with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
                 db.row_factory = sqlite3.Row
                 rows = db.execute(
@@ -242,8 +237,9 @@ class LegStateStore:
                     return {"state": "ok", "evidence": None}
                 evidence = {k: row[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                 evidence["event_id"] = row["id"]
-                if now >= row['ts'] + 21600: return {'state': 'reprobe', 'evidence': evidence}
                 if row['source'] == 'liveness-probe':
+                    if row['status'] == 503 and now >= row['ts'] + 21600:
+                        return {'state': 'reprobe', 'evidence': evidence}
                     # Two consecutive probe failures before down (M11): one
                     # failure is a reprobe hint, never proof the leg is gone.
                     streak = 1
@@ -265,6 +261,9 @@ class LegStateStore:
                     reset = row["reset_at"]
                     down = streak >= 2 and reset is not None and now < reset
                     return {'state': 'down' if down else 'reprobe', 'evidence': evidence}
+                if (row['source'] in ('provider-response', 'harness-stderr')
+                        and row['status'] in (429, 402) and now >= row['ts'] + 21600):
+                    return {'state': 'reprobe', 'evidence': evidence}
                 reset = row["reset_at"]
                 state = (("limited" if now < reset else "ok") if reset is not None
                          else ("limited" if now < row["ts"] + REPROBE_MINUTES * 60 else "reprobe"))
@@ -286,6 +285,8 @@ class LegStateStore:
             return None
         ok = row['source'] == 'provider-probe'
         return dict(ok=ok, reason='' if ok else (row['body_excerpt'] or 'probe failed'), ts=row['ts'])
+
+
 def _default_store():
     return LegStateStore(Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "plangraph" / "leg-state.sqlite")
 

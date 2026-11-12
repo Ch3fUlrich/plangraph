@@ -169,15 +169,11 @@ def test_disabled_and_fallback_routes():
              for role in ('review', 'implement')]
     for leg in DEFAULT_LEGS:
         if leg.model.startswith('opencode/') and leg.model.endswith('-free'):
-            if leg.id == 'opencode-deepseek-v4.1-flash-free':
-                assert leg.disabled is None
-                assert all(leg.id in [l.id for l in plan.legs] for plan in plans)
-                continue
-            assert leg.disabled == 'D-3605 operator: glm not acceptable'
+            assert leg.disabled == 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'
             for plan in plans:
                 assert leg.id not in [l.id for l in plan.legs]
                 if 'implement' in leg.roles or plan is plans[0]:
-                    assert any(s['leg'] == leg.id and 'D-3605' in s['reason'] for s in plan.skipped)
+                    assert any(s['leg'] == leg.id and 'D-4196' in s['reason'] for s in plan.skipped)
                 else:
                     assert not any(s['leg'] == leg.id for s in plan.skipped)
     assert 'omniroute-gemini-3.8-flash' not in [l.id for l in plans[0].legs]

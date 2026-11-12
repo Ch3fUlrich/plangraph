@@ -10,7 +10,11 @@ from plangraph.spawner import leg_state as ls
 def test_missing_legs_roles_and_probe_evidence(leg_id, store):
     from plangraph.planner.legs import DEFAULT_LEGS, leg_active
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
-    assert leg_active(leg)
+    if leg_id == 'opencode-deepseek-v4.1-flash-free':
+        assert not leg_active(leg)
+        assert leg.disabled == 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'
+    else:
+        assert leg_active(leg)
     assert set(leg.roles) == {'review', 'implement'}
     store.record_probe_pass(leg.model, 'leg-probe', now=100)
     assert store.last_probe_ts(leg.model) == 100
@@ -101,11 +105,35 @@ def test_manual_disable_expiry():
 
 def test_old_limit_evidence_reprobes(store):
     store.record_provider_response('test/leg', 429, 'quota', {'Retry-After': '86400'}, 'test', now=100)
+    assert store.leg_status('test/leg', now=100 + 21599)['state'] == 'limited'
     assert store.leg_status('test/leg', now=100 + 21600)['state'] == 'reprobe'
     # Also exercise a legacy row whose recorded reset exceeds the new cap.
     with store._connect() as db:
-        db.execute('UPDATE leg_events SET reset_at=?', (100 + 86400,))
-    assert store.leg_status('test/leg', now=100 + 21600)['state'] == 'reprobe'
+        before = db.execute('SELECT reset_at FROM leg_events').fetchone()[0]
+        db.execute('UPDATE leg_events SET reset_at=?', (100 + 7 * 86400,))
+        assert db.execute('SELECT reset_at FROM leg_events').fetchone()[0] > before
+    state = store.leg_status('test/leg', now=100 + 21600)
+    assert state['state'] == 'reprobe'
+    assert state['evidence']['reset_at'] == 100 + 7 * 86400
+
+
+@pytest.mark.parametrize('source,status', [('provider-probe', 200), ('provider-response', 429),
+                                         ('harness-stderr', 429), ('liveness-probe', 503),
+                                         ('unrecognized', 500)])
+def test_old_evidence_is_classified_before_reprobe(store, source, status):
+    store.record_provider_response('test/source', 429, 'quota', {'Retry-After': '86400'}, 'test', now=100)
+    with store._connect() as db:
+        db.execute('UPDATE leg_events SET source=?, status=?', (source, status))
+    state = store.leg_status('test/source', now=21700)['state']
+    assert state == ('ok' if status == 200 else 'limited' if source == 'unrecognized' else 'reprobe')
+
+
+@pytest.mark.parametrize('state,expected', [('ok', True), ('reprobe', True), ('limited', False),
+                                          ('down', False), ('expired', False)])
+def test_resolver_uses_shared_unavailable_states(state, expected):
+    from plangraph.routing_support.resolver import is_model_available
+    model = dict(id='test/model', available=1, active=True)
+    assert is_model_available(model, lambda *a, **k: dict(state=state, evidence=None)) is expected
 
 
 @pytest.mark.parametrize('age,reset', [(21600, 86400), (60, 60)])

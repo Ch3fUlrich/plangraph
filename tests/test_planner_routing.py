@@ -7,7 +7,9 @@ import json
 
 import pytest
 
-from plangraph.planner.legs import DEFAULT_LEGS, TIERS, Leg, WRITER_ORDER, load_legs, with_measured
+pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
+
+from plangraph.planner.legs import DEFAULT_LEGS, Leg, load_legs, with_measured
 from plangraph.planner.routing import (RouteError, effective_estimate,
                                        next_after_failure, pick_window_class,
                                         plan_spawn, route_card)
@@ -54,8 +56,9 @@ def good_leg(**kw):
 def test_default_legs_exact_d25_order():
     assert [leg.id for leg in DEFAULT_LEGS] == D25_IDS
     assert "trial" not in {leg.tier for leg in DEFAULT_LEGS}
-    tiers = [TIERS.index(leg.tier) for leg in route_card(card()).legs]
-    assert tiers == sorted(tiers)
+    # Independent expected tiers catch mis-tiered entries without routing them.
+    by_id = {leg.id: leg for leg in DEFAULT_LEGS}
+    assert [by_id[leg_id].tier for leg_id in ROUTE_IDS] == ["free"] * 6 + ["subscription"] * 21 + ["paid"]
     ids_ = [leg.id for leg in DEFAULT_LEGS]
     assert ids_.index("cx-gpt-6.1-sol") < ids_.index("agy-gemini-3.8-flash") < ids_.index("mimo-v2.6-flash")
     assert ids_[-2:] == ["deepseek", "claude-haiku-5.5"]  # D-3605 Haiku leg
@@ -332,7 +335,7 @@ def test_writer_order_d2683_unavailable_skipped():
             return {"state": "limited", "evidence": {"status": 429}}
         return {"state": "available", "evidence": None}
     plan = plan_spawn(c, role="implement", leg_reader=mock_reader)
-    assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert plan.first_leg.id == "openrouter-free"
     assert "agy-gemini-3.8-flash" not in [leg.id for leg in plan.legs]
 
 
@@ -344,13 +347,11 @@ def test_writer_order_d2683_review_order_unchanged():
 
 
 def test_writer_order_d2683_writer_family_exclusion():
-    # D-3745: Sol leads implement; family exclusions still apply for both roles.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
     assert plan_rev.first_leg.id == "opencode-gemini-4-argon"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
-    assert plan_imp.first_leg.id == "opencode-deepseek-v4.1-flash-free" and "gemini" not in {l.family for l in plan_imp.legs}
-    # F2: writer_families does not exclude implement legs
+    assert plan_imp.first_leg.id == "openrouter-free" and "gemini" not in {l.family for l in plan_imp.legs}
     plan_wf = plan_spawn(c, role="implement", writer_families=("gemini",))
     from test_route_free_first import WRITERS
     assert [l.id for l in plan_wf.legs] == WRITERS
@@ -380,20 +381,19 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     review = plan_spawn(dict(c, diff_ref={"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}), role="review", writer_families=("gpt",), benchmark=rows, leg_reader=reader)
     assert {s["leg"]: s["reason"] for s in review.skipped}["mimo-v2.6-pro"] == "limited"
     from test_route_free_first import WRITERS, FREE
-    assert [l.id for l in plan.legs] == [id for id in [FREE[0], FREE[1], *WRITERS[1:]] if id != "mimo-v2.6-pro"]
+    assert [l.id for l in plan.legs] == [id for id in [FREE[0], FREE[1], *WRITERS] if id != "mimo-v2.6-pro"]
 
 
 def test_no_implement_plan_leg_has_claude_family():
     # D-3605: registered Claude review/orchestration legs never route implementations.
+    from test_route_round3 import assert_review_seat_safety
     for estimate in (1000, 20000, 100000):
         plan = plan_spawn({"estimate_tokens": estimate}, role="implement")
         assert plan.legs
         assert not any(leg.claude_family or leg.family in ("claude", "anthropic") for leg in plan.legs)
-        from plangraph.planner.route_policy import DEFAULT_POLICY_PATH, load_route_policy
-        for diff in ({"diff_ref": {"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}}, {}):
-            review = plan_spawn({"estimate_tokens": estimate, **diff}, role="review", writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH))
-            assert len({leg.family for leg in review.review_seats}) == 2
-            assert all(leg.family != "gpt" for leg in review.review_seats)
+        assert_review_seat_safety(estimate)
+
+
 def test_alternate_limit_lookup_restricted_to_agy_harness(monkeypatch):
     from mechanics_legs import install_fallthrough_legs
     install_fallthrough_legs(monkeypatch)

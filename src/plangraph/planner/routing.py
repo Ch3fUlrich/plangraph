@@ -241,7 +241,7 @@ class SpawnPlan:
 
 
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
-                legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None) -> SpawnPlan:
+                legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, catalog_rows=None) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
 
     Every role ranks measured inputs within cost tiers, without a writer pin.
@@ -252,6 +252,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     review leg needs ``card["diff_ref"]``: the spawner inlines that diff.
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
+    ``catalog_rows`` pins tier/admission inputs; otherwise one catalog snapshot
+    is shared by all validation and tier projection in this plan.
     """
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
         raise SpawnRefused("card required" + (": missing estimate_tokens" if isinstance(card, Mapping) and card else ""))
@@ -300,9 +302,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     from plangraph.routing_support.leg_state import leg_status
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
     from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS, get_catalog_models
-    legs = catalog_tiers(tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS), get_catalog_models())
+    catalog_rows = tuple(get_catalog_models() if catalog_rows is None else catalog_rows)
+    legs = catalog_tiers(tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS), catalog_rows)
     for candidate in legs:
-        validate_model(candidate.model, allow_inactive=not leg_active(candidate, now=now))
+        validate_model(candidate.model, allow_inactive=not leg_active(candidate, now=now), catalog_rows=catalog_rows)
     candidates = tuple(l for l in legs if role in l.roles and leg_active(l, now=now))
     rows = (benchmark if isinstance(benchmark, Mapping) else {
         row["model_id"]: row for row in benchmark}) if benchmark is not None else {}
@@ -434,7 +437,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                      tuple(candidate_details), groups, coverage)
 
 
-def validate_model(model, *, allow_inactive=False):
+def validate_model(model, *, allow_inactive=False, catalog_rows=None):
     """The resolver catalog and registered legs are the exact admission door."""
     from plangraph.routing_support.resolver import (get_catalog_models, catalog_row_admitted,
                                            OPERATOR_REMOVED_MODELS)
@@ -443,7 +446,7 @@ def validate_model(model, *, allow_inactive=False):
     if not isinstance(model, str) or not model:
         raise SpawnRefused('model must be a nonempty string')
     check_mimo_path(model)
-    rows = get_catalog_models()
+    rows = get_catalog_models() if catalog_rows is None else catalog_rows
     inactive = {row['id'] for row in rows if not catalog_row_admitted(row)} if not allow_inactive else set()
     allowed = ({row['id'] for row in rows if catalog_row_admitted(row)} |
                {leg.model for leg in (*_legs.DEFAULT_LEGS, *_legs.EXPLICIT_LEGS)}

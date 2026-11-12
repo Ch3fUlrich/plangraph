@@ -1,12 +1,15 @@
 import asyncio
 import json
 import sqlite3
+import pytest
 from historical_legs import without_d4196
 
 from plangraph.planner.legs import DEFAULT_LEGS, LEAD_WRITER
 from plangraph.planner.routing import plan_spawn
 from plangraph.spawner.cli import main
 from plangraph.spawner.mcp import MCPSpawnerServer
+
+pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 
 CARD = {'estimate_tokens': 1000}
 WRITERS = tuple(l for l in without_d4196() if 'implement' in l.roles)

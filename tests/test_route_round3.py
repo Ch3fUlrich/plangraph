@@ -3,9 +3,27 @@ import ast
 from dataclasses import replace
 from pathlib import Path
 import subprocess
+import pytest
 
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import plan_spawn
+
+pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
+
+
+def assert_review_seat_safety(estimate):
+    """Retain main's Claude-seat fence and its exact 100k/no-diff exception."""
+    from plangraph.planner.route_policy import DEFAULT_POLICY_PATH, load_route_policy
+    for diff in ({"diff_ref": {"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}}, {}):
+        review = plan_spawn({"estimate_tokens": estimate, **diff}, role="review",
+                            writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH))
+        assert len({leg.family for leg in review.review_seats}) == 2
+        assert all(leg.family != "gpt" for leg in review.review_seats)
+        exception = estimate == 100000 and not diff
+        fenced = review.review_seats[:-1] if exception else review.review_seats
+        assert not any(leg.claude_family or leg.family in ("claude", "anthropic") for leg in fenced)
+        if exception:
+            assert [leg.id for leg in review.review_seats] == ["agy-gemini-3.8-flash", "agy-sonnet-5.5"]
 
 
 def test_review_same_family_table_order():
@@ -43,7 +61,8 @@ def test_changelog_fragment_only():
 
 
 def test_top_level_definition_spacing():
-    for name in ("src/plangraph/planner/routing.py", "tests/test_spawn_cli.py"):
+    for name in ("src/plangraph/planner/routing.py", "src/plangraph/routing_support/leg_state.py",
+                 "tests/test_spawn_cli.py"):
         text = Path(name).read_text()
         lines = text.splitlines()
         tree = ast.parse(text)
@@ -68,8 +87,8 @@ def test_each_role_falls_through_failed_and_limited():
     from plangraph.planner.route_policy import RoutePolicy
     base = next(leg for leg in DEFAULT_LEGS if leg.id == "opencode-deepseek-v4.1-flash-free")
     for role in ("implement", "review", "orchestrate"):
-        legs = (replace(base, id="first", roles=(role,)),
-                replace(base, id="second", model="opencode/big-pickle", family="pickle", roles=(role,)))
+        legs = (replace(base, id="first", roles=(role,), disabled=None),
+                replace(base, id="second", model="opencode/big-pickle", family="pickle", roles=(role,), disabled=None))
         for state in ("limited", "down"):
             def reader(model, **kwargs):
                 return {"state": state if model == base.model else "available", "evidence": None}

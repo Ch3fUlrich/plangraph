@@ -6,8 +6,61 @@ The existing test names remain, including historical names. No test was removed
 or newly skipped. Main's safety exclusions, review-family fences, scoped provider
 evidence, explicit effort variants, and generic utility/epsilon algorithm remain.
 
-The changes below compare against `origin/main`, including assertions delivered
-by the four slices. `WRITERS` below is the concrete unmeasured neutral-policy
+## Fix round s763split11b664 (authoritative)
+
+The merge from `origin/main` completed without conflicts. Both retained Zen free
+legs now keep main's exact permanent reason:
+`D-4196 opencode zen never worked, use opencode go; never remove (D-3828)`.
+Neither acquires an expiry or becomes override-eligible. The enabled Argon and
+Big Pickle registrations, GPT-OSS, Claude review/orchestration registrations, and
+explicit effort variants remain. Free-first selection is not permission to
+lift a permanent disable.
+
+The historical assertion ledger below records the prior consolidation at
+`11b6642f`; its enabled-free-DeepSeek expectations are superseded as follows:
+
+- The neutral default implementation route (`WRITERS`) starts OpenRouter,
+  Big Pickle, then Sol/Gemini/Argon/MiMo/gateway DeepSeek subscriptions and the
+  paid direct DeepSeek fallback. Exact mechanics tables explicitly enable Zen
+  rows to retain every slice's free-tier quota/fallthrough regression.
+- Default review starts personal free Argon, Big Pickle, then subscription
+  Gemini. Both Zen rows have `disabled: D-4196` skips, never a successful
+  override; both override-refusal assertions are restored. Historical registry
+  policy tests explicitly lift D-4196, so they still pin `banned_family` and
+  `off_family` rather than conflating policy with production disables.
+- The raw declared leg tiers are compared with an independent expected id/tier
+  table, not `route_card`'s sorted output. Review-seat Claude exclusions are
+  restored alongside the distinct-family/GPT fence. Main's exceptional 100k
+  no-diff fallback remains explicit: Gemini Flash plus a Claude subscription
+  seat (Sonnet in the consolidated registry); other seats must be non-Claude.
+- `plan_spawn(catalog_rows=...)` pins both admission and tier projection; absent
+  an explicit snapshot, one `get_catalog_models()` result is reused throughout
+  a plan. That resolver currently defaults to a seeded in-memory catalog, not
+  the host file. Exact planner/free-first/spawn-plan/W11/round-three probes pin
+  empty catalog rows to exercise their declared leg tables; shared test setup
+  also isolates `PLANGRAPH_CATALOG_DB` and the legacy default path so CLI
+  benchmark discovery and child processes never consume host measurements.
+- Six-hour expiry is applied after source/status classification. Successful
+  evidence stays healthy, known stale limit/probe failures request reprobe,
+  and unknown evidence is not relabeled by a generic early return. Resolver
+  availability now shares limited/down/expired exclusion with liveness.
+- Legacy reset coverage changes the recorded 24h reset to seven days, asserts
+  the stored value changed, and checks the six-hour boundary and evidence.
+  Fallthrough assertions pin the manual Muse `off_family` skip instead of
+  filtering non-dict records. Round-three `replace` and `plan_spawn` already
+  had module-level imports; all three role fallthrough cases run unchanged.
+- Duplicate fragment text is merged into one uppercase file per slice, with
+  historical probes labeled as observations rather than current eligibility
+  or benchmark claims. The tracked-tree regression refuses case-only path
+  collisions, and slice-fragment checks allow eventual changelog folding.
+
+No benchmark row, preference list, test removal, or new skip is introduced.
+
+## Historical consolidation ledger (superseded where noted above)
+
+The changes below compare the original consolidation against `origin/main`,
+including assertions delivered by the four slices. Historical `WRITERS` was
+the concrete unmeasured neutral-policy
 route in `tests/test_route_free_first.py`: free DeepSeek, OpenRouter, Big Pickle,
 Sol, Gemini Flash, personal high-effort Argon, MiMo Flash, MiMo Pro,
 gateway DeepSeek Flash, paid direct DeepSeek. Muse stays

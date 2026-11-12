@@ -245,7 +245,8 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
     assert final['status'] == 'completed', {k: final.get(k) for k in ('exit_code', 'reason', 'error', 'events')}
 
 
-def test_records_and_review(tmp_path):
+def test_records_and_review(tmp_path, monkeypatch):
+    install_fallthrough_legs(monkeypatch)  # Known writer families in this mechanics table.
     async def run():
         service = SpawnService(state=tmp_path)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', dry_run=True)
@@ -275,13 +276,12 @@ def test_transport_only_fallthrough(tmp_path, provider_stop, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
         assert len(record["attempts"]) == 12
         launched = [a for a in record['attempts'] if a['status'] != 'skipped']
-        assert len(launched) == (2 if provider_stop else 1)
-        assert len(runner.jobs) == len(launched)
-        assert all(a['skip_reason'] == 'earlier_leg_succeeded'
-                   for a in record['attempts'][len(launched):] if isinstance(a['leg'], dict))
+        assert (len(launched), len(runner.jobs)) == ((2, 2) if provider_stop else (1, 1))
+        spares = [a for a in record['attempts'] if a['status'] == 'skipped']
+        assert [a['leg'] for a in spares if not isinstance(a['leg'], dict)] == ['omniroute-muse-spark']
+        assert all(a['skip_reason'] == ('off_family' if a['leg'] == 'omniroute-muse-spark' else 'earlier_leg_succeeded') for a in spares)
         first_model = list(runner.jobs.values())[0].model_or_combo
-        first_key = first_model if '/' in first_model else 'agy/' + first_model
-        assert store.leg_status(first_key)['state'] == ('limited' if provider_stop else 'ok')
+        assert store.leg_status(first_model if '/' in first_model else 'agy/' + first_model)['state'] == ('limited' if provider_stop else 'ok')
         if provider_stop:
             assert service.route({'estimate_tokens': 1000}).first_leg.model != first_model
     asyncio.run(run())

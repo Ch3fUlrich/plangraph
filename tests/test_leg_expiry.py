@@ -13,7 +13,7 @@ from plangraph.planner.routing import plan_spawn
 
 def test_d3605_sol_routes_implement_never_review():
     card = {"estimate_tokens": 20000, "risk_tags": []}
-    assert plan_spawn(card, role="implement").first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert plan_spawn(card, role="implement").first_leg.id == "openrouter-free"
     review = plan_spawn(card, role="review", writer_families=("mimo",))
     assert "cx-gpt-6.1-sol" not in [leg.id for leg in review.legs]
 
