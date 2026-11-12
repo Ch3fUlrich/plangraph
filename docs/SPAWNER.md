@@ -1,8 +1,40 @@
 # Plangraph Spawner & Model Routing Architecture
 
+### QUOTA-PAUSE-GATE
+
+The usage owner creates `quota-pause` in the spawner state directory at usage
+>=95% and unlinks it at reset. Presence alone (including a dangling symlink)
+pauses admission: no second meter, expiry or automatic clearing. Flag read errors
+also pause admission.
+An empty/unset state falls back to `PLANGRAPH_SPAWN_STATE`, then
+`$XDG_STATE_HOME/plangraph`; an empty/unset XDG root uses
+`~/.local/state/plangraph`.
+Session `launch` and `relaunch` refuse with `quota pause` before invoking the
+action or stopping an existing session, without a model filter. Dry runs do not
+bypass the quota check or write audit records.
+Leg-aware checks in launch-spec, pre-launch probing and seat prompt assembly
+pause legs whose `id` or `model` starts with `claude-`, accepting object or mapping
+metadata. Known other providers are unaffected; missing provider metadata is
+unknown-provider and cannot bypass a pause.
+`basic-analysis` is the sole exempt role. After stripping one trailing `-<digits>`
+counter, a role or session name must equal `basic-analysis` or end in `-basic-analysis`.
+Thus `<host>-L1-` + `basic-analysis-0412` is exempt; `basic-analysis-helper-0001`,
+`not-basic-analysisx-0001` and empty names are not.
+Seat mixins accept `state` or `_state`. Probes check runner roots (`state`,
+`_state`, `state_root`) or environment defaults before resolving the probe store,
+then check its `state_root` or database parent if no runner root was configured.
+Launch-spec retains its required `state` and `role` request fields; quota refusals
+use reason code `quota_pause`. Omitted required fields remain invalid requests,
+not environment-defaulted builds.
+The deployed ctx-watchdog skips its external router call with one alert line for
+either a flag or symlink, or a missing, invalid, unreadable or unsearchable state
+directory. Its home fallback is systemd `%h`, independent of the manager's `HOME`;
+redeploy the service template to apply the guard.
+
 Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
 
 ### Windows prompt delivery
+
 Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
 argv guard (32,000 characters, or 8,000 for batch shims). This uses the existing
 per-job stdin payload path, not a temporary prompt file. Qoder retains an explicit
@@ -18,6 +50,7 @@ the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.
 
 ### MiMo seat timeouts and verdict packaging (MIMO-VERDICT-TIMEOUTS)
+
 For MiMo seats and all other `review` runs, `run_watchdog_limits.thresholds` sets
 `hard_max=True`, including default caps: reviews never wait for a writer's first
 edit and ignore a valid `hard_first_edit` opt-in. Card limits must be positive,
@@ -54,7 +87,8 @@ bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
 and no publish/push is attempted. Changed tracked files use the Python CI gate's
 400-line rule, exemptions, binary detection, splitlines counting and baseline
 ratchet. CI still runs unchanged `tools/check_file_size.py` over all tracked files.
-The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI entry/skip-trailer rule, returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. The `.docs-map` gate moves into Rust in slice S1c. Doc-only and empty commits do not require skip reasons; section boundaries include indented headings in both Rust and CI.
+The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI entry/skip-trailer rule, returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. Doc-only and empty commits do not require skip reasons; section boundaries include indented headings in both Rust and CI.
+The S1c Rust docs-map gate reads `.docs-map` from the committed head and compares changed paths over `merge-base(base, head)..head`. Each matching rule needs at least one mapped doc in that range; failures return `HOLD gate docs-map:` with unmatched `source -> doc` pairs before export/content gates or publication. Missing maps pass; malformed rules/dates hold. `# enforce-after:` begins enforcement inclusively on that local calendar date (earlier missing-doc matches do not hold); entries have no expiry syntax. CI retains its stricter union of merge-base and head policies, so removing head rules cannot disable CI enforcement. Shared JSON cases exercise Rust/Python parsing and glob parity.
 
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.
@@ -63,11 +97,16 @@ Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pendin
 `python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust
 `pg-spawnd doctor-sources` subcommand. `doctor.py` resolves it on the host's
 `PATH`, never from checkout build artifacts, and reads its JSON check rows with
-a ten-second subprocess timeout. Before any checks, optional `env.PATH` from the
+a derived subprocess timeout: ten seconds plus three seconds per batch of up to
+16 configured hosts (at least ten seconds). Before any checks, optional `env.PATH` from the
 local hosts registry entry replaces the inherited PATH for both pg-spawnd and
 harness discovery/children. Identity is `PLANGRAPH_HOST_NAME` or registry `self`,
 with case-insensitive id/alias lookup; absent configuration retains inherited PATH.
 There is no Python fallback for source checks; fresh release clones need no build.
+Fleet snapshots likewise delegate the read-only JSON projection to
+`pg-spawnd fleet-snapshot`; the Python loader supplies persisted registry and run
+records without probing, and projection failures preserve the existing
+`fleet: null` fallback.
 
 The Rust command reads `plangraph/ps-hosts.json` under `XDG_CONFIG_HOME` (or
 `~/.config`), checking valid entries with `src` or `win_src` in parallel with
@@ -491,3 +530,7 @@ The SSH ps endpoint serializes only running and queued records. Terminal history
 does not consume the 1 MiB transport budget; malformed terminal fields do not
 hide live runs. Malformed live replies and oversized replies name the queried
 host as unknown rather than silently omitting it.
+Rust source-filter tests and pytest's real `configured_hosts` checks consume
+`tests/fixtures/doctor_sources.json`, binding both validators and probe limits
+to the same accepted/rejected cases. Rust embeds JSON, never Python source or
+an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
