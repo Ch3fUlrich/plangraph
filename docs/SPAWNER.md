@@ -1,5 +1,36 @@
 # Plangraph Spawner & Model Routing Architecture
 
+### QUOTA-PAUSE-GATE
+
+The usage owner creates `quota-pause` in the spawner state directory at usage
+>=95% and unlinks it at reset. Presence alone (including a dangling symlink)
+pauses admission: no second meter, expiry or automatic clearing. Flag read errors
+also pause admission.
+An empty/unset state falls back to `PLANGRAPH_SPAWN_STATE`, then
+`$XDG_STATE_HOME/plangraph`; an empty/unset XDG root uses
+`~/.local/state/plangraph`.
+Session `launch` and `relaunch` refuse with `quota pause` before invoking the
+action or stopping an existing session, without a model filter. Dry runs do not
+bypass the quota check or write audit records.
+Leg-aware checks in launch-spec, pre-launch probing and seat prompt assembly
+pause legs whose `id` or `model` starts with `claude-`, accepting object or mapping
+metadata. Known other providers are unaffected; missing provider metadata is
+unknown-provider and cannot bypass a pause.
+`basic-analysis` is the sole exempt role. After stripping one trailing `-<digits>`
+counter, a role or session name must equal `basic-analysis` or end in `-basic-analysis`.
+Thus `<host>-L1-` + `basic-analysis-0412` is exempt; `basic-analysis-helper-0001`,
+`not-basic-analysisx-0001` and empty names are not.
+Seat mixins accept `state` or `_state`. Probes check runner roots (`state`,
+`_state`, `state_root`) or environment defaults before resolving the probe store,
+then check its `state_root` or database parent if no runner root was configured.
+Launch-spec retains its required `state` and `role` request fields; quota refusals
+use reason code `quota_pause`. Omitted required fields remain invalid requests,
+not environment-defaulted builds.
+The deployed ctx-watchdog skips its external router call with one alert line for
+either a flag or symlink, or a missing, invalid, unreadable or unsearchable state
+directory. Its home fallback is systemd `%h`, independent of the manager's `HOME`;
+redeploy the service template to apply the guard.
+
 ### Windows prompt delivery
 
 Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
