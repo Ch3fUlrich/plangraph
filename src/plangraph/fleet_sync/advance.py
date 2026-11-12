@@ -132,7 +132,8 @@ def transport(host, config):
                f"import base64;exec(base64.b64decode('{encoded}'))"]
     remote = subprocess.list2cmdline(command) if host['os'] == 'windows' else shlex.join(command)
     return json.loads(subprocess.check_output(
-        ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '--', host['id'], remote],
+        ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '--',
+         host.get('ssh_target') or host['id'], remote],
         text=True, stderr=subprocess.DEVNULL, timeout=900))
 
 

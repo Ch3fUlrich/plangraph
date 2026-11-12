@@ -23,7 +23,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import config as config_mod, db as kdb
+from . import config as config_mod
 from .cli_verbs import EXIT_OK, EXIT_REFUSED
 
 __all__ = ["cmd_oversight_check", "add_parser", "write_digest", "read_digest",
@@ -163,6 +163,7 @@ def _lane_git(cfg):
 
 
 def cmd_oversight_check(args, session):
+    from . import db as kdb
     from . import oversight     # lazy: keeps the cli module's import graph light
     cfg = _config(session)
     if cfg is None:
