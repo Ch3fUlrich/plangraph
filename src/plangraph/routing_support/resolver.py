@@ -256,7 +256,7 @@ for _leg in DEFAULT_LEGS:
             tier=_leg.tier, available=int(_model in _fallback_legs),
             active=_model in _fallback_legs,
             context_window=_leg.max_request_tokens, tool_mode=_leg.tool_mode,
-            aa_intelligence=0.0, combos=[]))
+            trains_on_prompts=int(_leg.trains_on_data), aa_intelligence=0.0, combos=[]))
 
 _DEFAULT_CATALOG_DB: Any = None
 _MISSING = object()

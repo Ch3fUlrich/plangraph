@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.planner.legs import DEFAULT_LEGS, MUSE_AMBER, WRITER_ORDER
 from plangraph.planner.route_policy import RoutePolicy
 from plangraph.planner.routing import SpawnRefused, plan_spawn
 from plangraph.planner.seats import seat_family
@@ -101,24 +101,44 @@ def test_muse_never_automatic_even_if_lifted(role):
     policy = RoutePolicy(review_allowed_families=("muse",))
     for leg in legs:
         assert policy.skip_reason(leg, role) == "off_family"
-    plan = plan_spawn(CARD, role=role, writer_families=("gpt",))
-    assert not any(l.id in MUSE_MANUAL for l in (*plan.legs, *plan.review_seats))
+    plan = plan_spawn(CARD, role=role, writer_families=("gpt",), policy=policy)
+    assert {l.id for l in (*plan.legs, *plan.review_seats) if l.family == "muse"} <= {MUSE_AMBER}
 
 
-def test_muse_amber_routed_after_sol_and_mimo_public_only():
-    from plangraph.planner.legs import MUSE_AMBER, WRITER_ORDER
+@pytest.mark.parametrize("estimate_tokens,paths", [
+    (1000, ["docs/guide.md"]),
+    (20000, ["src/public_api.py"]),
+    (60000, ["tests/test_public_api.py"]),
+])
+def test_muse_amber_routed_after_sol_and_mimo_public_only(estimate_tokens, paths):
     assert WRITER_ORDER == ("cx-gpt-6.1-sol", MUSE_AMBER) and BY_ID[MUSE_AMBER].trains_on_data
     assert RoutePolicy().skip_reason(BY_ID[MUSE_AMBER], "implement") is None
     assert [l.id for l in plan_spawn(CARD, role="implement").legs] == list(WRITER_ORDER)
     diff = {"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}
-    ids = [l.id for l in plan_spawn(dict(CARD, diff_ref=diff), role="review",
-                                    writer_families=("gpt",)).legs]
-    assert ids.index("mimo-v2.6-pro") < ids.index(MUSE_AMBER)
+    public = dict(estimate_tokens=estimate_tokens, paths=paths, risk_tags=[], diff_ref=diff)
+    plan = plan_spawn(public, role="review", writer_families=("gpt",))
+    ids = [l.id for l in plan.legs]
+    assert "mimo-v2.6-pro" in ids, f"public review must retain mimo-pro: {plan.skipped}"
+    assert MUSE_AMBER in ids, f"public review must retain muse-amber: {plan.skipped}"
+    positions = {leg_id: i for i, leg_id in enumerate(ids)}
+    assert positions["mimo-v2.6-pro"] < positions[MUSE_AMBER], "subscription mimo must precede paid muse-amber"
+    assert BY_ID["mimo-v2.6-pro"].tier == "subscription"
+    assert BY_ID[MUSE_AMBER].tier == "paid", "muse-amber is pay-as-you-go, not subscription"
     # D-4280 data fence: a risk-tagged card never reaches the training Muse leg.
     for role in ("implement", "review"):
         private = plan_spawn(dict(CARD, risk_tags=["secrets"]), role=role, writer_families=("gpt",))
         assert MUSE_AMBER not in [l.id for l in (*private.legs, *private.review_seats)]
         assert {s["leg"]: s["reason"] for s in private.skipped}[MUSE_AMBER] == "trains_on_data"
+
+
+def test_muse_amber_catalog_matches_leg():
+    from plangraph.routing_support.resolver import DEFAULT_FALLBACK_MODELS
+    leg = BY_ID[MUSE_AMBER]
+    row = next(row for row in DEFAULT_FALLBACK_MODELS if row["id"] == leg.model)
+    assert row.get("trains_on_prompts") == int(leg.trains_on_data) == 1
+    assert row["tier"] == leg.tier == "paid"
+    assert (row["family"], row["harness"], row["tool_mode"], row["context_window"]) == (
+        leg.family, leg.harness, leg.tool_mode, leg.max_request_tokens)
 
 
 @pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
@@ -152,8 +172,11 @@ def test_muse_fence_does_not_ban_other_meta_families(family, role):
 
 
 @pytest.mark.parametrize("mid", MUSE)
-def test_explicit_muse_requires_reason_and_still_works(tmp_path, mid):
+def test_explicit_muse_requires_reason_and_still_works(tmp_path, mid, monkeypatch):
+    from plangraph.planner.routing import SpawnPlan
     svc = SpawnService(SpawnerRunner(), state=tmp_path)
+    free = replace(BY_ID["qodercli-qwen3.8-flash"], disabled=None)
+    monkeypatch.setattr(svc, "_route", lambda *a, **kw: SpawnPlan((free,), (), "test", (), ()))
     kwargs = dict(card=CARD, prompt="Review public material", role="review",
                   writer_families=("gpt",), leg=mid, dry_run=True)
     with pytest.raises(SpawnRefused, match="override"):

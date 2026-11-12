@@ -131,7 +131,7 @@ DEFAULT_LEGS = (
     Leg("opencode-go-muse-spark", "subscription", "opencode",
         "opencode-go/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
         False, roles=("review",)),
-    Leg("opencode-console-muse-spark", "subscription", "opencode",
+    Leg("opencode-console-muse-spark", "paid", "opencode",
         "console-meta/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
         True, roles=("review", "implement"),
         note="D-5173: muse-amber, routed review seat and second writer after Sol, "

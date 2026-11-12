@@ -24,8 +24,8 @@ D25_IDS = [
     "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark", "opencode-go-deepseek-v4-flash", "omniroute-gemini-3.8-flash", "deepseek",
     "claude-haiku-5.5",  # D-3605 Haiku leg
 ]
-#: Route order: tiers ascending, so the subscription Haiku leg precedes paid deepseek.
-ROUTE_IDS = D25_IDS[:-2] + ["claude-haiku-5.5", "deepseek"]  # D-3605 Haiku leg
+#: Tiers ascend at routing time; muse-amber and deepseek are pay-as-you-go.
+ROUTE_IDS = [i for i in D25_IDS if i not in ("opencode-console-muse-spark", "deepseek")] + ["opencode-console-muse-spark", "deepseek"]
 
 
 def card(**kw):
@@ -52,8 +52,8 @@ def good_leg(**kw):
 def test_default_legs_exact_d25_order():
     assert [leg.id for leg in DEFAULT_LEGS] == D25_IDS
     assert "trial" not in {leg.tier for leg in DEFAULT_LEGS}
-    tiers = [TIERS.index(leg.tier) for leg in DEFAULT_LEGS[:-1]]  # D-3605 Haiku leg: appended last
-    assert tiers == sorted(tiers)
+    assert [leg.tier for leg in DEFAULT_LEGS] == (["free"] * 4 + ["subscription"] * 12
+        + ["paid", "subscription", "subscription", "paid", "subscription"])
     ids_ = [leg.id for leg in DEFAULT_LEGS]
     assert ids_.index("cx-gpt-6.1-sol") < ids_.index("agy-gemini-3.8-flash") < ids_.index("mimo-v2.6-flash")
     assert ids_[-2:] == ["deepseek", "claude-haiku-5.5"]  # D-3605 Haiku leg
@@ -291,7 +291,7 @@ def test_retry_until_budget_then_promote_free_sub_paid_park(route):
     a, leg = next_after_failure(route, [q], "check_fail", 3)
     assert (a, leg.id) == ("promote", "cx-gpt-6.1-sol")
     a, leg = next_after_failure(route, [q, leg.id], "check_fail", 3)
-    assert (a, leg.id) == ("promote", "deepseek")
+    assert (a, leg.id) == ("promote", "opencode-console-muse-spark")
     assert next_after_failure(route, [q, "mimo-v2.6-flash", "deepseek"],
                               "stall", 3) == ("park", None)
     assert next_after_failure(route, [q], "check_fail", 0)[0] == "retry"
@@ -300,7 +300,7 @@ def test_retry_until_budget_then_promote_free_sub_paid_park(route):
 def test_promote_skips_absent_tier():
     r = route_card(card(), legs=tuple(l for l in DEFAULT_LEGS if l.tier != "subscription"))
     a, leg = next_after_failure(r, ["qodercli-qwen3.8-flash"], "timeout", 3)
-    assert (a, leg.id) == ("promote", "deepseek")
+    assert (a, leg.id) == ("promote", "opencode-console-muse-spark")
 
 
 def test_park_classes(route):

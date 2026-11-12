@@ -63,6 +63,32 @@ def test_only_sol_writes():
     assert {'deepseek', 'openrouter-free', 'mimo-v2.6-pro'} <= {leg.id for leg in legs.DEFAULT_LEGS}
 
 
+@pytest.mark.parametrize('pin', ['leg', 'model'])
+@pytest.mark.parametrize('free_up', [True, False])
+def test_muse_amber_paid_pin_checks_free_availability(tmp_path, monkeypatch, pin, free_up):
+    amber = next(leg for leg in legs.DEFAULT_LEGS if leg.id == legs.MUSE_AMBER)
+    free = replace(next(leg for leg in legs.DEFAULT_LEGS if leg.id == 'qodercli-qwen3.8-flash'),
+                   disabled=None)
+    use_table(monkeypatch, (amber, free))
+    service = SpawnService(runner=fake_runner(tmp_path, status='dry_run'), state=tmp_path,
+        leg_reader=lambda model, **kw: {'state': 'down' if model == free.model and not free_up else 'available',
+                                      'evidence': None})
+    options = dict(card={'estimate_tokens': 1000}, role='review', writer_families=['gpt'],
+                   dry_run=True, **{pin: amber.id if pin == 'leg' else amber.model})
+    if free_up:
+        with pytest.raises(SpawnRefused, match='paid pin refused; free legs up: ' + free.id):
+            asyncio.run(service.spawn(**options))
+        assert not (tmp_path / 'spawn-overrides.jsonl').exists()
+        record = asyncio.run(service.spawn(**options, override_reason='Public material paid review'))
+        assert record['override_reason'] == 'Public material paid review'
+    else:
+        record = asyncio.run(service.spawn(**options))
+        assert record['override_reason'] == 'No eligible free leg is up on this host'
+    assert record['chosen_leg']['id'] == amber.id
+    assert record['chosen_leg']['tier'] == 'paid'
+    assert amber.model in (tmp_path / 'spawn-overrides.jsonl').read_text()
+
+
 @pytest.mark.parametrize('reason', ['credit usage limit', 'model not available',
     'Free usage limit reached', 'not_served_on_host'])
 def test_recorded_down_route(tmp_path, monkeypatch, reason):

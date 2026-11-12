@@ -43,7 +43,7 @@ def test_explicit_disabled_qwen_refused(tmp_path):
 def test_writer_order_sol_family_excluded():
     plan = plan_spawn({"estimate_tokens": 20000, "risk_tags": []},
                       role="implement", exclude_families=("gpt",))
-    assert plan.first_leg.id == "opencode-console-muse-spark"  # D-5179: the one fallback writer
+    assert [leg.id for leg in plan.legs] == ["opencode-console-muse-spark"]  # D-5179: the one fallback writer
     assert "gpt" not in {leg.family for leg in plan.legs}
     assert {s["leg"]: s["reason"] for s in plan.skipped}[
         "cx-gpt-6.1-sol"] == "excluded_family"
@@ -51,10 +51,12 @@ def test_writer_order_sol_family_excluded():
 
 def test_writer_order_privacy_excludes_training_sol():
     assert next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol").trains_on_data is False
-    # The default Sol is non-training. Exercise eligibility before lead sorting
-    # with a training lead and a non-training free fallback explicitly.
-    legs = tuple(dataclasses.replace(leg, trains_on_data=leg.trains_on_data or leg.id == "cx-gpt-6.1-sol")
+    # Change only Sol to training; muse-amber keeps its production training flag.
+    # Privacy eligibility must run before lead sorting, excluding both writers.
+    legs = tuple(dataclasses.replace(leg, trains_on_data=True) if leg.id == "cx-gpt-6.1-sol" else leg
                  for leg in DEFAULT_LEGS)
+    assert all(leg is original for leg, original in zip(legs, DEFAULT_LEGS)
+               if leg.id != "cx-gpt-6.1-sol")
     public = plan_spawn({"estimate_tokens": 20000, "risk_tags": []},
                         role="implement", legs=legs)
     assert public.first_leg.id == "cx-gpt-6.1-sol"
@@ -64,6 +66,8 @@ def test_writer_order_privacy_excludes_training_sol():
     assert "cx-gpt-6.1-sol" not in {leg.id for leg in private.legs}
     assert {s["leg"]: s["reason"] for s in private.skipped}[
         "cx-gpt-6.1-sol"] == "trains_on_data"
+    assert {s["leg"]: s["reason"] for s in private.skipped}[
+        "opencode-console-muse-spark"] == "trains_on_data"
 
 
 def test_cli_route_implement_gpt_first_no_claude_writer(tmp_path, capsys):
@@ -211,8 +215,8 @@ def test_writer_order_d2683_implement_first_seven(monkeypatch):
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="implement")
     expected = ['cx-gpt-6.1-sol', 'opencode-deepseek-v4.1-flash-free',
-                'opencode-glm-5.3-flash-free', 'openrouter-free', 'opencode-console-muse-spark',
-                'agy-gemini-3.8-flash', 'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek']
+                'opencode-glm-5.3-flash-free', 'openrouter-free', 'agy-gemini-3.8-flash',
+                'mimo-v2.6-flash', 'mimo-v2.6-pro', 'opencode-console-muse-spark', 'deepseek']
     assert [leg.id for leg in plan.legs] == expected
 
 

@@ -93,8 +93,8 @@ def test_benchmark_within_tier_only(monkeypatch):
     assert p.first_leg.id == "cx-gpt-6.1-sol"  # D-3745
     assert [l.id for l in p.legs] == [
         'cx-gpt-6.1-sol', 'opencode-deepseek-v4.1-flash-free',
-        'opencode-glm-5.3-flash-free', 'openrouter-free', 'opencode-console-muse-spark',
-        'agy-gemini-3.8-flash', 'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek']
+        'opencode-glm-5.3-flash-free', 'openrouter-free', 'agy-gemini-3.8-flash',
+        'mimo-v2.6-flash', 'mimo-v2.6-pro', 'opencode-console-muse-spark', 'deepseek']
     assert p.legs[-1].tier == 'paid'
     assert p.p_source == "operator-order"
     assert "no benchmark p" in plan_spawn(CARD, role="implement").reasons
