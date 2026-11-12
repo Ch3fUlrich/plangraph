@@ -155,12 +155,13 @@ def test_parser_requires_router_log():
 
 def test_cli_only_reads_keys(inputs, monkeypatch, capsys):
     from types import SimpleNamespace
+    from plangraph.keeper import db
 
     statements = []
     conn = SimpleNamespace(
         execute=lambda sql: statements.append(sql) or [("fixture:known",)],
         close=lambda: None)
-    monkeypatch.setattr(audit.kdb, "open_db", lambda *a, **kw: conn)
+    monkeypatch.setattr(db, "open_db", lambda *a, **kw: conn)
     args = SimpleNamespace(audit=True, out_dir=inputs[0],
                            router_log=inputs[1], cursor=inputs[2])
     session = SimpleNamespace(config=SimpleNamespace(db="fixture", db_options={}))

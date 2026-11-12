@@ -51,6 +51,7 @@ Run `cargo test -p <crate>` from `rust/` for each affected crate.
 ## Lanes
 
 One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `main`.
+The RUN-WORKTREE Python regression exception (D-5062) retires with SPAWNER-RUST-PORT.
 Work that covers two plan items is two lanes.
 A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) only for the item's latest verified head; interrupted sends are not blindly replayed.
 
