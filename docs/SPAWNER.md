@@ -16,6 +16,19 @@ Rejected stdin input or an unavailable/closed input pipe fails the run explicitl
 the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.
 
+### MiMo seat timeouts and verdict packaging (MIMO-VERDICT-TIMEOUTS)
+
+For MiMo seats and other `review` runs, an explicit card `max_min` sets
+`hard_max=True` in `run_watchdog_limits.thresholds`: the wall cap does not wait
+for a writer's first edit. `inline_diff_prompt` checks `max_chars` against the
+complete prompt (instructions, diff header, full diff and footer), not just the
+diff. Oversized packages raise `InlineDiffError` rather than truncating; missing
+diff references, empty diffs and failed `git diff` calls also fail explicitly.
+In `opencode_answer.final_answer`, `allow_unfinished=True` accepts pending text
+only when the latest `step_finish` reason was not an explicit truncation (a reason
+other than `stop` or `tool-calls`); a later unfinished `VERDICT: PASS` tail cannot
+rescue a truncated step. A completed `stop` answer remains eligible.
+
 ### Writer result finalization
 
 `worker-core::writer_result::check_result` runs the mandatory Rust file-size
