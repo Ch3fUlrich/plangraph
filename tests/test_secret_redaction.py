@@ -88,9 +88,12 @@ def test_dictionary_secret_keys_still_mask_expressions():
         'token': '[REDACTED]', 'idempotency_key': 'value'}
 
 
-def test_review_diff_reaches_prompt_record_and_adapter_verbatim(tmp_path, monkeypatch):
-    prompt = ('Review this diff:\n+    pair_key = f"{left}:{right}"\n'
+def test_review_diff_preserved_and_secrets_scrubbed_at_record_and_adapter(tmp_path, monkeypatch):
+    secret = ''.join(('fake', 'review', 'password'))
+    source = ('Review this diff:\n+    pair_key = f"{left}:{right}"\n'
               '+  const token=++x;\n+token = os.environ["X"]\n')
+    prompt = source + '+password = ' + secret + '\n'
+    expected = source + '+password = [REDACTED]\n'
     received, path = [], tmp_path / 'prompt.txt'
 
     def dispatch(**kwargs):
@@ -102,8 +105,10 @@ def test_review_diff_reaches_prompt_record_and_adapter_verbatim(tmp_path, monkey
         runner = runner_mod.SpawnerRunner(default_cwd=str(tmp_path))
         asyncio.run(runner.spawn(prompt=prompt, role='review',
             prompt_record=(path, {}, lambda record: None)))
-    assert received == [prompt]
-    assert path.read_bytes() == prompt.encode()
+    assert received == [expected]
+    assert secret not in received[0]
+    assert path.read_bytes() == expected.encode()
+    assert secret.encode() not in path.read_bytes()
 
 
 @pytest.mark.parametrize('payload', ['dsn', 'reserved_dsn', 'json', 'escaped_json'])

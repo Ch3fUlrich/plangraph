@@ -11,7 +11,8 @@ _ASSIGN_SYNTAX = re.compile(
     r'^(?:[\[({]|(?:\+\+|--|[!~])[^\S\r\n]*[A-Za-z_]|'
     r'[A-Za-z_][A-Za-z0-9_.]*[^\S\r\n]*[\[(])')
 _ASSIGN_OPERATOR = re.compile(r'[^\S\r\n](?:[+\-*/%&|^<>=!]+|and|or|if|else|in|is)[^\S\r\n]')
-_ASSIGN_REFERENCE = re.compile(r'[a-z_]+(?:\.[a-z_]+)*')
+# A lone identifier is indistinguishable from a plaintext credential.
+_ASSIGN_REFERENCE = re.compile(r'[a-z_]+(?:\.[a-z_]+)+')
 _ASSIGN_TIGHT_OPERATOR = re.compile(r'[a-z_]+[+*/%&|^<>=]+[a-z_]+')
 
 
@@ -49,10 +50,10 @@ def redact(value):
     f/b/r-prefixed literals containing both braces, calls/indexing/containers,
     ++/--/!/~ identifier prefixes, spaced symbolic or Python word operators,
     or quoted literals followed by an operator, attribute or index. For a
-    lowercase name with '=', digit-free lowercase identifier/attribute paths
-    and tight symbolic binary operations on such identifiers are also source;
-    digits and hyphens otherwise keep a bare value opaque. Other secret rules
-    and recursive dictionary-key masking still apply independently.
+    lowercase name with '=', digit-free lowercase dotted attribute paths and
+    tight symbolic binary operations on such identifiers are also source;
+    bare identifiers, digits and hyphens otherwise keep a value opaque. Other
+    secret rules and recursive dictionary-key masking still apply independently.
     """
     try:
         if isinstance(value, dict):

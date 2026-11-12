@@ -81,9 +81,9 @@ fn patterns() -> &'static [regex::Regex] {
 /// Assignments mask literals/opaque tokens (including legacy spaced plaintext),
 /// but preserve f/b/r strings with braces, calls/indexing/containers, ++/--/!/~
 /// identifier prefixes, spaced operators and quoted-literal expression suffixes.
-/// For lowercase `=` names, digit-free lowercase references/attribute paths and
-/// tight symbolic operations on those identifiers are source too; otherwise
-/// digits/hyphens keep bare tokens opaque. Other secret rules remain independent.
+/// For lowercase `=` names, digit-free lowercase dotted attribute paths and
+/// tight symbolic operations on those identifiers are source too; bare identifiers,
+/// digits and hyphens otherwise keep values opaque. Other secret rules remain independent.
 pub fn redact(text: &str) -> String {
     let rs = patterns();
     let out = rs[0].replace_all(text, REDACTED).into_owned();

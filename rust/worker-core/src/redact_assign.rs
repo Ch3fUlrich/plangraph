@@ -11,7 +11,8 @@ fn patterns() -> &'static [regex::Regex] {
             r"^(?:[\[({]|(?:\+\+|--|[!~])[^\S\r\n]*[A-Za-z_]|[A-Za-z_][A-Za-z0-9_.]*[^\S\r\n]*[\[(])",
             r"[^\S\r\n](?:[+\-*/%&|^<>=!]+|and|or|if|else|in|is)[^\S\r\n]",
             r"^[a-z_][a-z0-9_]*$",
-            r"^[a-z_]+(?:\.[a-z_]+)*$",
+            // A lone identifier is indistinguishable from a plaintext credential.
+            r"^[a-z_]+(?:\.[a-z_]+)+$",
             r"^[a-z_]+[+*/%&|^<>=]+[a-z_]+$",
         ]
         .into_iter()
