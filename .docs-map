@@ -5,3 +5,5 @@ src/plangraph/fleet_sync/** -> docs/fleet-sync.md
 src/plangraph/spawner/** -> docs/SPAWNER.md
 src/plangraph/keeper/** -> docs/KEEPER.md
 src/plangraph/planner/** -> docs/routing.md
+rust/pg-probe/** -> docs/context-probes.md
+rust/Cargo.toml -> docs/context-probes.md

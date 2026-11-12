@@ -49,6 +49,45 @@ def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card,
     assert not (tmp_path / "spawn-overrides.jsonl").exists()
 
 
+def test_implement_family_exclusion_over_all_catalog_rows():
+    from plangraph.catalog_data import SEED_MODELS
+    from plangraph.planner.routing import route_card
+    from plangraph.routing_support.resolver import DEFAULT_FALLBACK_MODELS
+    template, fallback = (next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
+                          for leg_id in SUBS[:2])
+    for row in [*SEED_MODELS, *DEFAULT_FALLBACK_MODELS]:
+        # Make every catalog row otherwise eligible, including inactive rows.
+        model = row.get("model_id", row.get("id"))
+        candidate = dataclasses.replace(template, id="catalog:" + model, model=model,
+                                        family=row["family"], claude_family=False)
+        route = route_card(CARD, legs=(candidate, fallback), role="implement")
+        assert (candidate in route.legs) == (row["family"] != "claude"), model
+
+
+@pytest.mark.parametrize("alias", ["claude", "anthropic", "fable", "opus", "sonnet", "haiku"])
+@pytest.mark.parametrize("source", ["family", "model"])
+def test_implement_claude_aliases_use_canonical_family(monkeypatch, alias, source):
+    from plangraph.planner.route_policy import RoutePolicy
+    from plangraph.planner.routing import route_card
+    from plangraph.routing_support import resolver
+    template, fallback = (next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
+                          for leg_id in SUBS[:2])
+    fields = dict(id="catalog-writer", model="catalog/opaque-model",
+                  family="distinct-family", claude_family=False)
+    fields[source] = alias.upper() if source == "family" else "catalog/" + alias + "-next"
+    candidate = dataclasses.replace(template, **fields)
+    monkeypatch.setattr(resolver, "get_catalog_models", lambda: [
+        {"id": candidate.model, "available": 1, "active": True}])
+    # Family aliases and model identities both work without the legacy flag.
+    assert resolver.detect_model_family(fields[source]) == "claude"
+    assert route_card(CARD, legs=(candidate, fallback), role="implement").legs == (fallback,)
+    assert route_card(dict(CARD, role="implement"), legs=(candidate, fallback)).legs == (fallback,)
+    plan = plan_spawn(CARD, role="implement", legs=(candidate, fallback), policy=RoutePolicy(),
+                      leg_reader=lambda *a, **kw: {"state": "available", "evidence": None})
+    assert plan.legs == (fallback,)
+    assert {skip["leg"]: skip["reason"] for skip in plan.skipped}[candidate.id] == "excluded_family"
+
+
 @pytest.mark.parametrize("refusal", ['{"type":"error","error":{"status":402}}',
     '{"type":"error","error":{"status":429}}', 'not_served_on_host: refused'])
 def test_default_writer_refusal_falls_through_to_agy(tmp_path, refusal):

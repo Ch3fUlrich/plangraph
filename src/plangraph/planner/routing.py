@@ -110,6 +110,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     ``overflow`` marks a context-overflow failure: the window class grows by one.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
+    from plangraph.routing_support.resolver import detect_model_family
     effective_role = role if role is not None else card.get("role")
     exclude_fams = set(exclude_families)
     legs = tuple(legs)
@@ -141,7 +142,8 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     for pos, leg in enumerate(legs):
         if not leg_active(leg):
             why = "disabled"
-        elif effective_role == "implement" and (leg.claude_family or leg.family in ("claude", "anthropic")):
+        elif effective_role == "implement" and (leg.claude_family or
+                any(detect_model_family(value) == "claude" for value in (leg.family, leg.model))):
             why = "excluded_family"
         elif leg.id in unavailable:
             why = "unavailable"

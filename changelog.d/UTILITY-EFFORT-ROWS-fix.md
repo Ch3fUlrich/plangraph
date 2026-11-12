@@ -1,0 +1,2 @@
+- Fix automatic implement exclusion for every Claude-family alias, including Fable, through canonical resolver family detection; retain the Sol xhigh default and agy Gemini fallback (D-5206/D-5212).
+- Restore Python/Rust reconciliation fixture parity with the optional leg effort field, without changing the fixture contract test.

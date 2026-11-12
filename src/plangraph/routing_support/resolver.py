@@ -354,7 +354,7 @@ MODEL_FAMILIES = frozenset({
 def detect_model_family(model_id: str) -> str:
     """Detect the canonical model family: claude, gemini, gpt, mimo, qwen, deepseek, muse, glm, kimi."""
     mid = (model_id or "").lower()
-    if any(tok in mid for tok in ("claude", "sonnet", "haiku", "opus")):
+    if any(tok in mid for tok in ("claude", "anthropic", "fable", "sonnet", "haiku", "opus")):
         return "claude"
     if any(tok in mid for tok in ("gemini", "argon")):
         return "gemini"

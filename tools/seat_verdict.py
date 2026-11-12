@@ -62,7 +62,7 @@ _BLOCKING_LABEL = re.compile(
     r"\b[*_`]*(?:critical|high|med|medium|major|blocker)[*_`]*\s*(?:[:(]|[-–—]\s)", re.I)
 _LOW_LABEL = re.compile(
     r"\b[*_`]*(?:low|lows|nit|nits|minor)[*_`]*(?:\s+only[*_`]*)?\s*[:(]", re.I)
-_VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
+_VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[*_`]*(?:[\s*_`]*:[\s*_`]*|[ \t]+(?=[*_`]*(?:[a-z]+|request[ _-]+changes|no[ -]+go)[*_`]*[.,;:!]*[ \t]*$))(.*)$", re.I)
 # word end: end/space/punctuation and NOT followed by "|" or "/" (that would
 # be an echoed "pass | fix | halt" template, not a decision); "?" is not a word
 # end (r3): "PASS? commentary" is a question, not a decision
@@ -117,7 +117,7 @@ def parse_verdict(text):
             found = (match, idx)
     if found is not None:
         match, idx = found
-        stripped = match.group(1).strip()
+        stripped = match.group(1).strip().lstrip('*_`')
         if _REQUEST_CHANGES.match(stripped):
             return False, idx
         if re.match(r"no(?:-|\s+)go\b", stripped, re.I):
