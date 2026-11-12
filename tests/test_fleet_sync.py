@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import jsonschema
@@ -93,7 +95,7 @@ def test_fleet_sync_scan_bounded_and_stops(tmp_path, monkeypatch):
     calls = []
     green = set()
     def git(*args):
-        assert args == ('rev-list', '--max-count=50', 'origin/main')
+        assert args == ('rev-list', '--first-parent', '--max-count=50', 'origin/main')
         return '\n'.join(str(i) for i in range(100))
     def query(endpoint):
         if endpoint.endswith('required_status_checks'):
@@ -117,6 +119,39 @@ def test_fleet_sync_scan_bounded_and_stops(tmp_path, monkeypatch):
     assert len(calls) == 2
 
 
+def test_fleet_sync_release_skips_merged_pr_heads(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    env = dict(os.environ, GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='test@example.invalid',
+               GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@example.invalid')
+    def git(*args, data=None):
+        return subprocess.check_output(['git', *args], input=data, text=True, env=env).strip()
+    git('init', '--quiet')
+    tree = git('mktree', data='')
+    dates = iter(range(5))
+    def commit(title, *parents):
+        env['GIT_AUTHOR_DATE'] = env['GIT_COMMITTER_DATE'] = f'200{next(dates)}-01-01T00:00:00Z'
+        return git('commit-tree', tree, *[arg for p in parents for arg in ('-p', p)],
+                   data=title + '\n')
+    base = commit('base')
+    merged_pr = commit('merged PR', base)
+    merge = commit('green merge on main', base, merged_pr)
+    pr_head = commit('newer PR head', merge)
+    tip = commit('pending merge on main', merge, pr_head)
+    git('update-ref', 'refs/remotes/origin/main', tip)
+    queried = []
+    def query(endpoint):
+        if endpoint.endswith('required_status_checks'):
+            return {'contexts': ['ci']}
+        sha = endpoint.split('/')[4]
+        queried.append(sha)
+        return {'check_runs': [], 'statuses': [
+            {'context': 'ci', 'state': 'failure' if sha == tip else 'success'}]}
+    path = tmp_path / 'release.json'
+    assert release.record(query, path=path)['sha'] == merge
+    assert json.loads(path.read_text())['sha'] == merge
+    assert pr_head not in queried
+
+
 def test_fleet_sync_configs(tmp_path, monkeypatch):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
     monkeypatch.setenv('HOME', str(tmp_path))
@@ -135,7 +170,7 @@ def test_fleet_sync_configs(tmp_path, monkeypatch):
                                  'mem_available_mb': 5048,
                                  'checked_at': release.datetime.now(release.UTC).isoformat()}))
     assert 'run_cap' not in config['hosts']['host-a']
-    assert overflow.decide(50, 5000, 2048, 3000, overflow.ready_records(config), True).host == 'host-a'
+    assert overflow.decide(5000, 2048, 3000, overflow.ready_records(config), True).host == 'host-a'
     assert genconfig.sync(registry) == 0
     (genconfig.config_dir() / 'ps-hosts.json').write_text('{"hosts": []}')
     assert genconfig.sync(registry) == 1

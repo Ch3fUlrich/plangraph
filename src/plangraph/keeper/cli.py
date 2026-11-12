@@ -10,7 +10,7 @@ import argparse
 import os
 import sys
 
-from . import (cli_admin, cli_audit_meta, cli_changelog, cli_check, cli_names,
+from . import (cli_audit_meta, cli_changelog, cli_check, cli_names,
                cli_oversight, cli_progress, cli_token, cli_verbs, outbox)
 from .cli_verbs import Session
 
@@ -305,6 +305,7 @@ def _cmd_sync(args) -> int:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "admin":
+        from . import cli_admin
         return cli_admin.dispatch(args)
     if args.command == "sync":
         return _cmd_sync(args)
