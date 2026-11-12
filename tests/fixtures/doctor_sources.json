@@ -1,0 +1,32 @@
+{
+  "max_workers": 16,
+  "timeout_secs": 3,
+  "base": {"name": "a", "target": "a", "src": "/src"},
+  "cases": [
+    {
+      "field": "name",
+      "accepted": ["a", "A0_.-", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      "rejected": [3, null, false, [], {}, "", "-a", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "a\n", "a\r\n", "a\t", "aé"]
+    },
+    {
+      "field": "target",
+      "accepted": ["u@h:22", "_a.-"],
+      "rejected": [3, null, false, [], {}, "", "-h", "h space", "h\n", "h\r\n", "h\t", "hé"]
+    },
+    {
+      "field": "src",
+      "accepted": ["/", "~/", "/source space/_.-09"],
+      "rejected": [3, null, false, [], {}, "", "relative", "/src;bad", "/src\n", "/src\r\n", "/src\t", "/srcé"]
+    },
+    {
+      "field": "win_src",
+      "accepted": ["C:/", "z:\\source space\\_.-09"],
+      "rejected": [3, null, false, [], {}, "bad", "C:relative", "C:/src;bad", "C:/src\n", "C:/src\r\n", "C:/src\t", "C:/srcé"]
+    },
+    {
+      "field": "wsl_distro",
+      "accepted": ["Ubuntu-24.04", "_", "."],
+      "rejected": [3, null, false, [], {}, "", "-Ubuntu", "Ubuntu space", "Ubuntu\n", "Ubuntu\r\n", "Ubuntu\t", "Ubuntué"]
+    }
+  ]
+}
