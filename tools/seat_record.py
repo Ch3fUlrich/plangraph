@@ -15,15 +15,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 _HEAD_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 # F8: both spellings count (review/tail.md uses TEST-GAMING).
 _TEST_GAMING = re.compile(r"^TEST[_-]GAMING:[ \t]*(.*)$", re.I | re.M)
-
-def _verdict_line():
-    """seat_verdict's authoritative VERDICT-line grammar (lazy: circular import)."""
-    from seat_verdict import _VERDICT_LINE
-    return _VERDICT_LINE
 
 def _canon_family(name):
     """Canonical family of a model or family name via seat_verdict's alias table."""
@@ -124,7 +121,7 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
                              f"family not witnessed")
         evidence.update(served_model=chosen, witness_kind="record-chosen-leg",
                         request_side_model=chosen)
-    verdict_line = _verdict_line()
+    from seat_verdict import _VERDICT_LINE as verdict_line
     lines = review_text.splitlines()
     verdicts = {" ".join(m.group(1).split()).lower()
                 for line in lines
@@ -145,16 +142,12 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         evidence["test_gaming"] = gaming.split()[0].lower()
     return evidence, review_text
 
-def record_paths(records_dir):
-    """Include host-partitioned spawner records as well as local runs."""
-    return sorted(Path(records_dir).glob("**/run-*/record.json"))
-
 def record_index(records_dir):
     """Read each record and prompt once, shared by writer and review discovery."""
     if isinstance(records_dir, dict):
         return records_dir
     rows = {}
-    for path in record_paths(records_dir):
+    for path in sorted(Path(records_dir).glob("**/run-*/record.json")):
         try:
             record = json.loads(path.read_text("utf-8"))
             if not isinstance(record, dict):
@@ -170,8 +163,6 @@ def record_index(records_dir):
 
 def merged_pr(item, git, lookup=None):
     """Resolve only an evidenced commit; injected lookup may use a JSON cache."""
-    import subprocess
-    from types import SimpleNamespace
     from plangraph.keeper.evidence_repo import repo_key
     head = item.get("head_sha")
     if not head:
@@ -196,8 +187,6 @@ def merged_pr(item, git, lookup=None):
 
 def writer_families(item, head, records_dir, git):
     """Prefer evidenced git writers; fall back to matching implement records."""
-    from types import SimpleNamespace
-    from subprocess import SubprocessError
     from plangraph.keeper.evidence_repo import repo_key
     from seat_verdict import model_family
     models = []
@@ -207,7 +196,7 @@ def writer_families(item, head, records_dir, git):
         if repo:
             try:
                 rows = git.writer_trailers(repo, head, git.repo_ref(key))
-            except (OSError, SubprocessError):
+            except (OSError, subprocess.SubprocessError):
                 rows = []
             for trailers in rows:
                 for name, value in trailers.items():
@@ -328,7 +317,11 @@ def backfill(args, poster, pr_lookup=None):
     """Print TSV discovery and optionally invoke the existing single-seat CLI."""
     import sys
     from collections import Counter
+    from contextlib import redirect_stdout, redirect_stderr
+    from io import StringIO
     from plangraph.keeper.evidence_git import GitAdapter
+    from plangraph.spawner.notify import inbox_lock, _verdict_outcome
+    from plangraph.spawner.private_io import atomic_write_private
     try:
         config = json.loads((Path.home() / ".local/share/plangraph/keeper.json").read_text())
     except (OSError, ValueError):
@@ -345,16 +338,13 @@ def backfill(args, poster, pr_lookup=None):
         return 1
     index = record_index(args.records_dir)
     cache_path = getattr(args, "pr_cache", None)
-    cache = {}
-    if cache_path:
-        try:
-            cache = json.loads(cache_path.read_text())
-        except (OSError, ValueError):
-            pass
+    try:
+        cache = json.loads(cache_path.read_text()) if cache_path else {}
+    except (OSError, ValueError):
+        cache = {}
     lookup = pr_lookup or ((cache.get if isinstance(cache, dict) else lambda _: None)
                            if cache_path else None)
     if getattr(args, "pr_lookup_gh", False) and args.backfill_apply and lookup is None:
-        import subprocess
         def lookup(sha):
             result = subprocess.run(["gh", "pr", "list", "--search", sha, "--state", "merged",
                                      "--json", "number"],
@@ -385,11 +375,22 @@ def backfill(args, poster, pr_lookup=None):
         if getattr(args, "format", "tsv") == "tsv":
             print(f"{item['key']}\t{detail.replace(chr(9), ' ').replace(chr(10), ' ')}")
         if args.backfill_apply and seats:
-            seat = seats[0]
-            failed += bool(poster(["--key", item["key"], "--seat-dir", str(seat["seat_dir"]),
-                                    "--head", seat["head_sha"], "--writer-family",
-                                   ",".join(item["writer_families"]), "--token-dir",
-                                   str(args.token_dir), "--url", args.url]))
+            directory = seats[0]["seat_dir"]
+            journal = directory / "verdict.json"
+            with inbox_lock(journal), redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                previous = json.loads(journal.read_text()) if journal.exists() else {}
+                if ((directory / "verdict.delivered").exists()
+                        or previous.get("status") in ("sending", "delivered", "skipped")):
+                    continue
+                atomic_write_private(journal, json.dumps(dict(status="sending",
+                    attempts=previous.get("attempts", 0))) + "\n")
+                rc = poster(["--key", item["key"], "--seat-dir", str(directory),
+                             "--head", seats[0]["head_sha"], "--writer-family",
+                             ",".join(item["writer_families"]), "--token-dir",
+                             str(args.token_dir), "--url", args.url])
+                _verdict_outcome(directory, "delivered" if rc == 0 else "skipped",
+                                 "backfill verifier exit " + str(rc))
+                failed += bool(rc)
     if getattr(args, "format", "tsv") == "json":
         print(json.dumps(output))
         return int(bool(failed))

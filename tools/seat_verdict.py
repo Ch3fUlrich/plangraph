@@ -257,7 +257,8 @@ def main(argv=None):
                                   "the launch commit")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
-    if args.backfill_dry_run or args.backfill_apply:
+    if args.backfill_dry_run or args.backfill_apply or (args.key is None and args.seat_dir is None):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
         if args.records_dir is None:
             args.records_dir = Path.home() / ".local/share/plangraph/spawner-records"
         if args.backfill_apply and (not args.url or not args.token_dir or args.dry_run):

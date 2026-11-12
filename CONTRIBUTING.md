@@ -50,6 +50,8 @@ The RUN-WORKTREE Python regression exception (D-5062) retires with SPAWNER-RUST-
 Work that covers two plan items is two lanes.
 A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) only for the item's latest verified head; interrupted sends are not blindly replayed.
 
+Historical seat discovery uses `python3 tools/seat_verdict.py --snapshot plan.snapshot.json --records-dir RECORDS` (equivalently, `--backfill-dry-run`). It is local and read-only by default; `--format json` emits structured outcomes, and `--pr-cache CACHE` supplies evidenced-commit-to-PR mappings without network access. Keeper writes require `--backfill-apply --url URL --token-dir TOKENS`; only apply may enable network PR lookup with `--pr-lookup-gh`. Backfill retains the existing verdict parser, exact-head binding, independent reviewer family and PASS safety gates. It shares the spawner's locked `verdict.json` / `verdict.delivered` outbox, so completed or ambiguous sends are never blindly replayed, including when the forward path already handled the record. A nonzero verifier result is terminal for automatic backfill replay; reconcile an ambiguous delivery before any operator-authorized retry. See [the historical backfill diagnosis](docs/seat-verdict-backfill-diagnosis.md) for the original observations; Slice A has since supplied the forward completion bridge.
+
 New production code must be Rust unless explicitly listed in `tools/new_code_allowlist.txt`; the host-readiness source-probe helper is a single-file exception for the pre-gate lane, retired by `SPAWNER-RUST-PORT`.
 
 For an offline judge brief, run `python3 tools/judge_prompt.py --findings findings.txt

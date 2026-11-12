@@ -1,5 +1,11 @@
 # Seat verdict backfill diagnosis
 
+Historical diagnosis: the observations and implementation gaps below describe the
+original saved dry-runs, not the current forward path. Slice A (PR #734), now on
+main, supplies the completion-to-verdict bridge and its independent delivery
+outbox. Historical backfill uses that same locked outbox to avoid replaying a
+forwarded or ambiguous verdict; it does not replace the bridge or its parser.
+
 ## Observed counts
 
 The saved initial dry-run inspected 177 in-review items and accepted zero:
