@@ -65,6 +65,7 @@ pub mod scope;
 pub mod seat_pool;
 pub mod slots;
 pub mod stall;
+pub mod turn_budget;
 pub mod watch;
 pub mod workspace;
 pub mod workspace_bundle;

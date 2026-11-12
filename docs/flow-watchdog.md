@@ -42,3 +42,16 @@ Systemd prevents concurrent ticks of this service; do not run manual concurrent
 instances against its state directory. Routing advances despite pending push;
 the queue retains its head and newest 255 events, reporting overflow on stderr. Collectors, freshness and host integration
 are deployment prerequisites, not supplied by this checker.
+
+## Optional turn-budget reader
+
+Set `PLANGRAPH_TURN_BUDGET_STATE_DIR` to the fleet state root to opt into the
+small read-only Rust status reader. Unset, the watchdog never reads session
+counts. The reader scans `<state>/status/*.json`, skips corrupt/unrelated files,
+and recomputes each rolling-hour count at the tick's time. See
+[Turn-budget hook](turn-budget-hook.md) for the producer and schema.
+Over-budget sessions each enqueue one exact `TURN-BUDGET <role> <session>
+wake=<n>/<cap> hour=<n>/<cap>` message, without a `FLOW-WATCHDOG:` prefix;
+both caps firing still yields one line. The existing active-set/queue machinery
+suppresses identical lines until recovery or changed counts. No collector,
+settings change, hook installation or live activation is performed by this lane.

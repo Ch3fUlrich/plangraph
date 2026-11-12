@@ -121,7 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = Path::new(&args[2]);
     fs::create_dir_all(dir)?;
     let pending = dir.join("pending.json");
-    let messages = match &validated {
+    let mut messages = match &validated {
         Ok(s) => {
             let mut messages = s.stuck.messages();
             messages.extend(hosts::messages(&s.hosts));
@@ -133,6 +133,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(_) => vec!["invalid snapshot".to_owned()],
     };
+    if let Some(state) = std::env::var_os("PLANGRAPH_TURN_BUDGET_STATE_DIR") {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        messages.extend(pg_worker_core::turn_budget::read_alerts(
+            Path::new(&state),
+            now,
+        ));
+    }
     let active = messages.join("\n");
     let queue_path = dir.join("queue.json");
     let mut queue: Vec<serde_json::Value> = match fs::read(&queue_path) {
@@ -146,8 +156,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if previous.lines().any(|line| line == message) {
                 continue;
             }
+            let line = if message.starts_with("TURN-BUDGET ") {
+                message.clone()
+            } else {
+                format!("FLOW-WATCHDOG: {message}")
+            };
             queue.push(serde_json::json!({"kind":"alert", "recipient":"routing",
-                "message":format!("FLOW-WATCHDOG: {message}"), "active":message}));
+                "message":line, "active":message}));
             atomic(&queue_path, &serde_json::to_string(&queue)?)?;
         }
         atomic(&dir.join("active"), &active)?;

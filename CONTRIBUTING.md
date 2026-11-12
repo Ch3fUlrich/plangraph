@@ -122,3 +122,14 @@ An explicit missing or unreadable list refuses pushes to any remote. The env lis
 Remotes are public unless `git config remote.<name>.plangraph-private true` is set:
 that skips private-word matching, not public patterns. Classification uses local config only.
 Diagnostics never show matched values or the words-file path.
+
+## Turn-budget hook development
+
+The standalone Rust `turn-budget-hook` lives in `rust/worker-core`, beside the
+existing watchdog binaries; `tools/hooks/install_hooks.sh` remains Python-only.
+Build, registration examples, injectable state paths and the polling-recognition
+boundary are documented in [Turn-budget hook](docs/turn-budget-hook.md).
+Run its hermetic contracts with `cargo test --manifest-path rust/Cargo.toml -p
+pg-worker-core --test turn_budget_hook --test turn_budget_poll --test
+turn_budget_alert --test turn_budget_watchdog`. Tests never install hooks, read
+live session state, or change permissions/settings files.

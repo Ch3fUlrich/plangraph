@@ -8,5 +8,8 @@ src/plangraph/routing_support/clients.py -> docs/lean-review-harness.md
 src/plangraph/routing_support/review_mode.py -> docs/lean-review-harness.md
 src/plangraph/spawner/** -> docs/SPAWNER.md
 rust/worker-core/src/writer_* -> docs/SPAWNER.md
+rust/worker-core/src/turn_budget/** -> docs/turn-budget-hook.md
+rust/worker-core/src/bin/turn-budget-hook.rs -> docs/turn-budget-hook.md
+rust/worker-core/src/bin/flow-watchdog.rs -> docs/flow-watchdog.md
 tests/test_check_changelog_docs.py -> CONTRIBUTING.md
 tools/** -> CONTRIBUTING.md
