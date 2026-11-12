@@ -4,3 +4,4 @@
 - MiMo group: replace October pro/flash scores with separately published AA v5.0.1 snapshot scores 30/27, with source URLs and 2026-11-12 snapshot dates; no guessed cache, provider-speed, or coding metrics.
 - Remaining group: publish Gemini, Qwen, Kimi and component-only Muse xhigh/DeepSeek/GLM/Kimi K3 evaluations. Unmeasured: agy-gpt-oss-120b (medium), omniroute-grok-4.7 (unspecified effort), claude-haiku-5.5 (unspecified effort), claude/claude-haiku-4-5, omniroute/gemini-3.8-flash (unverified route); retained disabled, never removed. Unavailable composite/cost/speed stays NULL, not a fabricated value.
 - Verify explicit Fable selection/family fences and MCP query provenance; retain the exact disabled-leg list and model/effort inventory in regression coverage.
+- Keep a published composite with unknown task cost queryable but out of utility ranking, without supplying a guessed default cost.

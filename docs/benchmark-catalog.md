@@ -22,5 +22,5 @@ throughput/cost describe the cited endpoint, not a claim about subscription burn
 The completed snapshot replaces uncited October seeds rather than attaching
 plausible URLs to old scores. SciCode-only rows for
 Muse xhigh, DeepSeek, GLM and Kimi K3 retain a NULL composite; `benchmark_options`
-does not treat component evidence as a composite ranking score. Unspecified
+does not treat component evidence or unknown task costs as a utility input. Unspecified
 Grok/Haiku efforts and GPT-OSS medium are unmeasured and disabled, not removed.

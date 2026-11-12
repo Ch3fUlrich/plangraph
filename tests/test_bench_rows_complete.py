@@ -109,7 +109,9 @@ def test_exact_effort_scores_and_components(tmp_path):
         muse = db.get_model("opencode-go/muse-spark-1.3-contributor")
         assert muse["aa_intelligence"] is None and muse["scicode"] == pytest.approx(59.722222)
         assert muse["cost_per_task_usd"] is None
-    assert muse["model_id"] not in benchmark_options(False, str(path))["benchmark"]
+    ranked = benchmark_options(False, str(path))["benchmark"]
+    assert muse["model_id"] not in ranked
+    assert "gemini-3.8-flash-low" not in ranked  # published score, unknown task cost
 
 
 def test_migrate_original_not_null_schema_without_data_loss():
