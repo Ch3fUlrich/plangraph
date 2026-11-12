@@ -35,12 +35,12 @@ fn quoted_json_key_keeps_name_and_drops_value() {
     let val = ["abcd", "1234"].concat();
     let text = format!("\"{key}\": \"{val}\"");
     let out = redact(&text);
-    assert_eq!(out, format!("\"{key}\": {REDACTED}"));
+    assert_eq!(out, format!("\"{key}\": \"{REDACTED}\""));
     assert!(!out.contains(&val), "{out}");
 
     let tight = format!("\"{key}\":\"{val}\"");
     let out = redact(&tight);
-    assert_eq!(out, format!("\"{key}\":{REDACTED}"));
+    assert_eq!(out, format!("\"{key}\":\"{REDACTED}\""));
 }
 
 #[test]
@@ -49,7 +49,7 @@ fn single_quoted_key_and_value() {
     let val = ["hunter", "22hunter22"].concat();
     let text = format!("'{key}': '{val}'");
     let out = redact(&text);
-    assert_eq!(out, format!("'{key}': {REDACTED}"));
+    assert_eq!(out, format!("'{key}': '{REDACTED}'"));
     assert!(!out.contains(&val), "{out}");
 }
 
@@ -59,12 +59,12 @@ fn quoted_value_with_spaces_is_fully_redacted() {
     let val = ["a ", "b ", "c"].concat();
     let text = format!("{key}: \"{val}\"");
     let out = redact(&text);
-    assert_eq!(out, format!("{key}: {REDACTED}"));
+    assert_eq!(out, format!("{key}: \"{REDACTED}\""));
     assert!(!out.contains("b c"), "{out}");
 
     let text = format!("{key} = '{val}'");
     let out = redact(&text);
-    assert_eq!(out, format!("{key} = {REDACTED}"));
+    assert_eq!(out, format!("{key} = '{REDACTED}'"));
 }
 
 #[test]
@@ -203,11 +203,10 @@ fn seat_review_edge_cases() {
     check(format!("{{{key}: }}"), format!("{{{key}: }}"));
     check(format!("url?{key}=&x=1"), format!("url?{key}=&x=1"));
     check(format!("{key}=a \"b c\" d"), format!("{key}={REDACTED}"));
-    // Existing inline tests replace the quoted value whole, so the
-    // placeholder is not quoted here.
+    // Keep the Python quote-preserving result, including JSON structure.
     check(
         format!("{{\"{key}\": \"abc\"}}"),
-        format!("{{\"{key}\": {REDACTED}}}"),
+        format!("{{\"{key}\": \"{REDACTED}\"}}"),
     );
 }
 
@@ -223,11 +222,10 @@ fn placeholder_tail_and_unicode_space() {
     // 4a: the placeholder alternative consumes the glued "x"; replacing
     // the whole match with one placeholder drops it.
     check(format!("{name}=[REDACTED]x"), format!("{name}={REDACTED}"));
-    // 4a: the placeholder alternative consumes only a glued tail; a
-    // whitespace-separated tail is left exactly as it is.
+    // Mask whitespace-separated placeholder tails too, matching Python.
     check(
         format!("{name}=[REDACTED] tail text"),
-        format!("{name}=[REDACTED] tail text"),
+        format!("{name}=[REDACTED]"),
     );
     // 4a/4b: [^\S\r\n]* puts the NBSP in group 3, so it is kept; group 4
     // matches "secret" and is replaced.
@@ -254,19 +252,22 @@ fn glued_tail_is_idempotent() {
 
     check(
         format!("{name}=\"hunter2\" --flag"),
-        format!("{name}={REDACTED} --flag"),
+        format!("{name}=\"{REDACTED}\" --flag"),
     );
-    check(format!("{name}=\"a\"b"), format!("{name}={REDACTED}"));
+    check(format!("{name}=\"a\"b"), format!("{name}=\"{REDACTED}\"b"));
     check(format!("{name}=[REDACTED]x"), format!("{name}={REDACTED}"));
     check(
         format!("{name}=[REDACTED] tail text"),
-        format!("{name}={REDACTED} tail text"),
+        format!("{name}={REDACTED}"),
     );
-    check(format!("{name}=\"a\",x"), format!("{name}={REDACTED},x"));
+    check(
+        format!("{name}=\"a\",x"),
+        format!("{name}=\"{REDACTED}\",x"),
+    );
 
     let json = format!("{{\"{name}\":\"v\",\"other\":1}}");
     let once = redact(&json);
-    let expected = format!("{{\"{name}\":{REDACTED},\"other\":1}}");
+    let expected = format!("{{\"{name}\":\"{REDACTED}\",\"other\":1}}");
     assert_eq!(once, expected, "{json}");
     assert!(once.contains("\"other\":1"), "{once}");
     assert_eq!(redact(&once), once, "{once}");
@@ -301,9 +302,12 @@ fn opening_quote_belongs_to_the_value_not_the_key_group() {
     // Trace: in `NAME="abc"` the optional key quote after the name is
     // empty because the next byte is `=`; 4a's group 3 takes `=`, and
     // its complete quoted-value branches consume `"abc"`/`'abc'`/`"abc def"`.
-    check(format!("{name}=\"abc\""), format!("{name}={REDACTED}"));
-    check(format!("{name}='abc'"), format!("{name}={REDACTED}"));
-    check(format!("{name}=\"abc def\""), format!("{name}={REDACTED}"));
+    check(format!("{name}=\"abc\""), format!("{name}=\"{REDACTED}\""));
+    check(format!("{name}='abc'"), format!("{name}='{REDACTED}'"));
+    check(
+        format!("{name}=\"abc def\""),
+        format!("{name}=\"{REDACTED}\""),
+    );
 }
 
 #[test]

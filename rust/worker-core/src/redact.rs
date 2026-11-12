@@ -35,12 +35,11 @@ fn patterns() -> &'static [regex::Regex] {
             // 3. Authorization/Bearer headers: keep the word "Bearer", cut the value.
             r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}",
             // 4a. Env-style assignments: keep the credential name, cut the
-            //     value. Separator whitespace is horizontal Unicode whitespace
-            //     only, never CR/LF, so it never crosses a newline. Complete
-            //     quoted values are preferred. Both they and the placeholder
-            //     consume only a GLUED tail G = [^\s,;"'}\])&]* — directly
-            //     attached, stopping at whitespace, comma, semicolon, quotes,
-            //     `&`, or a closing delimiter — so the rule is idempotent.
+            //     value. Colon separator whitespace may cross CR/LF; equals
+            //     separator whitespace stays horizontal. Complete
+            //     quoted values are preferred. assign::redact keeps their
+            //     quotes and suffixes (matching Python), and masks placeholder
+            //     tails through the structural boundary for idempotency.
             //     An unquoted value may not start with `}`, `]`, `)`, or `&`
             //     after either separator. An unterminated quote falls back to
             //     the rest of the line (no closing delimiter semantics).
@@ -49,7 +48,7 @@ fn patterns() -> &'static [regex::Regex] {
             //     rather than leaking a rejected expression's tail. A
             //     backslash before a line feed (or CRLF) continues the value
             //     onto the next line, quoted, unquoted, or unterminated.
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*|[A-Za-z0-9_]*_KEY|PG_DSN)(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\][^\s,;"'}\])&]*|(?:[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*[^\S\r\n]+)?[\[({][^\r\n]*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#,
+            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*|[A-Za-z0-9_]*_KEY|PG_DSN)(["']?)([^\S\r\n]*=[^\S\r\n]*|\s*:\s*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\][^\s,;"'}\])&]*|(?:[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*[^\S\r\n]+)?[\[({][^\r\n]*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#,
             // 4b. Same assignment rule for `=` only: after `=` an unquoted
             //     value may start with `}`, `]`, or `)` only when at least one
             //     more character follows before the next delimiter. A bare
@@ -81,25 +80,18 @@ fn patterns() -> &'static [regex::Regex] {
 /// Patterns 1–2 handle multi-line PEM blocks and are applied first, to the
 /// whole text, as are the remaining patterns; wrapped joins run before pattern 5.
 /// Idempotent: running already-redacted text through again changes nothing.
-/// Assignments mask every RHS except the four source forms documented in
-/// [`assign`]: prefixed strings with braces, direct identifier calls/indexes,
-/// direct ++/--/!/~ identifier prefixes and quoted-literal expression suffixes.
-/// Other secret rules remain independent.
+/// Assignments follow [`assign`]: tight uppercase env forms are never exempt;
+/// other forms preserve braced prefixed strings, balanced direct calls/indexes
+/// and digit-free ++/-- identifiers, but still scan nested credentials. Quoted
+/// literals are masked with quotes and suffixes kept; colon whitespace may
+/// cross newlines. Other secret rules remain independent.
 pub fn redact(text: &str) -> String {
     let rs = patterns();
     let out = rs[0].replace_all(text, REDACTED).into_owned();
     let out = rs[1].replace_all(&out, REDACTED).into_owned();
     let out = rs[2].replace_all(&out, "Bearer [REDACTED]").into_owned();
-    let out = rs[3]
-        .replace_all(&out, |caps: &regex::Captures| {
-            assign::replacement(caps, &out)
-        })
-        .into_owned();
-    let out = rs[4]
-        .replace_all(&out, |caps: &regex::Captures| {
-            assign::replacement(caps, &out)
-        })
-        .into_owned();
+    let out = assign::redact(&out, &rs[3]);
+    let out = assign::redact(&out, &rs[4]);
     let out = super::redact_wrapped::redact_wrapped(&out);
     let out = rs[5].replace_all(&out, REDACTED).into_owned();
     let out = rs[6].replace_all(&out, REDACTED).into_owned();

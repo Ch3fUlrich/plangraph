@@ -8,46 +8,110 @@ _ASSIGN_LITERAL = re.compile(
     r'''(?i:(fr|rf|br|rb|f|b|r))?("""(?:\\.|[^\\\r\n])*?"""|'''
     r"'''(?:\\.|[^\\\r\n])*?'''|"
     r'''"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')''')
-_ASSIGN_SUFFIX = re.compile(r'^(?:[+*/%&|^<>=!?]|\.[A-Za-z_]|\[|-(?:[^-]|$))')
-_ASSIGN_SYNTAX = re.compile(
-    r'^(?:(?:\+\+|--|[!~])[A-Za-z_]|'
-    r'[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*[\[(])')
+_ASSIGN_CALL = re.compile(r'[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*[\[(]')
+_ASSIGN_PREFIX = re.compile(r'(?:\+\+|--)[A-Za-z_]+(?:;|$)')
+_ASSIGN_LINE = re.compile(r'[^\r\n]*')
+_ASSIGN = re.compile(
+    r'''(?i)((?:["'])?\b(?P<name>[A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|'''
+    r'''API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*|[A-Za-z0-9_]*_KEY|PG_DSN)'''
+    r'''(?:["'])?(?P<separator>[^\S\r\n]*=[^\S\r\n]*|\s*:\s*))''')
 
 
-def _assignment_is_source(value):
-    if value.startswith('[REDACTED]'):
-        return False
+def _assignment_source_end(value):
     literal = _ASSIGN_LITERAL.match(value)
     if literal:
-        return bool((literal[1] and '{' in literal[2] and '}' in literal[2])
-                    or _ASSIGN_SUFFIX.match(value[literal.end():].lstrip()))
-    return bool(_ASSIGN_SYNTAX.match(value))
+        return literal.end() if literal[1] and '{' in literal[2] and '}' in literal[2] else 0
+    prefix = _ASSIGN_PREFIX.match(value)
+    if prefix:
+        return prefix.end()
+    call = _ASSIGN_CALL.match(value)
+    if not call:
+        return 0
+    stack, index = [], call.end() - 1
+    while index < len(value):
+        char = value[index]
+        if char in '\"\x27':
+            quoted = _ASSIGN_LITERAL.match(value, index)
+            if not quoted:
+                return 0
+            index = quoted.end()
+            continue
+        if char in '([{':
+            stack.append(char)
+        elif char in ')]}':
+            if not stack or stack.pop() != {')': '(', ']': '[', '}': '{'}[char]:
+                return 0
+            if not stack:
+                return index + 1
+        index += 1
+    return 0
 
 
-def _redact_assignment(match):
-    # Inspect the whole RHS: regex matches can end before a call's closing
-    # delimiter or before an operator following a complete quoted literal.
-    rhs = re.split(r'[\r\n]', match.string[match.end(1):], maxsplit=1)[0]
-    if _assignment_is_source(rhs):
-        return match[0]
-    value = match[0][len(match[1]):]
-    replacement = (value[0] + '[REDACTED]' + value[-1]
-                   if value[0] in '\"\x27' and value[-1] == value[0] else '[REDACTED]')
-    return match[1] + replacement
+def _redact_assignments(text):
+    parts, source_ends, copied, cursor = [], [], 0, 0
+    while (match := _ASSIGN.search(text, cursor)):
+        start = match.end()
+        end = _ASSIGN_LINE.match(text, start).end()
+        rhs = text[start:end]
+        while source_ends and start >= source_ends[-1]:
+            source_ends.pop()
+        env = re.fullmatch(r'[A-Z0-9_]+', match['name']) and match['separator'] == '='
+        source_end = _assignment_source_end(rhs)
+        if source_end and not env:
+            source_ends.append(start + source_end)
+            cursor = start  # An exempt outer expression must not hide nested credentials.
+            continue
+        literal = _ASSIGN_LITERAL.match(rhs)
+        replacement = '[REDACTED]'
+        if literal and not literal[1]:
+            quote = rhs[:3] if rhs.startswith(('"""', "'''")) else rhs[0]
+            end, replacement = start + literal.end(), quote + replacement + quote
+        elif source_ends:
+            end = start + _assignment_value_end(rhs, source_ends[-1] - start - 1)
+        if end > start:
+            parts.extend((text[copied:start], replacement))
+            copied = end
+        cursor = max(start, end)
+    return ''.join(parts) + text[copied:]
+
+
+def _assignment_value_end(value, limit):
+    """Keep an enclosing source expression's delimiters, not a secret's own."""
+    stack, index = [], 0
+    while index < min(len(value), limit):
+        char = value[index]
+        if char in '\"\x27':
+            quoted = _ASSIGN_LITERAL.match(value, index)
+            if not quoted:
+                return min(len(value), limit)
+            index = quoted.end()
+            continue
+        if char in '([{':
+            stack.append(char)
+        elif char in ')]}':
+            if not stack:
+                break
+            if stack.pop() != {')': '(', ']': '[', '}': '{'}[char]:
+                return min(len(value), limit)
+        elif char == ',' and not stack:
+            break
+        index += 1
+    return min(index, limit)
 
 
 def redact(value):
     """Shared fail-closed prompt/output scrubber; withhold text on failure.
 
-    Credential-name assignments mask every RHS except exactly these source
-    forms: f/b/r-prefixed string literals (including rf/fr and triple quotes)
-    containing both braces; identifiers (dotted allowed) directly followed by
-    '(' or '['; ++/--/!/~ directly before an identifier; and quoted literals
-    followed by a symbolic operator, attribute or index (horizontal space
-    allowed before that suffix). Bare/dotted words, spaced/tight operators
-    between bare words, word operators and/or/if/else/in/is, and bare container
-    starts are not exempt. Other secret rules and recursive dictionary-key
-    masking still apply independently.
+    Credential assignments mask every RHS; tight ALL_UPPERCASE=value env forms
+    never qualify for a source exemption. Otherwise preserve only f/b/r-prefixed
+    strings containing both braces (including rf/fr and triple quotes), direct
+    dotted identifier calls/indexes balanced on the same line, and ++/-- followed
+    directly by a digit-free identifier ending at EOL or ';'. Scan preserved
+    expressions for nested credential assignments too. Plain quoted literals
+    are masked with their quotes and expression suffixes kept. Colon separator
+    whitespace may cross newlines; equals separator whitespace may not. Bare
+    words, operators, containers and !/~ prefixes are not exempt. Other secret
+    rules and recursive dictionary-key masking apply independently.
     """
     try:
         if isinstance(value, dict):
@@ -62,11 +126,7 @@ def redact(value):
             # Greedily consume through the last @ within the quoted/space boundary.
             value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',
                            r'\1[REDACTED]\2', value)
-            return re.sub(
-                r'(?im)((?:["\x27])?\b(?P<name>\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
-                r'(?:["\x27])?[^\S\r\n]*(?P<separator>[=:])[^\S\r\n]*)(?:"(?:\\.|[^"\\\r\n])*"'
-                r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)",
-                _redact_assignment, value)
+            return _redact_assignments(value)
         return value
     except Exception:
         return '[autoos:redaction failed; output withheld]\n'
