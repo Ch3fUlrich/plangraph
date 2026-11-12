@@ -348,16 +348,16 @@ def test_writer_order_d2683_writer_family_exclusion():
     assert plan_rev.first_leg.id == "agy-gemini-3.8-flash"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
     assert plan_imp.first_leg.id == "cx-gpt-6.1-sol" and "gemini" not in {l.family for l in plan_imp.legs}
-    # F2: writer_families does not exclude implement legs
+    # F2 / D-5240: writer_families does not exclude the restored subscription Gemini.
     plan_wf = plan_spawn(c, role="implement", writer_families=("gemini",))
-    assert [l.id for l in plan_wf.legs] == ["cx-gpt-6.1-sol", "opencode-console-muse-spark"]
+    assert [l.id for l in plan_wf.legs] == ["cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "opencode-console-muse-spark"]
 
 
 def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     # F1 new test: implement plan_spawn with benchmark rows that score cx-gpt-6.1-sol
     # highest still returns D-3745 lead-first order, and a limited leg is still skipped.
     rows = {
-        "omniroute/cx-gpt-6.1-sol": {"model_id": "omniroute/cx-gpt-6.1-sol", "aa_intelligence": 999, "cost_per_task_usd": 0, "pool_burn_weight": 0},
+        "omniroute/cx-gpt-6.1-sol-xhigh": {"model_id": "omniroute/cx-gpt-6.1-sol-xhigh", "aa_intelligence": 999, "cost_per_task_usd": 0, "pool_burn_weight": 0},
         "gemini-3.8-flash": {"model_id": "gemini-3.8-flash", "aa_intelligence": 1, "cost_per_task_usd": 0, "pool_burn_weight": 0},
         "mimo/mimo-v2.6-pro": {"model_id": "mimo/mimo-v2.6-pro", "aa_intelligence": 1, "cost_per_task_usd": 0, "pool_burn_weight": 0},
     }
@@ -378,7 +378,7 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
     review = plan_spawn(dict(c, diff_ref={"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}), role="review", writer_families=("gpt",), benchmark=rows, leg_reader=reader)
     assert {s["leg"]: s["reason"] for s in review.skipped}["mimo-v2.6-pro"] == "limited"
-    assert [l.id for l in plan.legs] == ["cx-gpt-6.1-sol", "opencode-console-muse-spark"]
+    assert [l.id for l in plan.legs] == ["cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "opencode-console-muse-spark"]  # D-5240
 
 
 def test_no_implement_plan_leg_has_claude_family():

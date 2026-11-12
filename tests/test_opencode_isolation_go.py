@@ -139,11 +139,12 @@ def test_integration_is_opt_in():
 
 def test_resolution_preserves_harness(monkeypatch):
     from plangraph.spawner.target import resolve_target
+    # D-5240's default Sol leg now serves the xhigh model.
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
-        {'id': 'omniroute/cx-gpt-6.1-sol', 'combos': ['gpt-test']}])
+        {'id': 'omniroute/cx-gpt-6.1-sol-xhigh', 'combos': ['gpt-test']}])
     monkeypatch.setattr(resolver, 'catalog_row_admitted', lambda row: True)
     target, leg = resolve_target('gpt-test')
-    assert target == leg.model == 'omniroute/cx-gpt-6.1-sol'
+    assert target == leg.model == 'omniroute/cx-gpt-6.1-sol-xhigh'
     assert leg.harness == 'opencode'
 
 

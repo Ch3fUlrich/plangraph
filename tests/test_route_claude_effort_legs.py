@@ -137,11 +137,17 @@ def test_explicit_writer_implement_allowed(tmp_path, leg_id):
 
 
 def test_other_writers_still_refused(tmp_path):
+    # D-5240 restores base agy Gemini; other non-approved writers stay disabled.
     with pytest.raises(SpawnRefused, match='D-3828'):
         asyncio.run(_svc(tmp_path).spawn(
             card={'estimate_tokens': 20000}, prompt='Implement public code', role='implement',
-            leg='agy-gemini-3.8-flash', dry_run=True,
+            leg='mimo-v2.6-pro', dry_run=True,
             override_reason='operator 2026-11-09 explicit writer'))
+    result = asyncio.run(_svc(tmp_path).spawn(
+        card={'estimate_tokens': 20000}, prompt='Implement public code', role='implement',
+        leg='agy-gemini-3.8-flash', dry_run=True,
+        override_reason='D-5240 subscription writer'))
+    assert result['chosen_leg']['id'] == 'agy-gemini-3.8-flash'
 
 
 @pytest.mark.parametrize('leg_id', sorted(CLAUDE))

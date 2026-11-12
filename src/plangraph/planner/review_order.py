@@ -1,6 +1,6 @@
-"""D-4147: mimo first, table order next, Haiku last (independent of cost)."""
+"""D-5240: cost tier first; D-4147 role preferences remain within each tier."""
 
 
 def review_key(leg, tier_idx, pos):
     from .route_policy import review_priority
-    return (review_priority(leg), pos)
+    return (tier_idx, review_priority(leg), pos)

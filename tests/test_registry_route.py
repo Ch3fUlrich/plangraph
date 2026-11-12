@@ -177,7 +177,8 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
         assert policy.skip_reason(by_id[leg_id], role) == reason
         if role == "implement":
             assert reasons == {}  # Role-ineligible legs are not policy skips.
-            assert [leg.id for leg in plan.legs] == ['cx-gpt-6.1-sol', 'opencode-console-muse-spark']
+            # D-5240: subscription Gemini is the fallback before paid Muse.
+            assert [leg.id for leg in plan.legs] == ['cx-gpt-6.1-sol', 'agy-gemini-3.8-flash', 'opencode-console-muse-spark']
             from plangraph.planner.routing import SpawnRefused
             from plangraph.spawner.service import SpawnService
             with pytest.raises(SpawnRefused, match=r"leg disabled: .*D-4196"):
@@ -207,7 +208,8 @@ def test_route_skips_paused_harness_per_role():
     reasons = {s["leg"]: s["reason"] for s in paused.skipped}
     assert {leg_id: reasons[leg_id] for leg_id in paused_ids} == dict.fromkeys(
         paused_ids, "paused_harness")
-    assert not paused.legs
+    # D-5240's agy subscription writer remains when opencode is paused.
+    assert [leg.id for leg in paused.legs] == ["agy-gemini-3.8-flash"]
 
 
 def test_explicit_policy_argument_wins():
@@ -230,7 +232,8 @@ def test_default_policy_seats_deepseek_for_review():
     # D-3552: with the live policy a deepseek leg may be a review seat.
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
     assert "deepseek" in {leg.family for leg in plan.legs}
-    assert _families(plan)[0] == "mimo"
+    # D-5240: this historical table's free DeepSeek precedes subscription mimo.
+    assert _families(plan) == ["deepseek", "mimo"]
 
 
 def test_seat_never_shares_family_with_a_single_writer():

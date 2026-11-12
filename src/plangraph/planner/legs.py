@@ -100,7 +100,7 @@ DEFAULT_LEGS = (
         disabled="D-4196 opencode zen never worked, use opencode go; never remove (D-3828)"),
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
-    Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
+    Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol-xhigh",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",),
         note="D-3605: operator implement leg (ChatGPT subscription via OmniRoute cx)"),
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
@@ -134,7 +134,7 @@ DEFAULT_LEGS = (
     Leg("opencode-console-muse-spark", "paid", "opencode",
         "console-meta/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
         True, roles=("review", "implement"),
-        note="D-5173: muse-amber, routed review seat and second writer after Sol, "
+        note="D-5240: muse-amber, routed review seat and writer after subscription legs, "
              "pay-as-you-go; D-4280: scrubbed or public material only"),
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
@@ -156,10 +156,10 @@ DEFAULT_LEGS = (
 
 #: D-5173: the one Muse leg the route picks by itself (operator path: opencode console).
 MUSE_AMBER = "opencode-console-muse-spark"
-WRITER_ORDER: tuple[str, ...] = (
-    "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
-    MUSE_AMBER,         # D-5179: writes when Sol is unavailable
-)
+# D-5240 / rule 3.23a: tier, then table order; Muse writes only after subscriptions.
+WRITER_ORDER: tuple[str, ...] = tuple(
+    leg.id for leg in sorted(DEFAULT_LEGS, key=lambda leg: TIERS.index(leg.tier))
+    if leg.id in ("cx-gpt-6.1-sol", "agy-gemini-3.8-flash", MUSE_AMBER))
 # D-3828: retain every leg and its review order; only WRITER_ORDER legs write.
 DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
                              disabled=leg.disabled or (

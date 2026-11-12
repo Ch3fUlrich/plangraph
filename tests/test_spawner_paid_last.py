@@ -58,7 +58,8 @@ def test_paid_pin(tmp_path, monkeypatch, harness, pin, free_up, reason):
 
 
 def test_only_sol_writes():
-    assert legs.WRITER_ORDER == ('cx-gpt-6.1-sol', 'opencode-console-muse-spark')
+    # D-5240: paid Muse is third, after both subscription writers.
+    assert legs.WRITER_ORDER == ('cx-gpt-6.1-sol', 'agy-gemini-3.8-flash', 'opencode-console-muse-spark')
     assert [leg.id for leg in legs.DEFAULT_LEGS if 'implement' in leg.roles] == list(legs.WRITER_ORDER)
     assert {'deepseek', 'openrouter-free', 'mimo-v2.6-pro'} <= {leg.id for leg in legs.DEFAULT_LEGS}
 

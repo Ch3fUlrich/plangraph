@@ -102,9 +102,10 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
     assert bare["p_source"] == "operator-order"
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
     # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
+    # D-5240: the subscription DeepSeek seat precedes paid Muse.
     assert [leg["id"] for leg in bare["legs"]] == [
         "agy-gemini-3.8-flash", "agy-gpt-oss-120b", "opencode-go-gemini-4-argon",
-        "opencode-console-muse-spark", "opencode-go-deepseek-v4-flash",
+        "opencode-go-deepseek-v4-flash", "opencode-console-muse-spark",
         ]
 
 

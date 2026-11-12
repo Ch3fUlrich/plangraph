@@ -156,8 +156,8 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         assert len(models) == 9, record   # D-5198: public mechanics routes gain the paid Muse writer, not extra launches.
         assert len(runner.jobs) == 3
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
-        assert models[:4] == ['omniroute/cx-gpt-6.1-sol',
-                              'opencode/deepseek-v4.1-flash-free',
+        # D-5240 selects Sol xhigh without changing the synthetic free fallthrough.
+        assert models[:4] == ['omniroute/cx-gpt-6.1-sol-xhigh', 'opencode/deepseek-v4.1-flash-free',
                               'opencode/glm-5.3-flash-free', 'openrouter/free']
         for leg in service.route({'estimate_tokens': 1000}).legs:
                 store.record_provider_response(leg.model if '/' in leg.model else 'agy/' + leg.model,

@@ -43,7 +43,8 @@ def test_explicit_disabled_qwen_refused(tmp_path):
 def test_writer_order_sol_family_excluded():
     plan = plan_spawn({"estimate_tokens": 20000, "risk_tags": []},
                       role="implement", exclude_families=("gpt",))
-    assert [leg.id for leg in plan.legs] == ["opencode-console-muse-spark"]  # D-5179: the one fallback writer
+    # D-5240: excluding Sol still leaves subscription Gemini ahead of paid Muse.
+    assert [leg.id for leg in plan.legs] == ["agy-gemini-3.8-flash", "opencode-console-muse-spark"]
     assert "gpt" not in {leg.family for leg in plan.legs}
     assert {s["leg"]: s["reason"] for s in plan.skipped}[
         "cx-gpt-6.1-sol"] == "excluded_family"
@@ -52,7 +53,7 @@ def test_writer_order_sol_family_excluded():
 def test_writer_order_privacy_excludes_training_sol():
     assert next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol").trains_on_data is False
     # Change only Sol to training; muse-amber keeps its production training flag.
-    # Privacy eligibility must run before lead sorting, excluding both writers.
+    # Privacy eligibility excludes Sol and Muse; D-5240 retains non-training Gemini.
     legs = tuple(dataclasses.replace(leg, trains_on_data=True) if leg.id == "cx-gpt-6.1-sol" else leg
                  for leg in DEFAULT_LEGS)
     assert all(leg is original for leg, original in zip(legs, DEFAULT_LEGS)
@@ -62,7 +63,7 @@ def test_writer_order_privacy_excludes_training_sol():
     assert public.first_leg.id == "cx-gpt-6.1-sol"
     private = plan_spawn({"estimate_tokens": 20000, "risk_tags": ["secrets"]},
                          role="implement", legs=legs)
-    assert private.first_leg is None  # D-3828
+    assert [leg.id for leg in private.legs] == ["agy-gemini-3.8-flash"]  # D-5240
     assert "cx-gpt-6.1-sol" not in {leg.id for leg in private.legs}
     assert {s["leg"]: s["reason"] for s in private.skipped}[
         "cx-gpt-6.1-sol"] == "trains_on_data"
@@ -75,7 +76,7 @@ def test_cli_route_implement_gpt_first_no_claude_writer(tmp_path, capsys):
                  "--role", "implement", "--json"]) == 0
     plan = json.loads(capsys.readouterr().out)
     ids = [leg["id"] for leg in plan["legs"]]
-    assert ids == [SUBS[0], "opencode-console-muse-spark"]  # D-3828, D-5179
+    assert ids == [*SUBS[:2], "opencode-console-muse-spark"]  # D-5240: subscriptions before paid
     assert "agy-sonnet-5.5" not in ids
     assert [leg["id"] for leg in plan["legs"] if leg["claude_family"]] == []
 
@@ -83,7 +84,7 @@ def test_cli_route_implement_gpt_first_no_claude_writer(tmp_path, capsys):
 def test_route_and_refusal(tmp_path, capsys):
     assert main(['--state', str(tmp_path), 'route', '--card', '{"estimate_tokens":1000}', '--role', 'implement', '--json']) == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.1-sol'  # D-3745
+    assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.1-sol-xhigh'  # D-5240
     assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates'}
     assert main(['--state', str(tmp_path), 'spawn', 'task']) == 2
     assert 'spawn by card' in capsys.readouterr().err
@@ -101,7 +102,7 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     path.write_text(json.dumps({"banned_families": ["deepseek"], "off_families": ["glm"]}))
     monkeypatch.setenv("PLANGRAPH_ROUTE_POLICY", str(path))
     imp = plan_spawn(CARD, role="implement")
-    assert [leg.id for leg in imp.legs] == [SUBS[0], "opencode-console-muse-spark"]  # D-3828, D-5179
+    assert [leg.id for leg in imp.legs] == [*SUBS[:2], "opencode-console-muse-spark"]  # D-5240
     rev = plan_spawn(CARD, role="review", writer_families=("claude",))
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
     for leg_id in DISABLED_FREE:
@@ -141,9 +142,9 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
 def test_route_sol_unavailable_keeps_tier_writer_order():
     # D-3745: an ineligible lead does not change the fallback ordering.
     def reader(model, **kwargs):
-        return {"state": "down" if model == "omniroute/cx-gpt-6.1-sol" else "available", "evidence": None}
+        return {"state": "down" if model == "omniroute/cx-gpt-6.1-sol-xhigh" else "available", "evidence": None}
     plan = plan_spawn(CARD, role="implement", leg_reader=reader)
-    assert [leg.id for leg in plan.legs] == ["opencode-console-muse-spark"]  # D-5179
+    assert [leg.id for leg in plan.legs] == ["agy-gemini-3.8-flash", "opencode-console-muse-spark"]  # D-5240
     assert {s["leg"]: s["reason"] for s in plan.skipped}[SUBS[0]] == "down"
 
 
@@ -158,8 +159,9 @@ def test_fixed_review_order():
     legs = tuple(replace(table[id], roles=("review",), disabled=None) for id in ids)
     plan = plan_spawn(CARD, role="review", writer_families=("gpt",), legs=legs,
                       policy=RoutePolicy(), leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
-    assert [leg.id for leg in plan.legs] == ["mimo-v2.6-flash", "deepseek",
-        "agy-gemini-3.8-flash", "qodercli-qwen3.8-flash", *FREE, "claude-haiku-5.5"]
+    # D-5240: cost tier precedes within-tier mimo/Haiku preferences.
+    assert [leg.id for leg in plan.legs] == ["qodercli-qwen3.8-flash", *FREE,
+        "mimo-v2.6-flash", "agy-gemini-3.8-flash", "claude-haiku-5.5", "deepseek"]
 
 
 def test_no_anthropic_implement_leg_removes_sonnet():
@@ -191,10 +193,12 @@ def test_fixed_implement_sol_across_tiers():
         legs = (replace(table[FREE[2]], disabled=None), replace(table[SUBS[0]], tier=tier),
                 replace(table[FREE[0]], disabled=None), table[SUBS[2]])
         # route_card is a low-level ordering probe; plan_spawn filters roles.
-        expected = [SUBS[0], FREE[2], FREE[0], SUBS[2]]
+        # D-5240: even a paid lead cannot jump ahead of subscription writers.
+        expected = ([FREE[2], FREE[0], SUBS[2], SUBS[0]] if tier == "paid"
+                    else [SUBS[0], FREE[2], FREE[0], SUBS[2]])
         assert [leg.id for leg in route_card(CARD, legs=legs, role="implement").legs] == expected
         fallback = route_card(CARD, legs=legs, role="implement", unavailable=(SUBS[0],))
-        assert [leg.id for leg in fallback.legs] == expected[1:]
+        assert [leg.id for leg in fallback.legs] == [leg_id for leg_id in expected if leg_id != SUBS[0]]
 
 
 def test_implement_lead_independent_of_writer_order(monkeypatch):
@@ -226,7 +230,7 @@ def test_main_policy_gpt_first_and_retained_routes():
     clear = lambda *a, **k: {"state": "ok", "evidence": None}
     implement = plan_spawn(CARD, role="implement", policy=policy, leg_reader=clear)
     assert implement.first_leg.id == "cx-gpt-6.1-sol"
-    assert [leg.id for leg in implement.legs] == ["cx-gpt-6.1-sol", "opencode-console-muse-spark"]
+    assert [leg.id for leg in implement.legs] == [*SUBS[:2], "opencode-console-muse-spark"]  # D-5240
     for writers in (("mimo",), ("gpt",), ("claude",), ("gpt", "mimo")):
         review = plan_spawn(CARD, role="review", writer_families=writers,
                             policy=policy, leg_reader=clear)

@@ -71,7 +71,9 @@ def test_no_claude_implementers_and_haiku_last(boundary):
     assert all(l.family != 'claude' for l in plan(boundary, 'implement').legs)
     reviews = plan(boundary).legs
     haiku = next(i for i, l in enumerate(reviews) if l.id == 'claude-haiku-5.5')
-    assert all(i < haiku for i, l in enumerate(reviews) if l.family != 'claude')
+    # D-5240: Haiku is last within subscriptions, but still before paid Muse.
+    assert all(i < haiku for i, l in enumerate(reviews) if l.family != 'claude' and l.tier != 'paid')
+    assert all(haiku < i for i, l in enumerate(reviews) if l.tier == 'paid')
 
 
 @pytest.mark.parametrize('role', ['implement', 'review', 'orchestrate'])

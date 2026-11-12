@@ -35,9 +35,10 @@ def test_leg_present_review_only_and_last():
 def test_review_route_ends_with_haiku_for_mimo_writer():
     plan = plan_spawn(CARD, role="review", writer_families=("mimo",), leg_reader=_clear)
     ids = [l.id for l in plan.legs]
-    assert ids[-1] == "claude-haiku-5.5"
+    # D-5240: Haiku remains last in its subscription tier, before paid Muse.
+    assert ids[-2:] == ["claude-haiku-5.5", "opencode-console-muse-spark"]
     assert ids.index("claude-haiku-5.5") > max(
-        i for i, l in enumerate(plan.legs) if not l.claude_family)
+        i for i, l in enumerate(plan.legs) if not l.claude_family and l.tier != "paid")
 
 
 def test_claude_or_anthropic_writer_never_gets_haiku():

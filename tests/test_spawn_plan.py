@@ -17,7 +17,7 @@ def test_writer_live_limit_reset_and_scope(tmp_path, monkeypatch):
     install_fallthrough_legs(monkeypatch)
     store = LegStateStore(tmp_path / "state.sqlite")
     p = plan_spawn(CARD, role="implement", leg_reader=store, now=100)
-    assert p.first_leg.model == "omniroute/cx-gpt-6.1-sol"  # D-3745
+    assert p.first_leg.model == "omniroute/cx-gpt-6.1-sol-xhigh"  # D-5240
     nxt = next_leg_after_provider_stop(p, p.first_leg.id, 429, "quota exhausted",
                                        {"Retry-After": "60"}, "test", store=store,
                                        now=100, account="A")
@@ -57,7 +57,8 @@ def test_seats_and_impossible_fence():
     # With the other automatic families fenced, muse-amber and Haiku remain; Grok is manual-only.
     p = plan_spawn(CARD, role="review",
                    writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo"), legs=legs)
-    assert [l.family for l in p.review_seats] == ["muse", "claude"]  # D-5173
+    # D-5240: the subscription Haiku seat precedes paid Muse.
+    assert [l.family for l in p.review_seats] == ["claude", "muse"]
     assert p.error is None
     p = plan_spawn(CARD, role="review", exclude_families=("muse",),
                    writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo"), legs=legs)
@@ -71,7 +72,7 @@ def test_seats_and_impossible_fence():
 
 def test_operator_order_and_roles_roundtrip(tmp_path):
     assert [l.id for l in DEFAULT_LEGS if "implement" in l.roles] == [
-        "cx-gpt-6.1-sol", "opencode-console-muse-spark"]  # D-5173
+        "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "opencode-console-muse-spark"]  # D-5240
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
         "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
