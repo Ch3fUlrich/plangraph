@@ -8,7 +8,8 @@ from typing import Any
 
 # SEED_MODELS moved to plangraph.catalog_data (neutral module); re-exported
 # here so spawner importers keep working unchanged.
-from plangraph.catalog_data import SEED_MODELS
+from plangraph.catalog_data import SEED_MODELS as SEED_MODELS
+
 from .catalog_benchmarks import published_rows
 
 # 5-rung tier ladder ordering contract:
@@ -805,7 +806,7 @@ SEED_BENCHMARKS: list[dict[str, Any]] = [
 
 # Published rows replace only the corresponding historical seed, never an
 # operator's persisted score. Uncited legacy seed rows remain until researched.
-SEED_BENCHMARKS = list({r["model_id"]: r for r in [*SEED_BENCHMARKS, *published_rows()]}.values())
+SEED_BENCHMARKS = published_rows()
 # The 4 Role Routes
 SEED_ROUTES: list[dict[str, Any]] = [
     {

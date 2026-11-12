@@ -1,7 +1,7 @@
 # Plangraph Spawner & Model Routing Architecture
+Benchmark catalog queries expose [source URLs and dates](benchmark-catalog.md); component-only evidence never substitutes for a missing composite score.
 
 ### Windows prompt delivery
-
 Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
 argv guard (32,000 characters, or 8,000 for batch shims). This uses the existing
 per-job stdin payload path, not a temporary prompt file. Qoder retains an explicit

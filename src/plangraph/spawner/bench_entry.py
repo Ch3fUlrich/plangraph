@@ -32,7 +32,9 @@ def benchmark_options(require_bench=False, bench_db=None):
             found, errors = benchmark_rows_from_db(path)
             if errors:
                 raise BenchDataError('; '.join(errors))
-            rows.update(found)
+            # Component-only rows are queryable evidence, not composite utility.
+            rows.update({key: row for key, row in found.items()
+                         if row.get("aa_intelligence") is not None})
         # Alias mapped rows under their leg ids so the plan lookup
         # (rows.get(leg.model, rows.get(leg.id))) reaches them.
         for leg_id, model_id in LEG_BENCHMARK_MODEL.items():

@@ -19,5 +19,8 @@ GPT-6.1 Sol and Luna cover all five `CX_EFFORTS`; the unsuffixed cx leg aliases
 the medium row, matching `build_routing_envelope_headers`' default effort.
 MiMo pro/flash use the published model-page composite scores (30/27). Provider
 throughput/cost describe the cited endpoint, not a claim about subscription burn.
-Historical October seeds remain uncited until verified; group commits replace
-them with published measurements, rather than merely attaching plausible URLs.
+The completed snapshot replaces uncited October seeds rather than attaching
+plausible URLs to old scores. SciCode-only rows for
+Muse xhigh, DeepSeek, GLM and Kimi K3 retain a NULL composite; `benchmark_options`
+does not treat component evidence as a composite ranking score. Unspecified
+Grok/Haiku efforts and GPT-OSS medium are unmeasured and disabled, not removed.

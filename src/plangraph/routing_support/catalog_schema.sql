@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS catalog_models (
 CREATE TABLE IF NOT EXISTS catalog_benchmarks (
     model_id TEXT PRIMARY KEY REFERENCES catalog_models(model_id) ON DELETE CASCADE,
     master_rank INTEGER,
-    aa_intelligence REAL NOT NULL,
+    aa_intelligence REAL,
     coding_index REAL,
     agentic_index REAL,
     terminal_bench REAL,
@@ -71,13 +71,15 @@ CREATE TABLE IF NOT EXISTS catalog_benchmarks (
     frontier_code REAL,
     scicode REAL,
     cyberbench REAL,
-    verified_tok_per_s REAL NOT NULL,
+    verified_tok_per_s REAL,
     direct_api_tok_per_s REAL,
     alt_provider_tok_per_s REAL,
     ttft_seconds REAL,
-    cost_per_task_usd REAL NOT NULL,
+    cost_per_task_usd REAL,
     cache_hit_rate REAL,
     benchmark_source TEXT NOT NULL DEFAULT 'AA-v4.3.2-2026-10',
+    source_url TEXT,
+    source_date TEXT,
     updated_at TEXT NOT NULL
 );
 

@@ -9,7 +9,6 @@ from plangraph.planner.benchmarks import benchmark_rows_from_db
 from plangraph.routing_support.catalog_db import CatalogDB
 from plangraph.spawner.bench_entry import LEG_BENCHMARK_MODEL
 
-
 # No composite or component evaluation for these exact served variants.
 UNMEASURED = {
     "agy-gpt-oss-120b", "omniroute-grok-4.7", "claude-haiku-5.5",
@@ -53,6 +52,7 @@ def test_bench_rows_complete(tmp_path):
         assert seen == UNMEASURED
         for row in rows.values():
             assert_provenance(row)
+            assert any(row.get(key) is not None for key in ("aa_intelligence", "scicode"))
     loaded, errors = benchmark_rows_from_db(path)
     assert not errors
     for row in loaded.values():
@@ -93,3 +93,37 @@ def test_future_active_leg_without_a_row_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(legs, "DEFAULT_LEGS", (*legs.DEFAULT_LEGS, leg))
     with pytest.raises(AssertionError, match="future-active"):
         test_bench_rows_complete(tmp_path)
+
+
+def test_exact_effort_scores_and_components(tmp_path):
+    from plangraph.spawner.bench_entry import benchmark_options
+    path = tmp_path / "scores.db"
+    with CatalogDB(path) as db:
+        db.init_and_seed()
+        for effort, score in zip(legs.CX_EFFORTS, (35, 46, 50, 52, 55)):
+            assert db.get_model("omniroute/cx-gpt-6.1-sol-" + effort)["aa_intelligence"] == score
+        for effort, score in (("low", 54), ("medium", 56), ("high", 62)):
+            row = db.get_model("claude-fable-5-2-" + effort)
+            assert row["aa_intelligence"] == score
+            assert row["available"] == 1  # explicit selection remains spawnable
+        muse = db.get_model("opencode-go/muse-spark-1.3-contributor")
+        assert muse["aa_intelligence"] is None and muse["scicode"] == pytest.approx(59.722222)
+        assert muse["cost_per_task_usd"] is None
+    assert muse["model_id"] not in benchmark_options(False, str(path))["benchmark"]
+
+
+def test_migrate_original_not_null_schema_without_data_loss():
+    from plangraph.routing_support.catalog_benchmarks import migrate
+    from plangraph.routing_support.catalog_db import SCHEMA_PATH
+    with CatalogDB() as db:
+        schema = SCHEMA_PATH.read_text(encoding="utf-8")
+        for column in ("aa_intelligence", "verified_tok_per_s", "cost_per_task_usd"):
+            schema = schema.replace(column + " REAL,", column + " REAL NOT NULL,")
+        db.conn.executescript(schema)
+        db._insert_records("catalog_providers", [{"provider_id": "test", "tier": "free", "transport": "cli", "updated_at": "2026-11-12"}])
+        db._insert_records("catalog_models", [{"model_id": "test/model", "provider_id": "test", "upstream_id": "model", "family": "test", "context_tokens": 1, "max_output_tokens": 1, "status": "active"}])
+        db.conn.execute("INSERT INTO catalog_benchmarks (model_id,aa_intelligence,verified_tok_per_s,cost_per_task_usd,updated_at) VALUES ('test/model',1,2,3,'unchanged')")
+        before = dict(db.conn.execute("SELECT * FROM catalog_benchmarks").fetchone())
+        migrate(db.conn)
+        assert dict(db.conn.execute("SELECT * FROM catalog_benchmarks").fetchone()) == before
+        db.conn.execute("UPDATE catalog_benchmarks SET aa_intelligence=NULL,cost_per_task_usd=NULL")
