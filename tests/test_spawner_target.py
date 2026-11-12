@@ -26,3 +26,19 @@ def test_matching_disabled_leg_still_refused():
     chosen = replace(DEFAULT_LEGS[0], disabled='test policy')
     with pytest.raises(SpawnRefused, match='leg disabled: .*test policy'):
         resolve_target(chosen.model, chosen=chosen)
+
+
+@pytest.mark.parametrize('orchestrate_first', [True, False])
+def test_agy_shared_model_prefers_routed_seat_over_orchestrate_only(monkeypatch,
+                                                                 orchestrate_first):
+    from plangraph.planner import legs
+
+    base = next(leg for leg in DEFAULT_LEGS if leg.harness == 'agy')
+    orchestrate = replace(base, id='test-orchestrate', model='test-shared-model',
+                          roles=('orchestrate',), disabled=None)
+    seat = replace(orchestrate, id='test-routed-seat', roles=('review',))
+    assert orchestrate not in legs.EXPLICIT_LEGS and seat not in legs.EXPLICIT_LEGS
+    table = (orchestrate, seat) if orchestrate_first else (seat, orchestrate)
+    monkeypatch.setattr(legs, 'DEFAULT_LEGS', table)
+
+    assert resolve_target('agy/' + seat.model) == (seat.model, seat)

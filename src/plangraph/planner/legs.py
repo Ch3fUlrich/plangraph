@@ -74,7 +74,7 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
          note="free while qoder credits remain, until its rate limit"),
     _leg("mimo-v2.6-flash", "subscription", "opencode",
          "mimo/mimo-v2.6-flash", "mimo", ("128k", "256k", "1m"), 200000, False),
-    _leg("agy-gemini-3.8-flash", "subscription", "agy", "gemini-3.8-flash", "gemini",
+    _leg("agy-gemini-3.8-flash", "free", "agy", "gemini-3.8-flash", "gemini",
          ("128k", "256k", "1m"), 900000, False,
          note="gemini after its Friday-evening reset"),
     _leg("agy-sonnet-5.5", "subscription", "agy", "claude-sonnet-5-5-medium", "claude",
@@ -107,15 +107,23 @@ DEFAULT_LEGS = (
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
+    Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-high",
+        "gemini", ("128k", "256k", "1m"), 900000, False, roles=("implement", "review")),
+    Leg("opencode-big-pickle", "free", "opencode", "opencode/big-pickle",
+        "glm", ("128k",), 100000, True, roles=("implement", "review")),
     Leg("agy-gpt-oss-120b", "subscription", "agy", "gpt-oss-120b-medium",
         "openai", ("128k",), 100000, False, roles=("review",)),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False,
         roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
-    _legacy["agy-sonnet-5.5"],
-    # D-3552: opencode-go review seats, placed before the paid deepseek
-    # leg so existing order is unchanged; deepseek/glm lifted for review only (route_policy).
+    _replace(_legacy["agy-sonnet-5.5"], roles=("orchestrate", "review")),
+    Leg("agy-claude-opus", "subscription", "agy", "claude-opus-4-6-thinking",
+        "claude", ("128k", "256k"), 180000, False, claude_family=True, roles=("review",)),
+    Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-flash",
+        "deepseek", ("128k",), 100000, False, roles=("review",)),
+    Leg("omniroute-muse-spark", "subscription", "opencode", "omniroute/muse-spark-1.3-contributor",
+        "muse", ("128k",), 100000, False, roles=("review",)),
     Leg("opencode-go-gemini-4-argon", "subscription", "opencode",
         "opencode-go/gemini-4-argon", "gemini", ("128k",), 100000,
         False, roles=("review",)),
@@ -138,8 +146,6 @@ DEFAULT_LEGS = (
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
         False, roles=("review",)),
-    # D-4193: one gateway review leg, placed after the opencode-go review
-    # legs as the fallback seat; its upstream route is not verified.
     Leg("omniroute-gemini-3.8-flash", "subscription", "opencode",
         "omniroute/gemini-3.8-flash", "gemini", ("128k",), 100000, True,
         roles=("review",),
@@ -153,15 +159,12 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# D-3828: retain every leg and its review order, but never fall back writers.
+# Retain the designated writer; review legs remain available for parallel work.
 DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
                              disabled=leg.disabled or (
                                  'D-3828: writer disabled; no retained review or orchestrate role'
                                  if leg.roles == ('implement',) else None))
                      if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
-DEFAULT_LEGS = tuple(_replace(leg, disabled="D-5173 unmeasured exact effort; retained D-3828")
-                     if leg.id in {"agy-gpt-oss-120b", "claude-haiku-5.5"}
-                     else leg for leg in DEFAULT_LEGS)
 WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
 )
@@ -176,9 +179,6 @@ LEAD_WRITER = "cx-gpt-6.1-sol"
 #: legs are claude-family, so the D-2511 fence keeps them off claude-written work.
 #: A cx effort model needs a per-run opencode entry (``opencode_render``).
 EXPLICIT_LEGS: tuple[Leg, ...] = (
-    *(Leg(f"agy-claude-fable-5-2-{e}", "subscription", "agy", f"claude-fable-5-2-{e}",
-          "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
-          roles=("review", "implement")) for e in ("low", "medium", "high")),
     *(Leg(f"agy-claude-{m}-5-5-{e}", "subscription", "agy", f"claude-{m}-5-5-{e}",
           "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
           roles=("review", "implement"), note="operator 2026-11-09: Antigravity quota")

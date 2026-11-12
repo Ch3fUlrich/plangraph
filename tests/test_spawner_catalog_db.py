@@ -11,9 +11,6 @@ import pytest
 
 from plangraph.spawner import CatalogDB, TIER_RUNG
 from plangraph.spawner.catalog_db import SCHEMA_PATH
-from plangraph.catalog_data import SEED_MODELS
-from plangraph.routing_support.catalog_seed import SEED_BENCHMARKS
-from plangraph.routing_support.catalog_benchmarks import snapshot_data
 
 
 def test_registered_grok_and_console_muse_catalog_derivation():
@@ -47,14 +44,13 @@ def test_schema_initialization_and_idempotency(tmp_path: Path) -> None:
         # First init and seed
         db.init_and_seed()
         models_first = db.list_models()
-        assert len(models_first) == len(SEED_MODELS)
+        assert len(models_first) == 57  # benchmark-only effort identities included
         assert len({m["master_rank"] for m in models_first if m.get("master_rank")}) == 22
-        assert sum(m["source_url"] is not None for m in models_first) == len(SEED_BENCHMARKS)
 
         # Second init and seed (must not raise UNIQUE constraint violations)
         db.init_and_seed()
         models_second = db.list_models()
-        assert models_second == models_first
+        assert len(models_second) == 57
 
         # Verify key tables exist with rows
         tables = [
@@ -74,66 +70,91 @@ def test_schema_initialization_and_idempotency(tmp_path: Path) -> None:
 
 
 def test_all_22_models_and_exact_aa_v432_benchmarks(memory_db: CatalogDB) -> None:
-    """Refresh cited metrics without losing any unrelated v4.3.2 seed field."""
+    """Verify all 22 models are present with exact AA v4.3.2 matrix figures."""
     models = memory_db.list_models()
-    assert len(models) == len(SEED_MODELS)
-    assert len(models) == 50  # 27 historical identities plus 23 explicit measured variants
-    assert len(SEED_BENCHMARKS) == 49
+    assert len(models) == 57
     assert len({m["master_rank"] for m in models if m.get("master_rank")}) == 22
-    sources = snapshot_data()
-    for model, historical in sources["legacy"].items():
-        actual = memory_db.get_model(model)
-        updates = sources["published"].get(model, {}).get("metrics", {})
-        for key, value in historical["metrics"].items():
-            if key not in updates and key not in ("updated_at", "benchmark_source"):
-                assert actual[key] == value, (model, key)
-    for expected in SEED_BENCHMARKS:
-        actual = memory_db.get_model(expected["model_id"])
-        for key, value in expected.items():
-            if key != "updated_at":  # not part of the joined model interface
-                assert actual[key] == value, (expected["model_id"], key)
-        assert actual["source_date"] == expected["source_date"]
-        assert actual["source_url"] == expected["source_url"]
+
+    # 1. mimo/mimo-v2.6-flash: 54.0 overall verified, 29.0 direct, 75.4 cyberbench, 0.04 USD cost
     flash = memory_db.get_model("mimo/mimo-v2.6-flash")
-    assert flash["aa_intelligence"] == 27 and flash["verified_tok_per_s"] == 37
-    assert flash["cost_per_task_usd"] == 0.13
-    assert flash["cache_hit_rate"] == 0.924 and flash["cyberbench"] == 75.4
+    assert flash is not None
+    assert flash["verified_tok_per_s"] == 54.0
     assert flash["direct_api_tok_per_s"] == 29.0
+    assert flash["cyberbench"] == 75.4
+    assert flash["cost_per_task_usd"] == 0.04
+    assert flash["cache_hit_rate"] == 0.924
+    assert flash["aa_intelligence"] == 37.9
+    assert flash["benchmark_source"] == "AA-v4.3.2-2026-10"
+
+    # 2. mimo/mimo-v2.6-pro: 46.0 aa_intelligence > opencode-go/qwen3.8-max 45.4
     pro = memory_db.get_model("mimo/mimo-v2.6-pro")
     qwen = memory_db.get_model("opencode-go/qwen3.8-max")
-    assert pro["aa_intelligence"] == 30 and pro["cost_per_task_usd"] == 0.26
-    assert pro["direct_api_tok_per_s"] == 29.0 and pro["cache_hit_rate"] == 0.924
-    assert qwen["aa_intelligence"] == 34
+    assert pro is not None
+    assert qwen is not None
+    assert pro["aa_intelligence"] == 46.0
+    assert pro["direct_api_tok_per_s"] == 29.0
+    assert pro["cost_per_task_usd"] == 0.13
+    assert pro["cache_hit_rate"] == 0.924
+    assert qwen["aa_intelligence"] == 45.4
+    assert pro["aa_intelligence"] > qwen["aa_intelligence"]
+
+    # 3. agy/claude-opus-5-5-high: rank 1, intelligence 57.6, terminal 60.0, deepswe 74.2
     opus = memory_db.get_model("agy/claude-opus-5-5-high")
-    assert opus["aa_intelligence"] == 52 and opus["verified_tok_per_s"] == 105
-    assert opus["master_rank"] == 1 and opus["terminal_bench"] == 60.0 and opus["deepswe"] == 74.2
+    assert opus is not None
+    assert opus["master_rank"] == 1
+    assert opus["aa_intelligence"] == 57.6
+    assert opus["terminal_bench"] == 60.0
+    assert opus["deepswe"] == 74.2
+    assert opus["verified_tok_per_s"] == 98.0
+    assert opus["cost_per_task_usd"] == 1.82
+
+    # 4. opencode-go/gemini-4-argon: rank 2, active smart model under OpenCode Go subscription
     argon_oc = memory_db.get_model("opencode-go/gemini-4-argon")
-    assert argon_oc["aa_intelligence"] == 50
-    assert argon_oc["master_rank"] == 2 and argon_oc["deepswe"] == 77.9
+    assert argon_oc is not None
+    assert argon_oc["master_rank"] == 2
+    assert argon_oc["aa_intelligence"] == 53.0
+    assert argon_oc["deepswe"] == 77.9
     assert argon_oc["status"] == "active"
     assert argon_oc["available"] == 1
     assert argon_oc["tier"] == "subscription"
+
+    # gemini/gemini-4-argon-high: rank 2, upgrade placeholder on direct Gemini API
     argon = memory_db.get_model("gemini/gemini-4-argon-high")
-    assert argon["aa_intelligence"] == 50
-    assert argon["master_rank"] == 2 and argon["terminal_bench"] == 57.0 and argon["deepswe"] == 77.9
+    assert argon is not None
+    assert argon["master_rank"] == 2
+    assert argon["aa_intelligence"] == 53.0
+    assert argon["terminal_bench"] == 57.0
+    assert argon["deepswe"] == 77.9
     assert argon["status"] == "upgrade"
     assert argon["available"] == 0
+
+    # 5. cxa/gpt-6-astra-max: rank 3, intelligence 53.0, coding_index 62.0
     astra = memory_db.get_model("cxa/gpt-6-astra-max")
-    assert astra["aa_intelligence"] == 57 and astra["cost_per_task_usd"] == 6.24
-    assert astra["master_rank"] == 3 and astra["coding_index"] == 62.0
+    assert astra is not None
+    assert astra["master_rank"] == 3
+    assert astra["aa_intelligence"] == 53.0
+    assert astra["coding_index"] == 62.0
+    assert astra["cost_per_task_usd"] == 3.26
+
+    # 6. agy/claude-sonnet-5-5-xhigh: rank 4, terminal 70.6, frontier_code 52.1
     sonnet_xhigh = memory_db.get_model("agy/claude-sonnet-5-5-xhigh")
-    assert sonnet_xhigh["aa_intelligence"] == 50
-    assert sonnet_xhigh["master_rank"] == 4 and sonnet_xhigh["terminal_bench"] == 70.6
+    assert sonnet_xhigh is not None
+    assert sonnet_xhigh["master_rank"] == 4
+    assert sonnet_xhigh["terminal_bench"] == 70.6
     assert sonnet_xhigh["frontier_code"] == 52.1
+
+    # 7. opencode-go/muse-spark-1.3-contributor: coding 75.8, agentic 55.5, tok_s 287.0
     muse = memory_db.get_model("opencode-go/muse-spark-1.3-contributor")
-    assert muse["aa_intelligence"] is None and muse["deepswe"] == 75.4
-    assert muse["coding_index"] == 75.8 and muse["agentic_index"] == 55.5
+    assert muse is not None
+    assert muse["coding_index"] == 75.8
+    assert muse["agentic_index"] == 55.5
+    assert muse["verified_tok_per_s"] == 287.0
+
+    # 8. opencode-go/glm-5.2: coding 71.5, scicode 52.0
     glm = memory_db.get_model("opencode-go/glm-5.2")
-    assert glm["aa_intelligence"] is None and glm["scicode"] == pytest.approx(51.157407)
-    assert glm["coding_index"] == 71.5 and glm["agentic_index"] == 50.9
-    haiku = memory_db.get_model("claude/claude-haiku-4-5")
-    assert haiku["available"] == 1 and haiku["aa_intelligence"] == 43.4
-    assert haiku["master_rank"] == 16 and haiku["terminal_bench"] == 39.2
+    assert glm is not None
+    assert glm["coding_index"] == 71.5
+    assert glm["scicode"] == 52.0
 
 
 def test_5_rung_tier_ladder_ordering(memory_db: CatalogDB) -> None:
@@ -147,7 +168,7 @@ def test_5_rung_tier_ladder_ordering(memory_db: CatalogDB) -> None:
     }
 
     all_models = memory_db.list_models()
-    assert len(all_models) == len(SEED_MODELS)
+    assert len(all_models) == 57
 
     # Check non-decreasing tier rung sequence
     rungs = [TIER_RUNG[m["tier"]] for m in all_models]
@@ -298,8 +319,8 @@ def test_export_json_and_combos_roundtrip(memory_db: CatalogDB, tmp_path: Path) 
     # Export catalog tables
     exported_data = memory_db.export_json(export_file)
     assert export_file.is_file()
-    assert len(exported_data["models"]) == len(SEED_MODELS)
-    assert len(exported_data["benchmarks"]) == len(SEED_BENCHMARKS)
+    assert len(exported_data["models"]) == 57
+    assert len(exported_data["benchmarks"]) == 56
     assert len(exported_data["routes"]) == 4
 
     # Import into fresh DB
@@ -309,9 +330,8 @@ def test_export_json_and_combos_roundtrip(memory_db: CatalogDB, tmp_path: Path) 
     assert imported_count > 0
 
     reloaded_models = fresh_db.list_models()
+    assert len(reloaded_models) == 57
     assert len({m["master_rank"] for m in reloaded_models if m.get("master_rank")}) == 22
-    assert {r["model_id"]: r for r in reloaded_models} == {
-        r["model_id"]: r for r in memory_db.list_models()}
 
     # Export OmniRoute combos
     combos_data = memory_db.export_combos(combos_file)

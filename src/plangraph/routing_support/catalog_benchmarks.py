@@ -1,5 +1,4 @@
 """D-5173 benchmark provenance migration and published snapshot data."""
-import hashlib
 import json
 from pathlib import Path
 from urllib.parse import quote
@@ -17,6 +16,11 @@ def migrate(conn):
     for column in ("source_url", "source_date"):
         if column not in columns:
             conn.execute(f"ALTER TABLE catalog_benchmarks ADD COLUMN {column} TEXT")
+    if "swe_bench_verified" not in columns:
+        conn.execute("ALTER TABLE catalog_benchmarks ADD COLUMN swe_bench_verified REAL")
+    model_columns = {r[1] for r in conn.execute("PRAGMA table_info(catalog_models)")}
+    if "benchmark_only" not in model_columns:
+        conn.execute("ALTER TABLE catalog_models ADD COLUMN benchmark_only INTEGER NOT NULL DEFAULT 0")
     # Component evaluations can be published without an Intelligence Index or
     # cost. Rebuild only the old NOT NULL layout, retaining every column/value.
     info = list(conn.execute("PRAGMA table_info(catalog_benchmarks)"))
@@ -39,18 +43,13 @@ def snapshot_data():
 
 
 def published_rows():
-    """Exact measured identities only; routing aliases belong in the reader."""
+    """Cite the actual model-specific upstream, not our own copy of its claims."""
     path = Path(__file__).with_name("catalog_benchmarks.json")
-    rows = json.loads(path.read_text(encoding="utf-8"))
-    evidence = path.with_name("catalog_benchmark_sources.json").read_bytes()
-    oid = hashlib.sha1(b"blob " + str(len(evidence)).encode() + b"\0" + evidence).hexdigest()
-    for row in rows:
-        row["source_url"] = blob_url(oid, "published/" + row["model_id"])
-    return rows
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def benchmark_rows(legacy):
-    """Overlay only supplied metrics, preserving legacy ranks and other fields."""
+    """Add effort coverage without retuning main's existing scores or routes."""
     historical = snapshot_data()["legacy"]
     by_id = {}
     for row in legacy:
@@ -59,11 +58,8 @@ def benchmark_rows(legacy):
             source_url=blob_url(provenance["source_oid"], provenance["source_line"]))
     for row in published_rows():
         model = row["model_id"]
-        previous = by_id.get(model, {})
-        merged = dict(previous, **row)
-        if previous:
-            merged["benchmark_source"] += "; retained fields: " + previous["source_url"]
-        by_id[model] = merged
+        if model not in by_id:
+            by_id[model] = row
     return list(by_id.values())
 
 
@@ -74,5 +70,22 @@ def model_rows(rows):
     for row in json.loads(path.read_text(encoding="utf-8")):
         if row["model_id"] in by_id:
             raise ValueError("duplicate benchmark catalog identity: " + row["model_id"])
-        by_id[row["model_id"]] = row
+        # Catalog visibility is not permission to add an automatic resolver route.
+        by_id[row["model_id"]] = dict(row, benchmark_only=1)
     return list(by_id.values())
+
+
+def backfill_provenance(conn, seeds):
+    """Cite unchanged main seeds on upgrade, never relabel operator measurements."""
+    for seed in seeds:
+        raw = conn.execute("SELECT * FROM catalog_benchmarks WHERE model_id=?",
+                           (seed["model_id"],)).fetchone()
+        if raw is None:
+            continue
+        row = dict(raw)
+        if row["source_url"] is not None or row["source_date"] is not None:
+            continue
+        if all(row[key] == value for key, value in seed.items()
+               if key not in {"source_url", "source_date"}):
+            conn.execute("UPDATE catalog_benchmarks SET source_url=?,source_date=? WHERE model_id=?",
+                         (seed["source_url"], seed["source_date"], seed["model_id"]))

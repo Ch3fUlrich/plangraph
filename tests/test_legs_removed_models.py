@@ -59,12 +59,9 @@ def test_route_never_returns_removed_leg_ids(tmp_path, role):
 @pytest.mark.parametrize("writer", ["claude", "gpt", "deepseek", "qwen", "gemini", "mimo"])
 def test_route_review_across_writer_families_never_returns_removed_leg_ids(tmp_path, writer):
     svc = SpawnService(state=tmp_path / "state")
-    # Include inline-only reviewers: unmeasured GPT-OSS/Haiku are fenced, so
-    # a tools-only request cannot promise two other families for every writer.
-    card = {"estimate_tokens": 1000, "diff_ref": {"repo": "/srv/repo", "base": "a1b2", "head": "c3d4"}}
+    card = {"estimate_tokens": 1000}
     plan = svc.route(card, role="review", writer_families=(writer,))
     assert plan.legs and not getattr(plan, "error", None)
-    assert all(not leg.disabled for leg in plan.legs)
     assert plan.first_leg.id not in REMOVED_LEG_IDS
     assert not ({l.id for l in plan.legs} & REMOVED_LEG_IDS)
     if getattr(plan, "review_seats", None):

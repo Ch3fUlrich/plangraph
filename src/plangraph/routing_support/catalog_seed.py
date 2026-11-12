@@ -152,6 +152,11 @@ SEED_QUOTA_POOLS: list[dict[str, Any]] = [
 ]
 
 SEED_PROVIDERS: list[dict[str, Any]] = [
+    {"provider_id": "opencode", "omniroute_id": "opencode", "tier": "free", "transport": "gateway", "gateway_mode": "omniroute_acp", "available": 1, "updated_at": "2026-11-12T00:00:00Z"},
+    {"provider_id": "omniroute", "omniroute_id": "omniroute", "tier": "subscription", "transport": "gateway", "gateway_mode": "omniroute_acp", "available": 1, "updated_at": "2026-11-12T00:00:00Z"},
+    {"provider_id": "gc", "omniroute_id": "gc", "tier": "subscription",
+     "transport": "gateway", "gateway_mode": "omniroute_acp", "available": 1,
+     "unavailable_reason": None, "updated_at": "2026-11-12T00:00:00Z"},
     {"provider_id": "console-meta", "omniroute_id": "console-meta",
      "tier": "subscription", "transport": "gateway", "gateway_mode": "omniroute_acp",
      "available": 1, "unavailable_reason": None, "updated_at": "2026-11-12T00:00:00Z"},

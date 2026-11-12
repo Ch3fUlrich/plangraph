@@ -15,7 +15,7 @@ import sys
 from typing import Any, Sequence
 
 from plangraph import registry_columns
-from .catalog_benchmarks import migrate as migrate_benchmarks
+from .catalog_benchmarks import backfill_provenance, migrate as migrate_benchmarks
 from .catalog_seed import (SEED_BENCHMARKS, SEED_CLIENTS, SEED_MODELS, SEED_PROVIDERS,
                            SEED_QUOTA_POOLS, SEED_ROUTE_LEGS, SEED_ROUTES, TIER_RUNG)
 
@@ -30,6 +30,8 @@ def default_db_path() -> Path:
 
 DEFAULT_DB_PATH: Path = default_db_path()
 SCHEMA_PATH: Path = Path(__file__).parent / "catalog_schema.sql"
+
+
 class CatalogDB:
     """SQLite-backed model, provider, quota-pool, and routing catalog."""
 
@@ -70,8 +72,7 @@ class CatalogDB:
 
     def init_and_seed(self) -> None:
         """Initialize schema and seed catalog tables idempotently."""
-        schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
-        self.conn.executescript(schema_sql)
+        self.conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         registry_columns.migrate(self.conn)
         migrate_benchmarks(self.conn)
 
@@ -80,6 +81,7 @@ class CatalogDB:
         self._insert_records("catalog_clients", SEED_CLIENTS)
         self._insert_records("catalog_models", SEED_MODELS, seed=True)
         self._insert_records("catalog_benchmarks", SEED_BENCHMARKS, seed=True)
+        backfill_provenance(self.conn, SEED_BENCHMARKS)
         self._insert_records("catalog_routes", SEED_ROUTES)
         self._insert_records("catalog_route_legs", SEED_ROUTE_LEGS)
 
@@ -120,7 +122,7 @@ class CatalogDB:
             b.coding_index,
             b.agentic_index,
             b.terminal_bench,
-            b.deepswe,
+            b.deepswe, b.swe_bench_verified,
             b.frontier_code,
             b.scicode,
             b.cyberbench,
@@ -202,7 +204,7 @@ class CatalogDB:
             b.coding_index,
             b.agentic_index,
             b.terminal_bench,
-            b.deepswe,
+            b.deepswe, b.swe_bench_verified,
             b.frontier_code,
             b.scicode,
             b.cyberbench,
@@ -299,7 +301,7 @@ class CatalogDB:
             b.coding_index,
             b.agentic_index,
             b.terminal_bench,
-            b.deepswe,
+            b.deepswe, b.swe_bench_verified,
             b.frontier_code,
             b.scicode,
             b.cyberbench,

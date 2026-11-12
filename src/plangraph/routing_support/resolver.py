@@ -738,8 +738,8 @@ _catalog_failures = {}
 
 
 def get_catalog_models(db: Any = None, *, active_only: bool = False,
-                       clock=time.monotonic) -> list[dict[str, Any]]:
-    """Retrieve catalog models, including inactive rows unless explicitly filtered."""
+                       clock=time.monotonic, include_benchmark_only=False) -> list[dict[str, Any]]:
+    """Read routing identities; query_catalog can also request benchmark-only rows."""
     catalog_source = None
     identity = db if db is not None else _get_default_catalog_db
     try:
@@ -771,13 +771,15 @@ def get_catalog_models(db: Any = None, *, active_only: bool = False,
                 if models:
                     _catalog_failures.pop(key, None)
                     return [_normalize_catalog_row(m) for m in models
-                            if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
+                            if (include_benchmark_only or not m.get("benchmark_only"))
+                            and (not active_only or catalog_row_admitted(_normalize_catalog_row(m)))]
             if hasattr(target_db, "get_models"):
                 models = target_db.get_models()
                 if models:
                     _catalog_failures.pop(key, None)
                     return [_normalize_catalog_row(m) for m in models
-                            if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
+                            if (include_benchmark_only or not m.get("benchmark_only"))
+                            and (not active_only or catalog_row_admitted(_normalize_catalog_row(m)))]
     except Exception as exc:
         import logging
         if not failure:
@@ -917,10 +919,8 @@ def resolve_review_plan(
 
     min_intelligence = RISK_MIN_INTELLIGENCE[risk_l]
 
-    def _pick_reviewer(
-        pool: Sequence[Mapping[str, Any]],
-        excluded_families: set[str],
-    ) -> dict[str, Any] | None:
+    def _pick_reviewer(pool: Sequence[Mapping[str, Any]],
+                      excluded_families: set[str]) -> dict[str, Any] | None:
         eligible = [
             dict(c)
             for c in pool

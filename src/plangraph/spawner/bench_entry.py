@@ -10,6 +10,7 @@ from plangraph.planner.routing import benchmark_rows_from_db, BenchDataError
 LEG_BENCHMARK_MODEL = {
     "qodercli-qwen3.8-flash": "qoder/qwen3.8-flash-next",
     "agy-gemini-3.8-flash": "agy/gemini-3.8-flash-tiered-high",
+    "agy-gemini-4-argon": "gemini/gemini-4-argon-high",
     "agy-sonnet-5.5": "agy/claude-sonnet-5-5-medium",
     "mimo-v2.6-pro": "mimo/mimo-v2.6-pro",
     "mimo-v2.6-flash": "mimo/mimo-v2.6-flash",
@@ -38,9 +39,10 @@ def benchmark_options(require_bench=False, bench_db=None):
             found, errors = benchmark_rows_from_db(path)
             if errors:
                 raise BenchDataError('; '.join(errors))
-            # Partial rows are queryable evidence, not a complete utility input.
+            # Old benchmark tables may omit cost entirely; main supports those.
+            # An explicitly unknown score/cost is evidence, not a utility input.
             rows.update({key: row for key, row in found.items()
-                         if all(row.get(key) is not None for key in
+                         if all(key not in row or row[key] is not None for key in
                                 ("aa_intelligence", "cost_per_task_usd"))})
         # Alias mapped rows under their leg ids so the plan lookup
         # (rows.get(leg.model, rows.get(leg.id))) reaches them.

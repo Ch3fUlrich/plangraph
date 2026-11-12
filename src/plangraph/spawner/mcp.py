@@ -241,7 +241,7 @@ class MCPSpawnerServer:
             family = arguments.get("family")
             min_intel = arguments.get("min_intelligence")
 
-            models = get_catalog_models()
+            models = get_catalog_models(include_benchmark_only=True)
             matched: list[dict[str, Any]] = []
             for m in models:
                 m = dict(m, leg_state=leg_status(m["id"], combo=combo))

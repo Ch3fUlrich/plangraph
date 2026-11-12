@@ -96,13 +96,8 @@ def test_route_is_terminal_only_for_claude(tmp_path, monkeypatch, harness, tool_
         runner = SpawnerRunner(process_factory=process, default_cwd=str(tmp_path))
         sink = SimpleNamespace(deliver=lambda recipient, event: notifications.append(event))
         service = spawn_service(runner, tmp_path / 'state', completion_sink=sink, keeper_sink=sink)
-        # Supply an enabled synthetic seat so the exact-effort fence cannot
-        # prevent this test from reaching the real refusal monitor.
-        leg = replace(next(l for l in DEFAULT_LEGS if l.harness == harness
-                           and (not l.disabled or harness == 'claude')
-                           and 'review' in l.roles and l.tool_mode == tool_mode), disabled=None)
-        monkeypatch.setattr('plangraph.planner.legs.DEFAULT_LEGS',
-                            tuple(leg if item.id == leg.id else item for item in DEFAULT_LEGS))
+        leg = next(l for l in DEFAULT_LEGS if l.harness == harness and not l.disabled
+                   and 'review' in l.roles and l.tool_mode == tool_mode)
         legs = (leg, replace(leg, id='second-leg'))
         monkeypatch.setattr(service, '_route', lambda *a, **k: SpawnPlan(legs, (), 'test', (), ()))
         async def continuation(*a):
