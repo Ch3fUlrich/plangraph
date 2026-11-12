@@ -8,7 +8,9 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.spawner import resolver
-from plangraph.spawner.opencode_isolation import GO_ABSENT_REASON, install_go_credential
+from plangraph.spawner.opencode_isolation import (
+    GO_ABSENT_REASON, GO_AUTH_DB_ENV, install_go_credential,
+)
 from plangraph.spawner.runner import SpawnerRunner, _opencode_tools_denied
 from fake_pid import FAKE_PID
 
@@ -25,15 +27,15 @@ def source_store(path, active=1):
 
 
 @pytest.mark.usefixtures('fake_ownership')
-@pytest.mark.parametrize('present', [True, False])
-@pytest.mark.parametrize('active', [1, None, 0], ids=['active', 'null', 'inactive'])
+@pytest.mark.parametrize('present,active', [(True, 1), (True, None), (True, 0), (False, None)],
+                         ids=['active', 'null', 'inactive', 'missing'])
 @pytest.mark.parametrize('model', ['opencode-go/gemini-4-argon', 'opencode-go-gemini-4-argon',
                                    'go-test-combo', 'aliases/go-test-combo'])
 def test_review_provider_only(tmp_path, monkeypatch, caplog, present, active, model):
     source = tmp_path / 'source.db'
     if present:
         source_store(source, active)
-    monkeypatch.setenv('PLANGRAPH_OPENCODE_GO_AUTH_DB', str(source))
+    monkeypatch.setenv(GO_AUTH_DB_ENV, str(source))
     async def probe(*args, **kwargs):
         return None
     monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
@@ -100,15 +102,61 @@ def test_credential_selection_excludes_inactive_and_other_providers(tmp_path, ac
 def test_refusal_names_credential_query_not_login(tmp_path, monkeypatch, inactive):
     from plangraph.spawner.opencode_isolation import review_credential_reason
     source = tmp_path / 'source.db'
-    source_store(source, active=0)
-    if not inactive:
-        with sqlite3.connect(source) as db:
+    source_store(source)
+    monkeypatch.setenv(GO_AUTH_DB_ENV, str(source))
+    child_env = {GO_AUTH_DB_ENV: str(source)}
+    usable_job = tmp_path / 'usable-job'
+    # Prove the fixture store is read before testing either refusal result.
+    assert review_credential_reason('opencode-go/test-model', str(usable_job), child_env) is None
+    with sqlite3.connect(usable_job / 'opencode' / 'opencode.db') as db:
+        assert db.execute('SELECT id, active FROM credential').fetchall() == [('opencode-go', 1)]
+    with sqlite3.connect(source) as db:
+        if inactive:
+            db.execute("UPDATE credential SET active = 0 WHERE integration_id = 'opencode-go'")
+        else:
             db.execute("DELETE FROM credential WHERE integration_id = 'opencode-go'")
-    monkeypatch.setenv('PLANGRAPH_OPENCODE_GO_AUTH_DB', str(source))
-    reason = review_credential_reason('opencode-go/test-model', str(tmp_path / 'job'), {})
+    refused_job = tmp_path / 'refused-job'
+    reason = review_credential_reason('opencode-go/test-model', str(refused_job), child_env)
     assert reason == GO_ABSENT_REASON
     assert 'query' in reason and 'no row' in reason and 'inactive' in reason
     assert 'login' not in reason.lower() and 'log in' not in reason.lower()
+    assert child_env['XDG_DATA_HOME'] == str(refused_job)
+    assert not (refused_job / 'opencode' / 'opencode.db').exists()
+
+
+@pytest.mark.parametrize('reverse', [False, True], ids=['forward', 'reverse'])
+@pytest.mark.parametrize('legacy_times,v2_times,expected', [
+    ((1, 3), (2, 2), 'legacy-go'),
+    ((2, 2), (1, 3), 'v2-go'),
+    ((1, 3), (2, 3), 'v2-go'),
+    ((2, 3), (1, 3), 'legacy-go'),
+    ((2, 3), (2, 3), 'legacy-go'),
+], ids=['legacy-updated', 'v2-updated', 'v2-created', 'legacy-created', 'id-tie'])
+def test_mixed_version_store_selects_one_deterministic_credential(
+        tmp_path, reverse, legacy_times, v2_times, expected):
+    source = tmp_path / 'source.db'
+    source_store(source, active=0)
+    rows = [
+        ('legacy-go', 'opencode-go', 'test', 'synthetic-legacy-value', None, None,
+         1, *legacy_times),
+        ('v2-go', 'opencode-go', 'test', 'synthetic-v2-value', None, None,
+         None, *v2_times),
+    ]
+    with sqlite3.connect(source) as db:
+        # Newer inactive Go and NULL other-provider rows must not win.
+        db.execute('UPDATE credential SET time_created = 99, time_updated = 99')
+        db.execute("UPDATE credential SET active = NULL WHERE integration_id = 'other'")
+        db.executemany('INSERT INTO credential VALUES(?,?,?,?,?,?,?,?,?)',
+                       list(reversed(rows)) if reverse else rows)
+    before = source.read_bytes()
+    job = tmp_path / 'job'
+    assert install_go_credential(job, source)
+    destination = job / 'opencode' / 'opencode.db'
+    assert destination.stat().st_mode & 0o777 == 0o600
+    with sqlite3.connect(destination) as db:
+        assert db.execute('SELECT * FROM credential').fetchall() == [
+            next(row for row in rows if row[0] == expected)]
+    assert source.read_bytes() == before
 
 
 def test_missing_store_is_clean(tmp_path):

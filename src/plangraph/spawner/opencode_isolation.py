@@ -63,9 +63,11 @@ def install_go_credential(job_dir, source=None):
     ``<job_dir>/opencode/opencode.db`` (the review child's
     ``XDG_DATA_HOME/opencode``) holding the schema and only the selected provider auth
     row -- opencode-go with active 1 (legacy) or NULL (v2 in use), never 0.
-    Nothing else is copied: no accounts,
-    no sessions, no other provider's credential, no host key material.  The
-    file is 0600 inside the job dir the spawner already removes with the job.
+    Choose the latest time_updated, then latest time_created, then smallest
+    credential ID, including in mixed legacy/v2 stores.
+    Nothing else is copied: no accounts, no sessions, no other provider's
+    credential, no host key material. The file is 0600 inside the job dir
+    the spawner already removes with the job.
 
     True iff the store was written.  False -- never raises -- when the
     credential is absent or unreadable: the leg then ends ``not_served`` via
@@ -98,7 +100,8 @@ def install_go_credential(job_dir, source=None):
             creds = read.execute(
                 'SELECT id, integration_id, label, value, connector_id, method_id,'
                 ' active, time_created, time_updated FROM credential'
-                ' WHERE integration_id = ? AND (active = 1 OR active IS NULL)',
+                ' WHERE integration_id = ? AND (active = 1 OR active IS NULL)'
+                ' ORDER BY time_updated DESC, time_created DESC, id ASC LIMIT 1',
                 (GO_PROVIDER,)).fetchall()
             if not creds:
                 return False

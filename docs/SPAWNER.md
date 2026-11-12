@@ -35,7 +35,9 @@ The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and t
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.
 Isolated OpenCode Go reviews accept credential rows with `active = 1` (legacy)
-or `active IS NULL` (v2 in use), never `active = 0`. A failed query or install reports
+or `active IS NULL` (v2 in use), never `active = 0`. Only the most recently updated
+eligible row is copied; ties prefer the most recently created row, then the smallest
+credential ID. This selection also applies to mixed legacy/v2 stores. A failed query or install reports
 `no row / inactive or store error`, not a login instruction; credentials stay out of logs and events.
 ### Doctor host source checks
 
