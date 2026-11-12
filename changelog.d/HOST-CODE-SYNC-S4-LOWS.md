@@ -1,0 +1,1 @@
+- Fix host doctor registry diagnostics, Windows `Path` lookup and temporary PATH restoration; honour `ssh_target` in fleet drift and generated ps/overflow configs, demonstrate it on an SSH host, and cover fresh-clone execution plus lazy keeper admin/oversight imports.

@@ -36,13 +36,13 @@ Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doct
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.
 ### Doctor host source checks
 
-`python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust
-`pg-spawnd doctor-sources` subcommand. `doctor.py` resolves it on the host's
-`PATH`, never from checkout build artifacts, and reads its JSON check rows with
-a ten-second subprocess timeout. Before any checks, optional `env.PATH` from the
-local hosts registry entry replaces the inherited PATH for both pg-spawnd and
-harness discovery/children. Identity is `PLANGRAPH_HOST_NAME` or registry `self`,
-with case-insensitive id/alias lookup; absent configuration retains inherited PATH.
+`python3 -m plangraph.spawner.doctor` delegates source checks to Rust `pg-spawnd doctor-sources`.
+Doctor resolves it from host PATH, never checkout build artifacts, reading JSON rows with a ten-second timeout.
+Before checks, local registry `env.PATH` replaces inherited PATH for pg-spawnd and harness discovery/children.
+Identity is `PLANGRAPH_HOST_NAME` or registry `self`, with case-insensitive id/alias lookup.
+Absent configuration retains inherited PATH; Windows PATH keys are case-insensitive (`Path` is accepted).
+A present but unusable registry produces `host_path: fail`, distinguishing an identity mismatch from invalid
+configuration without printing registry or environment values. PATH is restored after checks, even on exceptions.
 There is no Python fallback for source checks; fresh release clones need no build.
 
 The Rust command reads `plangraph/ps-hosts.json` under `XDG_CONFIG_HOME` (or

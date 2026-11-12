@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -9,8 +10,8 @@ import pytest
 from plangraph.spawner import doctor, remote_ps
 
 
-@pytest.mark.parametrize('identity', [None, 'ALIAS'])
-def test_doctor_fresh_clone_uses_host_path(tmp_path, monkeypatch, identity):
+@pytest.mark.parametrize('identity,path_key', [(None, 'PATH'), ('ALIAS', 'PATH'), ('ALIAS', 'Path')])
+def test_doctor_fresh_clone_uses_host_path(tmp_path, monkeypatch, identity, path_key):
     import asyncio
     from types import SimpleNamespace
     from plangraph.spawner import service
@@ -19,8 +20,9 @@ def test_doctor_fresh_clone_uses_host_path(tmp_path, monkeypatch, identity):
     subprocess.run(['git', 'clone', '--quiet', '--local', '--no-hardlinks', str(source), str(clone)],
                    check=True, capture_output=True)
     assert not (clone / 'rust/target').exists()
+    # Exercise the candidate module in the clone, including before it is committed.
+    shutil.copyfile(doctor.__file__, clone / 'src/plangraph/spawner/doctor.py')
     monkeypatch.chdir(clone)
-    monkeypatch.setattr(doctor, '__file__', str(clone / 'src/plangraph/spawner/doctor.py'))
     config = tmp_path / 'config/plangraph'
     config.mkdir(parents=True)
     tools = tmp_path / 'tools'
@@ -31,7 +33,8 @@ def test_doctor_fresh_clone_uses_host_path(tmp_path, monkeypatch, identity):
         binary.write_text(f'#!{sys.executable}\nprint({output!r})\n')
         binary.chmod(0o755)
     (config / 'hosts.json').write_text(json.dumps({'self': 'host-a', 'hosts': [
-        {'id': 'host-a', 'aliases': ['alias'], 'env': {'PATH': str(tools)}}]}))
+        {'id': 'host-a', 'aliases': ['alias'], 'os': 'windows' if path_key == 'Path' else 'linux',
+         'env': {path_key: str(tools)}}]}))
     monkeypatch.setenv('XDG_CONFIG_HOME', str(config.parent))
     monkeypatch.setenv('PATH', os.defpath)
     monkeypatch.delenv('PLANGRAPH_HOST_NAME', raising=False)
@@ -50,6 +53,25 @@ def test_doctor_fresh_clone_uses_host_path(tmp_path, monkeypatch, identity):
     assert rows['ps_hosts']['status'] == 'pass'
     assert rows['harness_fake']['status'] == 'pass'
     assert 'harness_any' not in rows
+    assert os.environ['PATH'] == os.defpath
+    code = '''import asyncio, json, os
+from pathlib import Path
+from types import SimpleNamespace
+from plangraph.spawner import doctor, service
+from plangraph.planner import legs
+assert Path(doctor.__file__).is_relative_to(Path.cwd())
+legs.HARNESSES = ('fake',)
+async def ok(*args): return 'pass', 'ok'
+doctor.mcp = ok
+doctor.whoami = doctor.completion = lambda: ('pass', 'ok')
+service.SpawnService = lambda: SimpleNamespace(route=lambda *a, **k: SimpleNamespace(legs=[]))
+before = os.environ['PATH']
+rows = {r['name']: r for r in asyncio.run(doctor.diagnose())['checks']}
+assert rows['ps_hosts']['status'] == rows['harness_fake']['status'] == 'pass'
+assert os.environ['PATH'] == before
+'''
+    subprocess.run([sys.executable, '-c', code], check=True, capture_output=True,
+                   env=dict(os.environ, PYTHONPATH=str(clone / 'src')), timeout=30)
 
 
 @pytest.fixture

@@ -221,3 +221,33 @@ def test_fleet_sync_windows_config(tmp_path, monkeypatch, live):
     config = json.loads((genconfig.config_dir() / 'overflow-hosts.json').read_text())
     assert config == {'hosts': {}, 'public_repos': []}
     assert overflow.ready_records(config) == {}
+
+
+@pytest.mark.parametrize('system', ['linux', 'windows'])
+@pytest.mark.parametrize('target', [None, 'remote-user@worker.example.invalid'])
+@pytest.mark.parametrize('consumer', ['drift', 'ps', 'overflow'])
+def test_fleet_sync_ssh_target_every_consumer(monkeypatch, system, target, consumer):
+    host = dict(id='host-a', os=system, transport='ssh', caps={'mem_floor_mb': 1},
+                repos={'plangraph': {'live_dir': 'C:/live/current' if system == 'windows'
+                                    else '/srv/live/current'}})
+    if target:
+        host['ssh_target'] = target
+    def output(command, **kwargs):
+        assert command[0] == 'ssh'
+        assert command[-2] == (target or host['id'])
+        return 'a' * 40
+    monkeypatch.setattr(drift.subprocess, 'check_output', output)
+    if consumer == 'drift':
+        assert drift.transport(host) == 'a' * 40
+        return
+    generated = genconfig.generate({'hosts': [host]})
+    if consumer == 'ps':
+        assert generated['ps-hosts.json']['hosts'][0]['target'] == (target or host['id'])
+    elif system == 'linux':
+        assert generated['overflow-hosts.json']['hosts']['host-a']['ssh'] == (target or host['id'])
+
+
+def test_hosts_example_demonstrates_remote_ssh_target():
+    registry = json.loads(Path('docs/schemas/examples/hosts.example.json').read_text())
+    assert any(h.get('ssh_target') for h in registry['hosts'] if h['transport'] == 'ssh')
+    assert all('ssh_target' not in h for h in registry['hosts'] if h['transport'] == 'local')

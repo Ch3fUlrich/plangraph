@@ -7,7 +7,6 @@
       "class": "worker",
       "aliases": ["devbox"],
       "transport": "local",
-      "ssh_target": "worker.example.invalid",
       "env": { "PATH": "/opt/fleet/bin:/usr/bin:/bin" },
       "os": "linux",
       "state_dir": "/srv/fleet/code/state",
@@ -49,6 +48,7 @@
       "class": "worker",
       "aliases": ["winbox"],
       "transport": "ssh",
+      "ssh_target": "worker.example.invalid",
       "os": "windows",
       "state_dir": "C:\\fleet\\workstation\\state",
       "caps": {
