@@ -1,5 +1,6 @@
 //! gix object/ref operations. Local transport never starts git-upload-pack.
 use super::Alarm;
+use gix::protocol::transport::{self, client::blocking_io::Transport, Protocol};
 use std::{collections::BTreeSet, fs, io, path::Path, sync::atomic::AtomicBool};
 
 fn options() -> gix::open::Options {
@@ -44,6 +45,24 @@ pub(super) fn set_main(repo: &gix::Repository, head: gix::ObjectId) -> Result<()
 }
 
 pub(super) fn fetch(repo: &gix::Repository, remote: &str) -> Result<gix::ObjectId, Alarm> {
+    fetch_with_connector(repo, remote, |url, version| {
+        transport::client::blocking_io::connect::connect(
+            url,
+            transport::client::blocking_io::connect::Options {
+                version,
+                ..Default::default()
+            },
+        )
+    })
+}
+
+// Only connection establishment is replaceable: tests run the same refspec,
+// credential refusal, negotiation and pack/ref receive code over local pipes.
+pub(super) fn fetch_with_connector(
+    repo: &gix::Repository,
+    remote: &str,
+    connect: impl FnOnce(gix::Url, Protocol) -> gix::Result<Box<dyn Transport + Send>>,
+) -> Result<gix::ObjectId, Alarm> {
     let url = gix::url::parse(remote).map_err(|_| Alarm::FetchFailed)?;
     match url.scheme {
         gix::url::Scheme::File => {
@@ -66,13 +85,15 @@ pub(super) fn fetch(repo: &gix::Repository, remote: &str) -> Result<gix::ObjectI
                 })
                 .map_err(|_| Alarm::FetchFailed)?
                 .with_fetch_tags(gix::remote::fetch::Tags::None);
+            let (url, version) = remote
+                .sanitized_url_and_version(gix::remote::Direction::Fetch)
+                .map_err(|_| Alarm::FetchFailed)?;
+            let transport = connect(url, version).map_err(|_| Alarm::FetchFailed)?;
             remote
-                .connect(gix::remote::Direction::Fetch)
-                .and_then(|c| {
-                    // Never fall back to credential helper programs or prompts.
-                    c.with_credentials(|_| Ok(None))
-                        .prepare_fetch(gix::progress::Discard, Default::default())
-                })
+                .to_connection_with_transport(transport)
+                // Never fall back to credential helper programs or prompts.
+                .with_credentials(|_| Ok(None))
+                .prepare_fetch(gix::progress::Discard, Default::default())
                 .and_then(|p| p.receive(gix::progress::Discard, &AtomicBool::new(false)))
                 .map_err(|_| Alarm::FetchFailed)?;
             let id = repo

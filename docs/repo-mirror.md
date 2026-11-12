@@ -76,7 +76,15 @@ If publication completed before an interrupted watermark write, the next fetch
 must fast-forward both accepted main and the older watermark; it cannot silently
 rewind the newly accepted mirror back to the watermark's head.
 
-Keeper ready-file startup code, its contract harness, startup regression and
-changelog bullets predate this fix round and are unchanged. They are not mirror
-wiring. The unrelated keeper table attribution edit has been removed; keeper
-mirror wiring remains a later slice.
+Native HTTP/HTTPS/Git fetch tests replace only the connection opener with pipes
+to a disposable local bare remote's test-only upload-pack server. The production
+refspec, negotiation and receive path still run, including forced candidate
+updates and refusal to invoke a configured credential helper on authentication
+failure. No test opens a network connection. Recovery tests read the complete
+persisted watermark, retaining named blobs and monotonic freshness when a bare
+mirror is rebuilt; the contended writer test advances its bounded fake clock.
+
+Keeper ready-file startup code and its contract harness predate this round and
+are not mirror wiring. The startup regression allows benign health retries while
+checking every probe's child-owned endpoint (including non-200 and OSError
+retries). Keeper mirror wiring remains a later slice.

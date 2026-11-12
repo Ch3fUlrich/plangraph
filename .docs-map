@@ -2,6 +2,7 @@
 # Docs mapping for plangraph (rule D-653)
 rust/pg-mcp/** -> docs/keeper/mcp-rust.md
 rust/pg-probe/** -> docs/context-probes.md
+rust/pg-reap/** -> docs/pg-reap.md
 src/plangraph/fleet_sync/** -> docs/fleet-sync.md
 src/plangraph/keeper/** -> docs/KEEPER.md
 src/plangraph/routing_support/clients.py -> docs/lean-review-harness.md

@@ -87,7 +87,7 @@ def test_real_output_boundaries(tmp_path, monkeypatch, split, failure, payload):
     if failure:
         original_sub = env_redact.re.sub
         def broken(pattern, *args, **kwargs):
-            if pattern.startswith(r'\b(?:x?sk)'):
+            if pattern.startswith(r'(?i)Bearer'):
                 raise RuntimeError('synthetic failure')
             return original_sub(pattern, *args, **kwargs)
         monkeypatch.setattr(env_redact, 're', SimpleNamespace(

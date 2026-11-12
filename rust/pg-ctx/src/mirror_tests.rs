@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 #[path = "mirror_safety_tests.rs"]
 mod safety;
+#[path = "mirror_transport_tests.rs"]
+mod transport;
 
 static COMMIT: AtomicU64 = AtomicU64::new(0);
 
@@ -52,8 +54,11 @@ impl Fixture {
     }
     fn commit(&self, parent: Option<&str>) -> String {
         let tree = git(&self.origin, &["mktree"]);
+        self.commit_tree(parent, &tree)
+    }
+    fn commit_tree(&self, parent: Option<&str>, tree: &str) -> String {
         let message = format!("fixture {}", COMMIT.fetch_add(1, Ordering::Relaxed));
-        let mut args = vec!["commit-tree", &tree, "-m", &message];
+        let mut args = vec!["commit-tree", tree, "-m", &message];
         if let Some(parent) = parent {
             args.extend(["-p", parent]);
         }
@@ -63,6 +68,16 @@ impl Fixture {
     }
     fn bytes(&self) -> Vec<u8> {
         fs::read(self.mirror.root.join("demo/watermark.json")).unwrap()
+    }
+    fn assert_persisted(&self, watermark: &Watermark) {
+        assert_eq!(
+            self.mirror.watermark("demo").unwrap().as_ref(),
+            Some(watermark)
+        );
+        assert_eq!(
+            &serde_json::from_slice::<Watermark>(&self.bytes()).unwrap(),
+            watermark
+        );
     }
 }
 
@@ -86,11 +101,7 @@ fn mirror_first_fetch_and_advance_are_bare_and_persisted() {
     let second = f.mirror.fetch("demo").unwrap();
     assert_eq!(second.main_head, b);
     assert!(second.fetched_at >= first.fetched_at);
-    assert_eq!(f.mirror.watermark("demo").unwrap(), Some(second.clone()));
-    assert_eq!(
-        serde_json::from_slice::<Watermark>(&f.bytes()).unwrap(),
-        second
-    );
+    f.assert_persisted(&second);
     assert_eq!(git(&dir, &["rev-parse", "main"]), b);
 }
 
@@ -151,7 +162,9 @@ fn mirror_without_watermark_refuses_rewind_and_divergence() {
     assert_eq!(git(&dir, &["rev-parse", "main"]), b);
     assert_eq!(f.mirror.watermark("demo").unwrap(), None);
     let c = f.commit(Some(&b));
-    assert_eq!(f.mirror.fetch("demo").unwrap().main_head, c);
+    let recovered = f.mirror.fetch("demo").unwrap();
+    assert_eq!(recovered.main_head, c);
+    f.assert_persisted(&recovered);
 }
 
 #[test]
@@ -187,18 +200,48 @@ fn mirror_rebuilt_without_baseline_refuses_rewind_until_history_returns() {
     let saved = dir.with_file_name("saved.git");
     git(&f.origin, &["fetch", saved.to_str().unwrap(), "main"]);
     let c = f.commit(Some(&b));
-    assert_eq!(f.mirror.fetch("demo").unwrap().main_head, c);
+    let recovered = f.mirror.fetch("demo").unwrap();
+    assert_eq!(recovered.main_head, c);
+    f.assert_persisted(&recovered);
 }
 
 #[test]
 fn mirror_rebuilt_with_fast_forward_history_recovers_without_deleting_watermark() {
     let f = Fixture::new();
-    let a = f.commit(None);
-    f.mirror.fetch("demo").unwrap();
+    let source = open(&f.origin).unwrap();
+    let blob = source
+        .write_blob(b"retained named file\n")
+        .unwrap()
+        .detach();
+    git(
+        &f.origin,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "100644",
+            &blob.to_string(),
+            "README.md",
+        ],
+    );
+    let tree = git(&f.origin, &["write-tree"]);
+    let a = f.commit_tree(None, &tree);
+    let first = f
+        .mirror
+        .fetch_named_at("demo", Some(&["README.md"]), 200)
+        .unwrap();
+    assert_eq!(first.blob_shas["README.md"], blob.to_string());
+    let bytes = f.bytes();
     let dir = f.mirror.mirror_dir("demo").unwrap();
     fs::rename(&dir, dir.with_file_name("saved.git")).unwrap();
-    let b = f.commit(Some(&a));
-    assert_eq!(f.mirror.fetch("demo").unwrap().main_head, b);
+    assert_eq!(f.bytes(), bytes);
+    let b = f.commit_tree(Some(&a), &tree);
+    let recovered = f.mirror.fetch_at("demo", 100).unwrap();
+    assert_eq!(recovered.main_head, b);
+    assert_eq!(recovered.repo, first.repo);
+    assert_eq!(recovered.blob_shas, first.blob_shas);
+    assert_eq!(recovered.fetched_at, first.fetched_at);
+    f.assert_persisted(&recovered);
 }
 
 #[test]
@@ -220,7 +263,9 @@ fn mirror_existing_without_baseline_refuses_and_then_recovers_history() {
     assert_eq!(f.bytes(), bytes);
     git(&f.origin, &["fetch", saved.to_str().unwrap(), "main"]);
     let c = f.commit(Some(&b));
-    assert_eq!(f.mirror.fetch("demo").unwrap().main_head, c);
+    let recovered = f.mirror.fetch("demo").unwrap();
+    assert_eq!(recovered.main_head, c);
+    f.assert_persisted(&recovered);
 }
 
 #[test]
@@ -321,6 +366,7 @@ fn mirror_overlapping_fetch_waits_for_the_writer() {
     );
     assert_eq!(elapsed.get(), FETCH_LOCK_TIMEOUT);
     assert_eq!(f.mirror.watermark("demo").unwrap(), None);
+    elapsed.set(Duration::ZERO);
     let mut contended = false;
     let watermark = f
         .mirror
@@ -328,8 +374,9 @@ fn mirror_overlapping_fetch_waits_for_the_writer() {
             "demo",
             None,
             now(),
-            || Duration::ZERO,
-            |_| {
+            || elapsed.get(),
+            |delay| {
+                elapsed.set(elapsed.get() + delay);
                 assert!(!contended, "writer must release before retry");
                 contended = true;
                 child
@@ -346,5 +393,6 @@ fn mirror_overlapping_fetch_waits_for_the_writer() {
     child.kill().ok();
     assert!(child.wait().unwrap().success());
     assert!(contended, "another process must hold the writer lock");
+    assert!(elapsed.get() > Duration::ZERO && elapsed.get() < FETCH_LOCK_TIMEOUT);
     assert_eq!(watermark.main_head, head);
 }

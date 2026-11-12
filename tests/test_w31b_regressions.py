@@ -98,7 +98,7 @@ def test_second_query_failure_serves_registered_offline_legs_with_warning(caplog
 @pytest.mark.parametrize('client', ['gemini', 'qwen', 'codex'])
 def test_native_harness_preserves_model(client):
     argv = build_command('prompt', 'provider/model', client=client)
-    assert argv == ([client, 'exec', '--model', 'provider/model', 'prompt'] if client == 'codex' else [client, '-p', 'prompt', '--model', 'provider/model'])
+    assert argv == ([client, 'exec', '--model', 'provider/model', '-'] if client == 'codex' else [client, '-p', '', '--model', 'provider/model'])
 
 
 def test_native_runner_does_not_apply_overlay(monkeypatch):
