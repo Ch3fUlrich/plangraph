@@ -45,6 +45,13 @@ Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
 the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
 
+CI suite selection in `tools/ci_select.py` treats `docs/schemas/**` and its
+`RUST_INPUTS` list as Rust inputs even when they are documentation. These inputs
+select both `rust` and `rust-windows` via the shared `rust` output without changing
+other suites. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
+literals, manifest-relative reads and paths leaving `rust/`; new repository
+inputs must be added to `RUST_INPUTS`, not inline to the workflow.
+
 ## Lanes
 
 Completed Rust ports remove only their own Python waiver from
