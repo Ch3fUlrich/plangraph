@@ -32,14 +32,14 @@ fn patterns() -> &'static [regex::Regex] {
             //     only, never CR/LF, so it never crosses a newline. Complete
             //     quoted values are preferred. Both they and the placeholder
             //     consume only a GLUED tail G = [^\s,;"'}\])&]* — directly
-            //     attached, stopping at whitespace, comma, semicolon, quotes,
-            //     `&`, or a closing delimiter — so the rule is idempotent.
+            //     attached (placeholders atomic), stopping at whitespace, comma,
+            //     semicolon, quotes, `&`, or a closing delimiter — so the rule is idempotent.
             //     An unquoted value may not start with `}`, `]`, `)`, or `&`
             //     after either separator. An unterminated quote falls back to
             //     the rest of the line (no closing delimiter semantics). A
             //     backslash before a line feed (or CRLF) continues the value
             //     onto the next line, quoted, unquoted, or unterminated.
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\][^\s,;"'}\])&]*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#,
+            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\](?:\[REDACTED\]|[^\s,;"'}\])&])*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#,
             // 4b. Same assignment rule for `=` only: after `=` an unquoted
             //     value may start with `}`, `]`, or `)` only when at least one
             //     more character follows before the next delimiter. A bare
@@ -82,18 +82,18 @@ fn redact_inner(text: &str, assignments: bool) -> String {
     let out = rs[1].replace_all(&out, REDACTED).into_owned();
     let out = rs[2].replace_all(&out, "Bearer [REDACTED]").into_owned();
     let out = if assignments {
+        let out = super::redact_wrapped::join_shielded_assignments(&out, &rs[3..5]);
         let out = rs[3].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
         rs[4].replace_all(&out, "$1$2$3[REDACTED]").into_owned()
     } else {
         out
     };
-    let out =
-        super::redact_tokens::redact_url_userinfo(&super::redact_wrapped::redact_wrapped(&out));
+    let out = super::redact_wrapped::redact_wrapped(&out);
+    let out = super::redact_tokens::redact_url_userinfo(&out);
     let out = rs[5].replace_all(&out, REDACTED).into_owned();
     let out = rs[6].replace_all(&out, REDACTED).into_owned();
     let out = rs[7].replace_all(&out, REDACTED).into_owned();
-    // 8. Long blobs — but only runs mixing digits and letters, so plain long
-    // words and letter-only paths survive.
+    // 8. Long blobs must mix digits and letters; plain words and paths survive.
     rs[8]
         .replace_all(&out, |m: &regex::Captures| {
             let t = m.get(0).unwrap().as_str();

@@ -74,6 +74,8 @@ collapse to one; conflicting rows produce one `busy-quiet session="..." unknown=
 identity, independent of row order, rather than retaining multiple quiet periods.
 Groups whose rows are all explicitly idle remain skipped without validating details.
 
+Malformed rows with a readable session ID intentionally use `busy-quiet session="..." unknown=sessions` for both message and active identity instead of `busy-quiet unknown=sessions`. On upgrade, a standing unknown may re-key and alert once per affected session; downstream matchers must accept the session-qualified form.
+
 Each firing session queues one routing line, with JSON-escaped identifiers:
 `FLOW-WATCHDOG: busy-quiet session="session-1" role="build" quiet_age_seconds=1260 last_ended_run="run-1"`.
 `quiet_age_seconds` rounds fractional silence up to the next whole second, so
@@ -99,7 +101,7 @@ and run evidence produce the condition's own `busy-quiet ... unknown=transcript`
 `unknown=runs`, or `unknown=transcript,runs` line for each affected busy session, never a
 healthy result or the unrelated `invalid snapshot` rule. A malformed run record
 with a readable, nonempty `parent_session` invalidates run evidence only for that
-parent, including a missing/invalid run ID or a bad/future end timestamp; other
+parent, including a missing/invalid ended-run ID or a bad/future end timestamp; other
 sessions retain their own run evidence. A record with an unreadable parent, or
 a missing/null/malformed run list, invalidates run evidence for every session.
 Missing/null/bad
@@ -147,5 +149,35 @@ checkpointed independently. Each standing active identity is suppressed until
 recovery or a new identity; delivery is at-least-once across a crash during acknowledgement.
 Systemd prevents concurrent ticks of this service; do not run manual concurrent
 instances against its state directory. Routing advances despite pending push;
-the queue retains its head and newest 255 events, reporting overflow on stderr. Collectors, freshness and host integration
-are deployment prerequisites, not supplied by this checker.
+the queue retains its head and newest 255 events, reporting overflow on stderr.
+
+## Collectors, freshness and host integration
+
+Collectors, freshness and host integration are deployment prerequisites, not supplied by this checker.
+
+## Optional turn-budget reader
+
+Set `PLANGRAPH_TURN_BUDGET_STATE_DIR` to the fleet state root to opt into the
+small read-only Rust status reader. Unset, the watchdog never reads session
+counts. The reader scans `<state>/status/*.json`, skips corrupt/unrelated files,
+and recomputes each rolling-hour count at the tick's time. See
+[Turn-budget hook](turn-budget-hook.md) for the producer and schema.
+Over-budget sessions each enqueue one exact `TURN-BUDGET <role> <session>
+wake=<n>/<cap> hour=<n>/<cap>` message, without a `FLOW-WATCHDOG:` prefix;
+both caps firing still yields one line. The active-set/queue machinery keys these
+alerts by `(role, session)`: changed counts refresh the active, queued and pending
+line in place, retaining delivery checkpoints rather than enqueuing each tick.
+After delivery, count changes stay suppressed until recovery; a subsequent breach
+can alert again. `PLANGRAPH_TURN_BUDGET_NOW` optionally supplies Unix seconds for
+deterministic reader tests; leave it unset for normal system-clock expiry.
+No collector,
+settings change, hook installation or live activation is performed by this lane.
+Budget refresh compacts legacy duplicates by identity, preserving the oldest
+event's channel acknowledgements. Corrupt or unreadable pending JSON is preserved
+and skipped for refresh/delivery rather than aborting independent queued routing
+or suppressing unrelated alerts. The shell-delivery integration suite is Unix-only;
+its opt-out subprocess clears both budget-reader variables, including the clock.
+Pending reads are capped at 1 MiB plus one overflow-detection byte; oversized
+files follow the same preserve-and-skip path without an unbounded allocation.
+Portable unit coverage checks the exact cap and overflow; delivery coverage also
+pins preservation while unrelated queued routing continues.

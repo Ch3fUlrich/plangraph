@@ -32,13 +32,20 @@ directory. Its home fallback is systemd `%h`, independent of the manager's `HOME
 redeploy the service template to apply the guard.
 
 Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; private-key blocks are masked in both modes, and token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
-Both modes apply complete/truncated PEM, Bearer, wrapped prefixed tokens, URL userinfo,
-the Rust token catalog (OpenAI, GitHub, Slack, AWS and Google prefixes), and JWT rules.
-Wrapped bodies share the catalog's alphabets/floors and bounded 4096-byte LF/CRLF joins.
-Source spans must start and end on line boundaries; invalid spans withhold the prompt.
-Only child-produced output text additionally uses `redact_output`: long hex (32+)
-then base64/url-safe blobs (40+, mixing letters and digits), before tail truncation.
-These broad rules never run on prompts or record structures: commit SHAs and hashes
+Python and Rust order: complete/truncated PEM, Bearer, then plain-mode pre-pass P:
+shield every matched assignment's name/quote/separator with an indexed marker
+`U+E000 + decimal index + U+E001`, leaving values untouched; run the wrapped join,
+then restore the names.
+P is skipped entirely if either shield character already occurs in the text.
+Then main's order runs: full assignments, wrapped prefixed tokens, URL userinfo,
+token catalog and JWT. The shielded join cannot cross/eat a credential name while
+its value is unmasked. Source mode skips P and assignments; its order is unchanged.
+The catalog covers OpenAI, GitHub, Slack, AWS and Google prefixes; wrapped bodies
+share its alphabets/floors and bounded 4096-byte LF/CRLF joins.
+Source spans must start and end on line boundaries; invalid spans (even empty ones) withhold the prompt.
+Long hex (32+), then base64/url-safe blobs (40+, mixing letters and digits), run
+only on child output via Python's `redact_output`, and as part of Rust's `redact`.
+Python never runs these broad rules on prompts or record structures: SHAs and hashes
 must stay readable there, including run IDs, card hashes and prompt SHA-256 fields.
 Stored stdout/stderr tails have already passed the output scrubber at collection.
 A tail therefore masks commit SHAs and long slash paths: take SHAs from git or the run record, never from a tail.
@@ -96,6 +103,35 @@ Only a `stop` with non-blank pending text clears that block; empty or
 whitespace-only stops and tool calls cannot launder truncation into a verdict.
 A completed `stop` answer remains eligible.
 
+### Reasoning-only output exhaustion (MIMO-REASONING-OUTPUT-LIMIT)
+
+Before decoding display stdout, `opencode_answer.record_steps` retains each
+`step_finish` as an `opencode_step_finish` event with `finish_reason`,
+`output_tokens` and `reasoning_tokens`; absent usage remains null, not zero.
+Structured `output-limit` errors and the matching OpenCode stderr diagnostic
+add `opencode_output_limit`. These are diagnostic events, not served-model witnesses.
+A final `length` step with output zero, or that error with no text/output,
+adds `opencode_reasoning_exhausted`; later completed output is not retried.
+Display-text decoding also protects plain/mixed stdout answers; diagnostic-only JSON, including blank separator lines, is not answer text.
+The monitor's events reach `record.json` through either dispatch path.
+
+For an OpenCode inline `review`, shared `SeatSpawnMixin._launch_leg` retries
+once with the same prompt, model and harness, never unchanged. MiMo v2.6 Flash
+and Pro use model-local `body.thinking.type=disabled` (zero reasoning budget)
+in the isolated child config; the root config and other roles are unchanged.
+An already-disabled or unsupported control is unavailable, not an unchanged retry.
+The failed attempt and its events stay in the record, with `reasoning_retry=1`
+saved before the retry. Tool denial, fresh job isolation and the original review
+wall deadline remain in force. No new retry loop or provider-health booking is added.
+The retry requires more than 30 seconds of remaining wall budget. Base-service launches keep their original shielded monitor cancellation and ownership fields.
+Repeated zero-output exhaustion, an unavailable cap, or no remaining retry budget
+ends the run `failed` with terminal `reason: reasoning_output_limit`; no spare leg
+or writer continuation runs. Cancellation, timeout and kill-incomplete still win.
+Terminal status, reason, attempts and events are saved at the shared launch boundary before either caller returns; routed exhaustion keeps normal failure witness metadata, and both callers finalize `ended` and release monitor registrations in `finally`.
+Normal output, nonzero-output truncation and non-review roles retain existing behavior except that base-service watchdog exits now retain one attempt row, matching routed dispatch; `terminal_record` adds no rows, retries do not duplicate watchdog rows, and cancellation rows are unchanged.
+Hermetic coverage is in `tests/test_spawner_review_tools_inline.py` and
+`tests/test_spawner_runner_answer.py`; the live #768 seat is an after-merge operator check.
+
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:
 - `verdict.json` audits outcomes; `verdict.delivered` stops replay.
@@ -104,6 +140,9 @@ Terminal saves dispatch review verdicts to the keeper:
 - Verifier exit codes govern retries; ambiguous exceptions after invocation skip to prevent duplicate POSTs.
 - Remove both journal and marker explicitly to requeue after repair.
 - Delivery markers stop retries even when the completion field is absent.
+Spawn records take `item_key` (or the legacy `item` alias) from the card, falling back to `PLANGRAPH_SPAWN_ITEM` only when neither card field supplies a value. Python and `pg-spawnd` require an ASCII `project:ID` key (at most 200 characters total and 180 in the ID); invalid explicit values stay null with a warning rather than falling through to another identity. Prompt mentions never supply an item key. Review/judge records without a key retain a `seat_item_missing` warning event. Main's verdict outbox above is the only automatic posting path; record-derived posting refuses a `--key` that differs from a recorded `item_key`, including null. Legacy records without the field retain the manual CLI path.
+The `evidence.json` manual path also refuses any supplied `item_key` or `key` that differs from `--key`, including null or conflicting aliases, before reading reviewer tokens or posting. Missing-seat events are deduplicated against launch events and remain persisted on dry runs and queue refusals.
+Companion records still bind the target when `evidence.json` is present: missing evidence identity cannot override a record's explicit null or different key, and malformed companion records fail closed. Git-config capture refusals also retain validated identity and launch/missing-seat events. The record-only path checks record identity independently of the evidence builder. Manual invocations always require `--key` (including legacy records); omission exits 2 before reading seat files or tokens. Non-dry completed Python dispatch saves also preserve missing-seat and launch events.
 `worker-core::writer_result::check_result` runs the mandatory Rust file-size
 gate before returning a checked result; export rechecks it before content gates,
 bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
@@ -309,7 +348,8 @@ import `plangraph.spawner` at runtime; the boundary is enforced by
 
 `planner.routing.plan_spawn(card, role="implement"|"review")` applies the
 canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
-Every role puts eligible free inputs before subscriptions and paid inputs (D-5092); main's writer preference remains a tie-breaker within one tier, never across tiers or ahead of measured utility. Catalog cost tiers project onto registered legs without changing their roles, safety exclusions, or family metadata. Sonnet, main's Opus registration, high-effort Opus, gateway DeepSeek/Muse, personal Argon, and Big Pickle remain registered (D-5113). Grok's manual-only gate, both Zen free legs' exact permanent D-4196/D-3828 disables, and Qoder's stop remain enforced; Muse retains main's automatic admission, and Big Pickle retains its GLM family. Sonnet retains orchestration/review, high-effort Opus review only, and medium-effort Opus review/orchestration. No Claude-family leg may enter an automatic implement route, including custom role-bearing tables; explicitly audited effort-variant writer picks remain available.
+Writers use Sol xhigh then agy Gemini Flash (`WRITER_ORDER`); plain Sol is explicit-only. See [implement route defaults](routing.md); banned/off families are skipped for writers too.
+Other roles and the remaining implementation fallbacks put eligible free inputs before subscriptions and paid inputs (D-5092). Catalog cost tiers project onto registered legs without changing their roles, safety exclusions, or family metadata. Sonnet, main's Opus registration, high-effort Opus, gateway DeepSeek/Muse, personal Argon, and Big Pickle remain registered (D-5113). Grok's manual-only gate, both Zen free legs' exact permanent D-4196/D-3828 disables, and Qoder's stop remain enforced; Muse retains main's implementation/review/orchestration admission, and Big Pickle retains its GLM family. Sonnet retains orchestration/review, high-effort Opus review only, and medium-effort Opus review/orchestration. No Claude-family leg may enter an automatic implement route, including custom role-bearing tables; explicitly audited effort-variant writer picks remain available.
 
 `plan_spawn` shares one catalog snapshot for admission and tier projection.
 Callers may supply `catalog_rows` explicitly for deterministic offline planning;
@@ -321,9 +361,9 @@ Claude 5.5 and effort-variant legs (operator 2026-11-09): `agy-claude-{sonnet,op
 `cx-gpt-6-luna-{low,medium,high,xhigh,max}` (inline-only review) and
 `cx-gpt-6.1-sol-{low,medium,high,xhigh,max}` (implement). The ids are what `agy models` and
 OmniRoute `/v1/models` served that day; agy serves no Sonnet xhigh and cx serves no `-ultra`, so neither is a leg.
-These effort-variant ids live in `EXPLICIT_LEGS`: an explicit `--leg` pick (or the model
-override) spawns them; their explicit-only status is unchanged by D-5113's separate default registrations.
-`SpawnService.route` appends them to
+Except Sol xhigh (automatic, D-5206), these and plain Sol live in `EXPLICIT_LEGS`, not
+`DEFAULT_LEGS`: an audited `--leg` or model override spawns them. Claude never enters
+automatic implement routes. `SpawnService.route` appends explicit-only legs to
 the plan as `explicit_only` skips, so `route` shows them; `plan_spawn` itself does not list them. A Claude leg is claude-family: the fence refuses
 it for a claude writer, given or via `review_of`; with mixed writers the D-3084 per-part rule
 admits a seat that covers another writer part. The Claude and sol-effort writers are

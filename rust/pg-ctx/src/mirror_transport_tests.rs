@@ -57,6 +57,77 @@ fn mirror_native_fetch_receives_main_and_forced_candidates_without_network() {
     }
 }
 
+#[test]
+fn mirror_native_fetch_without_main_never_returns_stale_ref_or_refreshes_watermark() {
+    let f = Fixture::new();
+    let head = f.commit(None);
+    let watermark = f.mirror.fetch_at("demo", 100).unwrap();
+    let bytes = f.bytes();
+    let candidate = f._tmp.path().join("candidate.git");
+    copy_repository(&f.mirror.mirror_dir("demo").unwrap(), &candidate).unwrap();
+    let repo = open(&candidate).unwrap();
+    for scheme in ["http", "https", "git"] {
+        for protocol in ["", "version=2"] {
+            let url = format!("{scheme}://example.invalid/repository.git");
+            let fetch = || {
+                let mut child = None;
+                let result = backend::fetch_with_connector(&repo, &url, |actual, version| {
+                    assert_eq!(actual.to_bstring().to_string(), url);
+                    assert_eq!(version, Protocol::V2);
+                    let mut process = git_command(&f.origin)
+                        .env("GIT_PROTOCOL", protocol)
+                        .args(["upload-pack", "--strict", "."])
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .spawn()
+                        .unwrap();
+                    let transport = transport::client::git::blocking_io::Connection::new(
+                        process.stdout.take().unwrap(),
+                        process.stdin.take().unwrap(),
+                        version,
+                        actual.path,
+                        None::<(String, Option<u16>)>,
+                        transport::client::git::ConnectMode::Process,
+                        false,
+                    );
+                    child = Some(process);
+                    Ok(Box::new(transport))
+                });
+                // Missing-ref validation may disconnect before upload-pack's
+                // final flush; always reap the server, including on refusal.
+                let output = child.unwrap().wait_with_output().unwrap();
+                if result.is_ok() {
+                    assert!(output.status.success());
+                }
+                result
+            };
+            git(&f.origin, &["update-ref", "refs/heads/main", &head]);
+            assert_eq!(
+                fetch().map(|id| id.to_string()),
+                Ok(head.clone()),
+                "{scheme} {protocol}"
+            );
+            git(&candidate, &["pack-refs", "--all"]);
+            git(&f.origin, &["update-ref", "-d", "refs/heads/main"]);
+            git(&f.origin, &["update-ref", "refs/heads/other", &head]);
+            // Both a remote advertising only unrelated refs and an empty remote
+            // must fail despite the previous successful fetch's packed ref.
+            // Pinned gix validates the exact refspec in receive(); the backend's
+            // error propagation stops Mirror before publication or freshness writes.
+            for empty in [false, true] {
+                if empty {
+                    git(&f.origin, &["update-ref", "-d", "refs/heads/other"]);
+                }
+                assert_eq!(fetch(), Err(Alarm::FetchFailed), "{scheme} {protocol}");
+                assert_eq!(git(&candidate, &["rev-parse", "refs/pg-ctx/main"]), head);
+                assert_eq!(f.bytes(), bytes);
+                f.assert_persisted(&watermark);
+            }
+        }
+    }
+}
+
 struct Denied;
 impl transport::client::TransportWithoutIO for Denied {
     fn to_url(&self) -> Cow<'_, gix::bstr::BStr> {

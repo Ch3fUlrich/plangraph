@@ -128,6 +128,20 @@ def test_wrapped_token_in_prompt_and_tail(monkeypatch, tmp_path, newline):
     assert job.stdout == job.stderr == '[REDACTED]; retained\n'
 
 
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+@pytest.mark.parametrize('prefix, suffix', [
+    ('API_KEY="', '"'), ('export API_KEY=', ''), ('token: ', ''),
+])
+@pytest.mark.parametrize('scrub', [env_redact.redact, env_redact.redact_source, env_redact.redact_output])
+def test_wrapped_assignment_is_masked_whole(newline, prefix, suffix, scrub):
+    secret = 'gh' + 'p_' + 'A9' * 7 + newline + 'A9' * 8
+    text = prefix + secret + suffix + newline + 'next retained'
+    # D-5279 R3: Python keeps value quotes; Rust's existing assignment rule drops them.
+    expected = prefix + '[REDACTED]' + suffix + newline + 'next retained'
+    assert scrub(text) == expected
+    assert scrub(expected) == expected
+
+
 def test_split_token_at_source_boundary_fails_closed(monkeypatch, tmp_path):
     prompt = 'sk-' + env_redact._source_block('synthetic123')
     assert str(prompt) == 'sk-' + 'synthetic123'
@@ -137,6 +151,14 @@ def test_split_token_at_source_boundary_fails_closed(monkeypatch, tmp_path):
 
 def test_source_span_cannot_end_midline(monkeypatch, tmp_path):
     prompt = env_redact._source_block('s') + 'k-' + 'synthetic123'
+    assert capture(monkeypatch, tmp_path, prompt) == '[autoos:redaction failed; output withheld]\n'
+
+
+@pytest.mark.parametrize('at_end', [False, True])
+def test_empty_source_span_at_prompt_boundary_fails_closed(monkeypatch, tmp_path, at_end):
+    text = 'caller text without boundary newlines'
+    offset = len(text) if at_end else 0
+    prompt = env_redact._SourcePrompt(text, ((offset, offset),))
     assert capture(monkeypatch, tmp_path, prompt) == '[autoos:redaction failed; output withheld]\n'
 
 
