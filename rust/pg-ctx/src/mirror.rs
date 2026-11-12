@@ -21,6 +21,8 @@ pub enum Alarm {
 pub struct Watermark {
     pub repo: String,
     pub main_head: String,
+    #[serde(default)]
+    pub blob_shas: BTreeMap<String, String>,
     pub fetched_at: u64,
 }
 
@@ -97,18 +99,38 @@ impl Mirror {
     pub fn fetch(&self, repo: &str) -> Result<Watermark, Alarm> {
         self.fetch_at(repo, now())
     }
+    /// Replace the named-file set, recording each blob SHA at the accepted main.
+    /// Later `fetch` calls refresh the same set; missing/non-blob paths refuse publication.
+    pub fn fetch_named(&self, repo: &str, paths: &[&str]) -> Result<Watermark, Alarm> {
+        self.fetch_named_at(repo, Some(paths), now())
+    }
     fn fetch_at(&self, repo: &str, now: u64) -> Result<Watermark, Alarm> {
+        self.fetch_named_at(repo, None, now)
+    }
+    fn fetch_named_at(
+        &self,
+        repo: &str,
+        paths: Option<&[&str]>,
+        now: u64,
+    ) -> Result<Watermark, Alarm> {
         let failed = |_| Alarm::FetchFailed;
-        let dir = self.mirror_dir(repo).map_err(failed)?;
-        let parent = dir.parent().unwrap();
+        let accepted_dir = self.mirror_dir(repo).map_err(failed)?;
+        let parent = accepted_dir.parent().unwrap();
         fs::create_dir_all(parent).map_err(failed)?;
         let _lock = lockfile::try_lock(&parent.join("fetch.lock"))
             .map_err(|_| Alarm::FetchFailed)?
             .ok_or(Alarm::FetchFailed)?;
         let old = self.watermark(repo).map_err(failed)?;
-        if !dir.exists() {
-            let staging = tempfile::tempdir_in(parent).map_err(failed)?;
-            let clone = staging.path().join("mirror.git");
+        let staging = if !accepted_dir.exists() {
+            Some(tempfile::tempdir_in(parent).map_err(failed)?)
+        } else {
+            None
+        };
+        let dir = staging.as_ref().map_or_else(
+            || accepted_dir.clone(),
+            |stage| stage.path().join("mirror.git"),
+        );
+        if staging.is_some() {
             checked(git(
                 parent,
                 &[
@@ -116,15 +138,14 @@ impl Mirror {
                     "--bare",
                     "--",
                     &self.repos[repo],
-                    clone.to_str().ok_or(Alarm::FetchFailed)?,
+                    dir.to_str().ok_or(Alarm::FetchFailed)?,
                 ],
             )?)?;
             // Do not publish an empty clone that cannot supply an ancestry baseline.
             checked(git(
-                &clone,
+                &dir,
                 &["rev-parse", "--verify", "refs/heads/main^{commit}"],
             )?)?;
-            fs::rename(clone, &dir).map_err(failed)?;
         }
         // A missing watermark must not erase the mirror's accepted history.
         // Refuse an existing mirror without main rather than guess a baseline.
@@ -161,16 +182,56 @@ impl Mirror {
             .map_err(|_| Alarm::FetchFailed)?
             .trim()
             .to_owned();
+        // A rebuilt mirror can recover the baseline through the fetched ancestry.
+        // If it is still absent, no fast-forward can be proven: refuse as a history
+        // rewrite, not a transient transport failure, and never publish the clone.
+        if !git(&dir, &["cat-file", "-e", &format!("{baseline}^{{commit}}")])?
+            .status
+            .success()
+        {
+            return Err(Alarm::ForcePush);
+        }
         let ancestry = git(&dir, &["merge-base", "--is-ancestor", &baseline, &head])?;
         match ancestry.status.code() {
             Some(0) => {}
             Some(1) => return Err(Alarm::ForcePush),
             _ => return Err(Alarm::FetchFailed),
         }
+        let names = paths.map_or_else(
+            || {
+                old.as_ref().map_or_else(Vec::new, |w| {
+                    w.blob_shas.keys().map(String::as_str).collect()
+                })
+            },
+            |paths| paths.to_vec(),
+        );
+        let mut blob_shas = BTreeMap::new();
+        for name in names {
+            if name.contains(['\\', '\0', '\n', '\r'])
+                || name.split('/').any(|part| matches!(part, "" | "." | ".."))
+            {
+                return Err(Alarm::FetchFailed);
+            }
+            let output = checked(git(
+                &dir,
+                &["rev-parse", "--verify", &format!("{head}:{name}")],
+            )?)?;
+            let sha = String::from_utf8(output.stdout).map_err(|_| Alarm::FetchFailed)?;
+            let sha = sha.trim();
+            let kind = checked(git(&dir, &["cat-file", "-t", sha])?)?;
+            if kind.stdout != b"blob\n" {
+                return Err(Alarm::FetchFailed);
+            }
+            blob_shas.insert(name.into(), sha.into());
+        }
         checked(git(&dir, &["update-ref", "refs/heads/main", &head])?)?;
+        if staging.is_some() {
+            fs::rename(&dir, &accepted_dir).map_err(failed)?;
+        }
         let watermark = Watermark {
             repo: repo.into(),
             main_head: head,
+            blob_shas,
             fetched_at: now.max(old.map_or(0, |w| w.fetched_at)),
         };
         let bytes = serde_json::to_vec(&watermark).map_err(|_| Alarm::FetchFailed)?;

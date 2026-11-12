@@ -8,11 +8,13 @@ down cleanly and release the lock.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import sys
 import threading
 from contextlib import suppress
+from pathlib import Path
 
 from . import anchor, api, config as config_mod, db as kdb, outage
 from .errors import KeeperLocked
@@ -152,6 +154,8 @@ def main(argv=None) -> int:
     parser.add_argument("--host", default=None, help="override the bind host")
     parser.add_argument("--port", type=int, default=None,
                         help="override the bind port")
+    parser.add_argument("--ready-file", type=Path, default=None,
+                        help="write the bound host/port after startup (use --port 0)")
     args = parser.parse_args(argv)
     try:
         cfg = config_mod.load_config(args.config)
@@ -159,7 +163,13 @@ def main(argv=None) -> int:
         print(f"config: {exc}", file=sys.stderr)
         return 1
     try:
-        return run(cfg, host=args.host, port=args.port)
+        def ready(server):
+            if args.ready_file is not None:
+                from .snapshot_io import _atomic_write
+                host, port = server.server_address[:2]
+                _atomic_write(args.ready_file, json.dumps({"host": host, "port": port}).encode())
+
+        return run(cfg, host=args.host, port=args.port, ready=ready)
     except KeeperLocked as exc:
         print(f"keeper locked: {exc}", file=sys.stderr)
         return 1

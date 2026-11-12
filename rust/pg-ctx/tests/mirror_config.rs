@@ -48,6 +48,14 @@ fn mirror_ignores_caller_git_configuration() {
         .env("XDG_CONFIG_HOME", &xdg)
         .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
         .env("GIT_CONFIG_NOSYSTEM", "0")
+        .env("GIT_DIR", root.join("not-a-repository"))
+        .env("GIT_COMMON_DIR", root.join("not-a-common-dir"))
+        .env("GIT_WORK_TREE", root.join("not-a-worktree"))
+        .env("GIT_OBJECT_DIRECTORY", root.join("not-an-object-dir"))
+        .env("GIT_INDEX_FILE", root.join("not-an-index"))
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "protocol.file.allow")
+        .env("GIT_CONFIG_VALUE_0", "never")
         .output()
         .unwrap();
     assert!(

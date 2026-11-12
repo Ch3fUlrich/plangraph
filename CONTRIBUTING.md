@@ -43,10 +43,8 @@ Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
 the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
 
-The shared Rust workspace is defined by `rust/Cargo.toml` and `rust/Cargo.lock`;
-these cover all member crates, not one feature. Map their documentation updates
-here in `.docs-map`, while crate-specific paths keep their own feature guides.
-Run `cargo test -p <crate>` from `rust/` for each affected crate.
+Run `cargo test -p <crate>` from `rust/` for each affected crate. Documentation
+mapping for a crate covers its own paths, not shared workspace manifests or locks.
 
 ## Lanes
 

@@ -149,6 +149,63 @@ fn mirror_without_watermark_or_main_ref_refuses_fetch() {
 }
 
 #[test]
+fn mirror_rebuilt_without_baseline_refuses_rewind_until_history_returns() {
+    let f = Fixture::new();
+    let a = f.commit(None);
+    let b = f.commit(Some(&a));
+    f.mirror.fetch("demo").unwrap();
+    let bytes = f.bytes();
+    let dir = f.mirror.mirror_dir("demo").unwrap();
+    fs::rename(&dir, dir.with_file_name("saved.git")).unwrap();
+    git(&f.origin, &["update-ref", "refs/heads/main", &a]);
+    // Local clones otherwise copy unreachable objects too; really lose the baseline.
+    git(&f.origin, &["reflog", "expire", "--expire=now", "--all"]);
+    git(&f.origin, &["gc", "--prune=now"]);
+    for _ in 0..2 {
+        assert_eq!(f.mirror.fetch("demo"), Err(Alarm::ForcePush));
+        assert_eq!(f.bytes(), bytes);
+        assert!(!dir.exists(), "never publish a rejected rebuilt mirror");
+    }
+    let saved = dir.with_file_name("saved.git");
+    git(&f.origin, &["fetch", saved.to_str().unwrap(), "main"]);
+    let c = f.commit(Some(&b));
+    assert_eq!(f.mirror.fetch("demo").unwrap().main_head, c);
+}
+
+#[test]
+fn mirror_rebuilt_with_fast_forward_history_recovers_without_deleting_watermark() {
+    let f = Fixture::new();
+    let a = f.commit(None);
+    f.mirror.fetch("demo").unwrap();
+    let dir = f.mirror.mirror_dir("demo").unwrap();
+    fs::rename(&dir, dir.with_file_name("saved.git")).unwrap();
+    let b = f.commit(Some(&a));
+    assert_eq!(f.mirror.fetch("demo").unwrap().main_head, b);
+}
+
+#[test]
+fn mirror_existing_without_baseline_refuses_and_then_recovers_history() {
+    let f = Fixture::new();
+    let a = f.commit(None);
+    let b = f.commit(Some(&a));
+    f.mirror.fetch("demo").unwrap();
+    let bytes = f.bytes();
+    let dir = f.mirror.mirror_dir("demo").unwrap();
+    let saved = dir.with_file_name("saved.git");
+    fs::rename(&dir, &saved).unwrap();
+    fs::create_dir(&dir).unwrap();
+    git(&dir, &["init", "--bare", "--initial-branch=main"]);
+    git(&f.origin, &["update-ref", "refs/heads/main", &a]);
+    git(&f.origin, &["reflog", "expire", "--expire=now", "--all"]);
+    git(&f.origin, &["gc", "--prune=now"]);
+    assert_eq!(f.mirror.fetch("demo"), Err(Alarm::ForcePush));
+    assert_eq!(f.bytes(), bytes);
+    git(&f.origin, &["fetch", saved.to_str().unwrap(), "main"]);
+    let c = f.commit(Some(&b));
+    assert_eq!(f.mirror.fetch("demo").unwrap().main_head, c);
+}
+
+#[test]
 fn mirror_unreachable_and_deleted_main_keep_old_bytes() {
     let f = Fixture::new();
     f.commit(None);
@@ -191,6 +248,7 @@ fn mirror_age_stale_boundary_and_clock_rollback() {
     let w = Watermark {
         repo: "demo".into(),
         main_head: "abc".into(),
+        blob_shas: BTreeMap::new(),
         fetched_at: 1000,
     };
     assert_eq!(w.age_at(999), 0);

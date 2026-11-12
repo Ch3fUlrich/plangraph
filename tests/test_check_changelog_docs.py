@@ -160,7 +160,7 @@ def test_base_equal_head_refused(test_repo):
 def test_workspace_docs_map_accepts_workspace_documentation(test_repo, path):
     repo, _ = test_repo
     base = commit_files(repo, {
-        ".docs-map": (ROOT / ".docs-map").read_text(),
+        ".docs-map": "# enforce-after: 2026-11-08\nrust/Cargo.* -> CONTRIBUTING.md\n",
     }, "use repository docs mapping")
     commit_files(repo, {
         path: "# workspace dependency update\n",
@@ -176,7 +176,7 @@ def test_workspace_docs_map_accepts_workspace_documentation(test_repo, path):
 def test_workspace_docs_map_requires_more_than_feature_documentation(test_repo, path):
     repo, _ = test_repo
     base = commit_files(repo, {
-        ".docs-map": (ROOT / ".docs-map").read_text(),
+        ".docs-map": "# enforce-after: 2026-11-08\nrust/Cargo.* -> CONTRIBUTING.md\n",
     }, "use repository docs mapping")
     commit_files(repo, {
         path: "# workspace dependency update\n",
@@ -188,6 +188,18 @@ def test_workspace_docs_map_requires_more_than_feature_documentation(test_repo, 
     assert result.returncode == 1, result.stdout
     assert "CONTRIBUTING.md" in result.stdout
     assert "docs-map 0 warning(s)/1 error(s)" in result.stdout
+
+
+def test_repo_mirror_docs_mapping_is_crate_only():
+    from tools.check_changelog_docs import glob_to_regex, parse_docs_map
+
+    _, rules, errors = parse_docs_map((ROOT / ".docs-map").read_text())
+    assert not errors
+    mirror_rules = [(pattern, docs) for _, pattern, docs in rules
+                    if "docs/repo-mirror.md" in docs]
+    assert mirror_rules == [("rust/pg-ctx/**", ["docs/repo-mirror.md"])]
+    for path in ("rust/Cargo.toml", "rust/Cargo.lock", "rust/pg-probe/src/lib.rs"):
+        assert all(not glob_to_regex(pattern).fullmatch(path) for pattern, _ in mirror_rules)
 
 
 def test_writer_docs_map_shared_parity():

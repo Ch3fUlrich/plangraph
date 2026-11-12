@@ -1,2 +1,4 @@
 - Add Rust `pg-ctx::mirror`: configured bare Git fetches with atomic monotonic watermarks, force-push/failure refusal, and five-minute freshness helpers; hermetic bare-origin tests cover advancement and refusal.
-- Recover a missing watermark's ancestry baseline from accepted main (refusing an unverifiable baseline), isolate shipped mirror commands from caller Git configuration, and map shared workspace files to contributor documentation.
+- Recover a missing watermark's ancestry baseline from accepted main (refusing an unverifiable baseline), and isolate shipped mirror commands from caller Git configuration.
+- Persist and read back named-file blob SHAs alongside accepted main; classify a missing historical baseline as a force-push refusal without publishing a rejected rebuilt clone, and retain crate-only mirror documentation mappings.
+- Eliminate local keeper startup port races: bind port zero and atomically publish the child's actual endpoint, preventing another keeper's health response from causing spurious token refusals in parallel CI.
