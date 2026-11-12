@@ -13,3 +13,5 @@
   refusals, legacy-client stdin, the actual diff/bound exception hierarchy and exact
   advisory warnings. Rust accepts incidental short prompt substrings and retains
   plan, attempts and diagnostic evidence for named pre-exec failures.
+- Keep large-prompt real-child transport proofs readable after output redaction
+  by checking byte length and the full SHA-256 in colon-separated groups.
