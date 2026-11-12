@@ -1,4 +1,5 @@
 # Exceptions for Python regression tests of existing modules and the thin gate.
+tests/test_spawner_run_worktree.py | RUN-WORKTREE regression coverage (D-5062), retired by SPAWNER-RUST-PORT
 # A single * matches only within a directory; ** matches recursively.
 tests/test_*.py | Regression tests for existing Python modules
 tools/check_new_code_lang.py | D-4691 gate script, thin
@@ -18,6 +19,9 @@ src/plangraph/fleet_sync/genconfig.py | lane started before the gate (D-5062, ru
 src/plangraph/fleet_sync/release.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
 src/plangraph/keeper/cli_output_verbs.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
 src/plangraph/keeper/crit_path_stall.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
-src/plangraph/keeper/store_decision_close.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
 src/plangraph/keeper/run_records.py | Python area unblock (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
+src/plangraph/keeper/store_decision_close.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
+src/plangraph/routing_support/review_mode.py | lane started before the gate (D-5062, rule 9.14), retired by REVIEW-HARNESS-RUST
+src/plangraph/spawner/host_ready_source.py | lane started before the gate (D-5062, rule 9.14), retired by SPAWNER-RUST-PORT
 tools/crit_path_stall.py | CI/tool helper (D-5062, rule 9.14), tools exception
+tools/judge_prompt.py | CI/tool helper (D-5062, rule 9.14), tools exception

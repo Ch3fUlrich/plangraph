@@ -32,7 +32,7 @@ HARNESSES = ("qodercli", "opencode", "agy", "claude")
 #: How a review leg reads the change: with its own tools, or only from a diff the
 #: spawner inlines into the prompt (D-3134/D-3173: luna, mimo-pro give no verdict
 #: in tool mode).
-TOOL_MODES = ("tools", "inline-only")
+TOOL_MODES = ("tools", "inline-only", "prompt-only")
 #: Models that never sit as a review seat, routed or hand-picked (D-3225:
 #: opencode-go/qwen3.8-flash via OmniRoute returned empty content 6/6, ~289 s).
 NO_VERDICT_SEATS = frozenset({"opencode-go/qwen3.8-flash"})
@@ -150,7 +150,7 @@ DEFAULT_LEGS = (
     # D-3605 Haiku leg: last, so it sorts after every non-claude review leg.
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
-        tool_mode="tools",
+        tool_mode="prompt-only",
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
@@ -171,8 +171,8 @@ LEAD_WRITER = "cx-gpt-6.1-sol"
 #: Operator 2026-11-09: Claude 5.5 seats and effort variants, spawnable by an
 #: explicit ``--leg`` pick (or the model override) only.  They are NOT in
 #: DEFAULT_LEGS, so no route, keeper plan or role order changes (D-3605: Claude is
-#: no default writer or seat; D-3828: no writer fallback); ``plan_spawn`` lists them
-#: as ``explicit_only`` skips.  Model ids are what ``agy models`` and OmniRoute
+#: no default writer or seat; D-3828: no writer fallback); ``SpawnService.route``
+#: appends them as ``explicit_only`` skips, ``plan_spawn`` does not.  Model ids are what ``agy models`` and OmniRoute
 #: /v1/models served that day (agy serves no Sonnet xhigh, cx no -ultra).  Claude
 #: legs are claude-family, so the D-2511 fence keeps them off claude-written work.
 #: A cx effort model needs a per-run opencode entry (``opencode_render``).

@@ -1,0 +1,1 @@
+- Docs: `SpawnService.route`, not `plan_spawn`, lists the explicit-only legs as `explicit_only` skips.
