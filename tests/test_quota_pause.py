@@ -165,9 +165,13 @@ def test_judge_pause_precedes_store_resolution(tmp_path, monkeypatch, dry, sourc
     assert asyncio.run(leg_probe.before_launch(runner, leg, 'review', dry)) == 'quota pause'
     resolve_store.assert_not_called()
     (tmp_path / 'quota-pause').unlink()
-    with pytest.raises(OSError, match='injected store failure'):
-        asyncio.run(leg_probe.before_launch(runner, leg, 'review', dry))
-    resolve_store.assert_called_once_with(runner)
+    if dry:
+        assert asyncio.run(leg_probe.before_launch(runner, leg, 'review', dry)) is None
+        resolve_store.assert_not_called()
+    else:
+        with pytest.raises(OSError, match='injected store failure'):
+            asyncio.run(leg_probe.before_launch(runner, leg, 'review', dry))
+        resolve_store.assert_called_once_with(runner)
 
 
 def test_claude_judge_admission_before_probe(tmp_path, monkeypatch):
@@ -208,13 +212,22 @@ def test_judge_uses_configured_state(tmp_path, monkeypatch, dry, source):
         store.state_root = tmp_path
     reader = SimpleNamespace(enabled=True, store=store, record_probe_fail=Mock()) if source == 'adapter' else store
     runner = SimpleNamespace(leg_reader=reader)
-    if source in ('state', '_state', 'state_root'):
+    runner_root = source in ('state', '_state', 'state_root')
+    if runner_root:
         setattr(runner, source, tmp_path)
         runner.leg_reader = SimpleNamespace(record_probe_fail=Mock())
+    resolve_store = Mock(wraps=leg_probe._store_for)
+    monkeypatch.setattr(leg_probe, '_store_for', resolve_store)
     monkeypatch.setattr(leg_probe, 'probe', AsyncMock(side_effect=AssertionError('probe while paused')))
     (tmp_path / 'quota-pause').touch()
     leg = SimpleNamespace(id='claude-test', model='claude-test')
-    assert asyncio.run(leg_probe.before_launch(runner, leg, 'review', dry)) == 'quota pause'
+    # Dry runs use runner/env roots only; store fallback is for real launches.
+    expected = None if dry and not runner_root else 'quota pause'
+    assert asyncio.run(leg_probe.before_launch(runner, leg, 'review', dry)) == expected
+    if dry or runner_root:
+        resolve_store.assert_not_called()
+    else:
+        resolve_store.assert_called_once_with(runner)
     assert not store.path.exists()
 
 

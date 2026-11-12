@@ -243,6 +243,8 @@ async def before_launch(runner, leg, role, dry_run):
     # Refuse before resolving a store that may create state or raise.
     if quota_paused(root, role, leg):
         return 'quota pause'
+    if dry_run:
+        return None
     state = _store_for(runner)
     adapter = state if getattr(state, 'enabled', False) else None
     state = adapter.store if adapter else state
@@ -251,8 +253,6 @@ async def before_launch(runner, leg, role, dry_run):
         root = Path(path).parent
     if quota_paused(root, role, leg):
         return 'quota pause'
-    if dry_run:
-        return None
 
     def admission():
         if adapter:
