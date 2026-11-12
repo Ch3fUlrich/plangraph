@@ -1057,8 +1057,8 @@ def spawn_service(*args, **kwargs):
 
             if not plan.legs or plan.error:
                 host_skips = [s for s in plan.skipped if any(marker in str(s) for marker in ('not_served_on_host', 'harness_missing'))]
-                exhausted = not plan.legs and (not plan.error or
-                    bool(plan.skipped) and all(s['reason'] == 'limited' for s in plan.skipped))
+                from plangraph.routing_support.liveness import provider_exhausted
+                exhausted = not plan.legs and (not plan.error or provider_exhausted(plan.skipped))
                 record.update(status='failed' if host_skips else 'limited' if exhausted else 'refused',
                               exit_code=1 if host_skips else 4 if exhausted else 2, ended=time.time(),
                               error='; '.join(s.get('skip_reason') or s.get('reason', '') for s in host_skips) if host_skips else plan.error,

@@ -223,11 +223,9 @@ class LegStateStore:
 
     def leg_status(self, leg, now=None, account=None, combo=None):
         now = time.time() if now is None else now
-        if not self.path.exists():
+        if not self.path.exists() or self.path.stat().st_size == 0:
             return {"state": "ok", "evidence": None}
-        if self.path.stat().st_size == 0:
-            return {"state": "ok", "evidence": None}
-        try:
+        try:  # Read-only: no database creation or expiry mutation.
             with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
                 db.row_factory = sqlite3.Row
                 rows = db.execute(
@@ -251,7 +249,9 @@ class LegStateStore:
                     behind = None
                     for older in rows:
                         if older['source'] == 'liveness-probe' and older['status'] == 503:
-                            streak += 1
+                            # A live predecessor must exist when this failure books
+                            # the streak; its later expiry cannot unbook that down window.
+                            streak += int(row['ts'] < min(older['ts'] + EVIDENCE_TTL_S, older['reset_at'] or older['ts']))
                         else:
                             behind = older
                             break

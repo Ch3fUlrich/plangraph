@@ -286,20 +286,25 @@ import `plangraph.spawner` at runtime; the boundary is enforced by
 
 `planner.routing.plan_spawn(card, role="implement"|"review")` applies the
 canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
-Writers put eligible free legs first, then subscriptions in `WRITER_ORDER` (`planner/legs.py`), headed by `omniroute/cx-gpt-6.1-sol`; banned/off families are skipped for writers too.
-Review seats start with Qoder Qwen, then what the route policy leaves; a no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat; Claude is no default writer or seat. A review without a writer family refuses (D-1533). The `claude` harness (Haiku review leg, D-3605) runs with an allowlisted env (`claude_env.py`: HOME, PATH, PWD, locale, XDG_*, proxies, `CLAUDE_CONFIG_DIR`; every other variable is dropped whatever its case), and a host without the `claude` binary skips the leg as `harness_missing: claude` (D-3649). A finished claude run's stdout (the record's `stdout_tail`) is the final text of its stream-json `result` event (else the last assistant text), so `tools/seat_verdict.py` finds the `VERDICT:` line; the raw stream is kept as `claude-stream.jsonl` beside the run's `live.log`, which still carries the raw activity feed.
+Every role puts eligible free inputs before subscriptions and paid inputs (D-5092); main's writer preference remains a tie-breaker within one tier, never across tiers or ahead of measured utility. Catalog cost tiers project onto registered legs without changing their roles, safety exclusions, or family metadata. Sonnet, main's Opus registration, high-effort Opus, gateway DeepSeek/Muse, personal Argon, and Big Pickle remain registered (D-5113). Grok's manual-only gate, both Zen free legs' exact permanent D-4196/D-3828 disables, and Qoder's stop remain enforced; Muse retains main's automatic admission, and Big Pickle retains its GLM family. Sonnet retains orchestration/review, high-effort Opus review only, and medium-effort Opus review/orchestration. No Claude-family leg may enter an automatic implement route, including custom role-bearing tables; explicitly audited effort-variant writer picks remain available.
+
+`plan_spawn` shares one catalog snapshot for admission and tier projection.
+Callers may supply `catalog_rows` explicitly for deterministic offline planning;
+an empty snapshot uses the registered leg tiers and still rejects unknown models.
+Exact-order tests pin this input and isolate benchmark discovery from host files. Role-neutral keeper routes over the default table retain main's D-3828 readiness admission; S5's implementation fallbacks apply to role-bearing routes, not readiness. Custom tables remain explicit inputs.
+Review ordering preserves main's cost-first, per-leg measurement gate: measured rows precede missing rows within the same tier; unmeasured rows retain MiMo's existing role preference and Haiku's last-within-tier fallback. Provider-qualified tier identities win over unrelated bare names. Neither Haiku nor a measured paid row crosses a cheaper tier. A no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat. A review without a writer family refuses (D-1533). The `claude` harness (Haiku review leg, D-3605) runs with an allowlisted env (`claude_env.py`: HOME, PATH, PWD, locale, XDG_*, proxies, `CLAUDE_CONFIG_DIR`; every other variable is dropped whatever its case), and a host without the `claude` binary skips the leg as `harness_missing: claude` (D-3649). A finished claude run's stdout (the record's `stdout_tail`) is the final text of its stream-json `result` event (else the last assistant text), so `tools/seat_verdict.py` finds the `VERDICT:` line; the raw stream is kept as `claude-stream.jsonl` beside the run's `live.log`, which still carries the raw activity feed.
 Claude 5.5 and effort-variant legs (operator 2026-11-09): `agy-claude-{sonnet,opus}-5-5-{low,medium,high}`
 (agy harness, review and implement), `agy-gemini-3.8-flash-{low,medium,high}` (review),
 `cx-gpt-6-luna-{low,medium,high,xhigh,max}` (inline-only review) and
 `cx-gpt-6.1-sol-{low,medium,high,xhigh,max}` (implement). The ids are what `agy models` and
 OmniRoute `/v1/models` served that day; agy serves no Sonnet xhigh and cx serves no `-ultra`, so neither is a leg.
-They live in `EXPLICIT_LEGS`, not `DEFAULT_LEGS`: an explicit `--leg` pick (or the model
-override) spawns them, and no route, keeper plan or role order changes (D-3605: Claude is no
-default writer or seat; D-3828: no writer fallback). `SpawnService.route` appends them to
+These effort-variant ids live in `EXPLICIT_LEGS`: an explicit `--leg` pick (or the model
+override) spawns them; their explicit-only status is unchanged by D-5113's separate default registrations.
+`SpawnService.route` appends them to
 the plan as `explicit_only` skips, so `route` shows them; `plan_spawn` itself does not list them. A Claude leg is claude-family: the fence refuses
 it for a claude writer, given or via `review_of`; with mixed writers the D-3084 per-part rule
 admits a seat that covers another writer part. The Claude and sol-effort writers are
-`EXPLICIT_WRITERS`, which the spawn service admits for `implement`. The catalog spelling
+`EXPLICIT_WRITERS`; explicit implementation admission uses each registered leg's roles. The catalog spelling
 `agy/<model>` (MCP `model_or_combo`) resolves to a seat-capable agy leg holding the bare model, never an orchestrate-only alias. A cx
 effort model is not declared in the AutoOS root opencode config, so `render_gateway_providers`
 adds `providers.omniroute.models["cx-<m>-<effort>"]` (`modelID` `cx/<m>-<effort>`, the base
@@ -319,7 +324,7 @@ say `benchmark data absent` (the legacy `no benchmark p` reason remains compatib
 `SpawnRefused("benchmark rows missing: <legs>")`. This is the routing hook for the
 production CLI's `--require-bench`.
 
-Operator rules and `route_card` tier order come first; U_core only permutes within a tier, and only for review/orchestrate: implement keeps the writer order (D-2683), so a writer route shows `u_core` without applying it.
+Operator safety rules and `route_card` tier order come first; U_core permutes measured inputs within a tier for every role, including implement (D-5092). Same-family review inputs keep table order; free inputs never move behind subscriptions. The generic resolver retains its utility/epsilon-band algorithm without a model-name or post-ranking tier pin.
 CLI route/spawn and MCP load an existing `PLANGRAPH_CATALOG_DB` (default `~/.cache/plangraph/spawner_catalog.db`), unless `--bench-db`/`bench_db` overrides it.
 Route JSON `candidates` exposes each leg's tier, `u_core` (null without a row), `p_source` (`prior`/`measured`), and skip reason/evidence; live limited legs are skipped.
 
@@ -327,8 +332,8 @@ Route JSON `candidates` exposes each leg's tier, `u_core` (null without a row), 
 read-only mode; it never creates a missing database. It accepts `catalog_benchmarks`
 or OmniRoute `model_benchmarks` (catalog takes precedence if both exist).
 `BENCHMARK_COLUMNS` documents the small column alias map. Missing/unreadable files,
-missing tables and malformed model IDs return an empty mapping with explicit errors.
-Duplicate model rows expose `benchmark_row_count`; the first row supplies metrics.
+missing tables and malformed model IDs return an empty mapping with explicit errors. Shared default registrations do not change explicit effort-model alias resolution.
+Duplicate model rows expose `benchmark_row_count`; the first row supplies metrics. Bare harness model ids also resolve exact provider-qualified benchmark rows; explicit bare rows win, missing rows remain gaps, and the Opus high-effort leg maps to `agy/claude-opus-5-5-high`. No probe latency is treated as a benchmark measurement.
 
 ### Required benchmark release/swap gate (D-2576)
 

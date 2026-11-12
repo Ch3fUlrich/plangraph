@@ -1,7 +1,8 @@
-"""D-4147: OmniRoute alone owns expiry; old config rows are ignored."""
+"""D-5092: finite operator-stop expiry, separate from provider availability."""
 import ast
 import dataclasses
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -12,25 +13,49 @@ from plangraph.planner.routing import plan_spawn
 
 def test_d3605_sol_routes_implement_never_review():
     card = {"estimate_tokens": 20000, "risk_tags": []}
-    assert plan_spawn(card, role="implement").first_leg.id == "cx-gpt-6.1-sol"
+    assert plan_spawn(card, role="implement").first_leg.id == "openrouter-free"
     review = plan_spawn(card, role="review", writer_families=("mimo",))
     assert "cx-gpt-6.1-sol" not in [leg.id for leg in review.legs]
 
 
-@pytest.mark.parametrize("expires", ["2000-01-01", "invalid", None, 123])
+@pytest.mark.parametrize("expires", ["2000-01-01", "invalid", None, 123, True,
+                                    float("nan"), float("inf"), -float("inf")])
 def test_load_legs_ignores_legacy_expires(tmp_path, expires):
     raw = dataclasses.asdict(next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.1-sol"))
     raw["expires"] = expires
     path = tmp_path / "legs.json"
     path.write_text(json.dumps({"legs": [raw]}))
+    if expires is not None and (type(expires) not in (int, float) or not math.isfinite(expires)):
+        with pytest.raises(ValueError, match="finite epoch timestamp"):
+            load_legs(path)
+        return
     leg, = load_legs(path)
-    assert not hasattr(leg, "expires")
+    assert leg.expires == expires
     assert leg_active(leg)
     assert plan_spawn({"estimate_tokens": 1000}, legs=(leg,), role="implement").first_leg == leg
 
 
 def test_disabled_leg_stays_inactive():
     assert not leg_active(dataclasses.replace(DEFAULT_LEGS[0], disabled="policy"))
+
+
+def test_temporary_stop_uses_planner_clock_and_has_one_state():
+    sol = next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.1-sol")
+    leg = dataclasses.replace(sol, disabled="temporary stop", expires=160)
+    for now, expected in ((159, ()), (160, (leg,))):
+        plan = plan_spawn({"estimate_tokens": 1000}, role="implement", legs=(leg,), now=now,
+                          leg_reader=lambda *a, **k: {"state": "ok", "evidence": None})
+        assert plan.legs == expected
+        assert [s["leg"] for s in plan.skipped] == ([] if expected else [leg.id])
+
+
+def test_registered_implement_override_is_not_a_legacy_writer_pin(tmp_path):
+    import asyncio
+    from plangraph.spawner.service import SpawnService
+    result = asyncio.run(SpawnService(state=tmp_path).spawn(
+        card={"estimate_tokens": 1000}, role="implement", leg="opencode-big-pickle",
+        override_reason="D-5092 eligible free writer", dry_run=True))
+    assert result["chosen_leg"]["id"] == "opencode-big-pickle"
 
 
 @pytest.mark.parametrize("state", ["expired", "down"])
@@ -54,12 +79,14 @@ def test_omniroute_expired_or_down_no_route_or_override(tmp_path, state):
     assert not (tmp_path / "spawn-overrides.jsonl").exists()
 
 
-def local_state_definitions(source):
+def local_state_definitions(source, *, allow_operator_expiry=False):
     """CI guard: reject local state fields/keywords/dict literals, not disabled policy.
 
     Only the exact legacy-row comparison and removal may mention expiry.
     """
     forbidden = {"expires", "available", "availability", "active", "unavailable_until"}
+    if allow_operator_expiry:
+        forbidden.remove("expires")
     hits = []
     tree = ast.parse(source)
     compatibility = set()
@@ -87,7 +114,7 @@ def local_state_definitions(source):
 
 def test_no_local_state_in_leg_definitions():
     from plangraph.planner import legs
-    assert not local_state_definitions(Path(legs.__file__).read_text())
+    assert not local_state_definitions(Path(legs.__file__).read_text(), allow_operator_expiry=True)
 
 
 @pytest.mark.parametrize("literal", ["expires='2000-01-01'", "available=True",
@@ -108,7 +135,8 @@ def test_local_state_guard_string_constants(source):
 
 def test_config_row_schema_has_no_local_state(tmp_path):
     from plangraph.planner import legs
-    forbidden = {"expires", "available", "availability", "active", "unavailable_until"}
+    forbidden = {"available", "availability", "active", "unavailable_until"}
+    assert "expires" in legs._FIELDS and "expires" not in legs._REQUIRED
     for fields in (legs._FIELDS, legs._REQUIRED, legs._STR_FIELDS):
         assert not forbidden.intersection(fields)
     raw = dataclasses.asdict(DEFAULT_LEGS[0])
