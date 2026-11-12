@@ -19,9 +19,30 @@ impl Hook for Fake {
     }
 }
 fn python(script: &std::path::Path) -> Command {
-    let mut command = Command::new("python3");
+    // Resolve before shadow clears the environment, including non-system installs.
+    let mut command = Command::new(python_executable());
     command.arg(script);
     command
+}
+fn python_executable() -> std::path::PathBuf {
+    let output = Command::new("python3")
+        .args(["-c", "import sys; print(sys.executable)"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let path = std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
+    assert!(path.is_absolute());
+    path
+}
+
+fn python_path(tmp: &std::path::Path) -> std::path::PathBuf {
+    let bin = tmp.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(python_executable(), bin.join("python3")).unwrap();
+    #[cfg(not(unix))]
+    std::fs::copy(python_executable(), bin.join("python3.exe")).unwrap();
+    bin
 }
 
 #[test]
@@ -86,6 +107,7 @@ fn shadow_cli_returns_python_and_appends_not_implemented() {
     let tmp = tempfile::tempdir().unwrap();
     let script = tmp.path().join("hook.py");
     let log = tmp.path().join("shadow.jsonl");
+    let path = python_path(tmp.path());
     std::fs::write(&script, "import sys\nsys.stdout.write(sys.stdin.read())\nsys.stderr.write('python diagnostic')\nsys.exit(7)\n").unwrap();
     for _ in 0..2 {
         let mut child = Command::new(env!("CARGO_BIN_EXE_pg-hook"))
@@ -93,6 +115,7 @@ fn shadow_cli_returns_python_and_appends_not_implemented() {
             .arg(&log)
             .arg(&script)
             .env_clear()
+            .env("PATH", &path)
             .env("HOME", tmp.path())
             .env("XDG_STATE_HOME", tmp.path().join("state"))
             .stdin(Stdio::piped())
@@ -115,4 +138,129 @@ fn shadow_cli_returns_python_and_appends_not_implemented() {
         assert_eq!(record["py"]["stdout"], "{not json\n");
         assert_eq!(record["rust"]["status"], "NotImplemented");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn signal_exit_codes_match_the_logged_python_status() {
+    struct Signaled;
+    impl Hook for Signaled {
+        fn run(&self, _: &str, _: &Env) -> Result<HookOutput, HookError> {
+            Ok(HookOutput {
+                exit_code: 143,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        }
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("killed.py");
+    std::fs::write(
+        &script,
+        "import os, signal\nos.kill(os.getpid(), signal.SIGTERM)\n",
+    )
+    .unwrap();
+    let log = tmp.path().join("signal.jsonl");
+    let output = shadow(
+        "bash_guard",
+        b"",
+        &Env::new(),
+        &mut python(&script),
+        &Signaled,
+        &log,
+    )
+    .unwrap();
+    assert_eq!(output.status.code(), None);
+    assert_eq!(pg_hook::exit_code(&output), 143);
+    let record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(log).unwrap()).unwrap();
+    assert_eq!(record["py"]["exit"], 143);
+    assert_eq!(record["rust"]["exit"], 143);
+    assert_eq!(record["same"], true);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_pg-hook"))
+        .args(["shadow", "bash_guard"])
+        .arg(tmp.path().join("cli.jsonl"))
+        .arg(script)
+        .env_clear()
+        .env("PATH", python_path(tmp.path()))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(143));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn shadow_cli_fails_open_for_usage_and_python_spawn_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    for args in [vec![], vec!["shadow", "unknown", "log", "hook.py"]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_pg-hook"))
+            .args(args)
+            .env_clear()
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8(output.stderr)
+            .unwrap()
+            .starts_with("usage:"));
+    }
+    let log = tmp.path().join("shadow.jsonl");
+    let output = Command::new(env!("CARGO_BIN_EXE_pg-hook"))
+        .args(["shadow", "bash_guard"])
+        .arg(&log)
+        .arg(tmp.path().join("hook.py"))
+        .env_clear()
+        .env("PATH", tmp.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, b"pg-hook: Python hook could not run\n");
+    assert!(!log.exists());
+
+    // Diagnostics are also best effort when stderr is not writable.
+    let diagnostic = tmp.path().join("diagnostic");
+    std::fs::write(&diagnostic, "").unwrap();
+    for args in [vec![], vec!["shadow", "bash_guard", "log", "hook.py"]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_pg-hook"))
+            .args(args)
+            .env_clear()
+            .env("PATH", tmp.path())
+            .stderr(std::fs::File::open(&diagnostic).unwrap())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0));
+        assert!(output.stdout.is_empty());
+    }
+    assert_eq!(std::fs::read(diagnostic).unwrap(), b"");
+}
+
+#[cfg(unix)]
+#[test]
+fn shadow_cli_fails_open_for_stdin_read_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("hook.py");
+    std::fs::write(
+        &script,
+        "import sys\nopen(sys.argv[0] + '.ran', 'w').close()\n",
+    )
+    .unwrap();
+    let log = tmp.path().join("shadow.jsonl");
+    // Reading a directory fails with EISDIR, unlike an ordinary EOF on stdin.
+    let output = Command::new(env!("CARGO_BIN_EXE_pg-hook"))
+        .args(["shadow", "bash_guard"])
+        .arg(&log)
+        .arg(&script)
+        .env_clear()
+        .env("PATH", python_path(tmp.path()))
+        .stdin(std::fs::File::open(tmp.path()).unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, b"pg-hook: Python hook could not run\n");
+    assert!(!log.exists());
+    assert!(!script.with_extension("py.ran").exists());
 }

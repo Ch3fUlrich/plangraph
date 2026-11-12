@@ -76,7 +76,7 @@ pub fn shadow(
     })?;
     let rust = observe(hook, &String::from_utf8_lossy(payload), env);
     let same = serde_json::from_value::<HookOutput>(rust.clone()).is_ok_and(|r| {
-        py.status.code() == Some(r.exit_code)
+        exit_code(&py) == r.exit_code
             && py.stdout == r.stdout.as_bytes()
             && py.stderr == r.stderr.as_bytes()
     });

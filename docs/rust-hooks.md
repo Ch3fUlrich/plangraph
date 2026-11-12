@@ -4,6 +4,9 @@ Run `pg-hook shadow ENTRY LOG_PATH PYTHON_HOOK_PATH` with the original payload o
 Python's exit code, stdout and stderr remain authoritative; Rust errors, unwind panics
 and log-write failures cannot change that result. Logs append JSONL `{entry, same, py, rust}`;
 successful outputs use the existing parity fields `exit`, `stdout`, `stderr`.
+CLI usage mistakes and internal failures (including stdin reads or Python spawn)
+fail open with exit 0; an executed Python hook's status still wins, including signals
+encoded as 128 + signal in both the returned status and the parity comparison.
 Rust failures use `error` or `panic`; pending hooks use `status: NotImplemented`, not `error`.
 All five registry entries are pending: `bash_guard`, `fleet_inject_pre`, `fleet_inject_post`,
 `fleet_report`, `ctx_guard_session`. Supply the matching Python script explicitly
@@ -13,5 +16,11 @@ Keep logs private: they contain hook outputs. Log paths are explicit CLI argumen
 `tests/hooks/parity_payloads.json`: recorded Python outputs are the differential oracle.
 The driver restores `{TOK}`, substitutes `{TMP}`, seeds temporary files/HOME/state,
 maps historical `fleet_inject`/`context_guard` names, and skips NotImplemented entries.
+The driver explicitly checks that the pending registry produces no comparisons,
+then injects no-op test hooks for the 11 recorded no-op report/session cases and a
+different-output hook for 12 negative comparisons. These exercise the comparator
+without claiming that pending production hooks have passed parity. Replay tests
+resolve Python before clearing the environment; CLI tests use a private PATH with
+that interpreter, so non-system Python installations work without inherited state.
 Hook ports, property tests, 14-day zero-diff observation, rollback canary and settings
 integration remain deferred; the production switch belongs to **RUST-HOOKS-SWITCH**.

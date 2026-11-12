@@ -1,12 +1,14 @@
 # Fleet code sync
 
 Run `python3 -m plangraph.fleet_sync release record` after fetching origin/main.
-The newest of the last 50 locally known main commits with successful required branch checks is
+The newest of the last 50 locally known first-parent main commits with successful required branch checks is
 recorded privately and atomically in `~/.local/state/plangraph/release.json`.
 The CLI queries `gh api`; missing protection or required checks fails closed.
 `release show` prints the record. No checkout is changed.
 The Python `record(max_commits=50)` API can configure the scan window; scanning
 stops at the first green commit and fails closed if none is found in the window.
+The `git rev-list --first-parent` scan excludes merged PR heads; merge commits
+on main are eligible, not their second-parent commits.
 Check results are selected by completed/started (or status updated/created)
 timestamp, not API response order; equal-time conflicting results fail closed.
 
@@ -73,3 +75,11 @@ After a crash, inspect the rollout before manually removing a stale lock
 (`~/.local/state/plangraph/fleet-sync.lock` or `<live_root>/.advance.lock`).
 Selected ps-only hosts, missing health checks, and unknown host ids are refused
 before contacting any host (exit 2, one diagnostic line per problem).
+
+Each host may set `ssh_target` for advance's SSH destination (for example a
+user-qualified SSH alias); when omitted, advance uses the host id. Logs and
+selection still use the id. This override does not change generated consumers.
+For fresh release health checks, the local registry entry's optional `env.PATH`
+is the complete executable search path for doctor, including installed `pg-spawnd`
+and harnesses. Doctor selects `PLANGRAPH_HOST_NAME` or registry `self`, resolving
+ids/aliases case-insensitively. No build artifacts in a release tree are needed.

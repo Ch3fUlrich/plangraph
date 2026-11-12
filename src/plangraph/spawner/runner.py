@@ -48,7 +48,7 @@ _keeper_unconfigured_last_warned = None
 
 from .env_redact import first_reason, redact
 from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
-from .git_guard import writer_launch
+from .git_guard import prepare_worktree, writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
@@ -901,6 +901,7 @@ def spawn_service(*args, **kwargs):
             self.keeper_sink = keeper_sink or KeeperSink()
             self._running_records = {}
             if hasattr(self.runner, '__dict__'):
+                self.runner.state = self.state  # probes share this service's run directory
                 self.runner.on_sample = lambda jid: self._save(self._running_records[jid]) if jid in self._running_records else None
 
         async def cancel(self, run_id):   # D-3505: the leg loop of the supervisor stops on this marker
@@ -933,6 +934,7 @@ def spawn_service(*args, **kwargs):
             if changed:
                 super()._save(record)
             if terminal:
+                from .notify import deliver_verdict; deliver_verdict(self._path(record['run_id']).parent, record, self.keeper_sink)
                 for recipient, sink in (('parent', self.completion_sink), ('keeper', self.keeper_sink)):
                     marker = self._path(record['run_id']).parent / (recipient + '.delivered')
                     if marker.exists():
@@ -968,13 +970,11 @@ def spawn_service(*args, **kwargs):
         def retry_completions(self):
             """Re-drive durable terminal records after a supervisor/bridge outage."""
             for record in self.ps()['runs']:
-                recipients = ['parent', 'keeper']
+                recipients = ['parent', 'keeper', 'verdict'] if record.get('role') == 'review' else ['parent', 'keeper']
                 markers = [r + '.delivered' for r in recipients]
                 if os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD'):
-                    markers += [r + '.hook.delivered' for r in recipients]
-                pending = 'completion' not in record or any(
-                    not (self._path(record['run_id']).parent / marker).exists()
-                    for marker in markers)
+                    markers += [r + '.hook.delivered' for r in ('parent', 'keeper')]
+                pending = any(not (self._path(record['run_id']).parent / m).exists() for m in markers)
                 if record.get('ended') is not None and record.get('status') != 'running' and pending:
                     try:
                         self._save(record, retry=True)
@@ -1011,7 +1011,7 @@ def spawn_service(*args, **kwargs):
         async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
-                        seats=False, _plan=None):
+                        seats=False, _plan=None, run_worktree=False, _placement=None):
             from .private_io import SAVE_READ_ATTEMPTS
             from .run_watchdog import terminal_status, thresholds
             from .question_bridge import rounds_exhausted
@@ -1025,7 +1025,7 @@ def spawn_service(*args, **kwargs):
                     review_of=review_of, model=model, leg=leg, override_reason=override_reason,
                     dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=not seats or no_fallthrough,
                     benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
-                    seats=seats,
+                    seats=seats, run_worktree=run_worktree, _placement=_placement,
                 )
             from plangraph.settings import admit_review_scope
             admit_review_scope(card, role, review_scope)
@@ -1036,15 +1036,14 @@ def spawn_service(*args, **kwargs):
             plan = _plan if _plan is not None else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
             from .resolver import plan_for_launch_async
             if hasattr(plan, '__dataclass_fields__'):
-                plan = await plan_for_launch_async(plan, dry_run=dry_run)
+                plan = await plan_for_launch_async(replace(plan, placement=_placement or plan.placement), dry_run=dry_run)
             run_id = 'run-' + uuid.uuid4().hex
-            import hashlib
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
                 role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
                 served_family=None, request_side_model=None, witness_kind=None,
                 writer_family=None, status='running', started=time.time(),
                 given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
-                ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
+                ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
             from .context_pack import annotate
             from .item_key import annotate_item
             pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
@@ -1095,8 +1094,9 @@ def spawn_service(*args, **kwargs):
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
+                        worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
                         job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env,
+                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                         self._running_records[job.job_id] = record
                         process = self.runner._processes.get(job.job_id)
@@ -1168,7 +1168,7 @@ def spawn_service(*args, **kwargs):
                             return
                         current = plan if unavailable else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         if hasattr(current, '__dataclass_fields__'):
-                            current = restrict(await plan_for_launch_async(current, dry_run=dry_run))
+                            current = restrict(await plan_for_launch_async(replace(current, placement=_placement or current.placement), dry_run=dry_run))
                         for skipped in current.to_dict()['skipped']:
                             if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')) and skipped not in record.setdefault('skipped', []):
                                 record['skipped'].append(skipped)

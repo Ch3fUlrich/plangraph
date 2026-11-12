@@ -28,7 +28,8 @@ def test_mimo_flash_is_inline_only():
     assert next(l for l in DEFAULT_LEGS if l.id == "mimo-v2.6-flash").tool_mode == "inline-only"
 
 
-def test_verdict_commentary_and_parser_parity():
+def test_verdict_commentary_and_parser_parity(tools_importable):
+    # conftest's scoped tools path supplies seat_record; it never skips this check.
     spec = importlib.util.spec_from_file_location("seat_verdict", Path(__file__).parents[1] / "tools/seat_verdict.py")
     tool = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(tool)
@@ -115,7 +116,7 @@ def test_empty_run_timeout_keeps_default_limits(monkeypatch):
     for role in ("review", "implement", "orchestrate", None):
         limits = thresholds(role=role)
         assert limits["max_s"] == 5400
-        assert limits["hard_max"] is False
+        assert limits["hard_max"] is (role == "review")
     monkeypatch.delenv("PLANGRAPH_SPAWN_RUN_TIMEOUT")
     limits = thresholds(role="review")
     assert limits["max_s"] == 1500

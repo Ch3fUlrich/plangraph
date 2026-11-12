@@ -29,7 +29,7 @@ def record(query=gh_query, candidates=None, path=None, max_commits=50):
     if not names:
         raise ValueError('no required CI checks configured')
     if candidates is None:
-        candidates = git('rev-list', f'--max-count={max_commits}', 'origin/main').splitlines()
+        candidates = git('rev-list', '--first-parent', f'--max-count={max_commits}', 'origin/main').splitlines()
     for sha in islice(candidates, max_commits):
         runs = query(f'repos/:owner/:repo/commits/{sha}/check-runs?per_page=100')['check_runs']
         statuses = query(f'repos/:owner/:repo/commits/{sha}/status')['statuses']

@@ -110,7 +110,7 @@ def main(argv=None):
         p.add_argument('--card', type=_card)
         p.add_argument('--require-bench', action='store_true')
         p.add_argument('--bench-db', action='append')
-        p.add_argument('--role', choices=('implement', 'review', 'orchestrate'), default='implement')
+        p.add_argument('--role', choices=('implement', 'review', 'orchestrate', 'research'), default='implement')
         p.add_argument('--writer-family', action='append', default=[])
         p.add_argument('--review-of')
         p.add_argument('--json', action='store_true')
@@ -122,10 +122,10 @@ def main(argv=None):
             p.add_argument('--leg')
             p.add_argument('--override-reason')
             p.add_argument('--dry-run', action='store_true')
+            p.add_argument('--run-worktree', action='store_true', help='isolate each attempt from origin/main')
             p.add_argument('--wait', type=float, default=0)
             p.add_argument('--no-fallthrough', action='store_true')
-            p.add_argument('--seats', action='store_true',
-                           help='role review: spawn every seat route picks (per writer part)')
+            p.add_argument('--seats', action='store_true', help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps')
     commands.add_parser('catalog')
     commands.add_parser('launch-spec')
@@ -196,7 +196,7 @@ def main(argv=None):
                 raise
             payload = dict(card=args.card, prompt=prompt, role=args.role,
                 writer_families=args.writer_family, review_of=args.review_of, model=args.model,
-                review_scope=args.review_scope,
+                review_scope=args.review_scope, run_worktree=args.run_worktree,
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
                 no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
             from plangraph.settings import admit_review_scope
@@ -209,12 +209,6 @@ def main(argv=None):
             if not args.model and not args.leg:
                 # service.route saves the refusal record itself (one record per route error).
                 service.route(args.card, args.role, args.writer_family, args.review_of, **options)
-            if not args.dry_run:
-                from .seat_spawn import admit
-                admitted = admit(service, payload, card=args.card)
-                if admitted is not None:
-                    print(json.dumps(admitted, indent=2))
-                    return admitted.get('exit_code', 0)
             if args.dry_run:
                 result = asyncio.run(service.spawn(**payload, wait_seconds=None))
             else:

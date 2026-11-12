@@ -4,12 +4,17 @@ import os
 
 
 def thresholds(card=None, *, role=None):
-    """Unset PLANGRAPH_SPAWN_RUN_TIMEOUT gives a 25-minute review cap; empty means no review cap."""
+    """Unset run timeout gives reviews 25 minutes; empty keeps the 90-minute wall.
+
+    Reviews never wait for a writer's first edit, regardless of the cap source.
+    """
     from plangraph.planner.routing import SpawnRefused
     card = card or {}
     result = {'hard_max': False}   # table max_min may carry the first-edit hold (M5)
+    if role == 'review':
+        result['hard_max'] = True  # reviews never wait for a writer's first edit
     if not isinstance(card.get('hard_first_edit', False), bool): raise SpawnRefused('invalid watchdog threshold: hard_first_edit')
-    if card.get('hard_first_edit'): result['hard_first_edit'] = True
+    if role != 'review' and card.get('hard_first_edit'): result['hard_first_edit'] = True
     for key, default in [('stall_min', 20), ('first_edit_min', 15), ('max_min', 90)]:   # REMOVE-AT-R10 (D-3769): first_edit_min was 45
         value = card.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:

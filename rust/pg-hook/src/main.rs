@@ -6,8 +6,11 @@ fn run() -> std::io::Result<i32> {
     let hooks = pg_hook::registry();
     if args.len() != 5 || args[1] != "shadow" || !hooks.contains_key(args[2].to_str().unwrap_or(""))
     {
-        eprintln!("usage: pg-hook shadow ENTRY LOG_PATH PYTHON_HOOK_PATH");
-        return Ok(2);
+        let _ = writeln!(
+            std::io::stderr(),
+            "usage: pg-hook shadow ENTRY LOG_PATH PYTHON_HOOK_PATH"
+        );
+        return Ok(0);
     }
     let entry = args[2].to_str().unwrap();
     let mut payload = Vec::new();
@@ -28,8 +31,10 @@ fn run() -> std::io::Result<i32> {
 }
 fn main() {
     std::panic::set_hook(Box::new(|_| {})); // Shadow panics belong in JSONL, not Python stderr.
-    std::process::exit(run().unwrap_or_else(|_| {
-        eprintln!("pg-hook: Python hook could not run");
-        1
+    let result = std::panic::catch_unwind(run)
+        .unwrap_or_else(|_| Err(std::io::Error::other("hook harness panicked")));
+    std::process::exit(result.unwrap_or_else(|_| {
+        let _ = writeln!(std::io::stderr(), "pg-hook: Python hook could not run");
+        0
     }));
 }

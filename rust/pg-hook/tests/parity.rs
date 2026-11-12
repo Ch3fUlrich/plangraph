@@ -72,7 +72,39 @@ fn real_payload_loader_and_differential_driver() {
         .payloads
         .iter()
         .any(|p| p.name == "fi-ups-seeded-inbox" && !p.files.is_empty()));
-    for record in differential(&corpus, &registry()) {
+    let pending = registry();
+    assert!(differential(&corpus, &pending).is_empty());
+    // Independently return the no-op result recorded for these two hook groups.
+    // Pending production hooks do not count as exercised parity comparisons.
+    struct Noop;
+    impl Hook for Noop {
+        fn run(&self, event_json: &str, env: &Env) -> Result<HookOutput, pg_hook::HookError> {
+            let home = Path::new(&env[std::ffi::OsStr::new("HOME")]);
+            assert!(home.is_dir());
+            assert_eq!(
+                Path::new(&env[std::ffi::OsStr::new("XDG_STATE_HOME")]),
+                home.join(".local/state")
+            );
+            assert!(!event_json.contains("{TMP}"));
+            if let Ok(value) = serde_json::from_str::<Value>(event_json) {
+                if let Some(path) = value["transcript_path"].as_str() {
+                    assert!(Path::new(path).starts_with(home));
+                    assert!(std::fs::read_to_string(path).unwrap().contains("assistant"));
+                }
+            }
+            Ok(HookOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        }
+    }
+    let mut hooks = pending;
+    hooks.insert("fleet_report", &Noop);
+    hooks.insert("ctx_guard_session", &Noop);
+    let records = differential(&corpus, &hooks);
+    assert_eq!(records.len(), 11);
+    for record in records {
         assert_eq!(record["same"], true, "{record}");
     }
     struct Different;
