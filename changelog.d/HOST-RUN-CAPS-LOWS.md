@@ -1,0 +1,1 @@
+- HOST-RUN-CAPS-LOWS: run CLI/MCP spawn admission once through the public service method, remove unused overflow inputs/helpers, and document below-floor queue annotations without overflow configuration.
