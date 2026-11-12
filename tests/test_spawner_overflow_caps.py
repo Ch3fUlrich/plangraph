@@ -108,3 +108,19 @@ def test_cli_shared_ram_refusal(registry, monkeypatch, tmp_path):
     assert o.cli.main(['--supervise']) == 0
     result = json.loads(output.getvalue())
     assert reason in result['reason'] and result['status'] == 'queued'
+
+
+@pytest.mark.parametrize('total,free,used', [(0, 0, 0), (1000, 100, 90), (1000, 99, 90.1)])
+def test_swap_used_reader(monkeypatch, total, free, used):
+    monkeypatch.setattr(o.Path, 'read_text', lambda self:
+                        f'SwapTotal: {total} kB\nSwapFree: {free} kB\n')
+    assert o.swap_used_pct() == used
+
+
+@pytest.mark.parametrize('text', ['', 'SwapTotal: 1000 kB\n', 'SwapFree: 100 kB\n',
+                                   'SwapTotal:\nSwapFree: 0 kB\n'])
+def test_missing_swap_readings_have_named_refusal(monkeypatch, text):
+    monkeypatch.setattr(o.Path, 'read_text', lambda self: text)
+    assert o.local_health_refusal({}, 8000) == 'local_swap_unavailable'
+    with pytest.raises(ValueError, match='swap readings'):
+        o.swap_used_pct()

@@ -16,6 +16,30 @@ Rejected stdin input or an unavailable/closed input pipe fails the run explicitl
 the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.
 
+### MiMo seat timeouts and verdict packaging (MIMO-VERDICT-TIMEOUTS)
+
+For MiMo seats and all other `review` runs, `run_watchdog_limits.thresholds` sets
+`hard_max=True`, including default caps: reviews never wait for a writer's first
+edit and ignore a valid `hard_first_edit` opt-in. Card limits must be positive,
+finite numbers (not booleans); invalid limits refuse the spawn. Without a card
+`max_min`, an unset `PLANGRAPH_SPAWN_RUN_TIMEOUT` gives a 25-minute cap, an empty
+value keeps the default 90-minute wall, and a positive numeric value sets seconds.
+The package-wide `inline_diff_prompt` bound change was dropped to preserve main's
+cost-context contract: `max_chars` measures only the diff and exact-fit diffs pass.
+Oversized diffs keep `InlineDiffError`'s `diff too large for leg` text and diff-only
+size; strict mode maps that refusal to `inline_diff_oversized`. The separate
+opt-in `PLANGRAPH_CONTEXT_STRICT=1` whole-prompt bound retains
+`inline_prompt_oversized` for oversized instructions/framing. Neither truncates;
+missing diff references, empty diffs and failed `git diff` calls fail explicitly.
+
+In `opencode_answer.final_answer`, `allow_unfinished=True` accepts pending text
+with no finish frame or after `tool-calls`, unless an earlier finish blocked it.
+Reasons other than `stop` or `tool-calls`, including missing or unknown reasons,
+fail closed: pending text is discarded and unfinished tails stay ineligible.
+Only a `stop` with non-blank pending text clears that block; empty or
+whitespace-only stops and tool calls cannot launder truncation into a verdict.
+A completed `stop` answer remains eligible.
+
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:
 - `verdict.json` audits outcomes; `verdict.delivered` stops replay.
@@ -79,8 +103,8 @@ from the worker-core hosts registry (`$XDG_CONFIG_HOME/plangraph/hosts.json`,
 or `~/.config/plangraph/hosts.json`), the same location used by fleet-sync.
 Local identity is `PLANGRAPH_HOST_NAME` when set, otherwise registry `self`;
 IDs and aliases resolve case-insensitively. Routing and the public-repository
-allowlist still come from `overflow-hosts.json`, but its legacy run/floor caps
-and local limit overrides are ignored. Missing/unreadable registry or missing,
+allowlist still come from `overflow-hosts.json`; legacy run/floor caps and local
+limit overrides are ignored except the orchestration thresholds below. Missing registry or
 malformed caps exclude that host from overflow. Local admission instead uses
 conservative defaults of floor 3000 MB and role 2048 MB, with a logged reason.
 The independent OOM guard (D-5057/D-5075) remains unchanged.
@@ -92,6 +116,15 @@ excluded for that spawn; when none can accept, a queued record lists safe
 refusal reasons. Without overflow config, admitted local runs have no annotation;
 below-floor runs queue with matching `reason` and `overflow_reason`. Dry runs do not overflow.
 Local benchmark databases cannot be forwarded. CLI/MCP use public `admit_spawn` once in the shared wrapper, not the CLI parent; the service persists queued/remote records.
+Per-host `orchestration_only: true` in `hosts.json` (or the local overflow hosts entry; default false)
+makes implement/review/research remote-first: rank MemAvailable minus floor, then config order; no run-count caps.
+Local fallback requires RAM admission, `local_min_available_mb` (overflow config, default 4096) and
+`local_max_swap_used_pct` (default 90); below/above respectively refuses with that name, exit 2, never queues.
+Spawn/refusal records carry `placement: {host, reason, free_mb}`: sampled MemAvailable and
+`remote_most_free_ram`, `local_fallback_no_remote`, `local_benchmark_database`, or refusal.
+Route planning never samples admission resources: absent a supplied placement snapshot,
+it reports `placement_not_evaluated` with null host/free RAM. Missing or unreadable swap
+readings refuse local fallback as `local_swap_unavailable`; see [placement rules](placement-rules.md).
 
 SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel
 lines around the remote spawn JSON. Only the single bracketed JSON receipt is
