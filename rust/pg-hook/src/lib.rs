@@ -85,15 +85,17 @@ pub fn shadow(
     });
     let (python, same, fault) = match &py {
         Ok((output, fault)) => {
-            let same = fault.is_none().then(|| {
-                serde_json::from_value::<HookOutput>(rust.clone()).is_ok_and(|r| {
-                    exit_code(output) == r.exit_code
-                        && output.stdout == r.stdout.as_bytes()
-                        && output.stderr == r.stderr.as_bytes()
-                })
+            let exit = comparison_exit_code(output);
+            let same = fault.is_none().then_some(()).and_then(|()| {
+                let rust = serde_json::from_value::<HookOutput>(rust.clone()).ok()?;
+                Some(
+                    exit? == rust.exit_code
+                        && output.stdout == rust.stdout.as_bytes()
+                        && output.stderr == rust.stderr.as_bytes(),
+                )
             });
             (
-                json!({"exit": exit_code(output), "stdout": String::from_utf8_lossy(&output.stdout),
+                json!({"exit": exit, "stdout": String::from_utf8_lossy(&output.stdout),
                 "stderr": String::from_utf8_lossy(&output.stderr)}),
                 same,
                 fault.map(str::to_owned),
@@ -144,16 +146,49 @@ fn append_record(log: &Path, record: &Value) {
     }
 }
 pub fn exit_code(output: &Output) -> i32 {
+    // A status the platform cannot represent must fail open, not invent a failure.
+    comparison_exit_code(output).unwrap_or(0)
+}
+
+fn comparison_exit_code(output: &Output) -> Option<i32> {
     #[cfg(unix)]
-    {
+    let signal = {
         use std::os::unix::process::ExitStatusExt;
-        output
-            .status
-            .code()
-            .unwrap_or(128 + output.status.signal().unwrap_or(0))
-    }
+        output.status.signal()
+    };
     #[cfg(not(unix))]
-    {
-        output.status.code().unwrap_or(1)
+    let signal = None;
+    normalized_exit_code(output.status.code(), signal)
+}
+
+fn normalized_exit_code(code: Option<i32>, signal: Option<i32>) -> Option<i32> {
+    code.or_else(|| signal.map(|signal| 128 + signal))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_platform_status_is_not_a_synthetic_failure() {
+        assert_eq!(normalized_exit_code(Some(0), None), Some(0));
+        assert_eq!(normalized_exit_code(Some(1), None), Some(1));
+        assert_eq!(normalized_exit_code(Some(7), None), Some(7));
+        assert_eq!(normalized_exit_code(None, Some(15)), Some(143));
+        assert_eq!(normalized_exit_code(None, None), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unavailable_exit_code_fails_open_without_a_comparison() {
+        use std::os::unix::process::ExitStatusExt;
+        let output = Output {
+            // A stopped status has neither a completed exit code nor a death signal.
+            status: std::process::ExitStatus::from_raw(0x7f),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(comparison_exit_code(&output), None);
+        assert_eq!(exit_code(&output), 0);
     }
 }

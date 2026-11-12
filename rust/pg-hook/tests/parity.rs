@@ -1,4 +1,4 @@
-use pg_hook::{observe, registry, Env, Hook, HookOutput};
+use pg_hook::{observe, registry, Env, Hook, HookError, HookOutput};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -53,15 +53,35 @@ fn differential(corpus: &Corpus, hooks: &BTreeMap<&str, &dyn Hook>) -> Vec<Value
         ]);
         env.extend(case.env.iter().map(|(k, v)| (k.into(), sub(v).into())));
         let rust = observe(*hook, sub(&case.stdin).as_bytes(), &env);
-        if rust == json!({"status": "NotImplemented"}) {
+        let Ok(rust_output) = serde_json::from_value::<HookOutput>(rust.clone()) else {
             continue;
-        }
+        };
         let py = serde_json::to_value(&case.expected).unwrap();
         records.push(
-            json!({"entry": entry, "same": py == rust, "py": py, "rust": rust, "name": case.name}),
+            json!({"entry": entry, "same": case.expected == rust_output, "py": py,
+            "rust": rust, "name": case.name}),
         );
     }
     records
+}
+
+#[test]
+fn absent_rust_decisions_do_not_create_corpus_comparisons() {
+    struct Unavailable(bool);
+    impl Hook for Unavailable {
+        fn run(&self, _: &[u8], _: &Env) -> Result<HookOutput, HookError> {
+            if self.0 {
+                panic!("synthetic hook panic");
+            }
+            Err(HookError::Failed("synthetic hook failure".into()))
+        }
+    }
+    let corpus =
+        load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/hooks/parity_payloads.json"));
+    for hook in [Unavailable(false), Unavailable(true)] {
+        let hooks = BTreeMap::from([("bash_guard", &hook as &dyn Hook)]);
+        assert!(differential(&corpus, &hooks).is_empty());
+    }
 }
 #[test]
 fn real_payload_loader_and_differential_driver() {

@@ -64,7 +64,11 @@ fn python_wins_over_rust_differences_errors_panics_and_log_failures() {
         assert_eq!(py.stdout, b"{not json\n");
         let record: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(log).unwrap()).unwrap();
-        assert_eq!(record["same"], mode == "same");
+        if matches!(mode, "error" | "panic") {
+            assert!(record["same"].is_null(), "{record}");
+        } else {
+            assert_eq!(record["same"], mode == "same");
+        }
         assert_eq!(record["py"]["exit"], 7);
         assert_eq!(record["py"]["stdout"], "{not json\n");
         let key = match mode {
@@ -103,6 +107,41 @@ fn registry_has_exactly_five_unimplemented_entries() {
 }
 
 #[test]
+fn pending_hooks_have_no_parity_decision() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("hook.py");
+    std::fs::write(
+        &script,
+        "import sys\nsys.stdout.buffer.write(sys.stdin.buffer.read())\nsys.exit(7)\n",
+    )
+    .unwrap();
+    let log = tmp.path().join("pending.jsonl");
+    for (entry, hook) in registry() {
+        let output = shadow(
+            entry,
+            b"{not json\n",
+            &Env::new(),
+            &mut python(&script),
+            hook,
+            &log,
+        )
+        .unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(output.stdout, b"{not json\n");
+        assert!(output.stderr.is_empty());
+    }
+    let text = std::fs::read_to_string(log).unwrap();
+    assert_eq!(text.lines().count(), 5);
+    for line in text.lines() {
+        let record: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert!(record["same"].is_null(), "{record}");
+        assert_eq!(record["py"]["exit"], 7);
+        assert_eq!(record["rust"]["status"], "NotImplemented");
+        assert!(record.get("harness").is_none());
+    }
+}
+
+#[test]
 fn shadow_cli_returns_python_and_appends_not_implemented() {
     let tmp = tempfile::tempdir().unwrap();
     let script = tmp.path().join("hook.py");
@@ -134,7 +173,7 @@ fn shadow_cli_returns_python_and_appends_not_implemented() {
     for line in text.lines() {
         let record: serde_json::Value = serde_json::from_str(line).unwrap();
         assert_eq!(record["entry"], "bash_guard");
-        assert_eq!(record["same"], false);
+        assert!(record["same"].is_null(), "{record}");
         assert_eq!(record["py"]["stdout"], "{not json\n");
         assert_eq!(record["rust"]["status"], "NotImplemented");
     }
