@@ -20,6 +20,7 @@ seconds/date, and body “resets in N seconds/minutes/hours” give an explicit 
 At that reset the leg is eligible automatically. Without reset information the
 leg is limited for ten minutes then eligible with `reprobe` evidence until a
 real successful provider response clears it. Queries never update the database.
+Failure evidence expires to `reprobe` after six hours, even when its booked reset is later.
 
 Resolver results include state/evidence on every candidate (including excluded
 limited candidates) and the selected leg. MCP catalog queries retain limited

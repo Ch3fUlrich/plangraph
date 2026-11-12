@@ -4,7 +4,7 @@ fn multithreaded_signal_child() {
     if std::env::var_os("PG_TEST_THREADED_CHILD").is_none() {
         return;
     }
-    let threads: Vec<_> = (0..3)
+    let threads: Vec<std::thread::JoinHandle<()>> = (0..3)
         .map(|_| {
             std::thread::spawn(|| loop {
                 std::thread::park();
