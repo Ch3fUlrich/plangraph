@@ -147,7 +147,8 @@ def test_run_cwd_is_repo_subdirectory(tree):
     assert context_pack.warnings("m.py", dict(CARD, context=["m.py:1-2"]), sub) == []
 
 
-@pytest.mark.parametrize('data', [b'', b'a', b'a\n', b'a\nb', b'a\r\nb\r\n', b'x\n' * 70000 + b'tail'])
+@pytest.mark.parametrize('data', [b'', b'a', b'a\n', b'a\nb', b'a\r\nb\r\n', b'x\n' * 70000 + b'tail'],
+                         ids=['empty', 'single', 'trailing-newline', 'two-lines', 'crlf', 'multi-chunk'])
 def test_line_count_streams_and_matches_splitlines(tmp_path, monkeypatch, data):
     path = tmp_path / 'f.txt'
     path.write_bytes(data)

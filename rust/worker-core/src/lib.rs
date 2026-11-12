@@ -43,6 +43,7 @@ pub mod host_metrics;
 pub mod host_probe;
 pub mod hosts;
 pub mod janitor;
+pub mod live_probe;
 pub mod lockfile;
 pub mod outcome;
 pub mod packet;

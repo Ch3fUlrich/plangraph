@@ -1,0 +1,9 @@
+[Unit]
+Description=Deterministic flow watchdog (D-5050)
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/plangraph/flow-watchdog.env
+ExecStart=%h/.local/bin/flow-watchdog %h/.local/state/plangraph/flow-snapshot.json %h/.local/state/plangraph/flow-watchdog
+UMask=0077
+NoNewPrivileges=true

@@ -18,6 +18,23 @@ fn parse(doc: &Value) -> Result<HostRegistry, HostsError> {
 }
 
 #[test]
+fn repo_health_checks_validate_and_roundtrip() {
+    let mut doc = fixture();
+    let checks = json!({"doctor": ["python3", "doctor"],
+        "whoami": ["pg", "whoami"], "spawn": ["pg", "spawn", "--dry-run"]});
+    doc["hosts"][0]["repos"]["plangraph"] = json!({
+        "root": "/srv/repo", "live_dir": "/srv/live/current",
+        "worktrees_root": "/srv/trees", "remote": "example",
+        "import_roots": [], "cache_env": {}, "health_checks": checks
+    });
+    let registry = parse(&doc).unwrap();
+    let repo = &registry.self_host().repos["plangraph"];
+    assert_eq!(serde_json::to_value(repo).unwrap()["health_checks"], checks);
+    doc["hosts"][0]["repos"]["plangraph"]["health_checks"]["doctor"] = json!("bad");
+    assert!(matches!(parse(&doc), Err(HostsError::Parse(_))));
+}
+
+#[test]
 fn class_required_and_schema_agree() {
     let schema: Value =
         serde_json::from_str(include_str!("../../../../docs/schemas/hosts.schema.json")).unwrap();

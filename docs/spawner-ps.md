@@ -11,6 +11,11 @@ authentication. The remote endpoint reads only local records, preventing recursi
 fan-out. Only live remote records are included, with their original host identity.
 Failures, including malformed output, yield a named `unknown` row with the fixed
 reason `host query failed`; MCP never truncates these rows as ended-run history.
+Missing configured source directories or a missing plangraph module instead use
+`host src missing`; SSH exit 255 uses `host unreachable`. Timeouts retain
+`host query failed`. Transport stderr is never included in replies.
+Doctor checks each entry with `src` or `win_src` in parallel, reporting `ok`,
+`src missing`, or `unreachable`, with a three-second timeout per host.
 An empty XDG setting uses the default config location. Invalid entries produce
 an `invalid-config` unknown row without suppressing valid entries. An unreadable,
 malformed, or incorrectly shaped configuration file produces one `invalid-config`

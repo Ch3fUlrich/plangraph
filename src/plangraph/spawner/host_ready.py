@@ -121,8 +121,6 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
             runs = measure('runs', prefix + 'cli ps', lambda s: json.loads(s)['runs'])
             if runs is not None:
                 record['live_runs'] = sum(r['status'] == 'running' for r in runs)
-                if record['live_runs'] >= config['run_cap']:
-                    fail('runs', 'at_capacity')
             if record['mem_available_mb'] is not None and record['mem_available_mb'] < config['floor_mb']:
                 fail('memory', 'below_floor')
             if record['disk_free_gb'] == 0:

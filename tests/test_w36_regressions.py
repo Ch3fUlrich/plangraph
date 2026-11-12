@@ -104,7 +104,7 @@ def test_windows_process_cmd_resolution(tmp_path, monkeypatch):
     calls = []
     async def factory(*args, **kw):
         calls.append((args, kw))
-        async def communicate():
+        async def communicate(input=None):
             return b'', b'\x1b[91mError: \x1b[0mModel unavailable: fixture/model\r\n'
         return SimpleNamespace(pid=FAKE_PID, returncode=None, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
