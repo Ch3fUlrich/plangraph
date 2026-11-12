@@ -54,7 +54,8 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
         raise InlineDiffError("git diff failed: " + (proc.stderr.strip().splitlines() or ["exit %d" % proc.returncode])[0][:200])
     if not proc.stdout.strip():
         raise InlineDiffError("empty diff")
-    if len(proc.stdout) > max_chars:
-        raise InlineDiffError(f"diff too large for leg: {len(proc.stdout)} > {max_chars} chars",
-                              chars=len(proc.stdout), max_chars=max_chars)
-    return prompt + HEADER.format(base=base, head=head) + proc.stdout + FOOTER
+    packaged = prompt + HEADER.format(base=base, head=head) + proc.stdout + FOOTER
+    if len(packaged) > max_chars:
+        raise InlineDiffError(f"diff too large for leg: {len(packaged)} > {max_chars} chars",
+                              chars=len(packaged), max_chars=max_chars)
+    return packaged

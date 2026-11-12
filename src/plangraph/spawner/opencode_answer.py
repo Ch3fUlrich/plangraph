@@ -35,6 +35,7 @@ def final_answer(stdout, *, allow_unfinished=False):
     Review verdicts may opt into pending text, but never an explicit non-stop finish.
     """
     pending, complete = [], None
+    truncated = False
     for line in stdout.splitlines():
         try:
             event = json.loads(line)
@@ -51,10 +52,11 @@ def final_answer(stdout, *, allow_unfinished=False):
                 pending.append(text)
                 complete = None
         elif event.get('type') == 'step_finish':
+            truncated = part.get('reason') not in ('stop', 'tool-calls')
             if part.get('reason') == 'stop' and pending:
                 complete = '\n'.join(pending)
             pending = []
-    return '\n'.join(pending) if allow_unfinished and pending else complete
+    return '\n'.join(pending) if allow_unfinished and pending and not truncated else complete
 
 
 def answer_text(stdout):
