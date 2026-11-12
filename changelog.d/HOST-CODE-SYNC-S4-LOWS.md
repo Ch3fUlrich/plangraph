@@ -1,1 +1,2 @@
 - Fix host doctor registry diagnostics, Windows `Path` lookup and temporary PATH restoration; honour `ssh_target` in fleet drift and generated ps/overflow configs, demonstrate it on an SSH host, and cover fresh-clone execution plus lazy keeper admin/oversight imports.
+- Make every fleet SSH consumer regression case assert its result, including Windows overflow exclusion, anchor schema/example reads to the test source tree, and document why the keeper lazy-import findings do not apply to the existing source.

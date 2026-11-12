@@ -242,7 +242,9 @@ def test_fleet_sync_windows_transport_exact_argv(fleet, monkeypatch, ssh_target,
     remote = quote([
         'python3', '-c', f"import base64;exec(base64.b64decode('{encoded}'))"])
 
+    calls = []
     def check_output(argv, **kwargs):
+        calls.append(argv)
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
                         '--', ssh_target or 'host-a', remote]
         assert '\n' not in argv[-1] and '\r' not in argv[-1]
@@ -250,3 +252,4 @@ def test_fleet_sync_windows_transport_exact_argv(fleet, monkeypatch, ssh_target,
 
     monkeypatch.setattr(module.subprocess, 'check_output', check_output)
     assert module.transport(host, config)['ok']
+    assert len(calls) == 1

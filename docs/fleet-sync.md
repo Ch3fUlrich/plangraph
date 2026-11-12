@@ -87,3 +87,18 @@ ids/aliases case-insensitively. No build artifacts in a release tree are needed.
 Windows registry `env.Path` is accepted case-insensitively. A present but unusable
 registry reports `host_path: fail`; an unmatched identity is named explicitly.
 Doctor restores the inherited PATH after its checks, including on exceptions.
+
+## Keeper lazy-import review disposition
+
+The admin import LOW does not apply: `src/plangraph/keeper/cli.py:308`
+already imports `cli_admin` only inside `main`'s admin branch. The oversight
+import LOW does not apply: `src/plangraph/keeper/cli_oversight.py:166-167`
+already imports `db` and `oversight` inside `cmd_oversight_check`. The review's
+`cla_oversight.py` refers to `cli_oversight.py`; no `cla_oversight.py` exists.
+The fresh-interpreter guard covers help/whoami without `fcntl`, then real
+admin init/verify and oversight dispatch. No keeper source change is needed.
+
+Fleet-sync schema/example tests resolve fixtures relative to their test file
+and exercise reads after changing to an unrelated directory. The imports at
+`tests/test_fleet_sync.py:4` (`Path`) and `tests/test_fleet_sync.py:9` (`drift`)
+predate this PR.

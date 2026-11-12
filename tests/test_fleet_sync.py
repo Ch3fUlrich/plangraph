@@ -10,6 +10,9 @@ from plangraph.fleet_sync import drift, genconfig, release
 from plangraph.spawner import overflow, remote_ps
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setenv('HOME', str(tmp_path))
@@ -187,8 +190,9 @@ def test_fleet_sync_unreachable(capsys, tmp_path):
     assert drift.rows({'hosts': [{'id': 'host-a'}]}, 'a' * 40, unreachable)[0]['behind'] == 'unknown'
 
 
-def test_fleet_sync_hosts_schema():
-    schema = json.loads(Path('docs/schemas/hosts.schema.json').read_text())
+def test_fleet_sync_hosts_schema(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    schema = json.loads((ROOT / 'docs/schemas/hosts.schema.json').read_text())
     repo = {'root': '/srv/repo', 'worktrees_root': '/srv/trees', 'remote': 'example',
             'import_roots': [], 'cache_env': {}, 'live_dir': '/srv/live/current'}
     jsonschema.validate(repo, {'$ref': '#/$defs/repoEntry', '$defs': schema['$defs']})
@@ -232,22 +236,33 @@ def test_fleet_sync_ssh_target_every_consumer(monkeypatch, system, target, consu
                                     else '/srv/live/current'}})
     if target:
         host['ssh_target'] = target
-    def output(command, **kwargs):
-        assert command[0] == 'ssh'
-        assert command[-2] == (target or host['id'])
-        return 'a' * 40
-    monkeypatch.setattr(drift.subprocess, 'check_output', output)
     if consumer == 'drift':
+        calls = []
+        def output(command, **kwargs):
+            calls.append(command)
+            assert command[0] == 'ssh'
+            assert command[-2] == (target or host['id'])
+            return 'a' * 40
+        monkeypatch.setattr(drift.subprocess, 'check_output', output)
         assert drift.transport(host) == 'a' * 40
+        assert len(calls) == 1
         return
     generated = genconfig.generate({'hosts': [host]})
+    live = host['repos']['plangraph']['live_dir']
     if consumer == 'ps':
-        assert generated['ps-hosts.json']['hosts'][0]['target'] == (target or host['id'])
+        assert generated['ps-hosts.json'] == {'hosts': [dict(
+            name=host['id'], target=target or host['id'], **{
+                'win_src' if system == 'windows' else 'src': live + '/src'})]}
     elif system == 'linux':
-        assert generated['overflow-hosts.json']['hosts']['host-a']['ssh'] == (target or host['id'])
+        assert generated['overflow-hosts.json'] == {'hosts': {'host-a': {
+            'ssh': target or host['id'], 'repo': live, 'spawner_src': live + '/src',
+            'floor_mb': host['caps']['mem_floor_mb']}}, 'public_repos': []}
+    else:
+        assert generated['overflow-hosts.json'] == {'hosts': {}, 'public_repos': []}
 
 
-def test_hosts_example_demonstrates_remote_ssh_target():
-    registry = json.loads(Path('docs/schemas/examples/hosts.example.json').read_text())
+def test_hosts_example_demonstrates_remote_ssh_target(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    registry = json.loads((ROOT / 'docs/schemas/examples/hosts.example.json').read_text())
     assert any(h.get('ssh_target') for h in registry['hosts'] if h['transport'] == 'ssh')
     assert all('ssh_target' not in h for h in registry['hosts'] if h['transport'] == 'local')
