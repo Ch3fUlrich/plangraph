@@ -1,0 +1,1 @@
+- D-5520: Bind review seat-slot metadata in answers and run records to the chosen leg after fallthrough, preserve disjoint families across reroutes, name exhausted slots and adapter snapshot skips, and explicitly disclose an anthropic second family without changing leg order or policy rows.

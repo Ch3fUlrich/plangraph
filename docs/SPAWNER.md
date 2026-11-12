@@ -337,7 +337,7 @@ effort model is not declared in the AutoOS root opencode config, so `render_gate
 adds `providers.omniroute.models["cx-<m>-<effort>"]` (`modelID` `cx/<m>-<effort>`, the base
 model's limit) for that run only; without it opencode answers `provider.no-route`.
 Leg notes ("after its Friday-evening reset") are static text: availability is the leg state (`limited` after a provider stop), not a schedule.
-Two review seats must differ in family from every writer and each other; an impossible fence returns fewer seats and an explicit plan error, not a fallback.
+Two review seats must differ in family from every writer and each other; an impossible fence returns fewer seats and an explicit plan error, not a fallback. Seat-group answers and each run's `plan.review_seats` / `plan.seat_coverage` follow `chosen_leg`, including cross-family fallthrough; exhausted slots report `distinct_family_unavailable` with attempt reasons. Routes explicitly name an anthropic second family; see [seat records](spawner-seats.md).
 
 An explicitly supplied `benchmark=` mapping (model or leg id to resolver metric
 row), or sequence of rows with `model_id`, ranks measured legs only inside their

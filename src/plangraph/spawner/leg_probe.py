@@ -332,7 +332,8 @@ async def before_launch(runner, leg, role, dry_run):
             status = adapter.leg_status(key(leg), account=getattr(leg, 'account', None),
                                         combo=getattr(leg, 'combo', None))
             if status['state'] != 'ok':
-                return status.get('reason', status['state'])
+                reason = status.get('reason') or status['state']
+                return 'leg_state_snapshot_error' if reason == 'unknown' else reason
         return None
     # D-3685: a leg booked limited is known-unusable until its reset. Skip it
     # before any freshness or probe logic -- every role, TTL 0 included --

@@ -133,6 +133,38 @@ def _refuse_oversized_diff(exc, leg):
 class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``_save``, ``save_refusal`` and ``state`` from the service."""
 
+    @staticmethod
+    def _seat_reasons(families, reasons):
+        from plangraph.planner.seats import seat_family
+        reasons = list(reasons)
+        if len(families) > 1 and seat_family(families[1]) == 'anthropic':
+            reasons.append('second review family is anthropic')
+        return tuple(dict.fromkeys(reasons))
+
+    def _sync_seat(self, record):
+        """Keep the slot's audit metadata tied to the resolved leg on every save."""
+        from plangraph.planner.seats import seat_family
+        plan = record.get('plan') or {}
+        own = plan.get('seat_coverage') or []
+        if len(own) != 1 or not own[0].get('seat_group'):
+            return
+        chosen = record.get('chosen_leg')
+        if chosen:
+            plan['review_seats'] = [dict(chosen)]
+            own[0].update(leg=chosen['id'], family=chosen['family'],
+                          keeper_family=seat_family(chosen['family']))
+            own[0].pop('reason', None)
+        elif record.get('ended') is not None:
+            plan['review_seats'] = []
+            detail = '; '.join(dict.fromkeys(a['skip_reason'] for a in record.get('attempts', [])
+                                            if a.get('skip_reason')))
+            reason = 'distinct_family_unavailable: no eligible leg of a family not held by another seat'
+            reason += ': ' + (detail or record.get('error') or 'no leg launched')
+            reason = own[0].get('reason') or reason
+            own[0].update(family=None, keeper_family=None, reason=reason)
+            if record.get('status') != 'refused':
+                record['error'] = reason
+
     def admit_spawn(self, options, *, card=None):
         """Check admission and persist any queued or remote run through the service."""
         record = admit(self, options, card=card)
@@ -248,6 +280,8 @@ class SeatSpawnMixin:
         from plangraph.planner.seats import seat_family
         # Keeper families: gpt/openai and claude/anthropic are one family each.
         seat_families = {seat_family(s.family) for s in plan.review_seats}
+        if len(seat_families) != len(plan.review_seats):
+            raise SpawnRefused('two distinct review families unavailable: duplicate seat family')
         spares = []
         for spare in plan.legs:
             if seat_family(spare.family) not in seat_families:
@@ -257,11 +291,12 @@ class SeatSpawnMixin:
         group = 'seats-' + uuid.uuid4().hex
         coverage = {c['leg']: c for c in plan.seat_coverage}
         # Each seat record carries only its own coverage entry plus the group id.
-        own = [dict(coverage.get(seat.id, {'leg': seat.id}), seat_group=group) for seat in plan.review_seats]
+        own = [dict(coverage.get(seat.id, {'leg': seat.id}), seat_group=group,
+                    family=seat.family, keeper_family=seat_family(seat.family)) for seat in plan.review_seats]
         runs = await asyncio.gather(*(
             self._spawn(card=card, prompt=prompt, role=role, writer_families=writer_families,
                         review_of=review_of, _plan=replace(
-                            plan, legs=(seat, *spares[i::n]), seat_coverage=(own[i],)),
+                             plan, legs=(seat, *spares[i::n]), review_seats=(seat,), seat_coverage=(own[i],)),
                         **options)
             for i, seat in enumerate(plan.review_seats)), return_exceptions=True)
         # A seat that raised still gets a record (with its group and coverage); the
@@ -270,7 +305,10 @@ class SeatSpawnMixin:
                 if isinstance(r, Exception) else r
                 for i, (seat, r) in enumerate(zip(plan.review_seats, runs))]
         records = [r for r in runs if not isinstance(r, BaseException)]
-        envelope = {'seat_group': group, 'seats': records, 'seat_coverage': list(plan.seat_coverage)}
+        resolved = [r['plan']['seat_coverage'][0] for r in records]
+        families = [c.get('family') for c in resolved]
+        reasons = self._seat_reasons(families, [c['reason'] for c in resolved if c.get('reason')])
+        envelope = {'seat_group': group, 'seats': records, 'seat_coverage': resolved, 'reasons': list(reasons)}
         self._save_seat_group(envelope)   # before any re-raise: launched seats keep their group
         for r in runs:
             if isinstance(r, BaseException):

@@ -1026,7 +1026,7 @@ def spawn_service(*args, **kwargs):
             # A seat run (_plan from _spawn_seats) keeps to its own legs on re-route.
             allowed = {l.id for l in _plan.legs} if _plan is not None else None
             def restrict(p):
-                return p if allowed is None else replace(p, legs=tuple(l for l in p.legs if l.id in allowed))
+                return p if allowed is None else replace(p, legs=tuple(l for l in p.legs if l.id in allowed), review_seats=_plan.review_seats, seat_coverage=_plan.seat_coverage)
             plan = _plan if _plan is not None else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
             from .resolver import plan_for_launch_async
             if hasattr(plan, '__dataclass_fields__'):

@@ -38,6 +38,7 @@ class SpawnService(SeatSpawnMixin):
             raise ValueError('unknown run id') from None
 
     def _save(self, record):
+        self._sync_seat(record)
         from .private_io import atomic_write_private
         from .runner import redact
         from .seat_artifact import publish
@@ -120,7 +121,7 @@ class SpawnService(SeatSpawnMixin):
             from plangraph.planner.routing import SpawnRefused, explicit_only_skips
             if plan.error:
                 raise SpawnRefused("\n".join([plan.error, *(f"skip {row['leg']}: {row['reason']}" for row in plan.skipped)]))
-            return replace(plan, skipped=type(plan.skipped)((*plan.skipped, *explicit_only_skips(role))))
+            return replace(plan, skipped=type(plan.skipped)((*plan.skipped, *explicit_only_skips(role))), reasons=self._seat_reasons([s.family for s in plan.review_seats], plan.reasons))
         except Exception as exc:
             self.save_refusal(exc, role)
             raise
@@ -300,7 +301,6 @@ class SpawnService(SeatSpawnMixin):
              started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
         pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
-
         async def execute():
             try:
                 from .run_watchdog import prepare_run, terminal_record
