@@ -6,3 +6,4 @@ Seat fixes: refuse non-object ingest at the store boundary, bound incremental ro
 validate/cap range reads (24 h raw, 30 d minute, 10000 rows), and refuse unknown
 revocation ids while keeping repeat revocation idempotent.
 A JSON null request body is read as an empty body (HTTP 400 on ingest), no longer as the 413 sentinel.
+CI gives Postgres 256 MiB of shared memory for per-test schemas, null-body parsing accepts only JSON whitespace, and the default row-cap assertion runs without Postgres.

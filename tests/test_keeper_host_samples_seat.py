@@ -69,10 +69,6 @@ def test_range_exactly_cap_not_truncated(world, resolution, monkeypatch):
         start + n for n in range(1, cap + 1)]
 
 
-def test_range_default_row_cap():
-    assert store_host_samples.RANGE_ROW_CAP == 10000
-
-
 def test_revoke_unknown_and_repeat(world):
     with pytest.raises(Refused, match="not_found"):
         world.store.revoke_host_token(world.p("router"), 999)

@@ -209,7 +209,9 @@ jobs:
           POSTGRES_DB: keeper
         ports:
           - 5432
+        # Per-test schemas grow PG16 shared statistics beyond Docker's 64 MiB default.
         options: >-
+          --shm-size=256m
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s
           --health-timeout 5s
