@@ -1,5 +1,6 @@
 """Hermetic regressions for review budgeting and transport completion."""
 import ast
+import asyncio
 import inspect
 import json
 from pathlib import Path
@@ -29,12 +30,92 @@ def test_review_card_cap_is_a_hard_wall():
     assert limits['hard_max'] is True
 
 
-def test_inline_budget_includes_instructions_and_framing(monkeypatch):
+@pytest.mark.parametrize('factory', ['service', 'dispatch'])
+@pytest.mark.parametrize('leg_id', ['mimo-v2.6-flash', 'mimo-v2.6-pro'])
+@pytest.mark.parametrize('max_min', [None, 30])
+@pytest.mark.parametrize('timeout', [None, '', '7'])
+def test_mimo_verdict_seat_passes_review_role_to_thresholds(
+        monkeypatch, tmp_path, factory, leg_id, max_min, timeout):
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner import run_watchdog
+    from plangraph.spawner.runner import spawn_service
+    from plangraph.spawner.service import SpawnService
+    from registry_route_util import _Runner, _repo
+
+    if timeout is not None:
+        monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', timeout)
+    repo, base, head = _repo(tmp_path)
+    chosen = next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
+    plan = SpawnPlan((chosen,), (), 'operator-order', (chosen,), ())
+    card = {'estimate_tokens': 100, 'hard_first_edit': True,
+            'diff_ref': {'repo': str(repo), 'base': base, 'head': head}}
+    if max_min is not None:
+        card['max_min'] = max_min
+    expected_max = max_min * 60 if max_min is not None else {
+        None: 1500, '': 5400, '7': 7}[timeout]
+    threshold_calls = []
+
+    def observed_thresholds(card=None, *, role=None):
+        threshold_calls.append((card, role))
+        return thresholds(card, role=role)
+
+    class CappedRunner(_Runner):
+        async def spawn(self, **kwargs):
+            job = await super().spawn(**kwargs)
+            limits = kwargs['watchdog']
+            assert kwargs['role'] == 'review'
+            assert limits['max_s'] == expected_max
+            assert limits['hard_max'] is True
+            assert not limits.get('hard_first_edit', False)
+            # Even an accidental writer default cannot extend this seat's wall.
+            watchdog = run_watchdog.Watchdog(limits, start=0, edit='baseline')
+            assert watchdog.budget() == expected_max
+            assert watchdog.decide(expected_max - 1, 'baseline', expected_max - 1, None) is None
+            event = watchdog.decide(expected_max, 'baseline', expected_max, None)
+            assert event['rule'] == 'max'
+            job.status, job.exit_code, job.events = 'timeout', 124, [event]
+            return job
+
+    async def admit_plan(plan, **kwargs):
+        return plan
+
+    async def no_probe(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(run_watchdog, 'thresholds', observed_thresholds)
+    monkeypatch.setattr('plangraph.spawner.resolver.plan_for_launch_async', admit_plan)
+    monkeypatch.setattr('plangraph.spawner.leg_probe.before_launch', no_probe)
+    runner = CappedRunner()
+    runner.default_cwd = str(repo)
+    if factory == 'service':
+        service = SpawnService(runner=runner, state=tmp_path / 'state')
+    else:
+        sink = SimpleNamespace(deliver=lambda *args: None)
+        service = spawn_service(runner=runner, state=tmp_path / 'state',
+                                completion_sink=sink, keeper_sink=sink)
+    monkeypatch.setattr(service, '_route', lambda *args, **kwargs: plan)
+    result = asyncio.run(service.spawn(card=card, prompt='Review this change', role='review',
+                                      writer_families=('claude',), seats=True, wait_seconds=None))
+    assert threshold_calls == [(card, 'review')]
+    assert len(runner.calls) == 1
+    assert runner.calls[0]['model_or_combo'] == chosen.model
+    assert '+two' in runner.calls[0]['prompt']
+    seat, = result['seats']
+    assert seat['role'] == 'review'
+    assert seat['status'] == 'timed_out'
+    assert seat['watchdog']['rule'] == 'max'
+
+
+def test_inline_budget_excludes_instructions_and_framing(monkeypatch):
     monkeypatch.setattr(inline_diff, '_check_diff_ref', lambda ref: None)
     monkeypatch.setattr(inline_diff.subprocess, 'run',
                         lambda *a, **kw: SimpleNamespace(stdout='+change\n', stderr='', returncode=0))
-    with pytest.raises(InlineDiffError, match='too large'):
-        inline_diff_prompt('x' * 100, {'repo': '.', 'base': 'a', 'head': 'b'}, max_chars=110, timeout=3)
+    expected = 'x' * 100 + inline_diff.HEADER.format(base='a', head='b') + '+change\n' + inline_diff.FOOTER
+    packaged = inline_diff_prompt('x' * 100, {'repo': '.', 'base': 'a', 'head': 'b'},
+                                  max_chars=110, timeout=3)
+    assert packaged == expected
+    assert len(packaged) > 110
 
 
 def test_explicit_truncation_cannot_be_blessed_by_unfinished_tail():
@@ -175,16 +256,24 @@ def test_invalid_explicit_cap_is_refused(value, role):
         thresholds({'max_min': value}, role=role)
 
 
-def test_exact_fit_inline_package_is_accepted(monkeypatch):
+@pytest.mark.parametrize('extra', [-1, 0, 1])
+def test_inline_diff_boundary_preserves_main_contract(monkeypatch, extra):
     monkeypatch.setattr(inline_diff, '_check_diff_ref', lambda ref: None)
     monkeypatch.setattr(inline_diff.subprocess, 'run', lambda *a, **kw:
                         SimpleNamespace(stdout='+change\n', stderr='', returncode=0))
     expected = 'review' + inline_diff.HEADER.format(base='a', head='b') + '+change\n' + inline_diff.FOOTER
-    max_chars = len(expected)
+    max_chars = len('+change\n') + extra
+    if extra < 0:
+        with pytest.raises(InlineDiffError) as exc:
+            inline_diff_prompt('review', {'repo': '.', 'base': 'a', 'head': 'b'},
+                               max_chars=max_chars, timeout=3)
+        assert str(exc.value) == 'diff too large for leg: 8 > 7 chars'
+        assert (exc.value.chars, exc.value.max_chars) == (8, 7)
+        return
     packaged = inline_diff_prompt('review', {'repo': '.', 'base': 'a', 'head': 'b'},
                                   max_chars=max_chars, timeout=3)
     assert packaged == expected
-    assert len(packaged) == max_chars
+    assert len(packaged) > max_chars
 
 
 def test_packaging_tests_pass_explicit_timeout_and_patch_existing_targets():

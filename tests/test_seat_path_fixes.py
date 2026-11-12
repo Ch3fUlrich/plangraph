@@ -29,6 +29,7 @@ def test_mimo_flash_is_inline_only():
 
 
 def test_verdict_commentary_and_parser_parity(tools_importable):
+    # conftest's scoped tools path supplies seat_record; it never skips this check.
     spec = importlib.util.spec_from_file_location("seat_verdict", Path(__file__).parents[1] / "tools/seat_verdict.py")
     tool = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(tool)

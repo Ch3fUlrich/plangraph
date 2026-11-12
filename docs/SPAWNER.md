@@ -24,10 +24,13 @@ edit and ignore a valid `hard_first_edit` opt-in. Card limits must be positive,
 finite numbers (not booleans); invalid limits refuse the spawn. Without a card
 `max_min`, an unset `PLANGRAPH_SPAWN_RUN_TIMEOUT` gives a 25-minute cap, an empty
 value keeps the default 90-minute wall, and a positive numeric value sets seconds.
-`inline_diff_prompt` checks `max_chars` against the complete prompt (instructions,
-diff header, full diff and footer), not just the diff. Exact-fit packages pass.
-Oversized packages raise `InlineDiffError` rather than truncating; missing diff
-references, empty diffs and failed `git diff` calls also fail explicitly.
+The package-wide `inline_diff_prompt` bound change was dropped to preserve main's
+cost-context contract: `max_chars` measures only the diff and exact-fit diffs pass.
+Oversized diffs keep `InlineDiffError`'s `diff too large for leg` text and diff-only
+size; strict mode maps that refusal to `inline_diff_oversized`. The separate
+opt-in `PLANGRAPH_CONTEXT_STRICT=1` whole-prompt bound retains
+`inline_prompt_oversized` for oversized instructions/framing. Neither truncates;
+missing diff references, empty diffs and failed `git diff` calls fail explicitly.
 
 In `opencode_answer.final_answer`, `allow_unfinished=True` accepts pending text
 with no finish frame or after `tool-calls`, unless an earlier finish blocked it.
