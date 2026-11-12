@@ -18,7 +18,7 @@ Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12
 | `importer.py` | YAML dir → router-attributed batch; `export_yaml(conn, dir)` for round trip |
 | `api.py` | HTTP JSON server around `Store` |
 | `cli.py` (`python -m plangraph.keeper.cli` / entry `pg`) | thin client of the API; `cli_admin` and oversight's `db` import are lazy, so remote `whoami` works without POSIX `fcntl` on Windows; local DB commands still require the keeper host; `oversight-check` and `oversight-audit --out-dir DIR --cursor FILE --router-log FILE` live in `cli_oversight.py` |
-| `mcp.py` | stdio MCP server (hand-written JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`; no SDK), same verbs, calls the API |
+| `mcp.py` | stdio MCP server (hand-written JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`; no SDK), same verbs, calls the API; unchanged by the [Rust schema-only slice](keeper/mcp-rust.md) |
 
 Critical-path stall alerts notify owners and routing without mutating keeper state; see [configuration and delivery semantics](keeper/crit-path-stall.md).
 

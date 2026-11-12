@@ -16,15 +16,13 @@ from email.utils import parsedate_to_datetime
 
 REPROBE_MINUTES = 10
 
-#: D-3685: a booked reset never parks a leg for days: every reset is capped at
-#: now + 24 h, so the leg is checked once after the cap and re-booked if the
-#: provider still reports it limited.
+#: D-3685: cap booked resets at 24 h; readers expire evidence after six hours.
 RESET_CAP_S = 86400
+#: Failure evidence expires independently of its booked provider reset.
+EVIDENCE_TTL_S = 6 * 60 * 60
 
-#: Probe/harness evidence is leg-level: a probe session cannot attribute its
-#: outcome to a card's account/combo. Rows written without those dimensions
-#: stay visible to every reader of the leg, while provider responses keep the
-#: exact-tuple scope ("omitted dimensions are not wildcards").
+#: Probe/harness evidence is leg-level; provider responses keep exact-tuple scope
+#: (omitted account/combo dimensions are not wildcards for provider responses).
 _SCOPE = "((account IS ? AND combo IS ?) OR (account IS NULL AND combo IS NULL AND source != 'provider-response'))"
 
 
@@ -245,6 +243,8 @@ class LegStateStore:
                     return {"state": "ok", "evidence": None}
                 evidence = {k: row[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                 evidence["event_id"] = row["id"]
+                if now >= row['ts'] + EVIDENCE_TTL_S:
+                    return {'state': 'reprobe', 'evidence': evidence}
                 if row['source'] == 'liveness-probe':
                     # Two consecutive failures book down; serving evidence breaks the streak.
                     streak = 1
@@ -257,7 +257,7 @@ class LegStateStore:
                             break
                     # Probe failures never hide an older provider limit with a future reset (D-3685).
                     if (behind is not None and behind['source'] in ('harness-stderr', 'provider-response')
-                            and behind['reset_at'] is not None and now < behind['reset_at']):
+                            and behind['reset_at'] is not None and now < min(behind['reset_at'], behind['ts'] + EVIDENCE_TTL_S)):
                         evidence = {k: behind[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                         evidence["event_id"] = behind["id"]
                         return {"state": "limited", "evidence": evidence}
