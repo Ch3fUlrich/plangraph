@@ -9,6 +9,12 @@ from .brief import creation_error
 from .credential_guard import mask_all
 
 
+def cmd_close_merged(args, session):
+    from .cli_verbs import write
+    return write(session, "close_merged", {"key": args.key,
+                 "decision_id": args.decision_id, "families": args.families})
+
+
 def cmd_legacy(args, session):
     from .cli_verbs import write
     return write(session, "set_legacy_state",
