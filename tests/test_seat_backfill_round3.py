@@ -155,7 +155,8 @@ def test_item_resolution_failure_emits_row_and_continues(backfill_case, monkeypa
     assert (run / "verdict.delivered").exists()
 
 
-@pytest.mark.parametrize("token", ["model:GPT-4", "Branch:MAIN", "Team:AI", "other:UPPER"])
+@pytest.mark.parametrize("token", ["model:GPT-4", "Branch:MAIN", "Team:AI", "other:UPPER",
+                                   "demo:GPT-4", "demo:PASS"])
 def test_metadata_tokens_do_not_pollute_tsv_tallies(backfill_case, capsys, token):
     args, run = backfill_case
     args.backfill_apply, args.format = False, "tsv"
@@ -188,3 +189,43 @@ def test_shipped_fragment_has_no_review_dialogue():
     fragment = (root / "changelog.d/SEAT-VERDICT-TO-KEEPER-r2.md").read_text()
     assert "not reproduced" not in fragment
     assert "427 tests" not in fragment
+
+
+@pytest.mark.parametrize("repo", [None, ""])
+@pytest.mark.parametrize("repo_key", ["demo", "demo/lane"])
+def test_configured_missing_repo_never_uses_implementation_writers(backfill_case,
+                                                                 monkeypatch, capsys, repo, repo_key):
+    from plangraph.keeper.evidence_git import GitAdapter
+    args, run = backfill_case
+    snapshot = json.loads(args.snapshot.read_text())
+    snapshot["items"][0]["project"] = "demo"
+    snapshot["items"][0]["track"] = "lane"
+    args.snapshot.write_text(json.dumps(snapshot))
+    config = Path.home() / ".local/share/plangraph/keeper.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"repos": {repo_key: {"path": str(args.records_dir)}}}))
+    assert sr.writer_families(snapshot["items"][0], SHA, args.records_dir, None) == ["openai"]
+    monkeypatch.setattr(GitAdapter, "repo_path", lambda *a: repo)
+    lookup = Mock(side_effect=AssertionError("missing repository must not reach Git"))
+    monkeypatch.setattr(GitAdapter, "writer_trailers", lookup)
+    poster = Mock(return_value=0)
+    before = {p.name: p.read_bytes() for p in run.iterdir()}
+    assert sr.backfill(args, poster) == 0
+    row = json.loads(capsys.readouterr().out)[0]
+    assert row["status"] == "MISSING"
+    assert row["reasons"] == ["unknown writer"]
+    assert row["seats"] == []
+    lookup.assert_not_called()
+    poster.assert_not_called()
+    assert before == {p.name: p.read_bytes() for p in run.iterdir()}
+
+
+@pytest.mark.parametrize("key", ["SEAT-123", "demo/A", "demo:A/b", "demo:A"])
+@pytest.mark.parametrize("prefix,suffix", [("", ""), ("-", ""), (".", ""), ("", ".")])
+def test_exact_named_prompt_item_still_binds(tmp_path, key, prefix, suffix):
+    run = record(tmp_path, item_key=None)
+    (run / "prompt.txt").write_text(f"Review {prefix}{key}{suffix}")
+    seats, reasons = sr.eligible_records(dict(ITEM, key=key), tmp_path)
+    assert len(seats) == 1, reasons
+    assert seats[0]["run_id"] == run.name
+    assert reasons == []

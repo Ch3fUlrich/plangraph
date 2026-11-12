@@ -32,7 +32,7 @@ def test_prompt_tokens_do_not_lose_other_seats(tmp_path, text, count):
     other.mkdir()
     bad = record(other)
     (bad / "prompt.txt").write_text("Review item demo:A " + text)
-    seats, reasons = seat_record.eligible_records(ITEM, tmp_path)
+    seats, reasons = seat_record.eligible_records(ITEM, tmp_path, {"demo:A", "demo:B"})
     assert good.name in [s["run_id"] for s in seats]
     assert len(seats) == count, reasons
     if count == 2:

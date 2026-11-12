@@ -175,6 +175,7 @@ def record_index(records_dir):
         except (OSError, ValueError):
             continue
     return rows
+
 def merged_pr(item, git, lookup=None):
     """Resolve only an evidenced commit; injected lookup may use a JSON cache."""
     from plangraph.keeper.evidence_repo import repo_key
@@ -197,19 +198,21 @@ def merged_pr(item, git, lookup=None):
         match = re.search(r"Merge PR #(\d+)\b", result.stdout)
         return int(match[1]) if result.returncode == 0 and match else None
     return None
+
 def writer_families(item, head, records_dir, git):
     """Union evidenced git writers and matching implement-record writers."""
-    from plangraph.keeper.evidence_repo import repo_key
+    from plangraph.keeper.evidence_repo import repo_key, track_key
     from seat_verdict import model_family
     models = []
     if git is not None and head:
         key = repo_key(item, SimpleNamespace(git=git), head)
-        repo = git.repo_path(key)
+        repo, configured = git.repo_path(key), getattr(git, "_repos", None)
+        if not repo and (not isinstance(configured, dict)
+                         or key in configured or track_key(item) in configured): return []
         if repo:
             try:
                 rows = git.writer_trailers(repo, head, git.repo_ref(key))
-            except (OSError, subprocess.SubprocessError):
-                return []
+            except (OSError, subprocess.SubprocessError): return []
             for trailers in rows or [{}]:
                 writers = [v.split()[0] for name, value in trailers.items() if name.lower() == "writer"
                            for v in (value if isinstance(value, list) else [value]) if v.split()]
@@ -226,6 +229,7 @@ def writer_families(item, head, records_dir, git):
                 continue
     families = {model_family(m) for m in models}
     return sorted(families) if None not in families else []
+
 def snapshot_item(item, records_dir=None, git=None):
     """Choose newest verified evidence; conflicting SHAs in its epoch refuse."""
     if not isinstance(item.get("key"), str) or not item["key"]:
@@ -261,6 +265,7 @@ def snapshot_item(item, records_dir=None, git=None):
         reason = None if head else "head mismatch: ambiguous verified commits at same epoch"
     return dict(item, head_sha=head, missing_reason=reason,
                 writer_families=writer_families(item, head, records_dir, git))
+
 def eligible_records(item, records_dir, known_keys=()):
     """Pure local discovery: return (eligible records, rejection reasons).
     Schema/ownership checks cannot exclude fabrication by a malicious same-uid writer.
@@ -273,22 +278,18 @@ def eligible_records(item, records_dir, known_keys=()):
     if not writers or any(w not in KNOWN_FAMILIES for w in writers):
         return [], ["unknown writer"]
     eligible, reasons, bound = [], [], False
-    index = record_index(records_dir)
-    projects = {k.split(":", 1)[0] for k in (*known_keys, item["key"])}
+    index, known_keys = record_index(records_dir), set(known_keys) | {item["key"]}
     for path, (record, prompt) in index.items():
         family = model_family(record.get("served_model"))
         try:
             if record.get("role") != "review": continue
             prs = {int(n) for n in re.findall(r"\bPR\s+#(\d+)\b", prompt, re.I)}
-            keys = {k.rstrip(".") for k in re.findall(r"(?<![\w.:-])[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+(?![\w.:-])", prompt)
-                    if k.split(":", 1)[0] in projects}
-            if record.get("item_key") != item["key"] and not (item["key"] in keys or item.get("pr_number") in prs):
-                continue
+            keys = {k.rstrip(".") for k in re.findall(r"(?<![\w.:-])[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+(?![\w.:-])", prompt)} & known_keys
+            named = bool(re.search(r"(?<![\w:])" + re.escape(item["key"]) + r"(?![\w-])", prompt))
+            if record.get("item_key") != item["key"] and not (named or item.get("pr_number") in prs): continue
             bound = True
-            if record.get("item_key") not in (None, item["key"]) or keys - {item["key"]}:
-                raise ValueError("item key mismatch")
-            if prs and item.get("pr_number") and prs != {item["pr_number"]}:
-                raise ValueError("PR number mismatch")
+            if record.get("item_key") not in (None, item["key"]) or keys - {item["key"]}: raise ValueError("item key mismatch")
+            if prs and item.get("pr_number") and prs != {item["pr_number"]}: raise ValueError("PR number mismatch")
             if (_has_symlink(path, index)
                     or not re.fullmatch(r"run-[0-9a-f]{32}", path.parent.name)
                     or not re.fullmatch(r"[0-9a-f]{64}", str(record.get("card_hash")))
@@ -301,8 +302,7 @@ def eligible_records(item, records_dir, known_keys=()):
             evidence, text = evidence_from_record(path.parent, record=record)
             if not isinstance(evidence.get("head_sha"), str) or not _HEAD_SHA.fullmatch(evidence["head_sha"]):
                 raise ValueError("record completion.head_sha missing or not 40 hex chars")
-            if evidence["head_sha"].lower() != head.lower():
-                raise ValueError("head mismatch")
+            if evidence["head_sha"].lower() != head.lower(): raise ValueError("head mismatch")
             family = model_family(evidence.get("served_model"))
             if family is None: raise ValueError("served family unknown")
             if family in writers: raise ValueError("family same as writer")
@@ -311,8 +311,7 @@ def eligible_records(item, records_dir, known_keys=()):
             if ok and (evidence.get("finish_reason") not in ("stop", "end_turn")
                        or str(evidence.get("test_gaming")).lower() != "no"):
                 raise ValueError("PASS safety evidence missing")
-            if (path.parent / "evidence.json").exists():
-                raise ValueError("spawner record shadowed by evidence.json")
+            if (path.parent / "evidence.json").exists(): raise ValueError("spawner record shadowed by evidence.json")
             eligible.append(dict(run_id=path.parent.name, family=family, ok=ok,
                                  seat_dir=path.parent, head_sha=evidence["head_sha"]))
         except (OSError, ValueError) as exc:
@@ -322,6 +321,7 @@ def eligible_records(item, records_dir, known_keys=()):
     return eligible, sorted(set(reasons)) if bound else [
         f"no record [seat=review family=outside:{','.join(writers)} head={head} "
         f"item={item['key']} PR={item.get('pr_number') or 'unresolved'}]"]
+
 def backfill(args, poster, pr_lookup=None):
     """Print TSV discovery and optionally invoke the existing single-seat CLI."""
     import sys

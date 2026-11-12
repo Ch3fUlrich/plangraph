@@ -186,13 +186,15 @@ def test_seat_snapshot_writer_sources(tmp_path, snapshot_shape, source):
     run = record(tmp_path, role="implement", served_model="gpt-5")
     from unittest.mock import Mock
     git = Mock()
-    git.repo_path.return_value = str(tmp_path) if source == "trailer" else None
+    git.repo_path.return_value = str(tmp_path)
     git.writer_trailers.return_value = ([{"Writer": "openai/gpt-5 run-abc"}]
                                         if source == "trailer" else [])
     if source == "trailer":
         (run / "record.json").unlink()
     normalized = sr.snapshot_item(item, records_dir=tmp_path, git=git)
-    assert normalized["writer_families"] == ["openai"]
+    assert normalized["writer_families"] == (["openai"] if source == "trailer" else [])
+    if source == "record":
+        assert sr.eligible_records(normalized, tmp_path) == ([], ["unknown writer"])
 
 
 def test_seat_nested_records(tmp_path):
@@ -338,9 +340,9 @@ def test_round_two_binding(tmp_path, case):
     evidence = {"head_sha": "d" * 40} if case == "head" else {}
     if case in ("head", "reason"):
         with patch.object(sr, "evidence_from_record", return_value=(evidence, "VERDICT: FIX")):
-            seats, reasons = sr.eligible_records(dict(ITEM, pr_number=7), tmp_path)
+            seats, reasons = sr.eligible_records(dict(ITEM, pr_number=7), tmp_path, {"demo:A", "demo:B"})
     else:
-        seats, reasons = sr.eligible_records(dict(ITEM, pr_number=7), tmp_path)
+        seats, reasons = sr.eligible_records(dict(ITEM, pr_number=7), tmp_path, {"demo:A", "demo:B"})
     assert not seats
     if case in ("record-key", "prompt-key"):
         assert "item key mismatch" in " ".join(reasons)
