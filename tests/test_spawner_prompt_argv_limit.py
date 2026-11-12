@@ -23,9 +23,12 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
         f'#!{sys.executable}\n'
         'import hashlib, json, sys\n'
         'data = sys.stdin.buffer.read()\n'
-        'prompt = json.loads(data)["message"]["content"]\n'
+        'prompt = json.loads(data)["message"]["content"].encode()\n'
+        'digest = hashlib.sha256(prompt).hexdigest()\n'
+        'digest = ":".join(digest[i:i + 8] for i in range(0, len(digest), 8))\n'
+        'proof = f"bytes={len(prompt)} sha256={digest}"\n'
         'print(json.dumps({"event":"result", "result":{"status":"SUCCESS",'
-        '"response":"VERDICT: ACCEPT " + hashlib.sha256(prompt.encode()).hexdigest()}}))\n'
+        '"response":"VERDICT: ACCEPT " + proof}}))\n'
     )
     binary.chmod(0o700)
     # No inherited PATH, gateway endpoint, state, credentials, or notification hook.
@@ -54,7 +57,10 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt=prompt,
             role='review', writer_families=['gpt'], wait_seconds=None)
         assert record['status'] == 'completed', record.get('error')
-        assert hashlib.sha256(prompt.encode()).hexdigest() in record['stdout_tail']
+        # Keep every digest bit, separated so output redaction cannot mistake it for a secret.
+        digest = hashlib.sha256(prompt.encode()).hexdigest()
+        digest = ':'.join(digest[i:i + 8] for i in range(0, len(digest), 8))
+        assert record['stdout_tail'].strip() == f'VERDICT: ACCEPT bytes={len(prompt.encode())} sha256={digest}'
         assert record['attempts'][0]['status'] == 'completed'
         assert runner.jobs[record['job_id']].command[0] == 'agy'
         assert runner.jobs[record['job_id']].exit_code == 0
