@@ -154,6 +154,22 @@ def test_base_equal_head_refused(test_repo):
     assert "is HEAD itself" in out
 
 
+def test_writer_docs_map_shared_parity():
+    import json
+    from pathlib import Path
+
+    from tools.check_changelog_docs import glob_to_regex, parse_docs_map
+
+    cases = json.loads((Path(__file__).parent / "fixtures/writer_docs_map.json").read_text())
+    for pattern, path, matches in cases["globs"]:
+        assert bool(glob_to_regex(pattern).match(path)) == matches, (pattern, path)
+    for text, date, entries, error_classes in cases["maps"]:
+        parsed_date, rules, errors = parse_docs_map(text)
+        assert (parsed_date.isoformat() if parsed_date else None) == date, text
+        assert [[line, glob, docs] for line, glob, docs in rules] == entries, text
+        assert [error.split(": ", 1)[1].split(":", 1)[0] for error in errors] == error_classes
+
+
 def test_workspace_manifests_never_map_to_single_crate_docs(tools_importable):
     from check_changelog_docs import glob_to_regex, parse_docs_map
     from tests.changelog_docs_util import ROOT
