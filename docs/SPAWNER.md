@@ -31,6 +31,8 @@ either a flag or symlink, or a missing, invalid, unreadable or unsearchable stat
 directory. Its home fallback is systemd `%h`, independent of the manager's `HOME`;
 redeploy the service template to apply the guard.
 
+Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; private-key blocks are masked in both modes, and token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
+
 ### Windows prompt delivery
 
 Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
@@ -90,6 +92,11 @@ The S1c Rust docs-map gate reads `.docs-map` from the committed head and compare
 
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict.
+Isolated OpenCode Go reviews accept credential rows with `active = 1` (legacy)
+or `active IS NULL` (v2 in use), never `active = 0`. Only the most recently updated
+eligible row is copied; ties prefer the most recently created row, then the smallest
+credential ID. This selection also applies to mixed legacy/v2 stores. A failed query or install reports
+`no row / inactive or store error`, not a login instruction; credentials stay out of logs and events.
 ### Doctor host source checks
 
 `python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust
@@ -100,6 +107,9 @@ a derived subprocess timeout: ten seconds plus three seconds per batch of up to
 local hosts registry entry replaces the inherited PATH for both pg-spawnd and
 harness discovery/children. Identity is `PLANGRAPH_HOST_NAME` or registry `self`,
 with case-insensitive id/alias lookup; absent configuration retains inherited PATH.
+Windows PATH keys are case-insensitive (`Path` is accepted).
+A present but unusable registry produces `host_path: fail`, distinguishing an identity mismatch from invalid
+configuration without printing registry or environment values. PATH is restored after checks, even on exceptions.
 There is no Python fallback for source checks; fresh release clones need no build.
 Fleet snapshots likewise delegate the read-only JSON projection to
 `pg-spawnd fleet-snapshot`; the Python loader supplies persisted registry and run
