@@ -2,7 +2,7 @@
 import json
 import re
 from decimal import Decimal
-from .redact_tokens import TOKENS, JWT, redact_wrapped
+from .redact_tokens import TOKENS, JWT, redact_wrapped, starts_token_prefix
 
 
 def _redact_pem(text):
@@ -18,6 +18,19 @@ def _redact_pem(text):
     if start is not None:
         return ''.join((*out, text[copied:start], '[REDACTED]'))
     return ''.join((*out, text[copied:]))
+
+
+def _redact_assignments(text, *, skip_tokens=False):
+    def replace(m):
+        value = m[0][len(m[1]):]
+        if skip_tokens and starts_token_prefix(value):
+            return m[0]
+        return m[1] + (value[0] + '[REDACTED]' + value[-1]
+                       if value[0] in '\"\x27' and value[-1] == value[0] else '[REDACTED]')
+    return re.sub(
+        r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
+        r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
+        r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)", replace, text)
 
 
 def redact(value):
@@ -54,16 +67,13 @@ def _redact(value, *, source):
         if isinstance(value, str):
             value = _redact_pem(value)
             value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
-            # Consume continuations before assignments can erase the token prefix.
+            # A protects names; only catalog-prefixed values wait for the join.
+            if not source:
+                value = _redact_assignments(value, skip_tokens=True)
             value = redact_wrapped(value)
             if not source:
-                value = re.sub(
-                    r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
-                    r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
-                    r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)",
-                    lambda m: m[1] + (m[0][len(m[1])] + '[REDACTED]' + m[0][-1]
-                                      if m[0][len(m[1])] in '\"\x27' and
-                                      m[0][-1] == m[0][len(m[1])] else '[REDACTED]'), value)
+                # C also masks deferred values whose join stayed below its floor.
+                value = _redact_assignments(value)
             # Greedily consume through the last @ within the quoted/space boundary.
             value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',
                            r'\1[REDACTED]\2', value)

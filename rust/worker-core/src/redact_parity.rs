@@ -80,7 +80,7 @@ fn redact_wrapped_assignments_are_masked_whole() {
         ] {
             let input = format!("{prefix}{secret}{suffix}{nl}next retained");
             let source = format!("{prefix}[REDACTED]{suffix}{nl}next retained");
-            // Plain mode removes value quotes; source mode preserves them.
+            // D-5279 R3: Rust drops value quotes; Python's existing rule keeps them.
             let plain = format!(
                 "{}[REDACTED]{nl}next retained",
                 prefix.trim_end_matches('"')
@@ -91,4 +91,74 @@ fn redact_wrapped_assignments_are_masked_whole() {
             assert_eq!(redact_source(&source), source);
         }
     }
+}
+
+#[test]
+fn redact_prefixed_line_before_my_secret_retains_main_assignment_scope() {
+    let value = ["hunter", "2value"].concat();
+    let standalone = format!("MY_SECRET: {value}");
+    // Main's Rust assignment regex matches MY_SECRET, unlike Python's regex.
+    assert_eq!(redact(&standalone), "MY_SECRET: [REDACTED]");
+    for nl in ["\n", "\r\n"] {
+        let text = format!(
+            "x {}{}{nl}{standalone}",
+            ["gh", "p_"].concat(),
+            "A9".repeat(7)
+        );
+        assert_eq!(redact(&text), "x [REDACTED]: [REDACTED]");
+    }
+}
+
+#[test]
+fn redact_plain_order_never_reveals_pieces_masked_by_old_order() {
+    fn old_order(text: &str) -> String {
+        // Main's assignment-then-wrapped order; these inputs need no PEM/Bearer/URL rules.
+        let rs = super::patterns();
+        let out = rs[3..5].iter().fold(text.to_owned(), |out, rule| {
+            rule.replace_all(&out, "$1$2$3[REDACTED]").into_owned()
+        });
+        let out = crate::redact_wrapped::redact_wrapped(&out);
+        rs[5..7].iter().fold(out, |out, rule| {
+            rule.replace_all(&out, "[REDACTED]").into_owned()
+        })
+    }
+
+    let first = "A9".repeat(7);
+    let rest = "B8".repeat(8);
+    let value = ["hunter", "2value"].concat();
+    let short = ["gh", "p_", &first].concat();
+    let full = format!("{short}{}", "C7".repeat(3));
+    let mut inputs = Vec::new();
+    for nl in ["\n", "\r\n"] {
+        inputs.extend([
+            format!("x {short}{nl}API_KEY={value}"),
+            format!("x {short}{nl}PASSWORD={value}"),
+            format!("x {short}{nl}MY_SECRET: {value}"),
+            format!("API_KEY={short}{nl}{rest}{nl}next"),
+            format!("API_KEY=\"{short}{nl}{rest}\"{nl}next retained"),
+            format!("API_KEY='{short}{nl}{rest}'{nl}next retained"),
+            format!("API_KEY={short}{nl}PASSWORD={value}"),
+            format!("API_KEY={short}{nl}PASSWORD=[REDACTED]"),
+            format!("API_KEY=abc{nl}next line of prose"),
+            format!("PASSWORD={rest}{nl}next line of prose"),
+            format!("{full}{nl}API_KEY={value}"),
+            format!("{full}{nl}API_KEY=[REDACTED]"),
+            format!("API_KEY={short}{nl}next retained"),
+            format!("API_KEY=\"{short}\"{nl}next retained"),
+            format!("API_KEY=abc {short}{nl}next retained"),
+        ]);
+    }
+    assert!(inputs.len() >= 12);
+    let mut guarded = [false; 4];
+    for text in inputs {
+        let old = old_order(&text);
+        let new = redact(&text);
+        for (i, piece) in [&first, &rest, &full, &value].into_iter().enumerate() {
+            if text.contains(piece) && !old.contains(piece) {
+                guarded[i] = true;
+                assert!(!new.contains(piece), "{text:?}: old {old:?}, new {new:?}");
+            }
+        }
+    }
+    assert!(guarded.into_iter().all(|tested| tested));
 }

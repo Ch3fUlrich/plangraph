@@ -2,8 +2,7 @@
 use std::sync::OnceLock;
 
 pub(crate) fn redact_wrapped(text: &str) -> String {
-    static PREFIX: OnceLock<regex::Regex> = OnceLock::new();
-    let re = PREFIX.get_or_init(prefix_regex);
+    let re = super::redact_tokens::prefix_regex();
     static BODIES: OnceLock<Vec<regex::Regex>> = OnceLock::new();
     let bodies = BODIES.get_or_init(|| {
         super::redact_tokens::SPECS
@@ -80,15 +79,6 @@ pub(crate) fn redact_wrapped(text: &str) -> String {
     out
 }
 
-fn prefix_regex() -> regex::Regex {
-    let prefixes = super::redact_tokens::SPECS
-        .iter()
-        .map(|s| format!("({})", s.prefix))
-        .collect::<Vec<_>>()
-        .join("|");
-    regex::Regex::new(&format!(r"\b(?:{prefixes})")).unwrap()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,7 +141,7 @@ mod tests {
     #[test]
     fn prefix_capture_indices_identify_specs() {
         assert_eq!(
-            prefix_regex().captures_len(),
+            crate::redact_tokens::prefix_regex().captures_len(),
             crate::redact_tokens::SPECS.len() + 1
         );
     }

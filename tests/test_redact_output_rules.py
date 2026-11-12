@@ -136,6 +136,7 @@ def test_wrapped_token_in_prompt_and_tail(monkeypatch, tmp_path, newline):
 def test_wrapped_assignment_is_masked_whole(newline, prefix, suffix, scrub):
     secret = 'gh' + 'p_' + 'A9' * 7 + newline + 'A9' * 8
     text = prefix + secret + suffix + newline + 'next retained'
+    # D-5279 R3: Python keeps value quotes; Rust's existing assignment rule drops them.
     expected = prefix + '[REDACTED]' + suffix + newline + 'next retained'
     assert scrub(text) == expected
     assert scrub(expected) == expected

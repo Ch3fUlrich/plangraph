@@ -35,6 +35,11 @@ _PREFIX = re.compile(r'\b(?:' + '|'.join('(' + s.prefix + ')' for s in SPECS) + 
 _BODY = tuple(re.compile(s.body + '+') for s in SPECS)
 
 
+def starts_token_prefix(value):
+    """Defer catalog-prefixed assignment values, with at most one opening quote."""
+    return _PREFIX.match(value[1:] if value[:1] in ('"', "'") else value) is not None
+
+
 def redact_wrapped(text):
     """Consume contiguous bodies across LF/CRLF, exactly like redact_wrapped.rs.
 
