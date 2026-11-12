@@ -1,17 +1,19 @@
 # Plangraph Spawner & Model Routing Architecture
 
-### Windows prompt delivery
+### Prompt delivery
 
-Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
-argv guard (32,000 characters, or 8,000 for batch shims). This uses the existing
-per-job stdin payload path, not a temporary prompt file. Qoder retains an explicit
+Every harness and helper receives the prompt by stdin or file, never argv, for
+all prompt sizes on every OS (D-5233). Python's Linux OOM child inherits the stdin
+pipe; pg-spawnd uses the same launch-spec transport. Qoder retains an explicit
 empty `-p` value with `--input-format text`; missing prompt flags fail with
-`stdin_prompt_flag_missing`. Oversized Windows agy
-commands use `--input-format stream-json --output-format stream-json -p ""`, with
+`stdin_prompt_flag_missing`. All agy commands use
+`--input-format stream-json --output-format stream-json -p ""`, with
 one UTF-8 NDJSON user event on stdin followed by EOF. The last result's
 `response` supplies the answer and verdict; an ERROR or missing result fails
 explicitly, without publishing an unsuccessful response as an answer.
-Short agy prompts and Linux launches retain their existing argv form; see [background review launches and deadlines](spawner-operations.md) for Windows console suppression and bounded prompt packaging.
+OpenCode, Claude, Gemini and Qwen read text stdin; Codex uses `exec -`. Fleet sessions
+also read stdin; SSH overflow uses `--prompt-file` without shell expansion. Assembled
+prompts exceeding the leg budget (three chars/token) record `prompt_too_large`.
 Rejected stdin input or an unavailable/closed input pipe fails the run explicitly;
 the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.

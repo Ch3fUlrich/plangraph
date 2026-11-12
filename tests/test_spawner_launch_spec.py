@@ -82,9 +82,9 @@ def test_tools(request_data, role, tmp_path, explicit):
     result = json.loads(out)
     assert result['argv'][0] == str(exe)
     assert result['cwd'] == str(tmp_path)
-    # opencode (implement) takes the prompt on stdin; qodercli (review) in argv with stdin null.
-    assert (result['stdin'] is None) == (role == 'review')
-    prompt = result['stdin'] or ' '.join(result['argv'])
+    assert result['stdin'] is not None
+    prompt = result['stdin']
+    assert request_data['prompt'] not in result['argv']
     assert ('GIT_AUTHOR_NAME' in result['env']) == (role == 'implement')
     assert ('GIT_AUTHOR_EMAIL' in result['env']) == (role == 'implement')
     assert (IMPLEMENT_HEADER in prompt) == (role == 'implement')
@@ -103,6 +103,13 @@ def test_opencode(request_data):
     assert result['stdin'] == request_data['prompt']
     prefix = request_data['state'] + '/launch/' + request_data['run_id'] + '/'
     assert all(result['env'][key].startswith(prefix) for key in ('HOME', 'XDG_CONFIG_HOME'))
+
+
+def test_agy_stream_spec(request_data):
+    request_data.update(leg={'id': 'agy-gemini-3.8-flash'}, prompt='é\n' + 'x' * (300 * 1024))
+    result = spec.build(request_data)
+    assert request_data['prompt'] not in result['argv']
+    assert json.loads(result['stdin'])['message']['content'] == result['prompt'] == request_data['prompt']
 
 
 def test_dry(request_data, monkeypatch):
@@ -182,7 +189,7 @@ def test_refusals(request_data, monkeypatch, kind):
         monkeypatch.setattr(spec, 'host_skip_reason_async', unavailable)
     elif kind == 'launch':
         monkeypatch.setattr(spec.runner, '_is_nt', lambda: True)
-        request_data['prompt'] = 'x' * 40000
+        monkeypatch.setattr(spec.runner, '_resolve_launch', lambda *a, **kw: ('qodercli', 'command_line_too_long'))
     elif kind == 'inline_diff_failed':
         def fail(*a, **kw):
             raise InlineDiffError('blocked')

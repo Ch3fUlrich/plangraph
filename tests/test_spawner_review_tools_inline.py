@@ -75,7 +75,7 @@ def test_document_review_exception_preserved(diff_ref):
 
 @pytest.mark.parametrize('mode', ['tools', 'inline-only'])
 def test_same_diff_cap(diff_ref, mode):
-    with pytest.raises(InlineDiffError, match='diff too large'):
+    with pytest.raises(InlineDiffError, match='prompt_too_large'):
         prompt(diff_ref, mode=mode, max_tokens=1)
 
 

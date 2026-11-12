@@ -24,7 +24,7 @@ GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
 OMNIROUTE_BASE_URL_ENV_VAR = "OMNIROUTE_BASE_URL"
 
 #: Harnesses whose prompts are delivered via stdin instead of argv (I9).
-STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode", "claude")   # D-3605
+STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode", "claude", "agy", "qodercli", "codex", "gemini", "qwen")
 
 
 def gateway_url(env: Mapping[str, str] | None = None,
@@ -319,17 +319,17 @@ def build_standalone_fallback_command(
         cmd = ["agy", "--dangerously-skip-permissions"]
         if model:
             cmd.extend(["--model", {"gemini-3.8-flash": "gemini-3.8-flash-high"}.get(model, model)])
-        cmd.extend(["-p", prompt])
+        cmd.extend(["-p", "", "--input-format", "stream-json", "--output-format", "stream-json"])
         return cmd
     if cname in ("qoder", "qodercli"):
-        cmd = ["qodercli", "-p", prompt]
+        cmd = ["qodercli", "-p", "", "--input-format", "text"]
         if model:
             cmd.extend(["--model", model])
         return cmd
     if cname == "codex":
-        return ["codex", "exec", *(["--model", model] if model else []), prompt]
+        return ["codex", "exec", *(["--model", model] if model else []), "-"]
     if cname in ("claude", "gemini", "qwen"):   # D-3605: claude takes its prompt on stdin, plan mode
-        cmd = [cname, "-p", *([] if cname == "claude" else [prompt]), *(["--model", model] if model else [])]
+        cmd = [cname, "-p", *([] if cname == "claude" else [""]), *(["--model", model] if model else [])]
         return cmd + (["--output-format", "stream-json", "--verbose", *claude_access_args(role)] if cname == "claude" else [])
     # Legacy callers may pass a gateway name. Explicit harnesses are validated
     # by build_command, while this offline helper retains its OpenCode default.
@@ -343,19 +343,12 @@ WINDOWS_ARGV_LIMIT, WINDOWS_BATCH_ARGV_LIMIT = 32000, 8000
 
 
 def launch_stdin_payload(cmd, prompt, exe, *, is_nt=False):
-    """Move oversized native prompts off Windows argv; never use a prompt file."""
-    import subprocess
-    limit = WINDOWS_BATCH_ARGV_LIMIT if exe.lower().endswith(('.cmd', '.bat')) else WINDOWS_ARGV_LIMIT
-    if (is_nt and cmd[0] in ('qodercli', 'agy')
-            and len(subprocess.list2cmdline([exe, *cmd[1:]])) > limit):
-        if '-p' not in cmd or cmd.index('-p') + 1 >= len(cmd) or cmd[cmd.index('-p') + 1].startswith('--'):
-            raise RuntimeError('stdin_prompt_flag_missing: expected -p with a prompt value')
-        cmd[cmd.index('-p') + 1] = ''
-        if cmd[0] == 'agy':
-            cmd.extend(['--input-format', 'stream-json', '--output-format', 'stream-json'])
-            return (json.dumps({'event': 'user', 'message': {'role': 'user', 'content': prompt}}, ensure_ascii=False) + '\n').encode('utf-8')
-        cmd.extend(['--input-format', 'text'])
-        return prompt.encode('utf-8')
+    """One stdin transport per harness, independent of prompt size and OS."""
+    if cmd[0] in ('qodercli', 'agy'):
+        if '-p' not in cmd or cmd.index('-p') + 1 >= len(cmd) or cmd[cmd.index('-p') + 1] != '':
+            raise RuntimeError('stdin_prompt_flag_missing: expected -p with an empty value')
+    if cmd[0] == 'agy':
+        return (json.dumps({'event': 'user', 'message': {'role': 'user', 'content': prompt}}, ensure_ascii=False) + '\n').encode('utf-8')
     return prompt.encode('utf-8') if cmd[0] in STDIN_PROMPT_HARNESSES else None
 
 

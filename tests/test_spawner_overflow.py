@@ -302,7 +302,8 @@ def test_local_limits_coerce_or_default(inputs, monkeypatch, key, value):
     assert o.main(args) == 3
 
 
-@pytest.mark.parametrize('prompt', ['trailing\n', 'trailing\n\n', 'literal $(false) .\n'])
+@pytest.mark.parametrize('prompt', ['trailing\n', 'trailing\n\n', 'literal $(false) .\n', 'x' * (300 * 1024)],
+                         ids=['newline', 'blank-line', 'shell-literal', '300KiB'])
 def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
     stage = tmp_path / 'stage with spaces'
     stage.mkdir()
@@ -315,7 +316,7 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
             # Execute the actual generated shell, replacing only its spawn command.
             command = argv[-1].replace('python3 -m plangraph.spawner.cli spawn',
                                       shlex.join(['python3', '-c',
-                                                  'import sys; print(repr(sys.argv[3]))']))
+                                                  'import pathlib, sys; print(repr(pathlib.Path(sys.argv[4]).read_text()))']))
             result = real_run(['sh', '-c', command], capture_output=True, text=True)
             assert result.returncode == 0, result.stderr
             received.append(result.stdout.splitlines()[1])

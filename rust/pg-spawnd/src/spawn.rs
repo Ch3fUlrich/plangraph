@@ -146,7 +146,15 @@ pub(crate) fn spawn(
     {
         return Err(ToolError::Internal("route adapter returned no leg".into()));
     }
-    runs.spawn(state, args, host, role, plan)
+    match runs.spawn(state, args, host, role.clone(), plan) {
+        Err(ToolError::Refused { message, .. }) if message.contains("prompt_too_large:") => save(
+            state,
+            host,
+            json!({"role":role,"reason":"prompt_too_large","error":message,"exit_code":1}),
+            Status::Failed,
+        ),
+        result => result,
+    }
 }
 
 #[cfg(test)]

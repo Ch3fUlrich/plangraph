@@ -97,9 +97,9 @@ def annotate_review_warning(record):
 
 def _refuse_oversized_diff(exc, leg):
     from .context_pack import PromptBoundError
-    if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1' and exc.chars is not None:
+    if exc.chars is not None:
         raise PromptBoundError(
-            f'inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
+            f'prompt_too_large: inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
             f'max_request_tokens {leg.max_request_tokens}') from None
 
 
@@ -171,12 +171,10 @@ class SeatSpawnMixin:
             raise InlineDiffError('review prompt packaging deadline exceeded') from None
 
     def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
-        """Assemble one leg's payload, then apply opt-in whole-prompt admission."""
+        """Assemble one leg's payload, then enforce its request limit."""
         from . import context_pack
         prompt = self._unbounded_leg_prompt(prompt, card, role, leg, pack, document_review, diff_timeout)
-        if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1':
-            return context_pack.bound_prompt(prompt, leg.max_request_tokens)
-        return prompt
+        return context_pack.bound_prompt(prompt, leg.max_request_tokens)
 
     def _unbounded_leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
         """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff.

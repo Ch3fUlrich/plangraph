@@ -100,7 +100,7 @@ def test_explicit_leg_unavailable_one_attempt(tmp_path, monkeypatch):
 def test_agy_does_not_receive_overlay(tmp_path, monkeypatch):
     from plangraph.spawner.runner import SpawnerRunner
     binary = tmp_path / 'agy'
-    binary.write_text('#!/bin/sh\nif [ -n "$OPENCODE_CONFIG_CONTENT" ]; then echo overlay-leaked; exit 1; fi\necho clean\n')
+    binary.write_text('#!/bin/sh\nif [ -n "$OPENCODE_CONFIG_CONTENT" ]; then echo overlay-leaked; exit 1; fi\necho \'{"event":"result","result":{"status":"SUCCESS","response":"clean"}}\'\n')
     binary.chmod(0o755)
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.delenv('OPENCODE_CONFIG_CONTENT', raising=False)

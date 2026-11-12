@@ -50,7 +50,7 @@ def test_strict_before_runner_and_disabled_unchanged(sandbox, monkeypatch, enabl
     if enabled is not None:
         monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', enabled)
     calls = []
-    leg = SimpleNamespace(tool_mode='tools')
+    leg = SimpleNamespace(tool_mode='tools', max_request_tokens=200)
     if enabled == '1':
         with pytest.raises(cp.ContextError, match='^big_file_unsliced: count 1$'):
             dispatch(seat, root, 'edit large.py', {}, leg, calls)
@@ -85,11 +85,11 @@ def test_inline_bound_disabled_preserves_prompt_and_warning(sandbox, monkeypatch
         monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', enabled)
     prompt = 'edit large.py\n' + 'x' * 1000
     calls = []
-    record = dispatch(seat, root, prompt, {}, SimpleNamespace(
-        tool_mode='inline-only', max_request_tokens=200), calls)
-    assert calls == [prompt]
-    assert record['warnings'] == [
-        'big_file_unsliced: large.py 1000 lines; name one function per slice in card.context']
+    assert cp.annotate({}, prompt, {}, root).warnings
+    with pytest.raises(cp.PromptBoundError, match='prompt_too_large'):
+        dispatch(seat, root, prompt, {}, SimpleNamespace(
+            tool_mode='inline-only', max_request_tokens=200), calls)
+    assert calls == []
 
 
 @pytest.mark.parametrize('tool_mode', ['inline-only', 'tools'])
@@ -188,7 +188,7 @@ def test_strict_real_review_whole_prompt_refused(review_payload, monkeypatch, to
     with pytest.raises(cp.PromptBoundError) as exc:
         dispatch(seat, root, prompt, card, leg, calls, role='review')
     assert calls == []
-    assert str(exc.value) == (f'inline_prompt_oversized: chars {size} '
+    assert str(exc.value) == (f'prompt_too_large: inline_prompt_oversized: chars {size} '
                               f'estimated_tokens {(size + 2) // 3} max_request_tokens 200')
 
 
@@ -218,9 +218,10 @@ def test_disabled_real_oversized_review_matches_main(review_payload, monkeypatch
     expected = (inline_diff_prompt(prompt, card['diff_ref'], max_chars=600)
                 if tool_mode == 'inline-only' else prompt)
     calls = []
-    dispatch(seat, root, prompt, card, leg, calls, role='review')
-    assert calls == [expected] == [prompt + suffix]
-    assert len(calls[0]) > leg.max_request_tokens * 3
+    assert expected == prompt + suffix
+    with pytest.raises(cp.PromptBoundError, match='prompt_too_large'):
+        dispatch(seat, root, prompt, card, leg, calls, role='review')
+    assert calls == []
 
 
 @pytest.mark.parametrize('enabled', [None, '0', '1'])
@@ -233,12 +234,11 @@ def test_real_oversized_diff_refusal(review_payload, monkeypatch, enabled):
                         subprocess.CompletedProcess(a, 0, stdout='private diff' * 100, stderr=''))
     leg = SimpleNamespace(tool_mode='inline-only', max_request_tokens=200)
     calls = []
-    error = cp.PromptBoundError if enabled == '1' else inline_diff.InlineDiffError
+    error = cp.PromptBoundError
     with pytest.raises(error) as exc:
         dispatch(seat, root, 'tiny', card, leg, calls, role='review')
     assert calls == []
-    expected = ('inline_diff_oversized: chars 1200 estimated_tokens 400 max_request_tokens 200'
-                if enabled == '1' else 'diff too large for leg: 1200 > 600 chars')
+    expected = 'prompt_too_large: inline_diff_oversized: chars 1200 estimated_tokens 400 max_request_tokens 200'
     assert str(exc.value) == expected
 
 
@@ -263,7 +263,7 @@ def test_launch_maps_real_oversized_diff_refusal(review_payload, monkeypatch):
         launch_spec.build(request)
     assert exc.value.kind == 'inline_diff_failed'
     assert str(exc.value) == (
-        'inline_diff_oversized: chars 1200 estimated_tokens 400 max_request_tokens 200')
+        'prompt_too_large: inline_diff_oversized: chars 1200 estimated_tokens 400 max_request_tokens 200')
 
 
 @pytest.mark.parametrize('tool_mode', ['tools', 'inline-only'])
@@ -279,7 +279,7 @@ def test_strict_assembled_boundary(review_payload, monkeypatch, tool_mode, extra
             dispatch(seat, root, prompt, card, leg, calls, role='review')
         assert calls == []
         assert str(exc.value) == (
-            'inline_prompt_oversized: chars 601 estimated_tokens 201 max_request_tokens 200')
+            'prompt_too_large: inline_prompt_oversized: chars 601 estimated_tokens 201 max_request_tokens 200')
     else:
         dispatch(seat, root, prompt, card, leg, calls, role='review')
         assert calls == [prompt + (framing if tool_mode == 'inline-only' else '')]
@@ -303,4 +303,4 @@ def test_structured_diff_refusal_ignores_wording(review_payload, monkeypatch):
             tool_mode='inline-only', max_request_tokens=200), calls, role='review')
     assert calls == []
     assert str(exc.value) == (
-        'inline_diff_oversized: chars 601 estimated_tokens 201 max_request_tokens 200')
+        'prompt_too_large: inline_diff_oversized: chars 601 estimated_tokens 201 max_request_tokens 200')

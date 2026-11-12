@@ -132,6 +132,8 @@ def build(request: dict) -> dict:
             if event.get('event') == 'render_refused':
                 raise LaunchRefused('render_refused', event['reason'])
         cmd = job.command
+        from plangraph.routing_support.clients import launch_stdin_payload
+        payload = launch_stdin_payload(cmd, job.task_prompt, cmd[0])
         env = service.runner._child_envs[job.job_id]
         argv, events = list(cmd), rec['events'] + job.events
         if not request['dry_run']:
@@ -152,7 +154,7 @@ def build(request: dict) -> dict:
         events.append(dict(event='launch_spec', python_job_id=job.job_id))
         return dict(argv=argv, cwd=os.path.abspath(request['cwd']), env=env,
                     prompt=job.task_prompt,  # REMOVE-AT-R10: Rust redacts the final prompt.
-                    stdin=job.task_prompt if cmd[0] in runner.STDIN_PROMPT_HARNESSES else None,
+                    stdin=payload.decode('utf-8') if payload is not None else None,
                     warnings=[w for w in rec['warnings'] if isinstance(w, str)], events=events)
     finally:
         tempfile.tempdir = previous

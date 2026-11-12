@@ -280,6 +280,9 @@ def terminal_reason(record, job=None):
         record['reason'] = reason
         return
     if record.get('exit_code') not in (None, 0):
+        if 'prompt_too_large:' in (record.get('error') or ''):
+            record['reason'] = 'prompt_too_large'
+            return
         stderr = record.get('stderr_tail', '')
         if opencode:
             stderr = without_progress(stderr)

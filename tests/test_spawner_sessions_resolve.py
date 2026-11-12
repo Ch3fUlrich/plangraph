@@ -18,7 +18,8 @@ def test_argv_linux_is_list_no_shell(site):
     assert argv == ["claude", "--bg", "--strict-mcp-config", "--mcp-config", str(site.mcp.resolve()),
                     "--settings", '{"enabledPlugins":{"superpowers@superpowers-marketplace":false}}',
                     "--remote-control", "alpha", "-n", "alpha", "--model", MODEL, "--effort", EFFORT,
-                    "--permission-mode", MODE, PROMPT]
+                    "--permission-mode", MODE, '']
+    assert kw['input'] == PROMPT
     assert all(isinstance(a, str) for a in argv)
     assert kw.get("shell") in (None, False)
     assert kw["cwd"] == str(site.proj.resolve())
@@ -33,7 +34,7 @@ def test_argv_linux_is_list_no_shell(site):
     go(site, s2)
     # the old-id gate polls agents first (round 4): pick the launch argv
     argv2 = run2.launch_calls()[0]
-    assert argv2[-3:] == ["--append-system-prompt", "be terse", PROMPT]
+    assert argv2[-3:] == ["--append-system-prompt", "be terse", '']
 
 
 def test_id_from_full_uuid(site):

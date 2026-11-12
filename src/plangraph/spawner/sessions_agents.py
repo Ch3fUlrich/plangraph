@@ -93,7 +93,7 @@ class _AgentsMixin:
                 "--model", model, "--effort", effort, "--permission-mode", mode]
         if style:
             tail += ["--append-system-prompt", style]
-        tail += [prompt_arg]
+        tail += ['']  # The complete task (including a handoff) travels on stdin.
         bg_argv = head + ["--bg"] + tail
         # Spec defaults: ctx_cap_tokens 300000, compact_window "400000".
         cap = cfg.get("ctx_cap_tokens") or 300000
@@ -222,7 +222,7 @@ class _AgentsMixin:
         into the write-ahead record; it defaults to a fresh pre-start reading."""
         if launched_ms is None:
             launched_ms = self._now() * 1000.0  # before the start: rows near it count
-        proc = self._run(bg_argv, cwd=str(cwd_path), **self._launch_run_kw(env))
+        proc = self._run(bg_argv, input=prompt_arg, cwd=str(cwd_path), **self._launch_run_kw(env))
         if proc.returncode != 0:
             # First 300 chars of the process output: enough to see why claude
             # refused (e.g. untrusted workspace) without unbounded audit text.
