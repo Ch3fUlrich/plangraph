@@ -6,13 +6,13 @@ import pytest
 from test_keeper_host_samples import DSN, world, sample, host_principal
 from test_keeper_host_samples_http import srv
 from test_keeper_api import call
+from plangraph.keeper import store_host_samples
 from plangraph.keeper.errors import Refused
 
 pytestmark = pytest.mark.skipif(not DSN, reason="needs Postgres")
 
 
-@pytest.mark.parametrize("body", [[], "fixture", pytest.param(None, marks=pytest.mark.xfail(
-    strict=True, reason="api.py treats JSON null as its 413 sentinel before dispatch")), 1])
+@pytest.mark.parametrize("body", [[], "fixture", None, 1])
 def test_non_object_http(world, srv, body):
     _, minted = host_principal(world)
     status, _, _ = call(srv, "/v1/ingest_host_sample", method="POST",
@@ -31,21 +31,46 @@ def test_range_http_refusals(world, srv, start, end, resolution):
 
 
 @pytest.mark.parametrize("resolution", ["raw", "1m", "1h"])
-def test_range_row_cap(world, resolution):
-    who, _ = host_principal(world)
-    world.store.ingest_host_sample(who, sample())
+def test_range_row_cap(world, resolution, monkeypatch):
+    cap = 25
+    monkeypatch.setattr(store_host_samples, "RANGE_ROW_CAP", cap)
     start = world.clock()
+    world.conn.execute("SELECT host_samples_partitions(?)", (start,))
     # Dense fixture rows exercise the response cap independently of bucket width.
     world.conn.execute(
         f"INSERT INTO host_samples_{resolution} "
         "(host_id,received_at,seq,sample,sample_count) "
-        "SELECT 'host-a', ? + n, n, ?, 1 FROM generate_series(1,10001) n",
-        (start, json.dumps(sample())))
+        "SELECT 'host-a', ? + n, n, ?, 1 FROM generate_series(1,?) n",
+        (start, json.dumps(sample()), cap + 1))
     result = world.store.host_samples_range(world.p("reader"), "host-a",
-                                            start + 1, start + 10002, resolution)
+                                            start + 1, start + cap + 2, resolution)
     assert result["truncated"] is True
-    assert len(result["rows"]) == 10000
-    assert result["rows"][0]["received_at"] == start + 1
+    assert len(result["rows"]) == cap
+    assert [row["received_at"] for row in result["rows"]] == [
+        start + n for n in range(1, cap + 1)]
+
+
+@pytest.mark.parametrize("resolution", ["raw", "1m", "1h"])
+def test_range_exactly_cap_not_truncated(world, resolution, monkeypatch):
+    cap = 25
+    monkeypatch.setattr(store_host_samples, "RANGE_ROW_CAP", cap)
+    start = world.clock()
+    world.conn.execute("SELECT host_samples_partitions(?)", (start,))
+    world.conn.execute(
+        f"INSERT INTO host_samples_{resolution} "
+        "(host_id,received_at,seq,sample,sample_count) "
+        "SELECT 'host-a', ? + n, n, ?, 1 FROM generate_series(1,?) n",
+        (start, json.dumps(sample()), cap))
+    result = world.store.host_samples_range(world.p("reader"), "host-a",
+                                            start + 1, start + cap + 2, resolution)
+    assert isinstance(result, list)
+    assert len(result) == cap
+    assert [row["received_at"] for row in result] == [
+        start + n for n in range(1, cap + 1)]
+
+
+def test_range_default_row_cap():
+    assert store_host_samples.RANGE_ROW_CAP == 10000
 
 
 def test_revoke_unknown_and_repeat(world):

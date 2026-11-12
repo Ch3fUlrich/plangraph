@@ -18,8 +18,8 @@ SQLite refuses these verbs with `unavailable`. Code: `store_host_samples.py` (ve
   3 x `PG_HOST_SAMPLE_S`, default 60 s) / down (10 x); `GET /v1/host_samples_range` with host, start, end
   (half-open) and resolution `raw|1m|1h`. Invalid bounds or reversed ranges refuse with HTTP 400.
   Raw spans are capped at 24 h, 1 m spans at 30 d; 1 h has no span cap within retention.
-  Results are ordered and limited to 10000 rows: below the cap the response is a list;
-  when the cap is reached it is `{ "rows": [...], "truncated": true }`.
+  Results are ordered and limited to 10000 rows: up to and including the cap the response is a list;
+  when more than 10000 rows match it is `{ "rows": [first 10000], "truncated": true }`.
 - **Maintenance:** the keeper daemon's own thread (`keeper-host-samples`, every 60 s, no cron) creates partitions,
   writes sample-count-weighted 1 m and 1 h rollups of closed buckets and deletes raw rows after 14 d, 1 m after 90 d and
   1 h after 730 d. Re-running it is idempotent. Subsequent ticks reaggregate only from the latest

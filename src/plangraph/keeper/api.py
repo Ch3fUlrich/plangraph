@@ -216,7 +216,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
                              "msg": f"body exceeds {MAX_BODY} bytes"})
             return None
         raw = self.rfile.read(length) if length else b""
-        if not raw:
+        if not raw or raw.strip() == b"null":
             return {}
         try:
             return json.loads(raw.decode("utf-8"))

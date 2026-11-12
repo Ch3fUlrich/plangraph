@@ -13,6 +13,7 @@ TABLES = ('host_samples_raw', 'host_samples_1m', 'host_samples_1h', 'host_sample
 PREFIX = 'pgh1_'
 METRICS = ('cpu_pct', 'mem_available_bytes', 'swap_in_bytes_s', 'disk_free_bytes')
 GPU_METRICS = ('util_pct', 'mem_free_bytes', 'mem_total_bytes')
+RANGE_ROW_CAP = 10000
 
 
 @dataclass(frozen=True)
@@ -209,11 +210,12 @@ class HostSamplesMixin:
         cap = {'raw': 86400, '1m': 30 * 86400}.get(resolution)
         if cap is not None and end - start > cap:
             invalid()
+        row_cap = RANGE_ROW_CAP
         rows = self.conn.execute(f'SELECT * FROM host_samples_{resolution} WHERE host_id=? '
-                                 'AND received_at>=? AND received_at<? ORDER BY received_at,seq LIMIT 10000',
-                                 (host_id, start, end)).fetchall()
-        result = [self._host_row(row) for row in rows]
-        return dict(rows=result, truncated=True) if len(result) == 10000 else result
+                                 'AND received_at>=? AND received_at<? ORDER BY received_at,seq LIMIT ?',
+                                 (host_id, start, end, row_cap + 1)).fetchall()
+        result = [self._host_row(row) for row in rows[:row_cap]]
+        return dict(rows=result, truncated=True) if len(rows) > row_cap else result
 
     def maintain_host_samples(self):
         self._host_pg()
