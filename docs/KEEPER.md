@@ -17,7 +17,7 @@ Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12
 | `evidence.py` | pluggable verifiers (below) |
 | `importer.py` | YAML dir → router-attributed batch; `export_yaml(conn, dir)` for round trip |
 | `api.py` | HTTP JSON server around `Store` |
-| `cli.py` (`python -m plangraph.keeper.cli` / entry `pg`) | thin client of the API; also `admin` subcommands run locally on the keeper host; `oversight-check` and `oversight-audit --out-dir DIR --cursor FILE --router-log FILE` live in `cli_oversight.py` |
+| `cli.py` (`python -m plangraph.keeper.cli` / entry `pg`) | thin client of the API; `cli_admin` and oversight's `db` import are lazy, so remote `whoami` works without POSIX `fcntl` on Windows; local DB commands still require the keeper host; `oversight-check` and `oversight-audit --out-dir DIR --cursor FILE --router-log FILE` live in `cli_oversight.py` |
 | `mcp.py` | stdio MCP server (hand-written JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`; no SDK), same verbs, calls the API |
 
 Critical-path stall alerts notify owners and routing without mutating keeper state; see [configuration and delivery semantics](keeper/crit-path-stall.md).
@@ -176,7 +176,7 @@ Allowed edges only: open→claimed, claimed→open, claimed→in_review, in_revi
 Reads (any authenticated principal): `ready(project=None, n=10)` (text `views.brief`), `show(key)` (compact: fields, deps with states, unblocks,
 evidence, lease; ≤ ~300 tokens), `blocked(project)`, `waves()`, `critical_path(project)`, `percent(project)`, `alerts(project)` (lease expiring < 15 min,
 overdue reviews, audit_findings, stall = no ready + nothing in flight + goal unreached, refusals ≥2 on a key), `digest()` (router: per-project counts, stalled, last
-10 DONE with evidence kinds), `snapshot()` (SPEC snapshot JSON; `head` = last event hash), `whoami()`.
+10 DONE with evidence kinds), `snapshot()` (SPEC snapshot JSON; `head` = last event hash; persisted fleet: see docs/fleet-snapshot.md), `whoami()`.
 
 ## Evidence verifiers (`evidence.py`)
 `Result(ok: bool, detail: str, ref: dict)`; registry `VERIFIERS: dict[str, Verifier]`; `Verifier.verify(item, ref, ctx) -> Result`; ctx holds
@@ -275,7 +275,7 @@ Origin-main `decision_ref` closes need no batch file; see [decision-close proof,
 `Authorization: Bearer <token>` (health is open). Errors: `{"error": code, "msg": …}` with 4xx. Compact text responses where the verb is
 meant for agents (`ready`, `show`, `alerts`) via `?fmt=text` (default text for CLI). The server also runs the reaper every 60 s and rewrites
 `plan.snapshot.json` (path from config) after every committed write. Config file (JSON, mode 600 checked): db path, snapshot path, repos
-{project: path}, runs_dir, decisions_file, ci per project (plus `forgejo_url` + `forgejo_token_file`
+{project: path} or {project: {path, ref, non_pr: true}}: router-owned `non_pr` opts into merge-commit-on-target-ref proof instead of a hosted PR association (for non-PR repositories); direct pushes remain refused, green CI is required (`ci: none` cannot use this proof), and principal, trailer, time and floor guards remain. Also runs_dir, decisions_file, ci per project (plus `forgejo_url` + `forgejo_token_file`
 for `forgejo:` values), bind, lease defaults. No config value that is a secret is ever printed.
 
 ## CLI `pg`
@@ -591,7 +591,7 @@ The keeper writes no backups itself; operators leave ad-hoc copies (`backup-pre-
 - Policy: keep the newest `--keep` files by mtime, plus the newest file of each of the last `--daily-days` UTC calendar days; delete the rest. Files with a future mtime are kept.
 - **Dry run is the default**: it lists what would go, bytes freed and `du before` / `du after (projected)`, and deletes nothing. Only `--apply` unlinks. Exit 0 ok, 2 bad arguments or directory (`/`, empty, missing), 1 if any delete failed.
 - Never touched, whatever the name: `keeper.db`, `keeper.json` (and `keeper.json.*`), `*.token`, `*-wal`, `*-shm`, `*.lock`, `*.pid`, `*.alive`, `*.log`, `plan.snapshot*`, `md-sync*`, symlinks, sub-directories (not entered; no recursion) and any name outside the explicit allow-list in `backup_retention.py`.
-- Opt-in keeper hook (default off), in `keeper.json`: `"backup_prune": {"enabled": false, "dir": "<path>", "keep": 10, "daily_days": 7, "interval_s": 21600}`. When `enabled`, the daemon prunes (apply) once after startup and then every `interval_s` on a daemon thread that stops on shutdown; errors go to stderr and never stop the keeper. `enabled` without `dir` is a config error.
+- Opt-in keeper hook (default off), in `keeper.json`: `"backup_prune": {"enabled": false, "dir": "<path>", "keep": 10, "daily_days": 7, "interval_s": 21600}`. When `enabled`, the daemon prunes (apply) once after startup and then every `interval_s` on a daemon thread that stops on shutdown; errors go to stderr and never stop the keeper. `enabled` without `dir` is a config error. If startup fails before the shutdown thread exists, `daemon.run()` independently attempts to stop the reaper and close the socket under `suppress(Exception)`, preserving the original startup error even if cleanup raises.
 - Alternative to the hook: run `pg admin prune-backups --dir DIR --apply` from a Semaphore playbook or cron job.
 
 ## Placement rules migration-gates

@@ -60,6 +60,8 @@ def run(cfg, *, host=None, port=None, ready=None):
     """Start the server and block until a signal; returns 0 on clean shutdown."""
     lock = kdb.lock_keeper(cfg.db, **cfg.db_options)
     conn = kdb.open_db(cfg.db, **cfg.db_options)
+    server = None
+    cleanup_started = False
     try:
         store = Store(conn, ctx=config_mod.verifier_context(cfg),
                       batch_roots=cfg.batch_roots)
@@ -130,6 +132,7 @@ def run(cfg, *, host=None, port=None, ready=None):
             cleaner = threading.Thread(
                 target=_cleanup, daemon=True, name="keeper-shutdown")
             cleaner.start()
+            cleanup_started = True
             cleaner.join(timeout=SHUTDOWN_TIMEOUT)
             if getattr(server, "fatal_reason", None):
                 if cleaner.is_alive():
@@ -139,6 +142,11 @@ def run(cfg, *, host=None, port=None, ready=None):
                 os._exit(0)
             return 0
     finally:
+        if server is not None and not cleanup_started:
+            with suppress(Exception):
+                server.stop_reaper()
+            with suppress(Exception):
+                server.server_close()
         with suppress(Exception):
             conn.close()
         with suppress(Exception):

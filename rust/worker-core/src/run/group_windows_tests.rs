@@ -193,8 +193,7 @@ fn pipes_exit_and_assignment() {
         ("injob", "injob=1"),
         ("exit3", ""),
     ] {
-        // A completed payload does not synchronously release the holder's Job
-        // handle. Each independent case needs its own run identity.
+        // Holder release is asynchronous: independent cases need distinct identities.
         let unit = format!("pg-win-pipes-{}-{mode}", std::process::id());
         let (mut g, _dir) = launch(&unit, mode, false, true).unwrap();
         if mode == "injob" {
@@ -260,8 +259,7 @@ fn owner_process() {
     let expiry = std::env::var("PG_OWNER_EXPIRY").unwrap() == "1";
     let unit = std::env::var("PG_OWNER_UNIT").unwrap();
     let (mut g, _dir) = launch_bounded(&unit, "sleep", false, true, Some(if expiry { 1 } else { 10 })).unwrap();
-    // libtest writes startup output. Killing its pipe reader before startup
-    // completes makes the payload panic on Windows (broken pipe), not leave a Job.
+    // Drain startup output before killing its reader to avoid broken-pipe exit.
     let mut output = std::io::BufReader::new(g.child.stdout.take().unwrap());
     let (tx, rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
@@ -303,7 +301,11 @@ fn adopter_process() {
         thread::sleep(Duration::from_secs(30));
         return;
     }
-    thread::sleep(Duration::from_secs(11));
+    // Parent releases observation after the old adoption window elapsed.
+    let path = std::env::var("PG_ADOPT_OBSERVE").unwrap();
+    std::fs::write(path, "ready").unwrap();
+    let mut input = String::new();
+    std::io::stdin().read_to_string(&mut input).unwrap();
     assert!(!job.is_gone().unwrap());
     job.terminate().unwrap();
 }
@@ -312,7 +314,6 @@ fn adopter_process() {
 #[rustfmt::skip]
 fn killed_owner_adopted_by_fresh_process() {
     let dir = tempfile::tempdir().unwrap();
-    // Helpers must share this invocation's identity, never a previous run's Job.
     let unit = format!("pg-win-restart-{}", std::process::id());
     let path = dir.path().join("owner");
     let mut owner = Command::new(std::env::current_exe().unwrap())
@@ -350,9 +351,17 @@ fn killed_owner_adopted_by_fresh_process() {
         .args(["--exact", "run::group_windows_tests::adopter_process", "--nocapture"])
         .env("PG_ADOPT_TICKET", ticket)
         .env("PG_OWNER_UNIT", &unit)
+        .env("PG_ADOPT_OBSERVE", dir.path().join("observing"))
+        .stdin(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    until(|| dir.path().join("observing").exists());
+    thread::sleep(Duration::from_secs(11));
+    assert!(final_adopter.try_wait().unwrap().is_none());
+    assert!(!gone(pid));
+    assert_member(&unit, &std::fs::read_to_string(dir.path().join("owner")).unwrap());
+    drop(final_adopter.stdin.take());
+    let deadline = Instant::now() + Duration::from_secs(30);
     until_deadline(deadline, || final_adopter.try_wait().unwrap().map(|s| { assert!(s.success()); true }).unwrap_or(false));
     until(|| gone(pid));
 }
@@ -386,12 +395,6 @@ fn assert_member(unit: &str, ticket: &str) {
     let (pid, start) = ticket.split_once(' ').unwrap();
     assert!(NativeJob::open(&job_name(unit)).unwrap().unwrap().member(pid.parse().unwrap(), start.parse().unwrap()).unwrap());
 }
-fn until_deadline(deadline: Instant, mut predicate: impl FnMut() -> bool) {
-    loop {
-        assert!(Instant::now() < deadline);
-        if predicate() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-}
+#[path = "group_windows_wait_tests.rs"]
+mod wait;
+use wait::until_deadline;

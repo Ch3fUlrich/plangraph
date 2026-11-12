@@ -1,8 +1,5 @@
-"""tools/hooks/pre-push: the scrub gate refuses pushes whose changed files leak.
-
-The hook reuses scrub_check's rules and output contract (path:line: rule, never a
-matched value), so these tests only drive it as git would: ref lines on stdin,
-exit code 0/1, output free of the planted strings.
+"""Drive tools/hooks/pre-push as Git would: ref lines on stdin, exit code 0/1.
+Pin scrub_check's path:line:rule contract without exposing planted values.
 """
 import os
 import hashlib
@@ -17,6 +14,24 @@ ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "tools" / "hooks" / "pre-push"
 WORKFLOWS = ROOT / ".github" / "workflows" / "tests.yml"
 ZERO = "0" * 40
+
+
+def test_timeout_is_labelled(monkeypatch, capsys):
+    import runpy
+    hook = runpy.run_path(str(HOOK))
+
+    def timeout():
+        raise subprocess.TimeoutExpired("synthetic", 30)
+
+    monkeypatch.setitem(hook["main"].__globals__, "push_main", timeout)
+    assert hook["main"]() == 1
+    assert capsys.readouterr().err == "pre-push: subprocess timeout: push refused\n"
+
+
+def test_delete_only_push_refused_before_scans(tmp_path):
+    result = run_hook(tmp_path, [f"(delete) {ZERO} refs/heads/old {'1' * 40}"])
+    assert result.returncode == 1
+    assert result.stderr == "pre-push: refused delete of refs/heads/old\n"
 
 
 def fake_ip():
@@ -82,12 +97,19 @@ def run_hook(repo, lines, env_extra=None):
     env["HOME"] = str(Path(repo).parent / "home")
     env.pop("PLANGRAPH_SCRUB_WORDS", None)
     env.pop("PLANGRAPH_SCRUB_RULES", None)
+    env["PREFLIGHT_SKIP"] = "1"  # Scrub/changelog fixtures, not preflight.
     env.update(env_extra or {})
     stdin = "".join(l + "\n" for l in lines)
     command = [sys.executable, str(HOOK), "origin", "https://example.invalid/r.git"]
-    return subprocess.run(command,
+    result = subprocess.run(command,
                           cwd=str(repo), input=stdin, capture_output=True, text=True,
                           env=env, timeout=120)
+    if result.returncode == 0:
+        notice = "pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)"
+        assert result.stderr.splitlines().count(notice) == 1
+    else:
+        assert "tools/preflight.py missing" not in result.stderr
+    return result
 
 
 @pytest.fixture

@@ -14,6 +14,8 @@ pub(super) fn validate_fields(value: &serde_json::Value) -> Result<(), HostsErro
                 "class",
                 "aliases",
                 "transport",
+                "ssh_target",
+                "env",
                 "os",
                 "state_dir",
                 "caps",
@@ -32,6 +34,8 @@ pub(super) fn validate_fields(value: &serde_json::Value) -> Result<(), HostsErro
             "warmup" => &["warmup_s", "ramp_mb"],
             "repo" => &[
                 "root",
+                "live_dir",
+                "health_checks",
                 "worktrees_root",
                 "remote",
                 "python",

@@ -35,7 +35,7 @@ BASE_RULES = ("manifest.toml", "scrub_ci.toml")
 
 
 def git(*args):
-    return subprocess.run(["git", "--no-replace-objects", *args], capture_output=True)
+    return subprocess.run(["git", "--no-replace-objects", *args], capture_output=True, timeout=30)
 
 
 def is_zero(oid):
@@ -119,7 +119,7 @@ def scan_blob(rel, local_sha, cfg, find_shapes, hits, baselines=()):
 
 def file_size_gate():
     """tools/check_file_size.py on the pushing checkout: 0 clean, 1 refuse."""
-    r = subprocess.run([sys.executable, str(FILE_SIZE)], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(FILE_SIZE)], capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         sys.stderr.write(r.stdout + r.stderr)
         print("pre-push: file-size gate failed: push refused (split the file, "
@@ -136,6 +136,7 @@ def changelog_docs_warn(base, head):
         [sys.executable, str(CHANGELOG_DOCS), "--base", base, "--head", head, "--warn-only"],
         capture_output=True,
         text=True,
+        timeout=60,
     )
     if r.stdout:
         sys.stderr.write(r.stdout)
@@ -144,7 +145,17 @@ def changelog_docs_warn(base, head):
 
 
 def main():
+    try:
+        return push_main()
+    except subprocess.TimeoutExpired:
+        print("pre-push: subprocess timeout: push refused", file=sys.stderr)
+        return 1
+
+
+def push_main():
     refs = [rec.split(maxsplit=3) for rec in sys.stdin.read().splitlines()]
+    if not refs:
+        return 0
     for rec in refs:
         if (len(rec) != 4 or
                 not all(re.fullmatch(r"[0-9a-fA-F]+", rec[i]) for i in (1, 3)) or
@@ -174,6 +185,9 @@ def main():
             print(f"pre-push: refused non-fast-forward update of {remote_ref}",
                   file=sys.stderr)
             return 1
+    refs = [rec for rec in refs if not is_zero(rec[1])]
+    if not refs:
+        return 0
     if file_size_gate():
         return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
@@ -229,6 +243,24 @@ def main():
         sc.report(hits, words=cfg["_words"])
         print(f"pre-push: {len(hits)} scrub hit(s): push refused "
               "(rule ids above; matched values are never shown)", file=sys.stderr)
+        return 1
+    root = Path(git_out("rev-parse", "--show-toplevel"))
+    preflight = root / "tools/preflight.py"
+    if os.environ.get("PREFLIGHT_SKIP") != "1" and preflight.is_file():
+        for _, local_sha, _, remote_sha in refs:
+            command = [sys.executable, str(preflight),
+                       "--base", base_commit(remote_sha, local_sha), "--head", local_sha]
+            if os.environ.get("PREFLIGHT_FAST") == "1":
+                command.append("--fast")
+            # Per-check deadlines govern, including the possible INFRA retry.
+            result = subprocess.run(command)
+            if result.returncode:
+                return result.returncode
+    elif os.environ.get("PREFLIGHT_SKIP") == "1":
+        print("pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)",
+              file=sys.stderr)
+    elif any(rec[2] == "refs/heads/main" for rec in refs):
+        print("pre-push: tools/preflight.py missing: push refused", file=sys.stderr)
         return 1
     return 0
 

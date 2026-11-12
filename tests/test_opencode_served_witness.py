@@ -45,7 +45,7 @@ def _run_leg(tmp_path, monkeypatch, seed, role='review', exit_code=0, extra_env=
         if data_home.exists():
             ctx['mode'] = data_home.stat().st_mode & 0o777
         seed(argv[argv.index('--title') + 1], data_home)
-        async def communicate():
+        async def communicate(input=None):
             return b'ok', b''
         return SimpleNamespace(pid=FAKE_PID, returncode=exit_code, communicate=communicate)
 
@@ -490,7 +490,7 @@ def test_locked_store_read_does_not_stall_the_monitor_loop(tmp_path, monkeypatch
         locker.execute('BEGIN EXCLUSIVE')  # hold the store locked across the read
         lockers.append(locker)
 
-        async def communicate():
+        async def communicate(input=None):
             return b'ok', b''
         return SimpleNamespace(pid=FAKE_PID, returncode=0, communicate=communicate)
 

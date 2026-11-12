@@ -49,6 +49,23 @@ class RepoFixture(unittest.TestCase):
         return subprocess.run(["git"] + list(args), cwd=str(self.repo),
                               capture_output=True, text=True)
 
+    def test_head_batches_binary_and_non_utf8_blobs(self):
+        import importlib.util
+        from unittest.mock import patch
+        spec = importlib.util.spec_from_file_location("file_size", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        (self.repo / "binary.bin").write_bytes(b"\xff\0\n")
+        (self.repo / "text.txt").write_bytes(b"\xff\nlast")
+        self.git("add", ".")
+        self.assertEqual(self.git("commit", "-qm", "fixture").returncode, 0)
+        original = subprocess.run
+        with patch.object(module.subprocess, "run", wraps=original) as run:
+            self.assertEqual(module.measure(self.repo, set(), "HEAD"),
+                             ({"text.txt": 2}, 1))
+        self.assertEqual(len(run.call_args_list), 2)
+        self.assertIn("--batch", run.call_args_list[-1].args[0])
+
     def write(self, rel, text):
         path = self.repo / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -88,6 +105,30 @@ class RepoFixture(unittest.TestCase):
         out = run.stdout + run.stderr
         self.assertEqual(run.returncode, 1, "expected refusal, got %d:\n%s" % (run.returncode, out))
         self.assertIn(needle, out, "the refusal never named it:\n" + out)
+
+
+def test_malformed_batch_header_refuses(tmp_path):
+    code = '''
+import runpy
+import subprocess
+import sys
+from unittest.mock import patch
+original = subprocess.run
+def run(argv, **kwargs):
+    if "ls-tree" in argv:
+        return subprocess.CompletedProcess(argv, 0, b"100644 blob abc\\ttext.txt\\0")
+    if "--batch" in argv:
+        return subprocess.CompletedProcess(argv, 0, b"abc missing\\n")
+    return original(argv, **kwargs)
+sys.argv = [sys.argv[1], "--head", "HEAD"]
+with patch.object(subprocess, "run", run):
+    runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+    result = subprocess.run([sys.executable, "-c", code, str(SCRIPT)],
+                            cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr == "check-file-size: malformed git cat-file --batch header\n"
 
 
 class RequiredBaseTests(RepoFixture):

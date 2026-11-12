@@ -1,5 +1,6 @@
 """Bounded commit-task liveness checks, shared by dispatch, CLI and MCP."""
 import asyncio
+import json
 import math
 import os
 import shutil
@@ -31,6 +32,60 @@ GIT_REDIRECT_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE',
 #: expressed as removals -- ``build_child_env`` drops a key whose extra_env
 #: value is None. Every harness child inherits this (D-3465).
 CHILD_ISOLATION = {**GIT_ISOLATION, **dict.fromkeys(GIT_REDIRECT_VARS)}
+LIVE_RUN_WRITE_WINDOW_S = 120
+
+
+def _run_logs(runner):
+    """Read stable running records/log identities only from the owning service."""
+    root = getattr(runner, 'state', None)
+    snapshots = {}
+    if root is None:
+        return snapshots
+    try:
+        paths = list((Path(root) / 'runs').glob('run-*/record.json'))
+    except OSError:
+        return snapshots
+    for path in paths:
+        try:
+            text = path.read_text(encoding='utf-8')
+            record = json.loads(text)
+            if record.get('status') != 'running':
+                continue
+            with path.with_name('live.log').open('rb') as stream:
+                log = os.fstat(stream.fileno())
+            if log != path.with_name('live.log').stat() or text != path.read_text(encoding='utf-8'):
+                continue  # replaced/removed log or concurrent record save: no serving claim
+            snapshots[path] = record, log
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return snapshots
+
+
+def _leg_serving(runner, leg, previous=None):
+    """Observe size growth across the probe; touching an old log is not growth."""
+    now = time.time()
+    for path, (record, log) in _run_logs(runner).items():
+        try:
+            current = record.get('chosen_leg') or record.get('leg')
+            if not current:
+                tried = {a['leg']['id'] if isinstance(a.get('leg'), dict) else a.get('leg')
+                         for a in record.get('attempts', ())}
+                current = next((l for l in record.get('plan', {}).get('legs', ()) if l['id'] not in tried), {})
+            matches = (current.get('model') == leg.model and current.get('harness') == leg.harness
+                       if isinstance(current, dict) else current == getattr(leg, 'id', None))
+            last_growth = log.st_mtime  # first observation of an append log
+            if previous is not None and path in previous:
+                old_record, old = previous[path]
+                if (log.st_dev, log.st_ino) != (old.st_dev, old.st_ino) or log.st_size < old.st_size:
+                    continue
+                last_growth = log.st_mtime if log.st_size > old.st_size else old.st_mtime
+                if log.st_size == old.st_size and record != old_record:
+                    continue
+            if matches and log.st_size > 0 and 0 <= now - last_growth <= LIVE_RUN_WRITE_WINDOW_S:
+                return True
+        except (TypeError, KeyError, AttributeError):
+            continue
+    return False
 
 
 def probe_env(base=None):
@@ -153,8 +208,10 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
                     reason='host-not-ready: harness missing: ' + leg.harness,
                     infra=True, seconds=time.monotonic() - start)
     deadline = start + timeout
+    previous = await asyncio.to_thread(_run_logs, runner)
     root = tempfile.mkdtemp(prefix='plangraph-leg-probe-')
     job = None
+    stderr = ''
     spawn_task = None
     owned_ids = set()
 
@@ -193,8 +250,9 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
                 job = await asyncio.wait_for(asyncio.shield(spawn_task), max(deadline - time.monotonic(), 0))
             except asyncio.TimeoutError:
                 ok, reason = False, 'timeout'
-            except (ValueError, RuntimeError, OSError):
+            except (ValueError, RuntimeError, OSError) as exc:
                 ok, reason = False, 'exit 1'
+                stderr = getattr(exc, 'stderr', '') or ''
         if ok is None:
             try:
                 await _await_completion(runner, job, deadline)
@@ -215,12 +273,27 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
         if leaked:
             # Report the leak; NEVER auto-reset the caller's repo here.
             ok, reason, infra = False, 'probe leaked into caller repo', False
+        excerpt, serving = '', False
+        if not ok and not infra:
+            from .env_redact import redact, redact_env_values
+            diagnostic = job or next((j for jid, j in getattr(runner, 'jobs', {}).items() if jid in owned_ids), None)
+            stderr = getattr(diagnostic, 'stderr', '') or stderr
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode('utf-8', 'replace')
+            env = dict(os.environ)
+            env.update(getattr(runner, '_child_envs', {}).get(getattr(diagnostic, 'job_id', None), {}))
+            excerpt = ' '.join(leg_state._redact(redact(redact_env_values(stderr, env)), limit=None)[-400:].splitlines())
+            serving = await asyncio.to_thread(_leg_serving, runner, leg, previous)
         if not infra:
             if ok:
                 state.record_probe_pass(key(leg), caller='leg-probe')
             else:
-                state.record_probe_fail(key(leg), reason, caller='leg-probe')
-        return dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start)
+                state.record_probe_fail(key(leg), reason, caller='leg-probe', serving=serving, stderr_excerpt=excerpt)
+        reason += ': ' + excerpt if excerpt else ''
+        result = dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start, stderr_excerpt=excerpt)
+        if serving:
+            result['state'] = 'probe_failed_leg_serving'
+        return result
     finally:
         from .probe_cleanup import cleanup
         cleanup_task = asyncio.create_task(cleanup(runner, spawn_task, job, root, owned_ids))
@@ -237,11 +310,22 @@ _INFLIGHT = {}
 
 
 async def before_launch(runner, leg, role, dry_run):
+    from .target import quota_paused
+    root = (getattr(runner, 'state', None) or getattr(runner, '_state', None)
+            or getattr(runner, 'state_root', None))
+    # Refuse before resolving a store that may create state or raise.
+    if quota_paused(root, role, leg):
+        return 'quota pause'
     if dry_run:
         return None
     state = _store_for(runner)
     adapter = state if getattr(state, 'enabled', False) else None
     state = adapter.store if adapter else state
+    root = root or getattr(state, 'state_root', None)
+    if not root and (path := getattr(state, 'path', None)):
+        root = Path(path).parent
+    if quota_paused(root, role, leg):
+        return 'quota pause'
 
     def admission():
         if adapter:
@@ -272,20 +356,22 @@ async def before_launch(runner, leg, role, dry_run):
     result = await asyncio.shield(pending)
     if result.get('state') == 'host-not-ready':
         return result['reason']
-    return admission() if result['ok'] or result.get('infra') else 'down: ' + result['reason']
+    return admission() if result['ok'] or result.get('infra') or result.get('state') == 'probe_failed_leg_serving' else 'down: ' + result['reason']
 
 
 async def probe_many(runner, legs=(), all_writers=False, timeout=None):
-    from plangraph.planner.legs import DEFAULT_LEGS, leg_active
+    from plangraph.planner.legs import DEFAULT_LEGS, leg_active, spawnable_legs
+    SPAWNABLE_LEGS = spawnable_legs()
     ids = {legs} if isinstance(legs, str) else set(legs or ())
     if not (ids or all_writers):
         raise ValueError('select --leg ID or --all-writers')
-    unknown = ids - {leg.id for leg in DEFAULT_LEGS}
+    unknown = ids - {leg.id for leg in SPAWNABLE_LEGS}
     if unknown:
         raise ValueError('unknown legs: ' + ', '.join(sorted(unknown)))
-    selected = [leg for leg in DEFAULT_LEGS if leg_active(leg) and
-                (leg.id in ids or
-                 (all_writers and any(role in leg.roles for role in ('implement', 'fix'))))]
+    # --all-writers means the routed writers; an explicit leg is probed only by name.
+    selected = [leg for leg in SPAWNABLE_LEGS if leg_active(leg) and
+                (leg.id in ids or (all_writers and leg in DEFAULT_LEGS and
+                                   any(role in leg.roles for role in ('implement', 'fix'))))]
     results = []
     state = _store_for(runner)
     state = state.store if getattr(state, 'enabled', False) else state

@@ -86,10 +86,13 @@ def build(request: dict) -> dict:
     from .prompt_guard import admit_prompt
     if request['role'] == 'implement':
         admit_prompt(request['prompt'], lambda reason: LaunchRefused('refused', reason))
-    leg = next((leg for leg in DEFAULT_LEGS if leg.id == request['leg']['id']), None)
+    from plangraph.planner.legs import EXPLICIT_LEGS   # this module's DEFAULT_LEGS stays patchable
+    leg = next((leg for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS) if leg.id == request['leg']['id']), None)
     if leg is None:
         raise LaunchRefused('unknown_leg', 'unknown leg id')
-    from .target import admit_leg
+    from .target import admit_leg, quota_paused
+    if quota_paused(request['state'], request['role'], leg):
+        raise LaunchRefused('quota_pause', 'quota pause')
     from plangraph.routing_errors import SpawnRefused
     try:
         admit_leg(leg)

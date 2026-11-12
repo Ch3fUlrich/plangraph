@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any
+
 from plangraph.routing_support.claude_seat import claude_access_args
+from plangraph.routing_support.review_mode import is_prompt_only_command, leg_tool_mode, prompt_only_command, review_prompt
 
 #: Environment variable naming the model gateway base URL (see ``gateway_url``).
 GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
@@ -244,26 +247,12 @@ def build_child_env(
 
 
 def build_routing_envelope_headers(
-    role: str = "implement",
-    risk: str = "normal",
-    min_intelligence: float | int = 44.0,
-    required_context: int = 32000,
-    exclude_families: Sequence[str] | str = (),
-    effort: str = "medium",
-    author_model: str | None = None,
-    nonce: str | None = None,
+    role: str = "implement", risk: str = "normal",
+    min_intelligence: float | int = 44.0, required_context: int = 32000,
+    exclude_families: Sequence[str] | str = (), effort: str = "medium",
+    author_model: str | None = None, nonce: str | None = None,
 ) -> dict[str, str]:
-    """Build structured routing envelope headers for OmniRoute ACP/Gateway.
-
-    Headers:
-      - X-OmniRoute-Task-Role: 'implement' | 'review' | 'orchestrate' | 'drive'
-      - X-OmniRoute-Risk: 'low' | 'normal' | 'high' | 'critical'
-      - X-OmniRoute-Min-Intelligence: str(min_intelligence)
-      - X-OmniRoute-Required-Context: str(required_context)
-      - X-OmniRoute-Exclude-Family: ','.join(exclude_families) (when non-empty)
-      - X-OmniRoute-Effort: effort ('low' | 'medium' | 'high' | 'xhigh')
-      - X-OmniRoute-Author-Model: author_model (when set)
-    """
+    """Build structured routing envelope headers for OmniRoute ACP/Gateway."""
     headers: dict[str, str] = {
         "X-OmniRoute-Task-Role": str(role),
         "X-OmniRoute-Risk": str(risk),
@@ -290,11 +279,8 @@ def build_routing_envelope_headers(
 
 
 def build_opencode_command(
-    prompt: str,
-    model_or_combo: str,
-    serve_port: int | None = None,
-    headers: Mapping[str, str] | None = None,
-    extra_flags: Sequence[str] = (),
+    prompt: str, model_or_combo: str, serve_port: int | None = None,
+    headers: Mapping[str, str] | None = None, extra_flags: Sequence[str] = (), tool_mode: str = "tools",
 ) -> list[str]:
     """Build opencode command for execution via OmniRoute ACP/Gateway."""
     # --standalone: the shared background service ignores the child's config overlay
@@ -303,7 +289,7 @@ def build_opencode_command(
         cmd.extend(["--port", str(serve_port)])
     if extra_flags:
         cmd.extend(extra_flags)
-    return cmd
+    return prompt_only_command(cmd) if tool_mode == "prompt-only" else cmd
 
 
 def detect_client_for_model(model_id: str) -> str:
@@ -325,17 +311,15 @@ def detect_client_for_model(model_id: str) -> str:
 
 
 def build_standalone_fallback_command(
-    client_name: str,
-    prompt: str,
-    model: str | None = None,
-    role: str = "implement",
+    client_name: str, prompt: str, model: str | None = None,
+    role: str = "implement", tool_mode: str = "tools",
 ) -> list[str]:
     """Build direct CLI command as offline emergency fallback when gateway is offline."""
     cname = client_name.lower()
     if cname == "agy":
         cmd = ["agy", "--dangerously-skip-permissions"]
         if model:
-            cmd.extend(["--model", model])
+            cmd.extend(["--model", {"gemini-3.8-flash": "gemini-3.8-flash-high"}.get(model, model)])
         cmd.extend(["-p", prompt])
         return cmd
     if cname in ("qoder", "qodercli"):
@@ -347,13 +331,33 @@ def build_standalone_fallback_command(
         return ["codex", "exec", *(["--model", model] if model else []), prompt]
     if cname in ("claude", "gemini", "qwen"):   # D-3605: claude takes its prompt on stdin, plan mode
         cmd = [cname, "-p", *([] if cname == "claude" else [prompt]), *(["--model", model] if model else [])]
-        return cmd + (["--output-format", "stream-json", "--verbose", *claude_access_args(role)] if cname == "claude" else [])
+        return cmd + (["--output-format", "stream-json", "--verbose", *claude_access_args(role, tool_mode)] if cname == "claude" else [])
     # Legacy callers may pass a gateway name. Explicit harnesses are validated
     # by build_command, while this offline helper retains its OpenCode default.
     cmd = ["opencode", "run", "--standalone"]
     if model:
         cmd.extend(["--model", model])
-    return cmd
+    return prompt_only_command(cmd) if role == "review" and tool_mode == "prompt-only" else cmd
+
+
+WINDOWS_ARGV_LIMIT, WINDOWS_BATCH_ARGV_LIMIT = 32000, 8000
+
+
+def launch_stdin_payload(cmd, prompt, exe, *, is_nt=False):
+    """Move oversized native prompts off Windows argv; never use a prompt file."""
+    import subprocess
+    limit = WINDOWS_BATCH_ARGV_LIMIT if exe.lower().endswith(('.cmd', '.bat')) else WINDOWS_ARGV_LIMIT
+    if (is_nt and cmd[0] in ('qodercli', 'agy')
+            and len(subprocess.list2cmdline([exe, *cmd[1:]])) > limit):
+        if '-p' not in cmd or cmd.index('-p') + 1 >= len(cmd) or cmd[cmd.index('-p') + 1].startswith('--'):
+            raise RuntimeError('stdin_prompt_flag_missing: expected -p with a prompt value')
+        cmd[cmd.index('-p') + 1] = ''
+        if cmd[0] == 'agy':
+            cmd.extend(['--input-format', 'stream-json', '--output-format', 'stream-json'])
+            return (json.dumps({'event': 'user', 'message': {'role': 'user', 'content': prompt}}, ensure_ascii=False) + '\n').encode('utf-8')
+        cmd.extend(['--input-format', 'text'])
+        return prompt.encode('utf-8')
+    return prompt.encode('utf-8') if cmd[0] in STDIN_PROMPT_HARNESSES or is_prompt_only_command(cmd) else None
 
 
 def build_command(
@@ -367,34 +371,30 @@ def build_command(
     headers: Mapping[str, str] | None = None,
     serve_port: int | None = None,
     extra_flags: Sequence[str] = (),
+    tool_mode: str | None = None,
 ) -> list[str]:
-    """Build executable command for an agent task.
-
-    An explicit registered harness is authoritative. Calls without a harness
-    retain the legacy gateway-first transport policy.
-    """
+    """Explicit harness is authoritative; else gateway-first. Unknown pairs use tools."""
     from plangraph.mimo_policy import check_mimo_path
+    tool_mode = tool_mode if tool_mode is not None else leg_tool_mode(client, model_or_combo)
+    prompt = review_prompt(prompt, tool_mode, client) if role == "review" else prompt
     check_mimo_path(model_or_combo)
     if client is not None:
         if client not in (*CLIENTS, "qodercli"):
             raise ValueError(f"unknown harness: {client}")
         if client != "opencode":
-            return build_standalone_fallback_command(client, prompt, model_or_combo, role=role)
+            return build_standalone_fallback_command(client, prompt, model_or_combo, role=role, tool_mode=tool_mode)
     # 1. Gateway route (first priority)
     if gateway and gateway_online:
         return build_opencode_command(
-            prompt=prompt,
-            model_or_combo=model_or_combo,
-            serve_port=serve_port,
-            headers=headers,
+            prompt=prompt, model_or_combo=model_or_combo,
+            serve_port=serve_port, headers=headers,
             extra_flags=extra_flags,
+            tool_mode=tool_mode if role == "review" else "tools",
         )
 
     # 2. Offline emergency fallback
     resolved_client = client or detect_client_for_model(model_or_combo)
     return build_standalone_fallback_command(
-        client_name=resolved_client,
-        prompt=prompt,
-        model=model_or_combo,
-        role=role,
+        client_name=resolved_client, prompt=prompt, model=model_or_combo, role=role,
+        tool_mode=tool_mode,
     )

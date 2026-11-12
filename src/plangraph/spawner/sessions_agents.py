@@ -88,6 +88,7 @@ class _AgentsMixin:
     def _build_argv(self, name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg):
         head = self._claude_head()
         tail = ["--strict-mcp-config", "--mcp-config", str(mcp_path),
+                "--settings", '{"enabledPlugins":{"superpowers@superpowers-marketplace":false}}',
                 "--remote-control", name, "-n", name,
                 "--model", model, "--effort", effort, "--permission-mode", mode]
         if style:

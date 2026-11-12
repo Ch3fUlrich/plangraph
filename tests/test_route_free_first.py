@@ -80,7 +80,8 @@ def test_route_and_refusal(tmp_path, capsys):
     assert main(['--state', str(tmp_path), 'route', '--card', '{"estimate_tokens":1000}', '--role', 'implement', '--json']) == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.1-sol'  # D-3745
-    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates'}
+    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates', 'placement'}
+    assert plan['placement'] == {'host': None, 'reason': 'placement_not_evaluated', 'free_mb': None}
     assert main(['--state', str(tmp_path), 'spawn', 'task']) == 2
     assert 'spawn by card' in capsys.readouterr().err
 
@@ -236,4 +237,5 @@ def test_main_policy_gpt_first_and_retained_routes():
         "qodercli-qwen3.8-flash", *FREE, *SUBS, "cx-gpt-6-luna", "agy-sonnet-5.5",
         "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
         "omniroute-grok-4.7", "opencode-console-muse-spark",
-        "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek", "claude-haiku-5.5", "omniroute-gemini-3.8-flash"}
+        "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek", "claude-haiku-5.5", "omniroute-gemini-3.8-flash",
+        "agy-gpt-oss-120b"}
