@@ -134,8 +134,12 @@ def build(request: dict) -> dict:
             if event.get('event') == 'render_refused':
                 raise LaunchRefused('render_refused', event['reason'])
         cmd = job.command
-        from plangraph.routing_support.clients import launch_stdin_payload
-        payload = launch_stdin_payload(cmd, job.task_prompt, cmd[0])
+        from plangraph.routing_support.clients import PromptTransportError, launch_stdin_payload
+        try:
+            payload = launch_stdin_payload(cmd, job.task_prompt, cmd[0])
+        except PromptTransportError as exc:
+            kind, _, detail = str(exc).partition(': ')
+            raise LaunchRefused(kind, detail) from None
         env = service.runner._child_envs[job.job_id]
         argv, events = list(cmd), rec['events'] + job.events
         if not request['dry_run']:

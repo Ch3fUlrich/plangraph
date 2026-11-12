@@ -74,6 +74,36 @@ def test_every_harness_uses_stdin(harness, prompt):
         assert payload == prompt.encode()
 
 
+@pytest.mark.parametrize('exit_code', [None, 0, 1])
+@pytest.mark.parametrize('previous', [None, 'harness_limit'])
+def test_pre_exec_prompt_refusal_has_named_reason(exit_code, previous):
+    from plangraph.spawner.exit_outcome import terminal_reason
+    record = dict(status='failed', exit_code=exit_code, reason=previous,
+                  error='inline_diff_failed: prompt_too_large: request limit')
+    terminal_reason(record)
+    assert record['reason'] == 'prompt_too_large'
+
+
+@pytest.mark.parametrize('harness', ['agy', 'qodercli'])
+@pytest.mark.parametrize('tail', [[], ['-p'], ['-p', 'private task']])
+def test_runner_transport_refusal_is_named(tmp_path, monkeypatch, harness, tail):
+    from plangraph.spawner import runner as module
+    from plangraph.spawner.exit_outcome import terminal_reason
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(module, 'build_command', lambda **kw: [harness, *tail])
+    monkeypatch.setattr('plangraph.spawner.resolver.host_skip_reason_async', AsyncMock(return_value=None))
+    factory = AsyncMock()
+    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
+    monkeypatch.setattr('plangraph.planner.routing.validate_model', lambda model: model)
+    model = 'gemini-3.8-flash' if harness == 'agy' else 'fixture-qoder-model'
+    job = asyncio.run(runner.spawn('private task', model, role='review', client=harness))
+    assert job.status == 'failed'
+    record = dict(status=job.status, exit_code=job.exit_code, stderr_tail=job.stderr)
+    terminal_reason(record, job)
+    assert record['reason'] == 'stdin_prompt_flag_missing'
+    factory.assert_not_called()
+
+
 @pytest.mark.parametrize('routed', [False, True])
 def test_over_leg_limit_has_named_record_reason(tmp_path, monkeypatch, routed):
     from dataclasses import replace

@@ -148,16 +148,22 @@ pub(crate) fn spawn(
     }
     match runs.spawn(state, args, host, role.clone(), plan) {
         Err(error) => {
-            if !matches!(&error, ToolError::Refused { message, .. } if message.contains("prompt_too_large:"))
-            {
+            let named = ["prompt_too_large", "stdin_prompt_flag_missing"];
+            let reason = match &error {
+                ToolError::Refused { message, .. } => named
+                    .into_iter()
+                    .find(|name| message.contains(&format!("{name}:"))),
+                _ => None,
+            };
+            let Some(reason) = reason else {
                 return Err(error);
-            }
+            };
             // LaunchAdapter only maps exit 2 to Refused; retain that error's status.
             let error = error.into_error_data();
             save(
                 state,
                 host,
-                json!({"role":role,"reason":"prompt_too_large","error":error.message,
+                json!({"role":role,"reason":reason,"error":error.message,
                     "exit_code":error.data.as_ref().and_then(|data| data.get("exit_code"))}),
                 Status::Failed,
             )

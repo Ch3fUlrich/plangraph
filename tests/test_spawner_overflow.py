@@ -311,13 +311,24 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
     stage.mkdir()
     binary_dir = tmp_path / 'bin'
     binary_dir.mkdir()
-    (binary_dir / 'python3').symlink_to(sys.executable)
     policy = tmp_path / 'route-policy.json'
     policy.write_text('{"banned_families": [], "off_families": [], "paused_harnesses": {}}')
     env = dict(PATH=str(binary_dir), HOME=str(tmp_path), AUTOOS_ROOT=str(tmp_path),
                XDG_STATE_HOME=str(tmp_path / 'state'), PLANGRAPH_OMNIROUTE_LEG_STATE='0',
                PLANGRAPH_ROUTE_POLICY=str(policy))
     real_run = subprocess.run
+    source = o.Path(__file__).resolve().parents[1] / 'src'
+    # A source-only interpreter cannot fall back to an ambient site installation.
+    (binary_dir / 'python3').write_text(
+        f'#!{sys.executable} -S\n'
+        'import os, runpy, sys\n'
+        f'assert os.environ["PYTHONPATH"] == {str(source)!r}\n'
+        'import plangraph.spawner.overflow as module\n'
+        f'assert module.__file__ == {str(source / "plangraph/spawner/overflow.py")!r}\n'
+        'assert sys.argv[1:3] == ["-m", "plangraph.spawner.cli"]\n'
+        'sys.argv = sys.argv[2:]\n'
+        'runpy.run_module("plangraph.spawner.cli", run_name="__main__")\n')
+    (binary_dir / 'python3').chmod(0o700)
     received = []
     def run(argv, **kwargs):
         if argv[0] == 'scp':
@@ -333,7 +344,7 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
             return result
         return SimpleNamespace(returncode=0, stdout=str(stage) if argv[-1] == 'mktemp -d' else '{}')
     monkeypatch.setattr(o.subprocess, 'run', run)
-    host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src=str(o.Path(o.__file__).resolve().parents[2]))
+    host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src=str(source))
     options = ['--role', 'review', '--leg', 'agy-gemini-3.8-flash', '--writer-family', 'gpt',
                '--override-reason', 'hermetic prompt transport regression', '--dry-run', '--json']
     record = o.remote_spawn('invented', host, {'estimate_tokens': 1000}, prompt, options)

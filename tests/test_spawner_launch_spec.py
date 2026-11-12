@@ -119,18 +119,27 @@ def test_real_producer_prompt_stays_out_of_env(request_data, monkeypatch, leg_id
     from plangraph.routing_support.clients import build_child_env
     prompt = 'review payload\né\n' + 'x' * size + '\n\n'
     request_data.update(prompt=prompt, leg={'id': leg_id}, dry_run=dry_run)
-    for name in ('PROMPT', 'prompt', 'PrOmPt'):
+    carriers = ('PROMPT', 'prompt', 'PrOmPt', 'PROMPT_TEXT', 'PLANGRAPH_TASK_PROMPT', 'prompt_suffix')
+    for name in carriers:
         monkeypatch.setenv(name, prompt)
     monkeypatch.setenv('PATH', request_data['cwd'])
     # Use the real producer, not the fixture's synthetic child env. Exercise both
     # inherited and explicitly supplied legacy prompt env carriers.
     monkeypatch.setattr(spec.runner, 'build_child_env', build_child_env)
-    assert not any(name.upper() == 'PROMPT' for name in build_child_env({'PrOmPt': prompt}))
+    assert not any('PROMPT' in name.upper() for name in build_child_env(dict.fromkeys(carriers, prompt)))
     result = spec.build(request_data)
-    assert not any(name.upper() == 'PROMPT' for name in result['env'])
+    assert not any('PROMPT' in name.upper() for name in result['env'])
     assert all(prompt not in value for value in [*result['argv'], *result['env'].values()])
     payload = json.loads(result['stdin'])['message']['content'] if leg_id.startswith('agy-') else result['stdin']
     assert payload == result['prompt'] == prompt
+
+
+@pytest.mark.parametrize('harness,leg', [('agy', 'agy-gemini-3.8-flash'), ('qodercli', 'qodercli-qwen3.8-flash')])
+@pytest.mark.parametrize('tail', [[], ['-p'], ['-p', 'private task']])
+def test_transport_refusal_is_named(request_data, monkeypatch, harness, leg, tail):
+    request_data['leg'] = {'id': leg}
+    monkeypatch.setattr(spec.runner, 'build_command', lambda **kw: [harness, *tail])
+    assert invoke(request_data) == (2, '', 'stdin_prompt_flag_missing: expected -p with an empty value\n')
 
 
 def test_dry(request_data, monkeypatch):

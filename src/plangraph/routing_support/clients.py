@@ -243,7 +243,7 @@ def build_child_env(
                 env[key] = value
     for name in ("PLANGRAPH_GATEWAY_LOG_TOKEN", "PLANGRAPH_GATEWAY_LOG_TOKEN_FILE"): env.pop(name, None)  # spawner-only, after extra_env
     for name in tuple(env):  # Include Windows' case-insensitive environment spellings.
-        if name.upper() == "PROMPT": env.pop(name)  # Task content belongs on stdin.
+        if "PROMPT" in name.upper(): env.pop(name)  # Task content belongs on stdin.
 
     return env
 
@@ -345,11 +345,15 @@ def build_standalone_fallback_command(
 WINDOWS_ARGV_LIMIT, WINDOWS_BATCH_ARGV_LIMIT = 32000, 8000
 
 
+class PromptTransportError(RuntimeError):
+    """A malformed prompt carrier is a named pre-exec refusal."""
+
+
 def launch_stdin_payload(cmd, prompt, exe, *, is_nt=False):
     """One stdin transport per harness, independent of prompt size and OS."""
     if cmd[0] in ('qodercli', 'agy'):
         if '-p' not in cmd or cmd.index('-p') + 1 >= len(cmd) or cmd[cmd.index('-p') + 1] != '':
-            raise RuntimeError('stdin_prompt_flag_missing: expected -p with an empty value')
+            raise PromptTransportError('stdin_prompt_flag_missing: expected -p with an empty value')
     if cmd[0] == 'agy':
         return (json.dumps({'event': 'user', 'message': {'role': 'user', 'content': prompt}}, ensure_ascii=False) + '\n').encode('utf-8')
     return prompt.encode('utf-8') if cmd[0] in STDIN_PROMPT_HARNESSES or is_prompt_only_command(cmd) else None

@@ -289,7 +289,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
                 state.record_probe_pass(key(leg), caller='leg-probe')
             else:
                 state.record_probe_fail(key(leg), reason, caller='leg-probe', serving=serving, stderr_excerpt=excerpt)
-        reason += ': ' + excerpt if excerpt else ''
+        reason += ': ' + excerpt if excerpt and not leaked else ''
         result = dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start, stderr_excerpt=excerpt)
         if serving:
             result['state'] = 'probe_failed_leg_serving'

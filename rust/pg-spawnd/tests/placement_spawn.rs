@@ -196,3 +196,16 @@ fn oversized_prompt_records_named_reason() {
     assert_eq!(saved["exit_code"], 2);
     assert_eq!(saved["reason"], "prompt_too_large");
 }
+
+#[test]
+fn malformed_prompt_transport_records_named_reason() {
+    let mut f = Fixture::new("exit 0", Value::Null, &[]);
+    std::fs::write(f.state.path().join("launch"),
+        "#!/bin/sh\ncat >/dev/null\necho 'stdin_prompt_flag_missing: expected -p with an empty value' >&2\nexit 2\n").unwrap();
+    let row = payload(f.spawn(2.0));
+    assert_eq!(row["status"], "failed");
+    assert_eq!(row["reason"], "stdin_prompt_flag_missing");
+    assert_eq!(row["exit_code"], 2);
+    let saved = payload(f.call("result", json!({"run_id":row["run_id"]})));
+    assert_eq!(saved["reason"], "stdin_prompt_flag_missing");
+}

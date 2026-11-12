@@ -31,18 +31,22 @@ either a flag or symlink, or a missing, invalid, unreadable or unsearchable stat
 directory. Its home fallback is systemd `%h`, independent of the manager's `HOME`;
 redeploy the service template to apply the guard.
 
+Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; private-key blocks are masked in both modes, and token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
+
 ### Prompt delivery
 
 Every harness and helper receives the prompt by stdin or file, never argv, for
 all prompt sizes on every OS (D-5233). Python's Linux OOM child inherits the stdin
 pipe; pg-spawnd uses the same launch-spec transport.
-Child env construction drops inherited and overlaid `PROMPT` entries; Rust still
+Child env construction drops inherited and overlaid entries containing `PROMPT`
+(case-insensitive, including `PROMPT_TEXT` and `PLANGRAPH_TASK_PROMPT`); Rust still
 refuses any launch spec exposing its prompt in argv or environment values.
 SSH overflow passes a staged UTF-8 file to the real spawn CLI's `--prompt-file`
 option, preserving trailing newlines without shell command substitution.
-Request-budget refusals keep the launch adapter's exit status in their run record.
+Request-budget refusals keep the launch adapter's exit status in their run record;
+pre-exec refusals without an exit code also retain the named `prompt_too_large` reason.
 Qoder retains an explicit empty `-p` value with `--input-format text`; missing prompt flags fail with
-`stdin_prompt_flag_missing`. All agy commands use
+`stdin_prompt_flag_missing` in launch-spec refusals and Python run records. All agy commands use
 `--input-format stream-json --output-format stream-json -p ""`, with
 one UTF-8 NDJSON user event on stdin followed by EOF. The last result's
 `response` supplies the answer and verdict; an ERROR or missing result fails
@@ -65,9 +69,10 @@ value keeps the default 90-minute wall, and a positive numeric value sets second
 The package-wide `inline_diff_prompt` bound change was dropped to preserve main's
 cost-context contract: `max_chars` measures only the diff and exact-fit diffs pass.
 Oversized diffs keep `InlineDiffError`'s `diff too large for leg` text and diff-only
-size; strict mode maps that refusal to `inline_diff_oversized`. The separate
-opt-in `PLANGRAPH_CONTEXT_STRICT=1` whole-prompt bound retains
-`inline_prompt_oversized` for oversized instructions/framing. Neither truncates;
+size, prefixed with `prompt_too_large`. Seat assembly maps that refusal to
+`inline_diff_oversized`; whole-prompt admission retains `inline_prompt_oversized`
+for oversized instructions/framing, both under the named `prompt_too_large`
+reason regardless of `PLANGRAPH_CONTEXT_STRICT`. Neither truncates;
 missing diff references, empty diffs and failed `git diff` calls fail explicitly.
 
 In `opencode_answer.final_answer`, `allow_unfinished=True` accepts pending text

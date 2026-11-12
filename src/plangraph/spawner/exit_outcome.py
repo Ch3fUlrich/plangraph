@@ -252,6 +252,12 @@ def terminal_reason(record, job=None):
     reason = record.get('reason')
     if reason in TERMINAL_REASONS:
         return
+    if record.get('status') in ('failed', 'refused'):
+        diagnostic = (record.get('error') or '') + '\n' + (record.get('stderr_tail') or '')
+        for named in ('prompt_too_large', 'stdin_prompt_flag_missing'):
+            if named + ':' in diagnostic:
+                record['reason'] = named
+                return
     if (record.get('role') == 'review' and record.get('status') == 'completed'
             and record.get('exit_code') in (None, 0)):
         from plangraph.review.verdict import judge
@@ -280,9 +286,6 @@ def terminal_reason(record, job=None):
         record['reason'] = reason
         return
     if record.get('exit_code') not in (None, 0):
-        if 'prompt_too_large:' in (record.get('error') or ''):
-            record['reason'] = 'prompt_too_large'
-            return
         stderr = record.get('stderr_tail', '')
         if opencode:
             stderr = without_progress(stderr)
