@@ -1,0 +1,1 @@
+- MERGE-GATE-CODE slice 1 (D-5252): pure single-head decision and offline JSON shadow CLI, reusing seat verdict/coverage and door policy; hermetic refusal tests, no merge or live wiring.

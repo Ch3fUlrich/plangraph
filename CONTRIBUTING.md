@@ -122,3 +122,25 @@ An explicit missing or unreadable list refuses pushes to any remote. The env lis
 Remotes are public unless `git config remote.<name>.plangraph-private true` is set:
 that skips private-word matching, not public patterns. Classification uses local config only.
 Diagnostics never show matched values or the words-file path.
+
+## Shadow merge decision (D-5252, slice 1)
+
+`python3 tools/merge_gate.py facts.json` prints `GO <sha>` (exit 0) or
+`REFUSE <code> <detail>` (exit 1); it only reads that file. No collection,
+network, merge, GO-row write, verdict post or item closure is implemented.
+`merge_gate_core.decide(facts)` is pure and returns one immutable decision.
+Facts: `head_sha_at_check`, `head_sha_now` (full lowercase SHA), `required_checks`
+(nonempty names), `ci_checks` (complete latest-per-name records with `name`,
+`head_sha`, `status`, `conclusion`), `seats` (`family`, raw `verdict` text,
+boolean `pinned`, `open_findings` severity strings), `writer_families`,
+`changed_paths`, `tier`, `plan_key`, `item_key`, boolean `preflight_present`,
+and `main_changed_production_paths` (complete main delta since CI base).
+Path lists include deleted paths and both rename sides. Missing facts refuse;
+only completed success checks pass (unrequired suites may be skipped).
+The trusted future collector owns
+completeness, freshness and evidence provenance; this CLI grants no authority.
+First refusal wins: head, CI red/pending, seat absent/pinned/family/findings/
+acceptance, gate path, tier, PLAN key, preflight, stale green (rule 3.19).
+Python imports the existing strict seat parser/coverage and trailer door table;
+additional conservative path categories cover docs-map, deployment, allowlists,
+redact/auth and gate/check/scrub tools without copying the door list.
