@@ -101,6 +101,41 @@ def test_read_only_loader(tmp_path, table):
     assert path.read_bytes() == before
 
 
+def test_provider_qualified_rows_reach_legs_and_missing_stays_eligible(tmp_path):
+    from plangraph.planner.benchmarks import benchmark_rows_from_db
+    measured = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-argon')
+    missing = next(l for l in DEFAULT_LEGS if l.id == 'opencode-big-pickle')
+    path = database(tmp_path / 'bench.db', [f'{measured.harness}/{measured.model}'])
+    before = path.read_bytes()
+    data, errors = benchmark_rows_from_db(path)
+    assert not errors
+    assert data[measured.model]['aa_intelligence'] == 45
+    p = routing.plan_spawn(
+        {'estimate_tokens': 1000}, role='review', writer_families=('gpt',),
+        legs=(measured, missing), benchmark=data,
+        leg_reader=lambda *a, **k: {'state': 'ok', 'evidence': None})
+    assert {l.id for l in p.legs} == {measured.id, missing.id}
+    assert p.gaps == ({'leg': missing.id, 'model': missing.model,
+                       'reason': 'no benchmark row'},)
+    assert {d['leg']: d['p_source'] for d in p.candidates} == {
+        measured.id: 'measured', missing.id: 'prior'}
+    assert not any(measured.id in reason and 'no benchmark row' in reason for reason in p.reasons)
+    assert path.read_bytes() == before
+
+
+def test_exact_benchmark_rows_win_and_unmeasured_legs_are_not_filled(tmp_path):
+    bare = tuple(l for l in DEFAULT_LEGS if '/' not in l.model)
+    path = database(tmp_path / 'bench.db', [f'{l.harness}/{l.model}' for l in bare])
+    with sqlite3.connect(path) as conn:
+        conn.execute('INSERT INTO catalog_benchmarks VALUES (?, 60)', (bare[0].model,))
+    data, errors = routing.benchmark_rows_from_db(path)
+    assert not errors
+    assert data[bare[0].model]['aa_intelligence'] == 60
+    for leg in bare[1:]:
+        assert data[leg.model] == data[f'{leg.harness}/{leg.model}']
+    assert 'opencode/big-pickle' not in data
+
+
 def test_missing_table_and_file(tmp_path):
     path = tmp_path / "empty.db"
     sqlite3.connect(path).close()

@@ -1,0 +1,1 @@
+Resolve exact provider-qualified benchmark rows for planner legs without changing utility selection. Missing measurements remain eligible with an explicit benchmark gap; no measurements are fabricated.
