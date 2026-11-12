@@ -32,9 +32,13 @@ def final_answer(stdout, *, allow_unfinished=False):
     A later empty step does not revoke an already completed answer. A later
     text part does: it must itself reach a stop before it can be published.
     Plain terminal output has no completion framing and is not evidence.
-    Review verdicts may opt into pending text, but never an explicit non-stop finish.
+    Review verdicts may opt into pending text unless a finish reason other than
+    stop/tool-calls (including a missing/unknown reason) blocks it. Only a
+    non-blank text-bearing stop clears that block; empty/whitespace-only stops
+    and tool calls do not.
     """
     pending, complete = [], None
+    truncated = False
     for line in stdout.splitlines():
         try:
             event = json.loads(line)
@@ -51,10 +55,13 @@ def final_answer(stdout, *, allow_unfinished=False):
                 pending.append(text)
                 complete = None
         elif event.get('type') == 'step_finish':
-            if part.get('reason') == 'stop' and pending:
+            if part.get('reason') == 'stop' and any(p.strip() for p in pending):
                 complete = '\n'.join(pending)
+                truncated = False
+            elif part.get('reason') not in ('stop', 'tool-calls'):
+                truncated = True
             pending = []
-    return '\n'.join(pending) if allow_unfinished and pending else complete
+    return '\n'.join(pending) if allow_unfinished and pending and not truncated else complete
 
 
 def answer_text(stdout):

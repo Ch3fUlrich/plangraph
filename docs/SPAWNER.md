@@ -16,6 +16,30 @@ Rejected stdin input or an unavailable/closed input pipe fails the run explicitl
 the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.
 
+### MiMo seat timeouts and verdict packaging (MIMO-VERDICT-TIMEOUTS)
+
+For MiMo seats and all other `review` runs, `run_watchdog_limits.thresholds` sets
+`hard_max=True`, including default caps: reviews never wait for a writer's first
+edit and ignore a valid `hard_first_edit` opt-in. Card limits must be positive,
+finite numbers (not booleans); invalid limits refuse the spawn. Without a card
+`max_min`, an unset `PLANGRAPH_SPAWN_RUN_TIMEOUT` gives a 25-minute cap, an empty
+value keeps the default 90-minute wall, and a positive numeric value sets seconds.
+The package-wide `inline_diff_prompt` bound change was dropped to preserve main's
+cost-context contract: `max_chars` measures only the diff and exact-fit diffs pass.
+Oversized diffs keep `InlineDiffError`'s `diff too large for leg` text and diff-only
+size; strict mode maps that refusal to `inline_diff_oversized`. The separate
+opt-in `PLANGRAPH_CONTEXT_STRICT=1` whole-prompt bound retains
+`inline_prompt_oversized` for oversized instructions/framing. Neither truncates;
+missing diff references, empty diffs and failed `git diff` calls fail explicitly.
+
+In `opencode_answer.final_answer`, `allow_unfinished=True` accepts pending text
+with no finish frame or after `tool-calls`, unless an earlier finish blocked it.
+Reasons other than `stop` or `tool-calls`, including missing or unknown reasons,
+fail closed: pending text is discarded and unfinished tails stay ineligible.
+Only a `stop` with non-blank pending text clears that block; empty or
+whitespace-only stops and tool calls cannot launder truncation into a verdict.
+A completed `stop` answer remains eligible.
+
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:
 - `verdict.json` audits outcomes; `verdict.delivered` stops replay.
