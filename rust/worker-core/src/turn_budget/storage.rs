@@ -104,6 +104,9 @@ pub struct ReadState {
     trees: BTreeSet<String>,
     pub output: Option<String>,
     pub retry: bool,
+    pub remote: bool,
+    pub compared_at: Option<u64>,
+    pub pending: bool,
 }
 impl ReadState {
     pub fn affected_by(&self, paths: &[PathBuf]) -> bool {
@@ -116,10 +119,13 @@ impl ReadState {
 
 pub fn read_scope(command: &str, cwd: &str) -> ReadState {
     let mut read = ReadState::default();
-    let Some(shell) = parse(command) else {
+    let Some(commands) = super::poll::read_commands(command) else {
         return read;
     };
-    for c in shell.commands {
+    read.remote = commands
+        .iter()
+        .any(|c| matches!(c[0].as_str(), "gh" | "python" | "python3"));
+    for c in commands {
         if read.paths.len() + read.trees.len() >= 16 {
             break;
         }

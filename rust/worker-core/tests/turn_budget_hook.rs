@@ -5,6 +5,8 @@ use std::{
     io::Write,
     process::{Command, Stdio},
 };
+#[path = "turn_budget_hook/storage_cases.rs"]
+mod storage_cases;
 
 struct Fixture {
     dir: tempfile::TempDir,

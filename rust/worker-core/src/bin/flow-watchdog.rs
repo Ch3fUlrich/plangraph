@@ -104,6 +104,9 @@ fn budget_identity(line: &str) -> Option<(&str, &str)> {
     let mut parts = line.split_whitespace();
     (parts.next()? == "TURN-BUDGET").then_some((parts.next()?, parts.next()?))
 }
+fn pending_event(path: &Path) -> Option<serde_json::Value> {
+    serde_json::from_slice(&fs::read(path).ok()?).ok()
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 3 {
@@ -163,24 +166,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if active != previous {
         for message in &messages {
             if let Some(identity) = budget_identity(message) {
-                if let Some(index) = queue.iter().position(|event| {
+                if queue.iter().any(|event| {
                     event["active"].as_str().and_then(budget_identity) == Some(identity)
                 }) {
-                    queue[index]["message"] = message.clone().into();
-                    queue[index]["active"] = message.clone().into();
                     // Compact any old count-keyed duplicates while preserving
                     // the oldest event and its per-channel acknowledgements.
-                    let mut position = 0;
+                    let mut seen = false;
                     queue.retain(|event| {
-                        let keep = position == index
-                            || event["active"].as_str().and_then(budget_identity) != Some(identity);
-                        position += 1;
-                        keep
+                        if event["active"].as_str().and_then(budget_identity) != Some(identity) {
+                            return true;
+                        }
+                        !std::mem::replace(&mut seen, true)
                     });
+                    let event = queue
+                        .iter_mut()
+                        .find(|event| {
+                            event["active"].as_str().and_then(budget_identity) == Some(identity)
+                        })
+                        .unwrap(); // retain preserves the first matching identity
+                    event["message"] = message.clone().into();
+                    event["active"] = message.clone().into();
                     atomic(&queue_path, &serde_json::to_string(&queue)?)?;
-                    if pending.exists() {
-                        let mut event: serde_json::Value =
-                            serde_json::from_slice(&fs::read(&pending)?)?;
+                    if let Some(mut event) = pending_event(&pending) {
                         if event["active"].as_str().and_then(budget_identity) == Some(identity) {
                             event["message"] = message.clone().into();
                             event["active"] = message.clone().into();
@@ -216,8 +223,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             queue[i]["routing_done"] = true.into();
             atomic(&queue_path, &serde_json::to_string(&queue)?)?;
-            if i == 0 && pending.exists() {
-                let mut event: serde_json::Value = serde_json::from_slice(&fs::read(&pending)?)?;
+            if let Some(mut event) = (i == 0).then(|| pending_event(&pending)).flatten() {
                 let identity = queue[i]["active"].as_str().and_then(budget_identity);
                 if identity.is_some()
                     && event["active"].as_str().and_then(budget_identity) == identity
@@ -252,7 +258,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 atomic(&dir.join("routing.ok"), "ok")?;
             }
         }
-        let event = fs::read_to_string(&pending)?;
+        // Preserve unreadable/corrupt pending state for recovery without stopping
+        // independent routing acknowledgements or sending malformed alert bytes.
+        let Some(parsed) = pending_event(&pending) else {
+            break;
+        };
+        let event = parsed.to_string();
         for (marker, variable) in [
             ("routing.ok", "PLANGRAPH_WATCHDOG_DELIVERY"),
             ("push.ok", "PLANGRAPH_FLOW_PUSH"),

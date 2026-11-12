@@ -69,6 +69,12 @@ Unrelated top-level fields still consume the shared 1 MiB cap and are never
 discarded to recover space. Historical transcript replay
 without a recorded wake is attributed to the current wake; register at session
 start for precise boundaries. No live counts are provided here.
+An existing status over 1 MiB is preserved byte-for-byte and cannot resume
+accounting until repaired externally; historical read refusals are skipped too.
+An update that would exceed the cap leaves the original file and directory
+entries intact, without a stray temporary file. A denial already determined for
+the current invocation still returns if persistence fails; later invocations
+only have the last successfully persisted history, not an in-memory guarantee.
 
 ## Polling refusal
 
@@ -78,26 +84,37 @@ quoted prose and comments are not executable commands. Simple shell `-c`/`-lc`
 wrappers are examined up to three levels deep. A loop does not become an allowed
 wait merely by setting `run_in_background` or appending `&`.
 Quoted or escaped shell keyword words are not treated as control flow.
-Sleep-free `while`/`until`/`for` loops consisting only of recognised snapshots
+Sleep-free `while`/`until` loops consisting only of recognised snapshots
 and shell no-ops are also refused, as is `watch -n 5 git status` (including
 supported interval/display options). Thus `while git status; do :; done` and
-`for i in 1 2 3; do git status; done` are not loopholes. Mixed work loops such as
+`while true; do env git status; done` are not loopholes. Mixed work loops such as
 `while build_next; do git status; done` and `for i in 1 2 3; do touch marker;
 git status; done` remain allowed by design rather than blocking ordinary work.
-`timeout 2 git status` runs the read once, not periodically, and is allowed by
-design even when repeated across tool calls; timeout wrappers are outside the
-historical snapshot recogniser. Tests pin each of these boundaries.
+Self-terminating `for` lists are allowed, including `for f in *.md; do cat $f;
+done`, `for i in 1 2 3; do cat notes.txt; done`, and fixed-list git reads or
+sleep/read iterations. An enclosing `while`/`until` still makes a repeated
+snapshot loop. Common literal `timeout`, `env`, `nice`, `nohup`, and `command`
+wrappers are unwrapped, including nested shell `-c`/`-lc` reads: `timeout 2 git
+status` passes once but shares the underlying snapshot history with `git status`.
+Wrapper parsing supports timeout signal/kill options, env assignments/unsets and
+ignore-environment, nice adjustment and command `-p`; unknown wrapper options
+remain outside this narrow recogniser. Tests pin each of these boundaries.
 
 The first recognised read-only check passes and records a SHA-256 fingerprint of
-its parsed words plus `cwd` per session. Repeating that check is refused, even
+its parsed words plus `cwd` per session. Repeating a local check is refused, even
 after other read commands, notifications, or no-op commands. A successful
 `PostToolUse` for Edit/Write/NotebookEdit, a recognised mutating Bash command, or
 output redirection permits one retry only for reads whose observed paths can
 plausibly be affected. File reads depend on their literal path arguments; git
 snapshots depend on paths under their absolute `cwd` workspace, and directory
 listings depend on their named subtrees. Remote gh/spawner checks cannot be
-reset by local writes. A pre-tool mutation or failed command does not reset a
-read. This is evidence of a relevant mutating operation, not a filesystem diff.
+reset by local writes, but receive a comparison execution after their first
+successful output. Only an identical successful comparison blocks subsequent
+remote reads for 60 seconds from that result; a fresh comparison is then allowed
+even if remote state changes without local writes. Changed remote output keeps
+comparisons reachable. Missing output never proves an identical remote snapshot.
+A pre-tool mutation or failed mutation does not reset a read; a failed read does
+allow its own retry. This is evidence of a relevant mutating operation, not a filesystem diff.
 For example, `touch marker` or `git add unrelated` cannot reenable `cat
 status.json` or `gh pr checks 42`; `touch status.json` can reenable that file
 read, while `touch marker` or `git add unrelated` in the same workspace can
@@ -106,6 +123,9 @@ Unrelated paths, missing path metadata and unresolved directory-changing compoun
 commands never grant retries. Successful read results hash only output fields
 (`stdout`, `stderr`, `output`, `content`, or a string response); a differing
 result also permits one retry for that read alone. Identical output does not.
+Read results only advance history after an admitted pre-tool event, not from
+standalone or duplicated post-tool events. Paths are platform-native absolute
+paths; the tests use the same fixture contract on Unix and Windows.
 For simple `cp`/`install`, only the destination is mutation evidence; naming the
 observed file as a copy source does not grant a retry.
 
@@ -118,6 +138,19 @@ are not a sandbox: they fail open rather than being guessed read-only. The
 existing security-focused `bash_guard.py` remains independent and unchanged.
 Simple variable arguments do not hide an otherwise recognised sleep loop or
 sleep-then-read chain; command substitutions remain outside this narrow parser.
+Specifically, `while true; do sleep 2; git status $(echo); done`, repeated `git
+status $(date)` (or backticks), and `echo "$(cat state)"` are allowed by design.
+Variable command/subcommand indirection (`tool=git; $tool status`, `$tool status`,
+`git $subcommand`) and dynamic read arguments (`cat "$status"`) also remain
+allowed across calls, including an indirect sleep-free loop. Regression tests
+make these deliberate fail-open parser limits visible rather than claiming a
+shell sandbox or treating ordinary substitutions as polling.
+Fixed-list loops do not hide an inner `watch` or shell-wrapped infinite loop;
+arithmetic `for ((;;))` snapshot loops are refused, not treated as finite lists.
+An adjacent sleep-then-read chain outside the finite loop body is still refused.
+Legacy remote history missing comparison metadata can still reach a comparison
+after upgrade. Missing post events, like missing output, cannot establish an
+identical remote result.
 
 Use `python -m plangraph.spawner.cli wait <run_id> --timeout 3600` with Bash
 `run_in_background=true`: one command that exits, then its completion notification.
@@ -141,6 +174,10 @@ delivery stays suppressed until recovery. `PLANGRAPH_TURN_BUDGET_NOW` optionally
 injects Unix seconds into this reader for deterministic subprocess tests; absent
 or invalid values use the system clock. Production deployments should leave it
 unset so rolling-hour expiry advances normally.
+Corrupt or unreadable pending events are preserved and skipped during refresh
+and acknowledgement; independent queue routing and other alerts still advance.
+Legacy duplicate budget events compact by identity, retaining the oldest event's
+channel acknowledgements even when several identities are interleaved.
 
 Run the four `turn_budget_*` integration suites listed in CONTRIBUTING.md. They
 use disposable state, synthetic transcripts, explicit clocks and cleared child
@@ -152,3 +189,6 @@ without creating state. Atomic-write checks assert the exact `.json` and `.lock`
 directory entries (not a tempfile suffix), mode preservation and bounded-history
 recovery; watchdog tests exercise changing counts, delivery and recovery using
 an explicitly injected clock rather than wall time.
+Storage tests also cover existing over-cap status and rejected over-cap writes.
+The watchdog subprocess suite is Unix-only because its delivery fixtures use
+`/bin/sh` and `/bin/cat`; opt-out children clear both budget environment variables.

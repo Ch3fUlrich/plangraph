@@ -60,3 +60,8 @@ can alert again. `PLANGRAPH_TURN_BUDGET_NOW` optionally supplies Unix seconds fo
 deterministic reader tests; leave it unset for normal system-clock expiry.
 No collector,
 settings change, hook installation or live activation is performed by this lane.
+Budget refresh compacts legacy duplicates by identity, preserving the oldest
+event's channel acknowledgements. Corrupt or unreadable pending JSON is preserved
+and skipped for refresh/delivery rather than aborting independent queued routing
+or suppressing unrelated alerts. The shell-delivery integration suite is Unix-only;
+its opt-out subprocess clears both budget-reader variables, including the clock.

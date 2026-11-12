@@ -1,9 +1,13 @@
 use pg_worker_core::turn_budget::{handle, Config};
 use serde_json::{json, Value};
 
+fn workspace() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("turn-budget-test-workspace")
+}
+
 fn event(command: &str, name: &str) -> Value {
     json!({"session_id":"test-session", "hook_event_name":name, "tool_name":"Bash",
-        "cwd":"/workspace", "tool_input":{"command":command}, "tool_response":{"exit_code":0}})
+        "cwd":workspace(), "tool_input":{"command":command}, "tool_response":{"exit_code":0}})
 }
 fn config(dir: &tempfile::TempDir) -> Config {
     Config {
@@ -30,8 +34,13 @@ fn sleep_polling_shapes_are_refused() {
         "sleep 1; cat \"$status\"",
         "while true; do sleep 2; git status; done &",
         "while git status; do :; done",
-        "for i in 1 2 3; do git status; done",
         "watch -n 5 git status",
+        "timeout 2 bash -c 'while true; do sleep 1; git status; done'",
+        "while true; do env git status; done",
+        "for i in 1 2 3; do bash -c 'while true; do sleep 1; done'; done",
+        "for i in 1 2 3; do watch git status; done",
+        "for ((;;)); do git status; done",
+        "for i in 1 2 3; do cat notes.txt; done; sleep 2; git status",
     ] {
         let line = handle(&event(command, "PreToolUse"), &c, 1).unwrap();
         assert!(line.contains("run_in_background=true"), "{command}: {line}");
@@ -47,6 +56,11 @@ fn recognised_polling_survives_broken_transcript_and_missing_session_metadata() 
     let c = config(&dir);
     let mut check = event("gh pr checks 42", "PreToolUse");
     assert_eq!(handle(&check, &c, 1), None);
+    let mut post = event("gh pr checks 42", "PostToolUse");
+    post["tool_response"]["stdout"] = json!("pending");
+    assert_eq!(handle(&post, &c, 1), None);
+    assert_eq!(handle(&check, &c, 1), None);
+    assert_eq!(handle(&post, &c, 1), None);
     check["transcript_path"] = json!(dir.path()); // a directory cannot be a transcript
     assert!(handle(&check, &c, 2).is_some());
     let mut looped = event("while true; do sleep 1; done", "PreToolUse");
@@ -92,6 +106,10 @@ fn ordinary_commands_and_single_exiting_background_wait_pass() {
         "timeout 2 git status", // one invocation, not a repeated check
         "while build_next; do cargo test; done",
         "for i in 1 2 3; do echo git status; done",
+        "for f in *.md; do cat $f; done",
+        "for i in 1 2 3; do cat notes.txt; done",
+        "for i in 1 2 3; do git status; done",
+        "for i in 1 2 3; do sleep 1; cat notes.txt; done",
         "while build_next; do git status; done",
         "for i in 1 2 3; do touch marker; git status; done",
     ] {
@@ -184,7 +202,7 @@ fn edits_clear_poll_history_but_wakes_and_different_sessions_do_not_confuse_it()
     assert_eq!(
         handle(
             &json!({"session_id":"test-session", "hook_event_name":"PostToolUse",
-        "tool_name":"Edit", "cwd":"/workspace", "tool_input":{"file_path":"status.json"},
+        "tool_name":"Edit", "cwd":workspace(), "tool_input":{"file_path":"status.json"},
         "tool_response":{}}),
             &c,
             5
@@ -228,11 +246,18 @@ fn unrelated_mutations_cannot_reenable_snapshot_polling() {
         let c = config(&dir);
         let check = event(read, "PreToolUse");
         assert_eq!(handle(&check, &c, 1), None);
+        if read.starts_with("gh ") {
+            let mut post = event(read, "PostToolUse");
+            post["tool_response"]["stdout"] = json!("unchanged remote state");
+            assert_eq!(handle(&post, &c, 1), None);
+            assert_eq!(handle(&check, &c, 1), None);
+            assert_eq!(handle(&post, &c, 1), None);
+        }
         assert!(handle(&check, &c, 2).is_some());
         assert_eq!(handle(&event(mutation, "PostToolUse"), &c, 3), None);
         assert!(handle(&check, &c, 4).is_some(), "{read}: {mutation}");
         let edit = json!({"session_id":"test-session", "hook_event_name":"PostToolUse",
-            "tool_name":"Edit", "cwd":"/workspace", "tool_input":{"file_path":"/elsewhere/status.json"},
+            "tool_name":"Edit", "cwd":workspace(), "tool_input":{"file_path":"/elsewhere/status.json"},
             "tool_response":{}});
         assert_eq!(handle(&edit, &c, 5), None);
         assert!(handle(&check, &c, 6).is_some(), "unrelated edit: {read}");
@@ -247,20 +272,25 @@ fn relevant_mutations_and_changed_read_output_reenable_only_the_affected_check()
     let other = event("cat other.json", "PreToolUse");
     assert_eq!(handle(&check, &c, 1), None);
     assert_eq!(handle(&other, &c, 1), None);
+    let mut post = event("cat status.json", "PostToolUse");
+    post["tool_response"]["stdout"] = json!("same");
+    assert_eq!(handle(&post, &c, 1), None);
     for command in ["touch status.json", "echo ok > status.json"] {
         assert_eq!(handle(&event(command, "PostToolUse"), &c, 2), None);
         assert_eq!(handle(&check, &c, 3), None);
+        assert_eq!(handle(&post, &c, 3), None);
         assert!(handle(&check, &c, 4).is_some());
         assert!(handle(&other, &c, 4).is_some());
     }
-    let mut post = event("cat status.json", "PostToolUse");
-    post["tool_response"]["stdout"] = json!("same");
-    assert_eq!(handle(&post, &c, 5), None);
-    assert_eq!(handle(&post, &c, 6), None);
     assert!(
         handle(&check, &c, 7).is_some(),
         "identical output is not progress"
     );
+    assert_eq!(
+        handle(&event("touch status.json", "PostToolUse"), &c, 8),
+        None
+    );
+    assert_eq!(handle(&check, &c, 8), None);
     post["tool_response"]["stdout"] = json!("changed");
     assert_eq!(handle(&post, &c, 8), None);
     assert_eq!(handle(&check, &c, 9), None);
@@ -297,11 +327,7 @@ fn workspace_git_mutations_are_allowed_progress_for_local_git_reads_by_design() 
         assert_eq!(handle(&event(command, "PostToolUse"), &c, 3), None);
         assert_eq!(handle(&check, &c, 4), None, "{command}");
     }
-    for _ in 0..2 {
-        // One-shot timeout wrappers intentionally remain outside snapshot history.
-        assert_eq!(
-            handle(&event("timeout 2 git status", "PreToolUse"), &c, 5),
-            None
-        );
-    }
 }
+
+#[path = "turn_budget_poll/comparisons.rs"]
+mod comparisons;

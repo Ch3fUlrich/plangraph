@@ -223,15 +223,30 @@ fn update(
             let read = status.reads.entry(key.clone()).or_insert_with(|| {
                 storage::read_scope(command, payload["cwd"].as_str().unwrap_or(""))
             });
-            denied = known && !read.retry;
-            read.retry = false;
+            // Older status documents predate remote comparison metadata.
+            read.remote =
+                storage::read_scope(command, payload["cwd"].as_str().unwrap_or("")).remote;
+            let comparison_due = read.remote
+                && read
+                    .compared_at
+                    .is_none_or(|last| now.saturating_sub(last) >= 60);
+            denied = known && !read.retry && !comparison_due;
+            if !denied {
+                read.retry = false;
+                read.pending = true;
+            }
             if !known {
                 status.polls.push_back(key);
             }
         }
     }
-    if event == "PostToolUse" && storage::successful(payload) {
-        let changed = storage::changed_paths(payload, command);
+    if event == "PostToolUse" {
+        let success = storage::successful(payload);
+        let changed = if success {
+            storage::changed_paths(payload, command)
+        } else {
+            vec![]
+        };
         for read in status.reads.values_mut() {
             if read.affected_by(&changed) {
                 read.retry = true;
@@ -240,11 +255,22 @@ fn update(
         if let Some(command) = command.filter(|s| poll::read_only(s)) {
             let key = poll::fingerprint(command, payload["cwd"].as_str().unwrap_or(""));
             if let Some(read) = status.reads.get_mut(&key) {
-                if let Some(output) = storage::output_key(&payload["tool_response"]) {
-                    if read.output.as_ref().is_some_and(|old| old != &output) {
+                // A post result may only advance a read admitted by its pre hook.
+                if read.pending {
+                    read.pending = false;
+                    if !success {
                         read.retry = true;
+                    } else if let Some(output) = storage::output_key(&payload["tool_response"]) {
+                        let changed = read.output.as_ref().is_some_and(|old| old != &output);
+                        read.retry = changed;
+                        if read.remote {
+                            read.compared_at = (!changed && read.output.is_some()).then_some(now);
+                        }
+                        read.output = Some(output);
+                    } else if read.remote {
+                        // Missing output is not evidence of an identical snapshot.
+                        read.compared_at = None;
                     }
-                    read.output = Some(output);
                 }
             }
         }
@@ -255,8 +281,8 @@ fn update(
         }
     }
     document["turn_budget"] = serde_json::to_value(&status)?;
-    // Once identified, a repeated poll stays denied even if the advisory
-    // counter's new status cannot be persisted.
+    // This invocation returns its denial even if persistence fails. Later calls
+    // can only consult the previously persisted history, not this failed update.
     let written = storage::atomic_write(&path, &serde_json::to_vec(&document)?);
     if !denied {
         written?;
