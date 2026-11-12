@@ -318,16 +318,19 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
                PLANGRAPH_ROUTE_POLICY=str(policy))
     real_run = subprocess.run
     source = o.Path(__file__).resolve().parents[1] / 'src'
-    # A source-only interpreter cannot fall back to an ambient site installation.
-    (binary_dir / 'python3').write_text(
-        f'#!{sys.executable} -S\n'
+    # /bin/sh exec avoids optional shebang arguments and interpreter-path limits.
+    # -S and the file assertion prevent fallback to an ambient site installation.
+    launcher = binary_dir / 'launch.py'
+    launcher.write_text(
         'import os, runpy, sys\n'
-        f'assert os.environ["PYTHONPATH"] == {str(source)!r}\n'
+        f'assert os.environ.get("PYTHONPATH") == {str(source)!r}, "remote PYTHONPATH missing"\n'
         'import plangraph.spawner.overflow as module\n'
         f'assert module.__file__ == {str(source / "plangraph/spawner/overflow.py")!r}\n'
         'assert sys.argv[1:3] == ["-m", "plangraph.spawner.cli"]\n'
         'sys.argv = sys.argv[2:]\n'
         'runpy.run_module("plangraph.spawner.cli", run_name="__main__")\n')
+    (binary_dir / 'python3').write_text(
+        '#!/bin/sh\nexec ' + shlex.join([sys.executable, '-S', str(launcher)]) + ' "$@"\n')
     (binary_dir / 'python3').chmod(0o700)
     received = []
     def run(argv, **kwargs):

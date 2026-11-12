@@ -1,4 +1,6 @@
 use super::*;
+#[path = "runs_short_prompt_tests.rs"]
+mod short_prompt_tests;
 
 #[test]
 fn gitconfig_guard_only_arms_writers() {
@@ -167,7 +169,9 @@ fn short_prompt_substrings_are_not_carriers() {
 #[test]
 fn stream_prompt_snapshot_is_text_not_transport() {
     let dir = std::env::temp_dir().join(new_run_id());
-    let raw = format!("{}\né\n\n", "x".repeat(300 * 1024));
+    let secret = format!("sk-{}", "a".repeat(24));
+    let raw = format!("{}\né\n{secret}\n\n", "x".repeat(300 * 1024));
+    let clean = raw.replace(&secret, "[REDACTED]");
     let transport = json!({"event":"user", "message":{"role":"user", "content":raw}}).to_string();
     let mut launch = crate::launch::LaunchSpec {
         argv: vec!["agy".into(), "--input-format".into(), "stream-json".into()],
@@ -180,10 +184,13 @@ fn stream_prompt_snapshot_is_text_not_transport() {
     };
     let id = new_run_id();
     assert!(store_prompt(&dir, &id, &mut launch, &mut json!({}), false).is_ok());
-    assert_eq!(launch.stdin.as_deref(), Some((transport + "\n").as_str()));
+    assert_eq!(
+        launch.stdin.as_deref(),
+        Some((transport.replace(&secret, "[REDACTED]") + "\n").as_str())
+    );
     assert_eq!(
         std::fs::read_to_string(dir.join("runs").join(id).join("prompt.txt")).unwrap(),
-        raw
+        clean
     );
     std::fs::remove_dir_all(dir).unwrap();
 }

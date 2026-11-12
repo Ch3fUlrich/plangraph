@@ -100,8 +100,8 @@ def test_relaunch_starts_a_new_numbered_session(rc):
     assert new["handoff"] == str(hf.resolve()) and new["prompt_file"] == str(sessions / "alpha-0002.prompt.txt")
     assert [(sessions / f"alpha-000{n}.prompt.txt").read_text() for n in (1, 2)] == [PROMPT, PROMPT]
     assert not (sessions / "alpha-0001.ready.json").exists()
-    assert run.launch_calls()[1][-1] == ''
-    assert [kw['input'] for _, kw in run.calls if 'input' in kw][1] == f"Restart from handoff {hf.resolve()}.\n\n" + PROMPT
+    assert run.launch_calls()[1][-1] == f"Restart from handoff {hf.resolve()}.\n\n" + PROMPT
+    assert all('input' not in kw for _, kw in run.calls)
     assert go(rc, s, "alpha")["name"] == "alpha-0003"  # relaunch took 0002
     s.stop(name="alpha-0003")  # a later live record of the role would supersede 0002
     assert s.relaunch("alpha-0002", handoff=str(hf))["name"] == "alpha-0004"

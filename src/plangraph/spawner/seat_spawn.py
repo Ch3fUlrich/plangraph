@@ -127,7 +127,7 @@ def _refuse_oversized_diff(exc, leg):
     if exc.chars is not None:
         raise PromptBoundError(
             f'prompt_too_large: inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
-            f'max_request_tokens {leg.max_request_tokens}') from None
+            f'max_request_tokens {getattr(leg, "max_request_tokens", None)}') from None
 
 
 class SeatSpawnMixin:
@@ -202,14 +202,17 @@ class SeatSpawnMixin:
             raise InlineDiffError('review prompt packaging deadline exceeded') from None
 
     def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
-        """Assemble one leg's payload, then enforce its request limit."""
+        """Bound reviews; preserve opt-in strict admission for other roles."""
         from .target import quota_paused
         from plangraph.routing_errors import SpawnRefused
         if quota_paused(getattr(self, 'state', None) or getattr(self, '_state', None), role, leg):
             raise SpawnRefused('quota pause')
         from . import context_pack
         prompt = self._unbounded_leg_prompt(prompt, card, role, leg, pack, document_review, diff_timeout)
-        return context_pack.bound_prompt(prompt, leg.max_request_tokens)
+        budget = getattr(leg, 'max_request_tokens', None)
+        if budget is not None and (role == 'review' or os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1'):
+            return context_pack.bound_prompt(prompt, budget)
+        return prompt
 
     def _unbounded_leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
         """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff.
@@ -223,8 +226,9 @@ class SeatSpawnMixin:
             prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
         if role == 'review' and _needs_inline_diff(leg, card):
             from .inline_diff import InlineDiffError, inline_diff_prompt
+            budget = getattr(leg, 'max_request_tokens', None)
             try:
-                prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
+                prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=budget * 3 if budget is not None else 60_000,
                                             allow_document=document_review, timeout=diff_timeout)
             except InlineDiffError as exc:
                 _refuse_oversized_diff(exc, leg)

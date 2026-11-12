@@ -253,10 +253,12 @@ def terminal_reason(record, job=None):
     if reason in TERMINAL_REASONS:
         return
     if record.get('status') in ('failed', 'refused'):
-        diagnostic = '\n'.join(record.get(key) or '' for key in ('error', 'stderr', 'stderr_tail'))
-        diagnostic += '\n' + (getattr(job, 'stderr', '') or '')
-        for named in ('prompt_too_large', 'stdin_prompt_flag_missing'):
-            if named + ':' in diagnostic:
+        # Only spawner-owned pre-exec errors/events, never harness stderr echoes.
+        errors = (record.get('error') or '').split('; ')
+        events = [*events, *getattr(job, 'events', ())]
+        for named in ('prompt_too_large', 'stdin_prompt_flag_missing', 'stdin_prompt_command_unknown', 'stdin_prompt_argv_conflict'):
+            if any(error.removeprefix('inline_diff_failed: ').startswith(named + ':') for error in errors) or any(
+                    event.get('event') == 'prompt_transport_refused' and event.get('reason') == named for event in events):
                 record['reason'] = named
                 return
     if (record.get('role') == 'review' and record.get('status') == 'completed'

@@ -74,10 +74,38 @@ def test_every_harness_uses_stdin(harness, prompt):
         assert payload == prompt.encode()
 
 
-@pytest.mark.parametrize('command', [['gateway-client', 'run'], ['legacy-client', '-p', '']])
+@pytest.mark.parametrize('command', [['gateway-client', 'run'], ['legacy-client', '-p', ''],
+                                    ['legacy-client', '-p', 'task'], ['claude', '--bg', 'task'],
+                                    ['opencode', 'serve'], ['codex', 'exec', 'task']])
 def test_legacy_commands_do_not_drop_stdin(command):
+    from plangraph.routing_support.clients import PromptTransportError
     prompt = 'review payload\né\n' + 'x' * (300 * 1024)
-    assert launch_stdin_payload(command, prompt, command[0]) == prompt.encode()
+    # Refuse explicitly rather than silently dropping or duplicating a task.
+    original = command.copy()
+    with pytest.raises(PromptTransportError, match='stdin_prompt_command_unknown:'):
+        launch_stdin_payload(command, prompt, command[0])
+    assert command == original
+
+
+@pytest.mark.parametrize('harness', ['opencode', 'agy', 'qoder', 'qodercli', 'codex', 'claude', 'gemini', 'qwen'])
+@pytest.mark.parametrize('embedded', [False, True])
+def test_stdin_refuses_a_second_argv_carrier(harness, embedded):
+    from plangraph.routing_support.clients import PromptTransportError
+    prompt = 'private task'
+    cmd = build_command(prompt, 'fixture/model', client=harness)
+    cmd.append('--prompt=' + prompt if embedded else prompt)
+    with pytest.raises(PromptTransportError, match='stdin_prompt_argv_conflict:'):
+        launch_stdin_payload(cmd, prompt, harness)
+
+
+def test_prompt_only_launcher_is_a_known_stdin_reader(monkeypatch):
+    from plangraph.routing_support.review_mode import is_prompt_only_command
+    monkeypatch.setenv('OPENCODE_CONFIG_CONTENT', '{}')
+    prompt = 'review payload\né\n'
+    cmd = build_command(prompt, 'fixture/model', client='opencode', role='review', tool_mode='prompt-only')
+    assert is_prompt_only_command(cmd)
+    assert prompt not in cmd
+    assert launch_stdin_payload(cmd, prompt, cmd[0]) == prompt.encode()
 
 
 @pytest.mark.parametrize('field', ['error', 'stderr', 'stderr_tail'])
@@ -85,6 +113,8 @@ def test_legacy_commands_do_not_drop_stdin(command):
 def test_persisted_diagnostic_keys_keep_named_reason(field, named):
     from plangraph.spawner.exit_outcome import terminal_reason
     record = dict(status='failed', exit_code=1, **{field: named + ': refused before exec'})
+    if field != 'error':
+        record['events'] = [dict(event='prompt_transport_refused', reason=named)]
     terminal_reason(record)
     assert record['reason'] == named
 
@@ -97,6 +127,69 @@ def test_pre_exec_prompt_refusal_has_named_reason(exit_code, previous):
                   error='inline_diff_failed: prompt_too_large: request limit')
     terminal_reason(record)
     assert record['reason'] == 'prompt_too_large'
+
+
+@pytest.mark.parametrize('field', ['stderr', 'stderr_tail', 'job_stderr'])
+@pytest.mark.parametrize('text', ['harness echoed prompt_too_large: task text',
+                               'prompt_too_large: task text'])
+def test_harness_echo_is_not_prompt_refusal(field, text):
+    from plangraph.spawner.exit_outcome import terminal_reason
+    record = dict(status='failed', exit_code=1)
+    if field != 'job_stderr':
+        record[field] = text
+    terminal_reason(record, SimpleNamespace(stderr=text, command=['agy']) if field == 'job_stderr' else None)
+    assert record.get('reason') != 'prompt_too_large'
+
+
+def test_prompt_refusal_must_start_spawner_error():
+    from plangraph.spawner.exit_outcome import terminal_reason
+    record = dict(status='failed', exit_code=1, error='harness echoed prompt_too_large: task text')
+    terminal_reason(record)
+    assert record['reason'] != 'prompt_too_large'
+
+
+@pytest.mark.parametrize('role', ['implement', 'edit', 'review'])
+@pytest.mark.parametrize('tool_mode', ['tools', 'inline-only'])
+@pytest.mark.parametrize('missing', [False, True])
+@pytest.mark.parametrize('strict', ['0', '1'])
+def test_leg_without_request_limit_does_not_crash(tmp_path, monkeypatch, role, tool_mode, missing, strict):
+    from plangraph.spawner.seat_spawn import SeatSpawnMixin
+    from plangraph.spawner.context_pack import Pack
+    monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', strict)
+    leg = SimpleNamespace(harness='agy', model='fixture/model', tool_mode=tool_mode)
+    if not missing:
+        leg.max_request_tokens = None
+    seat = SeatSpawnMixin()
+    seat.state, seat.runner = tmp_path, SimpleNamespace(default_cwd=str(tmp_path))
+    assert seat._leg_prompt('task', {}, role, leg, Pack(), document_review=True) == 'task'
+
+
+def test_missing_budget_oversized_diff_is_named(tmp_path, monkeypatch):
+    from plangraph.spawner.seat_spawn import SeatSpawnMixin
+    from plangraph.spawner.context_pack import Pack, PromptBoundError
+    from plangraph.spawner.inline_diff import InlineDiffError
+    def oversized(*args, **kwargs):
+        assert kwargs['max_chars'] == 60000
+        raise InlineDiffError('oversized', chars=60001)
+    monkeypatch.setattr('plangraph.spawner.inline_diff.inline_diff_prompt', oversized)
+    seat = SeatSpawnMixin()
+    seat.state, seat.runner = tmp_path, SimpleNamespace(default_cwd=str(tmp_path))
+    leg = SimpleNamespace(harness='opencode', model='fixture/model', tool_mode='inline-only')
+    with pytest.raises(PromptBoundError, match='^prompt_too_large:'):
+        seat._leg_prompt('review', {}, 'review', leg, Pack())
+
+
+@pytest.mark.parametrize('role', ['implement', 'edit'])
+@pytest.mark.parametrize('tool_mode', ['tools', 'inline-only', 'prompt-only'])
+def test_non_review_prompt_above_bound_remains_accepted(tmp_path, monkeypatch, role, tool_mode):
+    from plangraph.spawner.seat_spawn import SeatSpawnMixin
+    from plangraph.spawner.context_pack import Pack
+    monkeypatch.delenv('PLANGRAPH_CONTEXT_STRICT', raising=False)
+    leg = SimpleNamespace(harness='agy', model='fixture/model', tool_mode=tool_mode, max_request_tokens=100)
+    seat = SeatSpawnMixin()
+    seat.state, seat.runner = tmp_path, SimpleNamespace(default_cwd=str(tmp_path))
+    prompt = 'x' * 301
+    assert seat._leg_prompt(prompt, {}, role, leg, Pack()) == prompt
 
 
 @pytest.mark.parametrize('harness', ['agy', 'qodercli'])

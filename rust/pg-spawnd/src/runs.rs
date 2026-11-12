@@ -13,7 +13,6 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-
 pub(crate) struct Runs {
     pub supervisor: Arc<Supervisor>,
     pub jobs: Mutex<BTreeMap<String, String>>,
@@ -111,9 +110,7 @@ impl Runs {
                     .filter(|s| !s.is_empty())
             });
         base["item_key"] = match item {
-            Some(s) if crate::records::valid_item(&s) => {
-                json!(s)
-            }
+            Some(s) if crate::records::valid_item(&s) => json!(s),
             Some(_) => {
                 if base.get("warnings").is_none() {
                     base["warnings"] = json!([]);
@@ -198,20 +195,23 @@ pub(crate) fn store_prompt(
     use sha2::{Digest, Sha256};
     let missing = || internal("launch prompt missing");
     let raw = launch.prompt.as_ref().ok_or_else(missing)?;
-    let argv = &launch.argv;
     // Short substrings of flags/model names are not evidence of a task carrier.
-    let mut carriers = argv.iter().chain(launch.env.values());
+    let mut carriers = launch.argv.iter().chain(launch.env.values());
     let exposed = carriers.any(|s| s == raw || (raw.len() >= 16 && s.contains(raw)));
     if !raw.is_empty() && exposed {
         return Err(internal("launch prompt must not be in argv or env"));
     }
     let prompt = pg_worker_core::redact::redact(raw);
+    for arg in launch.argv.iter_mut().chain(launch.env.values_mut()) {
+        *arg = arg.replace(raw, &prompt);
+    }
     match launch.stdin.as_mut() {
         Some(stdin) if stdin == raw => *stdin = prompt.clone(),
         Some(stdin) => {
             let mut event: Value =
                 serde_json::from_str(stdin).map_err(|_| internal("invalid prompt stream"))?;
-            let stream = argv
+            let stream = launch
+                .argv
                 .windows(2)
                 .any(|w| w == ["--input-format", "stream-json"]);
             if !stream

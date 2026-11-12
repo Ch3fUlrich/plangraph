@@ -543,6 +543,7 @@ class SpawnerRunner:
                 payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
             except PromptTransportError as exc:
                 job.status, job.exit_code, job.stderr, job.end_time = 'failed', 1, str(exc), time.time()
+                job.events.append(dict(event='prompt_transport_refused', reason=str(exc).split(':', 1)[0]))
                 return job
             resolved_exe, launch_refusal = _resolve_launch(resolved_exe, cmd[1:], is_nt=_is_nt())
             if launch_refusal:

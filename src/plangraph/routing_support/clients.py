@@ -1,10 +1,7 @@
 """OmniRoute ACP-First Client Adapter with Tailnet Coexistence.
 
-All model providers route first through the local model gateway; its base URL is
-deployment config (``OMNIROUTE_BASE_URL``, ``PLANGRAPH_GATEWAY_URL`` or the
-spawner/keeper config, see ``effective_gateway_base_url``), never a source
-literal. Standalone direct CLI spawning (agy,
-qodercli, codex, claude) is reserved strictly as an offline emergency fallback
+Gateway URLs are deployment config (see ``effective_gateway_base_url``), never
+source literals. Standalone direct CLI spawning is an offline emergency fallback
 when gateway_online=False.
 
 Preserves Windows SystemRoot/COMSPEC/PATHEXT/TEMP environment variables (D-2090 BUG-B).
@@ -18,16 +15,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from plangraph.routing_support.claude_seat import claude_access_args
-from plangraph.routing_support.review_mode import leg_tool_mode, prompt_only_command, review_prompt
+from plangraph.routing_support.review_mode import is_prompt_only_command, leg_tool_mode, prompt_only_command, review_prompt
 
-#: Environment variable naming the model gateway base URL (see ``gateway_url``).
 GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
 
-#: Environment variable naming the provider-level gateway base URL override.
 OMNIROUTE_BASE_URL_ENV_VAR = "OMNIROUTE_BASE_URL"
 
 #: Harnesses whose prompts are delivered via stdin instead of argv (I9).
 STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode", "claude", "agy", "qodercli", "codex", "gemini", "qwen")
+STDIN_PROMPT_MODES = {'opencode': ('run',), 'claude': ('-p',), 'agy': ('--input-format', 'stream-json'),
+                     'qodercli': ('--input-format', 'text'), 'codex': ('exec', '-'), 'gemini': ('-p',), 'qwen': ('-p',)}
 
 
 def without_prompt_env(env):
@@ -40,10 +37,8 @@ def gateway_url(env: Mapping[str, str] | None = None,
                 config: Mapping[str, Any] | None = None) -> str | None:
     """Base URL of the model gateway, or ``None`` when no source names one.
 
-    Sources, in order: ``PLANGRAPH_GATEWAY_URL`` in *env* (the process
-    environment by default), then ``gateway_url`` in the spawner/keeper *config*
-    mapping.  The endpoint is deployment data, so there is no built-in default:
-    a caller that has none supplies its own value (tests do).
+    Sources: ``PLANGRAPH_GATEWAY_URL`` in *env*, then *config*'s ``gateway_url``.
+    Endpoints are deployment data: there is no built-in default.
     """
     source = os.environ if env is None else env
     for candidate in ((source or {}).get(GATEWAY_URL_ENV_VAR),
@@ -284,7 +279,7 @@ def build_opencode_command(
     headers: Mapping[str, str] | None = None, extra_flags: Sequence[str] = (), tool_mode: str = "tools",
 ) -> list[str]:
     """Build opencode command for execution via OmniRoute ACP/Gateway."""
-    # --standalone: the shared background service ignores the child's config overlay
+    # --standalone honours the child's config overlay.
     cmd = ["opencode", "run", "--standalone", "--model", model_or_combo]
     if serve_port is not None:
         cmd.extend(["--port", str(serve_port)])
@@ -333,8 +328,6 @@ def build_standalone_fallback_command(
     if cname in ("claude", "gemini", "qwen"):   # D-3605: claude takes its prompt on stdin, plan mode
         cmd = [cname, "-p", *([] if cname == "claude" else [""]), *(["--model", model] if model else [])]
         return cmd + (["--output-format", "stream-json", "--verbose", *claude_access_args(role, tool_mode)] if cname == "claude" else [])
-    # Legacy callers may pass a gateway name. Explicit harnesses are validated
-    # by build_command, while this offline helper retains its OpenCode default.
     cmd = ["opencode", "run", "--standalone"]
     if model:
         cmd.extend(["--model", model])
@@ -349,10 +342,21 @@ class PromptTransportError(RuntimeError):
 
 
 def launch_stdin_payload(cmd, prompt, exe, *, is_nt=False):
-    """One stdin transport per harness, independent of prompt size and OS."""
+    """Only known stdin readers, never a second argv carrier (D-5533)."""
+    cmd = cmd[3:] if is_prompt_only_command(cmd) else cmd
+    if not cmd or cmd[0] not in STDIN_PROMPT_MODES or '--bg' in cmd:
+        raise PromptTransportError('stdin_prompt_command_unknown: command has no stdin contract')
     if cmd[0] in ('qodercli', 'agy'):
         if '-p' not in cmd or cmd.index('-p') + 1 >= len(cmd) or cmd[cmd.index('-p') + 1] != '':
             raise PromptTransportError('stdin_prompt_flag_missing: expected -p with an empty value')
+    if not all(flag in cmd[1:] for flag in STDIN_PROMPT_MODES[cmd[0]]):
+        raise PromptTransportError('stdin_prompt_command_unknown: command mode has no stdin contract')
+    config_flags = {'--model', '--port', '--agent', '--permission-mode', '--setting-sources',
+                    '--allowedTools', '--disallowedTools', '--tools', '--mcp-config', '--input-format', '--output-format'}
+    carriers = [arg for i, arg in enumerate(cmd[1:], 1) if not (i == 1 and arg in ('run', 'exec'))
+                and cmd[i - 1] not in config_flags and (not arg.startswith('-') or '=' in arg)]
+    if prompt and any(prompt in arg for arg in carriers):
+        raise PromptTransportError('stdin_prompt_argv_conflict: prompt already present in argv')
     if cmd[0] == 'agy':
         return (json.dumps({'event': 'user', 'message': {'role': 'user', 'content': prompt}}, ensure_ascii=False) + '\n').encode('utf-8')
     return prompt.encode('utf-8')
@@ -381,7 +385,6 @@ def build_command(
             raise ValueError(f"unknown harness: {client}")
         if client != "opencode":
             return build_standalone_fallback_command(client, prompt, model_or_combo, role=role, tool_mode=tool_mode)
-    # 1. Gateway route (first priority)
     if gateway and gateway_online:
         return build_opencode_command(
             prompt=prompt, model_or_combo=model_or_combo,
@@ -390,7 +393,6 @@ def build_command(
             tool_mode=tool_mode if role == "review" else "tools",
         )
 
-    # 2. Offline emergency fallback
     resolved_client = client or detect_client_for_model(model_or_combo)
     return build_standalone_fallback_command(
         client_name=resolved_client, prompt=prompt, model=model_or_combo, role=role,

@@ -184,7 +184,7 @@ def test_config_and_style_are_read_from_the_checked_fd(site, monkeypatch):
     res = go(site, make(site, run, config_path=cfg2))
     assert res["ok"] is True
     argv, _ = run.calls[0]
-    assert argv[-3:] == ["--append-system-prompt", "be terse", '']
+    assert argv[-3:] == ["--append-system-prompt", "be terse", "do the thing"]
 
 
 def test_config_rejects_unknown_keys_and_bad_scalar_types(site):

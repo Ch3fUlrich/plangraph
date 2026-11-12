@@ -15,7 +15,10 @@ argv or an `env` command. A portable Python launcher sets `OPENCODE_CONFIG`,
 removes inherited `OPENCODE_CONFIG_CONTENT`, forwards prompt stdin and exit status,
 and deletes the file after exit; unlaunched commands are cleaned at parent exit.
 Config size does not grow the command line, including on Windows.
-Every native or legacy harness command uses stdin for task content, and child
+Stdin task transport is allowlisted for OpenCode (including its prompt-only launcher),
+Claude print mode, agy, qodercli, Codex, Gemini and Qwen. Unknown/legacy commands
+refuse as `stdin_prompt_command_unknown`; argv task carriers refuse as
+`stdin_prompt_argv_conflict`, never receiving the prompt twice. Child
 environments discard known inherited or overlaid legacy task-prompt carriers before
 launch-spec serialization, while retaining unrelated prompt-template/theme settings.
 

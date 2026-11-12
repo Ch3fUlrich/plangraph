@@ -45,14 +45,16 @@ A tail therefore masks commit SHAs and long slash paths: take SHAs from git or t
 
 ### Prompt delivery
 
-Every harness and helper receives the prompt by stdin or file, never argv, for
-all prompt sizes on every OS (D-5233). Python's Linux OOM child inherits the stdin
+Known headless harnesses receive prompts by stdin or file, not argv (D-5233).
+Fleet `claude --bg` retains its pre-#775 positional prompt: stdin support is unproven.
+Oversized fleet argv refuses before exec as `prompt_too_large: fleet_argv_limit`.
+Python's Linux OOM child inherits the stdin
 pipe; pg-spawnd uses the same launch-spec transport.
 Child env construction drops only known legacy task carriers (`PROMPT`, `PROMPT_TEXT`,
 `PROMPT_SUFFIX`, `TASK_PROMPT`, `PLANGRAPH_TASK_PROMPT`, case-insensitive), including
 overlays; unrelated shell/theme/template configuration survives. Rust refuses exact
 prompt carriers and embedded prompts of at least 16 bytes in argv/env, without
-mistaking short incidental substrings of flags or model names for task transport.
+mistaking short incidental substrings for task transport; short embedded secrets are still redacted.
 SSH overflow passes a staged UTF-8 file to the real spawn CLI's `--prompt-file`
 option, preserving trailing newlines without shell command substitution.
 Request-budget refusals keep the launch adapter's exit status in their run record;
@@ -63,9 +65,12 @@ Qoder retains an explicit empty `-p` value with `--input-format text`; missing p
 one UTF-8 NDJSON user event on stdin followed by EOF. The last result's
 `response` supplies the answer and verdict; an ERROR or missing result fails
 explicitly, without publishing an unsuccessful response as an answer.
-OpenCode, Claude, Gemini and Qwen read text stdin; Codex uses `exec -`. Fleet sessions
-also read stdin; SSH overflow uses `--prompt-file` without shell expansion. Assembled
-prompts exceeding the leg budget (three chars/token) record `prompt_too_large`.
+OpenCode, Claude print mode, Gemini and Qwen read text stdin; Codex uses `exec -`.
+Unknown commands refuse as `stdin_prompt_command_unknown`; duplicate argv/stdin prompts
+refuse as `stdin_prompt_argv_conflict`. The prompt-only launcher retains stdin forwarding.
+Review prompts exceeding a known leg budget (three chars/token) record `prompt_too_large`;
+implement/edit bounds remain opt-in via `PLANGRAPH_CONTEXT_STRICT=1`, and absent budgets are safe.
+Only spawner-owned pre-exec errors/events name prompt refusals, never harness stderr echoes.
 Rejected stdin input or an unavailable/closed input pipe fails the run explicitly;
 the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.

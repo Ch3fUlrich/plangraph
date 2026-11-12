@@ -40,7 +40,7 @@ def sandbox(tmp_path, monkeypatch):
 def dispatch(seat, root, prompt, card, leg, calls, role='implement'):
     record = {}
     pack = cp.annotate(record, prompt, card, root)
-    calls.append(seat._leg_prompt(prompt, card, role, leg, pack))
+    calls.append(seat._leg_prompt(prompt, card, role, leg, pack, document_review=role == 'review'))
     return record
 
 
@@ -92,9 +92,13 @@ def test_inline_bound_disabled_preserves_prompt_and_warning(sandbox, monkeypatch
     assert record['warnings'] == [
         'big_file_unsliced: large.py 1000 lines; name one function per slice in card.context']
     calls.clear()
+    dispatch(seat, root, prompt, {}, SimpleNamespace(
+        tool_mode='inline-only', max_request_tokens=200), calls)
+    assert calls == [prompt]  # Non-review admission remains unchanged without strict mode.
+    calls.clear()
     with pytest.raises(cp.PromptBoundError, match='prompt_too_large'):
         dispatch(seat, root, prompt, {}, SimpleNamespace(
-            tool_mode='inline-only', max_request_tokens=200), calls)
+            tool_mode='inline-only', max_request_tokens=200), calls, role='review')
     assert calls == []
 
 

@@ -28,8 +28,28 @@ def test_handoff_prefixes_prompt(site):
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
     go(site, s, handoff=str(hf))
-    assert run.calls[0][0][-1] == ''
-    assert run.calls[0][1]['input'] == f"Restart from handoff {hf.resolve()}.\n\n" + PROMPT
+    assert run.calls[0][0][-1] == f"Restart from handoff {hf.resolve()}.\n\n" + PROMPT
+    assert 'input' not in run.calls[0][1]
+
+
+@pytest.mark.parametrize('platform,size', [('linux', 131072), ('linux', 307200), ('win32', 32000)])
+def test_fleet_argv_limit_refuses_before_exec(site, platform, size):
+    run = FakeRun()
+    s = make(site, run, platform=platform, which=lambda _: str(site.tmp_path / 'claude.exe'))
+    with pytest.raises(ParameterRefused, match='prompt_too_large: fleet_argv_limit:'):
+        go(site, s, prompt='é' * (size if platform == 'win32' else size // 2))
+    assert run.calls == []
+    assert not (site.state / 'sessions' / 'alpha.prompt.txt').exists()
+
+
+@pytest.mark.parametrize('platform', ['linux', 'win32'])
+def test_fleet_small_prompt_has_one_argv_carrier(site, platform):
+    run = FakeRun()
+    s = make(site, run, platform=platform, which=lambda _: str(site.tmp_path / 'claude.exe'))
+    assert go(site, s)['ok'] is True
+    argv, kw = run.calls[0]
+    assert argv[-1] == PROMPT and argv.count(PROMPT) == 1
+    assert 'input' not in kw
 
 
 def test_dry_run_writes_nothing(site):

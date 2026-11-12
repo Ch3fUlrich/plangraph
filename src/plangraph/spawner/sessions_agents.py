@@ -94,13 +94,22 @@ class _AgentsMixin:
                 "--model", model, "--effort", effort, "--permission-mode", mode]
         if style:
             tail += ["--append-system-prompt", style]
-        tail += ['']  # The complete task (including a handoff) travels on stdin.
+        tail += [prompt_arg]  # --bg stdin support is unproven; retain the positional contract.
         bg_argv = head + ["--bg"] + tail
         # Spec defaults: ctx_cap_tokens 300000, compact_window "400000".
         cap = cfg.get("ctx_cap_tokens") or 300000
         compact = cfg.get("compact_window") or "400000"
         env = {**without_prompt_env(os.environ), "FLEET_SESSION_NAME": name,
                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(compact)}
+        if self._platform == 'win32':
+            oversized = len(subprocess.list2cmdline(bg_argv).encode('utf-16-le')) // 2 + 1 > 32000
+        else:
+            arg_bytes = [len(os.fsencode(arg)) + 1 for arg in bg_argv]
+            env_bytes = sum(len(os.fsencode(k + '=' + v)) + 1 for k, v in env.items())
+            limit = os.sysconf('SC_ARG_MAX')
+            oversized = max(arg_bytes) > 131071 or sum(arg_bytes) + env_bytes + 8 * (len(env) + len(bg_argv) + 2) > limit - 2048
+        if oversized:
+            raise _refuse('prompt_too_large: fleet_argv_limit: claude --bg argv exceeds exec limit; stdin contract unproven')
         return bg_argv, env
 
     def _launch_run_kw(self, env):
@@ -223,7 +232,7 @@ class _AgentsMixin:
         into the write-ahead record; it defaults to a fresh pre-start reading."""
         if launched_ms is None:
             launched_ms = self._now() * 1000.0  # before the start: rows near it count
-        proc = self._run(bg_argv, input=prompt_arg, cwd=str(cwd_path), **self._launch_run_kw(env))
+        proc = self._run(bg_argv, cwd=str(cwd_path), **self._launch_run_kw(env))
         if proc.returncode != 0:
             # First 300 chars of the process output: enough to see why claude
             # refused (e.g. untrusted workspace) without unbounded audit text.
