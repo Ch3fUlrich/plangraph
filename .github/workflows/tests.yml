@@ -100,6 +100,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+      - name: Build fleet projection helper
+        run: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with: {python-version: "3.12"}
@@ -225,6 +235,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+      - name: Build fleet projection helper
+        run: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with: {python-version: "3.12"}
