@@ -20,3 +20,4 @@ src/plangraph/routing_support/leg_state.py -> docs/spawner-leg-state.md
 # Shared rust/Cargo.toml and rust/Cargo.lock are not owned by a single crate.
 src/plangraph/routing_support/opencode_render.py -> docs/opencode-gateway.md
 src/plangraph/routing_support/opencode_overlay.py -> docs/opencode-gateway.md
+src/plangraph/planner/** -> docs/routing.md

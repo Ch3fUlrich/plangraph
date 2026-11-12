@@ -65,7 +65,7 @@ def test_commit_probe_and_timeout(monkeypatch, success):
         leg_state.record_probe_fail(key(leg), 'timeout', 'leg-probe')  # second consecutive failure
         assert leg_state.leg_status(key(leg))['state'] == 'down'
         from plangraph.planner.routing import plan_spawn
-        plan = plan_spawn({'estimate_tokens': 1000}, role='implement', legs=(leg,))
+        plan = plan_spawn({'estimate_tokens': 1000}, role='implement', legs=(leg,), catalog_rows=())
         assert not plan.legs
         assert plan.skipped[0]['reason'] == 'down'
 
@@ -115,11 +115,11 @@ def test_execute_probe_falls_through(tmp_path, monkeypatch):
     assert record['attempts'][0]['skip_reason'] == 'down: timeout'
 
 
-@pytest.fixture
-def failed_probe(tmp_path, monkeypatch):
+@pytest.fixture(params=['cx-gpt-6.1-sol', 'cx-gpt-6.1-sol-xhigh'])
+def failed_probe(tmp_path, monkeypatch, request):
     from plangraph.spawner import leg_probe
-    from plangraph.planner.legs import DEFAULT_LEGS
-    leg = next(l for l in DEFAULT_LEGS if l.model == 'omniroute/cx-gpt-6.1-sol')
+    from plangraph.planner.legs import spawnable_legs
+    leg = next(l for l in spawnable_legs() if l.id == request.param)
     store = LegStateStore(tmp_path / 'legs.sqlite')
     runner = SimpleNamespace(leg_reader=store, stderr='probe diagnostic', jobs={})
     from plangraph.spawner.runner import spawn_service

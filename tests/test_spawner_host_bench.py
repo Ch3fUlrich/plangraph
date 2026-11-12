@@ -159,7 +159,7 @@ def test_unmapped_leg_no_p(tmp_path, capsys, monkeypatch):
 
 
 def test_implement_order_unchanged_by_benchmark(tmp_path):
-    """D-5092: implement uses benchmark utility without crossing cost tiers."""
+    """D-5212 pins Sol/Gemini; D-5092 utility stays within all remaining cost tiers."""
     from plangraph.planner.routing import plan_spawn
     db = seeded_db(tmp_path)
     rows = benchmark_options(False, str(db))["benchmark"]
@@ -168,7 +168,11 @@ def test_implement_order_unchanged_by_benchmark(tmp_path):
     assert with_bench["p_source"] == "benchmark" and bare["p_source"] == "operator-order"
     assert {leg["id"] for leg in with_bench["legs"]} == {leg["id"] for leg in bare["legs"]}
     from plangraph.planner.legs import TIERS
-    assert [TIERS.index(l["tier"]) for l in with_bench["legs"]] == sorted(TIERS.index(l["tier"]) for l in with_bench["legs"])
+    for plan in (with_bench, bare):
+        assert [l["id"] for l in plan["legs"][:2]] == ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash"]
+        assert plan["first_leg"]["effort"] == "xhigh"
+        tiers = [TIERS.index(l["tier"]) for l in plan["legs"][2:]]
+        assert tiers == sorted(tiers)
 
 
 def test_seed_idempotent(tmp_path):

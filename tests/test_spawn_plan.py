@@ -19,16 +19,19 @@ def fixed_catalog(monkeypatch):
     monkeypatch.setitem(plan_spawn.__kwdefaults__, "catalog_rows", ())
 
 
-def test_writer_live_limit_reset_and_scope(tmp_path, monkeypatch):
+@pytest.mark.parametrize("gemini_tier", ["free", "subscription"])
+def test_writer_live_limit_reset_and_scope(tmp_path, monkeypatch, gemini_tier):
     from mechanics_legs import install_fallthrough_legs
     install_fallthrough_legs(monkeypatch)
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, "catalog_rows", (
+        {"id": "agy/gemini-3.8-flash", "tier": gemini_tier},))
     store = LegStateStore(tmp_path / "state.sqlite")
     p = plan_spawn(CARD, role="implement", leg_reader=store, now=100)
-    assert p.first_leg.model == "opencode/deepseek-v4.1-flash-free"  # D-5092
+    assert p.first_leg.model == "omniroute/cx-gpt-6.1-sol-xhigh"  # D-5206
     nxt = next_leg_after_provider_stop(p, p.first_leg.id, 429, "quota exhausted",
                                        {"Retry-After": "60"}, "test", store=store,
                                        now=100, account="A")
-    assert nxt.id == "opencode-glm-5.3-flash-free"  # Same-tier synthetic fallback.
+    assert nxt.id == "agy-gemini-3.8-flash"  # D-5212: automatic next writer.
     limited = plan_spawn(dict(CARD, account="A"), role="implement", leg_reader=store, now=101)
     assert limited.first_leg == nxt
     assert next(s for s in limited.skipped if s["leg"] == p.first_leg.id)["evidence"]["status"] == 429
@@ -78,9 +81,8 @@ def test_seats_and_impossible_fence():
 def test_operator_order_and_roles_roundtrip(tmp_path):
     assert [l.id for l in DEFAULT_LEGS if "implement" in l.roles] == [
         "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "openrouter-free",
-        "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "agy-gemini-4-argon", "opencode-big-pickle",
-        "mimo-v2.6-flash", "mimo-v2.6-pro",
-        "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
+        "cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "agy-gemini-4-argon", "opencode-big-pickle",
+        "mimo-v2.6-flash", "mimo-v2.6-pro", "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
         "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
@@ -101,11 +103,12 @@ def test_benchmark_within_tier_only(monkeypatch):
     rows = {l.model: {"aa_intelligence": 40 + i * 10, "cost_per_task_usd": 0,
                       "pool_burn_weight": 0} for i, l in enumerate(writer)}
     p = plan_spawn(CARD, role="implement", benchmark=rows)
-    assert p.first_leg.id == "opencode-big-pickle"
+    assert p.first_leg.id == "cx-gpt-6.1-sol-xhigh"  # D-5206
     assert [l.id for l in p.legs] == [
-        'opencode-big-pickle', 'agy-gemini-3.8-flash', 'openrouter-free', 'opencode-glm-5.3-flash-free',
-        'opencode-deepseek-v4.1-flash-free', 'omniroute-muse-spark', 'omniroute-deepseek-flash', 'mimo-v2.6-pro', 'mimo-v2.6-flash',
-        'agy-gemini-4-argon', 'cx-gpt-6.1-sol', 'deepseek']
+        'cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash', 'opencode-big-pickle',
+        'openrouter-free', 'opencode-glm-5.3-flash-free', 'opencode-deepseek-v4.1-flash-free',
+        'omniroute-muse-spark', 'omniroute-deepseek-flash', 'mimo-v2.6-pro', 'mimo-v2.6-flash',
+        'agy-gemini-4-argon', 'deepseek']
     assert p.legs[-1].tier == 'paid'
     assert p.p_source == "benchmark"
     assert "no benchmark p" in plan_spawn(CARD, role="implement").reasons

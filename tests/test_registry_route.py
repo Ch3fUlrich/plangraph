@@ -179,7 +179,7 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
         if role == "implement":
             assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
             assert reasons["opencode-glm-5.3-flash-free"] == "off_family"
-            assert plan.first_leg.id == 'openrouter-free'
+            assert plan.first_leg.id == 'cx-gpt-6.1-sol-xhigh'
             from plangraph.planner.routing import SpawnRefused
             from plangraph.spawner.service import SpawnService
             with pytest.raises(SpawnRefused, match=r"leg disabled: .*D-4196"):
@@ -197,7 +197,7 @@ def test_route_skips_paused_harness_per_role():
     held = plan_spawn(CARD, role="review", writer_families=("mimo",), policy=pause)
     assert {s["leg"]: s["reason"] for s in held.skipped}["agy-gemini-3.8-flash"] == "paused_harness"
     writer = plan_spawn(CARD, role="implement")
-    assert writer.first_leg.id == "openrouter-free"
+    assert writer.first_leg.id == "cx-gpt-6.1-sol-xhigh"  # D-5206: eligible lead precedes free tier
     # Sol also uses opencode: pausing that harness must exclude the lead,
     # not merely leave a first-leg assertion that passes without filtering.
     paused = plan_spawn(CARD, role="implement", policy=RoutePolicy(
@@ -208,9 +208,9 @@ def test_route_skips_paused_harness_per_role():
     assert paused_ids
     assert paused_ids.isdisjoint({leg.id for leg in paused.legs})
     reasons = {s["leg"]: s["reason"] for s in paused.skipped}
-    assert {leg_id: reasons[leg_id] for leg_id in paused_ids} == {
-        leg_id: "paused_harness" for leg_id in paused_ids}
-    assert [leg.id for leg in paused.legs] == ["agy-gemini-3.8-flash", "agy-gemini-4-argon"]
+    assert {leg_id: reasons[leg_id] for leg_id in paused_ids} == dict.fromkeys(
+        paused_ids, "paused_harness")
+    assert [leg.id for leg in paused.legs] == ['agy-gemini-3.8-flash', 'agy-gemini-4-argon']
 
 
 def test_explicit_policy_argument_wins():
