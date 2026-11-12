@@ -47,6 +47,7 @@ systemd user scope. Use `affected` or `full` to measure each separately.
 
 One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `main`.
 Work that covers two plan items is two lanes.
+A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) when the seat's head is among the item's verified heads.
 
 ## File size
 
