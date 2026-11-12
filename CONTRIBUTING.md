@@ -48,6 +48,13 @@ systemd user scope. Use `affected` or `full` to measure each separately.
 One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `main`.
 Work that covers two plan items is two lanes.
 
+For an offline judge brief, run `python3 tools/judge_prompt.py --findings findings.txt
+--base origin/main --head HEAD --ci-summary ci.json --output judge.md`, with
+`ci.json` mapping job names to conclusion strings. The prompt includes complete
+findings and diff; `--byte-budget` limits whole file bodies and lists explicit cuts.
+See [Lean review harness](docs/lean-review-harness.md) for seat tool modes.
+New Python files require a reasoned rule 9.14 entry in `tools/new_code_allowlist.txt`.
+
 ## File size
 
 A tracked source, test, script or doc file stays at or under 400 lines; over 400, split it

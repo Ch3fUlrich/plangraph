@@ -12,3 +12,5 @@
 - Judge briefs retain evidence for command-time rendering from the leg's mode.
   Missing or malformed inline OpenCode config falls back to tools without
   replacing discovered provider/gateway settings.
+- Refusal dispatch regression coverage now exercises the prompt-only Claude
+  fallback while preserving the terminal refusal and notification assertions.
