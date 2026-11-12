@@ -4,3 +4,4 @@ tools/** -> CONTRIBUTING.md
 src/plangraph/fleet_sync/** -> docs/fleet-sync.md
 src/plangraph/spawner/** -> docs/SPAWNER.md
 src/plangraph/keeper/** -> docs/KEEPER.md
+rust/pg-ctx/** -> rust/pg-ctx/README.md
