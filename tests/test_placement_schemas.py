@@ -45,7 +45,10 @@ def test_schema_property_names_match_example():
     }
     for name, sample in samples.items():
         node = SCHEMA if name == "$root" else defs[name]
-        assert sorted(node["properties"]) == sorted(sample), name
+        keys = set(sample)
+        if name == "hostEntry":
+            keys = set().union(*(host.keys() for host in EXAMPLE["hosts"]))
+        assert sorted(node["properties"]) == sorted(keys), name
 
 
 @pytest.mark.parametrize("pointer,value", [
