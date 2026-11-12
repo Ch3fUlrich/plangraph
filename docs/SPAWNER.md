@@ -180,7 +180,7 @@ the plan as `explicit_only` skips, so `route` shows them; `plan_spawn` itself do
 it for a claude writer, given or via `review_of`; with mixed writers the D-3084 per-part rule
 admits a seat that covers another writer part. The Claude and sol-effort writers are
 `EXPLICIT_WRITERS`, which the spawn service admits for `implement`. The catalog spelling
-`agy/<model>` (MCP `model_or_combo`) resolves to the agy leg that holds the bare model. A cx
+`agy/<model>` (MCP `model_or_combo`) resolves to a seat-capable agy leg holding the bare model, never an orchestrate-only alias. A cx
 effort model is not declared in the AutoOS root opencode config, so `render_gateway_providers`
 adds `providers.omniroute.models["cx-<m>-<effort>"]` (`modelID` `cx/<m>-<effort>`, the base
 model's limit) for that run only; without it opencode answers `provider.no-route`.

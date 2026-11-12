@@ -11,3 +11,5 @@
   cross-family writer fence unchanged from main.
 - Expire temporal failure evidence after a named six-hour TTL so automatic
   liveness checks can retry stale legs; retain every disabled Zen route.
+- Pin exact-tier service and CLI tests to explicit routing inputs, and prevent
+  orchestrate-only agy aliases from shadowing routed seats sharing their model.

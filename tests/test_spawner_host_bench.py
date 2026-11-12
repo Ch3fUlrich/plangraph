@@ -82,9 +82,12 @@ def route_json(tmp_path, capsys, *extra):
     return json.loads(capsys.readouterr().out)
 
 
-def test_review_route_uses_benchmark_p(tmp_path, capsys):
+def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     """I3/D2: seeded rows reach review ranking through the leg-id map."""
+    from plangraph.planner.routing import plan_spawn
     from test_route_round3 import test_review_same_family_table_order
+    # Pin CLI tier/admission inputs independently of the host catalog snapshot.
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, "catalog_rows", ())
     test_review_same_family_table_order()
     db = seeded_db(tmp_path)
     rows = benchmark_options(False, str(db))["benchmark"]
@@ -108,6 +111,15 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
         "opencode-go-gemini-4-argon", "opencode-go-muse-spark", "opencode-console-muse-spark",
         "opencode-go-deepseek-v4-flash",
         ]
+
+
+def test_review_route_ignores_ambient_catalog_tiers(tmp_path, capsys, monkeypatch):
+    """The exact CLI order uses declared tiers even if the host catalog disagrees."""
+    from plangraph.routing_support import resolver
+
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
+        {'id': 'agy/gemini-3.8-flash', 'tier': 'paid', 'available': 1, 'active': True}])
+    test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch)
 
 
 def test_unmapped_leg_no_p(tmp_path, capsys, monkeypatch):
