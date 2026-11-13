@@ -228,6 +228,7 @@ def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=No
 
 QUOTA_POLL_IDLE_S = 60.0   # a gateway leg silent this long is checked against the call log
 QUOTA_POLL_EVERY_S = 30.0
+QUOTA_POLL_TIMEOUT_S = 3.0
 
 
 def quota_refusal(rows, tag):
@@ -270,23 +271,36 @@ class QuotaWatch:
     """Throttled call-log check for a gateway leg that has gone silent (used by the run watchdog)."""
 
     def __init__(self, job, env):
-        self.on = gateway_leg(getattr(job, 'model_or_combo', None), env)
+        self.model = getattr(job, 'model_or_combo', None)
+        self.wake = gateway_leg(self.model, env)   # wake cadence only; check() re-reads the env
         self.last = 0.0
 
     def delay(self, delay):
-        return min(delay, QUOTA_POLL_EVERY_S) if self.on else delay
+        return min(delay, QUOTA_POLL_EVERY_S) if self.wake else delay
 
     def check(self, job_id, job, env, refused):
         now = time.time()
-        due = (self.on and not refused.is_set() and now - self.last >= QUOTA_POLL_EVERY_S
-               and now - max(job.last_activity_ts or 0, job.start_time) >= QUOTA_POLL_IDLE_S)
-        if due:
-            self.last = now
-        return due
+        if (refused.is_set() or now - self.last < QUOTA_POLL_EVERY_S
+                or now - max(getattr(job, 'last_activity_ts', 0) or 0, getattr(job, 'start_time', now) or now) < QUOTA_POLL_IDLE_S
+                or not gateway_leg(self.model, env)):
+            return False
+        self.last = now
+        return True
+
+    async def refusal(self, job_id, job, env, refused):
+        """Refusal text that ends the run, else None; a failing check never ends or fails the run."""
+        try:
+            return await self.poll(job_id, job, env) if self.check(job_id, job, env, refused) else None
+        except Exception:
+            return None
 
     async def poll(self, job_id, job, env):
+        """Refusal text, or None; bounded by QUOTA_POLL_TIMEOUT_S so a slow gateway never stalls the watchdog loop."""
         import asyncio
-        return await asyncio.to_thread(poll_quota, job_id, job, env)
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(poll_quota, job_id, job, env), QUOTA_POLL_TIMEOUT_S)
+        except Exception:
+            return None
 
 
 def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):

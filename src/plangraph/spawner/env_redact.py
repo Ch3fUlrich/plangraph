@@ -173,17 +173,17 @@ CREDIT_AUTH_MARKER = re.compile(
     r'credits? (?:exhausted|depleted|exceeded|ran out)|out of credits|insufficient (?:credits?|balance|quota)'
     r'|payment required|unauthori[sz]ed|authentication (?:failed|error|required)|invalid api key', re.I)
 _QUOTA_MARKER = re.compile(
-    r'quota reached|quota exceeded|quota threshold|quota policy filtered|resource_exhausted|exhausted their quota|rate limit|resets in'
+    r'quota reached|quota exceeded|quota threshold|exhausted their quota|rate limit|resets in'
     r'|too many requests|\bHTTP 429\b|' + CREDIT_AUTH_MARKER.pattern, re.I)
 #: D-3685: OmniRoute appends "(reset after N)" to its quota line. The suffix is
 #: not quota evidence on its own: a line merely starting with it never marks a
 #: leg (prose stays out, D-3257). It counts only on an error-shaped line or
 #: next to a quota/rate-limit name.
 _RESET_AFTER = re.compile(r'\(reset after \d', re.I)
-# Gateway (omniroute) and agy refusal lines are quota evidence at the start of a line, no "Error:" prefix needed.
-_ERROR_SHAPED = re.compile(
-    r'\s*(?:error:|HTTP \d{3}:|RESOURCE_EXHAUSTED \(code \d{3}\):|quota policy filtered \d+ account'
-    r'|All \S+ accounts reached configured quota)', re.I)
+# Gateway (omniroute) and agy refusal lines are quota evidence by shape alone (no "Error:" prefix, no marker word).
+_GATEWAY = re.compile(r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:RESOURCE_EXHAUSTED \(code \d{3}\):|quota policy filtered \d+ account'
+                      r'|All \S+ accounts reached configured quota)', re.I)
+_ERROR_SHAPED = re.compile(r'\s*(?:error:|HTTP \d{3}:)|' + _GATEWAY.pattern, re.I)
 _USAGE_LIMIT = re.compile(
     r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:free |go )?usage limit '
     r'(?:reached|exceeded)(?:\s*[.!]?(?:\s*\(reset after \d[^\n)]*\))?'
@@ -277,7 +277,7 @@ def harness_limit_line(exit_code, stdout, stderr):
         if re.search(r'usage limit', line, re.I) and not _QUOTA_MARKER.search(line):
             return _USAGE_LIMIT.fullmatch(line)
         if _ERROR_SHAPED.match(line):
-            return _QUOTA_MARKER.search(line) or _RESET_AFTER.search(line)
+            return _QUOTA_MARKER.search(line) or _RESET_AFTER.search(line) or _GATEWAY.match(line)
         # Start-anchored only (D-3257): the reset-after suffix alone never
         # marks; it needs a quota/rate-limit name alongside.
         return _QUOTA_MARKER.match(line.strip()) or (
@@ -323,7 +323,7 @@ def early_refusal(complete_text):
             except (ValueError, TypeError, AttributeError, KeyError):
                 pass
     for line in lines:
-        if _ERROR_SHAPED.match(line) and (_QUOTA_MARKER.search(line) or _RESET_AFTER.search(line)):
+        if _ERROR_SHAPED.match(line) and (_QUOTA_MARKER.search(line) or _RESET_AFTER.search(line) or _GATEWAY.match(line)):
             return line.strip()
     return None
 

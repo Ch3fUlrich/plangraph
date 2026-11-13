@@ -364,7 +364,7 @@ async def collect(runner, job_id, proc):
                 break
             if task in done:
                 break
-            line = quota.check(job_id, job, env, refused) and await quota.poll(job_id, job, env)
+            line = await quota.refusal(job_id, job, env, refused)
             if line:   # a refusal the harness never printed, read from the gateway call log
                 job.refusal = scrub(line); refused.set(); continue
             edit = (await asyncio.to_thread(edit_signature, job.cwd or runner.default_cwd)
