@@ -1,0 +1,1 @@
+- Add the std-only Rust `pg-repo-sync` tool to fetch repositories and safely fast-forward clean default-branch checkouts, reporting behind checkouts that need attention without exposing untracked files or discarding work.
