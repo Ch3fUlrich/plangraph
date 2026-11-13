@@ -1,2 +1,3 @@
 - Add the native fleet command crate, fixed-card handoff validation and locked worklog logging, with Python parity cases and a repairable fleet PATH check.
 - Port fleet-name session discovery, confirmed replacement selection, launch fallback and bounded remote probes.
+- Port question-count with the existing queue summary format and counting rules.

@@ -2,6 +2,7 @@ pub mod fleet_name;
 pub mod handoff;
 pub mod path_check;
 pub mod process;
+pub mod question_count;
 
 /// The private data checkout remains the source of operational data during cutover.
 pub fn data_home() -> std::path::PathBuf {
