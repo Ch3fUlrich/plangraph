@@ -74,6 +74,7 @@ fn pilot_leak_guard_explains_oversized_floor() {
 }
 #[test]
 fn pilot_activity_owner_and_empty_claim() {
+    pilot_empty_claim_is_refused_before_harness_or_worktree();
     struct Held(std::sync::Barrier, std::sync::Barrier, Fake);
     impl Harness for Held {
         fn name(&self) -> &str {
@@ -138,6 +139,32 @@ fn pilot_activity_owner_and_empty_claim() {
         true,
     );
     assert_eq!(never.runs(), 0);
+}
+
+#[test]
+fn pilot_empty_claim_is_refused_before_harness_or_worktree() {
+    let (r, base) = repo();
+    let root = tempfile::tempdir().unwrap();
+    let never = Fake::new("exit 99");
+    for card in ["", " \t\n"] {
+        let mut inp = input(
+            claim(&r.path().to_string_lossy(), &base, &["out.txt"], "true"),
+            1,
+            root.path(),
+        );
+        inp.claim.card = card.into();
+        let error = crate::card_admit::run_attempt(
+            Some(&never), &tiny(), &Patterns::default(), &inp, &|| false,
+        ).unwrap_err();
+        assert!(matches!(&error,
+            crate::card_admit::EntryError::Attempt(AttemptError::Admission(
+                crate::AdmissionReason::NotClaimable(key))) if key == card));
+        crate::card_admit::tests::assert_failure(
+            crate::card_admit::attempt_error(error), Some("card_not_claimable"), true,
+        );
+        assert_eq!(never.runs(), 0);
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
 }
 
 #[test]

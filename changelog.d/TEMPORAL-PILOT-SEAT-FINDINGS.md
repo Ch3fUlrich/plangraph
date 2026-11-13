@@ -5,3 +5,5 @@ The S3 leak oracle rejects every floor-length secret window, not only edges;
 restore the symlink test's negative-control explanation and correct S3 lockfile attribution.
 Stage pilot allowlists before publishing repositories, pin the GitHub floor's
 catalog entry, retain the symlink rationale, and reject unrelated meta-test failures.
+Recover interrupted allowlist publication under a directory lock, preserve live
+publishers and foreign files, document filesystem requirements, and pin blank-claim refusal.

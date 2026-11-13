@@ -82,6 +82,11 @@ an isolated main-branch repository with only `check.sh`, no remote, and a siblin
 `pilot-a.cards.allow` containing exactly `pilot:PILOT-1` and `pilot:PILOT-2`.
 Parent traversal (`..`) is refused. Git initialization is staged in a private
 sibling directory so a failed init/add/commit leaves the destination retryable.
+The destination filesystem must support hard links and advisory directory locks;
+FAT/exFAT and some FUSE filesystems are unsupported and setup refuses there.
+An interrupted publication can be retried: under the parent-directory lock,
+setup reclaims only the exact generated regular allowlist while the repository
+is absent or empty; arbitrary existing allowlists and symlinks remain refused.
 The allowlist requires 1–20 `pilot:PILOT-<digits>` keys, one per line; blank
 lines and `#` comments are allowed. Preflight and verify enforce the same parser.
 Set `PG_CARD_ALLOWLIST` to that sibling path; never use production cards.

@@ -152,6 +152,82 @@ def test_setup_preserves_concurrent_allowlist(env, monkeypatch, capsys):
     assert allow.read_text() == 'pilot:PILOT-9\n'
 
 
+@pytest.mark.parametrize('operation', ['unlink', 'rename'])
+def test_setup_interrupt_after_link_is_retryable(env, monkeypatch, capsys, operation):
+    repo, allow = env / 'repo', env / 'repo.cards.allow'
+    original = getattr(Path, operation)
+    def interrupt(path, *args, **kwargs):
+        if (operation == 'unlink' and path.name == allow.name and path != allow
+                or operation == 'rename' and args[0] == repo):
+            raise KeyboardInterrupt('publication interrupted')
+        return original(path, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, operation, interrupt)
+        with pytest.raises(KeyboardInterrupt, match='publication interrupted'):
+            pilot.setup_repo(str(repo))
+    assert not os.path.lexists(allow)
+    assert not repo.exists()
+    assert run(capsys, 'setup-repo', str(repo))[0] == 0
+
+
+@pytest.mark.parametrize('existing', [False, True])
+def test_setup_recovers_orphan_allowlist(env, capsys, existing):
+    repo, allow = env / 'repo', env / 'repo.cards.allow'
+    if existing:
+        repo.mkdir()
+    allow.write_text('pilot:PILOT-1\npilot:PILOT-2\n')
+    assert run(capsys, 'setup-repo', str(repo))[0] == 0
+    assert (repo / '.git').is_dir()
+    assert allow.read_text() == 'pilot:PILOT-1\npilot:PILOT-2\n'
+    assert not list(env.glob('.pilot-repo-*'))
+
+
+def test_setup_active_publication_cannot_be_reclaimed(env, monkeypatch, capsys):
+    repo = env / 'repo'
+    original = os.link
+    def publish(source, destination):
+        original(source, destination)
+        assert run(capsys, 'setup-repo', str(repo))[0] == 2
+        assert destination.read_text() == source.read_text()
+    monkeypatch.setattr(os, 'link', publish)
+    assert run(capsys, 'setup-repo', str(repo))[0] == 0
+    assert (repo / '.git').is_dir()
+
+
+def test_setup_cleanup_failure_leaves_recoverable_allowlist(env, monkeypatch, capsys):
+    repo, allow = env / 'repo', env / 'repo.cards.allow'
+    original_rename, original_unlink = Path.rename, Path.unlink
+    def rename(path, destination):
+        if destination == repo:
+            raise RuntimeError('repository publication failed')
+        return original_rename(path, destination)
+    def unlink(path, *args, **kwargs):
+        if path == allow:
+            raise OSError('cleanup unavailable')
+        return original_unlink(path, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, 'rename', rename)
+        patch.setattr(Path, 'unlink', unlink)
+        with pytest.raises(RuntimeError, match='repository publication failed'):
+            pilot.setup_repo(str(repo))
+    assert allow.is_file() and not repo.exists()
+    assert run(capsys, 'setup-repo', str(repo))[0] == 0
+
+
+def test_setup_hardlink_requirement_documented_and_retryable(env, monkeypatch, capsys):
+    for name in ['CONTRIBUTING.md', 'docs/plan/rtp1-live-run.md']:
+        assert 'hard links' in (ROOT / name).read_text()
+    def unsupported(*args, **kwargs):
+        raise OSError('hard links unsupported')
+    repo, allow = env / 'repo', env / 'repo.cards.allow'
+    with monkeypatch.context() as patch:
+        patch.setattr(os, 'link', unsupported)
+        code, output = run(capsys, 'setup-repo', str(repo))
+        assert code == 2 and 'REFUSE setup-repo ' in output
+    assert not repo.exists() and not os.path.lexists(allow)
+    assert run(capsys, 'setup-repo', str(repo))[0] == 0
+
+
 @pytest.mark.parametrize('kind', ['alias', 'overmount', 'resolve-error'])
 def test_mount_resolution_and_order(env, monkeypatch, kind):
     db = env / 'db'

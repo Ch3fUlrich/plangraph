@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fail-closed, value-redacted pilot preparation (stdlib only)."""
 import argparse
+import fcntl
 import os
 from pathlib import Path
 import re
@@ -147,11 +148,26 @@ def setup_repo(directory):
     allow = repo.parent / (repo.name + ".cards.allow")
     if repo.is_relative_to(CHECKOUT):
         return emit("setup-repo", False, "directory is inside checkout")
+    repo.parent.mkdir(parents=True, exist_ok=True)
+    # Lock the parent inode, not an unlinkable lockfile: live publishers cannot
+    # be mistaken for crash residue, even between linking and renaming.
+    fd = os.open(repo.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return setup_locked(repo, allow)
+    finally:
+        os.close(fd)
+
+
+def setup_locked(repo, allow):
     if repo.exists() and (not repo.is_dir() or any(repo.iterdir())):
         return emit("setup-repo", False, "directory must be absent or empty")
     if allow.exists() or allow.is_symlink():
-        return emit("setup-repo", False, "allowlist already exists")
-    repo.parent.mkdir(parents=True, exist_ok=True)
+        # Recover only our exact generated regular file, never operator content
+        # or symlinks. The lock proves no cooperating publisher is using it.
+        if read_regular_file(allow) != "pilot:PILOT-1\npilot:PILOT-2\n":
+            return emit("setup-repo", False, "allowlist already exists")
+        allow.unlink()
     # Empty HOME and explicit config operands isolate Git without extra env keys.
     def git(*args):
         result = command(["git", "-c", "user.name=Pilot", "-c",
@@ -178,8 +194,11 @@ def setup_repo(directory):
         try:
             staged_allow.unlink()
             staged.rename(repo)
-        except OSError:
-            allow.unlink()
+        except BaseException:
+            try:
+                allow.unlink()
+            except OSError:
+                pass  # The locked entry check recovers this residue on retry.
             raise
     # Paths are explicit CLI operands, never environment values.
     emit("setup-repo", True, f"repo={ascii(str(repo))} allowlist={ascii(str(allow))}")

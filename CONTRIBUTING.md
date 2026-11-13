@@ -30,6 +30,10 @@ install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 Pilot preflight safety vectors live in `tests/test_pilot_preflight.py` and
 `tests/test_pilot_preflight_findings.py`; run both without a live keeper or server.
 Pilot setup stages the allowlist before publication; failed writes leave setup retryable.
+Setup requires a filesystem supporting hard links and advisory directory locks;
+unsupported filesystems refuse without publishing a repository. Retry reclaims
+only an orphan regular allowlist with the exact generated two-card content,
+under the parent-directory lock; other allowlists and symlinks remain refused.
 The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
 with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
 The D-5504/D-5506 `mcp_tools.py` exception only splits schema data out of the full Python MCP transport; it also retires with MCP-RUST.
