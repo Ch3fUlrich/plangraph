@@ -9,6 +9,7 @@ import subprocess
 import time
 
 from .run_cpu import cpu_seconds, proc_scan  # noqa: F401  re-exported for callers and tests
+from .prompt_input import checkout_env
 from .run_watchdog_limits import leg_limits, thresholds  # noqa: F401  re-exported for callers and tests
 from .run_refusal import REFUSAL_MAX_FRAMES, REFUSAL_MAX_LINES, REFUSAL_WINDOW_S, RefusalGate  # noqa: F401  re-exported for callers and tests
 
@@ -141,7 +142,7 @@ def edit_signature(cwd):
             if entries > 100000:
                 break
         head = subprocess.run(['git', '-C', str(cwd), 'rev-parse', 'HEAD'],
-                              capture_output=True, timeout=10, check=False)
+                              capture_output=True, timeout=10, check=False, env=checkout_env())
         return (count, newest, size), head.stdout if head.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
         return None

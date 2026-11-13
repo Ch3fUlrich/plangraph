@@ -1,5 +1,5 @@
-//! Claude Code command hook: JSON on stdin, silence on allow, exit 2 on poll.
-use pg_worker_core::turn_budget::{handle, Config};
+//! JSON on stdin; exit 1 on status IO error, exit 2 on poll (even if IO fails).
+use pg_worker_core::turn_budget::{handle_with_diagnostics, Config};
 use std::io::Read;
 
 fn main() {
@@ -25,8 +25,15 @@ fn main() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    if let Some(line) = handle(&payload, &config, now) {
+    let mut failed = false;
+    if let Some(line) = handle_with_diagnostics(&payload, &config, now, |error| {
+        eprintln!("turn-budget-hook: status update failed: {error}");
+        failed = true;
+    }) {
         eprintln!("{line}");
         std::process::exit(2);
+    }
+    if failed {
+        std::process::exit(1);
     }
 }
