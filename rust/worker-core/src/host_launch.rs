@@ -55,22 +55,14 @@ pub fn launch(registry: &HostRegistry, host: &Candidate, request: &Value) -> Lau
     let mut cmd = if host.id == registry.self_host {
         Command::new("pg-spawnd")
     } else {
-        let Some(dest) = host
-            .ssh
-            .as_deref()
-            .filter(|s| !s.starts_with('-') && !s.contains(char::is_whitespace))
-        else {
+        let Some(dest) = host.ssh.as_deref() else {
             return Launch::Refused("no SSH route".into());
         };
-        let mut cmd = Command::new("ssh");
-        cmd.args([
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=5",
-            dest,
-            "pg-spawnd",
-        ]);
+        let mut cmd = match host_command::ssh(dest) {
+            Ok(cmd) => cmd,
+            Err(_) => return Launch::Refused("invalid SSH route".into()),
+        };
+        cmd.arg("pg-spawnd");
         cmd
     };
     cmd.arg("shim");

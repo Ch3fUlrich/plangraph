@@ -4,7 +4,7 @@ use crate::{
     host_probe,
 };
 use serde_json::Value;
-use std::{fs, io, path::Path, process::Command};
+use std::{fs, io, path::Path};
 
 pub fn collect(host: &str, state: &Path) -> io::Result<Sample> {
     let probe = host_probe::probe(host).map_err(io::Error::other)?;
@@ -67,7 +67,7 @@ pub fn collect(host: &str, state: &Path) -> io::Result<Sample> {
 pub fn disk_pct(path: &Path) -> Option<f64> {
     #[cfg(unix)]
     {
-        let output = Command::new("df")
+        let output = std::process::Command::new("df")
             .arg("-Pk")
             .arg(path)
             .env("LC_ALL", "C")
@@ -147,24 +147,11 @@ fn top_rss() -> Vec<Rss> {
 }
 
 pub fn remote(host: &str, destination: &str) -> io::Result<Sample> {
-    if !crate::fleet_series::valid_host(host)
-        || destination.starts_with('-')
-        || destination.contains(char::is_whitespace)
-    {
+    if !crate::fleet_series::valid_host(host) {
         return Err(io::Error::other("invalid host route"));
     }
     let output = crate::host_command::output(
-        Command::new("ssh").args([
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=5",
-            destination,
-            "pg-fleet-series",
-            "probe",
-            "--host",
-            host,
-        ]),
+        crate::host_command::ssh(destination)?.args(["pg-fleet-series", "probe", "--host", host]),
         std::time::Duration::from_secs(15),
     )?;
     let row: Sample = serde_json::from_slice(&output).map_err(io::Error::other)?;

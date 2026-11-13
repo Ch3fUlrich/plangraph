@@ -1,6 +1,32 @@
 use pg_worker_core::{host_launch::classify, host_overflow::Launch};
 use serde_json::json;
 #[test]
+fn unsafe_ssh_route_is_refused_before_launch() {
+    let registry = pg_worker_core::hosts::HostRegistry {
+        version: 1,
+        self_host: "local".into(),
+        hosts: vec![],
+    };
+    for destination in [
+        "worker;evil",
+        "user@-worker",
+        "$(evil)",
+        "",
+        "worker\nother",
+    ] {
+        let candidate = pg_worker_core::package_placement::Candidate {
+            id: "worker".into(),
+            workstation: false,
+            ssh: Some(destination.into()),
+            sample: None,
+        };
+        assert!(matches!(
+            pg_worker_core::host_launch::launch(&registry, &candidate, &json!({})),
+            Launch::Refused(reason) if reason == "invalid SSH route"
+        ));
+    }
+}
+#[test]
 fn receipts_require_matching_host_and_explicit_refusals() {
     assert!(matches!(
         classify(

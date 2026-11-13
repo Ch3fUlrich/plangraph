@@ -6,6 +6,40 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Build a bounded SSH route from an ASCII host/alias or IP, optionally prefixed by a user.
+pub fn ssh(destination: &str) -> io::Result<Command> {
+    fn name(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 255
+            && value.as_bytes()[0].is_ascii_alphanumeric()
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    }
+    let hostname = match destination.split_once('@') {
+        Some((user, host)) if name(user) => host,
+        Some(_) => return Err(io::Error::other("invalid SSH route")),
+        None => destination,
+    };
+    let ip = hostname
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(hostname);
+    if !name(hostname) && ip.parse::<std::net::Ipv6Addr>().is_err() {
+        return Err(io::Error::other("invalid SSH route"));
+    }
+    let mut command = Command::new("ssh");
+    command.args([
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=5",
+        "--",
+        destination,
+    ]);
+    Ok(command)
+}
+
 pub fn isolate_git(command: &mut Command) {
     for (key, _) in std::env::vars_os() {
         if key.to_string_lossy().starts_with("GIT_") {
@@ -53,4 +87,64 @@ pub fn output(command: &mut Command, timeout: Duration) -> io::Result<Vec<u8>> {
         return Err(io::Error::other("command output too large"));
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_routes_preserve_destination_after_option_terminator() {
+        for destination in [
+            "worker-1",
+            "worker.example.invalid",
+            "worker_alias",
+            "build.user@192.0.2.1",
+            "user@::1",
+            "user@[2001:db8::1]",
+        ] {
+            let command = ssh(destination).unwrap();
+            let args: Vec<_> = command.get_args().map(|s| s.to_str().unwrap()).collect();
+            assert_eq!(
+                args,
+                [
+                    "-o",
+                    "BatchMode=yes",
+                    "-o",
+                    "ConnectTimeout=5",
+                    "--",
+                    destination
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn ssh_routes_reject_options_shell_characters_and_malformed_names() {
+        for destination in [
+            "",
+            "-oProxyCommand=evil",
+            "user@-worker",
+            "@worker",
+            "user@",
+            "a@b@c",
+            "worker other",
+            "worker\nother",
+            "worker\0other",
+            "worker;evil",
+            "$(evil)",
+            "`evil`",
+            "worker'",
+            "worker\"",
+            "worker\\evil",
+            "worker/evil",
+            "wörker",
+            "[worker]",
+            "worker:22",
+            "user;evil@worker",
+        ] {
+            assert!(ssh(destination).is_err(), "accepted {destination:?}");
+            assert!(crate::fleet_collect::remote("worker", destination).is_err());
+        }
+    }
 }
