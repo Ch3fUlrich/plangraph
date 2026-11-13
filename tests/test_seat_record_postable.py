@@ -89,3 +89,15 @@ def test_native_record_link_into_drive_mount_keeps_mode_checks(
     assert sv.main(argv) == sv.EXIT_REFUSED
     assert "not group/world-writable" in capsys.readouterr().err
     assert len(sent) == 1
+
+
+def test_mnt_prefix_with_dotdot_is_not_a_drive_path(posting, monkeypatch, capsys):
+    argv, seat, sent = posting
+    path = seat / "record.json"
+    path.chmod(0o666)
+    uid = path.stat().st_uid
+    monkeypatch.setattr(seat_record, "os", SimpleNamespace(name="posix", getuid=lambda: uid))
+    monkeypatch.setattr(Path, "absolute", lambda self: Path("/mnt/c/../../home") / seat.name / self.name)
+    assert sv.main(argv) == sv.EXIT_REFUSED
+    assert "not group/world-writable" in capsys.readouterr().err
+    assert not sent
