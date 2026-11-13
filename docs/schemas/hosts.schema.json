@@ -25,6 +25,8 @@
         "class": { "enum": ["worker", "restricted"], "default": "worker", "description": "Policy label; restricted cap bounds are enforced by Rust." },
         "aliases": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "transport": { "enum": ["local", "keeper", "ssh"] },
+        "ssh_target": { "type": "string", "minLength": 1 },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
         "os": { "enum": ["linux", "windows"] },
         "state_dir": { "type": "string", "minLength": 1 },
         "caps": { "$ref": "#/$defs/caps" },
@@ -68,12 +70,23 @@
         }
       }
     },
+    "command": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
     "repoEntry": {
       "type": "object",
       "additionalProperties": false,
       "required": ["root", "worktrees_root", "remote", "import_roots", "cache_env"],
       "properties": {
         "root": { "type": "string", "minLength": 1 },
+        "live_dir": { "type": "string", "minLength": 1 },
+        "health_checks": {
+          "type": "object", "additionalProperties": false,
+          "required": ["doctor", "whoami", "spawn"],
+          "properties": {
+            "doctor": { "$ref": "#/$defs/command" },
+            "whoami": { "$ref": "#/$defs/command" },
+            "spawn": { "$ref": "#/$defs/command" }
+          }
+        },
         "worktrees_root": { "type": "string", "minLength": 1 },
         "remote": { "type": "string", "minLength": 1 },
         "python": { "type": ["string", "null"], "minLength": 1 },

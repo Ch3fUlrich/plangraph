@@ -453,13 +453,14 @@ def served_models(config, *, env=None, clock=time.monotonic):
 
 def _probe_served_models(config, *, env=None):
     import logging
+    from . import background_process_options
     logger = logging.getLogger(__name__)
     env = dict(env or _probe_child_env.get() or host_probe_env())
     env['OPENCODE_CONFIG_CONTENT'] = config
     try:
         executable = shutil.which('opencode', path=env.get('PATH')) or 'opencode'
-        result = subprocess.run([executable, 'models', '--standalone'], env=env, capture_output=True,
-                                text=True, timeout=10)
+        result = subprocess.run([executable, 'models', '--standalone'], env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                                text=True, encoding='utf-8', errors='replace', timeout=10, **background_process_options())
         if result.returncode == 0:
             import re
             parsed = frozenset(line.strip() for line in result.stdout.splitlines()
@@ -539,9 +540,9 @@ def host_skip_reason(row, *, probe=None, env=None):
     if not model or '/' not in model:
         return None
     child = host_probe_env(env)
-    from .opencode_overlay import OVERLAY_UNKNOWN, OVERLAY_ROOT_MISSING
-    if child.get(OVERLAY_UNKNOWN):
-        return None
+    from .opencode_overlay import OVERLAY_UNKNOWN, OVERLAY_ROOT_MISSING, OVERLAY_ROOT_BROKEN
+    if child.get(OVERLAY_ROOT_BROKEN): return f'root_provider_config_broken: {child[OVERLAY_ROOT_BROKEN]}'
+    if child.get(OVERLAY_UNKNOWN): return None
     # Probe the config the launch will use: S1 renders the gateway providers per run.
     from .opencode_render import render_gateway_providers
     render_reason = render_gateway_providers(child, model)

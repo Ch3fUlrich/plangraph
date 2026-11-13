@@ -11,7 +11,7 @@ from plangraph.spawner.clients import build_command
 def test_agy_harness_dispatch():
     assert build_command('hello', 'gemini-3.8-flash', client='agy') == [
         'agy', '--dangerously-skip-permissions', '--model',
-        'gemini-3.8-flash', '-p', 'hello']
+        'gemini-3.8-flash-high', '-p', '', '--input-format', 'stream-json', '--output-format', 'stream-json']
 
 
 def test_opencode_harness_dispatch():
@@ -26,12 +26,13 @@ def test_unknown_harness_rejected():
 
 def test_qodercli_harness_dispatch():
     assert build_command('hello', 'Qwen3.8-Flash', client='qodercli') == [
-        'qodercli', '-p', 'hello', '--model', 'Qwen3.8-Flash']
+        'qodercli', '-p', '', '--input-format', 'text', '--model', 'Qwen3.8-Flash']
 
 
-@pytest.mark.parametrize('harness,model', [
-    ('agy', 'gemini-3.8-flash'), ('opencode', 'omniroute/cx-gpt-6.1-sol')])
-def test_unmocked_harness_popen(tmp_path, harness, model):
+@pytest.mark.parametrize('harness,model,native_model', [
+    ('agy', 'gemini-3.8-flash', 'gemini-3.8-flash-high'),
+    ('opencode', 'omniroute/cx-gpt-6.1-sol', 'omniroute/cx-gpt-6.1-sol')])
+def test_unmocked_harness_popen(tmp_path, harness, model, native_model):
     binary = tmp_path / harness
     binary.write_text('#!/bin/sh\nprintf "%s\\n" "$0" "$@"\ncat\n')
     binary.chmod(0o755)
@@ -43,5 +44,5 @@ def test_unmocked_harness_popen(tmp_path, harness, model):
     assert child.returncode == 0, stderr
     lines = stdout.decode().splitlines()
     assert lines[0] == str(binary)
-    assert model in lines
+    assert native_model in lines
     assert 'hello' in lines

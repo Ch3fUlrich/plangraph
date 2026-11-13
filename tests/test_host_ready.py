@@ -7,9 +7,20 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.spawner import host_ready as h
+from plangraph.spawner import host_ready_source as source
 
 CONFIG = dict(ssh='invented-alias', repo='/invented/repo', spawner_src='/invented/source',
-              env_file='/invented/env', run_cap=4, floor_mb=3000)
+              env_file='/invented/env', run_cap=4, floor_mb=3000, session_unit='worker')
+
+
+@pytest.fixture(autouse=True)
+def isolated_config(tmp_path, monkeypatch):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    directory = tmp_path / 'plangraph'
+    directory.mkdir()
+    (directory / 'ps-hosts.json').write_text(json.dumps({'hosts': [
+        dict(name=name, target=CONFIG['ssh'], src='/invented/source')
+        for name in ('fiction', 'other', 'slowfiction', 'fastfiction')]}))
 
 
 def runner(argv, **kwargs):
@@ -17,7 +28,11 @@ def runner(argv, **kwargs):
     assert argv[:5] == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
     assert kwargs['timeout'] > 0
     output = ''
-    if 'meminfo' in script:
+    if 'echo src_missing' in script:
+        output = 'ok'
+    elif 'rev-list' in script:
+        output = '0'
+    elif 'meminfo' in script:
         output = 'MemAvailable: 8000000 kB\n'
     elif 'df -Pk' in script:
         output = 'Filesystem 1024-blocks Used Available Capacity Mounted\nfake 9000000 0 9000000 0% /\n'
@@ -37,10 +52,10 @@ def test_green_atomic(tmp_path):
     assert result['live_runs'] == 1
     assert result['mem_available_mb'] == 7812
     assert result['disk_free_gb'] == 8
-    assert result['spawner_session'] is None
+    assert result['spawner_session'] is True
     assert json.loads((tmp_path / 'fiction.json').read_text()) == result
     assert (tmp_path / 'fiction.json').stat().st_mode & 0o777 == 0o600
-    assert list(tmp_path.iterdir()) == [tmp_path / 'fiction.json']
+    assert set(tmp_path.iterdir()) == {tmp_path / 'fiction.json', tmp_path / 'plangraph'}
     assert h.fresh(result)
     assert not h.fresh(result, datetime.now(timezone.utc) + timedelta(minutes=11))
 
@@ -141,18 +156,66 @@ def test_session_probe(tmp_path, session, probe, live):
     assert result['spawner_session'] is live
     assert result['ok'] is live
     assert ('session: command_failed' in result['failures']) is not live
+    assert result['failures'] == ([] if live else ['session: command_failed'])
     assert 'secret-value' not in (tmp_path / 'fiction.json').read_text()
 
 
-def test_state_write_failure(tmp_path, monkeypatch):
+@pytest.mark.parametrize('error', [OSError, UnicodeError, RuntimeError])
+def test_state_write_failure(tmp_path, monkeypatch, error):
     def broken(*args):
-        raise OSError('secret-value')
+        raise error('secret-value')
     monkeypatch.setattr(h, 'atomic_write_private', broken)
     result = h.check_host('fiction', CONFIG, tmp_path, runner)
     assert not result['ok']
     assert result['checked_at']
     assert result['failures'] == ['state: write_failed']
     assert 'secret-value' not in json.dumps(result)
+
+
+def test_session_not_configured(tmp_path):
+    config = dict(CONFIG)
+    del config['session_unit']
+    result = h.check_host('fiction', config, tmp_path, runner)
+    assert not result['ok']
+    assert result['spawner_session'] is None
+    assert result['failures'] == ['session: not_configured']
+
+
+def test_config_error_before_probe(tmp_path, monkeypatch, capsys):
+    config = dict(CONFIG)
+    del config['ssh']
+    path = tmp_path / 'hosts.json'
+    path.write_text(json.dumps({'hosts': {'fiction': config}}))
+    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(path))
+    monkeypatch.setattr(h.Path, 'home', lambda: tmp_path)
+    def never_contact(*args, **kwargs):
+        pytest.fail('host must not be contacted')
+    original = h.check_host
+    monkeypatch.setattr(h, 'check_host', lambda name, cfg, state:
+                        original(name, cfg, state, never_contact))
+    assert h.main(['--json']) == 1
+    output = capsys.readouterr()
+    assert output.err == 'HOST-NOT-READY fiction config invalid_response_or_config\n'
+    assert json.loads(output.out)[0]['reachable'] is False
+
+
+@pytest.mark.parametrize('ps_config', ['{', json.dumps({'hosts': [dict(
+    name='fiction', target='invented-alias', win_src='C:/source')]})])
+def test_deleted_spawner_with_invalid_ps_config(tmp_path, ps_config):
+    directory = tmp_path / 'plangraph'
+    directory.mkdir(exist_ok=True)
+    (directory / 'ps-hosts.json').write_text(ps_config)
+    probes = []
+    def fake(argv, **kwargs):
+        if 'echo src_missing' in argv[-1]:
+            probes.append(argv[-1])
+            return SimpleNamespace(returncode=0, stdout='src_missing')
+        return runner(argv, **kwargs)
+    result = h.check_host('fiction', CONFIG, tmp_path, fake)
+    assert not result['ok'] and result['src_ok'] is False
+    assert len(probes) == 1 and '/invented/source' in probes[0]
+    reason = 'unreadable' if ps_config == '{' else 'unsupported_or_invalid'
+    assert result['failures'] == [f'src_config: {reason}', 'src_missing: failed']
 
 
 @pytest.mark.parametrize('unwritable', [False, True])
@@ -176,3 +239,93 @@ def test_main_state_directory(tmp_path, monkeypatch, capsys, unwritable):
     assert all(r['ok'] is not unwritable for r in records)
     if unwritable:
         assert all(r['failures'] == ['state: write_failed'] for r in records)
+
+
+@pytest.mark.parametrize('src', [123, True, 1.5, ['/source'], {'path': '/source'}, None, ''])
+def test_invalid_source_type(tmp_path, monkeypatch, src):
+    monkeypatch.setattr(source, 'configured_hosts', lambda: [
+        dict(name='fiction', target=CONFIG['ssh'], src=src)])
+    result = h.check_host('fiction', CONFIG, tmp_path, runner)
+    assert not result['ok'] and result['src_ok'] is False
+    assert result['failures'] == ['src_config: route_or_path_unknown']
+    assert result['doctor_ok'] and result['live_runs'] == 1
+
+
+@pytest.mark.parametrize('error', [AttributeError, OverflowError, RuntimeError])
+def test_main_unexpected_host_errors(tmp_path, monkeypatch, capsys, error):
+    path = tmp_path / 'hosts.json'
+    path.write_text(json.dumps({'hosts': {'fiction': CONFIG, 'other': CONFIG}}))
+    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(path))
+    monkeypatch.setattr(h.Path, 'home', lambda: tmp_path)
+    def broken(*args, **kwargs):
+        raise error('secret-value')
+    original = h.check_host
+    monkeypatch.setattr(h, 'check_host', lambda name, cfg, state:
+                        original(name, cfg, state, broken))
+    assert h.main(['--json']) == 1
+    output = capsys.readouterr()
+    records = json.loads(output.out)
+    assert len(records) == 2 and all(not r['ok'] for r in records)
+    assert 'secret-value' not in output.out + output.err
+    for record in records:
+        assert (f"HOST-NOT-READY {record['host']} config invalid_response_or_config\n"
+                in output.err)
+        state = tmp_path / '.local/state/plangraph/host-ready' / (record['host'] + '.json')
+        assert json.loads(state.read_text()) == record
+
+
+@pytest.mark.parametrize('error', [OSError, FileNotFoundError, ValueError, KeyError, TypeError])
+def test_unreadable_ps_config_has_one_reason(tmp_path, monkeypatch, error):
+    def broken():
+        raise error('secret-value')
+    monkeypatch.setattr(source, 'configured_hosts', broken)
+    result = h.check_host('fiction', CONFIG, tmp_path, runner)
+    assert not result['ok'] and result['src_ok'] is False
+    assert result['failures'] == ['src_config: unreadable']
+    assert result['doctor_ok'] and result['live_runs'] == 1
+
+
+@pytest.mark.parametrize('host,reason', [
+    (dict(src=None), 'route_or_path_unknown'),
+    (dict(src=['/source']), 'route_or_path_unknown'),
+    (dict(src={'path': '/source'}), 'route_or_path_unknown'),
+    (dict(target='other-alias', src='/source'),
+     "ps target='other-alias' and overflow ssh='invented-alias' must be the same string"),
+    (dict(win_src='C:/source'), 'unsupported_or_invalid'),
+    (dict(invalid=True), 'unsupported_or_invalid'),
+])
+def test_duplicate_invalid_ps_sources(tmp_path, monkeypatch, host, reason):
+    host = dict(dict(name='fiction', target=CONFIG['ssh']), **host)
+    monkeypatch.setattr(source, 'configured_hosts', lambda: [host, dict(host)])
+    result = h.check_host('fiction', CONFIG, tmp_path, runner)
+    assert not result['ok'] and result['src_ok'] is False
+    assert result['failures'] == [f'src_config: {reason}']
+    assert result['doctor_ok'] and result['live_runs'] == 1
+
+
+def test_duplicate_valid_ps_sources_are_probed_once(tmp_path, monkeypatch):
+    host = dict(name='fiction', target=CONFIG['ssh'], src='/invented/source')
+    monkeypatch.setattr(source, 'configured_hosts', lambda: [host, dict(host)])
+    probes = []
+    def fake(argv, **kwargs):
+        if 'echo src_missing' in argv[-1]:
+            probes.append(argv[-1])
+        return runner(argv, **kwargs)
+    result = h.check_host('fiction', CONFIG, tmp_path, fake)
+    assert result['ok'] and result['failures'] == []
+    assert len(probes) == 2  # One checkout import and one remote-ps import.
+
+
+@pytest.mark.parametrize('error', [MemoryError, RecursionError, KeyboardInterrupt,
+                                  SystemExit, GeneratorExit])
+@pytest.mark.parametrize('stage', ['probe', 'sources', 'state'])
+def test_fatal_host_errors_propagate(tmp_path, monkeypatch, error, stage):
+    def broken(*args, **kwargs):
+        raise error('secret-value')
+    if stage == 'sources':
+        monkeypatch.setattr(source, 'configured_hosts', broken)
+    elif stage == 'state':
+        monkeypatch.setattr(h, 'atomic_write_private', broken)
+    with pytest.raises(error, match='secret-value'):
+        h.check_host('fiction', CONFIG, tmp_path, broken if stage == 'probe' else runner)
+    assert not (tmp_path / 'fiction.json').exists()

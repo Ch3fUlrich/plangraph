@@ -151,7 +151,7 @@ def test_runner_review_seat_on_omniroute_is_witnessed_from_call_log(tmp_path, mo
     monkeypatch.setattr(gw, 'fetch_rows', fetch)
     async def factory(*args, **kwargs):
         seen['cfg'] = json.loads(kwargs['env'].get('OPENCODE_CONFIG_CONTENT') or '{}')
-        async def communicate():
+        async def communicate(input=None):
             return (b'VERDICT: ACCEPT' if returncode == 0 else b'seat died, no verdict line'), b''   # D-4430: a final verdict at rc 1 completes
         return SimpleNamespace(pid=FAKE_PID, returncode=returncode, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)

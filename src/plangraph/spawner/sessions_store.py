@@ -144,6 +144,9 @@ class _StoreMixin:
 
     def _action_run(self, action, name, fn, dry):
         try:
+            from .target import quota_paused
+            if action in ('launch', 'relaunch') and quota_paused(self._state, name):
+                raise ParameterRefused('quota pause')
             result = fn()
         except ParameterRefused as exc:
             if not dry:

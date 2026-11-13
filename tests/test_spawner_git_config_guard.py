@@ -19,7 +19,7 @@ class FakeProcess:
         self._stdout = stdout
         self._stderr = stderr
 
-    async def communicate(self):
+    async def communicate(self, input=None):
         return self._stdout, self._stderr
 
 
@@ -368,7 +368,7 @@ def test_mutated_config_on_cancelled_job(tmp_path):
             subprocess.run(["git", "config", "core.hooksPath", "secret-path"], cwd=self.cwd,
                            check=True, capture_output=True)
 
-        async def communicate(self):
+        async def communicate(self, input=None):
             await asyncio.Event().wait()
 
     async def killer(pid):

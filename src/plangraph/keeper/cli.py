@@ -10,7 +10,7 @@ import argparse
 import os
 import sys
 
-from . import (cli_admin, cli_audit_meta, cli_changelog, cli_check, cli_names,
+from . import (cli_audit_meta, cli_changelog, cli_check, cli_names, cli_output_verbs,
                cli_oversight, cli_progress, cli_token, cli_verbs, outbox)
 from .cli_verbs import Session
 
@@ -42,6 +42,7 @@ HANDLERS = {
     "withdraw": cli_verbs.cmd_withdraw,
     "reopen": cli_verbs.cmd_reopen,
     "set-kind": cli_verbs.cmd_set_kind,
+    "close-merged": cli_output_verbs.cmd_close_merged,
     "close": cli_verbs.cmd_close,
     "legacy": cli_verbs.cmd_legacy,
     "priority": cli_verbs.cmd_priority,
@@ -166,9 +167,19 @@ def _add_writes(sub):
     set_kind.add_argument("key")
     set_kind.add_argument("kind", help="question or operator_task (the keeper checks)")
 
-    close = _p(sub, "close", help="router: close a tier-none item on a decision batch")
+    merged = _p(sub, "close-merged", help="router: close one merged review on a GO decision")
+    merged.add_argument("key")
+    merged.add_argument("decision_id", metavar="D-NNN")
+    merged.add_argument("--family", dest="families", action="append", required=True,
+                        help="seat family; repeat for high tier (keeper validates)")
+
+    close = _p(sub, "close", help="claimant/router: close tier-none or decision/operator_task items on proof")
     close.add_argument("key")
-    close.add_argument("--batch", required=True, metavar="PATH@SHA",
+    proof = close.add_mutually_exclusive_group()
+    close.add_argument("--epoch", type=int,
+                       help="current claim epoch (claimants require it with --decision-ref; not --batch)")
+    proof.add_argument("--decision-ref", metavar="D-NNNN")
+    proof.add_argument("--batch", metavar="PATH@SHA",
                        help="batch file path@sha256 inside a batch_roots dir")
 
     legacy = _p(sub, "legacy", help="router: set an open legacy item's state")
@@ -301,6 +312,7 @@ def _cmd_sync(args) -> int:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "admin":
+        from . import cli_admin
         return cli_admin.dispatch(args)
     if args.command == "sync":
         return _cmd_sync(args)

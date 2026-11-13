@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +24,8 @@ from plangraph.keeper.schema import WINDOW_CLASSES
 from plangraph.mimo_policy import MimoPathError, check_mimo_path
 
 __all__ = ["TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "leg_active",
-           "load_legs", "with_measured"]
+           "load_legs", "with_measured", "EXPLICIT_LEGS", "EXPLICIT_WRITERS", "spawnable_legs",
+           "CX_EFFORTS"]
 
 #: Cost tiers, cheapest first.
 TIERS = ("trial", "free", "subscription", "paid")
@@ -31,12 +34,14 @@ HARNESSES = ("qodercli", "opencode", "agy", "claude")
 #: How a review leg reads the change: with its own tools, or only from a diff the
 #: spawner inlines into the prompt (D-3134/D-3173: luna, mimo-pro give no verdict
 #: in tool mode).
-TOOL_MODES = ("tools", "inline-only")
+TOOL_MODES = ("tools", "inline-only", "prompt-only")
 #: Models that never sit as a review seat, routed or hand-picked (D-3225:
 #: opencode-go/qwen3.8-flash via OmniRoute returned empty content 6/6, ~289 s).
 NO_VERDICT_SEATS = frozenset({"opencode-go/qwen3.8-flash"})
 # Advisory only: these models remain routable, but explicit reviews warn.
 REVIEW_UNFIT_SEATS = frozenset({"mimo/mimo-v2.6-flash"})
+#: Reasoning-effort suffixes OmniRoute's cx provider serves (/v1/models, 2026-11-09).
+CX_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
 @dataclass(frozen=True)
@@ -49,13 +54,15 @@ class Leg:
     model: str
     family: str
     windows: tuple[str, ...]
-    max_request_tokens: int
-    trains_on_data: bool
+    max_request_tokens: int | None
+    trains_on_data: bool | None
     claude_family: bool = False
     note: str = ""
     roles: tuple[str, ...] = ("orchestrate",)
     tool_mode: str = "tools"
     disabled: str | None = None
+    expires: float | None = None
+    effort: str | None = None
 
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
@@ -64,14 +71,13 @@ def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=Fals
                claude, note)
 
 
-#: D25 order.  Position is the preference inside a tier.
 DEFAULT_LEGS: tuple[Leg, ...] = (
     _leg("qodercli-qwen3.8-flash", "free", "qodercli", "Qwen3.8-Flash", "qwen",
          ("128k", "256k"), 100000, False,
          note="free while qoder credits remain, until its rate limit"),
     _leg("mimo-v2.6-flash", "subscription", "opencode",
          "mimo/mimo-v2.6-flash", "mimo", ("128k", "256k", "1m"), 200000, False),
-    _leg("agy-gemini-3.8-flash", "subscription", "agy", "gemini-3.8-flash", "gemini",
+    _leg("agy-gemini-3.8-flash", "free", "agy", "gemini-3.8-flash", "gemini",
          ("128k", "256k", "1m"), 900000, False,
          note="gemini after its Friday-evening reset"),
     _leg("agy-sonnet-5.5", "subscription", "agy", "claude-sonnet-5-5-medium", "claude",
@@ -104,13 +110,31 @@ DEFAULT_LEGS = (
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
+    Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-high",
+        "gemini", ("128k", "256k", "1m"), 900000, False, roles=("implement", "review")),
+    Leg("opencode-big-pickle", "free", "opencode", "opencode/big-pickle",
+        "glm", ("128k",), 100000, True, roles=("implement", "review")),
+    Leg("agy-gpt-oss-120b", "subscription", "agy", "gpt-oss-120b-medium",
+        "openai", ("128k",), 100000, False, roles=("review",)),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False,
         roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
-    _legacy["agy-sonnet-5.5"],
-    # D-3552: opencode-go review seats, placed before the paid deepseek
-    # leg so existing order is unchanged; deepseek/glm lifted for review only (route_policy).
+    _replace(_legacy["agy-sonnet-5.5"], roles=("orchestrate", "review")),
+    Leg("agy-claude-opus", "subscription", "agy", "claude-opus-4-6-thinking",
+        "claude", ("128k", "256k"), 180000, False, claude_family=True, roles=("review",)),
+    Leg("agy-opus-5.5", "subscription", "agy", "claude-opus-5-5-high",
+        "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
+        roles=("review",)),
+    Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-flash",
+        "deepseek", ("128k",), 100000, False, roles=("implement", "review", "orchestrate")),
+    Leg("omniroute-muse-spark", "subscription", "opencode",
+        "omniroute/muse-spark-1.3-contributor", "muse", ("128k",), 100000, False,
+        roles=("implement", "review", "orchestrate")),
+    Leg("agy-opus", "subscription", "agy", "claude-opus-5-5-medium", "claude",
+        ("128k",), 100000, False, claude_family=True, roles=("review", "orchestrate")),
+    Leg("opencode-gemini-4-argon", "free", "opencode", "opencode/gemini-4-argon",
+        "gemini", ("128k",), 100000, True, roles=("review", "orchestrate")),
     Leg("opencode-go-gemini-4-argon", "subscription", "opencode",
         "opencode-go/gemini-4-argon", "gemini", ("128k",), 100000,
         False, roles=("review",)),
@@ -133,31 +157,94 @@ DEFAULT_LEGS = (
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
         False, roles=("review",)),
-    # D-4193: one gateway review leg, placed after the opencode-go review
-    # legs as the fallback seat; its upstream route is not verified.
     Leg("omniroute-gemini-3.8-flash", "subscription", "opencode",
         "omniroute/gemini-3.8-flash", "gemini", ("128k",), 100000, True,
         roles=("review",),
         disabled="D-4193 upstream route not verified",
         note="D-4193 upstream route not verified, conservative"),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
-    # D-3605 Haiku leg: last, so it sorts after every non-claude review leg.
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
-        tool_mode="tools",
+        tool_mode="prompt-only",
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# D-3828: retain every leg and its review order, but never fall back writers.
-DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
-                             disabled=leg.disabled or (
-                                 'D-3828: writer disabled; no retained review or orchestrate role'
-                                 if leg.roles == ('implement',) else None))
-                     if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
+# Preserve role-neutral keeper admission before applying implement-only policy.
+READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
+                               disabled=leg.disabled or (
+                                   'D-3828: writer disabled; no retained review or orchestrate role'
+                                   if leg.roles == ('implement',) else None))
+                       if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
+
+# D-5206/D-5212 change writer priority, not the registered fallback roles.
 WRITER_ORDER: tuple[str, ...] = (
-    "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
+    "cx-gpt-6.1-sol-xhigh",  # D-5206: effort-qualified default, then agy fallback
+    "agy-gemini-3.8-flash",
 )
-LEAD_WRITER = "cx-gpt-6.1-sol"
+LEAD_WRITER = WRITER_ORDER[0]
+
+#: Operator 2026-11-09: Claude 5.5 seats and effort variants, spawnable by an
+#: explicit ``--leg`` pick (or the model override) only.  They are NOT in
+#: DEFAULT_LEGS, except Sol xhigh promoted below (D-5206); Claude is never an
+#: automatic writer; ``SpawnService.route``
+#: appends them as ``explicit_only`` skips, ``plan_spawn`` does not.  Model ids are what ``agy models`` and OmniRoute
+#: /v1/models served that day (agy serves no Sonnet xhigh, cx no -ultra).  Claude
+#: legs are claude-family, so the D-2511 fence keeps them off claude-written work.
+#: A cx effort model needs a per-run opencode entry (``opencode_render``).
+EXPLICIT_LEGS: tuple[Leg, ...] = (
+    *(Leg(f"agy-claude-{m}-5-5-{e}", "subscription", "agy", f"claude-{m}-5-5-{e}",
+          "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
+          roles=("review", "implement"), effort=e, note="operator 2026-11-09: Antigravity quota")
+      for m in ("sonnet", "opus") for e in ("low", "medium", "high")),
+    *(Leg(f"agy-gemini-3.8-flash-{e}", "subscription", "agy", f"gemini-3.8-flash-{e}",
+          "gemini", ("128k", "256k", "1m"), 900000, False, roles=("review",))
+      for e in ("low", "medium", "high")),
+    *(Leg(f"cx-gpt-6.1-sol-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6.1-sol-{e}",
+          "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",), effort=e)
+      for e in CX_EFFORTS),
+    *(Leg(f"cx-gpt-6-luna-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6-luna-{e}",
+          "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
+          tool_mode="inline-only")
+      for e in CX_EFFORTS),
+)
+# Promote the existing effort leg; retain plain Sol as an active explicit-only pick.
+_plain_sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
+_sol_xhigh = next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER)
+DEFAULT_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in DEFAULT_LEGS)
+EXPLICIT_LEGS = (_plain_sol, *(leg for leg in EXPLICIT_LEGS if leg.id != LEAD_WRITER))
+# Keeper readiness keeps its existing admission, but uses the current routed id.
+READINESS_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in READINESS_LEGS)
+#: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
+EXPLICIT_WRITERS: frozenset[str] = frozenset(
+    leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)
+
+# Order-only declarations: unknown capabilities stay disabled and role-less.
+# JSON overrides still require all capability fields, even for declarations.
+EXPLICIT_LEGS += tuple(
+    Leg(id, 'subscription', harness, model, family, (), None, None,
+        claude_family=family == 'claude', roles=(), effort=effort,
+        disabled='D-5696: capability evidence required')
+    for id, harness, model, family, effort in (
+        ('agy-gemini-4-hydrogen-high', 'agy', 'gemini-4-hydrogen-high', 'gemini', 'high'),
+        ('agy-gemini-4-hydrogen-medium', 'agy', 'gemini-4-hydrogen-medium', 'gemini', 'medium'),
+        ('cx-gpt-6.1-terra-medium', 'opencode', 'omniroute/cx-gpt-6.1-terra-medium', 'gpt', 'medium'),
+        ('cx-gpt-6.1-terra-xhigh', 'opencode', 'omniroute/cx-gpt-6.1-terra-xhigh', 'gpt', 'xhigh'),
+        ('muse-ember-max', 'opencode', 'omniroute/muse-ember-max', 'muse', 'max'),
+        ('claude-fable-5.2-high', 'claude', 'claude-fable-5-2', 'claude', 'high')))
+
+
+def spawnable_legs() -> tuple[Leg, ...]:
+    """Every leg an explicit pick may name: the routed legs first, so a shared model
+    resolves to its DEFAULT_LEGS leg.  Read at call time (callers and tests rebind
+    DEFAULT_LEGS)."""
+    return (*DEFAULT_LEGS, *EXPLICIT_LEGS)
+
+
+def explicit_only_skips(role: str) -> tuple[dict, ...]:
+    """`route` output rows for the explicit legs serving ``role``: listed, never routed."""
+    return tuple({"leg": leg.id, "reason": "explicit_only", "evidence": {
+        "kind": "explicit_only", "reason": "spawn with --leg " + leg.id}}
+        for leg in EXPLICIT_LEGS if role in leg.roles)
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",
@@ -165,9 +252,10 @@ _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",
 _STR_FIELDS = ("id", "tier", "harness", "model", "family", "note", "tool_mode")
 
 
-def leg_active(leg: Leg) -> bool:
-    """Local policy may disable a leg; OmniRoute owns temporal availability."""
-    return leg.disabled is None
+def leg_active(leg: Leg, now=None) -> bool:
+    """Temporary operator stops expire; permanent safety exclusions do not."""
+    return leg.disabled is None or (leg.expires is not None and
+                                   (time.time() if now is None else now) >= leg.expires)
 
 
 def _is_int(value) -> bool:
@@ -186,7 +274,7 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         except MimoPathError as exc:
             problems.append(f"{where}.model: {exc}")
     for key in raw:
-        if key not in _FIELDS and key != "expires":
+        if key not in _FIELDS:
             problems.append(f"{where}: unknown field {key!r}")
     for key in _REQUIRED:
         if key not in raw:
@@ -205,6 +293,11 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         problems.append(f"{where}.tool_mode: {raw['tool_mode']!r} not in {TOOL_MODES}")
     windows = raw.get("windows")
     disabled = raw.get("disabled")
+    if raw.get("effort") is not None and raw["effort"] not in CX_EFFORTS:
+        problems.append(f"{where}.effort: must be one of {CX_EFFORTS} or null")
+    expiry = raw.get('expires')
+    if expiry is not None and (isinstance(expiry, bool) or not isinstance(expiry, (int, float)) or not math.isfinite(expiry)):
+        problems.append(f"{where}.expires: must be a finite epoch timestamp")
     if disabled is not None and (not isinstance(disabled, str) or not disabled.strip()):
         problems.append(f"{where}.disabled: must be a non-empty reason string")
     roles = raw.get("roles", ("orchestrate",))
@@ -229,10 +322,9 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     if len(problems) > start:
         return None
     data = dict(raw)
-    data.pop("expires", None)  # Old operator rows remain loadable, without local expiry.
     data["windows"] = tuple(windows)
     data["roles"] = tuple(roles)
-    return Leg(**data)
+    return Leg(effort=data.pop("effort", None), **data)
 
 
 def load_legs(path: Path | None) -> tuple[Leg, ...]:

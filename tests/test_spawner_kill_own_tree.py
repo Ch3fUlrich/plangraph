@@ -129,7 +129,7 @@ def test_nt_taskkill_per_snapshot_member_and_msys_winpid(tmp_path):
     cmds = []
 
     class Proc:
-        async def communicate(self):
+        async def communicate(self, input=None):
             return b'', b''
 
     async def factory(*argv, **kw):
@@ -160,7 +160,7 @@ def test_spawn_tolerates_process_without_pid(tmp_path):
     class NoPid:
         returncode = 0
 
-        async def communicate(self):
+        async def communicate(self, input=None):
             return b'', b''
 
     async def factory(*args, **kwargs):
@@ -203,7 +203,7 @@ class _Fake:
     def __init__(self, pid):
         self.pid = pid
 
-    async def communicate(self):
+    async def communicate(self, input=None):
         return b'', b''
 
 
@@ -340,7 +340,7 @@ def test_unproven_pid_timeout_ends_kill_incomplete_without_blocking(monkeypatch)
     killed = []
 
     class Hanging(_Fake):
-        async def communicate(self):
+        async def communicate(self, input=None):
             await asyncio.Event().wait()                    # never exits unless killed
 
     async def run():

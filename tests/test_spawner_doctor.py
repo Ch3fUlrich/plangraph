@@ -32,17 +32,22 @@ def host(tmp_path, monkeypatch):
     from plangraph.planner import legs
     from plangraph.spawner import service, leg_probe
     monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / '.config'))
+    config = tmp_path / '.config/plangraph'
+    config.mkdir(parents=True)
+    (config / 'ps-hosts.json').write_text('{"hosts": []}')
     monkeypatch.setenv('PATH', str(tmp_path))
-    token = tmp_path / 'credential'
-    token.write_text('planted-credential-value')
+    (token := tmp_path / 'credential').write_text('planted-credential-value')
     token.chmod(0o600)
     monkeypatch.setenv('PG_TOKEN_FILE', str(token))
     monkeypatch.setenv('PG_URL', 'http://unused.invalid')
     monkeypatch.setenv('PLANTED_SECRET', 'planted-private-environment')
     monkeypatch.setattr(legs, 'HARNESSES', ('fake', 'missing'))
-    binary = tmp_path / 'fake'
-    binary.write_text(f'#!{sys.executable}\nprint("fake version 1")\n')
+    (binary := tmp_path / 'fake').write_text(f'#!{sys.executable}\nprint("fake version 1")\n')
     binary.chmod(0o700)
+    (helper := tmp_path / 'pg-spawnd').write_text(f'#!{sys.executable}\nprint("[]")\n')
+    helper.chmod(0o700)
+    monkeypatch.setattr(d, '__file__', str(tmp_path / 'src/plangraph/spawner/doctor.py'))
     class Service:
         runner = object()
         leg_reader = None
@@ -63,7 +68,7 @@ def host(tmp_path, monkeypatch):
 
 def watchdog_env(host, text):
     path = host / '.config/plangraph/watchdog.env'
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     return path
 

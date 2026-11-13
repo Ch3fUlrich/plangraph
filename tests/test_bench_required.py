@@ -75,14 +75,18 @@ def test_absent_explicit_operator_order():
     p = plan()
     assert p.legs == WRITERS
     assert p.p_source == "operator-order"
-    assert {g["leg"] for g in p.gaps} == {l.id for l in WRITERS}
+    assert {g["leg"] for g in p.gaps} == {l.id for l in POLICY if 'implement' in l.roles and not l.disabled}
     assert "benchmark data absent" in p.reasons
 
 
 @pytest.mark.parametrize("data", [None, rows(WRITERS[1:])])
 def test_strict_names_missing(data):
-    with pytest.raises(routing.SpawnRefused, match="benchmark rows missing: .*cx-gpt-6.1-sol"):  # D-3745
+    # D-5206/D-5212: the missing first writer is now effort-qualified Sol.
+    with pytest.raises(routing.SpawnRefused, match=r"benchmark rows missing: .*cx-gpt-6\.1-sol-xhigh") as exc:
         plan(benchmark=data, strict=True)
+    assert {g["leg"] for g in exc.value.gaps} == {
+        l.id for l in POLICY if 'implement' in l.roles and not l.disabled
+        and (data is None or l.model not in data)}
 
 
 def database(path, models, table="catalog_benchmarks"):
@@ -99,6 +103,41 @@ def test_read_only_loader(tmp_path, table):
     data, errors = routing.benchmark_rows_from_db(path)
     assert not errors and data[WRITERS[0].model]["aa_intelligence"] == 45
     assert path.read_bytes() == before
+
+
+def test_provider_qualified_rows_reach_legs_and_missing_stays_eligible(tmp_path):
+    from plangraph.planner.benchmarks import benchmark_rows_from_db
+    measured = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-argon')
+    missing = next(l for l in DEFAULT_LEGS if l.id == 'opencode-big-pickle')
+    path = database(tmp_path / 'bench.db', [f'{measured.harness}/{measured.model}'])
+    before = path.read_bytes()
+    data, errors = benchmark_rows_from_db(path)
+    assert not errors
+    assert data[measured.model]['aa_intelligence'] == 45
+    p = routing.plan_spawn(
+        {'estimate_tokens': 1000}, role='review', writer_families=('gpt',),
+        legs=(measured, missing), benchmark=data,
+        leg_reader=lambda *a, **k: {'state': 'ok', 'evidence': None})
+    assert {l.id for l in p.legs} == {measured.id, missing.id}
+    assert p.gaps == ({'leg': missing.id, 'model': missing.model,
+                       'reason': 'no benchmark row'},)
+    assert {d['leg']: d['p_source'] for d in p.candidates} == {
+        measured.id: 'measured', missing.id: 'prior'}
+    assert not any(measured.id in reason and 'no benchmark row' in reason for reason in p.reasons)
+    assert path.read_bytes() == before
+
+
+def test_exact_benchmark_rows_win_and_unmeasured_legs_are_not_filled(tmp_path):
+    bare = tuple(l for l in DEFAULT_LEGS if '/' not in l.model)
+    path = database(tmp_path / 'bench.db', [f'{l.harness}/{l.model}' for l in bare])
+    with sqlite3.connect(path) as conn:
+        conn.execute('INSERT INTO catalog_benchmarks VALUES (?, 60)', (bare[0].model,))
+    data, errors = routing.benchmark_rows_from_db(path)
+    assert not errors
+    assert data[bare[0].model]['aa_intelligence'] == 60
+    for leg in bare[1:]:
+        assert data[leg.model] == data[f'{leg.harness}/{leg.model}']
+    assert 'opencode/big-pickle' not in data
 
 
 def test_missing_table_and_file(tmp_path):

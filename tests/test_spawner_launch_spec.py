@@ -82,9 +82,9 @@ def test_tools(request_data, role, tmp_path, explicit):
     result = json.loads(out)
     assert result['argv'][0] == str(exe)
     assert result['cwd'] == str(tmp_path)
-    # opencode (implement) takes the prompt on stdin; qodercli (review) in argv with stdin null.
-    assert (result['stdin'] is None) == (role == 'review')
-    prompt = result['stdin'] or ' '.join(result['argv'])
+    assert result['stdin'] is not None
+    prompt = result['stdin']
+    assert request_data['prompt'] not in result['argv']
     assert ('GIT_AUTHOR_NAME' in result['env']) == (role == 'implement')
     assert ('GIT_AUTHOR_EMAIL' in result['env']) == (role == 'implement')
     assert (IMPLEMENT_HEADER in prompt) == (role == 'implement')
@@ -103,6 +103,49 @@ def test_opencode(request_data):
     assert result['stdin'] == request_data['prompt']
     prefix = request_data['state'] + '/launch/' + request_data['run_id'] + '/'
     assert all(result['env'][key].startswith(prefix) for key in ('HOME', 'XDG_CONFIG_HOME'))
+
+
+def test_agy_stream_spec(request_data):
+    request_data.update(leg={'id': 'agy-gemini-3.8-flash'}, prompt='é\n' + 'x' * (300 * 1024))
+    result = spec.build(request_data)
+    assert request_data['prompt'] not in result['argv']
+    assert json.loads(result['stdin'])['message']['content'] == result['prompt'] == request_data['prompt']
+
+
+@pytest.mark.parametrize('leg_id', ['agy-gemini-3.8-flash', 'qodercli-qwen3.8-flash', 'opencode-glm-5.3-flash-free'])
+@pytest.mark.parametrize('dry_run', [False, True])
+@pytest.mark.parametrize('size', [16, 200 * 1024], ids=['short', '200KiB'])
+def test_real_producer_prompt_stays_out_of_env(request_data, monkeypatch, leg_id, dry_run, size):
+    from plangraph.routing_support.clients import build_child_env
+    prompt = 'review payload\né\n' + 'x' * size + '\n\n'
+    request_data.update(prompt=prompt, leg={'id': leg_id}, dry_run=dry_run)
+    carriers = ('PROMPT', 'prompt', 'PrOmPt', 'PROMPT_TEXT', 'PLANGRAPH_TASK_PROMPT', 'prompt_suffix')
+    for name in carriers:
+        monkeypatch.setenv(name, prompt)
+    settings = dict(SHELL_PROMPT_THEME='minimal', CLIENT_PROMPT_TEMPLATE_FILE='template.txt')
+    for name, value in settings.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv('PATH', request_data['cwd'])
+    # Use the real producer, not the fixture's synthetic child env. Exercise both
+    # inherited and explicitly supplied legacy prompt env carriers.
+    monkeypatch.setattr(spec.runner, 'build_child_env', build_child_env)
+    env = build_child_env(dict.fromkeys(carriers, prompt) | settings)
+    assert not set(carriers).intersection(env)
+    assert {name: env[name] for name in settings} == settings
+    result = spec.build(request_data)
+    assert not set(carriers).intersection(result['env'])
+    assert {name: result['env'][name] for name in settings} == settings
+    assert all(prompt not in value for value in [*result['argv'], *result['env'].values()])
+    payload = json.loads(result['stdin'])['message']['content'] if leg_id.startswith('agy-') else result['stdin']
+    assert payload == result['prompt'] == prompt
+
+
+@pytest.mark.parametrize('harness,leg', [('agy', 'agy-gemini-3.8-flash'), ('qodercli', 'qodercli-qwen3.8-flash')])
+@pytest.mark.parametrize('tail', [[], ['-p'], ['-p', 'private task']])
+def test_transport_refusal_is_named(request_data, monkeypatch, harness, leg, tail):
+    request_data['leg'] = {'id': leg}
+    monkeypatch.setattr(spec.runner, 'build_command', lambda **kw: [harness, *tail])
+    assert invoke(request_data) == (2, '', 'stdin_prompt_flag_missing: expected -p with an empty value\n')
 
 
 def test_dry(request_data, monkeypatch):
@@ -182,7 +225,7 @@ def test_refusals(request_data, monkeypatch, kind):
         monkeypatch.setattr(spec, 'host_skip_reason_async', unavailable)
     elif kind == 'launch':
         monkeypatch.setattr(spec.runner, '_is_nt', lambda: True)
-        request_data['prompt'] = 'x' * 40000
+        monkeypatch.setattr(spec.runner, '_resolve_launch', lambda *a, **kw: ('qodercli', 'command_line_too_long'))
     elif kind == 'inline_diff_failed':
         def fail(*a, **kw):
             raise InlineDiffError('blocked')

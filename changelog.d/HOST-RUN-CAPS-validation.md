@@ -1,0 +1,1 @@
+- **HOST-RUN-CAPS slice 2 fix:** Validate CLI card, prompt, review scope and route before RAM admission can launch overflow or queue a request. Preserve the explicit card-required refusal and pin the default RAM refusal's free memory, floor and role reservation in regression tests.

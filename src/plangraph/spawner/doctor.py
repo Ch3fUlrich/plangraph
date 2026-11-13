@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 import shutil
 import stat
+import subprocess
 import sys
 import urllib.request
 
@@ -40,7 +41,7 @@ def load_watchdog_env():
 
 
 def clean(value):
-    from .runner import redact
+    from .env_redact import redact_output
     from .env_redact import redact_env_values
     text = redact_env_values(str(value), os.environ)
     # Also scrub unstructured subprocess/HTTP errors, including opaque tokens.
@@ -54,7 +55,7 @@ def clean(value):
             text = text.replace(secret, '[REDACTED]')
     except (KeyError, OSError, UnicodeError):
         pass
-    return ' '.join(redact(text).split())[:600]
+    return ' '.join(redact_output(text).split())[:600]
 
 
 async def mcp(module, command=None):
@@ -145,11 +146,92 @@ async def harness(name):
         await child.wait()
 
 
+def host_path(checks):
+    from plangraph.fleet_sync.genconfig import config_dir
+    try:
+        registry = json.loads((config_dir() / 'hosts.json').read_text())
+        name = (os.environ.get('PLANGRAPH_HOST_NAME') or registry['self']).casefold()
+        hosts = registry['hosts']
+        if not isinstance(hosts, list):
+            raise ValueError('invalid hosts')
+        matches = []
+        for candidate in hosts:
+            aliases = candidate.get('aliases', [])
+            if not isinstance(aliases, list):
+                raise ValueError('invalid aliases')
+            if name in [s.casefold() for s in [candidate['id'], *aliases]]:
+                matches.append(candidate)
+        host = next(iter(matches))
+        env = host.get('env', {})
+        if not isinstance(env, dict):
+            raise ValueError('invalid env')
+        key = 'PATH'
+        if host.get('os') == 'windows':
+            key = next((key for key in env if key.casefold() == 'path'), 'PATH')
+        if key not in env:
+            return None
+        path = env[key]
+        if not isinstance(path, str) or not path or '\0' in path:
+            raise ValueError('invalid PATH')
+        return path
+    except FileNotFoundError:
+        return None  # The registry is optional; a present but broken one is not.
+    except StopIteration:
+        detail = 'host identity mismatch: no matching id or alias'
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        detail = 'invalid host registry'
+    checks.append(dict(name='host_path', status='fail', detail=detail))
+    return None
+
+
 async def diagnose(probe=False):
+    checks = []
+    original = os.environ.get('PATH')
+    path = host_path(checks)
+    try:
+        if path is not None:
+            os.environ['PATH'] = path
+        return await _diagnose(probe, checks)
+    finally:
+        if path is not None:
+            if original is None:
+                os.environ.pop('PATH', None)
+            else:
+                os.environ['PATH'] = original
+
+
+async def _diagnose(probe, checks):
     from plangraph.planner.legs import HARNESSES
     from .service import SpawnService
     from .leg_probe import probe_many
-    checks, plans = [], {}
+    plans = {}
+    def source_checks():
+        from .remote_ps import configured_hosts, MAX_WORKERS, TIMEOUT as probe_timeout
+        try:
+            count = len(configured_hosts())
+        except (OSError, ValueError, KeyError, TypeError):
+            count = 0
+        timeout = max(TIMEOUT, ((count + MAX_WORKERS - 1) // MAX_WORKERS) * probe_timeout + TIMEOUT)
+        binary = shutil.which('pg-spawnd') or 'pg-spawnd'
+        detail = 'host query failed'
+        try:
+            result = subprocess.run([binary, 'doctor-sources'], check=False,
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, timeout=timeout)
+            rows = json.loads(result.stdout)
+            if (result.returncode == 0 and isinstance(rows, list)
+                    and all(isinstance(row, dict)
+                            and all(isinstance(row.get(key), str)
+                                    for key in ('name', 'status', 'detail'))
+                            for row in rows)):
+                return [{key: row[key] for key in ('name', 'status', 'detail')}
+                        for row in rows]
+        except FileNotFoundError:
+            detail = 'unavailable'
+        except (OSError, subprocess.TimeoutExpired, ValueError, UnicodeError):
+            pass
+        return [dict(name='ps_hosts', status='fail', detail=detail)]
+    checks.extend(await asyncio.to_thread(source_checks))
 
     async def check(name, operation):
         try:

@@ -154,7 +154,7 @@ def test_real_spawn_warning_selection(tmp_path, monkeypatch, explicit):
     monkeypatch.setattr(service, '_save', capture)
     record = asyncio.run(service.spawn(
         card={'estimate_tokens': 100}, prompt='Review', role='review',
-        writer_families=['gpt'], override_reason='hermetic regression',
+        writer_families=['gpt'], override_reason='hermetic regression', wait_seconds=1,
         **({'leg': chosen.id} if explicit else {})))
     assert len(launches) == 1
     expected = ['review_unfit: mimo/mimo-v2.6-flash'] if explicit else []

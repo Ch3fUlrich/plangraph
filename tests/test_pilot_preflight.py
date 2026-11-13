@@ -15,7 +15,7 @@ if SPEC.loader and Path(SPEC.origin).exists():
 SECRET = "".join(("pilot", "sentinel", "private"))
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    # Helper executables need an executable mount, independent of --basetemp.
+    monkeypatch.delenv("PREFLIGHT_TOOLS_DIR", raising=False)
     tmp_path = Path(tempfile.mkdtemp(prefix="pilot-tests-", dir="/tmp"))
     for key in list(os.environ):
         if key.startswith(("PG_", "PLANGRAPH_", "GIT_")):
