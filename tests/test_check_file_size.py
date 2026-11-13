@@ -362,7 +362,7 @@ class GateHookTests(RepoFixture):
         self.assertEqual((ROOT / m.group(1) / "pre-push").resolve(),
                          HOOK.resolve())
         self.assertTrue(os.access(HOOK, os.X_OK), "pre-push not executable")
-        self.assertIn("file_size_gate()", HOOK.read_text(encoding="utf-8"))
+        self.assertIn("file_size_gate(rec[1])", HOOK.read_text(encoding="utf-8"))
 
 
 class RealTreeTests(unittest.TestCase):

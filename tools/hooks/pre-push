@@ -158,9 +158,9 @@ def identity_gate(base, head):
     return 0
 
 
-def file_size_gate():
+def file_size_gate(head=None):
     """tools/check_file_size.py on the pushing checkout: 0 clean, 1 refuse."""
-    r = subprocess.run([PYTHON, str(FILE_SIZE)], capture_output=True, text=True, timeout=60)
+    r = subprocess.run([PYTHON, str(FILE_SIZE), *(["--head", head] if head else [])], capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         sys.stderr.write(r.stdout + r.stderr)
         print("pre-push: file-size gate failed: push refused (split the file, "
@@ -246,7 +246,7 @@ def push_main():
         return 0
     PYTHON = python_interpreter(Path(git_out("rev-parse", "--show-toplevel")))
     print(f"pre-push Python: {PYTHON}", flush=True)
-    if file_size_gate():
+    if any(file_size_gate(rec[1]) for rec in refs):
         return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None

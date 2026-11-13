@@ -40,11 +40,14 @@ author forgot the newline.
 Exit: 0 clean (or updated), 1 violations or malformed config, 2 usage.
 """
 import argparse
+import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 LIMIT = 800
+DEFAULT_LIMIT = LIMIT
 BASELINE_NAME = ".filesize-baseline"
 ALLOW_NAME = ".filesize-allow"
 #: Vendored / generated trees; both vendor spellings are covered.
@@ -102,13 +105,14 @@ def full_path(root, rel):
     return os.path.join(root, *rel.split("/"))
 
 
-def read_allow(path):
+def read_allow(path, text=None):
     """``(allowed, errors)`` - `path reason` per line; a reason is mandatory."""
     allowed, errors = set(), []
-    if not os.path.isfile(path):
-        return allowed, errors
-    with open(path, encoding="utf-8", errors="replace") as handle:
-        text = handle.read()
+    if text is None:
+        if not os.path.isfile(path):
+            return allowed, errors
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
     for number, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -298,6 +302,7 @@ def write_baseline(root, counts):
 
 
 def main(argv=None):
+    global LIMIT
     ap = argparse.ArgumentParser(
         prog="check-file-size",
         description="refuse a tracked file over 800 lines unless the baseline "
@@ -310,8 +315,22 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     root = git_toplevel()
-    allowed, allow_errors = read_allow(full_path(root, ALLOW_NAME))
-    counts, base_errors = read_baseline(full_path(root, BASELINE_NAME))
+    def policy_text(name):
+        if args.head:
+            return git(root, "show", f"{args.head}:{name}").stdout
+        path = full_path(root, name)
+        return Path(path).read_text(encoding="utf-8") if os.path.isfile(path) else ""
+    try:
+        policy = json.loads(policy_text('.file-policy.json') or '{}')
+        limit = policy.get('max_lines', DEFAULT_LIMIT)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
+            raise ValueError('invalid max_lines')
+        LIMIT = limit
+    except (ValueError, AttributeError, OSError):
+        print('check-file-size: invalid .file-policy.json')
+        return 1
+    allowed, allow_errors = read_allow(full_path(root, ALLOW_NAME), policy_text(ALLOW_NAME))
+    counts, base_errors = parse_baseline(policy_text(BASELINE_NAME), BASELINE_NAME)
     measured, binaries = measure(root, allowed, args.head)
     required = os.environ.get(REQUIRE_BASE_ENV, "")
     if required:

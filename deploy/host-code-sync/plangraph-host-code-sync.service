@@ -1,0 +1,7 @@
+[Unit]
+Description=Fast-forward the shared plangraph hooks checkout from main
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/pg-spawnd host-code-sync --hooks-checkout %h/code/plangraph-hooks
+TimeoutStartSec=150

@@ -126,6 +126,9 @@ pub(crate) fn execute(
     }
     let verb = first;
     let rest: Vec<String> = args.collect();
+    if verb.as_deref() == Some("host-code-sync") {
+        return crate::host_code_sync::cli(rest, out);
+    }
     if verb.as_deref() == Some("host-readiness") {
         return crate::host_readiness::cli(rest, out);
     }

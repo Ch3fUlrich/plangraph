@@ -15,7 +15,7 @@ pub(crate) struct Native {
 fn error(message: &str) -> ToolError {
     ToolError::Internal(message.into())
 }
-fn capture(
+pub(crate) fn capture(
     command: &mut Command,
     input: &str,
     timeout: Duration,

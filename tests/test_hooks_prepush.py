@@ -426,3 +426,19 @@ def test_identity_gate_accepts_noreply_email(repo, monkeypatch):
         monkeypatch.setenv(prefix + '_EMAIL', '123+fixture@users.noreply.github.com')
     git(r, 'commit', '--allow-empty', '-qm', 'identity fixture')
     assert runpy.run_path(str(HOOK))['identity_gate'](base, git(r, 'rev-parse', 'HEAD').strip()) == 0
+
+
+def test_pushed_tree_cap_overrides_older_hook_checkout(repo, tmp_path):
+    import shutil
+    r, base = repo
+    head = commit_file(r, '.file-policy.json', '{"max_lines":800}\n')
+    head = commit_file(r, 'sample.rs', 'x\n' * 600)
+    old = tmp_path / 'older-hooks' / 'tools'
+    (old / 'hooks').mkdir(parents=True)
+    shutil.copy2(HOOK, old / 'hooks/pre-push')
+    shutil.copytree(ROOT / 'tools/split', old / 'split')
+    (old / 'check_file_size.py').write_text((ROOT / 'tools/check_file_size.py').read_text().replace('LIMIT = 800', 'LIMIT = 400'))
+    result = subprocess.run([sys.executable, str(old / 'hooks/pre-push')], cwd=r,
+        input=push_line('phase/fixture', head, base) + '\n', capture_output=True, text=True,
+        env={**os.environ, 'PREFLIGHT_SKIP': '1', 'HOME': str(tmp_path / 'home')})
+    assert result.returncode == 0, result.stdout + result.stderr

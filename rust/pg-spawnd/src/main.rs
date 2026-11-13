@@ -13,6 +13,7 @@ mod gitconfig_guard;
 mod health_cli;
 mod health_report;
 mod health_report_rows;
+mod host_code_sync;
 mod host_readiness;
 mod jobs;
 mod launch;
