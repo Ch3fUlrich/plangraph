@@ -2,10 +2,8 @@
 """Scan a tree for leaks before it goes public (M2c split).
 
 Rules: hostname, ipv4, ipv6, email, token-shape, high-entropy, credential-shape,
-home-path, private-word, symlink.  Output is ``path:line: rule`` only -- the
-matched value is never printed, stored or returned.  Exit 0 clean, 1 on any hit,
-2 on a usage/config error.
-
+home-path, private-word, symlink.  Output is ``path:line: rule`` only; the matched
+value is never printed.  Exit 0 clean, 1 on any hit, 2 on a usage/config error.
     scrub_check.py TREE [--rules rules.toml] [--words private_words.txt]
                         [--hash-hits]
 
@@ -46,6 +44,7 @@ import argparse
 import hashlib
 import math
 import re
+import subprocess
 import sys
 import tomllib
 from collections import namedtuple
@@ -312,16 +311,17 @@ def _value_allows(entries):
 
 
 def scan_tree(root, cfg, with_skipped=False):
-    """Hits for every file under *root* (``.git`` skipped, symlinks never followed).
+    """Hits for *root* files (``.git`` skipped, no symlinks followed; tracked only in a checkout).
 
     A rule that is not path-wide allowed still drops its hit only when *every*
     value it matched on the line is allowed by ``[[scrub.allow_value]]``."""
     root = Path(root)
     find_shapes = _shape_finder()
     hits, skipped = [], []
+    tracked = (set(subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, text=True).stdout.split("\0")) or None) if (root / ".git").exists() else None
     for p in sorted(root.rglob("*")):
         rel = p.relative_to(root).as_posix()
-        if ".git" in p.relative_to(root).parts:
+        if ".git" in p.relative_to(root).parts or (tracked is not None and rel not in tracked and not p.is_dir()):
             continue
         skip = _allowed(rel, cfg)
         if any(w.search(rel) for w in cfg["_words"]) and "private-word" not in skip:

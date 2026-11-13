@@ -177,3 +177,13 @@ def test_scan_line_still_returns_only_rule_names(tree):
     cfg = sc.build_config()
     assert sc.scan_line("addr " + IP_A, cfg, lambda t: []) == {"ipv4"}
     assert sc.scan_line("nothing to see", cfg, lambda t: []) == set()
+
+
+def test_git_checkout_scans_tracked_files_only(tree):
+    import subprocess
+    subprocess.run(["git", "-C", str(tree), "init", "-q"], check=True)
+    (tree / "tracked.txt").write_text("addr " + IP_A + "\n")
+    (tree / ".pytest_cache").mkdir()
+    (tree / ".pytest_cache" / "nodeids").write_text("addr " + IP_A + "\n")
+    subprocess.run(["git", "-C", str(tree), "add", "tracked.txt"], check=True)
+    assert [h.path for h in sc.scan_tree(tree, sc.build_config())] == ["tracked.txt"]
