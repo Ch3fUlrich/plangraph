@@ -121,7 +121,7 @@ def select_tests(root, changed, within=None):
             continue
         if p.parts[0] not in {"src", "tests", "tools"}:
             if p.name != "conftest.py":
-                if p.parts[0] in {"docs", "status"}:
+                if p.parts[0] in {"docs", "status", "changelog.d"}:
                     continue
                 if not revision_asset(root, path, asset_cache):
                     continue
@@ -148,6 +148,8 @@ def select_tests(root, changed, within=None):
         hits.update(s for s, text in texts.items() if s.startswith("tests/")
                     and Path(s).name.startswith("test_")
                     and (p.name in text or path in text))
+        if not hits and p.suffix in {".md", ".rst", ".txt"}:
+            continue  # prose no test names cannot change a test result (D-5827)
         if not hits:
             return fallback("no mapped tests")
         selected.update(hits)
