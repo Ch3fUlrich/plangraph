@@ -313,3 +313,5 @@ For a new remote branch, pre-push selects the nearest known origin branch merge-
 Pre-push preflight passes `--base`/`--head` to scrub, which reads changed blobs from the pushed tip even when checkout files differ or are deleted; manual scrub without a range still scans the worktree.
 
 Pre-push and preflight prepend an existing `~/.cargo/bin` to PATH. Missing Cargo refuses selected Rust or placement checks immediately with one `CARGO FAIL:` line before running those checks.
+
+Test fixtures set a Git discovery ceiling at their temporary root; settings discovery honors that ceiling so temporary policies remain isolated even when TMPDIR is inside the checkout.

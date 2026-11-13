@@ -11,18 +11,15 @@ from plangraph.settings import ReviewMethod, review_method
 from plangraph.routing_errors import SpawnRefused
 from plangraph.spawner.service import SpawnService
 
-
 def test_defaults(monkeypatch):
     monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
     assert review_method() == ReviewMethod()
     assert review_method().seats == {'standard': 1, 'high': 2}
 
-
 def test_root_and_safe_source(tmp_path, monkeypatch):
     (tmp_path / 'policy.json').write_text('{"review_method":{"max_rounds":4}}')
     monkeypatch.setenv('PLANGRAPH_SETTINGS', 'policy.json')
     assert review_method(root=tmp_path).source == 'global'
-
 
 def test_explicit_scope_all_roles(monkeypatch):
     from plangraph.settings import enforce_review_scope, SettingsError
@@ -38,13 +35,11 @@ def test_explicit_scope_all_roles(monkeypatch):
     with pytest.raises(SpawnRefused, match='review_method_batch_per_fixer'):
         enforce_review_scope({}, 'review', 'per-fixer')
 
-
 def test_stamped_scope_validation(monkeypatch):
     from plangraph.settings import enforce_review_scope, SettingsError
     monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
     with pytest.raises(SettingsError, match='review_scope'):
         enforce_review_scope({'review_scope': 'per_fixer'}, 'review', 'batch')
-
 
 def test_policy_flip_context(tmp_path, monkeypatch):
     from plangraph.settings import enforce_review_scope
@@ -62,7 +57,6 @@ def test_policy_flip_context(tmp_path, monkeypatch):
     path.write_text('{"review_method":{"mode":"per-item"}}')
     enforce_review_scope(card, 'review', None, item=item, root=tmp_path)
 
-
 def test_safe_decode(tmp_path, monkeypatch):
     from plangraph.settings import SettingsError
     path = tmp_path / 'policy.toml'
@@ -73,12 +67,10 @@ def test_safe_decode(tmp_path, monkeypatch):
     assert 'secret-content' not in str(caught.value)
     assert 'TOMLDecodeError' in str(caught.value)
 
-
 def test_unsupported_tier():
     from plangraph.settings import SettingsError
     with pytest.raises(SettingsError, match='unsupported tier'):
         ReviewMethod(seats={'standard': 1, 'high': 2, 'alien': 3})
-
 
 def test_json_only_without_tomllib(tmp_path, monkeypatch):
     import plangraph.settings as settings
@@ -93,7 +85,6 @@ def test_json_only_without_tomllib(tmp_path, monkeypatch):
     monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
     assert review_method().mode == 'batch'
 
-
 def test_cwd_non_git_fallback(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / 'policy.json').write_text('{"review_method":{"max_rounds":7}}')
@@ -101,13 +92,11 @@ def test_cwd_non_git_fallback(tmp_path, monkeypatch):
     monkeypatch.delenv('PLANGRAPH_REPO_ROOT', raising=False)
     assert review_method().max_rounds == 7
 
-
 def test_non_review_batch_rejected(monkeypatch):
     from plangraph.settings import enforce_review_scope, SettingsError
     monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
     with pytest.raises(SettingsError, match='review_scope only valid for role=review'):
         enforce_review_scope({}, 'implement', 'batch')
-
 
 def test_documented_advisory_and_batch_boundaries(tmp_path, monkeypatch):
     from pathlib import Path
@@ -139,7 +128,6 @@ def test_documented_advisory_and_batch_boundaries(tmp_path, monkeypatch):
     path.write_text(json.dumps({'review_method': {'max_rounds': 42}}))
     assert review_method().max_rounds == 42
 
-
 def test_finding_9_mcp_review_scope_passthrough(tmp_path, monkeypatch):
     from plangraph.spawner.mcp import MCPSpawnerServer
     from plangraph.routing_errors import SpawnRefused
@@ -167,7 +155,6 @@ def test_finding_9_mcp_review_scope_passthrough(tmp_path, monkeypatch):
         'dry_run': True
     }))
     assert res['status'] == 'dry_run'
-
 
 def test_finding_9_cli_spawn_refused_audited(tmp_path, monkeypatch, capsys):
     from plangraph.spawner.cli import main
@@ -1071,3 +1058,14 @@ def test_root_kwarg_beats_repo_root_env(tmp_path, monkeypatch):
     # Card layers are evaluated with the same root.
     assert fixer_threshold(root=arg_root, card={'phase': 'demo:P'}) == 3
     assert fixer_threshold(card={'phase': 'demo:P'}) == 5
+
+
+def test_settings_discovery_respects_git_ceiling(tmp_path, monkeypatch):
+    (tmp_path / '.git').mkdir()
+    ceiling = tmp_path / 'ceiling'
+    root = ceiling / 'child'
+    root.mkdir(parents=True)
+    (root / 'policy.json').write_text('{"review_method":{"max_rounds":7}}')
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(ceiling))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', 'policy.json')
+    assert review_method(root=root).max_rounds == 7

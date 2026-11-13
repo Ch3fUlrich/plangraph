@@ -262,6 +262,7 @@ def fixed_catalog_rows(monkeypatch):
 @pytest.fixture(autouse=True)
 def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     """UNKNOWN host; tests opt into providers with PLANGRAPH_PROVIDERS_FILE."""
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path_factory.getbasetemp()))
     root = tmp_path_factory.mktemp('empty-autoos')
     monkeypatch.setenv('AUTOOS_ROOT', str(root))
     providers = tmp_path_factory.mktemp('empty-providers') / 'providers.json'
