@@ -728,7 +728,7 @@ def test_s2_dead_lock_session_exits_75(tmp_path, monkeypatch):
     assert duration < 5.0
 
 
-def test_s2_shutdown_bounded(tmp_path, monkeypatch):
+def test_s2_shutdown_bounded(tmp_path, monkeypatch, bounded_shutdown_cleanup):
     w = World(tmp_path)
     port = free_port()
     cfg_path = tmp_path / "keeper.json"
@@ -827,4 +827,3 @@ def test_s2_daemon_exits_75_within_10s(tmp_path):
         if proc.poll() is None:
             proc.kill()
             proc.wait(timeout=5)
-

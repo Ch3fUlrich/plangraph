@@ -1,0 +1,1 @@
+- Prove Card continue-as-new restores attempt history, limits, answers and wait state against a private Temporal dev server; isolate Git overrides in the test child.

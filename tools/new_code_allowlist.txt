@@ -1,8 +1,38 @@
 # Exceptions for Python regression tests of existing modules and the thin gate.
+tests/test_spawner_run_worktree.py | RUN-WORKTREE regression coverage (D-5062), retired by SPAWNER-RUST-PORT
 # A single * matches only within a directory; ** matches recursively.
 tests/test_*.py | Regression tests for existing Python modules
 tools/check_new_code_lang.py | D-4691 gate script, thin
 tests/**/test_*.py | Regression tests at any depth (D-4691: tests allowed)
 src/plangraph/web/*.js | browser UI glue (D-4808, D-4811)
 configuration/opencode/plugins/**/*.mjs | OpenCode plugin byte copy from AutoOS (interim, D-4844)
+tools/hooks/context_compaction.py | interim carry of the AutoOS context guard (D-5673), retired by SU-HOOK-CTXGUARD
 tests/**/_*.py | test-only helper modules imported by tests/**/test_*.py (D-4821, D-4870)
+src/plangraph/keeper/store_host_samples.py | keeper PG store; keeper is Python; D-5038
+src/plangraph/keeper/host_samples_rollup.py | keeper PG store; keeper is Python; D-5038
+tools/preflight.py | CI/tool helper (D-5062, rule 9.14), tools exception
+tools/preflight_private_scrub.py | CI/tool helper (D-5062, rule 9.14), tools exception
+src/plangraph/fleet_sync/__init__.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
+src/plangraph/fleet_sync/__main__.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
+src/plangraph/fleet_sync/advance.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
+src/plangraph/fleet_sync/drift.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
+src/plangraph/fleet_sync/genconfig.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
+src/plangraph/fleet_sync/release.py | lane started before the gate (D-5062, rule 9.14), retired by FLEET-SYNC-RUST
+src/plangraph/keeper/cli_output_verbs.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
+src/plangraph/keeper/crit_path_stall.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
+src/plangraph/keeper/run_records.py | Python area unblock (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
+src/plangraph/keeper/store_decision_close.py | lane started before the gate (D-5062, rule 9.14), retired by PH-RT-RUSTKEEPER
+src/plangraph/routing_support/review_mode.py | lane started before the gate (D-5062, rule 9.14), retired by REVIEW-HARNESS-RUST
+src/plangraph/spawner/host_ready_source.py | lane started before the gate (D-5062, rule 9.14), retired by SPAWNER-RUST-PORT
+tools/crit_path_stall.py | CI/tool helper (D-5062, rule 9.14), tools exception
+tools/judge_prompt.py | CI/tool helper (D-5062, rule 9.14), tools exception
+tools/merge_gate.py | D-5252 rule 9.14: read-only JSON shadow CLI for the Python gate-importing core
+tools/merge_gate_core.py | D-5252 rule 9.14: imports seat_verdict parser/coverage and ci_commit_gate path authority; no duplicated Rust policy
+tests/test_keeper_mcp_snapshot.py | MCP schema/reply parity guard (D-5062), retired by MCP-RUST
+src/plangraph/spawner/redact_tokens.py | Python scrubber parity helper required by D-5279 option A; retired by SPAWNER-RUST-PORT
+tools/seat_backfill.py | D-5062 rule 9.14: responsibility-only extraction of existing seat_record/seat_verdict backfill helpers to meet the 400-line gate; no new behaviour
+src/plangraph/keeper/mcp_tools.py | D-5504/D-5506 rule 9.14: schema-only split required to add close_merged without growing the 400-line Python MCP transport; retired by MCP-RUST
+**/*.py | OPERATOR D-5830 interim: Rust preferred, Python accepted
+**/*.sh | OPERATOR D-5830 interim: Rust preferred, shell accepted
+
+tests/test_keeper_origin_git_env.py | D-5847 in-flight

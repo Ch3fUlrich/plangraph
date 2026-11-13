@@ -108,6 +108,18 @@ pub(crate) fn execute(
         .collect::<Result<Vec<_>, _>>()?
         .into_iter();
     let first = args.next();
+    if first.as_deref() == Some("fleet-snapshot") && args.len() == 0 {
+        return writeln!(out, "{}", crate::fleet_snapshot::run()?)
+            .map_err(|_| "fleet output failed".into());
+    }
+    if first.as_deref() == Some("doctor-sources") && args.len() == 0 {
+        return writeln!(
+            out,
+            "{}",
+            serde_json::to_string(&crate::doctor_sources::run()).unwrap()
+        )
+        .map_err(|e| e.to_string());
+    }
     if first.as_deref().is_some_and(is_help) {
         writeln!(out, "{USAGE}").map_err(|e| e.to_string())?;
         return Ok(());

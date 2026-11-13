@@ -5,8 +5,12 @@ review routed for a PR written by its own family (D-2511 family exclusion).
 """
 from __future__ import annotations
 
+import pytest
+
 from plangraph.planner.legs import DEFAULT_LEGS, WRITER_ORDER
 from plangraph.planner.routing import plan_spawn
+
+pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 
 CARD = {"estimate_tokens": 20000, "risk_tags": []}
 LUNA = "cx-gpt-6-luna"
@@ -18,7 +22,7 @@ def test_luna_leg_in_default_legs():
     assert (leg.family, leg.harness, leg.model, leg.roles) == (
         "gpt", "opencode", "omniroute/cx-gpt-6-luna", ("review",))
     ids = [leg.id for leg in DEFAULT_LEGS]
-    assert ids[ids.index("cx-gpt-6.1-sol") + 1] == LUNA
+    assert ids[ids.index("cx-gpt-6.1-sol-xhigh") + 1] == LUNA
 
 
 def test_luna_never_writes():

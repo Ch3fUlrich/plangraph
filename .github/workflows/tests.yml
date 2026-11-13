@@ -100,6 +100,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
+      - uses: ./.github/actions/setup-rust
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+      - name: Build fleet projection helper
+        run: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with: {python-version: "3.12"}
@@ -113,34 +123,45 @@ jobs:
         with: {node-version: "22"}
       - name: Install test deps
         run: python -m pip install --quiet -r requirements-ci.txt
-      - name: Install Temporal CLI 1.9.1
-        run: |
-          dir=$(mktemp -d)
-          curl -fsSL -o "$dir/temporal.tar.gz" --retry 5 --retry-all-errors \
-            https://github.com/temporalio/cli/releases/download/v1.9.1/temporal_cli_1.9.1_linux_amd64.tar.gz
-          echo "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5  $dir/temporal.tar.gz" | sha256sum -c -
-          tar -xzf "$dir/temporal.tar.gz" -C "$dir" temporal
-          echo "TEMPORAL_CLI=$dir/temporal" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-temporal
       - name: Git identity for tests that commit
         run: |
           git config --global user.name "plangraph-ci"
           git config --global user.email "ci@example.invalid"
           git config --global init.defaultBranch main
-      # D-2557: pinned gitleaks; verify checksums; digest never hard-coded, never curl | sh.
+      - name: Restore verified gitleaks binary
+        id: gitleaks-cache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ~/.local/bin/gitleaks
+          key: gitleaks-${{ runner.os }}-${{ runner.arch }}-8.30.1
+      # D-2557: release checksums or Go sumdb; no hard-coded digest or curl | sh.
       - name: Install gitleaks 8.30.1
+        if: steps.gitleaks-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           dir=$(mktemp -d)
-          curl -fsSL -o "$dir/gitleaks_8.30.1_linux_x64.tar.gz" --retry 5 --retry-all-errors https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
-          curl -fsSL -o "$dir/gitleaks_8.30.1_checksums.txt" --retry 5 --retry-all-errors https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt
-          # Only the asset's own line is checked: grep exits 1 when it is absent,
-          # so a missing line fails the step just like a checksum mismatch does.
-          grep -E "^[0-9a-f]{64}  gitleaks_8\.30\.1_linux_x64\.tar\.gz$" "$dir/gitleaks_8.30.1_checksums.txt" > "$dir/checks.sha256"
-          (cd "$dir" && sha256sum -c checks.sha256)
-          tar -xzf "$dir/gitleaks_8.30.1_linux_x64.tar.gz" -C "$dir" gitleaks
+          trap 'rm -rf "$dir"' EXIT
+          if curl -fsSL -o "$dir/gitleaks_8.30.1_linux_x64.tar.gz" --retry 3 --retry-delay 5 \
+              --retry-max-time 40 --retry-all-errors --connect-timeout 10 --max-time 20 \
+              https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz && \
+            curl -fsSL -o "$dir/gitleaks_8.30.1_checksums.txt" --retry 3 --retry-delay 5 \
+              --retry-max-time 40 --retry-all-errors --connect-timeout 10 --max-time 20 \
+              https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt; then
+            # Missing checksum lines and mismatches fail closed, not into fallback.
+            grep -E "^[0-9a-f]{64}  gitleaks_8\.30\.1_linux_x64\.tar\.gz$" "$dir/gitleaks_8.30.1_checksums.txt" > "$dir/checks.sha256"
+            (cd "$dir" && sha256sum -c checks.sha256)
+            tar -xzf "$dir/gitleaks_8.30.1_linux_x64.tar.gz" -C "$dir" gitleaks
+            "$dir/gitleaks" version | grep -Fx 8.30.1
+          else
+            # Force proxy + public checksum database even if runner defaults differ.
+            GOBIN="$dir" GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
+              GOPRIVATE= GONOSUMDB= GONOPROXY= \
+              go install github.com/zricethezav/gitleaks/v8@v8.30.1
+            go version -m "$dir/gitleaks" | grep -F 'github.com/zricethezav/gitleaks/v8'
+          fi
           mkdir -p ~/.local/bin
           install -m 0755 "$dir/gitleaks" ~/.local/bin/gitleaks
-          ~/.local/bin/gitleaks version | grep -Fx 8.30.1
       - name: Workflow archive policy
         if: github.event_name == 'pull_request'
         env:
@@ -198,7 +219,9 @@ jobs:
           POSTGRES_DB: keeper
         ports:
           - 5432
+        # Per-test schemas grow PG16 shared statistics beyond Docker's 64 MiB default.
         options: >-
+          --shm-size=256m
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s
           --health-timeout 5s
@@ -212,6 +235,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
+      - uses: ./.github/actions/setup-rust
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+      - name: Build fleet projection helper
+        run: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with: {python-version: "3.12"}
@@ -228,14 +261,7 @@ jobs:
         run: echo "PG_DSN=postgresql://postgres@localhost:$PG_PORT/keeper" >> "$GITHUB_ENV"
       - name: Install test deps
         run: python -m pip install --quiet -r requirements-ci.txt "psycopg[binary]"
-      - name: Install Temporal CLI 1.9.1
-        run: |
-          dir=$(mktemp -d)
-          curl -fsSL -o "$dir/temporal.tar.gz" --retry 5 --retry-all-errors \
-            https://github.com/temporalio/cli/releases/download/v1.9.1/temporal_cli_1.9.1_linux_amd64.tar.gz
-          echo "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5  $dir/temporal.tar.gz" | sha256sum -c -
-          tar -xzf "$dir/temporal.tar.gz" -C "$dir" temporal
-          echo "TEMPORAL_CLI=$dir/temporal" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-temporal
       - name: Git identity for tests that commit
         run: |
           git config --global user.name "plangraph-ci"
@@ -267,7 +293,7 @@ jobs:
       CARGO_BUILD_JOBS: "4"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
           targets: x86_64-pc-windows-gnu
@@ -301,7 +327,7 @@ jobs:
         working-directory: rust
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - uses: actions/cache@v4
         with:
           path: |
@@ -326,7 +352,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
       - uses: actions/cache@v4
@@ -336,14 +362,7 @@ jobs:
             ~/.cargo/git
             rust/worker/target
           key: rust-worker-${{ runner.os }}-${{ hashFiles('rust/worker/Cargo.lock', 'rust/worker-core/Cargo.toml') }}
-      - name: Install Temporal CLI 1.9.1
-        run: |
-          dir=$(mktemp -d)
-          curl -fsSL -o "$dir/temporal.tar.gz" --retry 5 --retry-all-errors \
-            https://github.com/temporalio/cli/releases/download/v1.9.1/temporal_cli_1.9.1_linux_amd64.tar.gz
-          echo "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5  $dir/temporal.tar.gz" | sha256sum -c -
-          tar -xzf "$dir/temporal.tar.gz" -C "$dir" temporal
-          echo "TEMPORAL_CLI=$dir/temporal" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-temporal
       - name: Start Temporal dev server
         run: |
           "$TEMPORAL_CLI" server start-dev --ip 127.0.0.1 --port 17233 > /tmp/temporal.log 2>&1 &
@@ -385,7 +404,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - uses: actions/cache@v4
         with:
           path: |

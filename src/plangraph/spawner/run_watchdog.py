@@ -9,7 +9,8 @@ import subprocess
 import time
 
 from .run_cpu import cpu_seconds, proc_scan  # noqa: F401  re-exported for callers and tests
-from .run_watchdog_limits import thresholds  # noqa: F401  re-exported for callers and tests
+from .prompt_input import checkout_env
+from .run_watchdog_limits import leg_limits, thresholds  # noqa: F401  re-exported for callers and tests
 from .run_refusal import REFUSAL_MAX_FRAMES, REFUSAL_MAX_LINES, REFUSAL_WINDOW_S, RefusalGate  # noqa: F401  re-exported for callers and tests
 
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)')
@@ -31,7 +32,7 @@ def terminal_record(record, job):
         return False
     status = terminal_status(job.status, record.get('role'))
     record.update(status=status, exit_code=job.exit_code, reason=job.status,
-                  watchdog=next(e for e in job.events if e['event'].startswith('watchdog_')),
+                  watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
                   events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s and earlier legs' events
     return True
 
@@ -60,6 +61,10 @@ class Watchdog:
         first_edit_s); once edited, or when the edit signal is unavailable, or for non-writers,
         max_s ends the run. Hard caps (including PLANGRAPH_SPAWN_RUN_TIMEOUT and the default
         review cap) are wall clocks, never extended. The opt-in first-edit stall is separate."""
+        if self.limits['max_s'] is None:
+            return float('inf')
+        if 'deadline' in self.limits:
+            return max(0, min(self.limits['max_s'], self.limits['deadline'] - self.start))
         if self.limits.get('hard_max'):
             return self.limits['max_s']
         return self.limits['max_s'] + (self.limits['first_edit_s']
@@ -137,7 +142,7 @@ def edit_signature(cwd):
             if entries > 100000:
                 break
         head = subprocess.run(['git', '-C', str(cwd), 'rev-parse', 'HEAD'],
-                              capture_output=True, timeout=10, check=False)
+                              capture_output=True, timeout=10, check=False, env=checkout_env())
         return (count, newest, size), head.stdout if head.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -271,14 +276,20 @@ async def collect(runner, job_id, proc):
         if all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
             readers = [asyncio.create_task(reader(getattr(proc, n), n)) for n in ('stdout', 'stderr')]
             try:
-                if payload is not None and proc.stdin is not None:
+                if payload is not None:
                     try:
+                        if proc.stdin is None:
+                            raise BrokenPipeError('stdin unavailable')
                         proc.stdin.write(payload)
                         await proc.stdin.drain()
                     except (BrokenPipeError, ConnectionResetError):
-                        pass
+                        job.status, job.exit_code = 'failed', 1
+                        job.stderr = 'stdin_delivery_failed: pipe unavailable or closed'
+                        job.events.append({'event': 'stdin_delivery_failed'})
+                        raise RuntimeError(job.stderr) from None
                     finally:
-                        proc.stdin.close()
+                        if proc.stdin is not None:
+                            proc.stdin.close()
                 drain = asyncio.ensure_future(asyncio.gather(*readers, return_exceptions=True))
                 gone = asyncio.ensure_future(run_gone(proc))
                 await asyncio.wait([drain, gone], return_when=asyncio.FIRST_COMPLETED)
@@ -309,7 +320,10 @@ async def collect(runner, job_id, proc):
             try:
                 return await proc.communicate(input=payload)
             except TypeError:
-                pass
+                job.status, job.exit_code = 'failed', 1
+                job.stderr = 'stdin_delivery_failed: communicate rejected input'
+                job.events.append({'event': 'stdin_delivery_failed'})
+                raise RuntimeError('stdin_delivery_failed: communicate rejected input') from None
         return await proc.communicate()
     task = asyncio.create_task(output())
     refusal_wait = asyncio.ensure_future(refused.wait())
@@ -321,7 +335,7 @@ async def collect(runner, job_id, proc):
             delay = min(limits['interval'], max(.001, job.start_time + w.budget() - time.time()))
             if limits.get('hard_first_edit') and w.writer and not w.edited and w.edit_baseline_known and w.edit is not None:
                 delay = min(delay, max(.001, job.start_time + limits['first_edit_s'] - time.time()))
-            if w.edit is None:
+            if w.writer and w.edit is None:
                 delay = min(delay, EDIT_RETRY_S)   # Q7: keep retrying a lost baseline
             done, _ = await asyncio.wait(waiters, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
             if refused.is_set() and not task.done() and job.status in ('cancelled', 'stalled', 'timeout'):
@@ -348,10 +362,11 @@ async def collect(runner, job_id, proc):
                 break
             if task in done:
                 break
-            edit = await asyncio.to_thread(edit_signature, job.cwd or runner.default_cwd)
+            edit = (await asyncio.to_thread(edit_signature, job.cwd or runner.default_cwd)
+                    if w.writer else None)
             now = time.time()
             cpu = (await cpu_seconds(runner, job_id, getattr(proc, 'pid', None), int(now / limits['interval']))
-                   if now - job.start_time < limits['max_s'] else None)
+                   if w.writer and now - job.start_time < limits['max_s'] else None)
             event = w.decide(now, edit, job.last_activity_ts, cpu); gate.progress(w.progress['edit'])   # REMOVE-AT-R10 (D-3769)
             try:
                 callback = getattr(runner, 'on_sample', None)

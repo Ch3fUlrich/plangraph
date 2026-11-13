@@ -142,6 +142,8 @@ def test_global_gate_and_usage(repo):
 
 @pytest.mark.parametrize("shape", ["home", "word", "id"])
 def test_installed_real_push(repo, tmp_path, monkeypatch, shape):
+    # This push exercises the installed scrub gate, not CI preflight.
+    monkeypatch.setenv("PREFLIGHT_SKIP", "1")
     bare = tmp_path / "public.git"
     git(tmp_path, "init", "-q", "--bare", str(bare))
     git(repo, "remote", "set-url", "origin", str(bare))
@@ -160,6 +162,10 @@ def test_installed_real_push(repo, tmp_path, monkeypatch, shape):
     assert (result.returncode == 0) == (shape == "id"), result.stderr
     if shape != "id":
         assert "scrub hit" in result.stderr
+    else:
+        assert result.stderr.splitlines().count(
+            "pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)"
+        ) == 1
 
 
 @pytest.mark.parametrize("value", [None, "", ", ,"])

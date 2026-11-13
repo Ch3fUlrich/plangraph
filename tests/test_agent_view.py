@@ -100,13 +100,14 @@ function node(tag) { return {tag, children: [], appendChild(n) {this.children.pu
 const box = node('div');
 global.document = {createElement: node, getElementById: () => box};
 global.PlanPage = {state: {snapshot: {agents_view: {generated_at: '2000-01-01',
-  hosts: [{host: 'remote', readable: false, agents: []}]}}}};
+  hosts: [{host: 'remote', readable: false, reason: 'source_unreadable', agents: []}]}}}};
 global.PlanAgentsSchema = require(process.argv[2]);
 require(process.argv[1]);
 PlanUI.AgentsPage.render();
 const row = box.children[1].children[1].children[0];
 assert.equal(row.children[0].textContent, 'remote');
 assert(row.children.slice(1).every(n => n.textContent === 'unknown'));
+assert.equal(row.title, 'source_unreadable');
 assert(box.children[0].textContent.includes('stale'));
 assert.equal(box.children[1].children[0].children[6].textContent, 'age');
 global.PlanPage.state.snapshot.agents_view.generated_at = 'invalid';

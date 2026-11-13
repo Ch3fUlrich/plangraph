@@ -17,7 +17,8 @@ use temporalio_client::{WorkflowGetResultOptions, WorkflowStartOptions};
 #[test]
 fn restored_card_preserves_attempt_answers_and_wait_baseline() {
     if std::env::var_os("PG_RESUME_TEST_CHILD").is_none() {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
             .args([
                 "--exact",
                 "restored_card_preserves_attempt_answers_and_wait_baseline",
@@ -25,8 +26,16 @@ fn restored_card_preserves_attempt_answers_and_wait_baseline() {
             ])
             .env("PG_RESUME_TEST_CHILD", "1")
             .env("PG_JAIL", "off")
-            .env("PG_TEST_ALLOW_UNJAILED", "1")
-            .status()
+            .env("PG_TEST_ALLOW_UNJAILED", "1");
+        for (key, _) in std::env::vars_os() {
+            let name = key.to_string_lossy();
+            if matches!(name.as_ref(), "GIT_DIR" | "GIT_WORK_TREE" | "GIT_INDEX_FILE")
+                || name.starts_with("GIT_CONFIG")
+            {
+                child.env_remove(key);
+            }
+        }
+        let status = child.status()
             .unwrap();
         assert!(status.success());
         return;

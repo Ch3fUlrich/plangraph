@@ -177,6 +177,10 @@ pub fn launch(
             )
         }
     };
+    #[cfg(target_os = "linux")]
+    unsafe {
+        cmd.pre_exec(|| super::oom::adjust(c"/proc/self/oom_score_adj"));
+    }
     let mut child = spawn_retrying(|| cmd.spawn())?;
     let pid = child.id();
     let start_time = proc_start_time(&roots.proc, pid);

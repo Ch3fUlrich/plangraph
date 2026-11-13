@@ -10,11 +10,13 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-fn read(path: &Path) -> Result<Value, String> {
-    let value: Value = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+fn read(path: &Path) -> std::io::Result<Value> {
+    let value: Value = serde_json::from_slice(&fs::read(path)?)?;
     if !value.is_object() {
-        return Err("expected object".into());
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "expected object",
+        ));
     }
     Ok(value)
 }
@@ -23,14 +25,13 @@ fn children(path: &Path) -> Result<Vec<PathBuf>, String> {
         Ok(entries) => entries
             .map(|e| e.map(|e| e.path()).map_err(|e| e.to_string()))
             .collect(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
         Err(e) => Err(e.to_string()),
     }
 }
 fn local(home: &Path, state: &Path, host: &str, now: f64) -> Value {
     let (mut agents, mut failures) = (vec![], 0);
     let mut identities = std::collections::HashSet::new();
-    let mut ingest = |path: PathBuf, runtime: &str| match read(&path) {
+    let mut ingest = |path: PathBuf, runtime: &str, optional: bool| match read(&path) {
         Ok(source) => {
             let row = project(&source, host, Some(runtime), Some(now));
             let ended = source
@@ -58,6 +59,9 @@ fn local(home: &Path, state: &Path, host: &str, now: f64) -> Value {
                 agents.push(row);
             }
         }
+        // Empty/in-progress run and job directories are absent records, not failed sources.
+        // Configured state files remain required; all other read errors mean unknown.
+        Err(e) if optional && e.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => {
             failures += 1;
         }
@@ -74,49 +78,43 @@ fn local(home: &Path, state: &Path, host: &str, now: f64) -> Value {
         if fs::metadata(&path).is_ok_and(|m| !m.is_dir()) {
             continue;
         }
-        let record = path.join("record.json");
-        if record.try_exists().unwrap_or(true) {
-            ingest(record, "spawner-run");
-        }
+        ingest(path.join("record.json"), "spawner-run", true);
     }
     for path in list(&state.join("sessions")) {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         if name.ends_with(".json") && name != "_counters.json" && !name.ends_with(".ready.json") {
-            ingest(path, "spawner-run");
+            ingest(path, "spawner-run", false);
         }
     }
     for path in list(&home.join(".claude/jobs")) {
         if fs::metadata(&path).is_ok_and(|m| !m.is_dir()) {
             continue;
         }
-        let record = path.join("state.json");
-        if record.try_exists().unwrap_or(true) {
-            ingest(record, "claude");
-        }
+        ingest(path.join("state.json"), "claude", true);
     }
     let scan = || -> Result<(), String> {
         let config = home.join(".config/autoos/oc-l1.json");
-        if config.try_exists().map_err(|e| e.to_string())? {
-            let config = read(&config)?;
-            let lanes = config.get("lanes").unwrap_or(&config);
-            let lanes: Vec<_> = match lanes {
-                Value::Object(m) => m.values().collect(),
-                Value::Array(a) => a.iter().collect(),
-                _ => return Err("bad lanes".into()),
-            };
-            for lane in lanes {
-                if !lane.is_object() {
-                    source_errors += 1;
-                    continue;
-                }
-                if let Some(s) = lane["state_file"].as_str() {
-                    let path = s
-                        .strip_prefix("~/")
-                        .map(|s| home.join(s))
-                        .unwrap_or_else(|| s.into());
-                    match fs::metadata(&path) {
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                        _ => ingest(path, "opencode"),
+        match read(&config) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.to_string()),
+            Ok(config) => {
+                let lanes = config.get("lanes").unwrap_or(&config);
+                let lanes: Vec<_> = match lanes {
+                    Value::Object(m) => m.values().collect(),
+                    Value::Array(a) => a.iter().collect(),
+                    _ => return Err("bad lanes".into()),
+                };
+                for lane in lanes {
+                    if !lane.is_object() {
+                        source_errors += 1;
+                        continue;
+                    }
+                    if let Some(s) = lane["state_file"].as_str() {
+                        let path = s
+                            .strip_prefix("~/")
+                            .map(|s| home.join(s))
+                            .unwrap_or_else(|| s.into());
+                        ingest(path, "opencode", false);
                     }
                 }
             }
@@ -243,6 +241,16 @@ fn gather(
         })
         .collect()
 }
+fn configured_hosts(config: &Path) -> Vec<Value> {
+    match read(config) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
+        Err(_) => vec![unavailable("unknown", "source_unreadable")],
+        Ok(config) => match config["hosts"].as_object() {
+            Some(entries) => gather(entries, Duration::from_secs(20), remote),
+            None => vec![unavailable("unknown", "config_unreadable")],
+        },
+    }
+}
 pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), String> {
     if args.first().is_some_and(|s| s == "--help" || s == "-h") {
         return writeln!(
@@ -274,14 +282,8 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
     let config = std::env::var_os("PLANGRAPH_OVERFLOW_HOSTS")
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".config/plangraph/overflow-hosts.json"));
-    if !seen.contains("--local") && config.exists() {
-        match read(&config)
-            .ok()
-            .and_then(|v| v["hosts"].as_object().cloned())
-        {
-            Some(entries) => hosts.extend(gather(&entries, Duration::from_secs(20), remote)),
-            None => hosts.push(unavailable("unknown", "config_unreadable")),
-        }
+    if !seen.contains("--local") {
+        hosts.extend(configured_hosts(&config));
     }
     // ISO UTC without an additional clock dependency (milliseconds are unnecessary).
     let secs = now as u64;

@@ -263,7 +263,8 @@ def decision_book(decisions, *, fresh=False):
         except (OSError, UnicodeDecodeError):
             raise DecisionsUnreadable from None
         return _build_book({did: tuple(lines) for did, lines in rows.items()})
-    path = getattr(decisions, "_path", None)
+    # Origin-backed rows change independently of the working-tree file's stat.
+    path = None if getattr(decisions, "_from_origin", False) else getattr(decisions, "_path", None)
     try:
         stat = os.stat(path) if path is not None else None
     except OSError:

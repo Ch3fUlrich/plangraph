@@ -1,8 +1,226 @@
 from functools import partial
+from dataclasses import replace
 
 import pytest
 
 from plangraph.spawner import leg_state as ls
+from plangraph.planner.legs import DEFAULT_LEGS, TIERS, leg_active
+from plangraph.planner.review_order import catalog_tiers, review_key
+from plangraph.planner.routing import SpawnPlan, plan_spawn
+
+
+@pytest.mark.parametrize('leg_id', ['agy-gemini-4-argon', 'opencode-big-pickle',
+                                  'opencode-deepseek-v4.1-flash-free'])
+def test_missing_legs_roles_and_probe_evidence(leg_id, store):
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
+    if leg_id == 'opencode-deepseek-v4.1-flash-free':
+        assert not leg_active(leg)
+        assert leg.disabled == 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'
+    else:
+        assert leg_active(leg)
+    assert set(leg.roles) == {'review', 'implement'}
+    store.record_probe_pass(leg.model, 'leg-probe', now=100)
+    assert store.last_probe_ts(leg.model) == 100
+    assert store.leg_status(leg.model, now=101)['state'] == 'ok'
+
+
+def test_go_usage_limit_leaves_personal_free_available(store):
+    from plangraph.routing_support.resolver import is_model_available
+    go, personal = 'opencode-go/gemini-4-argon', 'opencode/big-pickle'
+    store.record_provider_response(go, 429, 'usage_limit', {'Retry-After': '60'}, 'test')
+    store.record_probe_pass(personal, 'leg-probe')
+    rows = [{'id': model, 'tier': tier, 'available': 1, 'active': True} for model, tier in
+            [(go, 'subscription'), (personal, 'free')]]
+    available = [row['id'] for row in rows if is_model_available(row, store.leg_status)]
+    assert available == [personal]
+
+
+def test_provider_exhaustion_keeps_static_policy_refusals_separate():
+    from plangraph.routing_support.liveness import provider_exhausted
+    policy = [{'reason': 'off_family'}, {'reason': 'disabled: operator stop'}]
+    assert not provider_exhausted(policy)
+    for state in ('limited', 'down', 'expired'):
+        assert provider_exhausted([*policy, {'reason': state}])
+        assert not provider_exhausted([{'reason': state}, {'reason': 'window_class'}])
+
+
+@pytest.mark.parametrize('role', ('implement', 'review', 'orchestrate'))
+@pytest.mark.parametrize('state', ('limited', 'down'))
+def test_role_automatically_falls_back(role, state, monkeypatch):
+    monkeypatch.setattr('plangraph.routing_support.resolver.get_catalog_models', lambda: [])
+    card = {'estimate_tokens': 1000}
+    kwargs = dict(role=role, writer_families=('claude',))
+    clear = lambda *a, **k: {'state': 'ok', 'evidence': None}
+    first = plan_spawn(card, leg_reader=clear, catalog_rows=(), **kwargs)
+    assert len(first.legs) >= 2
+    blocked = first.legs[0].model
+    def reader(model, **kwargs):
+        return {'state': state if model == blocked else 'ok', 'evidence': None}
+    fallback = plan_spawn(card, leg_reader=reader, catalog_rows=(), **kwargs)
+    assert fallback.legs[0] == first.legs[1]
+    assert all(leg.model != blocked for leg in fallback.legs)
+    assert any(s['leg'] == first.legs[0].id and s['reason'] == state
+               for s in fallback.skipped)
+
+
+def test_route_free_first_keys():
+    from dataclasses import replace
+    from plangraph.planner.legs import spawnable_legs, TIERS
+    from plangraph.planner.review_order import review_key
+    from plangraph.planner.route_policy import implement_key
+    sol = next(l for l in spawnable_legs() if l.id == 'cx-gpt-6.1-sol')
+    free = replace(sol, id='free-test', tier='free', family='gemini')
+    for key in (review_key, implement_key):
+        assert key(free, TIERS.index('free'), 1) < key(sol, TIERS.index('subscription'), 0)
+
+
+def test_catalog_tiers_preserve_roles():
+    rows = [{'id': 'agy/gemini-3.8-flash', 'tier': 'free'}]
+    updated = catalog_tiers(DEFAULT_LEGS, rows)
+    assert next(l for l in updated if l.id == 'agy-gemini-3.8-flash').tier == 'free'
+    assert [l.roles for l in updated] == [l.roles for l in DEFAULT_LEGS]
+    assert next(l for l in updated if l.id == 'deepseek').tier == 'paid'
+
+
+def test_catalog_tiers_do_not_leak_between_harnesses():
+    base = replace(DEFAULT_LEGS[0], model='shared', tier='subscription')
+    legs = (replace(base, harness='agy'), replace(base, harness='opencode'))
+    assert [l.tier for l in catalog_tiers(legs, [{'id': 'agy/shared', 'tier': 'free'}])] == [
+        'free', 'subscription']
+    assert [l.tier for l in catalog_tiers(legs, [{'id': 'shared', 'tier': 'paid'},
+        {'id': 'agy/shared', 'tier': 'free'}])] == ['free', 'subscription']
+
+
+def test_manual_disable_expiry():
+    leg = replace(DEFAULT_LEGS[1], disabled='temporary operator stop', expires=160)
+    assert not leg_active(leg, now=159)
+    assert leg_active(leg, now=160)
+    assert not leg_active(replace(leg, expires=None), now=100000)
+
+
+def test_registered_pool_seats_exclude_claude_writers():
+    ids = {'omniroute-deepseek-flash', 'omniroute-muse-spark',
+           'agy-sonnet-5.5', 'agy-claude-opus'}
+    legs = tuple(leg for leg in DEFAULT_LEGS if leg.id in ids)
+    assert {leg.id for leg in legs} == ids
+    plan = plan_spawn({'estimate_tokens': 1000}, role='review', legs=legs,
+                      writer_families=('claude',), catalog_rows=(),
+                      leg_reader=lambda *a, **k: {'state': 'ok', 'evidence': None})
+    assert [leg.id for leg in plan.legs] == ['omniroute-deepseek-flash', 'omniroute-muse-spark']
+    assert [leg.id for leg in plan.review_seats] == ['omniroute-deepseek-flash', 'omniroute-muse-spark']
+
+
+@pytest.mark.parametrize('tier', ['free', 'subscription', 'paid'])
+@pytest.mark.parametrize('source', ['id', 'model_id', 'provider_id'])
+def test_catalog_tier_identity_and_route_output(tier, source):
+    leg = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-3.8-flash')
+    # Provider-qualified catalog identity must win over an unrelated bare name.
+    rows = [{source: 'agy/' + leg.model, 'tier': tier},
+            {source: leg.model, 'tier': 'paid' if tier != 'paid' else 'free'}]
+    if source == 'provider_id':
+        rows[0] = {'id': 'agy/served-alias', 'provider_id': 'agy', 'harness': None,
+                   'upstream_id': leg.model, 'tier': tier}
+        rows[1] = {'id': leg.model, 'tier': 'paid' if tier != 'paid' else 'free'}
+    for role in ('implement', 'review'):
+        projected, = catalog_tiers((replace(leg, roles=(role,)),), rows)
+        output = SpawnPlan((projected,), (), 'test', (projected,), ()).to_dict()
+        assert output['first_leg']['tier'] == tier
+        assert output['legs'][0]['tier'] == tier
+        assert output['review_seats'][0]['tier'] == tier
+        assert projected.roles == (role,)
+
+
+@pytest.mark.parametrize('tier', ['trial', 'free', 'subscription', 'paid'])
+@pytest.mark.parametrize('role', ['implement', 'review'])
+def test_catalog_tier_survives_planning_and_cli(tier, role, monkeypatch, tmp_path, capsys):
+    import json
+    from dataclasses import replace
+    from plangraph.planner.legs import spawnable_legs, TIERS
+    from plangraph.planner.routing import plan_spawn
+    from plangraph.routing_support import resolver
+    from plangraph.spawner.cli import main
+    base = next(l for l in spawnable_legs() if l.id == 'cx-gpt-6.1-sol')
+    legs = (replace(base, roles=(role,)), replace(base, id='free-review',
+            model='test/free-review', family='gemini', tier='free', roles=(role,)))
+    monkeypatch.setattr('plangraph.planner.legs.DEFAULT_LEGS', legs)
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, 'legs', legs)
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
+        {'id': l.model, 'tier': tier if l.id == base.id else 'free',
+         'available': 1, 'active': True} for l in legs])
+    card = {'estimate_tokens': 1000}
+    plan = plan_spawn(card, role=role, writer_families=('claude',))
+    assert next(l for l in plan.legs if l.id == base.id).tier == tier
+    assert [TIERS.index(l.tier) for l in plan.legs] == sorted(TIERS.index(l.tier) for l in plan.legs)
+    assert main(['--state', str(tmp_path), 'route', '--role', role,
+                 '--writer-family', 'claude', '--card', json.dumps(card), '--json']) == 0
+    output = json.loads(capsys.readouterr().out)
+    for key in ('legs', 'candidates', 'review_seats') if role == 'review' else ('legs', 'candidates'):
+        assert next(row for row in output[key] if row.get('id', row.get('leg')) == base.id)['tier'] == tier
+    assert output['first_leg']['tier'] == plan.first_leg.tier
+    assert all(l.roles == (role,) for l in plan.legs)
+
+
+def test_old_limit_evidence_reprobes(store):
+    store.record_provider_response('test/leg', 429, 'quota', {'Retry-After': '86400'}, 'test', now=100)
+    assert store.leg_status('test/leg', now=100 + 21599)['state'] == 'limited'
+    assert ls.EVIDENCE_TTL_S == 6 * 60 * 60
+    assert store.leg_status('test/leg', now=100 + ls.EVIDENCE_TTL_S - 1)['state'] == 'limited'
+    assert store.leg_status('test/leg', now=100 + 21600)['state'] == 'reprobe'
+    # Also exercise a legacy row whose recorded reset exceeds the new cap.
+    with store._connect() as db:
+        before = db.execute('SELECT reset_at FROM leg_events').fetchone()[0]
+        db.execute('UPDATE leg_events SET reset_at=?', (100 + 7 * 86400,))
+        assert db.execute('SELECT reset_at FROM leg_events').fetchone()[0] > before
+    state = store.leg_status('test/leg', now=100 + 21600)
+    assert state['state'] == 'reprobe'
+    assert state['evidence']['reset_at'] == 100 + 7 * 86400
+
+
+@pytest.mark.parametrize('source,status', [('provider-probe', 200), ('provider-response', 429),
+                                         ('harness-stderr', 429), ('liveness-probe', 503),
+                                         ('unrecognized', 500)])
+def test_old_evidence_is_classified_before_reprobe(store, source, status):
+    store.record_provider_response('test/source', 429, 'quota', {'Retry-After': '86400'}, 'test', now=100)
+    with store._connect() as db:
+        db.execute('UPDATE leg_events SET source=?, status=?', (source, status))
+    state = store.leg_status('test/source', now=21700)['state']
+    assert state == ('ok' if status == 200 else 'reprobe')
+
+
+@pytest.mark.parametrize('state,expected', [('ok', True), ('reprobe', True), ('limited', False),
+                                          ('down', False), ('expired', False)])
+def test_resolver_uses_shared_unavailable_states(state, expected):
+    from plangraph.routing_support.resolver import is_model_available
+    from plangraph.routing_support.liveness import unavailable
+    model = dict(id='test/model', available=1, active=True)
+    assert (not unavailable(dict(state=state))) is expected
+    def reader(*a, **k):
+        return dict(state=state, evidence=None)
+    # Main's disabled-reader compatibility path excludes limited only;
+    # live authority admits exactly ok and cannot reuse reprobe/down evidence.
+    assert is_model_available(model, reader) is (state != 'limited')
+    reader.enabled = True
+    assert is_model_available(model, reader) is (state == 'ok')
+
+
+@pytest.mark.parametrize('age,reset', [(21600, 86400), (60, 60)])
+def test_expired_probe_failure_cannot_complete_down_streak(store, age, reset):
+    store.record_probe_fail('test/expiry', 'timeout', 'test', now=100, down_s=reset)
+    store.record_probe_fail('test/expiry', 'timeout', 'test', now=100 + age, down_s=86400)
+    assert store.leg_status('test/expiry', now=100 + age)['state'] == 'reprobe'
+    store.record_probe_fail('test/expiry', 'timeout', 'test', now=101 + age, down_s=86400)
+    assert store.leg_status('test/expiry', now=101 + age)['state'] == 'down'
+
+
+def test_probe_failures_do_not_extend_hidden_limit_evidence(store):
+    store.record_provider_response('test/leg', 429, 'quota', {'Retry-After': '86400'}, 'test', now=100)
+    store.record_probe_fail('test/leg', 'timeout', 'probe', now=200, down_s=ls.RESET_CAP_S)
+    assert store.leg_status('test/leg', now=100 + ls.EVIDENCE_TTL_S - 1)['state'] == 'limited'
+    assert store.leg_status('test/leg', now=100 + ls.EVIDENCE_TTL_S)['state'] == 'reprobe'
+    store.record_probe_fail('test/down', 'timeout', 'probe', now=100, down_s=ls.RESET_CAP_S)
+    store.record_probe_fail('test/down', 'timeout', 'probe', now=101, down_s=ls.RESET_CAP_S)
+    assert store.leg_status('test/down', now=101 + ls.EVIDENCE_TTL_S - 1)['state'] == 'down'
+    assert store.leg_status('test/down', now=101 + ls.EVIDENCE_TTL_S)['state'] == 'reprobe'
 
 
 @pytest.fixture

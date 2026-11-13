@@ -1,4 +1,10 @@
 use super::*;
+#[path = "writer_changelog_tests.rs"]
+mod finalize_changelog;
+#[path = "writer_docs_map_tests.rs"]
+mod finalize_docs_map;
+#[path = "writer_file_size_tests.rs"]
+mod finalize_file_size;
 #[test]
 fn option_oid_ref_traversal_refused() {
     for value in ["--help", "../escape", "refs/heads/main", "HEAD"] {
@@ -98,6 +104,8 @@ impl Fixture {
         )
         .unwrap();
         let repo = RepoEntry {
+            live_dir: None,
+            health_checks: None,
             root: root.to_str().unwrap().into(),
             worktrees_root: trees.to_str().unwrap().into(),
             remote: root.to_str().unwrap().into(),

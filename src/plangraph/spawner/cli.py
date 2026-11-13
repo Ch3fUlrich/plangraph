@@ -1,6 +1,5 @@
 """Card-only per-host agent CLI: python -m plangraph.spawner.cli."""
 from __future__ import annotations
-
 import argparse
 import asyncio
 import json
@@ -10,11 +9,10 @@ import os
 import subprocess
 import time
 import uuid
-
 _start_supervisor = subprocess.Popen
-
-from .runner import spawn_service as SpawnService, redact
+from .runner import spawn_service as SpawnService, redact_output
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
+from plangraph.routing_support import background_process_options
 
 
 def _drain_chunks(chunks, write, observe=lambda size: None):
@@ -29,7 +27,7 @@ def _drain_chunks(chunks, write, observe=lambda size: None):
     def clean(data):
         if isinstance(data, bytes):
             data = data.decode('utf-8')
-        return redact(redact_env_values(data, redact_base)).encode()
+        return redact_output(redact_env_values(data, redact_base)).encode()
     pending = b''
     for chunk in chunks:
         pending += decoder.decode(chunk).encode('utf-8')
@@ -112,22 +110,23 @@ def main(argv=None):
         p.add_argument('--card', type=_card)
         p.add_argument('--require-bench', action='store_true')
         p.add_argument('--bench-db', action='append')
-        p.add_argument('--role', choices=('implement', 'review', 'orchestrate'), default='implement')
+        p.add_argument('--role', choices=('implement', 'review', 'orchestrate', 'research'), default='implement')
         p.add_argument('--writer-family', action='append', default=[])
         p.add_argument('--review-of')
         p.add_argument('--json', action='store_true')
         if verb == 'spawn':
             p.add_argument('prompt', nargs='?')
             p.add_argument('--prompt-file')
+            p.add_argument('--cwd', help='absolute path to an existing git checkout')
             p.add_argument('--review-scope', choices=['per-fixer', 'batch'])
             p.add_argument('--model')
             p.add_argument('--leg')
             p.add_argument('--override-reason')
             p.add_argument('--dry-run', action='store_true')
+            p.add_argument('--run-worktree', action='store_true', help='isolate each attempt from origin/main')
             p.add_argument('--wait', type=float, default=0)
             p.add_argument('--no-fallthrough', action='store_true')
-            p.add_argument('--seats', action='store_true',
-                           help='role review: spawn every seat route picks (per writer part)')
+            p.add_argument('--seats', action='store_true', help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps')
     commands.add_parser('catalog')
     commands.add_parser('launch-spec')
@@ -155,8 +154,12 @@ def main(argv=None):
     service = SpawnService(state=args.state)
     try:
         if args.verb == 'probe':
-            from .leg_probe import probe_many, reset_iso
-            result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout))
+            from .leg_probe import ParameterRefused, probe_many, reset_iso
+            try:
+                result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout))
+            except ParameterRefused as exc:
+                print(json.dumps(dict(status='refused', refusal='ParameterRefused', error=str(exc), exit_code=2)))
+                return 2
             if args.json:
                 print(json.dumps(result))
             else:
@@ -191,24 +194,23 @@ def main(argv=None):
             from .prompt_input import resolve_prompt
             try:
                 prompt = resolve_prompt(args.prompt, args.prompt_file)
+                from .prompt_guard import admit_prompt
+                if args.role == 'implement': admit_prompt(prompt, SpawnRefused)
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise
-            payload = dict(card=args.card, prompt=prompt, role=args.role,
-                writer_families=args.writer_family, review_of=args.review_of, model=args.model,
-                review_scope=args.review_scope,
-                leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
-                no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
-            # Validate before detaching so refusals are reported synchronously.
+            payload = dict(card=args.card, prompt=prompt, role=args.role, writer_families=args.writer_family,
+                review_of=args.review_of, model=args.model, review_scope=args.review_scope,
+                run_worktree=args.run_worktree, cwd=args.cwd, leg=args.leg, override_reason=args.override_reason,
+                dry_run=args.dry_run, no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
             from plangraph.settings import admit_review_scope
             try:
                 admit_review_scope(args.card, args.role, args.review_scope)
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise
+            # Explicit model/leg overrides intentionally bypass routing, not admission.
             if not args.model and not args.leg:
-                if not args.card:
-                    raise ValueError('spawn by card; card required')
                 # service.route saves the refusal record itself (one record per route error).
                 service.route(args.card, args.role, args.writer_family, args.review_of, **options)
             if args.dry_run:
@@ -233,7 +235,7 @@ def main(argv=None):
                 service.state.mkdir(parents=True, exist_ok=True)
                 log_path = service.state / ('supervisor-' + uuid.uuid4().hex + '.stderr.log')
                 _prune_supervisor_logs(service.state)
-                bootstrap = '''import os, sys, threading
+                bootstrap = '''import os, pathlib, sys, threading
 from plangraph.spawner import cli as supervisor
 from plangraph.spawner.env_redact import redact_env_values
 from plangraph.routing_support.host_keys import redaction_env
@@ -241,9 +243,10 @@ from plangraph.routing_support.host_keys import redaction_env
 # bootstrap top, not per emitted line (D-2759).
 redact_base = redaction_env(os.environ)
 path = sys.argv[1]
-from pathlib import Path
+if sys.platform.startswith("linux"):
+    from plangraph.spawner.proc_kill import _stat
 try:
-    Path(path + ".pid").write_text(str(os.getpid()))
+    pathlib.Path(path + ".pid").write_text(str(os.getpid()))
 except OSError:
     pass
 read_fd, write_fd = os.pipe()
@@ -260,7 +263,7 @@ def drain():
             pass
         def emit(line):
             nonlocal output
-            data = supervisor.redact(redact_env_values(line.decode("utf-8", errors="replace"), redact_base)).encode()
+            data = supervisor.redact_output(redact_env_values(line.decode("utf-8", errors="replace"), redact_base)).encode()
             # Bound even a native writer's multi-megabyte unterminated line,
             # but only after redaction so truncation cannot expose a secret suffix.
             data = data[-1024 * 1024:]
@@ -299,6 +302,7 @@ def service_with_log(*args, **kwargs):
     save = service._save
     def save_with_log(record):
         record["supervisor_stderr_path"] = path
+        record["supervisor_pid_start"] = (_stat(os.getpid()) or (None,) * 5)[4] if sys.platform.startswith("linux") else None
         return save(record)
     service._save = save_with_log
     return service
@@ -318,8 +322,7 @@ raise SystemExit(code)
                 with os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
                     child = _start_supervisor([sys.executable, '-c', bootstrap, str(log_path)],
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
-                        env=env, text=True, encoding="utf-8", errors="replace", **({'start_new_session': True} if os.name != 'nt' else
-                                      {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}))
+                        env=env, text=True, encoding="utf-8", errors="replace", **background_process_options(new_session=True, platform=os.name))
                     try:
                         child.stdin.write(json.dumps(dict(payload, state=str(service.state))) + '\n')
                         child.stdin.close()
@@ -346,7 +349,7 @@ raise SystemExit(code)
                         # Discard the possibly partial first line before displaying a suffix.
                         if size > 262144:
                             text = text.partition('\n')[2]
-                        tail = '\n'.join(redact(redact_env_values(text, redaction_env(overlay_env(os.environ)))).splitlines()[-20:])
+                        tail = '\n'.join(redact_output(redact_env_values(text, redaction_env(overlay_env(os.environ)))).splitlines()[-20:])
                         tail = tail.encode()[-4096:].decode('utf-8', errors='ignore')
                         raise ValueError('spawn supervisor failed; check card and override reason' +
                                          ('\n' + tail if tail else ''))

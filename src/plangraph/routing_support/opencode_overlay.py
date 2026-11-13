@@ -1,4 +1,4 @@
-"""Read-only AutoOS provider overlay; credentials remain environment references."""
+"""Read-only plangraph provider-file overlay; credentials remain environment references."""
 import copy
 import json
 import os
@@ -11,6 +11,7 @@ _content_warned = False
 UNKNOWN_PROVIDERS = object()
 OVERLAY_UNKNOWN = '_PLANGRAPH_OVERLAY_UNKNOWN'
 OVERLAY_ROOT_MISSING = '_PLANGRAPH_ROOT_MISSING'
+OVERLAY_ROOT_BROKEN = '_PLANGRAPH_ROOT_BROKEN'
 
 
 _missing_warned = False  # Missing roots warn once per process, even after recovery.
@@ -64,14 +65,16 @@ def _strip_jsonc(text):
                   lambda m: m.group(1) or '', ''.join(out))
 
 
-def load_root_providers(root=None):
-    return _load_root_providers(root)[0]
+def load_root_providers(path=None):
+    return _load_root_providers(path)[0]
 
 
-def _load_root_providers(root=None):
+def _load_root_providers(path=None):
     global _parse_warned, _missing_warned
-    root = root or os.environ.get('AUTOOS_ROOT') or Path.home() / 'code/AutoOS'
-    path = Path(root) / 'opencode.jsonc'
+    if path is None:
+        path = os.environ.get('PLANGRAPH_PROVIDERS_FILE') or (
+            Path(__file__).resolve().parents[3] / 'configuration/opencode/providers.json')
+    path = Path(path)
     try:
         text = path.read_text(encoding='utf-8')
         text = _strip_jsonc(text)
@@ -82,17 +85,19 @@ def _load_root_providers(root=None):
             logging.getLogger(__name__).warning('root_provider_config_missing path=%s', path)
             _missing_warned = True
         return None, path
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
         if not _parse_warned:
-            logging.getLogger(__name__).warning('root_provider_config_parse_error path=%s', path)
+            key = 'unreadable' if isinstance(exc, OSError) else 'parse_error'
+            logging.getLogger(__name__).warning('root_provider_config_%s path=%s', key, path)
             _parse_warned = True
-        return UNKNOWN_PROVIDERS, None
+        return UNKNOWN_PROVIDERS, path
 
 
 def overlay_env(base_env):
     global _content_warned
     env = dict(base_env)
     env.pop(OVERLAY_ROOT_MISSING, None)
+    env.pop(OVERLAY_ROOT_BROKEN, None)
     try:
         existing = json.loads(env.get('OPENCODE_CONFIG_CONTENT', '{}'))
         if not isinstance(existing, dict):
@@ -103,16 +108,22 @@ def overlay_env(base_env):
             _content_warned = True
         env[OVERLAY_UNKNOWN] = '1'
         return env
-    providers, missing_path = _load_root_providers()
-    if missing_path is not None:
-        env[OVERLAY_ROOT_MISSING] = str(missing_path)
+    providers, root_path = _load_root_providers()
+    if root_path is not None:
+        marker = OVERLAY_ROOT_BROKEN if providers is UNKNOWN_PROVIDERS else OVERLAY_ROOT_MISSING
+        env[marker] = str(root_path)
     if providers is UNKNOWN_PROVIDERS:
         env[OVERLAY_UNKNOWN] = '1'
         return env
     if providers is None:
         return env
+    from plangraph.review.gateway import GATEWAY_ENV_VAR
     from .clients import effective_gateway_base_url
     gateway = effective_gateway_base_url(env)
+    child = existing.get('providers', {})
+    child = child.get('omniroute', {}) if isinstance(child, dict) else {}
+    settings = child.get('settings') if isinstance(child, dict) else None
+    child_gateway = settings.get('baseURL') if isinstance(settings, dict) else None
 
     def merge(root, generated, path=()):
         result = copy.deepcopy(generated)
@@ -126,6 +137,10 @@ def overlay_env(base_env):
                 result[key] = list(dict.fromkeys(value + generated[key]))
             elif location in (('settings', 'baseURL'), ('options', 'baseURL')) and gateway and generated[key] == gateway:
                 pass  # Only the resolved per-run gateway displaces root URLs.
+            elif (location in (('settings', 'baseURL'), ('options', 'baseURL'))
+                  and value == '{env:' + GATEWAY_ENV_VAR + '}'
+                  and child_gateway and generated[key] == child_gateway):
+                pass  # A config-only child gateway replaces a root placeholder, not a concrete URL.
             elif isinstance(value, dict) and isinstance(generated[key], dict) and location != ('models',):
                 result[key] = merge(value, generated[key], location)
             elif location == ('models',) and isinstance(value, dict) and isinstance(generated[key], dict):

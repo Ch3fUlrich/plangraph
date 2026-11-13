@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from plangraph.routing_support.clients import without_prompt_env
 
 LAUNCH_TIMEOUT = 60
 STOP_TIMEOUT = 30
@@ -88,16 +89,17 @@ class _AgentsMixin:
     def _build_argv(self, name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg):
         head = self._claude_head()
         tail = ["--strict-mcp-config", "--mcp-config", str(mcp_path),
+                "--settings", '{"enabledPlugins":{"superpowers@superpowers-marketplace":false}}',
                 "--remote-control", name, "-n", name,
                 "--model", model, "--effort", effort, "--permission-mode", mode]
         if style:
             tail += ["--append-system-prompt", style]
-        tail += [prompt_arg]
+        tail += ['']  # The complete task (including a handoff) travels on stdin.
         bg_argv = head + ["--bg"] + tail
         # Spec defaults: ctx_cap_tokens 300000, compact_window "400000".
         cap = cfg.get("ctx_cap_tokens") or 300000
         compact = cfg.get("compact_window") or "400000"
-        env = {**os.environ, "FLEET_SESSION_NAME": name,
+        env = {**without_prompt_env(os.environ), "FLEET_SESSION_NAME": name,
                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(compact)}
         return bg_argv, env
 
@@ -221,7 +223,7 @@ class _AgentsMixin:
         into the write-ahead record; it defaults to a fresh pre-start reading."""
         if launched_ms is None:
             launched_ms = self._now() * 1000.0  # before the start: rows near it count
-        proc = self._run(bg_argv, cwd=str(cwd_path), **self._launch_run_kw(env))
+        proc = self._run(bg_argv, input=prompt_arg, cwd=str(cwd_path), **self._launch_run_kw(env))
         if proc.returncode != 0:
             # First 300 chars of the process output: enough to see why claude
             # refused (e.g. untrusted workspace) without unbounded audit text.

@@ -129,7 +129,8 @@ def unreleased_lines(changelog: str) -> collections.Counter[str]:
         line = raw.strip()
         if UNRELEASED_RE.match(line):
             inside = True
-        elif raw.startswith("## "):
+        # Match boundaries on stripped headings too, just like the opener.
+        elif re.match(r"^##\s+", line):
             inside = False
         elif inside and line and not line.startswith("#"):
             found[line] += 1
@@ -290,10 +291,11 @@ def main(argv: list[str] | None = None) -> int:
             touches_non_doc = any(not is_doc_path(p) for p in commit_paths(root, sha))
         except GitFailure as exc:
             return bail(f"check-changelog-docs: {exc} (commit {sha[:8]})", warn_only)
+        if not touches_non_doc:
+            # Doc-only and empty commits need neither entries nor skip reasons.
+            continue
         if empty:
             problems.append(f"commit {sha[:8]} has 'Changelog: skip' trailer with empty reason")
-        if not touches_non_doc:
-            continue
         if reasons:
             skipped.append(sha[:8])
             print(f"changelog: skip used by {sha[:8]} ({reasons[0]})")
@@ -350,9 +352,13 @@ def main(argv: list[str] | None = None) -> int:
         enforce_after = None if None in enforce_dates else min(d for d in enforce_dates if d is not None)
         is_enforced = (enforce_after is None) or (today >= enforce_after)
         compiled = [(glob_to_regex(g), g, d) for _, g, d in rules]
+        # Shared workspace metadata follows head mappings, not retired crate rules.
+        head_rules = {(g, tuple(d)) for _, g, d in parse_docs_map(map_text or "")[1]}
         for path in raw_paths:
             for rx, glob_pat, target_docs in compiled:
                 if rx.match(path):
+                    if path in ("rust/Cargo.toml", "rust/Cargo.lock") and (glob_pat, tuple(target_docs)) not in head_rules:
+                        continue
                     if not any(d in raw_paths for d in target_docs):
                         docs_str = ", ".join(target_docs)
                         if is_enforced:

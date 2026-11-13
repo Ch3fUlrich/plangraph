@@ -128,7 +128,7 @@ class _Api:
 class _Child:
     pid, returncode = 4242, 0
 
-    async def communicate(self): return b'', b''
+    async def communicate(self, input=None): return b'', b''
     async def wait(self): return 0
 
 

@@ -27,6 +27,17 @@ fn example_parses_and_validates() {
 }
 
 #[test]
+fn optional_host_launch_config_roundtrips() {
+    for (field, value) in [
+        ("ssh_target", json!("remote-user@worker.example.invalid")),
+        ("env", json!({"PATH": "/opt/fleet/bin:/usr/bin"})),
+    ] {
+        let reg = edited(&format!("/hosts/0/{field}"), value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(reg).unwrap()["hosts"][0][field], value);
+    }
+}
+
+#[test]
 fn v1_version_and_self_resolve() {
     assert!(matches!(
         edited("/version", json!(2)),
@@ -101,7 +112,7 @@ fn v5_slot_only_in_cache_env_values() {
 fn v6_numbers_ramp_roles_and_repo_shape() {
     let runs = edited("/hosts/0/caps/max_runs", json!(0));
     assert!(matches!(runs, Err(HostsError::NumbersShape(_))));
-    let writers = edited("/hosts/0/caps/max_writers", json!(9));
+    let writers = edited("/hosts/0/caps/max_writers", json!(11));
     assert!(matches!(writers, Err(HostsError::NumbersShape(_))));
     let ramp = edited(
         "/hosts/0/warmup/ramp_mb",
@@ -240,8 +251,10 @@ fn schema_fields_required_and_patterns_match_rust() {
             .collect();
         let expected: std::collections::BTreeSet<&str> = keys
             .into_iter()
-            .filter(|key| name != "repoEntry" || *key != "python")
-            .filter(|key| name != "hostEntry" || *key != "class")
+            .filter(|key| {
+                name != "repoEntry" || !["python", "live_dir", "health_checks"].contains(key)
+            })
+            .filter(|key| name != "hostEntry" || !["class", "ssh_target", "env"].contains(key))
             .collect();
         assert_eq!(required, expected, "required fields for {name}");
     }

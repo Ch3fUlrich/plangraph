@@ -1,6 +1,119 @@
 use super::*;
 
 #[test]
+fn gitconfig_guard_only_arms_writers() {
+    for role in [
+        json!("review"),
+        json!("research"),
+        json!("implement"),
+        json!("orchestrate"),
+        json!("session"),
+        json!("judge"),
+        json!("unknown"),
+        Value::Null,
+        json!({"malformed": true}),
+    ] {
+        let dir = Dir(std::env::temp_dir().join(new_run_id()));
+        std::fs::create_dir_all(dir.0.join(".git")).unwrap();
+        let config = dir.0.join(".git/config");
+        std::fs::write(&config, b"original\n").unwrap();
+        let runs = Runs::new(Arc::new(
+            Supervisor::new(SupervisorCfg::new(Config {
+                state_dir: dir.0.clone(),
+                confinement: Confinement::Plain,
+                ..Config::default()
+            }))
+            .unwrap(),
+        ));
+        let args = json!({"prompt":"unique-input","card":{},"wait_seconds":5});
+        let result = runs
+            .spawn_using(
+                &dir.0,
+                args.as_object().unwrap(),
+                "local",
+                json!(role),
+                json!({"first_leg":{"family":"f"}}),
+                |_, _| {
+                    Ok(crate::launch::LaunchSpec {
+                        argv: vec![
+                            "/bin/sh".into(),
+                            "-c".into(),
+                            "cat >/dev/null; printf 'changed\\n' >.git/config".into(),
+                        ],
+                        cwd: dir.0.clone(),
+                        env: BTreeMap::new(),
+                        stdin: Some("unique-input".into()),
+                        prompt: Some("unique-input".into()),
+                        warnings: None,
+                        events: None,
+                    })
+                },
+            )
+            .unwrap_or_else(|_| panic!("spawn failed"));
+        let writer = role != "review" && role != "research";
+        assert_eq!(
+            result.get("gitconfig_guard"),
+            writer.then_some(&json!(true))
+        );
+        let run_dir =
+            crate::gitconfig_guard::run_dir(&dir.0, result["run_id"].as_str().unwrap()).unwrap();
+        assert_eq!(run_dir.join("gitconfig.snapshot").exists(), writer);
+        assert_eq!(
+            result["status"],
+            if writer { "failed" } else { "completed" }
+        );
+        // The failed verdict is persisted before restoration; wait for the hook.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while writer && std::fs::read(&config).unwrap() != b"original\n" {
+            assert!(
+                Instant::now() < deadline,
+                "completion did not restore config"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            std::fs::read(&config).unwrap(),
+            if writer {
+                b"original\n".as_slice()
+            } else {
+                b"changed\n".as_slice()
+            }
+        );
+        std::fs::write(&config, b"restart mutation\n").unwrap();
+        let mut record = RunRecord::read(&dir.0, result["run_id"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            crate::gitconfig_guard::enforce(&mut record, Status::Orphaned, json!({})),
+            if writer {
+                Status::Failed
+            } else {
+                Status::Orphaned
+            }
+        );
+        assert_eq!(
+            std::fs::read(&config).unwrap(),
+            if writer {
+                b"original\n".as_slice()
+            } else {
+                b"restart mutation\n".as_slice()
+            }
+        );
+        // Recovery calls the same finish hook as completion, with an on-disk record.
+        std::fs::write(&config, b"recovery mutation\n").unwrap();
+        let mut record = RunRecord::read(&dir.0, result["run_id"].as_str().unwrap()).unwrap();
+        finish(&mut record, Status::Orphaned, &json!({}), 1);
+        assert_eq!(
+            std::fs::read(&config).unwrap(),
+            if writer {
+                b"original\n".as_slice()
+            } else {
+                b"recovery mutation\n".as_slice()
+            }
+        );
+        assert_eq!(record.get("gitconfig_original_outcome").is_some(), writer);
+    }
+}
+
+#[test]
 fn embedded_prompt_and_distinct_stdin() {
     let dir = std::env::temp_dir().join(new_run_id());
     let raw = format!("{}{}", "sk-", "a".repeat(24));
@@ -15,24 +128,63 @@ fn embedded_prompt_and_distinct_stdin() {
             events: None,
         };
         let id = new_run_id();
-        if stdin.contains(&raw) {
-            assert!(store_prompt(&dir, &id, &mut launch, &mut json!({}), false).is_err());
-            assert!(!dir.join("runs").join(id).join("prompt.txt").exists());
-            continue;
-        }
-        assert!(store_prompt(&dir, &id, &mut launch, &mut json!({}), false).is_ok());
-        assert_eq!(launch.argv[2], "echo [REDACTED]");
-        assert_eq!(launch.stdin.unwrap(), stdin.replace(&raw, "[REDACTED]"));
-        assert_eq!(
-            std::fs::read(dir.join("runs").join(id).join("prompt.txt")).unwrap(),
-            if stdin.contains(&raw) {
-                stdin.replace(&raw, "[REDACTED]")
-            } else {
-                "echo [REDACTED]".into()
-            }
-            .as_bytes()
-        );
+        assert!(store_prompt(&dir, &id, &mut launch, &mut json!({}), false).is_err());
+        assert!(!dir.join("runs").join(id).join("prompt.txt").exists());
     }
+    assert!(!dir.exists());
+}
+
+#[test]
+fn short_prompt_substrings_are_not_carriers() {
+    let dir = Dir(std::env::temp_dir().join(new_run_id()));
+    for raw in ["gemini", "p", "-", "é"] {
+        let mut launch = crate::launch::LaunchSpec {
+            argv: vec![
+                "agy".into(),
+                "--dangerously-skip-permissions".into(),
+                "--model".into(),
+                "gemini-3.8-flash".into(),
+            ],
+            cwd: dir.0.clone(),
+            env: BTreeMap::from([("MODEL".into(), "gemini-3.8-flash-é".into())]),
+            stdin: Some(raw.into()),
+            prompt: Some(raw.into()),
+            warnings: None,
+            events: None,
+        };
+        assert!(
+            store_prompt(&dir.0, &new_run_id(), &mut launch, &mut json!({}), false).is_ok(),
+            "short incidental substring was treated as a prompt carrier"
+        );
+        launch.argv.push(raw.into());
+        assert!(store_prompt(&dir.0, &new_run_id(), &mut launch, &mut json!({}), false).is_err());
+        launch.argv.pop();
+        launch.env.insert("TASK".into(), raw.into());
+        assert!(store_prompt(&dir.0, &new_run_id(), &mut launch, &mut json!({}), false).is_err());
+    }
+}
+
+#[test]
+fn stream_prompt_snapshot_is_text_not_transport() {
+    let dir = std::env::temp_dir().join(new_run_id());
+    let raw = format!("{}\né\n\n", "x".repeat(300 * 1024));
+    let transport = json!({"event":"user", "message":{"role":"user", "content":raw}}).to_string();
+    let mut launch = crate::launch::LaunchSpec {
+        argv: vec!["agy".into(), "--input-format".into(), "stream-json".into()],
+        cwd: dir.clone(),
+        env: BTreeMap::new(),
+        stdin: Some(transport.clone()),
+        prompt: Some(raw.clone()),
+        warnings: None,
+        events: None,
+    };
+    let id = new_run_id();
+    assert!(store_prompt(&dir, &id, &mut launch, &mut json!({}), false).is_ok());
+    assert_eq!(launch.stdin.as_deref(), Some((transport + "\n").as_str()));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("runs").join(id).join("prompt.txt")).unwrap(),
+        raw
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -43,7 +195,7 @@ fn prompt_snapshot_before_dispatch() {
     let id = new_run_id();
     let raw = format!("héllo {}{}", "sk-", "a".repeat(24));
     let mut launch = crate::launch::LaunchSpec {
-        argv: vec!["fake".into(), raw.clone()],
+        argv: vec!["fake".into()],
         cwd: dir.clone(),
         env: BTreeMap::new(),
         stdin: Some(raw.clone()),
@@ -56,7 +208,7 @@ fn prompt_snapshot_before_dispatch() {
     let path = dir.join("runs").join(&id).join("prompt.txt");
     let bytes = std::fs::read(&path).unwrap();
     assert_eq!(bytes, launch.stdin.as_ref().unwrap().as_bytes());
-    assert_eq!(bytes, launch.argv[1].as_bytes());
+    assert!(!launch.argv.iter().any(|arg| arg.contains(&raw)));
     assert_eq!(bytes, "héllo [REDACTED]".as_bytes());
     assert!(!base.to_string().contains(&raw));
     use sha2::{Digest, Sha256};
@@ -128,7 +280,7 @@ fn registered_job_with_card(dry: bool, card: Value) {
         }))
         .unwrap(),
     ));
-    let args = json!({"prompt":"p","card":card,"wait_seconds":1,"dry_run":dry});
+    let args = json!({"prompt":"p","card":card,"wait_seconds":10,"dry_run":dry});
     let result = runs
         .spawn_using(
             &dir.0,
@@ -215,18 +367,21 @@ fn env_prompt_and_missing_carrier() {
     };
     let id = new_run_id();
     let mut base = json!({});
-    assert!(store_prompt(&dir.0, &id, &mut launch, &mut base, false).is_ok());
-    let child = std::process::Command::new(&launch.argv[0])
-        .args(&launch.argv[1..])
-        .envs(&launch.env)
-        .output()
-        .unwrap();
-    assert_eq!(child.stdout, b"[REDACTED]");
-    assert_eq!(
-        std::fs::read(dir.0.join("runs").join(id).join("prompt.txt")).unwrap(),
-        child.stdout
-    );
+    assert!(store_prompt(&dir.0, &id, &mut launch, &mut base, false).is_err());
+    assert!(!dir.0.join("runs").join(id).join("prompt.txt").exists());
     assert!(!base.to_string().contains(&raw));
+    // A valid stdin carrier must not hide a second, unsafe env carrier.
+    launch.stdin = Some(raw.clone());
+    for key in ["PROMPT", "OTHER_TASK_ENV"] {
+        launch.env = BTreeMap::from([(key.into(), raw.clone())]);
+        let error = store_prompt(&dir.0, &new_run_id(), &mut launch, &mut base, false)
+            .err()
+            .unwrap()
+            .into_error_data();
+        assert_eq!(error.message, "launch prompt must not be in argv or env");
+    }
+    launch.env.clear();
+    launch.stdin = None;
     launch.prompt = Some("absent".into());
     assert!(store_prompt(&dir.0, &new_run_id(), &mut launch, &mut base, false).is_err());
 }

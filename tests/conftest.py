@@ -14,6 +14,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import pytest
 from pathlib import Path
 from pgtest_shm import _sweep_dead_pgtest_dirs
@@ -23,6 +24,87 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 _TOOLS = Path(__file__).resolve().parents[1] / "tools"
+
+
+def _oom_worker_count(count, meminfo=Path('/proc/meminfo')):
+    override = os.environ.get('PYTEST_XDIST_AUTO_NUM_WORKERS')
+    try:
+        count = min(count, max(1, int(override))) if override else count
+    except ValueError:
+        pass
+    try:
+        total = int(re.search(r'^MemTotal:\s+(\d+)', meminfo.read_text(), re.M)[1])
+    except (OSError, TypeError, ValueError):
+        return min(count, 4)  # Unknown capacity is not permission for unbounded workers.
+    return max(1, min(count, 4, total // (1024 * 1024)))
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_auto_num_workers(config):
+    return _oom_worker_count(os.cpu_count() or 1)
+
+
+@pytest.hookimpl(specname='pytest_configure')
+def pytest_oom_configure(config):
+    if sys.platform.startswith('linux'):
+        from plangraph.spawner.proc_kill import raise_oom_score
+        import warnings
+        event = raise_oom_score()
+        if event['event'] == 'oom_score_adj_denied':
+            warnings.warn('oom_score_adj_denied: EACCES raising pytest worker to 500')
+
+
+@pytest.fixture
+def bounded_shutdown_cleanup(monkeypatch):
+    """Finish cleanup before a mocked exit can close the database."""
+    from plangraph.keeper import daemon
+    real_run = daemon.run
+
+    def run(*args, **kwargs):
+        record_exit = os._exit  # the test has installed its recorder by now
+        preexisting = set(threading.enumerate())
+
+        def exit_and_join(code):
+            # Real _exit never returns. Give this run's cleanup a five-second
+            # join backstop before the recorder can permit conn.close().
+            cleaners = [t for t in threading.enumerate()
+                        if t not in preexisting and t.name == "keeper-shutdown"]
+            for thread in cleaners:
+                thread.join(timeout=5)
+                assert not thread.is_alive(), "keeper shutdown did not finish"
+            record_exit(code)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "_exit", exit_and_join)
+            return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(daemon, "run", run)
+    yield
+
+
+@pytest.fixture
+def keeper_thread_guard():
+    from _keeper_threads import guard_new_threads
+    return guard_new_threads
+
+
+@pytest.fixture(autouse=True)
+def no_leaked_keeper_threads(request, no_leaked_keeper_fixture_threads):
+    """Test-body starts stay test-owned; fixture starts follow their own scope."""
+    from _keeper_threads import thread_scope
+    no_leaked_keeper_fixture_threads(request.node)
+    with thread_scope(request):
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def no_leaked_keeper_fixture_threads(request):
+    import _keeper_threads as guard
+    # Session fixture setup uses session hooks, not tests/conftest.py's hooks.
+    request.config.pluginmanager.register(guard)
+    request.addfinalizer(lambda: request.config.pluginmanager.unregister(guard))
+    with guard.guard_new_threads(scope=lambda: guard.current_scope(request)) as watch_scope:
+        yield watch_scope
 
 
 @pytest.fixture
@@ -169,14 +251,26 @@ def real_served_models():
     return _real_served_models
 
 
+@pytest.fixture
+def fixed_catalog_rows(monkeypatch):
+    """Exact-order probes use declared leg tiers, never ambient catalog rows."""
+    from plangraph.planner.routing import plan_spawn
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, 'catalog_rows', ())
+
+
 @pytest.fixture(autouse=True)
 def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
-    """UNKNOWN host; tests may opt into config with monkeypatch.setenv('AUTOOS_ROOT', ...)."""
+    """UNKNOWN host; tests opt into providers with PLANGRAPH_PROVIDERS_FILE."""
     root = tmp_path_factory.mktemp('empty-autoos')
     monkeypatch.setenv('AUTOOS_ROOT', str(root))
+    providers = tmp_path_factory.mktemp('empty-providers') / 'providers.json'
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(providers))
     state = tmp_path_factory.mktemp('xdg-state')  # never the production spawner/leg state (D-2844)
     monkeypatch.setenv('XDG_STATE_HOME', str(state))
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
+    monkeypatch.setenv('PLANGRAPH_CATALOG_DB', str(state / 'absent-catalog.db'))
+    from plangraph.routing_support import catalog_db
+    monkeypatch.setattr(catalog_db, 'DEFAULT_DB_PATH', state / 'absent-catalog.db')
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '0')
     # Services remain default-on, but never construct the production adapter.
     from plangraph.routing_support import leg_state_flag
