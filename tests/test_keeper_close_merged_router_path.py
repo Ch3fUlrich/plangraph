@@ -1,11 +1,26 @@
 """Hermetic D-5558 follow-up: real GO authority clauses and D-5529 seats."""
+from contextlib import contextmanager
+import socket
 import subprocess
 from types import SimpleNamespace
 
 import pytest
 
-from test_keeper_close_merged import HEAD, KEY, _close, _refused, w
+from test_keeper_close_merged import HEAD, KEY, _close, _refused, unseated_w, w
 from plangraph.keeper import auth
+
+
+@pytest.fixture(autouse=True)
+def no_external_io(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("merged-close regressions must not spawn processes or connect sockets")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+
+
+PR_FORMS = ["#786", "#786,", "`#786`", "`#786`,"]
 
 
 # Verbatim authority clauses from the router decision log on origin/main,
@@ -41,51 +56,84 @@ def test_real_router_go_row_closes_only_its_merged_head(w, monkeypatch, decision
 
 
 @pytest.mark.parametrize("prefix", ["", "(23:21Z, date -u) "])
-def test_go_head_ignores_later_review_narrative(w, prefix):
-    text = (f"{prefix}GO #1 fixture; GO-HEAD {HEAD}; "
+@pytest.mark.parametrize("pr", PR_FORMS)
+def test_go_head_ignores_later_review_narrative(w, prefix, pr):
+    text = (f"{prefix}GO {pr} fixture; GO-HEAD {HEAD}; "
             "no workflow changes. The GO proof was reviewed.")
+    w.decision_path.write_text(
+        f"| D-5504 | demo | {text.replace(HEAD, 'f' * 40)} |\n", encoding="utf-8")
+    _refused(w, "evidence_unverified", "go_row_head_mismatch")
     w.decision_path.write_text(f"| D-5504 | demo | {text} |\n", encoding="utf-8")
+    proof, result = w.store._merged_go_proof(w.store._item(KEY), "D-5504", w.clock())
+    assert proof == HEAD and result.ok
     assert _close(w)["state"] == "done"
 
 
 @pytest.mark.parametrize("verdict", ["NO GO", "NO-GO", "NOT A GO", '"GO', "title GO"])
-def test_timestamp_does_not_turn_non_go_into_authority(w, verdict):
-    text = f"(23:21Z, date -u) {verdict} #1 fixture; GO-HEAD {HEAD}"
+@pytest.mark.parametrize("pr", PR_FORMS)
+def test_timestamp_does_not_turn_non_go_into_authority(w, verdict, pr):
+    text = f"(23:21Z, date -u) {verdict} {pr} fixture; GO-HEAD {HEAD}"
     w.decision_path.write_text(f"| D-5504 | demo | {text} |\n", encoding="utf-8")
     _refused(w, "evidence_unverified", "go_row_not_go")
 
 
 @pytest.mark.parametrize("token", [f"GO-HEAD {HEAD[:8]}", f"GO-HEAD {HEAD}0",
                                    f"OTHER-GO-HEAD {HEAD}", f"GO-HEAD x{HEAD}"])
-def test_modern_go_requires_whole_go_head_sha40(w, token):
+@pytest.mark.parametrize("pr", PR_FORMS)
+def test_modern_go_requires_whole_go_head_sha40(w, token, pr):
     w.decision_path.write_text(
-        f"| D-5504 | demo | (23:21Z, date -u) GO #1 fixture; {token} |\n",
+        f"| D-5504 | demo | (23:21Z, date -u) GO {pr} fixture; {token} |\n",
         encoding="utf-8")
     _refused(w, "evidence_unverified", "go_row_head_mismatch")
 
 
 @pytest.mark.parametrize("other", [HEAD, "f" * 40])
-def test_multiple_go_head_bindings_refuse(w, other):
+@pytest.mark.parametrize("pr", PR_FORMS)
+def test_multiple_go_head_bindings_refuse(w, other, pr):
     w.decision_path.write_text(
-        f"| D-5504 | demo | (23:21Z, date -u) GO #1 fixture; "
+        f"| D-5504 | demo | (23:21Z, date -u) GO {pr} fixture; "
         f"GO-HEAD {HEAD}; GO-HEAD {other} |\n", encoding="utf-8")
     _refused(w, "evidence_unverified", "go_row_head_mismatch")
 
 
-def test_modern_go_head_in_another_cell_does_not_bind(w):
+@pytest.mark.parametrize("pr", PR_FORMS)
+def test_modern_go_head_in_another_cell_does_not_bind(w, pr):
     w.decision_path.write_text(
-        f"| D-5504 | GO-HEAD {HEAD} | (23:21Z, date -u) GO #1 fixture |\n",
+        f"| D-5504 | GO-HEAD {HEAD} | (23:21Z, date -u) GO {pr} fixture |\n",
         encoding="utf-8")
     _refused(w, "evidence_unverified", "go_row_head_mismatch")
 
 
+@pytest.mark.parametrize("pr", ["#786x", "#786_x", "`#786", "#786`", "`#786`x"])
+def test_malformed_pr_token_cannot_use_go_head(w, pr):
+    w.decision_path.write_text(
+        f"| D-5504 | demo | GO {pr}; GO-HEAD {HEAD} |\n", encoding="utf-8")
+    _refused(w, "evidence_unverified", "go_row_head_mismatch")
+
+
+@pytest.mark.parametrize("prefix", ["", "(23:21Z, date -u) "])
+@pytest.mark.parametrize("head", [HEAD[:8], f"`{HEAD}`"])
+@pytest.mark.parametrize("negation", ["no GO", "NOT a GO", "not yet a go", "NO-GO"])
+def test_legacy_go_head_with_later_negation_refuses(w, prefix, head, negation):
+    w.decision_path.write_text(
+        f"| D-5504 | demo | {prefix}GO {head}; {negation} |\n", encoding="utf-8")
+    _refused(w, "evidence_unverified", "go_row_not_go")
+
+
 @pytest.mark.parametrize("key,families", [(KEY, ["Anthropic"]),
                                           ("demo:H", ["google", "claude-sonnet"])])
-def test_anthropic_seat_counts_over_non_claude_writer(w, key, families):
+def test_anthropic_seat_counts_over_non_claude_writer(unseated_w, key, families):
+    w = unseated_w
+    _refused(w, "coverage", "seat_family_not_recorded", key=key, families=families)
     w.store.record_run(w.p("spawner"), key, {
         "run_id": "cross-family", "phase": "finished", "rc": 0,
         "writer": {"family": "openai", "model": "gpt-test"},
         "seats": [{"model": "claude-sonnet", "verdict": "pass"}]})
+    if key == "demo:H":
+        _refused(w, "coverage", "seat_family_not_recorded", key=key, families=families)
+        w.store.record_run(w.p("spawner"), key, {
+            "run_id": "cross-family-google", "phase": "finished", "rc": 0,
+            "seats": [{"model": "gemini-test", "verdict": "pass"}]})
     out = _close(w, key=key, families=families)
     assert out["state"] == "done" and out["reviews_passed"] == len(families)
     assert "anthropic" in w.store._evidence(key)[-1]["ref"]["families"]
@@ -118,7 +166,8 @@ def test_anthropic_seat_refuses_every_claude_writer_source(w, monkeypatch, sourc
 
 @pytest.mark.parametrize("key", [KEY, "demo:H"])
 @pytest.mark.parametrize("risk", ["auth", "secrets"])
-def test_auth_lane_requires_non_anthropic_second_family(w, key, risk):
+def test_auth_lane_requires_non_anthropic_second_family(unseated_w, key, risk):
+    w = unseated_w
     w.store.put_card(w.p("router"), key, {"outcome": "fixture", "risk_tags": [risk]})
     w.store.record_run(w.p("spawner"), key, {
         "run_id": "auth-seats", "phase": "finished", "rc": 0,
@@ -126,7 +175,76 @@ def test_auth_lane_requires_non_anthropic_second_family(w, key, risk):
         "seats": [{"model": "claude-sonnet", "verdict": "pass"}]})
     _refused(w, "coverage", "insufficient_non_anthropic_seat_families",
              key=key, families=["google", "anthropic"])
+    _refused(w, "coverage", "seat_family_not_recorded",
+             key=key, families=["google", "deepseek"])
+    w.store.record_run(w.p("spawner"), key, {
+        "run_id": "auth-google-seat", "phase": "finished", "rc": 0,
+        "seats": [{"model": "gemini-test", "verdict": "pass"}]})
+    _refused(w, "coverage", "seat_family_not_recorded",
+             key=key, families=["google", "deepseek"])
+    w.store.record_run(w.p("spawner"), key, {
+        "run_id": "auth-deepseek-seat", "phase": "finished", "rc": 0,
+        "seats": [{"model": "deepseek-test", "verdict": "pass"}]})
     assert _close(w, key=key, families=["google", "deepseek"])["state"] == "done"
+
+
+@pytest.mark.parametrize("key,families", [(KEY, ["google"]),
+                                          ("demo:H", ["google", "anthropic"])])
+@pytest.mark.parametrize("phase,rc,verdict", [("started", 0, "pass"),
+    ("finished", None, "pass"), ("finished", 1, "pass"),
+    ("finished", 0, "fail"), ("finished", 0, None)])
+def test_unfinished_or_failed_seats_do_not_back_close(unseated_w, key, families,
+                                                     phase, rc, verdict):
+    w = unseated_w
+    w.store.record_run(w.p("spawner"), key, {
+        "run_id": "invalid-backing", "phase": phase, "rc": rc,
+        "seats": [{"model": "gemini-test", "verdict": verdict},
+                  {"model": "claude-sonnet", "verdict": verdict}]})
+    _refused(w, "coverage", "seat_family_not_recorded", key=key, families=families)
+
+
+@pytest.mark.parametrize("raw", ["null", "{}", '"auth"', "42", "true", "", "[",
+    '["Auth"]', '["SECRETS"]', '[" auth "]', '["unknown"]', '[null]', '[{}]', '[[]]',
+    '[false]', '["auth", 1]'])
+def test_invalid_card_risk_tags_are_named_audited_refusals(w, raw):
+    w.store.put_card(w.p("router"), KEY, {"outcome": "fixture", "risk_tags": []})
+    w.conn.execute("UPDATE cards SET risk_tags=? WHERE key=?", (raw, KEY))
+    _refused(w, "validation", "card_risk_tags_invalid")
+
+
+@pytest.mark.parametrize("raw,code,reason", [
+    ('["auth"]', "coverage", "insufficient_non_anthropic_seat_families"),
+    ("null", "validation", "card_risk_tags_invalid")])
+def test_card_risk_tags_are_rechecked_inside_write_lock(w, monkeypatch, raw, code, reason):
+    w.store.put_card(w.p("router"), KEY, {"outcome": "fixture", "risk_tags": []})
+    original = w.store._write
+
+    @contextmanager
+    def swapped():
+        w.conn.execute("UPDATE cards SET risk_tags=? WHERE key=?", (raw, KEY))
+        with original():
+            yield
+
+    monkeypatch.setattr(w.store, "_write", swapped)
+    _refused(w, code, reason)
+
+
+def test_null_card_risk_tags_are_named_audited_refusal(w, monkeypatch):
+    # SQL normally forbids NULL; an adapter returning it must still fail closed.
+    def execute(sql, *args):
+        if sql.startswith("SELECT risk_tags FROM cards"):
+            return SimpleNamespace(fetchone=lambda: {"risk_tags": None})
+        return w.conn.execute(sql, *args)
+
+    monkeypatch.setattr(w.store, "conn", SimpleNamespace(execute=execute))
+    _refused(w, "validation", "card_risk_tags_invalid")
+
+
+@pytest.mark.parametrize("tags", [[], ["money"], ["migration"], ["public-contract"],
+                                  ["live-step"]])
+def test_valid_non_auth_card_tags_keep_standard_seat_count(w, tags):
+    w.store.put_card(w.p("router"), KEY, {"outcome": "fixture", "risk_tags": tags})
+    assert _close(w)["state"] == "done"
 
 
 @pytest.mark.parametrize("in_lock", [False, True])
@@ -140,4 +258,11 @@ def test_plan_item_commits_failure_is_named_audited_refusal(w, monkeypatch, in_l
         return [{"sha": HEAD}]
 
     monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", commits)
+    before = w.conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0]
     _refused(w, "evidence_unverified", "merged_on_default_missing")
+    assert w.conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0] == before + 1
+    row = w.conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
+    assert (row["actor"], row["role"], row["action"], row["key"], row["ok"],
+            row["code"], row["msg"]) == (
+        "router", "router", "close_merged", KEY, 0,
+        "evidence_unverified", "merged_on_default_missing")

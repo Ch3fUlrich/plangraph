@@ -34,7 +34,7 @@ class MergedGit:
 
 
 @pytest.fixture
-def w(tmp_path, monkeypatch):
+def unseated_w(tmp_path, monkeypatch):
     tokens = count()
     monkeypatch.setattr(auth, "_mint_token", lambda: f"fixture-token-{next(tokens)}")
     world = World(tmp_path, backend="sqlite")
@@ -55,13 +55,19 @@ def w(tmp_path, monkeypatch):
     world.real_plan_item_commits = context_sources.plan_item_commits
     monkeypatch.setattr(context_sources, "plan_item_commits", lambda *a, **kw: [
         {"sha": HEAD, "date": "2026-01-01", "merge": {"pr": 1}}])
+    yield world
+    world.close()
+
+
+@pytest.fixture
+def w(unseated_w):
+    world = unseated_w
     for key in (KEY, "demo:H"):
         world.store.record_run(world.p("spawner"), key, {
             "run_id": "fixture-seats", "phase": "finished", "rc": 0,
             "seats": [{"model": "gemini-test", "verdict": "pass"},
                       {"model": "deepseek-test", "verdict": "pass"}]})
-    yield world
-    world.close()
+    return world
 
 
 def _close(w, key=KEY, families=None, decision="D-5504", who="router"):

@@ -27,6 +27,7 @@ from . import auth, context_sources
 from .coverage import writer_families
 from .errors import Refused
 from .evidence_types import Result, valid_commit_ref
+from .schema import RISK_TAGS
 from ..review.family import FAMILIES, model_family
 
 
@@ -92,7 +93,7 @@ class WaiverMixin:
             text = re.sub(r"^\([0-2][0-9]:[0-5][0-9]Z, date -u\)\s+", "", text)
         if not isinstance(text, str) or not re.match(r"^GO(?=$|\s)", text):
             raise Refused("evidence_unverified", "go_row_not_go")
-        if re.match(r"^GO\s+#[0-9]+(?=$|\s)", text):
+        if re.match(r"^GO\s+(?:#[0-9]+|`#[0-9]+`)(?=$|[\s,;:.])", text):
             # Review prose may itself discuss a NO GO; authority is the leading
             # GO verdict and its one explicit, full-length GO-HEAD token.
             bounds = re.findall(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])", text)
@@ -128,7 +129,18 @@ class WaiverMixin:
             raise Refused("coverage", f"insufficient_seat_families: need {need}")
         card = self.conn.execute("SELECT risk_tags FROM cards WHERE key=?",
                                  (item["key"],)).fetchone()
-        if card and {"auth", "secrets"}.intersection(json.loads(card["risk_tags"])) \
+        tags = []
+        if card is not None:
+            try:
+                tags = json.loads(card["risk_tags"])
+            except (ValueError, TypeError, RecursionError):
+                raise Refused("validation", "card_risk_tags_invalid") from None
+            # Match put_card's canonical vocabulary, not a permissive JSON
+            # iterable. Noncanonical spelling is invalid, never lower risk.
+            if not isinstance(tags, list) or any(
+                    not isinstance(tag, str) or tag not in RISK_TAGS for tag in tags):
+                raise Refused("validation", "card_risk_tags_invalid")
+        if {"auth", "secrets"}.intersection(tags) \
                 and len(set(seats) - {"anthropic"}) < 2:
             raise Refused("coverage", "insufficient_non_anthropic_seat_families: need 2")
         writers = writer_families(self, item, self._ctx(item, now))
