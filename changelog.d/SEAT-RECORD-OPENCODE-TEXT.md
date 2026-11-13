@@ -1,1 +1,2 @@
 - Derive seat review text from OpenCode JSON text events after the final step start, ignoring diagnostics and tool events; preserve plain-text logs and strict verdict-last-line validation, and refuse event logs without final-step review text (D-5587).
+- Restrict event-log detection to recognized OpenCode event types with an object-valued part, preserving plain-text reviews containing quoted JSON or unrelated typed objects unchanged (D-5587).

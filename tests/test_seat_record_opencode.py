@@ -104,6 +104,47 @@ def test_plain_text_log_without_typed_json_objects_is_unchanged(tmp_path, live):
     assert text == live
 
 
+@pytest.mark.parametrize("quoted_line", [
+    '> {"type": "text", "part": {"text": "x"}}',
+    json.dumps('{"type": "text", "part": {"text": "x"}}'),
+])
+def test_plain_text_log_with_quoted_json_is_unchanged(tmp_path, quoted_line):
+    live = f"{FINDING}\n{quoted_line}\nVERDICT: ACCEPT\n"
+
+    _, text = seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
+
+    assert text == live
+    assert sv.parse_verdict(text) == (True, 2)
+
+
+@pytest.mark.parametrize("non_event", [
+    {"type": "diagnostic", "part": {"text": "x"}},
+    {"type": None, "part": {}}, {"type": ["text"], "part": {}},
+    {"type": {"name": "text"}, "part": {}},
+    *({"type": kind} for kind in ("step_start", "step_finish", "text", "tool_use")),
+    *({"type": kind, "part": part}
+      for kind in ("step_start", "step_finish", "text", "tool_use")
+      for part in (None, [], "x", 42)),
+])
+def test_plain_text_log_with_non_event_typed_object_is_unchanged(tmp_path, non_event):
+    live = f"{FINDING}\n{json.dumps(non_event)}\nVERDICT: ACCEPT\n"
+
+    _, text = seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
+
+    assert text == live
+    assert sv.parse_verdict(text) == (True, 2)
+
+
+@pytest.mark.parametrize("kind", ["step_start", "step_finish", "text", "tool_use"])
+def test_minimal_recognized_event_marks_event_log(tmp_path, kind):
+    line = json.dumps({"type": kind, "part": {"type": kind.replace("_", "-")}},
+                      separators=(",", ":"))
+    live = f"{FINDING}\n{line}\nVERDICT: ACCEPT\n"
+
+    with pytest.raises(ValueError, match="record has no review text"):
+        seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
+
+
 def test_json_only_text_after_last_step_start_counts_in_file_order(tmp_path):
     live = event_log(
         event("text", 1, text="VERDICT: FIX"),

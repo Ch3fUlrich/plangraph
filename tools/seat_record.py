@@ -39,14 +39,16 @@ def _review_text_from_log(live_log: str) -> str:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if not isinstance(event, dict) or "type" not in event:
+        if (not isinstance(event, dict)
+                or event.get("type") not in ("step_start", "step_finish", "text", "tool_use")
+                or not isinstance(event.get("part"), dict)):
             continue
         event_log = True
         if event["type"] == "step_start":
             texts.clear()
         elif event["type"] == "text":
-            part = event.get("part")
-            if isinstance(part, dict) and isinstance(part.get("text"), str):
+            part = event["part"]
+            if isinstance(part.get("text"), str):
                 texts.append(part["text"])
     return "\n".join(texts) if event_log else live_log
 
