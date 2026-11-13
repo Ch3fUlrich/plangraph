@@ -705,3 +705,5 @@ Run listing is read-only. Watchdog sweeps own queue-timeout persistence and corr
 Gateway routes and explicit launches refuse with `gateway not configured` before creating a child when the effective base URL or client credential is absent. Set `PLANGRAPH_GATEWAY_KEY_FILE` to a private client key file, or use the established credential resolver.
 
 Prompt-only review legs always receive the card diff inline, including explicit document-mode overrides. A missing diff refuses the launch. Completed prompt-only records whose dispatched `prompt.txt` lacks patch data have `verdict_status=void` and `verdict_void_reason=prompt_only_no_diff`; no review evidence is published.
+
+`pg-spawnd review-probe` schedules tiny OK-answer probes for every active review route leg, including booked-down legs for recovery. It uses the isolated probe bridge and shared admission store. A failed review answer books the leg down immediately. MiMo review launches and probes disable thinking from their first request (`reasoning_cap=0` in the run record). Missing management credentials produce one routing-outbox notice per outage.

@@ -89,3 +89,5 @@ Notes:
 - Reads the same `projector.env` (`%h/.config/plangraph/projector.env`) as the reconcile service.
 - Does not replace the nightly reconcile timer.
 - Production placement stays with the release/deploy item.
+
+Install and enable `plangraph-review-probe.timer` to refresh every review leg every fifteen minutes. `pg-spawnd review-probe` uses the private `watchdog.env` for gateway and Python bridge configuration; missing management keys produce one routing notice without blocking independent legs.

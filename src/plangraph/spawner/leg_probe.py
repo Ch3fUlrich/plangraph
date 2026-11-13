@@ -192,7 +192,7 @@ async def _await_completion(runner, job, deadline):
         await asyncio.sleep(0.02)
 
 
-async def probe(runner, leg, *, timeout_s=None, store=None):
+async def probe(runner, leg, *, timeout_s=None, store=None, role='implement'):
     """One real commit task in a disposable repo; infra failures book no leg state.
 
     D-3465: a moved caller HEAD reports ``ok=False``, "probe leaked into caller
@@ -241,8 +241,9 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
             async def launch():
                 from .probe_cleanup import OWNED
                 OWNED.set(owned_ids)
-                return await runner.spawn(prompt=PROMPT, role='implement', model_or_combo=leg.model,
+                return await runner.spawn(prompt='Reply with exactly OK.' if role == 'review' else PROMPT, role=role, model_or_combo=leg.model,
                                          client=leg.harness, cwd=root, extra_env=CHILD_ISOLATION,
+                                         **({'reasoning_cap': True} if role == 'review' and leg.family == 'mimo' else {}),
                                          watchdog=dict(stall_s=timeout + 60, first_edit_s=timeout + 60,
                                                        max_s=timeout + 60, interval=1))
             spawn_task = asyncio.ensure_future(launch())
@@ -265,8 +266,8 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
             except (OSError, subprocess.CalledProcessError):
                 ok, reason, infra = False, 'probe infra: git', True
             else:
-                ok = changed and 'ok.txt' in files
-                reason = '' if ok else f'exit {job.exit_code}' if job.exit_code else 'no commit'
+                ok = (job.exit_code == 0 and job.stdout.strip() == 'OK') if role == 'review' else changed and 'ok.txt' in files
+                reason = '' if ok else f'exit {job.exit_code}' if job.exit_code else 'no OK answer' if role == 'review' else 'no commit'
         # Tripwire (D-3465): the writer must never touch the caller's repo.
         caller_after = await asyncio.to_thread(caller_heads)
         leaked = any(caller_after.get(label) != head for label, head in caller_before.items())
@@ -288,7 +289,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
             if ok:
                 state.record_probe_pass(key(leg), caller='leg-probe')
             else:
-                state.record_probe_fail(key(leg), reason, caller='leg-probe', serving=serving, stderr_excerpt=excerpt)
+                state.record_probe_fail(key(leg), reason, caller='review-leg-probe' if role == 'review' else 'leg-probe', serving=serving and role != 'review', stderr_excerpt=excerpt)
         reason += ': ' + excerpt if excerpt and not leaked else ''
         result = dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start, stderr_excerpt=excerpt)
         if serving:
@@ -368,11 +369,11 @@ async def before_launch(runner, leg, role, dry_run):
         adapter._at = None  # Re-read after an ordinary probe.
     return (limit() or admission(probe_ok=result['ok'])) if result['ok'] or result.get('infra') or result.get('state') == 'probe_failed_leg_serving' else 'down: ' + reason
 
-async def probe_many(runner, legs=(), all_writers=False, timeout=None):
+async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_reviews=False):
     from plangraph.planner.legs import DEFAULT_LEGS, leg_active, spawnable_legs
     SPAWNABLE_LEGS = spawnable_legs()
     ids = {legs} if isinstance(legs, str) else set(legs or ())
-    if not (ids or all_writers):
+    if not (ids or all_writers or all_reviews):
         raise ParameterRefused('select --leg ID or --all-writers')
     unknown = ids - {leg.id for leg in SPAWNABLE_LEGS}
     if unknown:
@@ -382,6 +383,12 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None):
     selected = [leg for leg in SPAWNABLE_LEGS if leg_active(leg) and
                 (leg.id in ids or (all_writers and leg in DEFAULT_LEGS and
                                    any(role in leg.roles for role in ('implement', 'fix'))))]
+    if all_reviews:
+        from plangraph.routing_support.leg_state_flag import live_default_legs
+        from plangraph.planner.route_policy import load_route_policy
+        policy = load_route_policy()
+        selected = [leg for leg in live_default_legs('review') if 'review' in leg.roles
+                    and leg_active(leg) and not policy.skip_reason(leg, 'review')]
     results = []
     state = _store_for(runner)
     state = state.store if getattr(state, 'enabled', False) else state
@@ -396,5 +403,6 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None):
                                 skipped='limited',
                                 reset_at=(status.get('evidence') or {}).get('reset_at')))
             continue
-        results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout, store=state)))
+        results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout, store=state,
+            **({'role': 'review'} if all_reviews else {}))))
     return dict(ok=all(row['ok'] for row in results), probes=results)

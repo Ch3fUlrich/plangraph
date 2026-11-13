@@ -129,6 +129,7 @@ def main(argv=None):
     p = commands.add_parser('probe')
     p.add_argument('--leg', action='append', default=[])
     p.add_argument('--all-writers', action='store_true')
+    p.add_argument('--all-reviews', action='store_true')
     p.add_argument('--timeout', type=float)
     p.add_argument('--json', action='store_true')
     p = commands.add_parser('wait')
@@ -152,7 +153,7 @@ def main(argv=None):
         if args.verb == 'probe':
             from .leg_probe import ParameterRefused, probe_many, reset_iso
             try:
-                result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout))
+                result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout, all_reviews=args.all_reviews))
             except ParameterRefused as exc:
                 print(json.dumps(dict(status='refused', refusal='ParameterRefused', error=str(exc), exit_code=2)))
                 return 2

@@ -1,0 +1,7 @@
+[Unit]
+Description=Probe every offered review leg and record unavailable legs
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/plangraph/watchdog.env
+ExecStart=%h/.cargo/bin/pg-spawnd review-probe
+TimeoutStartSec=31min

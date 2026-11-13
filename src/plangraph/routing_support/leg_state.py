@@ -262,7 +262,7 @@ class LegStateStore:
                         evidence["event_id"] = behind["id"]
                         return {"state": "limited", "evidence": evidence}
                     reset = row["reset_at"]
-                    down = streak >= 2 and reset is not None and now < reset
+                    down = (streak >= 2 or row['caller'] == 'review-leg-probe') and reset is not None and now < reset
                     return {'state': 'down' if down else 'reprobe', 'evidence': evidence}
                 reset = row["reset_at"]
                 state = (("limited" if now < reset else "ok") if reset is not None

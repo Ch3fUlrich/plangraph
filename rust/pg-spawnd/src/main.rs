@@ -34,6 +34,7 @@ mod reconcile_time;
 mod reconcile_watch;
 mod records;
 mod review_artifacts;
+mod review_probe;
 mod runs;
 mod serve;
 mod serve_options;

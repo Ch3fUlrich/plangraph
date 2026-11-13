@@ -216,6 +216,9 @@ class SeatSpawnMixin:
 
     async def _launch_leg(self, record, chosen, *, routed=False, **options):
         """One normal launch, at most one capped review retry; never recurse or reroute."""
+        if record.get('role') == 'review' and chosen.family == 'mimo':
+            options.setdefault('reasoning_cap', True)
+            record['reasoning_cap'] = 0  # Thinking disabled, leaving output capacity.
         if record.get('cwd') is not None:
             options.setdefault('cwd', record['cwd'])
         async def launch(prompt_record, **kwargs):

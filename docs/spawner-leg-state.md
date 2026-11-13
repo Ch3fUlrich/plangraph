@@ -103,3 +103,6 @@ Missing, empty or older logs retain normal cooldown behaviour. Provider and
 probe records serving evidence; this override applies only to probe failures.
 The probe result adds `state` only for serving failures (or `host-not-ready`);
 ordinary successes and failures omit the key, rather than returning null.
+
+Scheduled review answer failures (`review-leg-probe`) book a leg down after the
+first failed answer; writer commit probes retain their two-failure rule.
