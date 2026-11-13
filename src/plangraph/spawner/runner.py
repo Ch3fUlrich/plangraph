@@ -1012,7 +1012,7 @@ def spawn_service(*args, **kwargs):
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
                         seats=False, _plan=None, run_worktree=False, _placement=None, cwd=None):
             from .private_io import SAVE_READ_ATTEMPTS
-            from .run_watchdog import leg_limits, terminal_status, thresholds
+            from .run_watchdog import leg_limits, terminal_status, thresholds, watchdog_reason
             from .question_bridge import rounds_exhausted
             if rounds_exhausted(self, card, role):
                 from plangraph.routing_errors import SpawnRefused
@@ -1114,9 +1114,9 @@ def spawn_service(*args, **kwargs):
                             job.status = 'cancelled'   # another process ends the run, never a fall-through leg
                         stop = redact(self.runner.provider_responses.get(job.job_id))
                         if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
-                            record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
+                            record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=watchdog_reason(job),
                                 served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))
-                            record.update(status=terminal_status(job.status, role), exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
+                            record.update(status=terminal_status(job.status, role), exit_code=1 if job.exit_code is None else job.exit_code, reason=watchdog_reason(job),
                                 watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
                                 events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s events
                             return
