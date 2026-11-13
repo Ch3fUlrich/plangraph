@@ -117,6 +117,7 @@ def main(argv=None):
         if verb == 'spawn':
             p.add_argument('prompt', nargs='?')
             p.add_argument('--prompt-file')
+            p.add_argument('--cwd', help='absolute path to an existing git checkout')
             p.add_argument('--review-scope', choices=['per-fixer', 'batch'])
             p.add_argument('--model')
             p.add_argument('--leg')
@@ -198,11 +199,10 @@ def main(argv=None):
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise
-            payload = dict(card=args.card, prompt=prompt, role=args.role,
-                writer_families=args.writer_family, review_of=args.review_of, model=args.model,
-                review_scope=args.review_scope, run_worktree=args.run_worktree,
-                leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
-                no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
+            payload = dict(card=args.card, prompt=prompt, role=args.role, writer_families=args.writer_family,
+                review_of=args.review_of, model=args.model, review_scope=args.review_scope,
+                run_worktree=args.run_worktree, cwd=args.cwd, leg=args.leg, override_reason=args.override_reason,
+                dry_run=args.dry_run, no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
             from plangraph.settings import admit_review_scope
             try:
                 admit_review_scope(args.card, args.role, args.review_scope)
@@ -382,14 +382,14 @@ raise SystemExit(code)
                     print(line, file=sys.stderr)
                     seen.add(line)
         print(json.dumps(result, indent=2))
+        if isinstance(result, dict) and result.get('reason') == 'host_memory_floor': print(result['error'], file=sys.stderr)
         if isinstance(result, dict):
             if 'seats' in result:
                 # rc 0 only while some seat can still deliver a verdict (planned, running or completed).
                 return 0 if any(r.get('status') in ('dry_run', 'running', 'completed') for r in result['seats']) else 1
             if 'status' not in result:
                 return 2 if result.get('error') else 0
-            code = result.get('exit_code')
-            return code if code is not None else (0 if result.get('status') == 'running' else 1)
+            return result['exit_code'] if result.get('exit_code') is not None else (0 if result.get('status') == 'running' else 1)
         return 0
     except (ValueError, KeyError, OSError, SpawnRefused) as exc:
         print(((f'{args.run_id}: ' if hasattr(args, 'run_id') else '') + type(exc).__name__) if isinstance(exc, PermissionError) else str(exc), file=sys.stderr)

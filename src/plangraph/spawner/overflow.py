@@ -18,19 +18,17 @@ from typing import NamedTuple
 
 from plangraph.keeper.credential_guard import mask
 from plangraph.fleet_sync.genconfig import config_dir
+from plangraph.routing_errors import ParameterRefused
 
 from . import cli
 from .private_io import atomic_write_private
-
 
 class Decision(NamedTuple):
     host: str | None
     reason: str
 
-
 class RemoteRefusal(ValueError):
     """Safe, value-free remote failure reason."""
-
 
 def failure_reason(exc):
     """Describe the failure without exposing exception values or private paths."""
@@ -42,7 +40,6 @@ def failure_reason(exc):
         return 'remote spawn input has an invalid type'
     return 'remote spawn input or receipt has an invalid value'
 
-
 def registry_caps():
     """Read the same registry location and JSON format as fleet-sync."""
     try:
@@ -53,7 +50,6 @@ def registry_caps():
     except (OSError, ValueError, KeyError, TypeError):
         logging.warning('hosts registry missing or malformed; overflow disabled, local RAM defaults 3000/2048 MB')
         return {'hosts': [], 'self': None}
-
 
 def host_config(registry, name):
     for host in registry.get('hosts', []):
@@ -67,7 +63,6 @@ def host_config(registry, name):
         return host
     return {}
 
-
 def placement_policy(registry, config):
     name = os.environ.get('PLANGRAPH_HOST_NAME') or registry.get('self')
     host = host_config(registry, name)
@@ -76,7 +71,6 @@ def placement_policy(registry, config):
     local = hosts.get(name, {}) if isinstance(hosts, dict) else {}
     return name, (host.get('orchestration_only') is True or
                   isinstance(local, dict) and local.get('orchestration_only') is True)
-
 
 def host_caps(registry, name, role='implement'):
     host = host_config(registry, name)
@@ -91,13 +85,11 @@ def host_caps(registry, name, role='implement'):
     logging.warning('host %r: missing or malformed registry caps; not an overflow target', name)
     return None
 
-
 def local_limits(registry, role='implement'):
     caps = host_caps(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry.get('self'), role)
     if caps is None:
         logging.warning('local admission using conservative RAM defaults: floor 3000 MB, role 2048 MB')
     return caps or (2048, 3000)
-
 
 def memory_refusal(free_mb, reservation_mb, floor_mb):
     """Worker-core mem_fit: effective_free_mb - reservation_mb >= mem_floor_mb.
@@ -109,13 +101,11 @@ def memory_refusal(free_mb, reservation_mb, floor_mb):
         return None
     return f'memory: free {free_mb} MB, floor {floor_mb} MB, role {reservation_mb} MB'
 
-
 def memory_floor_record(memory, role_mb, floor, detail, role='implement'):
     return dict(run_id='run-' + uuid.uuid4().hex, status='refused', role=role,
                 reason='host_memory_floor', overflow_reason=detail, exit_code=2,
                 mem_available_mb=memory, floor_mb=floor, role_mb=role_mb, ended=time.time(),
                 error=f'host_memory_floor: MemAvailable {memory} MB, floor {floor} MB, role {role_mb} MB; {detail}')
-
 
 def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
             remote_first=False, local_refusal=None, host_order=()):
@@ -158,7 +148,6 @@ def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
         return Decision(None, local_reason or 'local_fallback_no_remote')
     return Decision(None, local_reason + '; queue: ' + ('; '.join(refused) or 'no overflow hosts configured'))
 
-
 def ready_records(config, role='implement'):
     records = {}
     registry = registry_caps()
@@ -186,11 +175,9 @@ def ready_records(config, role='implement'):
         records[name] = row
     return records
 
-
 def local_resources(state=None):
     runs = cli.SpawnService(state=state).ps()['runs']
     return sum(row.get('status') == 'running' for row in runs), available_memory_mb()
-
 
 def _windows_available_memory_mb():
     """MemAvailable's Windows twin: GlobalMemoryStatusEx ullAvailPhys."""
@@ -207,7 +194,6 @@ def _windows_available_memory_mb():
         raise OSError('GlobalMemoryStatusEx failed')
     return status.ullAvailPhys // (1024 * 1024)
 
-
 def available_memory_mb():
     # Windows has no /proc: every local spawn died with ENOENT before launch (2026-11-09).
     if os.name == 'nt':
@@ -218,7 +204,6 @@ def available_memory_mb():
     except StopIteration as exc:
         raise ValueError('MemAvailable missing') from exc
     return memory
-
 
 def swap_used_pct():
     try:
@@ -232,7 +217,6 @@ def swap_used_pct():
         raise ValueError('invalid swap readings')
     return 100 * (total - free) / total if total else 0
 
-
 def local_health_refusal(config, memory):
     if memory < config.get('local_min_available_mb', 4096):
         return 'local_min_available_mb'
@@ -244,9 +228,19 @@ def local_health_refusal(config, memory):
         return 'local_max_swap_used_pct'
     return None
 
+def repos_public(config, repo, diff=None):
+    """Every repository contributing checkout or diff context must be public."""
+    if diff is not None and not diff.get('repo'):
+        raise ParameterRefused('diff_ref requires repo')
+    allowed = {Path(p).expanduser().resolve() for p in config.get('public_repos', [])}
+    return all(Path(p).expanduser().resolve() in allowed
+               for p in [repo, *([diff.get('repo')] if diff is not None else [])])
 
 def remote_spawn(name, host, card, prompt, options):
     """Use private staging, quote every remote argument, never echo SSH stderr."""
+    options = list(options)
+    if 'cwd' in card or any(v == '--cwd' or v.startswith('--cwd=') for v in options):
+        raise RemoteRefusal('explicit cwd cannot overflow to another checkout')
     alias = host['ssh']
     def ssh(command):
         return subprocess.run(['ssh', '--', alias, command], capture_output=True, text=True,
@@ -310,7 +304,6 @@ def remote_spawn(name, host, card, prompt, options):
         ssh('rm -f -- ' + q(directory + '/card.json') + ' ' + q(directory + '/prompt.txt') +
             '; rmdir -- ' + q(directory))
 
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('verb', choices=['spawn'])
@@ -319,7 +312,10 @@ def main(argv=None):
     parser.add_argument('--prompt', required=True)
     parser.add_argument('--role', default='implement')
     parser.add_argument('--state', required=True, help='invoking spawn state directory (local only)')
+    parser.add_argument('--cwd')
     args, options = parser.parse_known_args(argv)
+    if args.cwd is not None:
+        options.extend(['--cwd', args.cwd])
     local = ['--state', args.state, 'spawn', '--card', '@' + args.card]
     if args.role != 'implement':
         options.extend(['--role', args.role])
@@ -335,11 +331,13 @@ def main(argv=None):
         _, memory = local_resources(args.state)
         if decide(memory, role_mb, floor_mb, {}, False).reason == 'local room':
             return cli.main([*local, Path(args.prompt).read_text(), *options])
-        public = str(Path(args.repo).resolve()) in [str(Path(p).expanduser().resolve())
-                                                  for p in config.get('public_repos', [])]
         card = json.loads(Path(args.card).read_text())
+        from .prompt_input import resolve_cwd
+        cwd = resolve_cwd(args.cwd, card)
+        repo = Path(cwd or args.repo).resolve()
         diff = card.get('diff_ref')
-        if diff and Path(diff['repo']).resolve() != Path(args.repo).resolve():
+        public = repos_public(config, repo, diff)
+        if not cwd and diff and Path(diff.get('repo')).resolve() != repo:
             public = False
         prompt = Path(args.prompt).read_text()
         records = ready_records(config, args.role)
@@ -377,7 +375,6 @@ def main(argv=None):
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         print('overflow input or resource check failed', file=sys.stderr)
         return 1
-
 
 if __name__ == '__main__':
     raise SystemExit(main())

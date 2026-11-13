@@ -30,7 +30,7 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 @contextmanager
-def inbox_lock(path):
+def inbox_lock(path, *, blocking=True):
     """Serialize independent supervisors sharing an inbox, on both host types."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(str(path) + '.lock', os.O_RDWR | os.O_CREAT, 0o600)
@@ -41,10 +41,10 @@ def inbox_lock(path):
                 lock.write(b'0')
                 lock.flush()
             lock.seek(0)
-            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            msvcrt.locking(fd, msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
         else:
             import fcntl
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         try:
             yield
         finally:
@@ -233,10 +233,12 @@ def _deliver_verdict(directory, record, keeper):
 
 def completion_event(record, cwd):
     from .runner import redact
+    from .prompt_input import checkout_env
     try:
         head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cwd,
-                                       text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL).strip()
-    except (OSError, subprocess.CalledProcessError):
+                                       text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL,
+                                       env=checkout_env(), timeout=10).strip()
+    except (OSError, subprocess.SubprocessError):
         head = None
     rc = record.get('exit_code')
     return redact(dict(event_id=record['run_id'] + ':completion', run_id=record['run_id'],

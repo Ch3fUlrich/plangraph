@@ -335,6 +335,7 @@ def test_slow_passing_check(repo, monkeypatch, capsys, command, family):
     monkeypatch.setattr(preflight.subprocess, "run", sleeping_check)
     monkeypatch.setattr(preflight, "run", run)
     monkeypatch.setattr(preflight, "test_environment", lambda root, env: env)
+    monkeypatch.setattr(preflight, "test_baseline", lambda root, base: base)
     monkeypatch.setattr(preflight, "rust_commands",
                         lambda *args: [command] if family == "rust" else [])
     assert preflight.main(["--base", "HEAD"], repo) == 0
@@ -355,3 +356,14 @@ def test_summary_is_immediate(repo, monkeypatch, capsys):
 
     monkeypatch.setattr(preflight, "run", run)
     assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
+
+
+def test_local_tests_use_main_while_policy_keeps_push_base(repo, monkeypatch):
+    subprocess.run(['git', 'update-ref', 'refs/remotes/origin/main', 'HEAD'], cwd=repo, check=True)
+    calls = fake_runner(monkeypatch)
+    assert preflight.main(['--base', 'HEAD'], repo) == 0
+    tests = next(cmd for cmd, _, _ in calls if Path(cmd[1]).name == 'affected_tests.py')
+    assert tests[tests.index('--base') + 1] == 'origin/main'
+    assert '--local' in tests
+    assert all(env['FILESIZE_REQUIRE_BASE'] == 'HEAD' for cmd, _, env in calls
+               if Path(cmd[1]).name == 'check_file_size.py')
