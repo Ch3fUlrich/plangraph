@@ -1,2 +1,4 @@
 Carry the caller's global git credential helper entries into the isolated keeper decisions fetch env (GIT_CONFIG_COUNT), so a private https origin authenticates instead of failing every claim with DecisionsFetchFailed; other GIT_* overrides stay dropped.
 Only credential.helper and credential.<url>.helper cross the isolation boundary; includes stay disabled and timed-out readers are reaped. Authenticated loopback fetch tests prove helper authentication, fail-closed fetch errors, hostile config isolation and no credential output.
+
+Rename the origin environment regression module to remove a path-shaped scrub hit, and remove its exact-value exception. Local push checks select affected files against origin/main and refuse full-suite execution (operator package R2). The host-view integration test declares its Rust projection-helper dependency through the shared helper; CI still requires that binary.

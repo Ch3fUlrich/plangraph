@@ -308,4 +308,5 @@ live session state, or change permissions/settings files.
 
 Package R Python files already in flight are individually listed in
 `tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
-The scrub rules carry one exact-value allowance for that test filename in the language allowlist.
+
+Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
