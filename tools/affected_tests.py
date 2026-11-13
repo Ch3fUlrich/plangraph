@@ -59,6 +59,23 @@ def filter_within(selected_tests, within):
     return sorted(set(matched))
 
 
+SMOKE_LIMIT = 12
+SMOKE_TEST = "tests/test_affected_tests.py"
+
+
+def smoke_tests(texts, path):
+    """Bounded stand-in for the whole suite when a code file maps to no test.
+
+    Tests naming the file's directory (two or more path parts deep, at most
+    SMOKE_LIMIT, sorted) plus the selector's own test; CI keeps the full suite.
+    """
+    parent = Path(path).parent.as_posix()
+    near = sorted(s for s, text in texts.items() if s.startswith("tests/")
+                  and Path(s).name.startswith("test_") and len(Path(parent).parts) > 1
+                  and parent in text)[:SMOKE_LIMIT]
+    return set(near) | ({SMOKE_TEST} if SMOKE_TEST in texts else set())
+
+
 def select_tests(root, changed, within=None):
     root = Path(root)
     paths = sorted(p for folder in ("src", "tests") for p in (root / folder).rglob("*.py"))
@@ -135,7 +152,8 @@ def select_tests(root, changed, within=None):
         if p.name == "conftest.py" or (path.startswith("tests/") and not p.name.startswith("test_")):
             return fallback("shared fixture")
         if p.parts[0] in {"src", "tests", "tools"} and path not in texts and p.suffix == ".py":
-            return fallback("unmapped file")
+            selected.update(smoke_tests(texts, path))
+            continue
         seen, todo = set(), [path]
         while todo:
             current = todo.pop()
@@ -151,7 +169,8 @@ def select_tests(root, changed, within=None):
         if not hits and p.suffix in {".md", ".rst", ".txt"}:
             continue  # prose no test names cannot change a test result (D-5827)
         if not hits:
-            return fallback("no mapped tests")
+            selected.update(smoke_tests(texts, path))
+            continue
         selected.update(hits)
     selected = {t for t in selected if not t.startswith("tests/browser/")}  # own CI job (D-2821)
     return {"tests": filter_within(sorted(selected), within), "reason": "reverse imports and explicit file references"}

@@ -37,8 +37,9 @@ python tools/affected_tests.py --base origin/main --run -n auto  # writers / PR 
 python -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
 
-The affected selector falls back to the full suite for unmapped Python source,
-shared fixtures and suite configuration; documentation, `changelog.d/` fragments,
+The affected selector falls back to the full suite for shared fixtures and suite
+configuration; unmapped code selects a bounded smoke set (tests naming its directory,
+at most 12, plus `tests/test_affected_tests.py`), and CI/main keep the full suite; documentation, `changelog.d/` fragments,
 status and build artifacts, and `.md`/`.rst`/`.txt` files no test names, select no tests. Do not bypass a conservative fallback on PRs.
 Pass `--head <revision>` for a committed-only comparison, excluding staged,
 worktree and untracked changes; omit it to include checkout changes.

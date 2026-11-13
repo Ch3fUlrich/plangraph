@@ -31,11 +31,15 @@ def test_docs_and_changelog_fragments_select_no_tests(tmp_path, path):
     assert selector().select_tests(tmp_path, [path])["tests"] == []
 
 
-def test_unmapped_tracked_non_doc_file_still_falls_back(tmp_path):
+def test_unmapped_code_selects_bounded_smoke_not_full_suite(tmp_path):
+    named = {f"tests/test_near{i}.py": "# deep/dir" for i in range(20)}
+    _repo(tmp_path, {"deep/dir/x.py": "", "tests/test_affected_tests.py": "", **named})
+    plan = selector().select_tests(tmp_path, ["deep/dir/x.py"])["tests"]
+    assert plan != ["tests"] and len(plan) <= selector().SMOKE_LIMIT + 1
+    assert "tests/test_affected_tests.py" in plan and "tests/test_near0.py" in plan
+
+
+@pytest.mark.parametrize("path", ["pyproject.toml", "tests/conftest.py", "requirements-ci.txt"])
+def test_suite_config_and_shared_fixtures_still_run_full_suite(tmp_path, path):
     _repo(tmp_path)
-    assert selector().select_tests(tmp_path, ["notes/tool.sh"])["tests"] == ["tests"]
-
-
-def test_unmapped_source_file_still_falls_back(tmp_path):
-    _repo(tmp_path, {"src/pkg/orphan.py": ""})
-    assert selector().select_tests(tmp_path, ["src/pkg/orphan.py"])["tests"] == ["tests"]
+    assert selector().select_tests(tmp_path, [path])["tests"] == ["tests"]
