@@ -60,7 +60,9 @@ never logs the token.
 
 Switch the live keeper to a new tree with `python tools/keeper_deploy.py --tag T --sha S --tree DIR --probe-key KEY`
 (PG_URL and PG_TOKEN_FILE set): it writes the `live-sync-T-S.conf` drop-in, restarts, and within 60 s smokes
-`/v1/health`, a claim+release of the dedicated probe item (reads origin decisions) and the `close_merged` route;
+`/v1/health`, a claim+release of the dedicated probe item (reads origin decisions) and an authenticated `close_merged` dry-run answer (`{"dry_run":true,"route":"close_merged"}`).
+The smoke uses one overall deadline for all API calls; malformed responses and all exceptions restore the previous drop-ins.
+`--dry-run` prints the proposed drop-in without changing files or services;
 on failure it restores the previous drop-ins, restarts, and exits 1 with the reason.
 ## 4. Import / export / verify / back up
     pg admin import DIR --as router   # YAML dir -> import_items (open/claimed/in_review)

@@ -604,3 +604,5 @@ indexes become `*_retired_v11` under migration and exclusive table locks.
 Preserve audit rows; reapplication requires an explicit restore plan.
 SQLite rollback retains tables; C4 owns forward audit events, not item events.
 Mandatory ephemeral PostgreSQL CI must pass before merge; storage is not closure.
+
+Deployment smoke can call `POST /v1/close_merged` with `{"dry_run": true}` using a router token. It returns `{"dry_run": true, "route": "close_merged"}` before reading an item or merge evidence, preserving item state and existing authorization. Nonboolean dry-run values are refused. The deploy smoke requires this explicit response within its overall deadline.

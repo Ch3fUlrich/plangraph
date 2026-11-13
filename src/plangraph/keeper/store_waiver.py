@@ -40,11 +40,16 @@ def _known_family(value):
 class WaiverMixin:
     """Router decision verbs for reviews: waive a family or close merged work."""
 
-    def close_merged(self, principal, key, decision_id, families):
+    def close_merged(self, principal, key, decision_id, families, *, dry_run=False):
         audit_key = key if isinstance(key, str) else None
-        return self._run(principal, "close_merged", audit_key,
-                         lambda now: self._close_merged(principal, key, decision_id,
-                                                       families, now))
+        def action(now):
+            self._require_role(principal, "router")
+            if type(dry_run) is not bool:
+                raise Refused('validation', 'dry_run must be boolean')
+            if dry_run:
+                return {'dry_run': True, 'route': 'close_merged'}
+            return self._close_merged(principal, key, decision_id, families, now)
+        return self._run(principal, "close_merged", audit_key, action)
 
     @staticmethod
     def _merged_review_state(item):

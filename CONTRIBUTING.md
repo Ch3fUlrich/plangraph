@@ -307,3 +307,6 @@ turn_budget_alert --test turn_budget_watchdog`. Tests never install hooks, read
 live session state, or change permissions/settings files.
 
 `tools/keeper_deploy.py` switches the live keeper to a new tree with a systemd drop-in, smokes it, and restores the previous drop-ins on failure (see docs/RUNBOOK.md).
+
+Package R Python files already in flight are individually listed in
+`tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.

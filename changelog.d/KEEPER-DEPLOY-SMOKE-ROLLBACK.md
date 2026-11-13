@@ -1,1 +1,2 @@
 - Keeper deploy tool `tools/keeper_deploy.py`: live smoke within 60 s after restart (health, probe claim+release, close_merged route); a failed smoke restores the previous drop-in set, restarts and exits non-zero.
+- Smoke requires an explicit authenticated close_merged dry-run result, bounds all calls under one deadline, and restores on unexpected exceptions. CLI --dry-run only prints the drop-in.

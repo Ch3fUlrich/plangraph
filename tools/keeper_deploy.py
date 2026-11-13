@@ -10,13 +10,15 @@ within ``--smoke-timeout`` seconds (default 60):
 * ``/v1/health`` answers;
 * claim + release of the dedicated probe item (the claim guard reads the
   origin decisions fresh, so "bad_state: cannot read decisions file" shows here);
-* the ``close_merged`` route exists (any answer but not_found).
+* the authenticated ``close_merged`` route returns an explicit dry-run answer.
 
 On any failure the previous drop-in set is restored byte for byte, then
 daemon-reload, restart and a health check run, and the exit code is 1 with the
 reason on stderr.  Environment as for ``pg``: PG_URL, PG_TOKEN_FILE.
 """
 import argparse
+from contextlib import contextmanager
+import signal
 import subprocess
 import sys
 import time
@@ -32,7 +34,7 @@ DROPIN_DIR = Path.home() / ".config/systemd/user" / (UNIT + ".d")
 
 def systemctl(*args):
     """Run ``systemctl --user``; raise RuntimeError when it fails."""
-    done = subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
+    done = subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True, timeout=60)
     if done.returncode:
         raise RuntimeError(f"systemctl {' '.join(args)}: {done.stderr.strip()}")
 
@@ -71,7 +73,26 @@ def wait_health(session, deadline, sleep=time.sleep, clock=time.monotonic):
             sleep(1)
 
 
+@contextmanager
+def smoke_deadline(timeout):
+    """Bound even a blocked request on this systemd deployment CLI's main thread."""
+    def expired(*_):
+        raise TimeoutError('smoke deadline exceeded')
+    previous = signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, timeout)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
 def smoke(session, probe_key, timeout, sleep=time.sleep, clock=time.monotonic):
+    with smoke_deadline(timeout):
+        return _smoke(session, probe_key, timeout, sleep, clock)
+
+
+def _smoke(session, probe_key, timeout, sleep=time.sleep, clock=time.monotonic):
     """``None`` when the live keeper passes, else the reason string."""
     deadline = clock() + timeout
     if not wait_health(session, deadline, sleep, clock):
@@ -87,10 +108,13 @@ def smoke(session, probe_key, timeout, sleep=time.sleep, clock=time.monotonic):
     except Unreachable as exc:
         return f"claim/release of {probe_key} failed: {exc}"
     try:
-        session.call("POST", "close_merged", body={})
+        answer = session.call("POST", "close_merged", body={"dry_run": True})
+        if not isinstance(answer, dict) or answer.get('dry_run') is not True or answer.get('route') != 'close_merged':
+            return 'close_merged did not return a dry-run answer'
     except RefusedCli as exc:
         if exc.code == "not_found":
             return "close_merged route missing"
+        return f"close_merged dry-run refused: {exc.code}: {exc.msg}"
     except Unreachable as exc:
         return f"close_merged route failed: {exc}"
     return None
@@ -107,7 +131,7 @@ def deploy(tag, sha, tree, probe_key, session, dropin_dir=DROPIN_DIR, ctl=system
         ctl("daemon-reload")
         ctl("restart", UNIT)
         reason = smoke(session, probe_key, timeout, sleep, clock)
-    except RuntimeError as exc:
+    except Exception as exc:
         reason = str(exc)
     if reason is None:
         return 0, "ok"
@@ -116,9 +140,10 @@ def deploy(tag, sha, tree, probe_key, session, dropin_dir=DROPIN_DIR, ctl=system
     try:
         ctl("daemon-reload")
         ctl("restart", UNIT)
-        if not wait_health(session, clock() + timeout, sleep, clock):
-            note += "; ROLLBACK UNHEALTHY: health did not answer after restore"
-    except RuntimeError as exc:
+        with smoke_deadline(timeout):
+            if not wait_health(session, clock() + timeout, sleep, clock):
+                note += "; ROLLBACK UNHEALTHY: health did not answer after restore"
+    except Exception as exc:
         note += f"; ROLLBACK FAILED: {exc}"
     return 1, note
 
@@ -130,7 +155,13 @@ def main(argv=None):
     ap.add_argument("--tree", required=True)
     ap.add_argument("--probe-key", required=True, help="dedicated item the smoke claims and releases")
     ap.add_argument("--smoke-timeout", type=int, default=60)
+    ap.add_argument("--dry-run", action="store_true", help="print drop-in text without changing files or services")
     args = ap.parse_args(argv)
+    if args.smoke_timeout <= 0:
+        ap.error('--smoke-timeout must be positive')
+    if args.dry_run:
+        print(dropin_text(args.tag, args.sha, args.tree), end='')
+        return 0
     code, msg = deploy(args.tag, args.sha, args.tree, args.probe_key, Session(json_mode=True),
                        timeout=args.smoke_timeout)
     print(msg, file=sys.stderr if code else sys.stdout)
