@@ -1,1 +1,2 @@
 - Declare and enable the project-local plangraph-spawner stdio MCP server alongside unchanged Omnigraph, loading the gateway log token at launch without storing secrets.
+- Strip CR/LF from the spawner gateway log key and load the base URL from optional local file ~/.config/plangraph/omniroute-base-url; if unreadable, default silently to the caller's OMNIROUTE_BASE_URL, or warn if unset/empty and still start the spawner.
