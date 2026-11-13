@@ -44,6 +44,7 @@ pub mod health_rates;
 pub mod health_until;
 pub mod host_metrics;
 pub mod host_overflow;
+pub mod host_launch;
 pub mod host_probe;
 pub mod host_readiness;
 pub mod host_command;
