@@ -15,18 +15,6 @@ from plangraph.spawner.runner import SpawnerRunner, _opencode_tools_denied
 from fake_pid import FAKE_PID
 
 
-@pytest.fixture
-def historical_go_argon(monkeypatch):
-    """Transport mechanics retain the historical Argon input, not production admission."""
-    from dataclasses import replace
-    from plangraph.planner import legs
-    argon = next(leg for leg in legs.DEFAULT_LEGS if leg.id == 'opencode-go-gemini-4-argon')
-    assert argon.roles == () and argon.disabled.startswith('D-5648:')
-    monkeypatch.setattr(legs, 'DEFAULT_LEGS', tuple(
-        replace(leg, roles=('review',), disabled=None) if leg.id == argon.id else leg
-        for leg in legs.DEFAULT_LEGS))
-
-
 def source_store(path, active=1):
     with sqlite3.connect(path) as db:
         db.execute('CREATE TABLE migration(id TEXT PRIMARY KEY, time_completed INTEGER)')
@@ -41,9 +29,9 @@ def source_store(path, active=1):
 @pytest.mark.usefixtures('fake_ownership')
 @pytest.mark.parametrize('present,active', [(True, 1), (True, None), (True, 0), (False, None)],
                          ids=['active', 'null', 'inactive', 'missing'])
-@pytest.mark.parametrize('model', ['opencode-go/gemini-4-argon', 'opencode-go-gemini-4-argon',
-                                   'go-test-combo', 'aliases/go-test-combo'])
-def test_review_provider_only(tmp_path, monkeypatch, caplog, present, active, model, historical_go_argon):
+@pytest.mark.parametrize('model', ['opencode-go/deepseek-v4.1-flash', 'opencode-go-deepseek-v4-flash',
+                                    'go-test-combo', 'aliases/go-test-combo'])
+def test_review_provider_only(tmp_path, monkeypatch, caplog, present, active, model):
     source = tmp_path / 'source.db'
     if present:
         source_store(source, active)
@@ -53,7 +41,7 @@ def test_review_provider_only(tmp_path, monkeypatch, caplog, present, active, mo
     monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
     if model in ('go-test-combo', 'aliases/go-test-combo'):
         monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
-            {'id': 'opencode-go/gemini-4-argon', 'combos': [model]}])
+            {'id': 'opencode-go/deepseek-v4.1-flash', 'combos': [model]}])
         monkeypatch.setattr(resolver, 'catalog_row_admitted', lambda row: True)
     seen = []
     async def factory(*args, **kwargs):

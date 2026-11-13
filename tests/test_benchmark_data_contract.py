@@ -11,7 +11,9 @@ import pytest
 
 from plangraph.catalog_data import SEED_MODELS
 from plangraph.planner.legs import CX_EFFORTS, Leg, leg_active, spawnable_legs
-from plangraph.routing_support.catalog_seed import SEED_BENCHMARKS
+from plangraph.routing_support.catalog_seed import SEED_BENCHMARKS as NUMERIC_BENCHMARKS, review_benchmarks
+
+SEED_BENCHMARKS = [*NUMERIC_BENCHMARKS, *review_benchmarks()]
 
 PENDING_PATH = Path(__file__).resolve().parents[1] / "configuration/benchmark_data_pending.json"
 FROZEN_CEILING_PATH = Path(__file__).with_name("fixtures") / "benchmark_data_ceiling.json"

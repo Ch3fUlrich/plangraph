@@ -30,11 +30,13 @@ def test_disabled_models_still_validated():
         plan_spawn({'estimate_tokens': 1000}, role='implement', legs=(leg,))
 
 
-def test_explicit_client_mismatch_refused(tmp_path):
+@pytest.mark.parametrize('leg_id', ['opencode-go-deepseek-v4-flash', 'opencode-go-longcat-2.5-free'])
+def test_explicit_client_mismatch_refused(tmp_path, leg_id):
     runner = SpawnerRunner(default_cwd=str(tmp_path))
     with pytest.raises(SpawnRefused, match='client.*harness'):
-        asyncio.run(runner.spawn('review', model_or_combo='opencode-go-gemini-4-argon',
+        asyncio.run(runner.spawn('review', model_or_combo=leg_id,
                                  client='claude', dry_run=True))
+    assert not runner.jobs and not runner._tasks
 
 
 @pytest.mark.parametrize('reason', [None, 'operator override'])

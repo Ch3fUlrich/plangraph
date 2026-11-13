@@ -314,17 +314,17 @@ def test_fixed_implement_sol_across_tiers():
     for tier in TIERS:
         legs = (replace(table[FREE[2]], disabled=None), replace(table[SUBS[0]], tier=tier),
                 replace(table[FREE[0]], disabled=None), table[SUBS[2]])
-        # route_card is a low-level ordering probe; plan_spawn filters roles.
-        expected = [SUBS[0], FREE[2], FREE[0], SUBS[2]]
+        # D-2739: the reactivated free DeepSeek registration is review-only.
+        expected = [SUBS[0], FREE[2], SUBS[2]]
         assert [leg.id for leg in route_card(CARD, legs=legs, role="implement").legs] == expected
         fallback = route_card(CARD, legs=legs, role="implement", unavailable=(SUBS[0],))
-        assert [leg.id for leg in fallback.legs] == [FREE[2], FREE[0], SUBS[2]]
+        assert [leg.id for leg in fallback.legs] == [FREE[2], SUBS[2]]
         for gemini_tier in TIERS:
             writers = (*legs, replace(table[SUBS[1]], tier=gemini_tier))
             assert [leg.id for leg in route_card(CARD, legs=writers, role="implement").legs] == [
-                *SUBS[:2], FREE[2], FREE[0], SUBS[2]]
+                *SUBS[:2], FREE[2], SUBS[2]]
             fallback = route_card(CARD, legs=writers, role="implement", unavailable=(SUBS[0],))
-            assert [leg.id for leg in fallback.legs] == [SUBS[1], FREE[2], FREE[0], SUBS[2]]
+            assert [leg.id for leg in fallback.legs] == [SUBS[1], FREE[2], SUBS[2]]
         # Neither writer promotion may erase the subscription/paid non-writer slots.
         for other_tier in TIERS:
             other = replace(table[SUBS[3]], tier=other_tier)

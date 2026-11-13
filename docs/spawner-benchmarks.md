@@ -55,7 +55,8 @@ The SQLite catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py
 ### Offline benchmark data contract (BENCH-DATA-TEST, slice 1)
 
 `tests/test_benchmark_data_contract.py` checks the actual
-`routing_support/catalog_seed.py::SEED_BENCHMARKS` data against
+`routing_support/catalog_seed.py::SEED_BENCHMARKS` plus the lazily loaded
+`review_benchmarks()` identity records against
 `catalog_data.py::SEED_MODELS` and `planner/legs.py::spawnable_legs()` (routed
 **and** explicit-only legs). The spawner catalog modules are compatibility
 aliases for the routing-support modules. This slice changes no row values,

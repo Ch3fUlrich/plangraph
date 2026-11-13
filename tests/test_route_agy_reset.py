@@ -71,17 +71,16 @@ def test_no_claude_implementers_and_haiku_last(boundary):
     assert all(l.family != 'claude' for l in plan(boundary, 'implement').legs)
     reviews = plan(boundary).legs
     haiku = next(i for i, l in enumerate(reviews) if l.id == 'claude-haiku-5.5')
-    assert all(i < haiku for i, l in enumerate(reviews) if l.family != 'claude')
+    assert all(i < haiku for i, l in enumerate(reviews) if l.family != 'claude' and l.tier != 'paid')
+    assert {l.id for l in reviews[haiku + 1:]} == {'console-deepseek-flash', 'omniroute-deepseek-flash'}
 
 
 @pytest.mark.parametrize('role', ['implement', 'review', 'orchestrate'])
 def test_free_and_subscription_before_paid_deepseek(boundary, role):
-    # route_card orders candidates; plan_spawn separately enforces retained roles.
-    # Include the disabled paid fallback to pin ordering even while it is parked.
+    # Use a paid registration serving this role, never a fabricated review writer.
     from dataclasses import replace
 
-    legs = tuple(replace(l, disabled=None) for l in DEFAULT_LEGS
-                 if role in l.roles or l.id == 'deepseek')
+    legs = tuple(replace(l, disabled=None) for l in DEFAULT_LEGS if role in l.roles)
     # The paid fallback serves implement only; other roles must not offer it.
     if role != 'implement':
         assert all(l.id != 'deepseek' for l in plan(boundary, role).legs)
@@ -90,6 +89,7 @@ def test_free_and_subscription_before_paid_deepseek(boundary, role):
         legs = tuple(l for l in legs if l.family != 'claude')
         assert any(l.tier in ('free', 'subscription') for l in legs)
     ordered = route_card(dict(estimate_tokens=1000), legs=legs, role=role).legs
-    paid = next(i for i, l in enumerate(ordered) if l.id == 'deepseek')
+    paid_id = 'deepseek' if role == 'implement' else 'omniroute-deepseek-flash'
+    paid = next(i for i, l in enumerate(ordered) if l.id == paid_id)
     assert all(i < paid for i, l in enumerate(ordered)
                if l.tier in ('free', 'subscription'))

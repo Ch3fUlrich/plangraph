@@ -68,7 +68,7 @@ inputs instead of deleting their implementation roles to enforce priority.
 - `tests/test_spawner_prompt_argv_limit.py::test_real_review_child_reaches_leg`
   (both sizes): left untouched as the separately owned, known main-red failure.
 
-Validation: affected selection bounded to all lane test files and routing,
+Historical validation (superseded by round-three validation below): affected selection bounded to all lane test files and routing,
 liveness, placement and utility consumers: `1312 passed in 137.05s (0:02:17)`.
 Postgres planner-service, round-three, catalog, watchdog, leg-state and expiry
 files: `139 passed in 63.38s (0:01:03)`. The untouched argv-limit file reproduces
@@ -114,7 +114,7 @@ from another provider or invented. They never enter the numeric SQLite benchmark
 table or count as measured utility. Two resolved legacy waivers are removed;
 the frozen debt ceiling and its independent fingerprint are unchanged.
 
-### Witnessed public verdicts (D-2739, 2026-11-13)
+### Native public verdict smokes — not witnessed review runs (D-2739, 2026-11-13)
 
 Executed from a scratch directory, with no repository content attached:
 `opencode run --standalone --format json --model MODEL --title TITLE PROMPT`.
@@ -123,6 +123,9 @@ def add(a, b): return a + b. It implements addition without other changes.
 Respond with exactly VERDICT: PASS if correct, otherwise VERDICT: FAIL.”
 OpenCode run identities (session IDs), final assistant text and finish reasons:
 The retained public-only event excerpts are `tests/fixtures/review_free_verdicts.json`.
+That fixture and its historical `test_witnessed_free_verdicts...` test are
+**docs-consistency only**, not independent live evidence or successful spawner
+reviews. No immutable successful review-run artifact is available for these routes.
 Session IDs below are displayed as two joined parts (remove the single space),
 preserving the public run identity without misclassifying it as a credential.
 
@@ -146,7 +149,7 @@ spawner run, and no quota, config isolation or host admission guard was bypassed
 `resolver.plan_for_launch` performs served-model probing before child launch.
 New fixed-input tests exercise both boundaries for every activated review route.
 
-Other optional public smokes (not part of the three witnessed runs above):
+Other optional public smokes (not part of the three native smokes above):
 
 ```sh
 opencode run --standalone --format json --model opencode/big-pickle 'Reply OK.'
@@ -158,7 +161,7 @@ opencode run --standalone --format json --model console-deepseek/deepseek-flash 
 
 | Finding | Disposition and guard |
 | --- | --- |
-| F1 HIGH live proof | Three native runs above retain session IDs, final assistant VERDICT lines and stop frames; isolated-spawner failures are disclosed separately. |
+| F1 HIGH live proof | **Unmet**: the three native runs above are smokes, not witnessed review runs; every retained isolated-spawner run failed. |
 | F2 HIGH benchmark contract | Exact sourced identity rows cover all activated routes; unchanged contract and frozen fingerprint pass without invented numeric scores. |
 | F3 HIGH OmniRoute model | Retained leg now names served `omniroute/deepseek-direct-flash`, paid; metadata test pins both. |
 | F4 HIGH missing Mimo/policy slice | Free review registration and narrowly scoped shared policy implemented here under D-2739/D-5648. |
@@ -173,7 +176,7 @@ opencode run --standalone --format json --model console-deepseek/deepseek-flash 
 | F13 LOW dead active branch | Active state depends on explicit Argon parameter case, making both branches reachable. |
 | F14 LOW retained-disabled Argon | Added Go Argon case asserts exact disable reason and empty roles. |
 | F15 LOW W30 imported table | Patch precedes service construction; call-time spawnable table and exact refusal reason asserted. |
-| F16 MED live proof | Native public proof retained; no failed isolated-spawner run is relabelled successful. |
+| F16 MED live proof | **Unmet**: native public smokes are not sufficient review-run proof; failed isolated-spawner runs remain failures. |
 | F17 MED OmniRoute base verification | Model corrected in production and pinned to discovered served id. |
 | F18 MED Console own family | Invalid as an independence requirement: direct and free DeepSeek are the same family; `seats.py:65-67` must deduplicate them. Regression proves they cannot fill two seats. |
 | F19 MED privacy expands writers | Free DeepSeek and Mimo are review-only; new-writer regression verifies absence even under neutral policy. |
@@ -184,11 +187,85 @@ opencode run --standalone --format json --model console-deepseek/deepseek-flash 
 | F24 MED tier indices | `legs.py:31` includes trial, so old indices were correct; now additionally assert named free/subscription/paid tiers and two actual seats. |
 | F25 MED W30 construction binding | Patch moved before construction, exact patched registration and refusal checked; GLM case still tests a production disable. |
 
-Validation: the affected selector's changelog/shared-helper fallback was bounded
+Historical validation (superseded below): the affected selector's changelog/shared-helper fallback was bounded
 with `--within` to 45 lane, routing, policy, benchmark, isolation, renderer and
 completion-evidence test files; every changed test file is included. With two
 workers: `1364 passed in 28.09s`. A broad reverse-import trial was interrupted
 after `668 passed, 4 skipped in 751.52s`; it is not claimed as a green gate.
-The whole suite was not run. Argon transport/witness probes retain their exact
-historical inputs through an explicitly named historical fixture, while separate
-production tests prove the retained Go Argon id and model cannot launch.
+The whole suite was not run in that historical validation. Round three removes
+the historical Argon-enabling fixture: Go transport/witness tests now exercise
+the production-enabled DeepSeek Go registration; production refusal tests still
+pin both retained Argon identifiers, with no job created.
+
+### Round-three findings (D-2739)
+
+- Keeper CI failures: review-only additions no longer widen role-neutral keeper
+  readiness. Gemini-first admission and the Sol/Gemini writer prefix keep their
+  original assertions; both service entry points exclude all five additions.
+- Review order CI failures: Haiku is last within its payment tier; paid DeepSeek
+  follows subscriptions. The paid-order probe uses a registration serving the
+  requested role, never an implement-only row fabricated into a review route.
+- Client mismatch and native witness CI failures: production-enabled Go DeepSeek
+  and LongCat exercise harness mismatch; Go DeepSeek exercises isolation/store
+  telemetry without lifting Argon's permanent disable. Spoof, request-side-only
+  evidence and gateway-first assertions are unchanged.
+- `plan_spawn` again documents LegStateStore/callable readers and scoped card
+  arguments. `route_card` now checks every explicit role symmetrically; role-neutral
+  keeper admission remains separate. Wrong-role legs report `role` in direct
+  routing and `plan_spawn` never probes them. Both reader shapes forward card scope.
+- Numeric seeds and identity-only records are separate collections. SQLite seeds
+  all numeric records without a nullable-score sentinel; malformed numeric rows
+  surface their schema error instead of disappearing. Identity JSON is loaded
+  lazily, with imports at the top. Existing `pyproject.toml:13-14` package-data
+  patterns include it; a built wheel was inspected and all six records verified.
+- Identity tests use explicit in-memory databases and exact seed-id sets, not a
+  frozen row count. The native-verdict fixture/test is explicitly docs-consistency.
+- **Live-proof finding remains unmet**, not false or out of scope: retained
+  `run-4100ebdb90934f1081e1f90f36a9bd1e` and
+  `run-ff163a6806c2442eac2b39e090f261e7` failed with HTTP 429;
+  `run-11451f3d508a46829c2e5a5570b3c205` failed host admission. The round-three
+  brief forbids spawning agents, so no new review agents were launched. Do not
+  treat native smokes, fixture assertions or green unit tests as live review proof;
+  this item must not be marked done or ready on that basis.
+
+Round-three validation uses Python 3.12 and the unchanged `requirements-ci.txt`
+dependencies. The original full-suite run completed (not interrupted):
+`7 failed, 17906 passed, 418 skipped, 41 subtests passed in 860.35s (0:14:20)`.
+All twelve reported CI cases passed. The remaining failures were test-environment
+prerequisites: six Unix-socket names exceeded the platform path limit in
+`tests/test_dell_ci_isolation.py:248`, and the UI host snapshot required the
+release `pg-spawnd` helper. Building that existing helper and using a short pytest
+`--basetemp` fixed those prerequisites without editing either test or its source:
+`86 passed in 28.82s` (sandbox, UI hosts and fleet snapshot files).
+The unbounded affected selector names `tests` because the changelog is unmapped;
+that fallback is not a green gate: the full-suite run above failed. The lane selector uses two
+workers and includes every changed test file: `728 passed in 19.92s`.
+Reader/availability consumers additionally passed: `276 passed in 8.12s`;
+benchmark contract and adversarial regressions: `133 passed in 1.21s`.
+The tracked working-tree scrub reported `scrub_check: 0 hit(s) in 0 file(s)`.
+The optional preflight wrapper's whole-directory scrub exceeded its 60-second
+bound while traversing local build/cache artifacts; that wrapper run is not
+claimed green. The clean tracked-tree scan and normal pre-push scrub still apply.
+Two concurrent broad tmpfs trials subsequently exhausted the host's per-user
+quota (`OSError: [Errno 122] Disk quota exceeded`); neither is green evidence.
+The disk-backed trial was interrupted for excessive fsync latency and a path-
+sensitive hook assertion; it is not green evidence. One subsequent runtime-directory
+trial was also interrupted and is not a green gate. Earlier bounded reruns recorded
+`728 passed in 16.25s`; they do not establish full-suite or live-review readiness.
+
+Final continuation validation (Python 3.12, unchanged CI dependencies): the exact
+`python3 tools/affected_tests.py --base origin/main -n 2` command again returned
+`{"tests": ["tests"], "reason": "no mapped tests: changelog.d/REVIEW-LEGS-FREE-AND-NO-ARGON.md"}`.
+The continuation explicitly prohibits a whole-suite run, so that conservative
+fallback was bounded with `--within` to 30 routing, benchmark, transport and
+catalog test files, including every modified test file and all twelve reported
+CI cases: `763 passed in 27.46s`. A disk-backed attempt timed out without a final
+result; only the completed runtime-filesystem rerun is claimed green. A newly
+built wheel contains all six exact identity records and its lazy loader works
+directly from the wheel. Language, both changelog/docs modes, base-relative file
+size and commit-trailer gates pass. Full-suite-green and successful witnessed
+review-run proof remain **unmet**, not waived by these bounded checks.
+The four existing keeper/waiver files changed by the inherited lane history also
+passed the bounded two-worker selector: `90 passed in 5.89s`. Deleted historical
+waiver filenames are not runnable targets; their retained coverage lives in those
+existing keeper files. No source, assertion or test name was removed here.

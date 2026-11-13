@@ -299,6 +299,10 @@ def test_keeper_readiness_does_not_enable_implementation_fallbacks(w, repo, entr
     else:
         route = service.route_for_card(w.store, w.p("router"), key, legs=DEFAULT_LEGS)
     assert route.first_leg.id == "agy-gemini-3.8-flash"
+    # D-2739 changes review admission, not role-neutral keeper readiness.
+    review_only_additions = {'opencode-deepseek-v4.1-flash-free', 'opencode-mimo-v2.6-flash-free',
+                             'opencode-go-longcat-2.5-free', 'console-openrouter-free', 'console-deepseek-flash'}
+    assert {leg.id for leg in route.legs}.isdisjoint(review_only_additions)
     # D-5206 replaces plain Sol with xhigh without lifting keeper-only admission.
     assert {leg.id for leg in route.legs if leg.roles == ("implement",)} == {"cx-gpt-6.1-sol-xhigh"}
     # D-5212 changes worker priority, not S5's registered free/paid fallbacks.

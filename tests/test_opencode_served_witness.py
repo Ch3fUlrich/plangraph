@@ -12,12 +12,11 @@ from plangraph.review.verdict import parse_test_gaming
 from plangraph.spawner import resolver
 from plangraph.spawner.runner import SpawnerRunner, _opencode_served_model
 from fake_pid import FAKE_PID; from go_credential_fake import go_credential  # noqa: E702,F401
-from test_opencode_isolation_go import historical_go_argon  # noqa: F401
-REQUESTED = 'opencode-go/' + 'gemini-4-argon'; pytestmark = pytest.mark.usefixtures('go_credential', 'historical_go_argon')
+REQUESTED = 'opencode-go/' + 'deepseek-v4.1-flash'; pytestmark = pytest.mark.usefixtures('go_credential')
 
 
 def _store(home, sessions, assistants):
-    """Build the store: sessions [(id, title)], assistant models [(session_id, model_id)]."""
+    """Build the store; legacy glm-5.2 fixture inputs mean the requested Go model."""
     db = home / 'opencode' / 'opencode.db'
     db.parent.mkdir(parents=True, exist_ok=True)
     db.unlink(missing_ok=True)
@@ -27,7 +26,7 @@ def _store(home, sessions, assistants):
         conn.executemany('INSERT INTO session_v2 VALUES (?, ?)', sessions)
         conn.executemany('INSERT INTO session_message VALUES (?, ?, ?, ?)',
                          [(f'm{i}', sid, 'assistant',
-                           json.dumps({'model': {'id': 'gemini-4-argon' if mid == 'glm-5.2' else mid, 'providerID': 'opencode-go'}}))
+                           json.dumps({'model': {'id': 'deepseek-v4.1-flash' if mid == 'glm-5.2' else mid, 'providerID': 'opencode-go'}}))
                           for i, (sid, mid) in enumerate(assistants)])
 
 
@@ -53,7 +52,7 @@ def _run_leg(tmp_path, monkeypatch, seed, role='review', exit_code=0, extra_env=
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
 
     async def run():
-        job = await runner.spawn('prompt', model_or_combo=REQUESTED, role=role, client='opencode',
+        job = await runner.spawn('prompt', model_or_combo=REQUESTED if role == 'review' else 'opencode/big-pickle', role=role, client='opencode',
                                 cwd=str(tmp_path),
                                 extra_env={'XDG_DATA_HOME': str(tmp_path), **(extra_env or {})},
                                 wait_seconds=3)

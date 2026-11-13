@@ -182,12 +182,18 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
+# Review admission must not widen role-neutral keeper readiness (D-2739).
+_REVIEW_ADDITIONS = frozenset({'opencode-mimo-v2.6-flash-free', 'opencode-go-longcat-2.5-free',
+                              'console-openrouter-free', 'console-deepseek-flash'})
+_readiness = tuple(_replace(leg, disabled='D-4196: review-only reactivation (D-5648)')
+                   if leg.id == 'opencode-deepseek-v4.1-flash-free' else leg
+                   for leg in DEFAULT_LEGS if leg.id not in _REVIEW_ADDITIONS)
 # Preserve role-neutral keeper admission before applying implement-only policy.
 READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
                                disabled=leg.disabled or (
                                    'D-3828: writer disabled; no retained review or orchestrate role'
                                    if leg.roles == ('implement',) else None))
-                       if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
+                       if leg.id != 'cx-gpt-6.1-sol' else leg for leg in _readiness)
 
 # D-5206/D-5212 change writer priority, not the registered fallback roles.
 WRITER_ORDER: tuple[str, ...] = (

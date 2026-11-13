@@ -4,11 +4,19 @@ Contains the canonical 5-rung tier ladder, provider, client, quota pool, model,
 Artificial Analysis v4.3.2 benchmark, and role route seed definitions.
 """
 
+import json
+from importlib.resources import files
 from typing import Any
 
 # SEED_MODELS moved to plangraph.catalog_data (neutral module); re-exported
 # here so spawner importers keep working unchanged.
 from plangraph.catalog_data import SEED_MODELS
+
+
+def review_benchmarks() -> list[dict[str, Any]]:
+    """Load publisher identity records on demand, never as numeric seed rows."""
+    return json.loads(files('plangraph').joinpath('config/review_benchmarks.json').read_text(encoding='utf-8'))
+
 
 # 5-rung tier ladder ordering contract:
 # trial (0) < free (1) < credit (2) < subscription (3) < paid (4)
@@ -801,12 +809,6 @@ SEED_BENCHMARKS: list[dict[str, Any]] = [
         "updated_at": "2026-10-26T00:00:00Z",
     },
 ]
-
-import json
-from importlib.resources import files
-# Publisher identity records: collection dates, not invented capability measurements.
-REVIEW_BENCHMARKS = json.loads(files("plangraph").joinpath("config/review_benchmarks.json").read_text(encoding="utf-8"))
-SEED_BENCHMARKS.extend(REVIEW_BENCHMARKS)
 
 # The 4 Role Routes
 SEED_ROUTES: list[dict[str, Any]] = [

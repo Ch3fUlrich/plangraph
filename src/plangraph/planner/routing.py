@@ -142,7 +142,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     for pos, leg in enumerate(legs):
         if not leg_active(leg, now=now):
             why = "disabled"
-        elif effective_role == "review" and "review" not in leg.roles:
+        elif effective_role is not None and effective_role not in leg.roles:
             why = "role"
         elif effective_role == "implement" and implement_family_excluded(leg):
             why = "excluded_family"
@@ -244,15 +244,15 @@ class SpawnPlan:
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
                 legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, placement=None,
                 catalog_rows=None) -> SpawnPlan:
-    """Plan by canonical rules; benchmark utility can only permute one tier.
-    Measured inputs rank within cost tiers; implement writer priority is final.
+    """Plan within cost tiers; implement writer priority is final.
     ``exclude_families`` excludes the specified family names from candidate legs.
     ``policy`` (default :func:`load_route_policy`) skips banned/off families and
     paused harnesses.  A review leg whose family is ANY writer family is
     excluded; seats cover each writer part (:func:`pick_seats`).  An inline-only
     review leg needs ``card["diff_ref"]``: the spawner inlines that diff.
     ``catalog_rows`` injects tier/admission data; None reads the live catalog once.
-    Readers follow leg_status; account/combo scope is never a wildcard.
+    Readers may be a LegStateStore or callable with the leg_status contract;
+    account/combo scope comes from the card and is never a wildcard.
     """
     placement = dict(placement) if placement is not None else dict(host=None, reason='placement_not_evaluated', free_mb=None)
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:

@@ -1,6 +1,6 @@
 {
   "date": "2026-11-13",
-  "scope": "public-only availability/verdict-format smoke; not a PR review or capability benchmark",
+  "scope": "docs-consistency only: native availability/verdict-format smokes, not witnessed spawner reviews",
   "prompt": "Do not use tools. Review this public Python change: def add(a, b): return a + b. It implements addition without other changes. Respond with exactly VERDICT: PASS if correct, otherwise VERDICT: FAIL.",
   "runs": [
     {

@@ -121,6 +121,37 @@ def test_free_review_admission_does_not_enable_new_writers(tmp_path):
         assert not result.legs and result.error
 
 
+@pytest.mark.parametrize('role', ['implement', 'review', 'orchestrate'])
+def test_route_card_checks_explicit_role_before_other_eligibility(role):
+    from dataclasses import replace
+    from plangraph.planner.routing import RouteError
+    original = TABLE['opencode-deepseek-v4.1-flash-free']
+    candidate = replace(original, roles=(role,))
+    assert route_card(CARD, legs=(candidate,), role=role).legs == (candidate,)
+    for other_role in {'implement', 'review', 'orchestrate'} - {role}:
+        with pytest.raises(RouteError) as exc:
+            route_card(CARD, legs=(candidate,), role=other_role)
+        assert exc.value.exclusion_reasons == {'role': 1}
+
+
+@pytest.mark.parametrize('wrapped', [False, True], ids=['callable', 'leg-status-object'])
+def test_plan_spawn_reader_contract_forwards_card_scope(wrapped):
+    from types import SimpleNamespace
+    leg = TABLE['opencode-deepseek-v4.1-flash-free']
+    calls = []
+
+    def reader(model, **scope):
+        calls.append((model, scope))
+        return {'state': 'ok', 'evidence': None}
+
+    result = plan_spawn(dict(CARD, account='public-account', combo='review-combo'),
+                        role='review', writer_families=('gpt',), legs=(leg,), catalog_rows=(),
+                        policy=RoutePolicy(), now=100,
+                        leg_reader=SimpleNamespace(leg_status=reader) if wrapped else reader)
+    assert result.legs == (leg,)
+    assert calls == [(leg.model, dict(now=100, account='public-account', combo='review-combo'))]
+
+
 def test_omniroute_deepseek_uses_served_paid_id():
     leg = TABLE['omniroute-deepseek-flash']
     assert (leg.model, leg.tier) == ('omniroute/deepseek-direct-flash', 'paid')
@@ -148,18 +179,55 @@ def test_free_mimo_does_not_inherit_direct_gateway_render_or_probe_bypass():
 
 def test_identity_only_benchmark_rows_never_enter_numeric_catalog():
     from plangraph.routing_support.catalog_db import CatalogDB
-    from plangraph.routing_support.catalog_seed import REVIEW_BENCHMARKS
-    with CatalogDB() as db:
+    from plangraph.routing_support.catalog_seed import review_benchmarks
+    from plangraph.routing_support.catalog_seed import SEED_BENCHMARKS
+    with CatalogDB(':memory:') as db:
+        assert db.is_memory and db.conn.execute('PRAGMA database_list').fetchone()[2] == ''
         db.init_and_seed()
         rows = db.conn.execute('SELECT model_id, aa_intelligence FROM catalog_benchmarks').fetchall()
-    assert len(rows) == 25 and all(row[1] is not None for row in rows)
-    assert {row[0] for row in rows}.isdisjoint(row['model_id'] for row in REVIEW_BENCHMARKS)
+    identities = {row['model_id'] for row in review_benchmarks()}
+    assert {row[0] for row in rows} == {row['model_id'] for row in SEED_BENCHMARKS}
+    assert rows and all(row[1] is not None for row in rows)
+    assert {row[0] for row in rows}.isdisjoint(identities)
+
+
+def test_numeric_seed_with_null_score_is_not_silently_discarded(monkeypatch):
+    import sqlite3
+    from plangraph.routing_support import catalog_db
+    original = catalog_db.SEED_BENCHMARKS[0]
+    monkeypatch.setattr(catalog_db, 'SEED_BENCHMARKS', [dict(original, aa_intelligence=None)])
+    with catalog_db.CatalogDB(':memory:') as db:
+        with pytest.raises(sqlite3.IntegrityError, match='aa_intelligence'):
+            db.init_and_seed()
+
+
+def test_review_identity_resource_load_is_lazy_and_packaged(monkeypatch):
+    import runpy
+    import tomllib
+    from fnmatch import fnmatch
+    from plangraph.routing_support import catalog_seed
+    from importlib.resources import files
+    original = files('plangraph').joinpath('config/review_benchmarks.json')
+    calls = []
+
+    def resource(package):
+        calls.append(package)
+        return files(package)
+
+    monkeypatch.setattr('importlib.resources.files', resource)
+    namespace = runpy.run_path(catalog_seed.__file__)
+    assert calls == []
+    assert namespace['review_benchmarks']() == json.loads(original.read_text(encoding='utf-8'))
+    assert calls == ['plangraph']
+    config = tomllib.loads((Path(__file__).resolve().parents[1] / 'pyproject.toml').read_text())
+    patterns = config['tool']['setuptools']['package-data']['plangraph']
+    assert any(fnmatch('config/review_benchmarks.json', pattern) for pattern in patterns)
 
 
 def test_identity_only_rows_do_not_claim_strict_runtime_benchmark_coverage():
     from plangraph.routing_support.catalog_db import CatalogDB
     from plangraph.planner.routing import BenchRequired
-    with CatalogDB() as db:
+    with CatalogDB(':memory:') as db:
         db.init_and_seed()
         # Identity-only data cannot satisfy the runtime numeric benchmark gate.
         data = {row['model_id']: dict(row) for row in db.conn.execute('SELECT * FROM catalog_benchmarks')}
@@ -206,8 +274,10 @@ def test_prerun_host_probe_skips_unserved_review_registration(monkeypatch, leg_i
 
 
 def test_witnessed_free_verdicts_name_exact_routes_and_completed_assistant_text():
+    """Historical name: docs consistency only, NOT independent live-run proof."""
     root = Path(__file__).resolve().parents[1]
     proof = json.loads((root / 'tests/fixtures/review_free_verdicts.json').read_text())
+    assert proof['scope'] == 'docs-consistency only: native availability/verdict-format smokes, not witnessed spawner reviews'
     runs = proof['runs']
     assert {run['model'] for run in runs} == {
         'opencode/deepseek-v4.1-flash-free', 'opencode/mimo-v2.6-flash-free',
