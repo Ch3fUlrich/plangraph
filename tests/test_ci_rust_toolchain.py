@@ -28,6 +28,7 @@ def assert_steps_use_pin(steps, name, shared_installer=False):
                 r"dtolnay/rust-toolchain@[0-9a-f]{40}", uses)), name
         assert not re.search(
             r"\brustup\s+(?:toolchain|install|update|default|override|run)\b"
+            r"|\brustup-init\b|\bsh\.rustup\.rs\b|--default-toolchain\b"
             r"|\bcargo\s+\+\S+|\bRUSTUP_TOOLCHAIN\b", step.get("run", ""), re.I), name
         if uses == SETUP:
             assert set(step.get("with", {})) <= {"components", "targets"}, name
@@ -132,6 +133,9 @@ def test_workflow_cannot_override_shared_installer_pin():
     {"run": "rustup toolchain install 1.0.0"},
     {"run": "rustup run nightly cargo test"},
     {"run": "rustup\trun\t1.0.0\trustc --version"},
+    pytest.param({"run": "./rustup-init -y"}, id="rustup-init"),
+    pytest.param({"run": "curl -sSf https://sh.rustup.rs | sh -s -- -y"}, id="rustup-script"),
+    pytest.param({"run": "sh installer.sh -y --default-toolchain nightly"}, id="default-toolchain"),
     {"run": "cargo +nightly clippy --all-targets -- -D warnings"},
     {"run": "cargo +1.0.0 test"},
     {"run": "cargo\t+stable build"},
@@ -190,6 +194,9 @@ def test_workflow_cannot_override_toolchain_in_environment(scope, key, toolchain
     {"run": "rustup default nightly"},
     {"run": "rustup override set nightly"},
     {"run": "rustup run nightly cargo test"},
+    pytest.param({"run": "./rustup-init -y"}, id="rustup-init"),
+    pytest.param({"run": "curl -sSf https://sh.rustup.rs | sh -s -- -y"}, id="rustup-script"),
+    pytest.param({"run": "sh installer.sh -y --default-toolchain nightly"}, id="default-toolchain"),
     {"run": "cargo +nightly test"},
     {"env": {"RUSTUP_TOOLCHAIN": "nightly"}, "run": "cargo test"},
     {"env": {"Rustup_Toolchain": "nightly"}, "run": "cargo test"},

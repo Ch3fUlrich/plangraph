@@ -20,7 +20,7 @@ Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12
 | `cli.py` (`python -m plangraph.keeper.cli` / entry `pg`) | thin client of the API; `cli_admin` and oversight's `db` import are lazy, so remote `whoami` works without POSIX `fcntl` on Windows; local DB commands still require the keeper host; `oversight-check` and `oversight-audit --out-dir DIR --cursor FILE --router-log FILE` live in `cli_oversight.py` |
 | `mcp.py` | stdio MCP server (hand-written JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`; no SDK), same verbs, calls the API; unchanged by the [Rust schema-only slice](keeper/mcp-rust.md) |
 
-Critical-path stall alerts notify owners and routing without mutating keeper state; see [configuration and delivery semantics](keeper/crit-path-stall.md).
+Critical-path stall alerts notify owners and routing without mutating keeper state; see [configuration and delivery semantics](keeper/crit-path-stall.md). [Repository mirrors](repo-mirror.md) are a standalone `pg-ctx` Rust slice; keeper mirror wiring and scheduling/timers are later slices, not daemon startup.
 
 ## Tables (all in one SQLite file)
 `principals(name PK, role, projects json, family, token_sha256, active)` ·
@@ -122,7 +122,7 @@ and may set `corrects` to a DONE key (validated by the store: target must be `do
 ## Verbs (Store) — role rules, state machine, errors
 Every verb: authenticate → authorise → validate → one transaction (event + cache + edges) → audit_log row (ok or refused).
 Refusals raise `Refused(code, msg)`; codes: `forbidden, not_found, bad_state, bad_transition, locked, epoch_stale, lease_held, cycle, validation,
-evidence_missing, evidence_unverified, same_principal, same_family, family_unknown, conflict, exec_stale, exec_stale_state`. A refused attempt writes only `audit_log`.
+evidence_missing, evidence_unverified, same_principal, same_family, family_unknown, writer_unknown, coverage, conflict, exec_stale, exec_stale_state`. A refused attempt writes only `audit_log`.
 `exec_stale`/`exec_stale_state` and `bad_transition` are the exec-ownership fence (see `docs/adr-exec-ownership.md`): a stale or retired run, a
 worker that is not the recorded owner, a card whose observed state fails the live-set CAS, and a back move on an OWNED card without
 `run`/`hand_back`. Recording an owner is `forbidden` for every principal but a worker (the recording principal is stored in `items.exec_principal`).
@@ -268,7 +268,7 @@ it a weaker proof, so it is attachable **only by the router through
 `add_evidence_router`**; a claimant or delegate naming kind `commit` is refused `forbidden`
 and stores nothing.  Unknown project (no `repos` entry), missing repo and any git error all
 fail closed as unverified.
-Origin-main `decision_ref` closes need no batch file; see [decision-close proof, usage and refusals](keeper/keeper-decision-close.md).
+Origin-main `decision_ref` closes need no batch file; see [decision-close proof, usage and refusals](keeper/keeper-decision-close.md), also covering router-only `close_merged` for merged reviews on head-bound GO decisions (D-5504/D-5506).
 ## API (stdlib `http.server`, threaded; one Store with a lock; bind 127.0.0.1 by default, `--host`)
 `POST /v1/<verb>` JSON body → JSON; `GET /v1/{ready,show,blocked,waves,critical_path,percent,alerts,digest,snapshot,whoami,health}` plus
 `GET /v1/audit-meta?project=&stale_days=` (router/L1 only, and `GET /v1/changelog?since=`);

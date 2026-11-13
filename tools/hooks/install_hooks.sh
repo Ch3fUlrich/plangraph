@@ -37,6 +37,9 @@
 #   fleet_inject.py    PostToolUse and UserPromptSubmit
 #   fleet_report.py    Stop
 #   session_title.py   UserPromptSubmit
+# Rust hook turn-budget-hook is built/installed separately; see
+# docs/turn-budget-hook.md for events and the missing-binary guard. This
+# Python-only copier does not ship it or register any hook.
 #
 # Usage:
 #   tools/hooks/install_hooks.sh                 # into $HOME/.local/share/plangraph/hooks

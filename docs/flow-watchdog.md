@@ -154,3 +154,30 @@ the queue retains its head and newest 255 events, reporting overflow on stderr.
 ## Collectors, freshness and host integration
 
 Collectors, freshness and host integration are deployment prerequisites, not supplied by this checker.
+
+## Optional turn-budget reader
+
+Set `PLANGRAPH_TURN_BUDGET_STATE_DIR` to the fleet state root to opt into the
+small read-only Rust status reader. Unset, the watchdog never reads session
+counts. The reader scans `<state>/status/*.json`, skips corrupt/unrelated files,
+and recomputes each rolling-hour count at the tick's time. See
+[Turn-budget hook](turn-budget-hook.md) for the producer and schema.
+Over-budget sessions each enqueue one exact `TURN-BUDGET <role> <session>
+wake=<n>/<cap> hour=<n>/<cap>` message, without a `FLOW-WATCHDOG:` prefix;
+both caps firing still yields one line. The active-set/queue machinery keys these
+alerts by `(role, session)`: changed counts refresh the active, queued and pending
+line in place, retaining delivery checkpoints rather than enqueuing each tick.
+After delivery, count changes stay suppressed until recovery; a subsequent breach
+can alert again. `PLANGRAPH_TURN_BUDGET_NOW` optionally supplies Unix seconds for
+deterministic reader tests; leave it unset for normal system-clock expiry.
+No collector,
+settings change, hook installation or live activation is performed by this lane.
+Budget refresh compacts legacy duplicates by identity, preserving the oldest
+event's channel acknowledgements. Corrupt or unreadable pending JSON is preserved
+and skipped for refresh/delivery rather than aborting independent queued routing
+or suppressing unrelated alerts. The shell-delivery integration suite is Unix-only;
+its opt-out subprocess clears both budget-reader variables, including the clock.
+Pending reads are capped at 1 MiB plus one overflow-detection byte; oversized
+files follow the same preserve-and-skip path without an unbounded allocation.
+Portable unit coverage checks the exact cap and overflow; delivery coverage also
+pins preservation while unrelated queued routing continues.

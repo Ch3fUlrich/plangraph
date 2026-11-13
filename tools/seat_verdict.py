@@ -35,8 +35,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from seat_backfill import apply_backfill
 from seat_record import evidence_from_record
-
 ROUTE = "/v1/verdict"
 TIMEOUT = 30
 EXIT_IO, EXIT_REFUSED, EXIT_NO_VERDICT, EXIT_PASS_REFUSED = 1, 2, 3, 4
@@ -77,7 +77,6 @@ _FIRST_WORD = re.compile(r"([a-z]+)" + _WORD_END, re.I)
 # echo, and bare "request" stays unknown.
 _REQUEST_CHANGES = re.compile(r"request[\s_-]+changes" + _WORD_END, re.I)
 
-
 def model_family(model):
     """Family name for a model id, or None when unknown or ambiguous."""
     name = str(model or "").lower().rsplit("/", 1)[-1]
@@ -86,7 +85,6 @@ def model_family(model):
         return "alibaba"
     found = {family for pattern, family in FAMILIES if re.search(pattern, name)}
     return found.pop() if len(found) == 1 else None
-
 
 def parse_verdict(text):
     """Return (ok, index_of_line) from the LAST ``VERDICT:`` line, else (None, -1).
@@ -140,19 +138,16 @@ def parse_verdict(text):
         return None, idx
     return None, -1
 
-
 def findings(text, idx, limit=600):
     """First ``limit`` chars after the verdict line (before it if nothing after)."""
     lines = text.splitlines()
     after = "\n".join(lines[idx + 1:]).strip()
     return (after or "\n".join(lines[:idx]).strip())[:limit]
 
-
 def verdict_payload(key, ok, reason):
     """The exact JSON body the keeper's verdict route takes."""
     assert type(ok) is bool, "ok must be a JSON boolean, never a string"
     return {"key": str(key), "ok": ok, "reason": str(reason)}
-
 
 def build_reason(evidence, ok, text, idx, covers=None, witness=None,
                  witness_kind=None):
@@ -174,7 +169,6 @@ def build_reason(evidence, ok, text, idx, covers=None, witness=None,
         reason = f"{reason}\ncovers: {', '.join(covers)}"
     return reason
 
-
 def coverage(writers, seats, need=2, sensitive=False):
     """Return sorted writer families not covered by the recorded seats.
 
@@ -195,11 +189,9 @@ def coverage(writers, seats, need=2, sensitive=False):
             uncovered.append(writer)
     return sorted(uncovered)
 
-
 def parse_writer_families(value):
     """Parse comma-separated writer families, ignoring empty entries."""
     return [part.strip().lower() for part in str(value or "").split(",") if part.strip()]
-
 
 def send(url, token, payload):
     """POST the payload; return (http_status, reply_text)."""
@@ -232,17 +224,35 @@ def read_record_identity(seat_dir):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--key", required=True, help="item key to review")
-    ap.add_argument("--seat-dir", required=True, type=Path)
-    ap.add_argument("--writer-family", required=True)
-    ap.add_argument("--token-dir", required=True, type=Path)
+    ap.add_argument("--key", help="item key to review")
+    ap.add_argument("--seat-dir", type=Path)
+    ap.add_argument("--writer-family")
+    ap.add_argument("--token-dir", type=Path)
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--backfill-dry-run", action="store_true")
+    mode.add_argument("--backfill-apply", action="store_true")
+    ap.add_argument("--snapshot", type=Path, default=Path("plan.snapshot.json"))
+    ap.add_argument("--records-dir", type=Path)
+    ap.add_argument("--pr-cache", type=Path, help="JSON object mapping evidenced SHA to merged PR number")
+    ap.add_argument("--pr-lookup-gh", action="store_true", help="resolve merged PRs using gh (network)")
+    ap.add_argument("--format", choices=("tsv", "json"), default="tsv")
     ap.add_argument("--url", default=os.environ.get("PG_URL"))
-    ap.add_argument("--head", help="expected record completion.head_sha "
-                                  "(record-derived evidence only); binds the "
-                                  "completion-time HEAD of the run cwd, not "
-                                  "the launch commit")
+    ap.add_argument("--head", help="expected record completion.head_sha (record-derived evidence only); "
+                                  "binds the completion-time HEAD of the run cwd, not the launch commit")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+    if (args.backfill_dry_run or args.backfill_apply) and any(v is not None for v in (args.key, args.seat_dir, args.head, args.writer_family)):
+        ap.error("backfill modes cannot use single-seat arguments: --key, --seat-dir, --head, --writer-family")
+    if args.backfill_dry_run or args.backfill_apply or (args.key is None and args.seat_dir is None):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        if args.backfill_apply and (not args.url or not args.token_dir or args.dry_run):
+            ap.error("--backfill-apply requires --url and --token-dir, without --dry-run")
+        from seat_record import backfill
+        return backfill(args, main)
+    if args.key is None:
+        ap.error("the following arguments are required: --key")
+    if any(v is None for v in (args.key, args.seat_dir, args.writer_family, args.token_dir)):
+        ap.error("single-record mode requires --key, --seat-dir, --writer-family, --token-dir")
     writer_families = parse_writer_families(args.writer_family)
     try:
         record_identity = read_record_identity(args.seat_dir)
@@ -252,16 +262,13 @@ def main(argv=None):
     if "item_key" in record_identity and record_identity["item_key"] != args.key:
         print("seat_verdict: refused, record item_key does not match --key", file=sys.stderr)
         return EXIT_REFUSED
-    from_record = False
-    if not (args.seat_dir / "evidence.json").exists() and \
-            (args.seat_dir / "record.json").exists():
+    from_record = not (args.seat_dir / "evidence.json").exists() and (args.seat_dir / "record.json").exists()
+    if from_record:
         try:
-            evidence, text = evidence_from_record(
-                args.seat_dir, cli_writer_families=writer_families)
+            evidence, text = evidence_from_record(args.seat_dir, cli_writer_families=writer_families)
         except ValueError as exc:
             print(f"seat_verdict: refused, record: {exc}", file=sys.stderr)
             return EXIT_REFUSED
-        from_record = True
     else:
         try:
             evidence = json.loads((args.seat_dir / "evidence.json").read_text("utf-8"))
@@ -283,18 +290,14 @@ def main(argv=None):
     if from_record and not args.head:
         print("seat_verdict: refused, record seats require --head", file=sys.stderr)
         return EXIT_REFUSED
-    if args.head and from_record and \
-            str(evidence.get("head_sha") or "").lower() != args.head.strip().lower():
+    if args.head and from_record and str(evidence.get("head_sha") or "").lower() != args.head.strip().lower():
         print(f"seat_verdict: refused, record head_sha {evidence.get('head_sha')!r} "
               f"does not match --head {args.head!r}", file=sys.stderr)
         return EXIT_REFUSED
-    if not writer_families:
-        print("seat_verdict: refused, writer family list is empty", file=sys.stderr)
-        return EXIT_REFUSED
     unknown_writers = [w for w in writer_families if w not in KNOWN_FAMILIES]
-    if unknown_writers:
-        print(f"seat_verdict: refused, unknown writer families "
-              f"{unknown_writers!r}", file=sys.stderr)
+    if not writer_families or unknown_writers:
+        why = f"unknown writer families {unknown_writers!r}" if unknown_writers else "writer family list is empty"
+        print(f"seat_verdict: refused, {why}", file=sys.stderr)
         return EXIT_REFUSED
     served = evidence.get("served_model")
     model = served or evidence.get("requested_model")
@@ -315,30 +318,23 @@ def main(argv=None):
     if (not served or served == "unwitnessed") and \
             evidence.get("witness_kind") == "request-side-opencode-store":
         candidate = evidence.get("request_side_model")
-        if (isinstance(candidate, str) and candidate.startswith("opencode/")
-                and candidate.endswith("-free")):
+        if isinstance(candidate, str) and candidate.startswith("opencode/") and candidate.endswith("-free"):
             witness_model = candidate
     elif from_record and evidence.get("witness_kind") == "record-chosen-leg":
         # D-3564: the record's chosen leg is the only witness; count the family
         # by the request-side model and keep the witness auditable in the reason.
         candidate = evidence.get("request_side_model")
-        if isinstance(candidate, str) and candidate:
-            witness_model = candidate
-    if witness_model is not None:
-        model = witness_model
+        if isinstance(candidate, str) and candidate: witness_model = candidate
+    model = witness_model or model
     family = model_family(model)
     if family is None:
-        print(f"seat_verdict: refused, family {family!r} of model {model!r} "
-              f"is unknown", file=sys.stderr)
+        print(f"seat_verdict: refused, family {family!r} of model {model!r} is unknown", file=sys.stderr)
         return EXIT_REFUSED
-    if family == "anthropic":
-        if "anthropic" in writer_families:
-            print(f"seat_verdict: refused, anthropic seat over writer families "
-                  f"{writer_families!r}", file=sys.stderr)
-            return EXIT_REFUSED
+    if family == "anthropic" and "anthropic" in writer_families:
+        print(f"seat_verdict: refused, anthropic seat over writer families {writer_families!r}", file=sys.stderr)
+        return EXIT_REFUSED
     elif all(writer == family for writer in writer_families):
-        print(f"seat_verdict: refused, family {family!r} of model {model!r} "
-              f"covers no listed writer", file=sys.stderr)
+        print(f"seat_verdict: refused, family {family!r} of model {model!r} covers no listed writer", file=sys.stderr)
         return EXIT_REFUSED
     ok, idx = parse_verdict(text)
     if ok is None:
@@ -350,15 +346,12 @@ def main(argv=None):
         print("seat_verdict: pass refused (finish_reason not stop or end_turn, or test_gaming not no)",
               file=sys.stderr)
         return EXIT_PASS_REFUSED
-    covers = sorted({writer for writer in writer_families if writer != family})
-    payload = verdict_payload(args.key, ok,
-                              build_reason(evidence, ok, text, idx, covers,
-                                           witness=witness_model,
-                                           witness_kind=evidence.get("witness_kind")))
+    payload = verdict_payload(args.key, ok, build_reason(evidence, ok, text, idx,
+                              sorted({writer for writer in writer_families if writer != family}),
+                              witness=witness_model, witness_kind=evidence.get("witness_kind")))
     if args.dry_run:
         print(json.dumps({"url": (args.url or "").rstrip("/") + ROUTE, "family": family,
-                          "headers": {"Authorization": "Bearer <redacted>"},
-                          "body": payload}, indent=2))
+                          "headers": {"Authorization": "Bearer <redacted>"}, "body": payload}, indent=2))
         return 0
     if not args.url:
         print("seat_verdict: no keeper URL: pass --url or set PG_URL", file=sys.stderr)
@@ -372,7 +365,5 @@ def main(argv=None):
     short = " ".join(reply.split())[:120]
     print(f"key={args.key} family={family} ok={ok} http={status} reply={short}")
     return 0 if 200 <= status < 300 else EXIT_IO
-
-
 if __name__ == "__main__":
     sys.exit(main())
