@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from plangraph.spawner.env_redact import OutputLines, redact
 from plangraph.spawner.exit_outcome import terminal_reason
-from plangraph.spawner.seat_artifact import publish
+from plangraph.spawner.seat_record import publish
 import pytest
 
 

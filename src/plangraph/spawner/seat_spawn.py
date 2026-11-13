@@ -13,6 +13,8 @@ import time
 import uuid
 from pathlib import Path
 
+from .seat_record import seat_reasons, sync_seat
+
 
 def resources(service):
     from .overflow import available_memory_mb
@@ -133,37 +135,8 @@ def _refuse_oversized_diff(exc, leg):
 class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``_save``, ``save_refusal`` and ``state`` from the service."""
 
-    @staticmethod
-    def _seat_reasons(families, reasons):
-        from plangraph.planner.seats import seat_family
-        reasons = list(reasons)
-        if len(families) > 1 and seat_family(families[1]) == 'anthropic':
-            reasons.append('second review family is anthropic')
-        return tuple(dict.fromkeys(reasons))
-
-    def _sync_seat(self, record):
-        """Keep the slot's audit metadata tied to the resolved leg on every save."""
-        from plangraph.planner.seats import seat_family
-        plan = record.get('plan') or {}
-        own = plan.get('seat_coverage') or []
-        if len(own) != 1 or not own[0].get('seat_group'):
-            return
-        chosen = record.get('chosen_leg')
-        if chosen:
-            plan['review_seats'] = [dict(chosen)]
-            own[0].update(leg=chosen['id'], family=chosen['family'],
-                          keeper_family=seat_family(chosen['family']))
-            own[0].pop('reason', None)
-        elif record.get('ended') is not None:
-            plan['review_seats'] = []
-            detail = '; '.join(dict.fromkeys(a['skip_reason'] for a in record.get('attempts', [])
-                                            if a.get('skip_reason')))
-            reason = 'distinct_family_unavailable: no eligible leg of a family not held by another seat'
-            reason += ': ' + (detail or record.get('error') or 'no leg launched')
-            reason = own[0].get('reason') or reason
-            own[0].update(family=None, keeper_family=None, reason=reason)
-            if record.get('status') != 'refused':
-                record['error'] = reason
+    _seat_reasons = staticmethod(seat_reasons)
+    _sync_seat = staticmethod(sync_seat)
 
     def admit_spawn(self, options, *, card=None):
         """Check admission and persist any queued or remote run through the service."""
