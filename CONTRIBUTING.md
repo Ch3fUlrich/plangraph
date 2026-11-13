@@ -320,3 +320,5 @@ Operator D-5847 restores the Rust-only new-code gate: Python and shell exception
 New stacked branches select affected tests from the nearest remote merge-base, while scrub starts at `origin/main` (the whole tip when main is unknown); the hook passes a separate `--scrub-base` to preflight.
 
 Pytest uses a session-owned temporary global Git config and disables system Git config; session teardown detects shared or worktree repository config changes without invoking Git on the real checkout.
+
+Event-log seat reviews use completed step text only. A stop answer survives empty trailing steps, but new unfinished text or tool activity cannot supply a verdict; plain-text logs retain their existing path.

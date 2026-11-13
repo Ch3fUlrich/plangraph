@@ -37,8 +37,8 @@ def _canon_family(name):
     return family
 
 def _review_text_from_log(live_log: str) -> str:
-    """Final-step text, retaining a stop-completed answer across empty steps."""
-    event_log, texts, completed = False, [], None
+    """Completed final-step text, or a stop answer retained across empty steps."""
+    event_log, texts, completed, stopped = False, [], None, False
     for line in live_log.split("\n"):
         line = line.removesuffix("\r")
         try:
@@ -52,6 +52,8 @@ def _review_text_from_log(live_log: str) -> str:
         event_log |= event["type"] in ("step_start", "step_finish")
         if event["type"] == "step_start":
             texts.clear()
+            if not stopped:
+                completed = None
         elif event["type"] == "text":
             part = event["part"]
             if isinstance(part.get("text"), str):
@@ -61,12 +63,13 @@ def _review_text_from_log(live_log: str) -> str:
         elif event["type"] == "tool_use":
             completed = None
         elif event["type"] == "step_finish":
-            if event["part"].get("reason") == "stop":
+            stopped = event["part"].get("reason") == "stop"
+            if stopped:
                 if any(t.strip() for t in texts):
                     completed = "\n".join(texts)
             else:
-                completed = None
-    text = completed if completed is not None else "\n".join(texts)
+                completed = "\n".join(texts)
+    text = completed if completed is not None else ""
     return text if event_log else live_log
 
 def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None) -> tuple[dict, str]:
