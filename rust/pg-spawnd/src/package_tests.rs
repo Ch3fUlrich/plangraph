@@ -144,3 +144,16 @@ fn package_linux_script_runs_against_command_fakes() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("pane-1"));
     std::fs::remove_dir_all(state).unwrap();
 }
+
+#[test]
+fn package_all_stale_claims_return_reasons_without_remote_work() {
+    let state=temp(); let mut fake=Fake::default();
+    let args=json!({"host":"fixture","base_ref":"origin/main","branch":"phase/test","keys":["p:STALE","p:STALE"]});
+    let result=launch(&state,args.as_object().unwrap(),&host(false),&mut fake).unwrap_or_else(|_|panic!("refusal list"));
+    assert_eq!(result["status"],"refused");
+    assert_eq!(result["refused"],json!([{"key":"p:STALE","reason":"already merged"}]));
+    assert!(result.get("package_text").is_none());
+    assert_eq!(fake.calls,vec![("claim".into(),"p:STALE".into())]);
+    assert!(list(&state).is_empty());
+    std::fs::remove_dir_all(state).unwrap();
+}
