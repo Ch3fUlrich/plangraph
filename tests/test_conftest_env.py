@@ -57,8 +57,7 @@ def test_session_git_configuration_is_isolated():
 
 
 @pytest.mark.parametrize('worktree', [False, True])
-def test_git_config_guard_detects_change_at_teardown(tmp_path, worktree):
-    import conftest
+def test_git_config_guard_detects_change_at_teardown(tmp_path, worktree, config_guard):
     repo = tmp_path / 'repo'
     repo.mkdir()
     if worktree:
@@ -73,7 +72,7 @@ def test_git_config_guard_detects_change_at_teardown(tmp_path, worktree):
     config = metadata / 'config'
     config.write_text('[core]\n bare = false\n')
     with pytest.raises(AssertionError, match='repository .git/config changed during pytest session'):
-        with conftest.git_config_guard(repo):
+        with config_guard(repo):
             config.write_text('[core]\n bare = true\n')
 
 

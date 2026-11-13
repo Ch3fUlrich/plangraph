@@ -134,6 +134,11 @@ def isolated_git_session(tmp_path_factory):
         patch.undo()
 
 
+@pytest.fixture
+def config_guard():
+    return git_config_guard
+
+
 @pytest.fixture(scope="session", autouse=True)
 def no_leaked_keeper_fixture_threads(request):
     import _keeper_threads as guard
