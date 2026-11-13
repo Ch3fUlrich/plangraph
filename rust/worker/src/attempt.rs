@@ -1141,13 +1141,13 @@ mod tests {
     }
     #[test]
     fn raw_empty_check_kind_runs_red_first_then_writer() {
-        assert_legacy_change_path("");
+        assert_eq!(assert_legacy_change_path("raw-json-empty"), "change");
     }
     #[test]
     fn legacy_json_without_check_kind_runs_red_first_then_writer() {
         assert_legacy_change_path("json");
     }
-    fn assert_legacy_change_path(kind: &str) {
+    fn assert_legacy_change_path(kind: &str) -> String {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
         let mut c = claim(
@@ -1156,9 +1156,14 @@ mod tests {
             &["out.txt"],
             "if test ! -f out.txt; then echo scratch > marker; exit 1; fi",
         );
-        if kind == "json" {
+        if matches!(kind, "json" | "raw-json-empty") {
             let mut value = serde_json::to_value(&c).unwrap();
-            value.as_object_mut().unwrap().remove("check_kind");
+            if kind == "json" {
+                value.as_object_mut().unwrap().remove("check_kind");
+            } else {
+                value["check_kind"] = "".into();
+                assert_eq!(value["check_kind"], "");
+            }
             c = serde_json::from_value::<Claim>(value).unwrap();
         } else {
             c.check_kind = Claim::default().check_kind;
@@ -1185,6 +1190,7 @@ mod tests {
         assert_eq!(res.exit_class, ExitClass::ContractDefect);
         assert!(res.check_tail.starts_with("red-first:"));
         assert_eq!(h.runs(), 0);
+        inp.claim.check_kind
     }
     #[test]
     fn unknown_check_kind_is_a_contract_defect() {
