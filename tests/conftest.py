@@ -19,6 +19,9 @@ import pytest
 from pathlib import Path
 from pgtest_shm import _sweep_dead_pgtest_dirs
 
+# Nested conftests may replace the unqualified module name during collection.
+sys.modules["_plangraph_test_conftest"] = sys.modules[__name__]
+
 _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
@@ -143,14 +146,15 @@ Path(_policy_dir, "route-policy.json").write_text(_NEUTRAL_POLICY)
 os.environ["PLANGRAPH_ROUTE_POLICY"] = str(Path(_policy_dir, "route-policy.json"))
 
 
-def _use_tmpfs_tempdir() -> None:
+def _make_worker_tmpdir() -> None:
     # The suite is fsync-bound (SQLite commits); tmpfs avoids slow-disk stalls.
     worker = os.environ.get("PYTEST_XDIST_WORKER")
     if worker:
         # The controller's TMPDIR is inherited. Give non-pytest daemon helpers
         # their own worker root too (tmp_path is already isolated by xdist).
-        parent = os.environ.get("TMPDIR") or tempfile.gettempdir()
-        _sweep_dead_pgtest_dirs(parent)
+        parent = os.environ.get("TMPDIR")
+        if parent:
+            _sweep_dead_pgtest_dirs(parent)
         path = tempfile.mkdtemp(prefix=f"pgtest-{os.getpid()}-{worker}-", dir=parent)
         atexit.register(shutil.rmtree, path, ignore_errors=True)
         os.environ["TMPDIR"] = path
@@ -174,6 +178,10 @@ def _use_tmpfs_tempdir() -> None:
     atexit.register(shutil.rmtree, path, ignore_errors=True)
     os.environ["TMPDIR"] = path
     tempfile.tempdir = path
+
+
+def _use_tmpfs_tempdir() -> None:
+    _make_worker_tmpdir()
 
 
 _use_tmpfs_tempdir()

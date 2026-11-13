@@ -11,7 +11,7 @@ def test_worker_paths_and_schemas(tmp_path, case):
     worker = os.environ.get("PYTEST_XDIST_WORKER")
     if worker:
         assert worker in str(tmp_path)
-        assert f"pgtest-{worker}-" in os.environ["TMPDIR"]
+        assert os.path.basename(os.environ["TMPDIR"]).startswith(f"pgtest-{os.getpid()}-{worker}-")
     paths = [tmp_path / f"worker-{n}" / "keeper.db" for n in range(8)]
     schemas = [derive_schema(path) for path in paths]
     assert len(set(schemas)) == 8

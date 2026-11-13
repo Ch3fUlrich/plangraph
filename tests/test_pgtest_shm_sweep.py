@@ -1,5 +1,6 @@
 import atexit
 import configparser
+import importlib
 import inspect
 import os
 import subprocess
@@ -130,13 +131,10 @@ def test_sweep_keeps_unverifiable_worker_pid(tmp_path, monkeypatch, error):
 
 
 @pytest.mark.parametrize("explicit_parent", [True, False])
-def test_worker_tmpdir_sweeps_before_creation(tmp_path, monkeypatch, pytestconfig,
-                                           explicit_parent):
-    conftest = pytestconfig.pluginmanager.getplugin(
-        str(Path(__file__).with_name("conftest.py").resolve()))
-    assert conftest is not None
-    assert conftest is sys.modules[conftest.__name__]
-    assert inspect.isfunction(conftest._use_tmpfs_tempdir)
+def test_worker_tmpdir_sweeps_before_creation(tmp_path, monkeypatch, explicit_parent):
+    conftest = importlib.import_module("_plangraph_test_conftest")
+    assert conftest is sys.modules["_plangraph_test_conftest"]
+    assert inspect.isfunction(conftest._make_worker_tmpdir)
     registrations = []
     monkeypatch.setattr(atexit, "register", lambda *a, **k: registrations.append((a, k)))
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
@@ -151,11 +149,12 @@ def test_worker_tmpdir_sweeps_before_creation(tmp_path, monkeypatch, pytestconfi
     mkdtemp = conftest.tempfile.mkdtemp
 
     def create_after_sweep(*args, **kwargs):
-        assert swept == [str(tmp_path)]
+        assert swept == ([str(tmp_path)] if explicit_parent else [])
         return mkdtemp(*args, **kwargs)
 
     monkeypatch.setattr(conftest.tempfile, "mkdtemp", create_after_sweep)
-    conftest._use_tmpfs_tempdir()
+    conftest._make_worker_tmpdir()
+    assert swept == ([str(tmp_path)] if explicit_parent else [])
     path = Path(conftest.tempfile.tempdir)
     assert path.parent == tmp_path
     assert path.name.startswith(f"pgtest-{os.getpid()}-gw0-")
@@ -171,15 +170,36 @@ def test_pytest_tmp_path_retention_config():
 
 
 @pytest.mark.parametrize("explicit_parent", [True, False])
-def test_worker_tmpdir_test_is_isolated(tmp_path, monkeypatch, pytestconfig,
-                                       explicit_parent):
+def test_worker_tmpdir_test_is_isolated(tmp_path, monkeypatch, explicit_parent):
+    conftest = importlib.import_module("_plangraph_test_conftest")
     monkeypatch.setenv("TMPDIR", "x")
     monkeypatch.delenv("TMPDIR")
+    monkeypatch.setattr(conftest.tempfile, "tempdir", str(tmp_path))
     registrations = []
-    monkeypatch.setattr(atexit, "register", lambda *a, **k: registrations.append((a, k)))
+    register = atexit.register
     with monkeypatch.context() as patch:
-        test_worker_tmpdir_sweeps_before_creation(tmp_path, patch, pytestconfig,
-                                                explicit_parent)
+        patch.setattr(atexit, "register", lambda *a, **k: registrations.append((a, k)))
+        patch.setenv("PYTEST_XDIST_WORKER", "gw0")
+        patch.setenv("TMPDIR", str(tmp_path) if explicit_parent else "x")
+        if not explicit_parent:
+            patch.delenv("TMPDIR")
+        patch.setattr(conftest.tempfile, "tempdir", str(tmp_path))
+        conftest._make_worker_tmpdir()
+        path = conftest.tempfile.tempdir
+        assert os.environ["TMPDIR"] == path
+        assert Path(path).parent == tmp_path
     restored = "TMPDIR" not in os.environ
     assert restored
-    assert registrations == []
+    assert conftest.tempfile.tempdir == str(tmp_path)
+    assert atexit.register is register
+    assert registrations == [((conftest.shutil.rmtree, path), {"ignore_errors": True})]
+
+
+def test_tmpdir_startup_delegates_to_plain_helper(monkeypatch):
+    conftest = importlib.import_module("_plangraph_test_conftest")
+    assert inspect.isfunction(conftest._use_tmpfs_tempdir)
+    assert inspect.isfunction(conftest._make_worker_tmpdir)
+    calls = []
+    monkeypatch.setattr(conftest, "_make_worker_tmpdir", lambda: calls.append("setup"))
+    conftest._use_tmpfs_tempdir()
+    assert calls == ["setup"]
