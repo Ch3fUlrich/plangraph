@@ -11,6 +11,7 @@ _content_warned = False
 UNKNOWN_PROVIDERS = object()
 OVERLAY_UNKNOWN = '_PLANGRAPH_OVERLAY_UNKNOWN'
 OVERLAY_ROOT_MISSING = '_PLANGRAPH_ROOT_MISSING'
+OVERLAY_ROOT_BROKEN = '_PLANGRAPH_ROOT_BROKEN'
 
 
 _missing_warned = False  # Missing roots warn once per process, even after recovery.
@@ -84,17 +85,19 @@ def _load_root_providers(path=None):
             logging.getLogger(__name__).warning('root_provider_config_missing path=%s', path)
             _missing_warned = True
         return None, path
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
         if not _parse_warned:
-            logging.getLogger(__name__).warning('root_provider_config_parse_error path=%s', path)
+            key = 'unreadable' if isinstance(exc, OSError) else 'parse_error'
+            logging.getLogger(__name__).warning('root_provider_config_%s path=%s', key, path)
             _parse_warned = True
-        return UNKNOWN_PROVIDERS, None
+        return UNKNOWN_PROVIDERS, path
 
 
 def overlay_env(base_env):
     global _content_warned
     env = dict(base_env)
     env.pop(OVERLAY_ROOT_MISSING, None)
+    env.pop(OVERLAY_ROOT_BROKEN, None)
     try:
         existing = json.loads(env.get('OPENCODE_CONFIG_CONTENT', '{}'))
         if not isinstance(existing, dict):
@@ -105,9 +108,10 @@ def overlay_env(base_env):
             _content_warned = True
         env[OVERLAY_UNKNOWN] = '1'
         return env
-    providers, missing_path = _load_root_providers()
-    if missing_path is not None:
-        env[OVERLAY_ROOT_MISSING] = str(missing_path)
+    providers, root_path = _load_root_providers()
+    if root_path is not None:
+        marker = OVERLAY_ROOT_BROKEN if providers is UNKNOWN_PROVIDERS else OVERLAY_ROOT_MISSING
+        env[marker] = str(root_path)
     if providers is UNKNOWN_PROVIDERS:
         env[OVERLAY_UNKNOWN] = '1'
         return env

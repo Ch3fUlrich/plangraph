@@ -53,7 +53,8 @@ def test_unparseable_overlay_is_unknown_one_path_only_warning(tmp_path, monkeypa
     path.write_text("{'private-secret': 1}")
     with caplog.at_level(logging.WARNING):
         for _ in range(2):
-            assert r.host_skip_reason({'harness': 'opencode', 'model': 'root/model'}, probe=lambda e: set()) is None
+            assert r.host_skip_reason({'harness': 'opencode', 'model': 'root/model'}, probe=lambda e: set()) == (
+                f'root_provider_config_broken: {path}')
     assert len(caplog.records) == 1
     assert str(path) in caplog.text and 'private-secret' not in caplog.text
 

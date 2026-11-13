@@ -540,9 +540,9 @@ def host_skip_reason(row, *, probe=None, env=None):
     if not model or '/' not in model:
         return None
     child = host_probe_env(env)
-    from .opencode_overlay import OVERLAY_UNKNOWN, OVERLAY_ROOT_MISSING
-    if child.get(OVERLAY_UNKNOWN):
-        return None
+    from .opencode_overlay import OVERLAY_UNKNOWN, OVERLAY_ROOT_MISSING, OVERLAY_ROOT_BROKEN
+    if child.get(OVERLAY_ROOT_BROKEN): return f'root_provider_config_broken: {child[OVERLAY_ROOT_BROKEN]}'
+    if child.get(OVERLAY_UNKNOWN): return None
     # Probe the config the launch will use: S1 renders the gateway providers per run.
     from .opencode_render import render_gateway_providers
     render_reason = render_gateway_providers(child, model)
