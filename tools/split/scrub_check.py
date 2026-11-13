@@ -318,7 +318,7 @@ def scan_tree(root, cfg, with_skipped=False):
     root = Path(root)
     find_shapes = _shape_finder()
     hits, skipped = [], []
-    tracked = (set(subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, text=True).stdout.split("\0")) or None) if (root / ".git").exists() else None
+    tracked = (set(filter(None, subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, text=True).stdout.split("\0"))) or None) if (root / ".git").exists() else None
     for p in sorted(root.rglob("*")):
         rel = p.relative_to(root).as_posix()
         if ".git" in p.relative_to(root).parts or (tracked is not None and rel not in tracked and not p.is_dir()):
