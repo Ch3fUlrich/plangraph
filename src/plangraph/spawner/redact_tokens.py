@@ -1,5 +1,6 @@
 """Rust worker-core's shared prefixed-token and wrapped-body policy."""
 import re
+import unicodedata
 from typing import NamedTuple
 
 
@@ -89,4 +90,72 @@ def redact_wrapped(text):
         if wrapped and count >= spec.floor:
             out.extend((text[copied:match.start()], '[REDACTED]'))
             copied = end
+    return ''.join((*out, text[copied:]))
+
+
+_NAME_KEYWORD = re.compile(r'token|secret|password|passwd|api_?key|access_?key|private_?key|credential')
+_LINE_REMAINDER = re.compile(r'[^\r\n]*')
+
+
+def _wide(char):
+    category = unicodedata.category(char)
+    return category[0] in 'LNM' or category == 'Pc' or char in '\u200c\u200d'
+
+
+def _horizontal(char):
+    return char.isspace() and char not in '\r\n'
+
+
+def _name_headers(text):
+    """Discover maximal WIDE runs once; failed headers consume maximal H too."""
+    index, size = 0, len(text)
+    while index < size:
+        if not _wide(text[index]):
+            index += 1
+            continue
+        start = index
+        while index < size and _wide(text[index]):
+            index += 1
+        # Per-code-point folding cannot shift offsets into the original text.
+        folded = ''.join(chr(ord(c) + 32) if 'A' <= c <= 'Z' else
+                         {'ſ': 's', 'K': 'k'}.get(c, c) for c in text[start:index])
+        if not _NAME_KEYWORD.search(folded):
+            continue
+        opening = text[start - 1] if start else ''
+        closing = text[index:index + 1]
+        subscript = (start >= 12 and opening in ('"', "'") and closing == opening
+                     and text[start - 12:start] == 'os.environ[' + opening
+                     and text[index + 1:index + 2] == ']')
+        header_start = start - 12 if subscript else start - int(opening in ('"', "'"))
+        index += 2 if subscript else int(closing in ('"', "'"))
+        while index < size and _horizontal(text[index]):
+            index += 1
+        separator = text[index:index + 1]
+        excluded = not subscript and opening == closing == '"' and separator == ':'
+        if excluded or separator not in (('=',) if subscript else ('=', ':')):
+            continue
+        index += 1
+        while index < size and _horizontal(text[index]):
+            index += 1
+        yield header_start, index
+
+
+def redact_wide_assignments(text, assignment):
+    """Python NEW-only stage: OLD headers/values win; NEW consumes to CR/LF."""
+    old_matches = iter(assignment.finditer(text))
+    old = next(old_matches, None)
+    out, copied = [], 0
+    for start, end in _name_headers(text):
+        if start < copied:
+            continue
+        while old is not None and old.end() <= start:
+            old = next(old_matches, None)
+        if old is not None and old.start() < end:
+            continue  # OLD value containment or intersecting half-open headers.
+        value_end = _LINE_REMAINDER.match(text, end).end()
+        if value_end > end:
+            out.extend((text[copied:end], '[REDACTED]'))
+            copied = value_end
+            while old is not None and old.start() < copied:
+                old = next(old_matches, None)
     return ''.join((*out, text[copied:]))
