@@ -327,9 +327,9 @@ fn symbolic_ref_errors_are_not_detached() {
 #[test]
 fn default_ref_errors_do_not_guess_main() {
     let f = Fixture::new();
-    f.alert_command("probe-failed", 1, f.git_shim(
-        "if [ \"$5\" = symbolic-ref ] && [ \"$7\" = refs/remotes/origin/HEAD ]; then exit 128; fi"
-    ));
+    let script =
+        "if [ \"$5\" = symbolic-ref ] && [ \"$7\" = refs/remotes/origin/HEAD ]; then exit 128; fi";
+    f.alert_command("probe-failed", 1, f.git_shim(script));
 }
 
 #[cfg(unix)]

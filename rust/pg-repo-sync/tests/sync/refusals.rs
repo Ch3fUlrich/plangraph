@@ -24,6 +24,11 @@ fn rev_list_errors_after_successful_fetch_are_probe_failures() {
     ] {
         let f = Fixture::new();
         f.alert_command("probe-failed", 0, f.git_shim(script));
+        // The zero in the alert means unavailable, not a parsed zero count.
+        assert_eq!(
+            f.git(&f.repo, &["rev-list", "--count", "HEAD..origin/main"]),
+            b"1\n"
+        );
         assert_eq!(
             f.git(&f.repo, &["rev-parse", "origin/main"]),
             f.git(&f.seed, &["rev-parse", "HEAD"])
@@ -63,11 +68,40 @@ fn absent_default_ref_still_falls_back_to_main() {
 #[test]
 fn fetch_failure_takes_precedence_over_probe_failure() {
     let f = Fixture::new();
-    f.alert_command(
-        "fetch-failed",
-        0,
-        f.git_shim("if [ \"$5\" = fetch ] || [ \"$5\" = rev-list ]; then exit 128; fi"),
-    );
+    f.git(&f.repo, &["fetch", "origin"]);
+    for (script, behind) in [
+        (
+            "if [ \"$5\" = fetch ] || [ \"$5\" = rev-list ]; then exit 128; fi",
+            0,
+        ),
+        ("if [ \"$5\" = fetch ]; then exit 128; fi", 1),
+    ] {
+        let before = f.snapshot();
+        let out = f.git_shim(script).output().unwrap();
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        assert_eq!(
+            out.stdout,
+            format!("ALERT repo behind={behind} reason=fetch-failed\n").as_bytes()
+        );
+        assert!(out.stderr.is_empty(), "{out:?}");
+        assert_eq!(f.snapshot(), before);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn parsed_zero_behind_is_silent_despite_probe_errors() {
+    let f = Fixture::new();
+    f.fast_forwarded(f.run());
+    for script in [
+        "if [ \"$5\" = symbolic-ref ] && [ \"$7\" = refs/remotes/origin/HEAD ]; then exit 128; fi",
+        "if [ \"$5\" = symbolic-ref ] && [ \"$7\" = refs/remotes/origin/HEAD ]; then echo refs/heads/main; exit 0; fi",
+        "if [ \"$5\" = symbolic-ref ] || [ \"$5\" = ls-files ] || [ \"$5\" = status ]; then exit 128; fi",
+    ] {
+        let before = f.snapshot();
+        f.fast_forwarded(f.git_shim(script).output().unwrap());
+        assert_eq!(f.snapshot(), before);
+    }
 }
 
 fn flagged_index_alerts_without_changes(flags: &[&str], tag: u8) {
@@ -110,10 +144,34 @@ fn lowercase_skip_worktree_entries_alert_without_changes() {
 fn index_flag_probe_errors_refuse_fast_forward() {
     let f = Fixture::new();
     f.alert_command(
-        "tracked-changes",
+        "probe-failed",
         1,
         f.git_shim("if [ \"$5\" = ls-files ]; then exit 128; fi"),
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn status_probe_errors_refuse_fast_forward() {
+    let f = Fixture::new();
+    f.alert_command(
+        "probe-failed",
+        1,
+        f.git_shim("if [ \"$5\" = status ]; then exit 128; fi"),
+    );
+}
+
+#[test]
+fn sparse_checkout_exclusions_are_conservatively_refused() {
+    let f = Fixture::new();
+    f.git(
+        &f.repo,
+        &["sparse-checkout", "set", "--no-cone", "/included/"],
+    );
+    assert!(!f.repo.join("tracked").exists());
+    assert_eq!(f.git(&f.repo, &["ls-files", "-v", "-z"])[0], b'S');
+    f.alert("tracked-changes", 1);
+    assert!(!f.repo.join("tracked").exists());
 }
 
 #[cfg(unix)]

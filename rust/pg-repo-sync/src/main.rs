@@ -89,24 +89,17 @@ fn sync(repo: &Path) -> (u64, Option<String>) {
         .ok()
         .and_then(|s| s.parse::<u64>().ok());
     let behind = count.unwrap_or(0);
+    if fetched && count == Some(0) {
+        return (0, None);
+    }
     let branch = text(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
     let reason = if !fetched {
         "fetch-failed".to_owned()
     } else if default.is_none() || count.is_none() {
         "probe-failed".to_owned()
-    } else if behind == 0 {
-        return (0, None);
     } else if let Ok(branch) = branch.as_ref() {
-        if branch != name {
-            format!("other-branch:{branch}")
-        } else if text(repo, &["ls-files", "-v", "-z"]).ok().is_none_or(|s| {
-            s.split('\0').any(|entry| {
-                entry
-                    .as_bytes()
-                    .first()
-                    .is_some_and(|tag| *tag == b'S' || tag.is_ascii_lowercase())
-            })
-        }) || text(
+        let flags = text(repo, &["ls-files", "-v", "-z"]);
+        let status = text(
             repo,
             &[
                 "status",
@@ -114,9 +107,19 @@ fn sync(repo: &Path) -> (u64, Option<String>) {
                 "--untracked-files=no",
                 "--ignore-submodules=untracked",
             ],
-        )
-        .ok()
-        .is_none_or(|s| !s.is_empty())
+        );
+        if branch != name {
+            format!("other-branch:{branch}")
+        } else if flags.is_err() || status.is_err() {
+            "probe-failed".to_owned()
+        } else if flags.is_ok_and(|s| {
+            s.split('\0').any(|entry| {
+                entry
+                    .as_bytes()
+                    .first()
+                    .is_some_and(|tag| *tag == b'S' || tag.is_ascii_lowercase())
+            })
+        }) || status.is_ok_and(|s| !s.is_empty())
         {
             "tracked-changes".to_owned()
         } else {

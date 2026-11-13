@@ -32,6 +32,28 @@ Q&A page connects each decision/question to task, phase and project and lets you
 | `examples/` | fictional plans, a batch, `snapshot.json` |
 | `docs/` | proposal, spec, runbook, UI/UX reviews |
 
+## Repository synchronization contract
+
+`pg-repo-sync` emits exactly one `ALERT <repo> behind=<n> reason=<reason>` line
+per repository needing attention (exit 1). The reason codes are:
+
+- `detached`, `other-branch:<branch>`, `tracked-changes`, `diverged`, `fetch-failed`;
+- `probe-failed`: default-ref, revision-count, index-flag, or tracked-status probe failed;
+- `branch-check-failed`: current-branch probe failed, rather than a detached HEAD;
+- `ancestry-check-failed`: ancestry probe failed, rather than confirmed divergence;
+- `ff-failed`: a fast-forward was refused, including untracked or ignored collisions.
+
+Fetch failures always alert with the last available behind count. If the count
+cannot be parsed, alerts use `behind=0` as an unavailable-count sentinel, not as
+proof of synchronization. After a successful fetch, a **parsed** zero count is
+silent despite other probe failures (`--verbose` prints `OK <repo>`).
+
+Index flags are deliberately conservative: **all** skip-worktree (`S`) and
+assume-unchanged (lowercase) entries refuse fast-forward as `tracked-changes`,
+even if clean or absent. This includes sparse-checkout exclusions; sparse
+checkouts are not automatically fast-forwarded. This avoids trusting status
+that can hide local edits and leaves the index and worktree untouched.
+
 ## Setup
 
 Requirements: Python 3.11+, `pytest` for the tests, Node.js for the viewport/layout tests. The page
