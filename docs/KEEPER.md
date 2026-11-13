@@ -603,4 +603,4 @@ Keep application writers stopped during rollback and restore: fixed tables and
 indexes become `*_retired_v11` under migration and exclusive table locks.
 Preserve audit rows; reapplication requires an explicit restore plan.
 SQLite rollback retains tables; C4 owns forward audit events, not item events.
-Mandatory ephemeral PostgreSQL CI must pass before merge; storage is not closure.
+Mandatory ephemeral PostgreSQL CI must pass before merge; storage is not closure. `quota_alarms.py` (systemd timer, deploy/systemd) reads gateway quota snapshots and sends one routing line per 50/75/90 % threshold per window, deduped in a state file.
