@@ -323,7 +323,7 @@ class SpawnService(SeatSpawnMixin):
                     job = await self._launch_leg(record, chosen, prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
                         prompt_record=(self._path(record['run_id']).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
-                    if record.get('reason') == 'reasoning_output_limit':
+                    if record.get('reason') in ('reasoning_output_limit', 'reasoning_only_length', 'reasoning_session_missing'):
                         break
                     stop = self.runner.provider_responses.get(job.job_id)
                     if terminal_record(record, job):

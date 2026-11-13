@@ -207,8 +207,20 @@ class SeatSpawnMixin:
             raise InlineDiffError('review prompt packaging deadline exceeded') from None
 
     async def _launch_leg(self, record, chosen, *, routed=False, **options):
-        """One normal launch, at most one capped review retry; never recurse or reroute."""
+        """One isolated review session with at most one bounded exhaustion retry."""
+        from .opencode_answer import ReviewSession, launch_review
+        session = ReviewSession(record['started'] + (options.get('watchdog') or {}).get('max_s', 1500)) if chosen.harness == 'opencode' and record.get('role') == 'review' else None
+        try:
+            return await launch_review(self, record, chosen, routed=routed, session=session, **options)
+        finally:
+            if session is not None:
+                session.close()
+
+    async def _launch_session(self, record, chosen, *, routed, session, **options):
+        from .opencode_answer import record_attempt, fail_review
         async def launch(prompt_record, **kwargs):
+            if session is not None:
+                kwargs['review_session'] = session
             job = await self.runner.spawn(prompt_record=prompt_record, **kwargs)
             self._running_records[job.job_id] = record
             process = self.runner._processes.get(job.job_id)
@@ -233,7 +245,7 @@ class SeatSpawnMixin:
                         publish_cancel(job)
                     elif task.exception() is not None:
                         raise task.exception()
-            if kwargs.get('reasoning_cap') and self._path(record['run_id']).with_name('cancelled').exists():
+            if session is not None and session.id and self._path(record['run_id']).with_name('cancelled').exists():
                 job.status = 'cancelled'
             return job
 
@@ -245,57 +257,45 @@ class SeatSpawnMixin:
                 or any(e.get('event') in ('watchdog_timeout', 'watchdog_stalled') for e in job.events))
 
         def exhausted(job):
-            if record.get('role') != 'review' or protected(job):
+            if record.get('role') != 'review':
                 return None
             return next((e for e in getattr(job, 'events', ())
                          if e.get('event') == 'opencode_reasoning_exhausted'), None)
-
-        def record_attempt(job):
-            record['attempts'].append(dict(leg=asdict(chosen), job_id=job.job_id,
-                status='failed', skip_reason='reasoning_output_limit',
-                served_model=job.served_model, served_family=job.served_family,
-                served_witness_reason=job.served_witness_reason,
-                **(dict(request_side_model=job.request_side_model, witness_kind=job.witness_kind) if routed else {}),
-                stdout_tail=job.stdout, stderr_tail=job.stderr, events=job.events))
-            record.setdefault('events', []).extend(job.events)
 
         job = await launch(**options)
         evidence = exhausted(job)
         if evidence is None:
             return job
-        if self._path(record['run_id']).with_name('cancelled').exists():
-            job.status = 'cancelled'
-            return job
+        failure = evidence.get('reason', 'reasoning_output_limit')
         limits = options.get('watchdog') or {}
-        remaining = record['started'] + limits.get('max_s', 1500) - time.time()
-        if evidence.get('cap_available') and not record.get('reasoning_retry') and remaining > 30:
-            record_attempt(job)
-            record['events'].append(dict(event='reasoning_capped_retry', leg=chosen.id,
-                                         thinking='disabled'))
-            record['reasoning_retry'] = 1  # durable before launching the sole retry
-            self._save(record)
-            job = await launch(**dict(options, reasoning_cap=True,
-                watchdog=dict(limits, max_s=remaining, hard_max=True)))
+        record.setdefault('reasoning_continuations', 0)
+        for retry in range(2):
+            remaining = record['started'] + limits.get('max_s', 1500) - time.time()
             if protected(job):
                 return job
-            cap_unavailable = any(e.get('event') == 'render_refused' and
-                str(e.get('reason', '')).startswith('reasoning_output_limit:') for e in job.events)
-            if exhausted(job) is None and not cap_unavailable:
+            if self._path(record['run_id']).with_name('cancelled').exists():
+                job.status = 'cancelled'
                 return job
-        job.status, job.exit_code = 'failed', job.exit_code or 1
-        job.events.append(dict(event='reasoning_output_limit'))
-        record_attempt(job)
-        if routed:
-            record.update(request_side_model=job.request_side_model, witness_kind=job.witness_kind,
-                served_model_mismatch=any(e.get('event') == 'served_model_mismatch' for e in job.events))
-        record.update(status='failed', reason='reasoning_output_limit', exit_code=job.exit_code,
-            served_model=job.served_model, served_family=job.served_family,
-            served_witness_reason=job.served_witness_reason,
-            writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
-            stdout_tail=record.get('stdout_tail', '') + job.stdout,
-            stderr_tail=record.get('stderr_tail', '') + job.stderr)
-        self._save(record)  # terminal evidence must survive even if the caller never saves again
-        return job
+            if retry or record['reasoning_continuations'] or remaining <= 0:
+                break
+            if session is None or not (getattr(job, 'session_id', None) or session.id):
+                failure = 'reasoning_session_missing'  # never silently start a fresh context
+                break
+            session.id = getattr(job, 'session_id', None) or session.id
+            record_attempt(record, chosen, job, routed)
+            record['reasoning_continuations'] += 1
+            usage = [e for e in job.events if e.get('event') == 'opencode_step_finish']
+            record['events'].append(dict(event='reasoning_continuation', leg=chosen.id,
+                count=record['reasoning_continuations'], session_id=session.id,
+                **{k: sum(e.get(k) or 0 for e in usage) for k in ('output_tokens', 'reasoning_tokens')}))
+            self._save(record)
+            from .opencode_answer import retry_prompt
+            job = await launch(**dict(options,
+                prompt=retry_prompt(options.get('prompt', '')),
+                watchdog=dict(limits, max_s=min(120, remaining), hard_max=True)))
+            if exhausted(job) is None:
+                return job
+        return fail_review(self, record, chosen, job, routed, failure)
 
     def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
         """Assemble one leg's payload, then enforce its request limit."""
@@ -308,12 +308,7 @@ class SeatSpawnMixin:
         return context_pack.bound_prompt(prompt, leg.max_request_tokens)
 
     def _unbounded_leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
-        """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff.
-
-        ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
-        ``document_review`` allows explicit ``--leg`` document reviews and dry-run planning; live routed
-        inline-only review legs need the card's diff and refuse without ``diff_ref`` (r3).
-        OpenCode tools-mode reviews inline a diff when supplied, but also support non-diff reviews."""
+        """Inline context (D-3622/D-3649) and diff; only explicit document reviews omit the diff."""
         if getattr(leg, 'tool_mode', 'tools') == 'inline-only':
             from . import context_pack
             prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
@@ -329,11 +324,7 @@ class SeatSpawnMixin:
 
     async def _spawn_seats(self, *, card, prompt, role, writer_families, review_of, model, leg,
                            **options):
-        """One review run per seat ``route`` picked; callers never name legs (D-3198).
-
-        Reserve entire canonical families, not individual spare indices, so
-        alternate legs of one family can never belong to different slots.
-        """
+        """D-3198: one run per routed seat; reserve whole families, never individual spare indices."""
         from plangraph.planner.routing import SpawnRefused
         if role != 'review' or model is not None or leg is not None:
             raise SpawnRefused('seats needs role review without model or leg')

@@ -61,7 +61,8 @@ def redact_output(text):
 def _redact(value, *, source):
     try:
         if isinstance(value, dict):
-            return {k: ('[REDACTED]' if k != 'idempotency_key' and re.search(
+            return {k: (v if k in ('output_tokens', 'reasoning_tokens') and type(v) is int and v >= 0
+                else '[REDACTED]' if k != 'idempotency_key' and re.search(
                 r'(?i)(key|authorization|token|secret)', k) else _redact(v, source=source))
                     for k, v in value.items()}
         if isinstance(value, (list, tuple)):

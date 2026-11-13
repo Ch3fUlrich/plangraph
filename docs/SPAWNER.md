@@ -115,27 +115,26 @@ Before decoding display stdout, `opencode_answer.record_steps` retains each
 `output_tokens` and `reasoning_tokens`; absent usage remains null, not zero.
 Structured `output-limit` errors and the matching OpenCode stderr diagnostic
 add `opencode_output_limit`. These are diagnostic events, not served-model witnesses.
-A final `length` step with output zero, or that error with no text/output,
+A final `length` step with positive reasoning usage and no answer text (even output 1), legacy output-zero length, or that error with no text/output,
 adds `opencode_reasoning_exhausted`; later completed output is not retried.
 Display-text decoding also protects plain/mixed stdout answers; diagnostic-only JSON, including blank separator lines, is not answer text.
 The monitor's events reach `record.json` through either dispatch path.
 
-For an OpenCode inline `review`, shared `SeatSpawnMixin._launch_leg` retries
-once with the same prompt, model and harness, never unchanged. MiMo v2.6 Flash
-and Pro use model-local `body.thinking.type=disabled` (zero reasoning budget)
-in the isolated child config; the root config and other roles are unchanged.
-An already-disabled or unsupported control is unavailable, not an unchanged retry.
-The failed attempt and its events stay in the record, with `reasoning_retry=1`
-saved before the retry. Tool denial, fresh job isolation and the original review
-wall deadline remain in force. No new retry loop or provider-health booking is added.
-The retry requires more than 30 seconds of remaining wall budget. Base-service launches keep their original shielded monitor cancellation and ownership fields.
-Repeated zero-output exhaustion, an unavailable cap, or no remaining retry budget
-ends the run `failed` with terminal `reason: reasoning_output_limit`; no spare leg
-or writer continuation runs. Cancellation, timeout and kill-incomplete still win.
-Terminal status, reason, attempts and events are saved at the shared launch boundary before either caller returns; routed exhaustion keeps normal failure witness metadata, and both callers finalize `ended` and release monitor registrations in `finally`.
-Normal output, nonzero-output truncation and non-review roles retain existing behavior except that base-service watchdog exits now retain one attempt row, matching routed dispatch; `terminal_record` adds no rows, retries do not duplicate watchdog rows, and cancellation rows are unchanged.
-Hermetic coverage is in `tests/test_spawner_review_tools_inline.py` and
-`tests/test_spawner_runner_answer.py`; the live #768 seat is an after-merge operator check.
+`src/plangraph/spawner/opencode_answer.py:cap_reasoning`, called by
+`runner.py:SpawnerRunner.spawn`, sets MiMo's harness-read
+`OPENCODE_CONFIG_CONTENT.providers.mimo.models[model].limit.output` and
+`OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX` from `catalog_data.py:SEED_MODELS.max_output_tokens`:
+131072 for Pro and Flash, matching `deploy/omniroute/custom-models.json` (D-5645).
+The old 65536 overlay and OpenCode's 32000 custom-model fallback are not the provider maximum;
+reasoning and answer share this budget. V2 reads `limit.output`; the env also lifts older harness clamps.
+`run_watchdog.py:collect` detects open-pipe reasoning-only length, records the reason and reaps immediately.
+`seat_spawn.py:SeatSpawnMixin._launch_session` retries once with `--session` and the same
+private store, capped at 120 seconds and the remaining original card `max_min`/run timeout.
+Each turn sends `answer now: findings, then the VERDICT line; no further analysis`; context is not replayed.
+`reasoning_continuations` and `reasoning_continuation` events persist count and both token counters;
+repeated exhaustion is `failed/reasoning_only_length`; watchdog timeout remains `timeout` (`timed_out` on review records).
+Missing session evidence fails as `reasoning_session_missing`; completed prose is not retried (existing `no_verdict` still applies).
+MiMo review prompts over 24000 UTF-8 bytes are automatically split at source lines into bounded parts in the same private session; all evidence is retained before the final review instruction. Unsplittable lines fail closed; chunks share one retry and wall budget. Hermetic 25/55/100 KB coverage is not a live proof; live run IDs and each host's #781 spawner-source evidence remain open in PR #807.
 
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:

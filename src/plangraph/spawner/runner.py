@@ -157,7 +157,8 @@ def _opencode_managed_dir(env: Mapping) -> Path:
 _REVIEW_OPENCODE_ENV_ALLOW = ('OPENCODE_CONFIG_CONTENT', 'OPENCODE_CONFIG',
                               'OPENCODE_CONFIG_DIR', 'OPENCODE_DISABLE_PROJECT_CONFIG',
                               'OPENCODE_DISABLE_CLAUDE_CODE', 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS',
-                              'OPENCODE_DISABLE_AUTOUPDATE', 'OPENCODE_API_KEY')
+                              'OPENCODE_DISABLE_AUTOUPDATE', 'OPENCODE_API_KEY',
+                              'OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX')
 
 
 def _opencode_tools_denied(config_json, env) -> bool:
@@ -310,7 +311,7 @@ class SpawnerRunner:
         gateway: bool = True,
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
-        client: str | None = None, reasoning_cap=False,
+        client: str | None = None, review_session=None,
         watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial',  # REMOVE-AT-R10
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
@@ -409,8 +410,11 @@ class SpawnerRunner:
             except ValueError:
                 title_at = len(cmd)  # no positional exists on that path
             cmd[title_at:title_at] = ['--title', f'plangraph-{job_id}']
+            if review_session is not None and review_session.id:
+                cmd[title_at:title_at] = ['--session', review_session.id]
             from .opencode_overlay import overlay_env
             child_env = overlay_env(child_env)
+            child_env.pop('OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX', None)
             from plangraph.routing_support.opencode_render import render_gateway_providers
             render_reason = render_gateway_providers(child_env, model_or_combo)
             if render_reason is None:
@@ -423,7 +427,8 @@ class SpawnerRunner:
             # D-2921 F1 / D-3236: every role (writers too) runs without the global, project and
             # Claude Code config layers -- a global `instructions` entry made a writer change nothing.
             from .opencode_isolation import close_config_layers, review_credential_reason
-            oc_dir = self._ocdata_dirs[job_id] = close_config_layers(child_env)
+            oc_dir = self._ocdata_dirs[job_id] = (review_session.isolate(child_env, job_id)
+                if review_session is not None else close_config_layers(child_env))
             if role == 'review':
                 # D-2905 (1): the per-job dir is also the spawner-owned store, read only after child exit
                 # -- the shared store is child-writable and proves nothing. REVIEW-WITNESS-OPENCODE R1:
@@ -432,7 +437,7 @@ class SpawnerRunner:
                 render_reason = review_credential_reason(model_or_combo, oc_dir, child_env, render_reason)
                 child_env['HOME'] = oc_dir
                 xdg_config = os.path.join(oc_dir, 'config')
-                os.mkdir(xdg_config, 0o700)
+                os.makedirs(xdg_config, mode=0o700, exist_ok=True)
                 child_env['XDG_CONFIG_HOME'] = xdg_config
                 for name in [n for n in child_env
                              if str(n).startswith('OPENCODE_') and n not in _REVIEW_OPENCODE_ENV_ALLOW]:
@@ -450,11 +455,11 @@ class SpawnerRunner:
                     child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
-                from .opencode_answer import cap_reasoning
-                if reasoning_cap and not cap_reasoning(child_env, model_or_combo):
-                    render_reason = 'reasoning_output_limit: no supported reasoning cap'
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
+            from .opencode_answer import cap_reasoning
+            if render_reason is None and model_or_combo.startswith('mimo/') and not cap_reasoning(child_env, model_or_combo):
+                render_reason = 'reasoning_output_limit: no supported output cap'
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
         if render_reason is None:
@@ -516,8 +521,11 @@ class SpawnerRunner:
             from .probe_cleanup import register
             self.jobs[job_id] = job; register(job_id)
             job.prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
+            job._review_session = review_session
             from .run_watchdog import thresholds, edit_signature
             job._watchdog_limits = watchdog or thresholds(role=role)
+            if review_session is not None and review_session.deadline is not None:
+                job._watchdog_limits = dict(job._watchdog_limits, max_s=min(job._watchdog_limits['max_s'], review_session.deadline - job.start_time), hard_max=True)
             job._live_log = live_log
             job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir) if role in ('implement', 'fix') else None
             if tools_event:
@@ -636,7 +644,9 @@ class SpawnerRunner:
                 self._git_guards.pop(job_id, None)
                 self._stdin_payloads.pop(job_id, None)
                 oc_dir = self._ocdata_dirs.pop(job_id, None)
-                if oc_dir is not None:
+                if review_session is not None:
+                    review_session.release(job_id)
+                elif oc_dir is not None:
                     import shutil
                     shutil.rmtree(oc_dir, ignore_errors=True)
             else:
@@ -645,7 +655,9 @@ class SpawnerRunner:
                 # (no-op when the monitor already cleaned up).
                 def _sweep(_task, _self=self, _jid=job_id):
                     _oc = _self._ocdata_dirs.pop(_jid, None)
-                    if _oc is not None:
+                    if review_session is not None:
+                        review_session.release(_jid)
+                    elif _oc is not None:
                         import shutil
                         shutil.rmtree(_oc, ignore_errors=True)
                 self._tasks[job_id].add_done_callback(_sweep)
@@ -698,7 +710,7 @@ class SpawnerRunner:
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
             exit_code = self.jobs[job_id].exit_code if (self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled')
                                                         or self.jobs[job_id].survivors
-                                                        or getattr(self.jobs[job_id], 'refusal', None)) else proc.returncode
+                                                        or getattr(self.jobs[job_id], 'refusal', None) or any(e.get('event') == 'reasoning_only_length' for e in self.jobs[job_id].events)) else proc.returncode
             job = self.jobs[job_id]
             for line in stderr_text.splitlines():
                 try:
@@ -815,7 +827,7 @@ class SpawnerRunner:
             self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)
             oc_dir = self._ocdata_dirs.pop(job_id, None)
-            if oc_dir is not None:
+            if oc_dir is not None and getattr(self.jobs[job_id], '_review_session', None) is None:
                 import shutil
                 shutil.rmtree(oc_dir, ignore_errors=True)
             getattr(self, '_reaped_jobs', set()).discard(job_id)
@@ -1096,7 +1108,7 @@ def spawn_service(*args, **kwargs):
                         job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
                             role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
-                        if record.get('reason') == 'reasoning_output_limit':
+                        if record.get('reason') in ('reasoning_output_limit', 'reasoning_only_length', 'reasoning_session_missing'):
                             return
                         if job.survivors:   # kill_incomplete: terminal, no fall-through leg, no second writer
                             record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason='kill_incomplete'))

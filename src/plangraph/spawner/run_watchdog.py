@@ -200,6 +200,7 @@ class LiveLog:
 
 async def collect(runner, job_id, proc):
     from .runner import redact
+    from .opencode_answer import ReasoningLengthGate
     from .reap import cancel_and_close
     from .env_redact import early_refusal, redact_env_values, OutputLines
     job = runner.jobs[job_id]
@@ -213,6 +214,7 @@ async def collect(runner, job_id, proc):
     def scrub(text):
         return redact(redact_env_values(text, env))
     gate = RefusalGate(refused, job, scrub)
+    length_gate = ReasoningLengthGate(job, asyncio.Event())
     async def reader(stream, name):
         pending, tail = '', ''
         log = LiveLog(job)
@@ -223,6 +225,8 @@ async def collect(runner, job_id, proc):
             if not text:
                 return
             captured[name].append(text)   # raw; kept even if a drain grace cancels us
+            if name == 'stdout':
+                length_gate.feed(text)
             pending += text
             lines = pending.splitlines(keepends=True)
             pending = ''
@@ -322,7 +326,8 @@ async def collect(runner, job_id, proc):
         return await proc.communicate()
     task = asyncio.create_task(output())
     refusal_wait = asyncio.ensure_future(refused.wait())
-    waiters = [task, refusal_wait]
+    length_wait = asyncio.ensure_future(length_gate.stopped.wait())
+    waiters = [task, refusal_wait, length_wait]
     ticker = asyncio.ensure_future(gate.run())
     try:
         while not task.done():
@@ -333,17 +338,22 @@ async def collect(runner, job_id, proc):
             if w.writer and w.edit is None:
                 delay = min(delay, EDIT_RETRY_S)   # Q7: keep retrying a lost baseline
             done, _ = await asyncio.wait(waiters, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
-            if refused.is_set() and not task.done() and job.status in ('cancelled', 'stalled', 'timeout'):
+            if length_wait.done() and not length_gate.exhausted:
+                length_wait = asyncio.ensure_future(length_gate.stopped.wait()); waiters = [task, refusal_wait, length_wait]
+            if (refused.is_set() or length_gate.exhausted) and not task.done() and job.status in ('cancelled', 'stalled', 'timeout'):
                 # Q14/M9/M15: a cancel/stall/timeout verdict is never stomped;
                 # the refusal is booked (job.refusal) but the verdict stands.
                 # Drop the resolved waiter so the loop keeps sampling normally.
                 waiters = [task]
-            elif refused.is_set() and not task.done():
-                # D-3605 (a): a refused/rate-limited/credit/auth dispatch ends the run now,
-                # never 'running' until a stall rule fires; the leg loop records leg_state.
+            elif (refused.is_set() or length_gate.exhausted) and not task.done():
+                # Dispatch refusals and reasoning-only length stops end open-pipe runs now.
                 job.status, job.exit_code = 'failed', 7
-                job.events.append({'event': 'dispatch_refused', 'reason': job.refusal})
-                logging.getLogger(__name__).info('%s dispatch refused', job_id)
+                if length_gate.exhausted:
+                    job.events.extend([dict(event='reasoning_only_length'), dict(event='opencode_reasoning_exhausted', reason='reasoning_only_length')])
+                else:
+                    job.events.append({'event': 'dispatch_refused', 'reason': job.refusal})
+                logging.getLogger(__name__).info('%s %s', job_id,
+                    'reasoning_only_length' if length_gate.exhausted else 'dispatch refused')
                 await runner._reap_process(job_id, proc)
                 try:
                     callback = getattr(runner, 'on_sample', None)
@@ -384,7 +394,7 @@ async def collect(runner, job_id, proc):
                 break
         return await gate.finish(runner, job_id, proc, await task)
     finally:
-        refusal_wait.cancel(); ticker.cancel()
+        refusal_wait.cancel(); length_wait.cancel(); ticker.cancel()
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)

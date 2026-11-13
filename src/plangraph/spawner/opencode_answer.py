@@ -3,6 +3,163 @@ import json
 
 from .env_redact import normalize
 
+REVIEW_PROMPT_MAX_BYTES = 24_000
+
+
+def split_review_prompt(prompt):
+    """Keep all evidence and producer spans; refuse an unsplittable source line."""
+    from .context_pack import PromptBoundError
+    from .env_redact import _SourcePrompt
+    if len(prompt.encode()) <= REVIEW_PROMPT_MAX_BYTES:
+        return [prompt]
+    bound, start, end, size, chunks = REVIEW_PROMPT_MAX_BYTES - 512, 0, 0, 0, []
+    for line in prompt.splitlines(keepends=True):
+        length = len(line.encode())
+        if length > bound:
+            raise PromptBoundError('prompt_too_large: review source line exceeds split bound')
+        if size + length > bound:
+            chunks.append((start, end)); start, size = end, 0
+        end, size = end + len(line), size + length
+    chunks.append((start, end))
+    out = []
+    for i, (start, end) in enumerate(chunks):
+        text = prompt[start:end]
+        if type(prompt) is _SourcePrompt:
+            text = _SourcePrompt(text, tuple((max(a, start) - start, min(b, end) - start)
+                for a, b in prompt.spans if a < end and b > start))
+        instruction = ('Now review the complete request; findings, then the VERDICT line.'
+                       if i == len(chunks) - 1 else 'Do not review yet; retain this evidence and acknowledge receipt only.')
+        out.append(f'Review request part {i + 1}/{len(chunks)}. {instruction}\n=== REVIEW PROMPT PART ===\n'
+                   + text + '\n=== END REVIEW PROMPT PART ===\n')
+    return out
+
+
+def record_attempt(record, chosen, job, routed, status='continued', failure=None):
+    from dataclasses import asdict
+    record['attempts'].append(dict(leg=asdict(chosen), job_id=job.job_id,
+        status=status, skip_reason=failure if status == 'failed' else None,
+        served_model=job.served_model, served_family=job.served_family,
+        served_witness_reason=job.served_witness_reason,
+        **(dict(request_side_model=job.request_side_model, witness_kind=job.witness_kind) if routed else {}),
+        stdout_tail=job.stdout, stderr_tail=job.stderr, events=job.events))
+    record.setdefault('events', []).extend(job.events)
+
+
+def fail_review(service, record, chosen, job, routed, failure):
+    job.status, job.exit_code = 'failed', job.exit_code or 1
+    job.events.append(dict(event=failure, continuations=record.get('reasoning_continuations', 0)))
+    record_attempt(record, chosen, job, routed, 'failed', failure)
+    if routed:
+        record.update(request_side_model=job.request_side_model, witness_kind=job.witness_kind,
+            served_model_mismatch=any(e.get('event') == 'served_model_mismatch' for e in job.events))
+    record.update(status='failed', reason=failure, exit_code=job.exit_code,
+        served_model=job.served_model, served_family=job.served_family,
+        served_witness_reason=job.served_witness_reason,
+        writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
+        stdout_tail=record.get('stdout_tail', '') + job.stdout,
+        stderr_tail=record.get('stderr_tail', '') + job.stderr)
+    service._save(record)
+    return job
+
+
+async def launch_review(service, record, chosen, *, routed, session, **options):
+    """Load large MiMo requests serially in one private session before reviewing."""
+    from .mimo_policy import ACCEPTED_MIMO_IDS
+    prompts = (split_review_prompt(options.get('prompt', ''))
+               if session is not None and chosen.model in ACCEPTED_MIMO_IDS else [options.get('prompt', '')])
+    if len(prompts) > 1:
+        record.setdefault('events', []).append(dict(event='review_prompt_split', parts=len(prompts),
+            bytes=len(options.get('prompt', '').encode()), max_bytes=REVIEW_PROMPT_MAX_BYTES))
+        service._save(record)
+    for i, prompt in enumerate(prompts):
+        job = await service._launch_session(record, chosen, routed=routed, session=session,
+                                            **dict(options, prompt=prompt))
+        if i < len(prompts) - 1 and job.status == 'terminated_after_answer':
+            return fail_review(service, record, chosen, job, routed, 'reasoning_session_missing')
+        if i == len(prompts) - 1 or job.status != 'completed' or record.get('status') != 'running':
+            return job
+        if service._path(record['run_id']).with_name('cancelled').exists():
+            job.status = 'cancelled'
+            return job
+        session.id = getattr(job, 'session_id', None) or session.id
+        if not session.id:
+            return fail_review(service, record, chosen, job, routed, 'reasoning_session_missing')
+        record_attempt(record, chosen, job, routed, 'context_loaded')
+        service._save(record)
+
+
+def reasoning_only_length(step):
+    return (step.get('finish_reason') == 'length'
+            and (step.get('reasoning_tokens') or 0) > 0)
+
+
+class ReasoningLengthGate:
+    """Wake collection on a reasoning-only length frame, even with open pipes."""
+    def __init__(self, job, stopped):
+        from .exit_outcome import is_opencode
+        self.active = is_opencode(job) and job.role == 'review'
+        self.stopped, self.exhausted = stopped, False
+        self.pending, self.saw_text = '', False
+
+    def feed(self, text):
+        if not self.active:
+            return
+        lines = (self.pending + text).split('\n')
+        self.pending = lines.pop()
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                self.saw_text |= bool(line.strip())
+                continue
+            if not isinstance(event, dict) or not isinstance(event.get('part'), dict):
+                continue
+            part = event['part']
+            if event.get('type') == 'text':
+                self.saw_text |= isinstance(part.get('text'), str) and bool(part['text'].strip())
+            tokens = part.get('tokens') or {}
+            reasoning = tokens.get('reasoning') if isinstance(tokens, dict) else None
+            if event.get('type') == 'step_finish' and part.get('reason') == 'length' and type(reasoning) is int and reasoning > 0:
+                self.exhausted = not self.saw_text
+        if self.saw_text:
+            self.exhausted = False
+        if self.exhausted:
+            self.stopped.set()
+        else:
+            self.stopped.clear()
+
+
+def retry_prompt(prompt):
+    """The original evidence already lives in the continued session."""
+    return 'answer now: findings, then the VERDICT line; no further analysis'
+
+
+class ReviewSession:
+    """Retain one isolated store across continuations, including cancellation."""
+    def __init__(self, deadline=None):
+        self.directory, self.id, self.closed = None, None, False
+        self.deadline = deadline
+        self.jobs = set()
+
+    def release(self, job_id=None):
+        import shutil
+        self.jobs.discard(job_id)
+        if self.closed and not self.jobs and self.directory:
+            shutil.rmtree(self.directory, ignore_errors=True)
+
+    def close(self):
+        self.closed = True
+        self.release()
+
+    def isolate(self, env, job_id):
+        from pathlib import Path
+        from .opencode_isolation import close_config_layers, CLOSED_LAYERS
+        self.directory = self.directory or close_config_layers(env)
+        env.update(CLOSED_LAYERS, OPENCODE_CONFIG_DIR=self.directory,
+                   OPENCODE_CONFIG=str(Path(self.directory) / 'pg-empty.json'))
+        self.jobs.add(job_id)
+        return self.directory
+
 
 def record_steps(job, stdout, stderr, env):
     """Retain diagnostic step usage before stdout becomes display text, not a witness."""
@@ -18,6 +175,8 @@ def record_steps(job, stdout, stderr, env):
             continue
         if not isinstance(event, dict):
             continue
+        if isinstance(event.get('sessionID'), str) and event['sessionID'].startswith('ses_'):
+            job.session_id = event['sessionID']
         part = event.get('part')
         if event.get('type') == 'step_finish' and isinstance(part, dict):
             tokens = part.get('tokens')
@@ -36,35 +195,37 @@ def record_steps(job, stdout, stderr, env):
     job.events.extend(steps)
     if output_limit:
         job.events.append(dict(event='opencode_output_limit'))
-    # A zero-output length step followed by a real answer is already recovered.
-    if not saw_text and not any((s['output_tokens'] or 0) > 0 for s in steps) and (
+    length = bool(steps and reasoning_only_length(steps[-1]))
+    # Text, not an output-token counter (which can be 1 with no text), owns recovery.
+    if not saw_text and (length or not any((s['output_tokens'] or 0) > 0 for s in steps) and (
             steps and steps[-1]['finish_reason'] == 'length' and steps[-1]['output_tokens'] == 0
-            or output_limit):
-        # Probe the first child's isolated config on a copy; only the retry mutates its own env.
-        job.events.append(dict(event='opencode_reasoning_exhausted',
-                               cap_available=cap_reasoning(dict(env), job.model_or_combo)))
+            or output_limit)):
+        evidence = dict(event='opencode_reasoning_exhausted',
+                        **({'reason': 'reasoning_only_length'} if length else {}))
+        if evidence not in job.events:
+            job.events.append(evidence)
 
 
 def cap_reasoning(env, model):
-    """MiMo's documented thinking-off control: a zero reasoning budget for this run only."""
+    """Set MiMo's combined reasoning/answer output cap from the model catalog."""
     from .mimo_policy import ACCEPTED_MIMO_IDS
+    from plangraph.catalog_data import SEED_MODELS
     if model not in ACCEPTED_MIMO_IDS:
         return False
     try:
         cfg = json.loads(env['OPENCODE_CONFIG_CONTENT'])
         provider, key = model.split('/', 1)
-        block = cfg['providers'][provider]
-        entry = block['models'][key]
-        if (not isinstance(entry, dict) or
-                entry.get('package', block.get('package')) != '@opencode/ai/providers/openai-compatible'):
+        block = cfg.setdefault('providers', cfg.get('provider', {})).setdefault(provider, {})
+        entry = block.setdefault('models', {}).setdefault(key, {})
+        if not isinstance(entry, dict) or not isinstance(entry.get('body', {}), dict):
             return False
-        body = entry.setdefault('body', {})
-        if not isinstance(body, dict) or body.get('thinking') == {'type': 'disabled'}:
-            return False
-        body['thinking'] = {'type': 'disabled'}
+        maximum = next(row['max_output_tokens'] for row in SEED_MODELS if row['model_id'] == model)
+        entry.setdefault('limit', {})['output'] = maximum
+        # Older harnesses also clamp model.limit.output by this process-wide default (32000).
+        env['OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX'] = str(maximum)
         env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
         return True
-    except (KeyError, ValueError, TypeError, AttributeError):
+    except (KeyError, ValueError, TypeError, AttributeError, StopIteration):
         return False
 
 
