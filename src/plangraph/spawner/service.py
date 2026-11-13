@@ -338,6 +338,9 @@ class SpawnService(SeatSpawnMixin):
                         job.exit_code = job.exit_code or 1
                     reason = unavailable or (('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}')
                         if job.status in ('failed', 'skipped') else None)
+                    # A stopped seat did not fill its slot, even when the harness exited successfully.
+                    if stop and any(slot.get('seat_group') for slot in plan.seat_coverage):
+                        reason = reason or 'provider_stop'
                     stop_status = stop.get('status') if isinstance(stop, dict) else None
                     down_token = (unavailable or '').split(':', 1)[0].strip()
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
