@@ -260,7 +260,7 @@ pub(super) fn oversized_exited_child_does_not_kill_group() {
 }
 
 #[test]
-fn oversized_hung_producer_is_a_bounded_timeout_not_too_large() {
+fn stalled_producer_below_cap_is_a_bounded_timeout() {
     // A stalled prefix is not evidence that the diff exceeds the cap.
     assert!(deadline_ends_wait("hung", 4096) < Duration::from_millis(500));
 }
