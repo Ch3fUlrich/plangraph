@@ -2,7 +2,7 @@
 """Pre-push gate: public scrub (D-1751) + 400-line file size (AO-400LOC, D-3198).
 
 Runs scrub rules over committed blobs in the pushed range, including preflight;
-new branches use the nearest known origin merge-base, with origin/main as fallback.
+new branches scrub from origin/main and select affected tests from their nearest remote base.
 When origin/main is available, identical upstream/base blobs and inherited lines
 are excluded; without it the stricter whole-file scan remains in effect.
 PLANGRAPH_SCRUB_WORDS overrides ~/.config/plangraph/scrub-words.txt; an explicit
@@ -47,7 +47,7 @@ def git_out(*args):
     return r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
 
 
-def base_commit(remote_sha, local_sha):
+def affected_base_commit(remote_sha, local_sha):
     """What the pushed commits add: the remote sha when the push fast-forwards,
     else a merge-base; a new branch uses its nearest remote merge-base, and
     with no usable base at all, everything in the pushed commits is checked."""
@@ -73,6 +73,15 @@ def base_commit(remote_sha, local_sha):
         if best:
             return best
     return git_out("hash-object", "-t", "tree", "--stdin")
+
+
+def base_commit(remote_sha, local_sha):
+    """Public scrub must cover inherited stacked history on a new remote branch."""
+    if not is_zero(remote_sha):
+        return affected_base_commit(remote_sha, local_sha)
+    main = git_out('rev-parse', '--verify', '-q', 'refs/remotes/origin/main^{commit}')
+    base = git_out('merge-base', main, local_sha) if main else ''
+    return base or git_out('hash-object', '-t', 'tree', '--stdin')
 
 
 def main_baselines(local_sha):
@@ -262,7 +271,8 @@ def push_main():
     if os.environ.get("PREFLIGHT_SKIP") != "1" and preflight.is_file():
         for _, local_sha, _, remote_sha in refs:
             command = [sys.executable, str(preflight),
-                       "--base", base_commit(remote_sha, local_sha), "--head", local_sha]
+                       "--base", affected_base_commit(remote_sha, local_sha),
+                       "--scrub-base", base_commit(remote_sha, local_sha), "--head", local_sha]
             if os.environ.get("PREFLIGHT_FAST") == "1":
                 command.append("--fast")
             # Per-check deadlines govern, including the possible INFRA retry.

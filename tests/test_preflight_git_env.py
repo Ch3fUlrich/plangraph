@@ -131,3 +131,12 @@ def test_missing_cargo_stops_selected_placement_tests(repo, monkeypatch, capsys)
     assert module.main(root=repo) == 1
     assert not calls
     assert capsys.readouterr().err.splitlines() == ['CARGO FAIL: cargo is required for selected placement tests']
+
+
+def test_preflight_keeps_scrub_base_separate_from_affected_base(repo, monkeypatch):
+    calls = fake_runner(monkeypatch)
+    assert preflight.main(['--base', 'HEAD', '--scrub-base', 'scrub-start', '--fast'], repo) == 0
+    command = calls[0][0]
+    assert command[command.index('--base') + 1] == 'scrub-start'
+    policy = next(command for command, _, _ in calls if Path(command[1]).name == 'ci_commit_gate.py')
+    assert policy[policy.index('--base') + 1] == 'HEAD'

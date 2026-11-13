@@ -114,6 +114,7 @@ def main(argv=None, root=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="origin/main")
     parser.add_argument("--head", default="HEAD")
+    parser.add_argument("--scrub-base", help="scrub range start when affected tests use a nearer base")
     parser.add_argument("--fast", action="store_true")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--keep-going", action="store_true", help="default behaviour")
@@ -135,7 +136,7 @@ def main(argv=None, root=None):
     def python(name, *extra):
         return [sys.executable, str(tools / name), *extra]
 
-    scrub = python("split/scrub_check.py", ".", "--base", args.base, "--head", args.head,
+    scrub = python("split/scrub_check.py", ".", "--base", args.scrub_base or args.base, "--head", args.head,
                    "--rules", str(tools / "split/manifest.toml"),
                    "--rules", str(tools / "split/scrub_ci.toml"))
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS")
@@ -146,7 +147,7 @@ def main(argv=None, root=None):
     elif default_words.exists():
         words = str(default_words)
     if words:
-        scrubs.append(python("preflight_private_scrub.py", "--base", args.base,
+        scrubs.append(python("preflight_private_scrub.py", "--base", args.scrub_base or args.base,
                              "--head", args.head, "--words", words))
     tests = python("affected_tests.py", "--base", args.base, "--head", args.head,
                    "--root", str(root), "--run")
