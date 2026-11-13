@@ -131,6 +131,22 @@ class Compaction(GuardCase):
         self.assertEqual(self.hook().stdout, "")
         self.assertFalse(self.state_file().exists())
 
+    def test_missing_compaction_module_keeps_hard_cap_guidance(self):
+        import io
+        self.write(usage_line(inp=301000))
+        payload = json.dumps({"transcript_path": str(self.transcript), "session_id": SID, "cwd": "/w/x"})
+        with patch.dict(sys.modules, {"context_compaction": None}), \
+                patch.dict(os.environ, self.env(), clear=True), \
+                patch("sys.stdout", new_callable=io.StringIO) as out:
+            guard = load_module("context_guard")
+            with patch.object(guard, "read_stdin_text", return_value=payload):
+                self.assertEqual(guard.run_hook(), 0)
+            self.assertIn("HARD-CAP ctx=301k >= 300k", out.getvalue())
+            text = json.loads(out.getvalue())["hookSpecificOutput"]["additionalContext"]
+            self.assertEqual(text, guard.emit_line("hard", 301000, 300000))
+        scan_path = self.state_file().parent.with_name("ctx-guard-scan") / (SID + ".scan")
+        self.assertFalse(scan_path.exists())
+
     def test_deliberate_difference_persistence_failure_does_not_hide_warning(self):
         import io
         guard = load_module("context_guard")

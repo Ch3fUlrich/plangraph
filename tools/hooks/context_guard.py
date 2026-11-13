@@ -221,16 +221,20 @@ def run_hook() -> int:
             return 0
         handoff, hard = resolve_thresholds()
         hard = max(hard, handoff)  # a garbled pair must never hide or misreport the hard cap
-        from context_compaction import scan
+        try:
+            from context_compaction import scan
+        except ImportError:
+            scan = None
         # Independent cursor survives clearing below-threshold announce state.
         scan_path = state_dir().with_name("ctx-guard-scan") / ("%s.scan" % session_id)
         try:
             previous = json.loads(read_text_capped(scan_path))
         except (OSError, ValueError):
             previous = None
-        scanned = scan(transcript_path, previous)
+        scanned = scan(transcript_path, previous) if scan else None
         stored = read_state(session_id) or {}
-        boundary = scanned.get("boundary") if scanned.get("fleet") else None
+        scan_state = scanned or {}
+        boundary = scan_state.get("boundary") if scan_state.get("fleet") else None
         compact = bool(boundary)
         if ctx < handoff and not compact:
             clear_state(session_id)  # back under the line (compaction): the next climb is announced afresh
