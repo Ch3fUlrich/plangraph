@@ -223,6 +223,7 @@ class SeatSpawnMixin:
             options.setdefault('cwd', record['cwd'])
         async def launch(prompt_record, **kwargs):
             job = await self.runner.spawn(prompt_record=prompt_record, **kwargs)
+            record['launched_leg'] = asdict(chosen)
             self._running_records[job.job_id] = record
             process = self.runner._processes.get(job.job_id)
             owned = getattr(self.runner, '_owned', {}).get(job.job_id, {})

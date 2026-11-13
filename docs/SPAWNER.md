@@ -707,3 +707,9 @@ Gateway routes and explicit launches refuse with `gateway not configured` before
 Prompt-only review legs always receive the card diff inline, including explicit document-mode overrides. A missing diff refuses the launch. Completed prompt-only records whose dispatched `prompt.txt` lacks patch data have `verdict_status=void` and `verdict_void_reason=prompt_only_no_diff`; no review evidence is published.
 
 `pg-spawnd review-probe` schedules tiny OK-answer probes for every active review route leg, including booked-down legs for recovery. It uses the isolated probe bridge and shared admission store. A failed review answer books the leg down immediately. MiMo review launches and probes disable thinking from their first request (`reasoning_cap=0` in the run record). Missing management credentials produce one routing-outbox notice per outage.
+
+Implement cards bind the requested `writer_family` (default: the first writer
+family in operator order) before availability checks. Only boolean
+`allow_family_fallthrough: true` permits another writer family. Exhausting the
+bound family returns `writer_family_unavailable`. Run records name
+`launched_leg` even when that harness subsequently fails.

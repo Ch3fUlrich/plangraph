@@ -109,3 +109,6 @@ on line 57. The full suite was not run, following the brief's final prohibition
 on whole-suite runs; no test was skipped or weakened to hide those failures.
 
 Gateway legs require a configured child base URL and client credential before routing. The skip reason names `gateway not configured`; direct subscription legs retain their own admission.
+
+Writer family selection precedes health filtering. A down writer family cannot
+silently select a different family unless the card allows family fallthrough.
