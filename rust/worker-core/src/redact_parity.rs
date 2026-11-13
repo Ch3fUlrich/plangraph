@@ -24,7 +24,8 @@ struct Row {
     #[serde(default)]
     input_parts: Vec<String>,
     expected: Option<Text>,
-    // D-5279 R3: Python retains quoted values' quotes; Rust drops them.
+    // D-5279 R3: Python retains value quotes and quotes NEW JSON scalars;
+    // Rust drops quoted values' quotes and keeps its unquoted stop characters.
     rust_expected: Option<Text>,
     source: Option<Text>,
     output: Option<Text>,

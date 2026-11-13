@@ -36,14 +36,29 @@ Python and Rust order: complete/truncated PEM, Bearer, then plain-mode pre-pass 
 shield every matched assignment's name/quote/separator with an indexed marker
 `U+E000 + decimal index + U+E001`, leaving values untouched; run the wrapped join,
 then restore the names.
-Python now includes Rust's case-insensitive assignment-name set:
+Python plain-mode assignments use two case-insensitive name classes. OLD names
+are exactly main's `\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)` followed by its
+optional quote and separator. Their separator (`\s*[=:]\s*`), value matching and
+kept value quotes are unchanged, including cross-line whitespace and unquoted
+values running to line end. NEW names are the remaining Rust credential names:
 `[A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*`,
-including `MY_SECRET`, `DB_PASSWORD`, `AUTH_TOKEN`, `max_tokens` and `token_count`;
-Python also retains `PG_DSN` and `\w*_KEY`. P uses the same widened Python rule.
-The D-5279 R3 value difference remains: Python keeps quoted-value quotes, Rust
-drops them, explicitly recorded as `expected` versus `rust_expected` in the shared
-parity fixture. Separator whitespace and value/closing-delimiter rules remain
-language-specific; this change widens only Python's credential names.
+including `MY_SECRET`, `DB_PASSWORD`, `AUTH_TOKEN`, `max_tokens` and `token_count`.
+NEW separators use horizontal whitespace only (`[^\S\r\n]*[=:][^\S\r\n]*`).
+Their values follow Rust rules rs[3] and rs[4]: unquoted values stop at line ends,
+closing braces, closing brackets, closing parentheses or `&`, not commas or spaces;
+backslash-newline continues a value. Complete quoted values and placeholders
+consume only a glued tail, and Python keeps complete value quotes (D-5279 R3).
+One additional D-5279 R3 exception applies only to NEW double-quoted JSON-style
+keys with a colon: a bare number (`-?\d[\d.eE+-]*`), `true`, `false` or `null`,
+ending at a comma, closing brace, closing bracket, whitespace or line end, is
+replaced by the JSON string `"[REDACTED]"`. It is never left readable, even for
+numeric credentials. Later fields and usage-limit error status remain parseable;
+each following assignment is still scrubbed. String values keep their quotes;
+container values keep Rust's shape, which can cut JSON structure. OLD keys do not
+get this exception. Differences use explicit `expected` and `rust_expected` shared
+fixtures. A keyword lookahead followed by a possessive whole-name scan avoids
+retrying each keyword occurrence on separator-free runs. P shields both classes
+using the same combined assignment matcher; Rust production rules are unchanged.
 P is skipped entirely if either shield character already occurs in the text.
 Then main's order runs: full assignments, wrapped prefixed tokens, URL userinfo,
 token catalog and JWT. The shielded join cannot cross/eat a credential name while

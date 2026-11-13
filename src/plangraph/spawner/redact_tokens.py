@@ -35,6 +35,44 @@ _PREFIX = re.compile(r'\b(?:' + '|'.join('(' + s.prefix + ')' for s in SPECS) + 
 _BODY = tuple(re.compile(s.body + '+') for s in SPECS)
 
 
+# Check for a keyword once, then consume the whole name without retrying every
+# keyword occurrence when the separator is absent (TOKEN repeated took >80 s).
+_NEW_NAME = (r'(?=[A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|'
+             r'ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL))[A-Za-z0-9_]++')
+_OLD_VALUE = r'''"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+'''
+# Rust rs[3]/rs[4]: complete quotes and placeholders consume a glued tail;
+# unquoted values stop at closing delimiters or &, not commas or spaces.
+# Possessive repetitions keep failed complete quotes/continuations linear.
+_NEW_VALUE = (
+    r'''(?P<quoted>"(?:[^"\\\n]|\\(?:\r?\n|.))*+"|'''
+    r"'(?:[^'\\\n]|\\(?:\r?\n|.))*+')" + r'''[^\s,;"'}\])&]*+|'''
+    r'''\[REDACTED\](?:\[REDACTED\]|[^\s,;"'}\])&])*+|'''
+    r'''(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*+|'''
+    r'''"(?:\\\r?\n|[^\n\r])*+|'(?:\\\r?\n|[^\n\r])*+|'''
+    r'(?(equals)[}\])][^\n\r}\])&]++|(?!))')
+_ASSIGNMENT = re.compile(
+    r'''(?im)((?:["'])?\b(?P<old>\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'''
+    r'''(?:["'])?\s*[=:]\s*|(?P<json>"\b''' + _NEW_NAME +
+    r'''"[^\S\r\n]*:[^\S\r\n]*)|(?:["'])?\b''' + _NEW_NAME +
+    r'''(?:["'])?[^\S\r\n]*(?:(?P<equals>=)|:)[^\S\r\n]*)'''
+    r'(?(old)(?:' + _OLD_VALUE + r')|(?:(?(json)(?P<scalar>'
+    r'-?\d[\d.eE+-]*|(?-i:true|false|null))(?=[,}\]\s]|$)|(?!))|'
+    + _NEW_VALUE + r'))')
+
+
+def _redact_assignments(text):
+    def replace(m):
+        if m['scalar'] is not None:
+            # D-5279 R3: NEW double-quoted JSON keys only. Always mask the
+            # scalar, including numeric credentials, but preserve later fields.
+            return m[1] + '"[REDACTED]"'
+        value = m[0][len(m[1]):] if m['old'] else m['quoted']
+        return m[1] + (value[0] + '[REDACTED]' + value[-1]
+                       if value and value[0] in '"\x27' and value[-1] == value[0]
+                       else '[REDACTED]')
+    return _ASSIGNMENT.sub(replace, text)
+
+
 def join_shielded_assignments(text, assignment):
     """P: join untouched values without crossing or eating a credential name."""
     if '\ue000' in text or '\ue001' in text:

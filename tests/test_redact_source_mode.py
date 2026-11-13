@@ -171,7 +171,8 @@ def test_direct_caller_prompt_keeps_full_strength(monkeypatch, tmp_path):
 def test_widened_names_stay_readable_only_in_producer_source_spans(monkeypatch, tmp_path, name):
     text = name + '=ordinary_expression()\n'
     assert env_redact.redact_source(text) == text
-    assert capture(monkeypatch, tmp_path, text) == name + '=[REDACTED]\n'
+    # NEW names follow Rust's closing-delimiter stop; source spans stay intact.
+    assert capture(monkeypatch, tmp_path, text) == name + '=[REDACTED])\n'
     assert '+' + text in capture(monkeypatch, tmp_path,
                                 diff_prompt(monkeypatch, tmp_path, extra=text))
     (tmp_path / 'sample.py').write_text(text)
