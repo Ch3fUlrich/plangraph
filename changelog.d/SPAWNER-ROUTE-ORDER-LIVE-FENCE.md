@@ -1,0 +1,1 @@
+- The live default route (`SpawnService.route`) never routes legacy Gemini 3.8 Flash or GPT-6 Luna identities (D-5696) and never auto-routes an argon leg for review (D-5648); explicit pins and `plan_spawn` with explicit legs are unchanged.

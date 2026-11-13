@@ -24,6 +24,7 @@ SUBS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v
 WRITERS = [*SUBS[:2], "openrouter-free", "opencode-big-pickle", "agy-gemini-4-argon",
            "mimo-v2.6-flash", "mimo-v2.6-pro", "omniroute-deepseek-flash",
            "omniroute-muse-spark", "deepseek"]
+LIVE_WRITERS = [i for i in WRITERS if i != "agy-gemini-3.8-flash"]  # D-5696: legacy is off the live route
 
 
 @pytest.fixture(autouse=True)
@@ -150,7 +151,7 @@ def test_cli_route_implement_gpt_first_no_claude_writer(tmp_path, capsys):
                  "--role", "implement", "--json"]) == 0
     plan = json.loads(capsys.readouterr().out)
     ids = [leg["id"] for leg in plan["legs"]]
-    assert ids == WRITERS
+    assert ids == LIVE_WRITERS
     assert "agy-sonnet-5.5" not in ids and "agy-opus-5.5" not in ids
     assert [leg["id"] for leg in plan["legs"] if leg["claude_family"]] == []
 
@@ -214,9 +215,9 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    assert ids[:4] == ["agy-gemini-3.8-flash", "opencode-big-pickle", "opencode-gemini-4-argon", "mimo-v2.6-flash"]
+    assert ids[:2] == ["opencode-big-pickle", "mimo-v2.6-flash"]  # D-5696/D-5648: no legacy flash, no argon
     assert DISABLED_FREE.isdisjoint(ids)
-    assert ids.index("agy-gemini-3.8-flash") == 0
+    assert not any(i in ids for i in ("agy-gemini-3.8-flash", "opencode-gemini-4-argon", "agy-gemini-4-argon"))
 
 
 def test_route_sol_unavailable_keeps_tier_writer_order():

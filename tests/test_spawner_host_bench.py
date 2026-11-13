@@ -97,7 +97,7 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     plan = route_json(tmp_path, capsys, "--bench-db", str(db))
     assert plan["p_source"] == "benchmark"
     by_leg = {c["leg"]: c for c in plan["candidates"]}
-    for leg in ("agy-gemini-3.8-flash", "mimo-v2.6-flash"):
+    for leg in ("mimo-v2.6-flash", "mimo-v2.6-pro"):
         assert by_leg[leg]["u_core"] is not None, leg
         assert by_leg[leg]["p_source"] == "measured", leg
     # Without a DB: no p anywhere and the order is today's operator order.
@@ -106,9 +106,8 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
     # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
     assert [leg["id"] for leg in bare["legs"]] == [
-        "agy-gemini-3.8-flash", "opencode-big-pickle", "opencode-gemini-4-argon", "agy-gemini-4-argon",
-        "agy-gpt-oss-120b", "omniroute-deepseek-flash", "omniroute-muse-spark",
-        "opencode-go-gemini-4-argon", "opencode-go-muse-spark", "opencode-console-muse-spark",
+        "opencode-big-pickle", "agy-gpt-oss-120b", "omniroute-deepseek-flash", "omniroute-muse-spark",
+        "opencode-go-muse-spark", "opencode-console-muse-spark",
         "opencode-go-deepseek-v4-flash",
         ]
 
@@ -120,14 +119,14 @@ def test_review_route_ignores_ambient_catalog_tiers(tmp_path, capsys, monkeypatc
     reads = []
     def ambient_catalog():
         reads.append(1)
-        return [{'id': 'agy/gemini-3.8-flash', 'tier': 'paid', 'available': 1, 'active': True}]
+        return [{'id': 'opencode/big-pickle', 'tier': 'paid', 'available': 1, 'active': True}]
 
     monkeypatch.setattr(resolver, 'get_catalog_models', ambient_catalog)
     # Positive control: an unpinned CLI route reads this snapshot and changes order.
     ambient = route_json(tmp_path, capsys)
     assert reads == [1]
-    assert next(c for c in ambient['candidates'] if c['leg'] == 'agy-gemini-3.8-flash')['tier'] == 'paid'
-    assert ambient['first_leg']['id'] == 'opencode-big-pickle'
+    assert next(c for c in ambient['candidates'] if c['leg'] == 'opencode-big-pickle')['tier'] == 'paid'
+    assert ambient['first_leg']['id'] != 'opencode-big-pickle'
     test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch)
     assert reads == [1]  # The exact-order probe must inject its own catalog input.
 
