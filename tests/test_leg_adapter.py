@@ -375,3 +375,18 @@ def test_snapshot_probe_sharing_is_loop_hermetic(snapshot_failure, monkeypatch):
         case.events.clear()
         asyncio.run(run())
         assert case.events.count('probe') == 1
+
+
+@pytest.mark.parametrize('probe_reason', ['', None, 'unknown', ' Unknown '])
+def test_snapshot_error_probe_without_reason_is_named_not_unknown(snapshot_failure, monkeypatch, probe_reason):
+    import asyncio
+    from plangraph.spawner import leg_probe
+
+    async def probe(runner, leg, **kwargs):
+        return dict(ok=False, reason=probe_reason, infra=False)
+
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '0')
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    case = snapshot_failure
+    reason = asyncio.run(leg_probe.before_launch(case.runner, case.leg, 'review', False))
+    assert reason == 'leg_state_snapshot_error: OSError: snapshot unavailable; probe: leg_probe_failed'
