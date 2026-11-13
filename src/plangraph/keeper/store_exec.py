@@ -9,7 +9,7 @@ from .errors import Refused
 class ExecMixin:
     """Transactional exec ownership and retired-run fencing."""
 
-    def _exec_project(self, conn, item, run, principal, now):
+    def _exec_project(self, conn, item, run, principal, now, run_ord=None):
         """Install the watermark-ordered history owner in the state transaction."""
         from .store_cards import _exec_parts, _load_list
         self._require_role(principal, "system")
@@ -20,9 +20,18 @@ class ExecMixin:
             raise Refused("exec_stale", "projected run has been retired")
         if same and attempt <= item["exec_attempt"]:
             return
-        if not same and item["exec_run_id"] is not None:
-            self._exec_clear(conn, item["key"], principal, now)
+        # A worker-recorded owner has no proven history order yet. Never let
+        # an unrelated/older history retire it just because its watermark lags.
         holder = item["exec_principal"] if same else (item["delegate"] or item["claimed_by"])
+        if not same and item["exec_run_id"] is not None:
+            mark = conn.execute(
+                "SELECT run_id, run_ord FROM projector_watermark WHERE workflow_id=?",
+                (wf,)).fetchone()
+            if (wf != item["exec_workflow_id"] or mark is None
+                    or mark["run_id"] != item["exec_run_id"] or run_ord is None
+                    or run_ord <= mark["run_ord"]):
+                raise Refused("exec_stale", "projected run is not proven newer than owner")
+            self._exec_clear(conn, item["key"], principal, now)
         conn.execute("UPDATE items SET exec_workflow_id=?, exec_run_id=?, exec_attempt=?,"
                      " exec_principal=?, updated_at=? WHERE key=?",
                      (wf, run_id, attempt, holder, self._iso(now), item["key"]))

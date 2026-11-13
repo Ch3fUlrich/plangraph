@@ -114,10 +114,16 @@ def test_alarm_is_per_run_and_activity_and_survives_reconcile(world, projector, 
     assert len(alarms(world)) == 2                             # a reconcile pass never clears them
 
 
-def test_every_worker_activity_is_a_known_type():
+@pytest.mark.parametrize("bare_attrs", ["", None])
+def test_every_worker_activity_is_a_known_type(monkeypatch, bare_attrs):
     """Drift guard: each ``#[activity]`` fn of the Rust worker (the question ones too) is known."""
     import re
     from plangraph.projector.models import KNOWN_ACTIVITY_TYPES
+    findall = re.findall
+    def optional_groups(pattern, source):
+        found = findall(pattern, source)
+        return [(attrs or bare_attrs, name) for attrs, name in found] if "pub async fn" in pattern else found
+    monkeypatch.setattr(re, "findall", optional_groups)
     src = (ROOT / "rust/worker/src/activities.rs").read_text()
     activities = re.findall(r'#\[activity(?:\(([^]]*)\))?\]\s+pub async fn (\w+)', src)
     assert len(activities) == len(re.findall(r"(?m)^\s*#\[activity(?:\(|\])", src))
@@ -126,7 +132,7 @@ def test_every_worker_activity_is_a_known_type():
     assert len(names) >= 1, "parsed no #[activity] fn names from activities.rs"
     assert {"attempt", "observe", "ask_question", "record_question_timeout", "janitor"} <= set(names)
     for attrs, name in activities:
-        override = re.search(r'\bname\s*=\s*"([^"]+)"', attrs)
+        override = re.search(r'\bname\s*=\s*"([^"]+)"', attrs or "")
         wire_name = override[1] if override else f"CardActivities::{name}"
         assert wire_name in KNOWN_ACTIVITY_TYPES, wire_name
 
@@ -140,6 +146,17 @@ def test_observe_question_park_fixture_projects_without_alarm(world, projector):
     assert [s.state for s in proj.states] == ["running", "needs_input", "parked"]
     assert projector.apply_run(proj, run_ord=1).states_written == 3
     assert alarms(world) == []
+
+
+def test_observe_fixture_uses_wire_payload_and_nondefault_attempt():
+    from plangraph.projector.history import decode_payload
+    h = json.loads((ROOT / "rust/worker/tests/fixtures/projector/observe_park.json").read_text())
+    payload = events(h, "ACTIVITY_TASK_SCHEDULED")[0][
+        "activityTaskScheduledEventAttributes"]["input"]["payloads"][0]
+    assert decode_payload(payload) == {"n": 3}
+    p = project_history(_expand_data_json(h), workflow_id="card:demo:A", run_id="r2")
+    assert [s.attempt for s in p.states] == [3, 3, 3]
+    assert p.shape_issues == ()
 
 
 def test_rebuild_from_history_yields_identical_alarm_rows_twice(world, projector):
@@ -184,3 +201,38 @@ def test_card_workflow_with_one_unknown_activity_raises_exactly_one(world, proje
 def test_plan_key_memo_marks_a_card_workflow_whatever_its_type(world, projector):
     h = with_mystery(load(ROOT / "tests/fixtures/temporal/01_ok_single.json"), "Renamed")
     assert len(project_history(h, workflow_id="x", run_id="r1").shape_issues) == 1
+
+
+@pytest.mark.parametrize("bad,detail", [
+    ({"workflow_id": "other"}, "attempt input execution identity differs from history"),
+    ({"run_id": "other"}, "attempt input execution identity differs from history"),
+    *[({field: value}, "attempt input n must be a positive int32")
+      for field in ("n", "attempt") for value in (0, -1, True, "2", None, 2**31)],
+])
+def test_bad_attempt_input_is_an_alarm_not_a_projection_outage(world, projector, bad, detail):
+    import base64
+    from test_keeper_exec_projector_path import history, event
+    h = history("needs_input")
+    h["events"][1]["activityTaskScheduledEventAttributes"]["input"] = {"payloads": [{
+        "metadata": {"encoding": "anNvbi9wbGFpbg=="},
+        "data": base64.b64encode(json.dumps(bad).encode()).decode()}]}
+    # A later valid attempt must still project; no poisoned attempt number leaks.
+    h["events"] = h["events"][:4] + [event(5, "ACTIVITY_TASK_SCHEDULED",
+        activityId="attempt-2", activityType={"name": "attempt"})]
+    p = project_history(h, workflow_id="card:demo:A", run_id="r1")
+    assert [i.detail for i in p.shape_issues] == [detail]
+    assert p.shape_issues[0].activity_id == "attempt-1"
+    assert p.attempts == ()
+    assert [(s.event_id, s.state, s.attempt) for s in p.states] == [(5, "running", 2)]
+    projector.apply_run(p, run_ord=0)
+    assert len(alarms(world)) == 1
+
+
+def test_worker_lock_includes_core_manifest_dependencies():
+    import tomllib
+    manifest = tomllib.loads((ROOT / "rust/worker-core/Cargo.toml").read_text())
+    lock = tomllib.loads((ROOT / "rust/worker/Cargo.lock").read_text())
+    core = next(p for p in lock["package"] if p["name"] == "pg-worker-core")
+    assert set(manifest["dependencies"]) <= {d.split()[0] for d in core["dependencies"]}
+    assert {"clock", "std"} <= set(manifest["dependencies"]["chrono"]["features"])
+    assert "use chrono::" in (ROOT / "rust/worker-core/src/writer_docs_map.rs").read_text()

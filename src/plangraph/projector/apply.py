@@ -149,7 +149,7 @@ class Projector:
         else:
             try:
                 out = self.store.project_state(self.principal, rec.plan_key, rec.state,
-                    (rec.reason or "")[:_REASON_CAP], run=(wf, run, rec.attempt))
+                    (rec.reason or "")[:_REASON_CAP], run=(wf, run, rec.attempt), run_ord=run_ord)
             except Refused as exc:
                 # ``bad_state``/``locked``: the item moved under us.
                 # ``bad_transition`` (RT-P1 sq5 fix 3): a late projection whose
@@ -160,7 +160,7 @@ class Projector:
                     raise
                 result.states_skipped_state += 1
             else:
-                if state == "claimed":
+                if state == "claimed" or rec.state == "claimed":
                     result.states_skipped_state += 1
                 elif out["changed"]:
                     result.states_written += 1

@@ -113,6 +113,7 @@ Tables (migration 3, `ddl.py`, PG and SQLite variants, created only through the 
 * `projector_alarms(id, kind, workflow_id, key, detail, raised_at, cleared_at)`; open = `cleared_at IS NULL`.
 
 Writes go through the keeper `Store` (`record_attempt`, system-only `project_state`), never raw SQL on keeper tables. State writes carry `(workflow_id, run_id, attempt)` from history; the Rust scheduled input carries the same identity behind `projector-run-ids-v1` for replay compatibility. The card attempt is input `attempt`/`n` (legacy fallback: scheduled-attempt ordinal), never the activity retry count. Claim state is preserved while ownership is recorded, so a stale worker arriving before the live worker gets `exec_stale`. Newer projected runs retire prior owners; old watermark events and retired runs cannot reacquire ownership.
+Supersession requires a watermark for the current owner and a strictly greater `run_ord`; an owner recorded by a worker but not yet projected cannot be displaced by an unordered history. A `claimed` projection records ownership only. Mismatched attempt identities and invalid attempt numbers raise an `unknown_shape` alarm and skip that activity, not the workflow.
 * Attempt `n` = next number for the key in history order, taken from `projector_applied` order; row fields `workflow_id`,
   `run_id`, `log_ref = "temporal:<activity_id>:<attempt>"`. Crash window (attempt row written, applied row not): on `Refused
   conflict` for that n, if the existing row has the same workflow_id/run_id/log_ref, just insert the applied row.
@@ -143,6 +144,8 @@ Writes go through the keeper `Store` (`record_attempt`, system-only `project_sta
   `projector_alarms`.
 
 ## Tests
+
+The worker lock's `chrono`/clock dependencies are required by the existing `rust/worker-core/Cargo.toml` (writer docs-map dates and turn-budget transcript timestamps), not by projector identity inputs. `test_worker_lock_includes_core_manifest_dependencies` pins this manifest/lock relationship; removing those entries makes locked Cargo resolution stale.
 
 Hermetic: recorded history fixtures under `tests/fixtures/temporal/` (recorded once from a local dev server by
 `tests/projector_record.py`), parser tests, apply/idempotency/forward-only/rebuild/reconciler tests on SQLite and, when

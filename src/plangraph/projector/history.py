@@ -171,11 +171,18 @@ def project_history(history: dict, *, workflow_id: str, run_id: str) -> RunProje
             if atype in ATTEMPT_ACTIVITY_TYPES:
                 scheduled_attempts += 1
                 inp = _dict(_first_payload(attrs.get("input")))
-                attempt_no = inp.get("attempt", inp.get("n", scheduled_attempts))
+                number = inp.get("attempt", inp.get("n", scheduled_attempts))
+                problem = None
                 if (inp.get("workflow_id", workflow_id), inp.get("run_id", run_id)) != (workflow_id, run_id):
-                    raise ValueError("attempt input execution identity differs from history")
-                if type(attempt_no) is not int or not 1 <= attempt_no <= 2**31 - 1:
-                    raise ValueError("attempt input n must be a positive int32")
+                    problem = "attempt input execution identity differs from history"
+                elif type(number) is not int or not 1 <= number <= 2**31 - 1:
+                    problem = "attempt input n must be a positive int32"
+                if problem:
+                    if card:
+                        issues.append(ShapeIssue(workflow_id, run_id,
+                                                str(attrs.get("activityId", "")), problem))
+                    continue
+                attempt_no = number
                 acts[eid] = {"activity_id": str(attrs.get("activityId", "")), "attempt": 1,
                              "started_at": None}
                 open_acts.add(eid)

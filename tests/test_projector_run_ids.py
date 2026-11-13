@@ -1,21 +1,19 @@
 """Projector-established execution ownership, through the real history/apply path."""
 import pytest
 
-from keeper_util import World, seed, to_claimed
+from keeper_util import seed, to_claimed
 from plangraph.keeper.errors import Refused
 from plangraph.projector.apply import Projector
 from plangraph.projector.history import project_history
 from test_keeper_exec_projector_path import history
-from test_keeper_worker_principal import require_backend
+from test_keeper_worker_principal import scoped
 
 
-@pytest.fixture(params=["sqlite", "postgres"])
-def world(tmp_path, request):
-    require_backend(request.param)
-    w = World(tmp_path, backend=request.param)
+@pytest.fixture
+def world(scoped):
+    w, _ = scoped
     seed(w, [("A", [])])
-    yield w
-    w.close()
+    return w
 
 
 def project(w, run="R2", *, ordinal=1, attempt=1):
@@ -52,7 +50,9 @@ def test_r2_projection_fences_r1_before_any_worker_fact(world, claimed, verb):
             body.update(reason="question")
         else:
             body.update(n=1, exit_class="ok")
-        return getattr(w.store, "worker_" + verb)(w.p("workerA"), body)
+        method = getattr(w.store, "worker_" + verb, None)
+        assert callable(method), f"missing worker verb: {verb}"
+        return method(w.p("workerA"), body)
     with pytest.raises(Refused) as exc:
         call("R1")
     assert exc.value.code == "exec_stale"
@@ -94,3 +94,71 @@ def test_second_scheduled_attempt_advances_owner_even_while_running(world):
     p = project_history(h, workflow_id="card:demo:A", run_id="R2")
     Projector(world.store, world.p("system")).apply_run(p, run_ord=1)
     assert world.store._item("demo:A")["exec_attempt"] == 2
+
+
+@pytest.mark.parametrize("claimed", [False, True])
+def test_claimed_projection_records_only_owner(world, claimed):
+    from dataclasses import replace
+    if claimed:
+        to_claimed(world, "demo:A", "workerA")
+    before = dict(world.store._item("demo:A"))
+    p = project_history(history("ok"), workflow_id="card:demo:A", run_id="R2")
+    p = replace(p, states=(replace(p.states[0], state="claimed"),))
+    result = Projector(world.store, world.p("system")).apply_run(p, run_ord=1)
+    assert (result.states_written, result.states_skipped_state) == (0, 1)
+    item = world.store._item("demo:A")
+    assert item["exec_run_id"] == "R2"
+    assert all(item[k] == before[k] for k in (
+        "state", "claimed_by", "delegate", "epoch", "lease_until"))
+    assert world.store.verify_integrity() == []
+
+
+@pytest.mark.parametrize("done", [False, True])
+def test_claimed_target_does_not_bypass_keeper_owned_states(world, done):
+    from keeper_util import to_in_review, pass_review
+    to_in_review(world, "demo:A")
+    if done:
+        pass_review(world, "demo:A")
+    before = dict(world.store._item("demo:A"))
+    with pytest.raises(Refused) as exc:
+        world.store.project_state(world.p("system"), "demo:A", "claimed", "history",
+                                  run=("card:demo:A", "R2", 1))
+    assert exc.value.code == ("locked" if done else "bad_state")
+    assert dict(world.store._item("demo:A")) == before
+
+
+@pytest.mark.parametrize("old_watermark", [False, True])
+def test_worker_recorded_r2_refuses_unordered_r1_projection(world, old_watermark):
+    if old_watermark:
+        project(world, "R0", ordinal=0)
+        world.store.set_state(world.p("router"), "demo:A", "open", hand_back=True)
+    to_claimed(world, "demo:A", "workerA")
+    body = {"card": "demo:A", "reason": "live", **identity()}
+    world.store.worker_alarm(world.p("workerA"), body)
+    before = dict(world.store._item("demo:A"))
+    with pytest.raises(Refused) as exc:
+        world.store.project_state(world.p("system"), "demo:A", "running", "late",
+                                  run=("card:demo:A", "R1", 1))
+    assert exc.value.code == "exec_stale"
+    assert project(world, "R1", ordinal=1).states_skipped_state == 2
+    assert dict(world.store._item("demo:A")) == before
+    world.store.worker_alarm(world.p("workerA"), body)
+    assert world.store._item("demo:A")["exec_run_id"] == "R2"
+    project(world, "R2", ordinal=2)  # Establish R2's order without displacing it.
+    project(world, "R3", ordinal=3)
+    assert world.store._item("demo:A")["exec_run_id"] == "R3"
+    assert world.store.verify_integrity() == []
+
+
+def test_projected_supersession_keeps_claim_and_principal_consistent(world):
+    to_claimed(world, "demo:A")
+    world.store.delegate(world.p("l1main"), "demo:A", "workerA")
+    project(world, "R1", ordinal=0)
+    before = dict(world.store._item("demo:A"))
+    project(world)
+    item = world.store._item("demo:A")
+    assert (item["exec_run_id"], item["exec_principal"]) == ("R2", "workerA")
+    assert all(item[k] == before[k] for k in ("claimed_by", "delegate", "lease_until"))
+    world.store.worker_alarm(world.p("workerA"), {
+        "card": "demo:A", "reason": "live", **identity()})
+    assert world.store.verify_integrity() == []

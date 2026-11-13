@@ -110,17 +110,17 @@ class CardUpdatesMixin:
                 "meter": reading}
 
     # ---------------------------------------------------------------- state
-    def project_state(self, principal, key, state, reason, *, run):
+    def project_state(self, principal, key, state, reason, *, run, run_ord=None):
         """System-only history projection; worker verbs cannot choose the owner."""
         def apply(now):
             self._require_role(principal, "system")
             identity = _exec_parts(key, run)
-            if state not in SETTABLE_STATES:
+            if state not in SETTABLE_STATES and state != "claimed":
                 raise Refused("validation", "projection target must be a settable state")
             return self._apply_state(principal, key, state,
                 _text("reason", reason or "", cap=500, key=key), now,
                 lambda project: self._may_write_for(principal, project),
-                run=identity, projected=True)
+                run=identity, projected=True, run_ord=run_ord)
         return self._run(principal, "set_state", key, apply)
 
     def set_state(self, principal, key, state, reason="", run=None, new_run=False,
@@ -169,7 +169,7 @@ class CardUpdatesMixin:
 
     def _apply_state(self, principal, key, state, why, now, scope,
                      guard=None, release_claim=False, run=None, new_run=False,
-                     hand_back=False, projected=False):
+                     hand_back=False, projected=False, run_ord=None):
         """Move *key* to *state*; *scope(project)* does the authorisation check.
 
         Idempotent: re-applying the state the item already has changes nothing.
@@ -203,12 +203,14 @@ class CardUpdatesMixin:
                 guard(item)
             was = item["state"]
             if projected:
-                if (item["exec_run_id"] == run[1] and was != state
+                if was not in SETTABLE_STATES and was != "claimed":
+                    raise Refused("bad_state", f"{key} is {was}; projection cannot change ownership")
+                if (state != "claimed" and item["exec_run_id"] == run[1] and was != state
                         and not (was in ("waiting", "needs_input") and state == "running")
                         and not _forward(was, state) and was != "claimed"):
                     raise Refused("bad_transition", f"{key}: {was} -> {state} is not forward")
-                self._exec_project(self.conn, item, run, principal, now)
-                if was == "claimed":
+                self._exec_project(self.conn, item, run, principal, now, run_ord)
+                if was == "claimed" or state == "claimed":
                     return {"key": key, "state": was, "changed": False}
             if was not in SETTABLE_STATES and not (release_claim and was == "claimed"):
                 raise Refused("bad_state", f"{key} is {was}; set_state moves only"
