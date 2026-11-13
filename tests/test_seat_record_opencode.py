@@ -43,6 +43,17 @@ def event_log(*events):
     return "\n".join(json.dumps(e) for e in events) + "\n"
 
 
+@pytest.fixture
+def extreme_json_lines():
+    # Python 3.12's C decoder accepts 5,000 levels; exceed its own recursion cap.
+    return ["1" * 5000, "[" * 100000 + "0" + "]" * 100000]
+
+
+@pytest.fixture(params=[0, 1], ids=["integer", "nested"])
+def extreme_json_line(request, extreme_json_lines):
+    return extreme_json_lines[request.param]
+
+
 def test_json_final_verdict_parses_and_evidence_is_preserved(tmp_path):
     reply = f"{FINDING}\ntests not run (no tools)\nVERDICT: ACCEPT"
     live = event_log(
@@ -81,6 +92,18 @@ def test_json_without_text_after_last_step_refused_without_tail_fallback(tmp_pat
     events.append(event("step_finish", 7))
     live = event_log(*events)
 
+    with pytest.raises(ValueError, match="record has no review text"):
+        seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
+
+
+@pytest.mark.parametrize("blank_text", [None, "", " \n\t"])
+def test_step_start_only_or_blank_text_has_no_review_text(tmp_path, blank_text):
+    events = [event("step_start")]
+    if blank_text is not None:
+        events.append(event("text", 2, text=blank_text))
+    live = event_log(*events)
+
+    assert not seat_record._review_text_from_log(live).strip()
     with pytest.raises(ValueError, match="record has no review text"):
         seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
 
@@ -135,14 +158,63 @@ def test_plain_text_log_with_non_event_typed_object_is_unchanged(tmp_path, non_e
     assert sv.parse_verdict(text) == (True, 2)
 
 
-@pytest.mark.parametrize("kind", ["step_start", "step_finish", "text", "tool_use"])
-def test_minimal_recognized_event_marks_event_log(tmp_path, kind):
+@pytest.mark.parametrize("kind", ["step_start", "step_finish"])
+def test_minimal_lifecycle_event_marks_event_log(tmp_path, kind):
     line = json.dumps({"type": kind, "part": {"type": kind.replace("_", "-")}},
                       separators=(",", ":"))
     live = f"{FINDING}\n{line}\nVERDICT: ACCEPT\n"
 
+    assert seat_record._review_text_from_log(live) == ""
     with pytest.raises(ValueError, match="record has no review text"):
         seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
+
+
+@pytest.mark.parametrize("kind", ["text", "tool_use"])
+def test_plain_text_log_with_one_non_lifecycle_event_is_unchanged(tmp_path, kind):
+    line = json.dumps({"type": kind, "part": {"text": "x"}}, separators=(",", ":"))
+    live = f"{FINDING}\n{line}\nVERDICT: ACCEPT\nTEST_GAMING: yes\n"
+
+    evidence, text = seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
+
+    assert seat_record._review_text_from_log(live) == live
+    assert text == live
+    assert evidence["test_gaming"] == "yes"
+
+
+def test_plain_text_log_with_extreme_json_is_unchanged(tmp_path, extreme_json_line):
+    live = f"{FINDING}\n{extreme_json_line}\nVERDICT: FIX\nTEST_GAMING: yes\n"
+
+    evidence, text = seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
+
+    assert seat_record._review_text_from_log(live) == live
+    assert text == live
+    assert evidence["test_gaming"] == "yes"
+
+
+def test_plain_text_log_with_both_extreme_json_lines_is_unchanged(tmp_path, extreme_json_lines):
+    live = "\n".join([FINDING, *extreme_json_lines, "VERDICT: FIX", "TEST_GAMING: yes", ""])
+
+    evidence, text = seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
+
+    assert text == live
+    assert evidence["test_gaming"] == "yes"
+
+
+def test_record_with_extreme_json_is_refused(tmp_path, extreme_json_line):
+    seat = rec_dir(tmp_path, live="VERDICT: FIX\n")
+    (seat / "record.json").write_text(extreme_json_line, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="record.json is not valid JSON"):
+        seat_record.evidence_from_record(seat)
+
+
+def test_record_index_skips_extreme_json_without_losing_valid_seat(tmp_path, extreme_json_line):
+    seat = rec_dir(tmp_path, live="VERDICT: FIX\n")
+    broken = tmp_path / ("run-" + "2" * 32)
+    broken.mkdir()
+    (broken / "record.json").write_text(extreme_json_line, encoding="utf-8")
+
+    assert list(seat_record.record_index(tmp_path)) == [seat / "record.json"]
 
 
 def test_json_only_text_after_last_step_start_counts_in_file_order(tmp_path):
@@ -186,13 +258,28 @@ def test_json_raw_or_untyped_text_cannot_supply_missing_review(tmp_path):
         seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
 
 
-def test_json_without_step_start_uses_all_text_events(tmp_path):
+@pytest.mark.parametrize("with_plain_lines", [False, True])
+def test_plain_log_with_text_only_json_lines_is_unchanged(tmp_path, with_plain_lines):
     live = event_log(event("text", text=FINDING),
                      event("text", 2, text="VERDICT: ACCEPT"))
+    if with_plain_lines:
+        live = f"{FINDING}\n{live}VERDICT: ACCEPT\nTEST_GAMING: yes\n"
 
-    _, text = seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
+    evidence, text = seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
 
-    assert text == f"{FINDING}\nVERDICT: ACCEPT"
+    assert seat_record._review_text_from_log(live) == live
+    assert text == live
+    assert evidence.get("test_gaming") == ("yes" if with_plain_lines else None)
+
+
+def test_step_finish_without_step_start_selects_event_text(tmp_path):
+    reply = f"{FINDING}\nVERDICT: ACCEPT\nTEST_GAMING: no"
+    live = event_log(event("text", text=reply), event("step_finish", 2))
+
+    evidence, text = seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
+
+    assert text == reply
+    assert evidence["test_gaming"] == "no"
 
 
 @pytest.mark.parametrize("bad_event", [

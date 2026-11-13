@@ -32,18 +32,18 @@ def _canon_family(name):
     return family
 
 def _review_text_from_log(live_log: str) -> str:
-    """Keep plain logs intact; OpenCode events yield only the final step's text."""
+    """Lifecycle events select OpenCode mode; otherwise keep plain logs intact."""
     event_log, texts = False, []
     for line in live_log.splitlines():
         try:
             event = json.loads(line)
-        except json.JSONDecodeError:
+        except (ValueError, RecursionError):
             continue
         if (not isinstance(event, dict)
                 or event.get("type") not in ("step_start", "step_finish", "text", "tool_use")
                 or not isinstance(event.get("part"), dict)):
             continue
-        event_log = True
+        event_log |= event["type"] in ("step_start", "step_finish")
         if event["type"] == "step_start":
             texts.clear()
         elif event["type"] == "text":
@@ -69,7 +69,7 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         stat = record_path.stat()
     except OSError as exc:
         raise ValueError(f"record.json unreadable: {type(exc).__name__}") from exc
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise ValueError(f"record.json is not valid JSON: {exc}") from exc
     if not isinstance(record, dict):
         raise ValueError("record.json is not an object")
@@ -196,7 +196,7 @@ def record_index(records_dir):
             except OSError:
                 prompt = ""
             rows[path] = (record, prompt)
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             continue
     return rows
 
