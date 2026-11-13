@@ -17,7 +17,7 @@ def _sweep_dead_pgtest_dirs(root) -> None:
                 if not m or not entry.is_dir(follow_symlinks=False):
                     continue
                 pid = int(m.group(1))
-                if pid <= 0 or pid == mypid:
+                if not 0 < pid < 2**31 or pid == mypid:
                     continue
                 try:
                     os.kill(pid, 0)

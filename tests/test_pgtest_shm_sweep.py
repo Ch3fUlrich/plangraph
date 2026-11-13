@@ -1,4 +1,6 @@
+import atexit
 import configparser
+import inspect
 import os
 import subprocess
 import sys
@@ -41,11 +43,16 @@ def test_sweep_dead_pgtest_dirs(tmp_path):
     assert target_dir.is_dir()
 
 
-def test_sweep_dead_pgtest_worker_dirs(tmp_path):
-    dead = subprocess.Popen([sys.executable, "-c", "pass"], cwd=tmp_path)
-    dead.wait(timeout=5)
-    with pytest.raises(ProcessLookupError):
-        os.kill(dead.pid, 0)
+def test_sweep_dead_pgtest_worker_dirs(tmp_path, monkeypatch):
+    dead_pid = 2**31 - 1
+    real_kill = os.kill
+
+    def probe(pid, signal):
+        if pid == dead_pid:
+            raise ProcessLookupError
+        return real_kill(pid, signal)
+
+    monkeypatch.setattr(os, "kill", probe)
     live = subprocess.Popen(
         [sys.executable, "-c",
          "import os, time; print(os.getpid(), flush=True); time.sleep(60)"],
@@ -54,16 +61,17 @@ def test_sweep_dead_pgtest_worker_dirs(tmp_path):
     try:
         live_pid = int(live.stdout.readline())
         assert live_pid == live.pid
-        dead_dir = tmp_path / f"pgtest-{dead.pid}-gw0-x"
+        dead_dir = tmp_path / f"pgtest-{dead_pid}-gw0-x"
         dead_dir.mkdir()
         (dead_dir / "payload").write_text("stale")
         kept = [tmp_path / name for name in (
             f"pgtest-{live_pid}-gw0-x", f"pgtest-{os.getpid()}-gw0-x",
-            "pgtest-abc", "pgtest-gw0-abc", "pgtest-0-gw0-x", "target",
+            "pgtest-abc", "pgtest-gw0-abc", "pgtest-0-gw0-x",
+            "pgtest-3000000000-gw0-x", "target",
         )]
         for directory in kept:
             directory.mkdir()
-        link = tmp_path / f"pgtest-{dead.pid}-gw0-link"
+        link = tmp_path / f"pgtest-{dead_pid}-gw0-link"
         link.symlink_to(kept[-1], target_is_directory=True)
 
         _sweep_dead_pgtest_dirs(tmp_path)
@@ -91,6 +99,20 @@ def test_sweep_never_probes_own_pid(tmp_path, monkeypatch, prefix):
     assert own_dir.is_dir()
 
 
+@pytest.mark.parametrize("prefix", ["pg", "pgtest-"])
+@pytest.mark.parametrize("pid", [0, 2**31, 3_000_000_000, 10**100])
+def test_sweep_never_probes_invalid_pid(tmp_path, monkeypatch, prefix, pid):
+    directory = tmp_path / f"{prefix}{pid}-gw0-x"
+    directory.mkdir()
+
+    def forbidden_probe(*args):
+        pytest.fail("the sweep must not probe an invalid pid")
+
+    monkeypatch.setattr(os, "kill", forbidden_probe)
+    _sweep_dead_pgtest_dirs(tmp_path)
+    assert directory.is_dir()
+
+
 @pytest.mark.parametrize("error", [PermissionError, OSError])
 def test_sweep_keeps_unverifiable_worker_pid(tmp_path, monkeypatch, error):
     directory = tmp_path / f"pgtest-{os.getpid() + 1}-gw0-x"
@@ -112,10 +134,16 @@ def test_worker_tmpdir_sweeps_before_creation(tmp_path, monkeypatch, pytestconfi
                                            explicit_parent):
     conftest = pytestconfig.pluginmanager.getplugin(
         str(Path(__file__).with_name("conftest.py").resolve()))
+    assert conftest is not None
+    assert conftest is sys.modules[conftest.__name__]
+    assert inspect.isfunction(conftest._use_tmpfs_tempdir)
+    registrations = []
+    monkeypatch.setattr(atexit, "register", lambda *a, **k: registrations.append((a, k)))
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
     if explicit_parent:
         monkeypatch.setenv("TMPDIR", str(tmp_path))
     else:
+        monkeypatch.setenv("TMPDIR", "x")
         monkeypatch.delenv("TMPDIR", raising=False)
     monkeypatch.setattr(conftest.tempfile, "tempdir", str(tmp_path))
     swept = []
@@ -132,6 +160,7 @@ def test_worker_tmpdir_sweeps_before_creation(tmp_path, monkeypatch, pytestconfi
     assert path.parent == tmp_path
     assert path.name.startswith(f"pgtest-{os.getpid()}-gw0-")
     assert os.environ["TMPDIR"] == str(path)
+    assert registrations == [((conftest.shutil.rmtree, str(path)), {"ignore_errors": True})]
 
 
 def test_pytest_tmp_path_retention_config():
@@ -139,3 +168,18 @@ def test_pytest_tmp_path_retention_config():
     config.read(Path(__file__).resolve().parents[1] / "pytest.ini")
     assert config["pytest"]["tmp_path_retention_count"] == "1"
     assert config["pytest"]["tmp_path_retention_policy"] == "failed"
+
+
+@pytest.mark.parametrize("explicit_parent", [True, False])
+def test_worker_tmpdir_test_is_isolated(tmp_path, monkeypatch, pytestconfig,
+                                       explicit_parent):
+    monkeypatch.setenv("TMPDIR", "x")
+    monkeypatch.delenv("TMPDIR")
+    registrations = []
+    monkeypatch.setattr(atexit, "register", lambda *a, **k: registrations.append((a, k)))
+    with monkeypatch.context() as patch:
+        test_worker_tmpdir_sweeps_before_creation(tmp_path, patch, pytestconfig,
+                                                explicit_parent)
+    restored = "TMPDIR" not in os.environ
+    assert restored
+    assert registrations == []
