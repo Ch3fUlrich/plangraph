@@ -60,15 +60,18 @@ async def queue_pause(event, delay):
         try: await asyncio.wait_for(event.wait(), min(.1, max(0, deadline - time.monotonic())))
         except asyncio.TimeoutError: pass
         if (event.wake_path.stat().st_mtime_ns if event.wake_path.exists() else None) != token: return
-def enqueue_memory(service, record, options, card, config):
+def enqueue_memory(service, record, options, card, config, *, defer=False):
     try:
-        loop = asyncio.get_running_loop()
+        loop = None if defer else asyncio.get_running_loop()
         bound = float(config.get('queue_bound_s', 900))
         if not math.isfinite(bound) or bound <= 0: return
     except (RuntimeError, ValueError, TypeError, OverflowError): return
     record.update(status='queued', reason='memory_recovery', queue_reason='memory_recovery', exit_code=0,
                   ended=None, queued_until=queue_now() + bound, queue_bound_s=bound)
     record.pop('error', None)
+    if loop is not None: start_memory_queue(service, record, options, card)
+def start_memory_queue(service, record, options, card):
+    loop = asyncio.get_running_loop()
     if not hasattr(service, '_queued'): service._queued = {}
     event = service._queued[record['run_id']] = asyncio.Event(); event.wake_path = service.state / 'queue-wake'
     service.tasks[record['run_id']] = loop.create_task(_wait_memory(service, record, options, card, event))
