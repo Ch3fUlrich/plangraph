@@ -1,0 +1,1 @@
+- Add an unwired payment-order core using one supplied-leg payment classifier: exact-id Muse Amber follows subscriptions and precedes paid DeepSeek, non-prefix trial/free and unknown-tier slots stay fixed, and fixed local fixtures cover implement and review; routing, registrations, and failure-successor behavior are unchanged (D-5622 b, D-5646).
