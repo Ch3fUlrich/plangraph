@@ -40,6 +40,8 @@ def pool_of(model):
 
 
 def _ts(value):
+    if isinstance(value, (int, float)):
+        return value / 1000 if value > 1e11 else float(value)
     try:
         stamp = datetime.fromisoformat(str(value).strip().replace('Z', '+00:00'))
     except ValueError:
@@ -89,7 +91,8 @@ def fetch_snapshot_rows(env=None, *, fetch=None):
             db = sqlite3.connect(Path(source['QUOTA_SNAPSHOT_DB']).resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
             try:
                 cursor = db.execute('SELECT provider, connection_id, window_key, remaining_percentage, '
-                                    'is_exhausted, next_reset_at, created_at FROM quota_snapshots')
+                                    'is_exhausted, next_reset_at, created_at FROM quota_snapshots WHERE id IN '
+                                    '(SELECT MAX(id) FROM quota_snapshots GROUP BY provider, connection_id, window_key) ORDER BY id')
                 columns = [column[0] for column in cursor.description]
                 return [dict(zip(columns, row)) for row in cursor]
             finally:
@@ -112,9 +115,7 @@ def fetch_snapshot_rows(env=None, *, fetch=None):
         raise LookupError('quota snapshots unreadable') from None
     if status != 200 or not isinstance(rows, list):
         raise LookupError('quota snapshots unreadable')
-    observed = datetime.fromtimestamp(time.time(), timezone.utc).isoformat()
-    return [dict(row, created_at=observed) if isinstance(row, dict) and
-            _get(row, 'created_at', 'createdAt', 'timestamp') is None else row for row in rows]
+    return rows
 
 
 def _min_pct():
@@ -129,12 +130,28 @@ class QuotaGate:
 
     def __init__(self, rows=None, *, clock=time.time, ttl_s=CACHE_S):
         self.rows, self.clock, self.ttl_s = rows, clock, ttl_s
-        self._at, self._cached = None, []
+        self._at, self._cached, self._observed = None, [], {}
 
     def _snapshot(self):
         if self._at is None or self.clock() - self._at >= self.ttl_s:
             try:
-                self._cached = (self.rows or fetch_snapshot_rows)()
+                rows = (self.rows or fetch_snapshot_rows)()
+                self._cached = []
+                for row in rows if isinstance(rows, list) else ():
+                    if not isinstance(row, dict):
+                        continue
+                    key = (row.get('provider'), _get(row, 'connection_id', 'connectionId'), _get(row, 'window_key', 'windowKey'))
+                    try:
+                        down = float(_get(row, 'remaining_percentage', 'remainingPercentage', 'remainingPct')) <= _min_pct()
+                    except (TypeError, ValueError):
+                        down = False
+                    down |= _get(row, 'is_exhausted', 'isExhausted') in (1, True, '1', 'true')
+                    if not down or _get(row, 'next_reset_at', 'nextResetAt', 'resetAt') is not None:
+                        self._observed.pop(key, None)
+                    elif _get(row, 'created_at', 'createdAt', 'timestamp') is None:
+                        first = self._observed.setdefault(key, self.clock())
+                        row = dict(row, created_at=datetime.fromtimestamp(first, timezone.utc).isoformat())
+                    self._cached.append(row)
             except Exception:
                 self._cached = []   # missing or unreadable: routing proceeds as without the gate
             self._at = self.clock()

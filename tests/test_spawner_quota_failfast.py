@@ -1,5 +1,6 @@
 """Quota refusals (omniroute, agy, opencode-go) book the leg down and end the run at once."""
 import asyncio
+import json
 import sys
 import sqlite3
 import time
@@ -68,6 +69,51 @@ def test_call_log_error_summary_is_quota_evidence():
     assert poll_quota('j', type('J', (), {'model_or_combo': 'agy/x'})(), {}, fetch=lambda t, e: ROWS) is None
 
 
+@pytest.mark.parametrize('later', [200, 201, 0, 500])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_only_latest_request_can_refuse_a_recovered_run(later, reverse):
+    rows = [dict(sessionTag='j', id=1, status=429, error=THRESHOLD),
+            dict(sessionTag='j', id=2, status=later)]
+    assert quota_refusal(rows[::-1] if reverse else rows, 'j') is None
+
+
+def test_429_without_summary_is_a_refusal():
+    assert quota_refusal([dict(sessionTag='j', status=429)], 'j') == 'HTTP 429'
+
+
+def test_resetless_api_refresh_does_not_extend_hold_forever(monkeypatch):
+    monkeypatch.setattr(quota_snapshots, 'effective_gateway_base_url', lambda env: 'http://gw/v1')
+    monkeypatch.setattr(quota_snapshots, '_gateway_key', lambda env: 'k')
+    clock = [1000.0]
+    monkeypatch.setattr(quota_snapshots.time, 'time', lambda: clock[0])
+    data = [dict(provider='codex:a1', remainingPct=0)]
+    fetch = lambda *a: (200, json.dumps({'data': data}).encode())
+    gate = QuotaGate(lambda: fetch_snapshot_rows({}, fetch=fetch), clock=lambda: clock[0])
+    assert gate.apply(SOL, OK)['evidence']['reset_at'] == 2800
+    clock[0] = 2000
+    assert gate.apply(SOL, OK)['evidence']['reset_at'] == 2800
+    clock[0] = 2900
+    assert gate.apply(SOL, OK) == OK
+    data[0]['remainingPct'] = 100
+    clock[0] = 3000
+    assert gate.apply(SOL, OK) == OK
+    data[0]['remainingPct'] = 0
+    clock[0] = 3100
+    assert gate.apply(SOL, OK)['evidence']['reset_at'] == 4900
+
+
+def test_db_returns_latest_row_of_each_window_in_id_order(tmp_path):
+    path = tmp_path / 'snapshots.sqlite'
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE quota_snapshots (id INTEGER PRIMARY KEY, provider, connection_id, '
+                   'window_key, remaining_percentage, is_exhausted, next_reset_at, created_at)')
+        for ident, window, pct in [(1, 'weekly', 0), (2, 'daily', 30), (3, 'weekly', 100)]:
+            db.execute('INSERT INTO quota_snapshots VALUES (?,?,?,?,?,?,?,?)',
+                       (ident, 'codex', 'a', window, pct, 0, None, '2026-11-13 10:00:00'))
+    rows = fetch_snapshot_rows({'QUOTA_SNAPSHOT_DB': str(path)})
+    assert [(r['window_key'], r['remaining_percentage']) for r in rows] == [('daily', 30), ('weekly', 100)]
+
+
 def test_silent_gateway_leg_ends_on_logged_quota_refusal_without_waiting_for_stall(tmp_path, monkeypatch):
     monkeypatch.setattr('plangraph.spawner.gateway_witness.QUOTA_POLL_IDLE_S', 0)
     monkeypatch.setattr('plangraph.spawner.gateway_witness.QUOTA_POLL_EVERY_S', .05)
@@ -90,9 +136,9 @@ OK = {'state': 'ok', 'evidence': None}
 def test_read_only_snapshot_source_preserves_reset(tmp_path):
     path = tmp_path / 'snapshots.sqlite'
     with sqlite3.connect(path) as db:
-        db.execute('CREATE TABLE quota_snapshots (provider, connection_id, window_key, '
+        db.execute('CREATE TABLE quota_snapshots (id INTEGER PRIMARY KEY, provider, connection_id, window_key, '
                    'remaining_percentage, is_exhausted, next_reset_at, created_at)')
-        db.execute('INSERT INTO quota_snapshots VALUES (?,?,?,?,?,?,?)',
+        db.execute('INSERT INTO quota_snapshots (provider,connection_id,window_key,remaining_percentage,is_exhausted,next_reset_at,created_at) VALUES (?,?,?,?,?,?,?)',
                    ('codex', 'a1', 'weekly', 0, 1, '2026-11-19T00:00:00Z', '2026-11-13T00:00:00Z'))
     def no_http(*args):
         raise AssertionError('local snapshot needs no gateway request or credentials')
@@ -120,7 +166,7 @@ def test_api_reset_and_resetless_observation_holds(monkeypatch):
     for extra, until in [('', 2800.0), (', "next_reset_at": "1970-01-01T02:00:00Z"', 7200.0)]:
         def fetch(*args):
             return 200, ('{"data":[{"provider":"codex:a1","remainingPct":0' + extra + '}]}').encode()
-        gate = QuotaGate(lambda: fetch_snapshot_rows({}, fetch=fetch))
+        gate = QuotaGate(lambda: fetch_snapshot_rows({}, fetch=fetch), clock=lambda: 1000.0)
         assert gate.apply(SOL, OK, 1001)['evidence']['reset_at'] == until
         assert gate.apply(SOL, OK, until + 1) == OK
 
@@ -179,7 +225,7 @@ def test_snapshot_fetch_is_read_only_json_and_unreadable_is_a_lookup_error(monke
         return 200, b'{"data": [{"provider": "codex:a1", "remainingPct": 0}]}'
     rows = fetch_snapshot_rows({}, fetch=fetch)
     assert rows[0]['provider'] == 'codex:a1' and rows[0]['remainingPct'] == 0
-    assert quota_snapshots._ts(rows[0]['created_at']) is not None
+    assert 'created_at' not in rows[0]  # observation time belongs to the gate, not each fetch
     assert seen[0][0].startswith('http://gw/api/usage/utilization?') and seen[0][1] == {'Authorization': 'Bearer k'}
     for bad in (lambda u, h, t: (500, b'{}'), lambda u, h, t: (200, b'nope'), lambda u, h, t: (_ for _ in ()).throw(OSError())):
         with pytest.raises(LookupError):

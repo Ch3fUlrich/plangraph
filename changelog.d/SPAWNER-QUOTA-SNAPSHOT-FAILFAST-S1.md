@@ -5,3 +5,5 @@ A configured read-only `QUOTA_SNAPSHOT_DB` preserves `next_reset_at`; API rows w
 Local push checks select affected files against origin/main and refuse full-suite execution (operator package R2).
 
 The host-view integration test declares its Rust projection-helper dependency through the existing shared helper; CI still requires that binary.
+
+Final review: only the latest request can refuse a session (including empty-summary 429s). Timestamp-less exhausted observations keep their first-seen hold across refreshes and rearm after recovery. Direct snapshot reads return the latest row per pool/window in id order.

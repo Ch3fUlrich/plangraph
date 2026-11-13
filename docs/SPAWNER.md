@@ -668,4 +668,4 @@ host as unknown rather than silently omitting it.
 Rust source-filter tests and pytest's real `configured_hosts` checks consume
 `tests/fixtures/doctor_sources.json`, binding both validators and probe limits
 to the same accepted/rejected cases. Rust embeds JSON, never Python source or
-an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
+an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks. Quota polling considers only the newest request of a session, including a 429 without text. Timestamp-less pool observations keep their first-seen hold until recovery; database reads select the latest row per window.

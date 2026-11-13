@@ -232,29 +232,33 @@ QUOTA_POLL_TIMEOUT_S = 3.0
 
 
 def quota_refusal(rows, tag):
-    """First quota refusal line the gateway logged for ``tag`` (429 row or quota error text), else None.
-
-    The stalled-run case: the harness printed nothing, but the call log row
-    carries the gateway's error text, including its reset time.
-    """
+    """Only the newest request of a session can refuse it; unversioned rows use input order."""
     from .env_redact import early_refusal
-    for row in rows if isinstance(rows, list) else ():
-        if not isinstance(row, dict) or row.get('sessionTag') != tag:
-            continue
-        text = ' '.join(str(row.get(k) or '') for k in ('error_summary', 'errorSummary', 'error')).strip()
+    from plangraph.routing_support.quota_snapshots import _ts
+    def order(pair):
+        index, row = pair
+        at = _ts(row.get('createdAt') or row.get('created_at') or row.get('timestamp')) or 0
         try:
-            status = int(row.get('status'))
+            ident = int(row.get('id') or 0)
         except (TypeError, ValueError):
-            status = 0
-        if not text or 200 <= status < 300:
-            continue
-        line = ' '.join(text.split())[:300]
-        found = early_refusal(line) or early_refusal('Error: ' + line)
-        if found:
-            return found
-        if status == 429:
-            return 'HTTP 429: ' + line
-    return None
+            ident = 0
+        return at, ident, index
+    matching = [(i, r) for i, r in enumerate(rows if isinstance(rows, list) else ())
+                if isinstance(r, dict) and r.get('sessionTag') == tag]
+    if not matching:
+        return None
+    row = max(matching, key=order)[1]
+    try:
+        status = int(row.get('status'))
+    except (TypeError, ValueError):
+        status = 0
+    if 200 <= status < 300:
+        return None
+    line = ' '.join(' '.join(str(row.get(k) or '') for k in
+                    ('error_summary', 'errorSummary', 'error')).split())[:300]
+    found = early_refusal(line) or early_refusal('Error: ' + line)
+    return found or (('HTTP 429: ' + line if line else 'HTTP 429') if status == 429 else None)
+
 
 
 def poll_quota(job_id, job, env, *, fetch=None):
