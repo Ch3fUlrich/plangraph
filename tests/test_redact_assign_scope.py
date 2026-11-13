@@ -1,11 +1,11 @@
 """Python-only A1 decisions; A2, slice C and main's joins stay explicit."""
+import ast
 import json
-import statistics
-import subprocess
+import py_compile
 import sys
-import time
 from pathlib import Path
 import pytest
+from plangraph.spawner import redact_tokens
 from plangraph.spawner.env_redact import redact, redact_output, redact_source
 
 TABLE = json.loads((Path(__file__).parent / 'fixtures/redact_name_scope.json').read_text())
@@ -70,24 +70,90 @@ def test_x05_empty_and_horizontal_only(tail):
     assert redact(NAME + '=' + tail) == NAME + '=' + tail
 
 
-def test_x06_keyword_child_timeout():
-    code = ("import sys,time; sys.path.insert(0,sys.argv[1]); from plangraph.spawner.env_redact import redact; "
-            "s=('TO'+'KEN')*20000; t=time.perf_counter(); assert redact(s)==s; "
-            "assert time.perf_counter()-t<2; assert redact(s+'=V1')==s+'=[REDACTED]'")
-    subprocess.run([sys.executable, '-B', '-c', code, str(Path(__file__).parents[1] / 'src')], check=True, timeout=5)
+def test_a1_artifacts_parse(tmp_path):
+    root = Path(__file__).parent
+    rows = json.loads((root / 'fixtures/redact_name_scope.json').read_text(encoding='utf-8'))
+    assert rows == TABLE
+    for name in ('test_redact_assign_scope', 'test_redact_parity', 'test_spawner_runner_answer'):
+        py_compile.compile(str(root / (name + '.py')), cfile=str(tmp_path / (name + '.pyc')), doraise=True)
+    tree = ast.parse((root / 'test_opencode_json_limit.py').read_text())
+    imports = {alias.name for node in tree.body if isinstance(node, ast.Import) for alias in node.names}
+    assert {'json', 'pytest'} <= imports
+
+
+def test_a1_marker_and_deferred_gap_coverage():
+    for marker in ('\ue000', '\ue001', '\ue0000\ue001'):
+        assert any(marker in ''.join(row['input_parts']) and row['expected'] != 'I' for row in TABLE)
+    gaps = ('N16', 'N19', 'N20', 'N21', 'A02', 'A07', 'A08', 'N59', 'N60')
+    for suffix in gaps:
+        row = next(row for row in TABLE if row['id'] == 'a1-' + suffix)
+        assert row.get('gap', '').startswith(('A2', 'D-5685')), row['id']
+    wrapped = next(row for row in TABLE if row['id'] == 'a1-J04')
+    assert wrapped['gap'].startswith('D-5685')
+    text = ''.join(wrapped['input_parts'])
+    assert redact_tokens.redact_wrapped(text) == text  # Joined body is still below the floor.
+
+
+@pytest.mark.parametrize('scrub', [redact, redact_output])
+def test_a1_markers_do_not_bypass_name_masking(scrub):
+    for row in TABLE:
+        if row['id'].startswith('a1-M'):
+            text = ''.join(row['input_parts'])
+            unmarked = text.replace('\ue0000\ue001', '').replace('\ue000', '').replace('\ue001', '')
+            result = scrub(text).replace('\ue0000\ue001', '').replace('\ue000', '').replace('\ue001', '')
+            assert result == scrub(unmarked)
+
+
+def _redact_work(text):
+    """Count scanner/folding steps, independent of scheduling and CI load."""
+    operations = 0
+    def trace(frame, event, arg):
+        nonlocal operations
+        if frame.f_code.co_filename == redact_tokens.__file__:
+            operations += event == 'line'
+            return trace
+    previous = sys.gettrace()
+    try:
+        sys.settrace(trace)
+        result = redact(text)
+    finally:
+        sys.settrace(previous)
+    assert operations > 0
+    return result, operations
+
+
+def test_x06_keyword_child_timeout(monkeypatch):
+    # Keep the historical name and 100k-character adversary, not a wall-clock deadline.
+    searches, keyword = [], redact_tokens._NAME_KEYWORD
+    class CountSearch:
+        def search(self, text):
+            searches.append(len(text))
+            return keyword.search(text)
+    monkeypatch.setattr(redact_tokens, '_NAME_KEYWORD', CountSearch())
+    text = ('TO'+'KEN') * 20000
+    for suffix in ('', '=V1'):
+        result, operations = _redact_work(text + suffix)
+        assert result == text + ('=' + MASK if suffix else '')
+        assert operations < 150 * len(text)
+    assert searches == [len(text), len(text), 2]
 
 
 @pytest.mark.parametrize('kind', ['masked-lines', 'runs', 'failed-headers', 'new-blanks', 'old-blanks'])
 def test_x07_linear_scaling(kind):
-    timings = []
-    # Large 1x workloads avoid millisecond noise; 4x separates linear (4) from quadratic (16).
+    counts = []
+    # Trace counts need no huge/noisy timing samples; 4x rejects quadratic (16x) growth.
     for size in (1, 4):
-        text = {'masked-lines': (NAME + '=' + MASK + '\n') * (50000 * size), 'runs': 'x' * (1000000 * size),
-                'failed-headers': (NAME + ' ? ') * (1000000 * size // (len(NAME) + 3)),
-                'new-blanks': NAME + '=' + ' ' * (600000 * size), 'old-blanks': 'TO'+'KEN=' + ' ' * (600000 * size)}[kind]
-        expected = text[:-1] + MASK if kind == 'old-blanks' else text
-        samples = []
-        for _ in range(7):
-            start = time.perf_counter(); assert redact(text) == expected; samples.append(time.perf_counter() - start)
-        timings.append(statistics.median(samples))
-    assert timings[1] < timings[0] * 7
+        # Preserve the original large functional workloads; instrument a smaller copy.
+        for scale in (1, 100):
+            n = size * scale
+            text = {'masked-lines': (NAME + '=' + MASK + '\n') * (500 * n), 'runs': 'x' * (10000 * n),
+                    'failed-headers': (NAME + ' ? ') * (10000 // (len(NAME) + 3) * n),
+                    'new-blanks': NAME + '=' + ' ' * (6000 * n), 'old-blanks': 'TO'+'KEN=' + ' ' * (6000 * n)}[kind]
+            expected = text[:-1] + MASK if kind == 'old-blanks' else text
+            if scale == 1:
+                result, operations = _redact_work(text)
+                counts.append(operations)
+            else:
+                result = redact(text)
+            assert result == expected
+    assert counts[0] < counts[1] <= counts[0] * 4

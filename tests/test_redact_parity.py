@@ -42,6 +42,38 @@ def test_redact_output_parity(row):
         assert env_redact.redact_source(input_text(row)) == input_text(row)
 
 
+def test_a1_changed_shapes_have_explicit_rust_expectations(monkeypatch):
+    rows = json.loads((Path(__file__).parent / 'fixtures/redact_name_scope.json').read_text())
+    wide = env_redact.redact_wide_assignments
+    covered = {input_text(row): row for row in TABLE if 'rust_expected' in row}
+    changed = set()
+    for row in rows:
+        if row.get('mode') == 'source':
+            continue
+        text = ''.join(row['input_parts']) * row.get('repeat', 1)
+        monkeypatch.setattr(env_redact, 'redact_wide_assignments', wide)
+        current = redact(text)
+        # Exactly e7964367's pipeline: A1 added only this stage/call.
+        monkeypatch.setattr(env_redact, 'redact_wide_assignments', lambda text, assignment: text)
+        if current != redact(text):
+            changed.add(row['id'])
+            assert text in covered, row['id']
+            assert joined(covered[text]['expected']) == current
+    assert changed
+
+
+def test_a1_engine_difference_inventory():
+    # D-5694: explicit golden differences, not a claim that the engines agree.
+    shapes = {'N03', 'N06', 'N07', 'N48', 'N53', 'A04', 'A04-dict', 'M02',
+              'wide-categories', 'python-blanks', 'glued-tail',
+              'delimiters', 'bare-closer', 'wrapped-lf', 'wrapped-crlf',
+              'wrapped-quoted', 'placeholder-tail', 'later-old-label'}
+    by_id = {row['id']: row for row in TABLE if 'rust_expected' in row}
+    for shape in shapes:
+        row = by_id['a1-' + shape]
+        assert joined(row['expected']) != joined(row['rust_expected']), shape
+
+
 def test_catalog_is_exactly_rust_specs():
     rust = (Path(__file__).parents[1] / 'rust/worker-core/src/redact_tokens.rs').read_text()
     table = rust.split('pub(crate) const SPECS:', 1)[1].split('];', 1)[0]

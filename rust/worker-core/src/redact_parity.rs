@@ -24,6 +24,8 @@ struct Row {
     #[serde(default)]
     input_parts: Vec<String>,
     expected: Option<Text>,
+    // D-5694: pin engine differences; slice B owns production alignment.
+    rust_expected: Option<Text>,
     source: Option<Text>,
     output: Option<Text>,
 }
@@ -44,7 +46,10 @@ fn redact_shared_parity_table() {
                 .unwrap_or_else(|| row.input_parts.concat());
             for (expected, actual) in [
                 (
-                    row.output.as_ref().or(row.expected.as_ref()),
+                    row.rust_expected
+                        .as_ref()
+                        .or(row.output.as_ref())
+                        .or(row.expected.as_ref()),
                     redact(&input),
                 ),
                 (row.source.as_ref(), redact_source(&input)),
