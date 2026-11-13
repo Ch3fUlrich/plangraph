@@ -337,14 +337,10 @@ fn inline_only_NO_tools_header() {
     std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
-#[allow(non_snake_case, unused_mut, unused_variables)]
+#[allow(non_snake_case)]
 fn too_large_InlineDiffError_no_truncation() {
-    let (root, mut launch, args, repos) = review_fixture();
-    let diff = serde_json::from_value(args["card"]["diff_ref"].clone()).unwrap();
-    assert_eq!(
-        read_diff(&repos["repo"], &diff, 1),
-        Err(InlineDiffError::TooLarge)
-    );
+    let (root, repo, diff) = fixture();
+    assert_eq!(read_diff(&repo, &diff, 1), Err(InlineDiffError::TooLarge));
     std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
@@ -374,4 +370,30 @@ fn timeout_escaped_stdout_holder_bounded() {
         Err(InlineDiffError::Git)
     );
     assert!(start.elapsed() < Duration::from_millis(500));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn oversized_stdout_is_drained_before_checkout_cleanup() {
+    use std::os::{fd::AsRawFd, unix::process::CommandExt};
+    let root = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+    std::fs::create_dir(&root).unwrap();
+    let child = std::process::Command::new("sh")
+        .args(["-c", "head -c 1048576 /dev/zero && echo done > drained"])
+        .current_dir(&root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    // Prove backpressure: the producer cannot finish in this pipe buffer.
+    let fd = child.stdout.as_ref().unwrap().as_raw_fd();
+    // SAFETY: stdout owns this fd for the duration of the call.
+    assert!((1..1048576).contains(&unsafe { libc::fcntl(fd, libc::F_GETPIPE_SZ) }));
+    assert_eq!(
+        collect_diff(child, 1, Duration::from_secs(5)),
+        Err(InlineDiffError::TooLarge)
+    );
+    assert_eq!(std::fs::read(root.join("drained")).unwrap(), b"done\n");
+    std::fs::remove_dir_all(root).unwrap();
 }

@@ -1,7 +1,16 @@
 //! Bounded, registry-rooted diff reads. Never consult adapter cwd.
 use crate::prompt::InlineDiffError;
 use pg_worker_core::{hosts::RepoEntry, workspace::DiffRef, workspace_resolver};
-use std::{io::Read, path::Path, process::Stdio, sync::mpsc, time::Duration};
+use std::{
+    io::Read,
+    path::Path,
+    process::Stdio,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
+    time::Duration,
+};
 
 pub(crate) fn read_diff(
     repo: &RepoEntry,
@@ -46,21 +55,27 @@ fn collect_diff(
     cap: usize,
     timeout: Duration,
 ) -> Result<Vec<u8>, InlineDiffError> {
-    let stdout = child.stdout.take().ok_or(InlineDiffError::Git)?;
+    let mut stdout = child.stdout.take().ok_or(InlineDiffError::Git)?;
     let (tx, rx) = mpsc::sync_channel(1);
+    let oversized = Arc::new(AtomicBool::new(false));
+    let reader_oversized = Arc::clone(&oversized);
     let reader = std::thread::spawn(move || {
         let mut bytes = Vec::new();
         let result = stdout
+            .by_ref()
             .take(cap.saturating_add(1) as u64)
             .read_to_end(&mut bytes);
+        reader_oversized.store(bytes.len() > cap, Ordering::Release);
+        // Git for Windows may be a wrapper. Drain without retaining more bytes
+        // so its actual Git child can exit before the checkout is removed.
+        let result = result.and_then(|_| std::io::copy(&mut stdout, &mut std::io::sink()));
+        drop(stdout);
         let _ = tx.send(result.map(|_| bytes));
     });
     let result = rx.recv_timeout(timeout);
-    let oversized = matches!(&result, Ok(Ok(bytes)) if bytes.len() > cap);
     let deadline = std::time::Instant::now() + Duration::from_secs(1);
     let mut exited = child.try_wait().map_err(|_| InlineDiffError::Git)?;
     while result.is_ok()
-        && !oversized
         && {
             exited = child.try_wait().map_err(|_| InlineDiffError::Git)?;
             exited.is_none()
@@ -89,7 +104,13 @@ fn collect_diff(
         let _ = reader.join();
     }
     let bytes = result
-        .map_err(|_| InlineDiffError::Git)?
+        .map_err(|_| {
+            if oversized.load(Ordering::Acquire) {
+                InlineDiffError::TooLarge
+            } else {
+                InlineDiffError::Git
+            }
+        })?
         .map_err(|_| InlineDiffError::Git)?;
     if bytes.len() > cap {
         return Err(InlineDiffError::TooLarge);
