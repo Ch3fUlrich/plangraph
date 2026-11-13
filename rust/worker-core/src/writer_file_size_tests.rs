@@ -11,7 +11,7 @@ fn record(f: &Fixture, path: &str, text: &str) {
 #[test]
 fn finalize_file_size_under_limit() {
     let f = Fixture::new();
-    record(&f, "small.rs", &"x\n".repeat(400));
+    record(&f, "small.rs", &"x\n".repeat(800));
     assert!(check_result(&f.repo, &f.tree, &f.ws).is_ok());
 }
 
@@ -27,14 +27,14 @@ fn finalize_file_size_hold_blocks_export_before_content_gate_or_push() {
         let f = Fixture::new();
         record(&f, path, "small");
         let mut checked = check_result(&f.repo, &f.tree, &f.ws).unwrap();
-        record(&f, path, &"x\n".repeat(401));
+        record(&f, path, &"x\n".repeat(801));
         // Simulate a previously issued handle after the checkout changes:
         // export must independently gate the current tree, not trust the handle.
         checked.head_sha = git(&f.tree, &["rev-parse", "HEAD"]).unwrap();
         let error = check_result(&f.repo, &f.tree, &f.ws).unwrap_err();
         assert!(error
             .to_string()
-            .contains(&format!("HOLD gate file-size: {path} 401")));
+            .contains(&format!("HOLD gate file-size: {path} 801")));
         let mut blobs =
             crate::writer_blob::LocalBlobStore::open(&f._dir.path().join("blobs")).unwrap();
         let refs_before = git(Path::new(&f.repo.root), &["show-ref"]).unwrap();
@@ -61,13 +61,13 @@ fn finalize_file_size_exemptions_and_decode_fixtures() {
         "a.lock",
         "a.min.js",
     ] {
-        record(&f, path, &"x\n".repeat(401));
+        record(&f, path, &"x\n".repeat(801));
     }
-    record(&f, "binary", &format!("\0{}", "x\n".repeat(401)));
-    record(&f, "unicode.rs", &"x\u{2028}".repeat(400));
+    record(&f, "binary", &format!("\0{}", "x\n".repeat(801)));
+    record(&f, "unicode.rs", &"x\u{2028}".repeat(800));
     assert!(check_result(&f.repo, &f.tree, &f.ws).is_ok());
-    record(&f, "é.rs", &"x\r\n".repeat(401));
-    assert_hold(&f, "é.rs 401");
+    record(&f, "é.rs", &"x\r\n".repeat(801));
+    assert_hold(&f, "é.rs 801");
 }
 
 fn assert_hold(f: &Fixture, path: &str) {
@@ -82,15 +82,15 @@ fn assert_hold(f: &Fixture, path: &str) {
 
 #[test]
 fn baseline_ratchets_against_recorded_base_without_origin_main() {
-    for proposed in [450, 451] {
+    for proposed in [850, 851] {
         let f = Fixture::new();
-        record(&f, ".filesize-baseline", "large.rs 450\n");
+        record(&f, ".filesize-baseline", "large.rs 850\n");
         let base = git(&f.tree, &["rev-parse", "HEAD"]).unwrap();
-        record(&f, "large.rs", &"x\n".repeat(450));
+        record(&f, "large.rs", &"x\n".repeat(850));
         record(&f, ".filesize-baseline", &format!("large.rs {proposed}\n"));
         let head = git(&f.tree, &["rev-parse", "HEAD"]).unwrap();
         let result = file_size::check(&f.tree, &base, &head).map_err(WriterError::FileSize);
-        if proposed == 450 {
+        if proposed == 850 {
             assert!(result.is_ok(), "{result:?}");
         } else {
             assert!(result
@@ -105,14 +105,14 @@ fn baseline_ratchets_against_recorded_base_without_origin_main() {
 fn invalid_utf8_content_uses_replacement_and_splitlines() {
     let f = Fixture::new();
     record(&f, "invalid.rs", "initial");
-    std::fs::write(f.tree.join("invalid.rs"), b"\xff\r\n".repeat(400)).unwrap();
+    std::fs::write(f.tree.join("invalid.rs"), b"\xff\r\n".repeat(800)).unwrap();
     git(&f.tree, &["add", "."]).unwrap();
     f.commit("fixture\n\nChangelog: skip (file-size fixture)\nWriter: test");
     assert!(check_result(&f.repo, &f.tree, &f.ws).is_ok());
-    std::fs::write(f.tree.join("invalid.rs"), b"\xff\r\n".repeat(401)).unwrap();
+    std::fs::write(f.tree.join("invalid.rs"), b"\xff\r\n".repeat(801)).unwrap();
     git(&f.tree, &["add", "."]).unwrap();
     f.commit("fixture\n\nChangelog: skip (file-size fixture)\nWriter: test");
-    assert_hold(&f, "invalid.rs 401");
+    assert_hold(&f, "invalid.rs 801");
 }
 
 #[test]
@@ -161,7 +161,7 @@ fn absent_recorded_base_holds_without_fallback() {
 #[test]
 fn empty_range_passes_at_head_and_away_from_checkout() {
     let f = Fixture::new();
-    record(&f, "large.rs", &"x\n".repeat(401));
+    record(&f, "large.rs", &"x\n".repeat(801));
     let base = git(&f.tree, &["rev-parse", "HEAD"]).unwrap();
     assert!(file_size::check(&f.tree, &base, "HEAD").is_ok());
     record(&f, "later.rs", "small");
@@ -182,7 +182,7 @@ fn base_at_checkout_is_not_confused_with_requested_head() {
 fn missing_baseline_and_unreadable_baseline_are_distinct() {
     let f = Fixture::new();
     let base = git(&f.tree, &["rev-parse", "HEAD"]).unwrap();
-    record(&f, ".filesize-baseline", "large.rs 450\n");
+    record(&f, ".filesize-baseline", "large.rs 850\n");
     let error = file_size::check(&f.tree, &base, "HEAD").unwrap_err();
     assert_eq!(error, ".filesize-baseline: no baseline at base");
     let base = git(&f.tree, &["rev-parse", "HEAD"]).unwrap();

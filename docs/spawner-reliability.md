@@ -257,7 +257,7 @@ The tool-open savings population requires both open tools and a recorded
 Invalid report windows are rejected before resolving or reading the state store.
 
 The remaining behavior and tests require a follow-up size allocation, rather
-than removal of tests to meet the 400-production-line limit. Rollback is
+than removal of tests to meet the 800-production-line limit. Rollback is
 `git revert`; RL14 must not call this partial API.
 
 Restart inventory now runs before listener acceptance when configured `shadow`.

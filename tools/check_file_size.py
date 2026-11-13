@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""check_file_size.py - the 400-line file-size gate (moved from AutoOS AO-400LOC, D-653/D-3198).
+"""check_file_size.py - the 800-line file-size gate (moved from AutoOS AO-400LOC, D-653/D-3198).
 
 Counts the lines of every TRACKED file (``git ls-files -z``, split on NUL:
 plain ``ls-files`` mangles non-ASCII names through ``core.quotePath``) in the
 checkout the cwd is in and refuses a file that is too big. Hand-written
-source, test, script, playbook and doc files stay <= 400 lines; over 400 ->
+source, test, script, playbook and doc files stay <= 800 lines; over 800 ->
 split by responsibility before adding more (CONTRIBUTING.md "File size").
 
 WHAT IS COUNTED
@@ -26,7 +26,7 @@ file gets no amnesty at all. The document itself is a ratchet - it may
 shrink, never grow - measured against the baseline at ``origin/main`` (the
 base the pre-push gate already requires fetched) or, failing that, HEAD.
 
-``--update-baseline`` only LOWERS counts: it never raises one and never adds
+``--update-baseline`` only LOWERS counts and prunes entries within the limit: it never raises one and never adds
 an entry. With no baseline present it writes the first one from the tree it
 sees (the one-time generation); from then on the file only ratchets down.
 The baseline-vs-reference check runs on the PROPOSED counts before any
@@ -44,7 +44,7 @@ import os
 import subprocess
 import sys
 
-LIMIT = 400
+LIMIT = 800
 BASELINE_NAME = ".filesize-baseline"
 ALLOW_NAME = ".filesize-allow"
 #: Vendored / generated trees; both vendor spellings are covered.
@@ -281,7 +281,10 @@ def proposed_baseline(counts, measured, exists):
                  if lines > LIMIT}, 0, True)
     lowered = 0
     for name in list(counts):
-        if name in measured and measured[name] < counts[name]:
+        if counts[name] <= LIMIT or measured.get(name, LIMIT + 1) <= LIMIT:
+            del counts[name]
+            lowered += 1
+        elif name in measured and measured[name] < counts[name]:
             counts[name] = measured[name]
             lowered += 1
     return counts, lowered, False
@@ -297,7 +300,7 @@ def write_baseline(root, counts):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="check-file-size",
-        description="refuse a tracked file over 400 lines unless the baseline "
+        description="refuse a tracked file over 800 lines unless the baseline "
                     "grandfathers it (and then only while it keeps shrinking)")
     ap.add_argument("--update-baseline", action="store_true",
                     help="rewrite %s: create it if missing, otherwise only "

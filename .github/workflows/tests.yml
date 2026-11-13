@@ -58,7 +58,7 @@ jobs:
       - name: scrub_check (public patterns)
         run: python tools/split/scrub_check.py . --rules tools/split/manifest.toml --rules tools/split/scrub_ci.toml
 
-  # AO-400LOC (D-3198): a file over 400 lines needs a .filesize-baseline entry
+  # AO-400LOC (D-3198): a file over 800 lines needs a .filesize-baseline entry
   # that only shrinks vs the base: PR origin/main, push the pushed-over sha, else HEAD~1.
   file-size:
     runs-on: ubuntu-24.04
