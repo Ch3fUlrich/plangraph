@@ -47,3 +47,11 @@ limitation for hosts using hooks; it never accepts an unproven hook trust state.
 The phase-batch skill must call the check on the chosen host before a package.
 See the official [configuration reference](https://developers.openai.com/codex/config-reference)
 and [sandbox command reference](https://developers.openai.com/codex/cli/reference).
+
+`pg-repo-sync --repo PATH --check-config --host ID --allow-name NAME --allow-email EMAIL`
+checks a main checkout's local `core.bare` and identity overrides without writing.
+Repeat allow-list flags for accepted host identities. Absent local overrides inherit
+the host identity; explicit overrides must match. Drift prints one `ALERT` line with
+host, path and escaped values and exits 1. Clean checkouts are silent.
+Git context variables, including `GIT_DIR` and injected config, are removed from
+child processes so fixtures and host checks cannot address unrelated metadata.

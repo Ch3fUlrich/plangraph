@@ -1,2 +1,3 @@
 2026-11-13T21:48:53.2089476Z W1-1 FLEET-SERIES-SAMPLER SKIPPED c74f356e +Rust sampler,summary,run-record,timer -live-host-install tests=Windows+WSL:3/3 failing-first=unresolved-module choice=existing-worker-core; full-suite pending
 2026-11-13T21:52:35.4590189Z W1-2 PACKAGE-HOST-BALANCER SKIPPED 545cd5ac +chooser,stale-SSH-fallback,shared-policy -live-host-run,missing-phase-batch-skill tests=Windows+WSL:4/4 failing-first=unresolved-module choice=reuse-host-registry
+2026-11-13T21:58:03.0262615Z W1-3 CODEX-HOST-READINESS SKIPPED d81693b5 +readiness,scratch-commit,prompt-checks -live-host-evidence,hook-hash-verification,missing-phase-batch-skill tests=Windows+WSL:5/5 failing-first=unresolved-module choice=native-sandbox-no-model
