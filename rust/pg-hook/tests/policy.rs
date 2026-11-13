@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use std::path::Path;
 
 fn repo_file(path: &str) -> String {

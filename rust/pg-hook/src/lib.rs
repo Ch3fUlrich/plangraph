@@ -165,7 +165,7 @@ fn normalized_exit_code(code: Option<i32>, signal: Option<i32>) -> Option<i32> {
     code.or_else(|| signal.map(|signal| 128 + signal))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

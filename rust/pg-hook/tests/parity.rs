@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use pg_hook::{observe, registry, Env, Hook, HookError, HookOutput};
 use serde::Deserialize;
 use serde_json::{json, Value};

@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 mod common;
 
 use common::{python, python_executable};
@@ -157,6 +159,7 @@ fn shadow_cli_returns_python_and_appends_not_implemented() {
 
 #[test]
 fn shadow_cli_uses_in_place_isolated_python_without_path() {
+    use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
     let script = tmp.path().join("interpreter.py");
     std::fs::write(
@@ -165,12 +168,19 @@ fn shadow_cli_uses_in_place_isolated_python_without_path() {
     )
     .unwrap();
     let executable = python_executable();
+    // Only this test's interpreter shim supplies isolated arguments. Production
+    // must preserve Python's normal sibling, PYTHONPATH and user-site imports.
+    let isolated = tmp.path().join("isolated-python");
+    let quoted = executable.to_str().unwrap().replace('\'', "'\\''");
+    std::fs::write(&isolated, format!("#!/bin/sh\nexec '{quoted}' -I \"$@\"\n")).unwrap();
+    std::fs::set_permissions(&isolated, std::fs::Permissions::from_mode(0o700)).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_pg-hook"))
         .args(["shadow", "bash_guard"])
         .arg(tmp.path().join("shadow.jsonl"))
         .arg(&script)
         .env_clear()
-        .env("PG_HOOK_PYTHON", &executable)
+        .env("PG_HOOK_PYTHON", &isolated)
+        .env("HOME", tmp.path())
         .env("PYTHONHOME", tmp.path().join("missing"))
         .output()
         .unwrap();
@@ -223,6 +233,7 @@ fn signal_exit_codes_match_the_logged_python_status() {
         .arg(script)
         .env_clear()
         .env("PG_HOOK_PYTHON", python_executable())
+        .env("HOME", tmp.path())
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(143));
@@ -302,6 +313,7 @@ fn shadow_cli_fails_open_for_stdin_read_errors() {
         .arg(&script)
         .env_clear()
         .env("PG_HOOK_PYTHON", python_executable())
+        .env("HOME", tmp.path())
         .stdin(std::fs::File::open(tmp.path()).unwrap())
         .output()
         .unwrap();

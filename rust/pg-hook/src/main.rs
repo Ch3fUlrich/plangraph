@@ -15,9 +15,17 @@ fn run(args: &[std::ffi::OsString]) -> std::io::Result<i32> {
         pg_hook::record_harness_fault(entry, log, "stdin read failed");
         return Err(std::io::Error::other("stdin read failed"));
     }
-    let mut python =
-        Command::new(std::env::var_os("PG_HOOK_PYTHON").unwrap_or_else(|| "python3".into()));
-    python.arg("-I").arg(&args[4]);
+    let executable = std::env::var_os("PG_HOOK_PYTHON");
+    if executable
+        .as_ref()
+        .is_some_and(|path| !Path::new(path).is_absolute())
+    {
+        let error = "PG_HOOK_PYTHON must be an absolute path";
+        pg_hook::record_harness_fault(entry, log, error);
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error));
+    }
+    let mut python = Command::new(executable.unwrap_or_else(|| "python3".into()));
+    python.arg(&args[4]);
     let output = pg_hook::shadow(
         entry,
         &payload,
@@ -63,7 +71,7 @@ fn fault_target(args: &[std::ffi::OsString]) -> Option<(&str, &Path)> {
         .then_some((entry, Path::new(&args[3])))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
