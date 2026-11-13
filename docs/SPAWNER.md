@@ -57,6 +57,11 @@ A tail therefore masks commit SHAs and long slash paths: take SHAs from git or t
 
 ### Prompt delivery
 
+Tool-less review/judge legs refuse file requests without matching inline bodies or
+unified diffs (`toolless_needs_inline`); fences/labels around requests are not evidence.
+Judge cut-file lists are metadata, not requests. Inline-only judges without a
+`diff_ref` use supplied evidence even on live routed runs; review diff requirements stay unchanged.
+
 Every harness and helper receives the prompt by stdin or file, never argv, for
 all prompt sizes on every OS (D-5233). Python's Linux OOM child inherits the stdin
 pipe; pg-spawnd uses the same launch-spec transport.
