@@ -41,3 +41,6 @@ Legacy uncapped MiMo attempts retain their bounded retry path; newly launched
 MiMo reviews start capped and accept an already-disabled thinking configuration.
 
 [Verification scope and baseline failures](lesson-gates-verification.md).
+
+The RC launch deadline uses a monotonic clock, so wall-clock corrections cannot
+extend the launch wait.

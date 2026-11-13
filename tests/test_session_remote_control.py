@@ -23,3 +23,14 @@ def test_required_rc_launch_is_bounded(site, platform, bridge):
         assert record['state'] == 'rc_missing'
         assert record['session_id'] == UUID1
     assert len(run.calls) <= 4
+
+
+def test_bridge_bound_uses_monotonic_time(site, monkeypatch):
+    import itertools
+    from types import SimpleNamespace
+    from plangraph.spawner import sessions_agents
+    service = make(site, FakeRun(), resolve_budget=1)
+    service._now = lambda: pytest.fail('RC wait used wall clock')
+    ticks = itertools.count(0, 0.6)
+    monkeypatch.setattr(sessions_agents, 'time', SimpleNamespace(monotonic=lambda: next(ticks)), raising=False)
+    assert service._wait_bridge(UUID1) is None

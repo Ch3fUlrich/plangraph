@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from plangraph.routing_support.clients import without_prompt_env
 
@@ -162,9 +163,9 @@ class _AgentsMixin:
     def _wait_bridge(self, sid):
         """Bound both each CLI poll and total startup time; unknown bridge fails closed."""
         budget = min(60.0, max(0.0, self._resolve_budget))
-        deadline = self._now() + budget
+        deadline = time.monotonic() + budget
         for attempt in range(max(1, int(budget / 0.5) + 1)):
-            remaining = deadline - self._now()
+            remaining = deadline - time.monotonic()
             if remaining <= 0 or not sid:
                 return None
             try:
@@ -177,7 +178,7 @@ class _AgentsMixin:
                         and isinstance(bridge, str) and bridge.strip()):
                     return bridge
             if attempt < int(budget / 0.5):
-                self._sleep(min(0.5, max(0, deadline - self._now())))
+                self._sleep(min(0.5, max(0, deadline - time.monotonic())))
         return None
 
     def _resolve_id(self, name, stdout, exclude=None, launched_ms=None):

@@ -2,8 +2,8 @@
 
 The requested base is `95a9ac3423dec2bb7c6a6ca7f8d173ecbba868b5`.
 A detached temporary checkout of that exact base reproduced the following
-25 failures, without this package's changes. The same 25 cases remain outside
-these lesson gates; they are not reported as passing or hidden by xfail/skip.
+25 failures, without this package's changes. They were recorded without
+xfail/skip; one affected mutation fixture is repaired as noted below.
 
 - `tests/test_benchmark_data_contract.py::test_catalog_benchmark_contract`
 - `tests/test_benchmark_data_contract.py::test_pending_allows_real_partial_resolution`
@@ -46,3 +46,7 @@ Linux tests use temporary roots and fake harnesses. Windows is cross-compiled;
 no Windows host or live gateway was exercised. Remote CI, independent model
 reviews, host timer activation and external proxy retirement remain outstanding.
 See [the retirement boundary](local-gateway-retirement.md) for external work.
+
+The outdated `stale_entry` prompt-record mutation fixture listed above is repaired
+by targeting the current call site and asserting the mutation target exists.
+That leaves 24 of the reproduced base failures outstanding.

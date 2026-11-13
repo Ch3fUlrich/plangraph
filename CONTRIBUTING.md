@@ -332,3 +332,4 @@ CI selects Rust checks when a settings.json/settings.local.json changes and runs
 The lesson-gate verification record is in `docs/lesson-gates-verification.md`.
 Prompt-record call-site allowances track the exact probe/preparation calls;
 companion evidence cannot bypass the prompt-only diff requirement.
+Prompt-record mutation fixtures assert that their target exists before testing the guard.
