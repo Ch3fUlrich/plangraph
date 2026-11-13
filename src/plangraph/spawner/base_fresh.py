@@ -48,15 +48,21 @@ def base_fresh(repo, *, default=None, fetch=True, timeout=60) -> dict:
     """Compare the run cwd's HEAD with origin's default branch, fetching by default."""
     return _check(repo, default, fetch, timeout)
 async def admit_base(service, record, card, *, launch=False):
-    """Check the worker checkout initially and again immediately before launch."""
+    """Check the worker checkout and any reviewed diff at both admission boundaries."""
     card = card or {}
     repo = record.get('cwd') or getattr(service.runner, 'default_cwd', None) or os.getcwd()
     result = await asyncio.to_thread(base_fresh, repo)
     decision = card.get('base_decision')
-    waived = (isinstance(decision, str) and re.fullmatch(r'D-[0-9]+', decision) is not None
-              and result.get('behind') is not None and result['behind'] > 0
-              and result['reason'] == f"base_stale: behind={result['behind']}")
-    if result['ok'] or waived:
+    def accepted(check):
+        return check['ok'] or (isinstance(decision, str) and re.fullmatch(r'D-[0-9]+', decision) is not None
+            and check.get('behind') is not None and check['behind'] > 0
+            and check['reason'] == f"base_stale: behind={check['behind']}")
+    diff = card.get('diff_ref') if record.get('role') in ('review', 'judge') else None
+    if accepted(result) and diff is not None:
+        reviewed = await asyncio.to_thread(_check, diff.get('repo') or repo, ref=diff.get('head', ''))
+        if not accepted(reviewed):
+            result = reviewed
+    if accepted(result):
         record['base_sha'] = card['base_sha'] = result['origin_sha']
         record['checked_base_sha'] = card['checked_base_sha'] = result.get('base_sha')
         record['card'] = dict(card)
