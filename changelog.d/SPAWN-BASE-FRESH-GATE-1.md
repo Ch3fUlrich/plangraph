@@ -1,0 +1,1 @@
+- D-5661: refuse stale or unfetchable bases before spawner model calls for every worker role and diff review; record the fetched base SHA, with only an explicit `base_decision: D-NNN` allowing an older base.

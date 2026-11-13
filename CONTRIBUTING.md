@@ -136,6 +136,7 @@ Only `--tool-mode tools` advertises follow-up reads; `inline-only` reads the
 spawner-inlined diff without tools, and `prompt-only` uses supplied evidence.
 Gateway prompt-only config is file-backed via a portable launcher, never argv.
 New Python files require a reasoned rule 9.14 entry in `tools/new_code_allowlist.txt`.
+The D-5661 `spawner/base_fresh.py` exception keeps mandatory spawn admission in the existing Python service until `SPAWNER-RUST-PORT`.
 
 ## File size
 

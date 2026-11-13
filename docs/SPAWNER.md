@@ -1,5 +1,7 @@
 # Plangraph Spawner & Model Routing Architecture
 
+Spawn admission fetches origin's default branch and refuses `base_stale` (behind count or fetch failure) before any model call; workers check their run cwd/source repo, reviews/judges check `diff_ref.head` ancestry (no diff means no check), and only card `base_decision: D-NNN` waives an older base, recording the decision and fetched `base_sha` on successful run/card admission; there is no flag, environment or settings bypass (D-5661).
+
 ### QUOTA-PAUSE-GATE
 
 The usage owner creates `quota-pause` in the spawner state directory at usage

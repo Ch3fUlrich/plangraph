@@ -91,7 +91,7 @@ def _supervise():
         for run in record.get('seats') or [record]:
             if run['run_id'] in service.tasks:
                 await service.tasks[run['run_id']]
-        return 0
+        return (record.get('exit_code') or 1) if str(record.get('reason', '')).startswith('base_stale:') else 0
     return asyncio.run(run())
 
 

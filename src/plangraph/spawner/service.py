@@ -15,6 +15,7 @@ from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
 from .item_key import annotate_item
+from .base_fresh import admit_base
 class SpawnService(SeatSpawnMixin):
     def __init__(self, runner=None, state=None, leg_reader=None):
         self.runner = runner or SpawnerRunner()
@@ -163,6 +164,7 @@ class SpawnService(SeatSpawnMixin):
         try:
             chosen = child['chosen_leg']
             worktree = await prepare_worktree(self, child, {'lane_branch': (record.get('run_worktree') or {}).get('branch')}, bool(record.get('run_worktree')), continuation=True)
+            if not await admit_base(self, child, {'base_decision': record.get('base_decision')}): return
             job = await self.runner.spawn(prompt=render_fixer_brief([{'text': g} for g in gaps]),
                 model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=worktree.get('cwd', child['cwd']), wake_variant='fixer',  # REMOVE-AT-R10
                 prompt_record=(self._path(child['run_id']).with_name('prompt.txt'), child, self._save))  # REMOVE-AT-R10
@@ -178,7 +180,6 @@ class SpawnService(SeatSpawnMixin):
         finally:
             child['ended'] = time.time()
             self._save(child)
-
     def save_refusal(self, exc, role='implement', *, card=None, placement=None, **extra):
         """Persist pre-service refusals using the same record contract (``extra``: seat fields)."""
         from plangraph.planner.routing import SpawnRefused, BenchmarkError, BenchRequired
@@ -300,6 +301,7 @@ class SpawnService(SeatSpawnMixin):
             served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
              started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
+        if not await admit_base(self, record, card): return self.result(record['run_id'])
         pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
         async def execute():
             try:

@@ -244,6 +244,7 @@ def pytest_configure(config):
         atexit.register(_remove_windows_basetemp, root)
     config.addinivalue_line('markers', 'real_probe: exercise the real served-model probe, not the host stub')
     config.addinivalue_line('markers', 'writer_change_check: keep the D-3236 writer no-change check live')
+    config.addinivalue_line('markers', 'real_base_fresh: use a local origin instead of the spawn mechanics fake')
 
 
 @pytest.fixture
@@ -261,6 +262,12 @@ def fixed_catalog_rows(monkeypatch):
 @pytest.fixture(autouse=True)
 def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     """UNKNOWN host; tests may opt into config with monkeypatch.setenv('AUTOOS_ROOT', ...)."""
+    if request.node.get_closest_marker('real_base_fresh') is None:
+        from plangraph.spawner import base_fresh
+        def fake_base_fresh(*args, **kwargs):
+            return dict(ok=True, reason=None, origin_sha='0' * 40, behind=0)
+        monkeypatch.setattr(base_fresh, 'base_fresh', fake_base_fresh)
+        monkeypatch.setattr(base_fresh, '_check', fake_base_fresh)
     root = tmp_path_factory.mktemp('empty-autoos')
     monkeypatch.setenv('AUTOOS_ROOT', str(root))
     state = tmp_path_factory.mktemp('xdg-state')  # never the production spawner/leg state (D-2844)

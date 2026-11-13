@@ -23,6 +23,11 @@ def test_live_smoke_contract():
 @pytest.mark.parametrize('visible', [True, False])
 def test_smoke_requires_live_readback(tmp_path, monkeypatch, visible):
     """Execute the shipped smoke offline; a marker alone must never pass."""
+    for args in (['init', '--bare', str(tmp_path / 'origin.git')], ['init', '-b', 'main'],
+                 ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                  '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'initial'],
+                 ['remote', 'add', 'origin', str(tmp_path / 'origin.git')], ['push', 'origin', 'HEAD:main']):
+        subprocess.run(['git', '-C', str(tmp_path), *args], check=True, capture_output=True)
     runs = []
 
     class Handler(BaseHTTPRequestHandler):
