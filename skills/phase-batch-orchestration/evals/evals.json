@@ -10,5 +10,11 @@
     "prompt": "A checkpoint review found several problems. Plan the fix and handoff.",
     "must": ["One fix brief with every finding", "One re-review of the delta", "Never a fourth writer round"],
     "must_not": ["restart an unlimited review loop", "merge without a GO"]
+  },
+  {
+    "id": "phase-batch-host-placement",
+    "prompt": "Place an authorized package when some worker hosts failed readiness, then handle a lost connection after the launch was acknowledged.",
+    "must": ["only `READY` is eligible", "--exclude-host ID", "An acknowledged run must not be duplicated"],
+    "must_not": ["choose a host manually", "retry the acknowledged run", "disable hooks to pass readiness"]
   }
 ]
