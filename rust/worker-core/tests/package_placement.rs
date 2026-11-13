@@ -83,3 +83,23 @@ fn refresh_probes_only_stale_samples_and_records_unreachable() {
     );
     assert!(!rows[1].sample.as_ref().unwrap().reachable);
 }
+
+#[test]
+fn stricter_host_limits_and_readiness_exclusions_are_binding() {
+    let mut policy = Policy::default();
+    policy.host_limits.insert("worker".into(), (4096, 2048));
+    assert!(choose(&[host("worker", 6000, 0.0)], &policy, 100)
+        .host
+        .is_none());
+    policy.excluded_hosts.insert("station".into());
+    let result = choose(
+        &[host("station", 16000, 0.0), host("worker", 16000, 1.0)],
+        &policy,
+        100,
+    );
+    assert_eq!(result.host.as_deref(), Some("worker"));
+    assert_eq!(
+        result.refusals[0].reason,
+        "host excluded by readiness preflight"
+    );
+}

@@ -5,7 +5,11 @@ use crate::{
     hosts::{HostRegistry, Os},
 };
 use serde::{Deserialize, Serialize};
-use std::{io, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io,
+    path::Path,
+};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Candidate {
@@ -21,6 +25,8 @@ pub struct Policy {
     pub floor_mb: u64,
     pub reservation_mb: u64,
     pub max_load_per_core: f64,
+    pub host_limits: BTreeMap<String, (u64, u64)>,
+    pub excluded_hosts: BTreeSet<String>,
 }
 impl Default for Policy {
     fn default() -> Self {
@@ -29,6 +35,27 @@ impl Default for Policy {
             floor_mb: 3000,
             reservation_mb: 2048,
             max_load_per_core: 1.0,
+            host_limits: BTreeMap::new(),
+            excluded_hosts: BTreeSet::new(),
+        }
+    }
+}
+impl Policy {
+    pub fn apply_registry(&mut self, registry: &HostRegistry, role: crate::hosts::Role) {
+        let key = serde_json::to_value(role)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for host in &registry.hosts {
+            self.host_limits.insert(
+                host.id.clone(),
+                (
+                    self.floor_mb.max(host.caps.mem_floor_mb),
+                    self.reservation_mb
+                        .max(host.warmup.ramp_mb.get(&key).copied().unwrap_or(0)),
+                ),
+            );
         }
     }
 }
@@ -45,7 +72,14 @@ pub struct Choice {
 }
 
 pub fn refusal(candidate: &Candidate, policy: &Policy, now: u64) -> Option<String> {
-    let reason = if candidate.workstation && !policy.allow_workstation {
+    let (floor, reservation) = policy
+        .host_limits
+        .get(&candidate.id)
+        .copied()
+        .unwrap_or((policy.floor_mb, policy.reservation_mb));
+    let reason = if policy.excluded_hosts.contains(&candidate.id) {
+        "host excluded by readiness preflight"
+    } else if candidate.workstation && !policy.allow_workstation {
         "workstation not allowed"
     } else if !fleet_series::valid_host(&candidate.id) {
         "invalid host id"
@@ -56,10 +90,10 @@ pub fn refusal(candidate: &Candidate, policy: &Policy, now: u64) -> Option<Strin
             "unreachable"
         } else if row.ts > now || now - row.ts > 120 {
             "stale sample"
-        } else if row.mem_avail_mb.is_none_or(|m| {
-            m.checked_sub(policy.reservation_mb)
-                .is_none_or(|left| left < policy.floor_mb)
-        }) {
+        } else if row
+            .mem_avail_mb
+            .is_none_or(|m| m.checked_sub(reservation).is_none_or(|left| left < floor))
+        {
             "memory below floor after reservation"
         } else if row.cores == 0 || row.cpu_load.is_none_or(|l| !l.is_finite() || l < 0.0) {
             "unknown capacity"
@@ -144,10 +178,18 @@ pub fn refresh_with(
     }
 }
 pub fn load(registry: &HostRegistry, state: &Path, now: u64) -> Vec<Candidate> {
+    load_for_role(registry, state, now, crate::hosts::Role::Implement)
+}
+pub fn load_for_role(
+    registry: &HostRegistry,
+    state: &Path,
+    now: u64,
+    role: crate::hosts::Role,
+) -> Vec<Candidate> {
     let mut hosts: Vec<_> = registry
         .hosts
         .iter()
-        .filter(|h| h.roles.contains(&crate::hosts::Role::Implement))
+        .filter(|h| h.roles.contains(&role))
         .map(|h| Candidate {
             id: h.id.clone(),
             workstation: h.os == Os::Windows,

@@ -31,8 +31,10 @@ Windows workstation placement requires `--allow-workstation`.
 JSON includes the selected host, measurements and every admission refusal.
 Exit 5 means queue: no host admits. `--reservation-mb` sets package memory.
 This admission module is also the Rust overflow spawner's policy source.
-The phase-batch-orchestration skill is absent from this checkout; its caller
-must invoke this command before launch when that skill is available.
+The [phase-batch skill](../skills/phase-batch-orchestration/SKILL.md) calls the
+readiness and placement commands before each package start. Repeat
+`--exclude-host ID` for failed readiness checks; stricter registry RAM floors
+and per-role reservations also apply to both selection and overflow.
 
 Before launching Codex, run `pg-host-readiness --project PATH --sandbox workspace-write`.
 It checks version, login, native sandbox startup, and a commit in an independent
