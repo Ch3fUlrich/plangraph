@@ -35,7 +35,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from seat_backfill import apply_backfill
+from seat_backfill import apply_backfill, repost_transport, _SEND_STATE
 from seat_record import evidence_from_record
 ROUTE = "/v1/verdict"
 TIMEOUT = 30
@@ -223,6 +223,8 @@ def read_record_identity(seat_dir):
 
 
 def main(argv=None):
+    send_state = _SEND_STATE.get()
+    if send_state is not None: send_state["started"] = False
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--key", help="item key to review")
     ap.add_argument("--seat-dir", type=Path)
@@ -231,6 +233,7 @@ def main(argv=None):
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--backfill-dry-run", action="store_true")
     mode.add_argument("--backfill-apply", action="store_true")
+    mode.add_argument("--repost-transport", action="store_true")
     ap.add_argument("--snapshot", type=Path, default=Path("plan.snapshot.json"))
     ap.add_argument("--records-dir", type=Path)
     ap.add_argument("--pr-cache", type=Path, help="JSON object mapping evidenced SHA to merged PR number")
@@ -243,14 +246,17 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if (args.backfill_dry_run or args.backfill_apply) and any(v is not None for v in (args.key, args.seat_dir, args.head, args.writer_family)):
         ap.error("backfill modes cannot use single-seat arguments: --key, --seat-dir, --head, --writer-family")
-    if args.backfill_dry_run or args.backfill_apply or (args.key is None and args.seat_dir is None):
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    if args.backfill_dry_run or args.backfill_apply or (args.key is None and args.seat_dir is None and not args.repost_transport):
         if args.backfill_apply and (not args.url or not args.token_dir or args.dry_run):
             ap.error("--backfill-apply requires --url and --token-dir, without --dry-run")
         from seat_record import backfill
         return backfill(args, main)
     if args.key is None:
         ap.error("the following arguments are required: --key")
+    if args.repost_transport:
+        if args.seat_dir is None or args.token_dir is None or args.writer_family is not None:
+            ap.error("repost requires --seat-dir and --token-dir, without --writer-family")
+        return repost_transport(args, main)
     if any(v is None for v in (args.key, args.seat_dir, args.writer_family, args.token_dir)):
         ap.error("single-record mode requires --key, --seat-dir, --writer-family, --token-dir")
     writer_families = parse_writer_families(args.writer_family)
@@ -358,6 +364,12 @@ def main(argv=None):
         return EXIT_IO
     try:
         token = (args.token_dir / f"reviewer-{family}.token").read_text("utf-8").strip()
+        if not token: raise ValueError("empty reviewer token")
+    except (OSError, ValueError) as exc:
+        print(f"seat_verdict: send failed (token read): {type(exc).__name__}", file=sys.stderr)
+        return EXIT_IO
+    try:
+        if send_state is not None: send_state["started"] = True
         status, reply = send(args.url, token, payload)
     except (OSError, ValueError) as exc:
         print(f"seat_verdict: send failed: {type(exc).__name__}", file=sys.stderr)
