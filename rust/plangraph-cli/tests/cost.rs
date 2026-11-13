@@ -174,6 +174,16 @@ fn real_cli_private_budget_refresh_admit_and_dry_run() {
     assert!(invoke(&["cost-gate", "admit"]).status.success());
     assert!(invoke(&["cost-gate", "status"]).status.success());
     fs::write(&rows_path, fresh(2000000).to_string()).unwrap();
+    let before = fs::read(state.join("plangraph/daily-gate.json")).unwrap();
+    assert_eq!(
+        invoke(&["cost-gate", "admit", "--dry-run"]).status.code(),
+        Some(1)
+    );
+    assert_eq!(
+        fs::read(state.join("plangraph/daily-gate.json")).unwrap(),
+        before
+    );
+
     assert_eq!(invoke(&["cost-gate", "admit"]).status.code(), Some(1));
     fs::write(&rows_path, "{truncated").unwrap();
     let output = invoke(&["cost-gate", "admit"]);

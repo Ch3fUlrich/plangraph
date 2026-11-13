@@ -80,8 +80,6 @@ def resolve_target(target, *, chosen=None):
 
 def admit_daily_budget(leg=None, *, model=None, dry_run=False):
     """Every paid launch/retry asks the Rust gate; unavailable evidence refuses."""
-    if dry_run:
-        return
     from .resolver import get_catalog_models
     from plangraph.planner.review_order import catalog_tiers, payment_tier
     tiers = set()
@@ -99,8 +97,13 @@ def admit_daily_budget(leg=None, *, model=None, dry_run=False):
         return
     import subprocess
     try:
-        result = subprocess.run([os.environ.get('PLANGRAPH_BIN') or 'plangraph',
-                                 'cost-gate', 'admit'], timeout=30,
+        gate_home = Path.home()
+        if os.name == 'posix':
+            import pwd
+            gate_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        gate = gate_home / '.local/bin' / ('plangraph.exe' if os.name == 'nt' else 'plangraph')
+        command = [str(gate), 'cost-gate', 'admit'] + (['--dry-run'] if dry_run else [])
+        result = subprocess.run(command, timeout=30,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         raise SpawnRefused('daily cost gate unavailable; paid launch refused') from None

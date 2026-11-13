@@ -1,0 +1,1 @@
+- Bind paid admission to the installed account-local Rust binary, ignore caller binary overrides, and evaluate paid dry runs with the read-only gate instead of bypassing admission.

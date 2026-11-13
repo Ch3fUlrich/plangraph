@@ -676,8 +676,8 @@ Paid harness launches and review retries call the Rust `plangraph cost-gate admi
 before spawning. The direct runner and Rust launch-spec adapter enforce the same
 boundary. Paid catalog overrides and unknown billing evidence also require it;
 missing or failed execution refuses the launch. Private configuration and gateway
-export requirements are in [daily spend admission](cost-gate.md). Dry runs do not
-launch and remain available without private budget configuration.
+export requirements are in [daily spend admission](cost-gate.md). Paid dry runs also evaluate admission without writing gate state; neither a
+caller-selected binary nor the dry-run flag can suppress the budget check.
 
 Haiku is the existing `claude-haiku-5.5` leg (review only, Claude family,
 subscription harness `claude -p`). Explicit picks use normal run records/stdout

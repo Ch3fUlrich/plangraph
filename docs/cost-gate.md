@@ -4,8 +4,7 @@
 export. `cost-gate admit` recomputes immediately before every paid launch/retry;
 it exits 0 only for `ok` or `near`, 1 for over/unpriced/truncated/invalid evidence,
 and 2 for missing configuration or unavailable/stale/malformed input. No public
-budget default exists. `--dry-run` computes without writing. Dry-run spawns do not
-start paid work and therefore bypass launch admission.
+budget default exists. `--dry-run` computes without writing. Paid dry-run spawns also require admission, using the read-only gate preview.
 
 The private config is `~/.config/plangraph/daily-gate.toml`, overridden by
 PLANGRAPH_COST_CONFIG. It must have mode 0600 on Unix and an owner-only ACL on
@@ -39,8 +38,10 @@ observed daily spend, not reservations for concurrent or in-flight calls.
 State is private, atomic and locked at XDG_STATE_HOME/plangraph/daily-gate.json
 and `.status` (LOCALAPPDATA on Windows). `cost-gate status` is the external
 routerctl cost-line interface and refuses stale status. Admission never trusts
-cached or migrated verdicts. PLANGRAPH_BIN selects the Rust gate binary for the
-Python launch boundary; otherwise it resolves `plangraph` on PATH. Missing gate
+cached or migrated verdicts. The Python launch boundary uses the installed `.local/bin/plangraph` binary
+(`plangraph.exe` on Windows) under the user account home; POSIX resolves that
+home from the OS account database. PLANGRAPH_BIN and PATH cannot select a
+replacement gate. Keep that installation operator-controlled. Missing gate
 execution refuses paid work. Catalog-paid overrides, explicit paid legs, unknown
 billing tiers and the designated paid review seat all require the gate.
 

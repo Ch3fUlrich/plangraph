@@ -2,6 +2,8 @@
 import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
+from pathlib import Path
+import os
 
 import pytest
 
@@ -10,8 +12,16 @@ from plangraph.routing_errors import SpawnRefused
 from plangraph.spawner.target import admit_daily_budget
 
 
+@pytest.fixture(autouse=True)
+def private_account_home(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    if os.name == 'posix':
+        import pwd
+        monkeypatch.setattr(pwd, 'getpwuid', lambda _: SimpleNamespace(pw_dir=str(tmp_path)))
+
+
 @pytest.mark.parametrize('code', [1, 2, 3])
-def test_paid_refused_and_output_never_echoed(monkeypatch, code):
+def test_paid_refused_and_output_never_echoed(monkeypatch, tmp_path, code):
     import subprocess
     calls = []
     def run(argv, **options):
@@ -22,7 +32,8 @@ def test_paid_refused_and_output_never_echoed(monkeypatch, code):
     paid = replace(DEFAULT_LEGS[0], tier='paid')
     with pytest.raises(SpawnRefused, match='daily cost gate refused'):
         admit_daily_budget(paid)
-    assert calls[0][0] == ['/private/plangraph', 'cost-gate', 'admit']
+    assert Path(calls[0][0][0]).parent == tmp_path / '.local/bin'
+    assert calls[0][0][1:] == ['cost-gate', 'admit']
     assert calls[0][1]['timeout'] == 30
     assert calls[0][1]['stdout'] == subprocess.DEVNULL
 
@@ -35,7 +46,8 @@ def test_gate_unavailable_free_and_dry_run(monkeypatch):
     paid = replace(DEFAULT_LEGS[0], tier='paid')
     with pytest.raises(SpawnRefused, match='unavailable'):
         admit_daily_budget(paid)
-    admit_daily_budget(paid, dry_run=True)
+    with pytest.raises(SpawnRefused, match='unavailable'):
+        admit_daily_budget(paid, dry_run=True)
     admit_daily_budget(replace(paid, tier='subscription'))
 
 
@@ -62,3 +74,19 @@ def test_catalog_paid_override_and_unknown_billing_gate(monkeypatch):
     monkeypatch.setattr('plangraph.spawner.resolver.get_catalog_models', lambda: [{'id':'unknown/model'}])
     with pytest.raises(SpawnRefused, match='daily cost gate refused'):
         admit_daily_budget(model='unknown/model')
+
+
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_caller_cannot_choose_successful_gate_or_skip_preview(monkeypatch, tmp_path, dry_run):
+    import subprocess
+    untrusted = str(tmp_path / 'always-accept')
+    monkeypatch.setenv('PLANGRAPH_BIN', untrusted)
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0 if argv[0] == untrusted else 1)
+    monkeypatch.setattr(subprocess, 'run', run)
+    with pytest.raises(SpawnRefused, match='daily cost gate refused'):
+        admit_daily_budget(replace(DEFAULT_LEGS[0], tier='paid'), dry_run=dry_run)
+    assert calls and calls[0][0] != untrusted
+    assert ('--dry-run' in calls[0]) == dry_run
