@@ -75,10 +75,17 @@ def test_parent_admission_precedes_fresh_handoff(tmp_path, monkeypatch, outcome)
 
 @pytest.mark.parametrize('envelope', [{'seats': None}, {'seats': []},
     {'seats': [], 'writers': [{'run_id': 'run-child', 'status': 'completed', 'exit_code': 0}]}])
-def test_injected_cli_keeps_local_imports_and_handles_empty_seats(tmp_path, monkeypatch, capsys, envelope):
+@pytest.mark.parametrize('installed', [False, True])
+def test_injected_cli_keeps_local_imports_and_handles_empty_seats(tmp_path, monkeypatch, capsys, envelope, installed):
     import io
     import json
+    import plangraph
     from plangraph.spawner import cli
+    root = tmp_path / ('site-packages' if installed else 'src'); root.mkdir()
+    if not installed: (tmp_path / 'pyproject.toml').touch()
+    monkeypatch.setattr(plangraph, '__file__', str(root / 'plangraph/__init__.py'))
+    monkeypatch.delenv('PYTHONPATH', raising=False)
+    monkeypatch.setattr(git_guard.subprocess, 'run', Mock(return_value=SimpleNamespace(returncode=0)))
     service = SpawnService(runner=SimpleNamespace(default_cwd=str(tmp_path)), state=tmp_path)
     monkeypatch.setattr(service, 'route', Mock())
     monkeypatch.setattr(cli, 'SpawnService', lambda **kwargs: service)
@@ -90,7 +97,9 @@ def test_injected_cli_keeps_local_imports_and_handles_empty_seats(tmp_path, monk
         def __init__(self, argv, **kwargs):
             self.stdin, self.stdout = Input(), self
             assert kwargs['cwd'] is None
-            assert '' not in kwargs['env']['PYTHONPATH'].split(os.pathsep)
+            expected = None if installed else str(root)
+            assert kwargs['env'].get('PYTHONPATH') == expected
+            assert '' not in kwargs['env'].get('PYTHONPATH', 'absent').split(os.pathsep)
         def readline(self):
             payload = json.loads(self.stdin.getvalue())
             assert payload['state'] == str(tmp_path) and '_tree' not in payload
@@ -101,6 +110,49 @@ def test_injected_cli_keeps_local_imports_and_handles_empty_seats(tmp_path, monk
         'Implement the requested change.']) == 0
     assert json.loads(capsys.readouterr().out)['seats'] == envelope['seats']
     assert service.injected_runner and not service.fresh_tree
+
+
+@pytest.mark.parametrize('envelope', [{'seats': []}, {'seats': None}, {'writers': []},
+    {'seats': [], 'writers': []}])
+def test_cli_empty_envelope_without_status_fails(tmp_path, monkeypatch, capsys, envelope):
+    from plangraph.spawner import cli
+    service = SpawnService(runner=SimpleNamespace(), state=tmp_path)
+    async def spawn(**kwargs): return envelope
+    monkeypatch.setattr(service, 'spawn', spawn)
+    monkeypatch.setattr(service, 'route', Mock())
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kwargs: service)
+    assert cli.main(['spawn', '--dry-run', '--card', '{"task":"test"}',
+        'Implement the requested change.']) == 1
+    import json
+    assert json.loads(capsys.readouterr().out) == envelope
+
+
+def test_supervisor_consumes_parent_admission_once(tmp_path, monkeypatch, capsys):
+    import io
+    import json
+    from plangraph.spawner import cli
+    service = SpawnService(runner=SimpleNamespace(), state=tmp_path)
+    calls = []
+    def admit(options, **kwargs):
+        calls.append('admit'); return {'run_id': 'run-queued', 'status': 'queued'}
+    async def spawn(prompt='', wait_seconds=0, _placement=None):
+        calls.append('launch')
+        assert _placement == {'host': 'local', 'reason': 'local_fallback_no_remote'}
+        return {'run_id': 'run-child', 'status': 'completed', 'exit_code': 0}
+    monkeypatch.setattr(service, 'admit_spawn', admit)
+    monkeypatch.setattr(service, '_spawn', spawn)
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kwargs: service)
+    monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps(dict(state=str(tmp_path),
+        prompt='Implement the requested change.', _admitted=True,
+        _placement={'host': 'local', 'reason': 'local_fallback_no_remote'}))))
+    class Output(io.StringIO):
+        def close(self): pass
+    output = Output(); monkeypatch.setattr('sys.stdout', output)
+    assert cli.main(['--supervise']) == 0
+    assert json.loads(output.getvalue())['run_id'] == 'run-child'
+    assert calls == ['launch']
+    assert asyncio.run(service.spawn(prompt='Implement another change.'))['status'] == 'queued'
+    assert calls == ['launch', 'admit']
 
 
 @pytest.mark.parametrize('error', [OSError('probe unavailable'), git_guard.subprocess.TimeoutExpired('probe', 10)])

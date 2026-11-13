@@ -38,6 +38,7 @@ class spawn_service:
         path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(record))
         return record
     async def spawn(self, prompt, card=None, **kwargs):
+        assert self._parent_admitted is True
         if (card or {}).get('refuse'):
             from plangraph.planner.routing import SpawnRefused
             raise SpawnRefused('fixture refusal')
@@ -182,15 +183,20 @@ def test_mcp_dispatch_uses_tree_without_restarting_server(trees):
         (state / 'finish-run-mcp').touch()
         await asyncio.gather(*server.service.tasks.values())
     asyncio.run(run())
-def test_run_tree_design_and_changelog_name_the_evidence_boundary():
-    root = Path(__file__).resolve().parents[1]
-    for name in ('docs/SPAWNER.md', 'changelog.d/SPAWNER-RUN-CHECKOUT-FOLLOWS-MAIN.md'):
-        text = (root / name).read_text()
-        assert 'src/plangraph/live_follow.py:_follow' in text
-        assert 'empty-run-list' in text and 'tree_sha' in text
-        assert 'plangraph.spawner.launch_spec' in text
-        assert ('**before** redeploying this spawnd binary' in text
-                or 'before redeploying the new spawnd binary' in text)
+def test_run_tree_design_and_changelog_name_the_evidence_boundary(trees):
+    # Exercise the documented boundary: code selection neither waits for idle
+    # runs nor fast-forwards the caller's checkout like the render-only updater.
+    origin, repo, state = trees
+    caller = git(repo, 'rev-parse', 'HEAD')
+    with git_guard.run_tree(state, repo) as a: pass
+    record = state / 'runs/run-boundary/record.json'; record.parent.mkdir(parents=True)
+    record.write_text(json.dumps(dict(a, status='running', ended=None)))
+    main = advance(origin)
+    with git_guard.run_tree(state, repo) as b:
+        assert b['tree_sha'] == main != caller
+        assert Path(a['tree_path']).is_dir()
+        assert git(repo, 'rev-parse', 'HEAD') == caller
+        assert git(b['tree_path'], 'branch', '--show-current') == ''
 
 
 @pytest.mark.parametrize('envelope', [{'seats': None}, {'seats': []},
@@ -271,17 +277,25 @@ def test_cleanup_continues_after_one_tree_fails_and_unlinks_lease(trees, monkeyp
     if failure == 'dirty':
         (b_path / 'untracked').touch()
     else:
-        stat, seen = Path.stat, []
-        def fail_once(path, *args, **kwargs):
-            if path == b_path:
-                seen.append(path)
-                if len(seen) == 4: raise OSError('cannot read tree')
-            return stat(path, *args, **kwargs)
-        monkeypatch.setattr(Path, 'stat', fail_once)
+        cleanup, stat, seen, faults = git_guard._cleanup_tree, Path.stat, [], []
+        def fail_cleanup(old, *args):
+            seen.append(old)
+            with monkeypatch.context() as patch:
+                def fail_stat(path, *a, **kw):
+                    if path == b_path:
+                        faults.append(path)
+                        raise OSError('cannot read tree during cleanup')
+                    return stat(path, *a, **kw)
+                patch.setattr(Path, 'stat', fail_stat)
+                return cleanup(old, *args)
+        monkeypatch.setattr(git_guard, '_cleanup_tree', fail_cleanup)
     with git_guard.run_tree(state, repo): pass
     assert b_path.is_dir() and not a_path.exists()
     assert not (state / 'trees' / (a['tree_sha'] + '.lease')).exists()
     if failure == 'dirty': assert (state / 'trees' / (b['tree_sha'] + '.lease')).is_file()
+    else:
+        assert seen == [b_path, a_path]
+        assert faults == [b_path]
 
 
 @pytest.mark.parametrize('unreadable', [False, True])

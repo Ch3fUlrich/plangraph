@@ -156,7 +156,9 @@ class SeatSpawnMixin:
             from plangraph.planner.routing import SpawnRefused
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
-            admitted = self.admit_spawn(options, card=card)
+            parent_admitted = getattr(self, '_parent_admitted', False)
+            self._parent_admitted = False  # One handoff, never subsequent service requests.
+            admitted = None if parent_admitted else self.admit_spawn(options, card=card)
             if admitted is not None:
                 return admitted
             if getattr(self, 'fresh_tree', False) and not options.get('dry_run'):

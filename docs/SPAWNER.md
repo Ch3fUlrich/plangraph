@@ -1,16 +1,7 @@
 # Plangraph Spawner & Model Routing Architecture
 
-### Run tree
-Before this slice, `tools/plangraph-spawn:module` and `tools/plangraph-spawn.py:module` import their checkout's `src`; `src/plangraph/spawner/cli.py:main` passed that source to `_supervise`. `src/plangraph/spawner/mcp.py:MCPSpawnerServer.call_tool` runs dispatch in the long-lived interpreter. `rust/pg-spawnd/src/adapter.rs:Adapter::run` and `rust/pg-spawnd/src/launch.rs:LaunchAdapter::request` inherited its Python import path.
-The reported `spawner-run` / `spawner-main2` checkout updater and D-3861 empty-run-list condition are **not present** in `src/plangraph/spawner`, `deploy/` or `tools/`; no repository file:function can honestly be assigned to that host-local wrapper. The repository's fast-forward is `src/plangraph/live_follow.py:_follow` (`fetch`, CI check, `merge --ff-only`), used by `deploy/systemd/plangraph-render.service:ExecStartPre` for rendering, not spawner admission. `src/plangraph/spawner/git_guard.py:create` fetches optional *task* worktrees, without an idle-run condition.
-`src/plangraph/spawner/git_guard.py:run_tree` fetches the host source clone (`PLANGRAPH_SPAWNER_REPO`, otherwise the package checkout; bare clones work), pins `origin/main`, and creates `<state>/trees/<sha>` with `git worktree add --detach`. Selection/creation/cleanup share a lock, never an empty run list. Fetch has a ten-second bound; failure uses the newest cached tree (by last selection time), or seeds from cached main/HEAD on first use, and records `tree_stale: fetch_failed|fetch_timeout` (`main_unavailable` if only HEAD resolves); no run is refused just because fetch failed. An unusable local repository/disk still fails explicitly.
-CLI supervisors and MCP's `git_guard.py:fresh_spawn` import the selected tree through exclusive `PYTHONPATH=<tree>/src` and supervisor cwd; `_supervise` stamps every record with `tree_sha` / `tree_path` and optional `tree_stale`. Task cwd remains the caller's repository (or its opt-in task worktree); code-tree selection never redirects writer edits into the shared code cache. Direct library/injected services and dry runs retain their local test/planning path. Spawnd's `launch_spec.py:fresh_main` imports fresh per-run launch construction; `rust/pg-spawnd/src/runs.rs:Runs::spawn_using` copies its tree event into the durable record. Already-running workers never switch trees.
-Cleanup considers only SHA-named, non-symlink trees unused for seven days; live/unfinished records, survivors and startup leases protect them. Malformed/unreadable records suppress cleanup; each failed/dirty removal is isolated, and successful removal unlinks its lease. The exclusive creation lock is released before yielding a live run; its shared lease does not block later selections. Windows uses the existing `msvcrt` creation lock, skips POSIX leases and disables cleanup conservatively; spawning still works without `fcntl`.
-No service is restarted here. MCP schema/validation, route/status/cancel and the fresh-worker launcher remain service-process code; spawnd's Rust routing, supervisor, monitoring, record finalization and binaries likewise need a restart/redeploy to change (next slice). Its Python launch construction changes per run, not its Rust completion logic. Host rollout and units remain operator work.
-Upgrade the service interpreter's Python package to include runnable `plangraph.spawner.launch_spec` **before** redeploying this spawnd binary; `PG_SPAWND_PYTHON` must resolve that upgraded interpreter. The initial adapter cannot bootstrap from a newer tree if its installed module is missing. Its JSON request requires absolute `state`; invalid/missing state is rejected before Git, not defaulted. Parent MCP admission runs before worker handoff, and child refusals retain `SpawnRefused` at the parent boundary.
-On each POSIX host, after a new spawn, inspect `python3 -m plangraph.spawner.cli result RUN_ID | jq '{run_id,tree_sha,tree_stale}'` under that service's user/state (`--state STATE` before `result` if nondefault); compare with `git -C SOURCE rev-parse origin/main`. This is a check command, not a claim of a live rollout.
-
 ### QUOTA-PAUSE-GATE
+
 The usage owner creates `quota-pause` in the spawner state directory at usage
 >=95% and unlinks it at reset. Presence alone (including a dangling symlink)
 pauses admission: no second meter, expiry or automatic clearing. Flag read errors
@@ -40,6 +31,17 @@ either a flag or symlink, or a missing, invalid, unreadable or unsearchable stat
 directory. Its home fallback is systemd `%h`, independent of the manager's `HOME`;
 redeploy the service template to apply the guard.
 
+### Run tree
+
+Before this slice, `tools/plangraph-spawn:module` and `tools/plangraph-spawn.py:module` import their checkout's `src`; `src/plangraph/spawner/cli.py:main` passed that source to `_supervise`. `src/plangraph/spawner/mcp.py:MCPSpawnerServer.call_tool` runs dispatch in the long-lived interpreter. `rust/pg-spawnd/src/adapter.rs:Adapter::run` and `rust/pg-spawnd/src/launch.rs:LaunchAdapter::request` inherited its Python import path.
+The reported checkout updater and D-3861 empty-run-list condition are **not present** in `src/plangraph/spawner`, `deploy/` or `tools/`; no repository file:function can honestly be assigned to that external wrapper. The repository's fast-forward is `src/plangraph/live_follow.py:_follow` (`fetch`, CI check, `merge --ff-only`), used by `deploy/systemd/plangraph-render.service:ExecStartPre` for rendering, not spawner admission. `src/plangraph/spawner/git_guard.py:create` fetches optional *task* worktrees, without an idle-run condition.
+`src/plangraph/spawner/git_guard.py:run_tree` fetches the explicit source repository when supplied, otherwise `PLANGRAPH_SPAWNER_REPO` or the package checkout (bare clones work), pins `origin/main`, and creates `<state>/trees/<sha>` with `git worktree add --detach`. Selection/creation/cleanup share a lock, never an empty run list. Fetch has a ten-second bound; failure uses the newest cached tree (by last selection time), or seeds from cached main/HEAD on first use, and records `tree_stale: fetch_failed|fetch_timeout` (`main_unavailable` if only HEAD resolves); no run is refused just because fetch failed. An unusable local repository/disk still fails explicitly.
+CLI supervisors and MCP's `git_guard.py:fresh_spawn` import the selected tree through exclusive `PYTHONPATH=<tree>/src` and supervisor cwd; `_supervise` stamps every record with `tree_sha` / `tree_path` and optional `tree_stale`. Task cwd remains the caller's repository (or its opt-in task worktree); code-tree selection never redirects writer edits into the shared code cache. Direct library/injected services and dry runs retain their local test/planning path. Spawnd's `launch_spec.py:fresh_main` imports fresh per-run launch construction; `rust/pg-spawnd/src/runs.rs:Runs::spawn_using` copies its tree event into the durable record. Already-running workers never switch trees.
+Cleanup considers only SHA-named, non-symlink trees unused for seven days; nonterminal/unknown records, survivors and startup leases protect them. Known terminal statuses permit cleanup even without `ended`, including refused records. Malformed/unreadable records suppress cleanup; each failed/dirty removal is isolated, and successful removal unlinks its lease. The exclusive creation lock is released before yielding a live run; its shared lease does not block later selections and closes even if selection fails. Windows uses the existing `msvcrt` creation lock, skips POSIX leases and disables cleanup conservatively; spawning still works without `fcntl`.
+No service is restarted here. MCP schema/validation, route/status/cancel and the fresh-worker launcher remain service-process code; spawnd's Rust routing, supervisor, monitoring, record finalization and binaries likewise need a restart/redeploy to change (next slice). Its Python launch construction changes per run, not its Rust completion logic. Host rollout and units remain operator work.
+Upgrade the service interpreter's Python package to include runnable `plangraph.spawner.launch_spec` **before** redeploying this spawnd binary; `PG_SPAWND_PYTHON` must resolve that upgraded interpreter. The initial adapter cannot bootstrap from a newer tree if its installed module is missing. Its JSON request requires absolute `state`; invalid/missing state is rejected before Git, not defaulted. Parent MCP admission runs once before worker handoff; an internal one-use handoff preserves placement without repeating admission's queue/remote side effects. Child refusals retain `SpawnRefused` at the parent boundary. Adapter timeout/invalid-output failures retain the `launch-spec failed` diagnostic contract.
+On each POSIX host, after a new spawn, inspect `python3 -m plangraph.spawner.cli result RUN_ID | jq '{run_id,tree_sha,tree_stale}'` under that service's user/state (`--state STATE` before `result` if nondefault); compare with `git -C SOURCE rev-parse origin/main`. This is a check command, not a claim of a live rollout.
+
 Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; private-key blocks are masked in both modes, and token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
 Python and Rust order: complete/truncated PEM, Bearer, then plain-mode pre-pass P (Python first masks wider names as below):
 shield every matched assignment's name/quote/separator with an indexed marker
@@ -65,6 +67,7 @@ Stored stdout/stderr tails have already passed the output scrubber at collection
 A tail therefore masks commit SHAs and long slash paths: take SHAs from git or the run record, never from a tail.
 
 ### Prompt delivery
+
 Every harness and helper receives the prompt by stdin or file, never argv, for
 all prompt sizes on every OS (D-5233). Python's Linux OOM child inherits the stdin
 pipe; pg-spawnd uses the same launch-spec transport.
@@ -91,6 +94,7 @@ the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.
 
 ### MiMo seat timeouts and verdict packaging (MIMO-VERDICT-TIMEOUTS)
+
 For MiMo seats and all other `review` runs, `run_watchdog_limits.thresholds` sets
 `hard_max=True`, including default caps: reviews never wait for a writer's first
 edit and ignore a valid `hard_first_edit` opt-in. Card limits must be positive,
@@ -116,6 +120,7 @@ whitespace-only stops and tool calls cannot launder truncation into a verdict.
 A completed `stop` answer remains eligible.
 
 ### Reasoning-only output exhaustion (MIMO-REASONING-OUTPUT-LIMIT)
+
 Before decoding display stdout, `opencode_answer.record_steps` retains each
 `step_finish` as an `opencode_step_finish` event with `finish_reason`,
 `output_tokens` and `reasoning_tokens`; absent usage remains null, not zero.
@@ -171,6 +176,7 @@ eligible row is copied; ties prefer the most recently created row, then the smal
 credential ID. This selection also applies to mixed legacy/v2 stores. A failed query or install reports
 `no row / inactive or store error`, not a login instruction; credentials stay out of logs and events.
 ### Doctor host source checks
+
 `python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust
 `pg-spawnd doctor-sources` subcommand. `doctor.py` resolves it on the host's
 `PATH`, never from checkout build artifacts, and reads its JSON check rows with
@@ -270,6 +276,7 @@ its timeout stops waiting, not the writer.
 Plain stdout, including text saying 429, is never provider evidence.
 
 ### Opt-in per-attempt worktrees (RUN-WORKTREE slice 1)
+
 CLI `spawn --run-worktree` / service `spawn(run_worktree=True)` creates a fresh
 `attempt-<uuid>` directory before each launch, including sequential fallthroughs
 and fixer continuations. The trusted `PLANGRAPH_SETTINGS` JSON/TOML top-level
@@ -356,6 +363,7 @@ import `plangraph.spawner` at runtime; the boundary is enforced by
 `tests/test_spawner_import_guard.py`. Selection runs without a feature flag.
 
 ### Card-driven routing core
+
 `planner.routing.plan_spawn(card, role="implement"|"review")` applies the
 canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
 Writers use Sol xhigh then agy Gemini Flash (`WRITER_ORDER`); plain Sol is explicit-only. See [implement route defaults](routing.md); banned/off families are skipped for writers too.
@@ -409,6 +417,7 @@ missing tables and malformed model IDs return an empty mapping with explicit err
 Duplicate model rows expose `benchmark_row_count`; the first row supplies metrics. Bare harness model ids also resolve exact provider-qualified benchmark rows; explicit bare rows win, missing rows remain gaps, and the Opus high-effort leg maps to `agy/claude-opus-5-5-high`. No probe latency is treated as a benchmark measurement.
 
 ### Required benchmark release/swap gate (D-2576)
+
 Before an OmniRoute image release or swap, check both host database snapshots:
 
 ```bash
@@ -438,6 +447,7 @@ Plangraph Spawner provisions, routes, and supervises autonomous agents across mu
 ---
 
 ## 1. Architecture Overview
+
 The spawner pipeline follows a deterministic, layered design:
 
 ```mermaid

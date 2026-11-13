@@ -13,7 +13,7 @@ rewritten from a snapshot.  Errors listing the config only record a warning
 event: the run is neither failed nor restored.
 """
 from pathlib import Path
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import os
 import re
 import subprocess
@@ -31,74 +31,83 @@ def run_tree(state, repo=None):
     if os.name != 'nt':
         import fcntl
     state = Path(state).resolve()
-    repo = Path(os.environ.get('PLANGRAPH_SPAWNER_REPO') or repo or
+    repo = Path(repo or os.environ.get('PLANGRAPH_SPAWNER_REPO') or
                 Path(__file__).resolve().parents[3])
     root = state / 'trees'
     def git(*args):
         return subprocess.run(['git', '-C', str(repo), *map(str, args)],
-            check=True, capture_output=True, text=True, timeout=10 if args[0] == 'fetch' else 30).stdout.strip()
+            check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=10 if args[0] == 'fetch' else 30).stdout.strip()
     def valid(path):
         return (not path.is_symlink() and path.is_dir() and
                 re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', path.name))
-    with run_worktree_lock(root):
-        stale = None
-        try:
-            git('fetch', '--no-write-fetch-head', 'origin',
-                '+refs/heads/main:refs/remotes/origin/main')
-        except (OSError, subprocess.SubprocessError) as exc:
-            stale = 'fetch_timeout' if isinstance(exc, subprocess.TimeoutExpired) else 'fetch_failed'
-        cached = []
-        for candidate in root.iterdir():
+    with ExitStack() as resources:
+        with run_worktree_lock(root):
+            stale = None
             try:
-                if valid(candidate): cached.append((candidate.stat().st_mtime, candidate))
-            except OSError:
-                continue
-        existing = [p for _, p in sorted(cached, reverse=True)]
-        try:
-            sha = (existing[0].name if stale and existing else
-                   git('rev-parse', '--verify', 'origin/main^{commit}'))
-        except (OSError, subprocess.SubprocessError):
-            sha = git('rev-parse', '--verify', 'HEAD^{commit}')
-            stale = stale or 'main_unavailable'
-        path = root / sha
-        if path.exists() and not valid(path):
-            raise RuntimeError('run_tree_invalid')
-        if not path.exists():
-            git('worktree', 'add', '--detach', path, sha)
-        os.utime(path, None)  # Startup grace also covers spawnd's adapter-to-record handoff.
-        lease = None
-        if os.name != 'nt':
-            lease = (root / (sha + '.lease')).open('a+b')
-            fcntl.flock(lease, fcntl.LOCK_SH)
-        # Unknown/corrupt records withhold cleanup, never admission.
-        try:
-            live = set()
-            for record in (state / 'runs').glob('*/record.json'):
-                row = json.loads(record.read_text())
-                if row.get('ended') is None or row.get('survivors') or row.get('status') in ('running', 'queued'):
-                    live.add(row.get('tree_sha'))
-        except (OSError, ValueError, TypeError, AttributeError):
-            live = None
-        # Windows has no shared lease implementation: spawn, but never reap there.
-        for old in existing if live is not None and os.name != 'nt' else ():
-            try:
-                if old == path or old.name in live or time.time() - old.stat().st_mtime <= 7 * 86400:
+                git('fetch', '--no-write-fetch-head', 'origin',
+                    '+refs/heads/main:refs/remotes/origin/main')
+            except (OSError, subprocess.SubprocessError) as exc:
+                stale = 'fetch_timeout' if isinstance(exc, subprocess.TimeoutExpired) else 'fetch_failed'
+            cached = []
+            for candidate in root.iterdir():
+                try:
+                    if valid(candidate): cached.append((candidate.stat().st_mtime, candidate))
+                except OSError:
                     continue
-                lease_path = root / (old.name + '.lease')
-                with lease_path.open('a+b') as guard:
-                    try:
-                        fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    except BlockingIOError:
-                        continue
-                    git('worktree', 'remove', old)  # Never force-remove a dirty tree.
-                lease_path.unlink(missing_ok=True)
+            existing = [p for _, p in sorted(cached, reverse=True)]
+            try:
+                sha = (existing[0].name if stale and existing else
+                       git('rev-parse', '--verify', 'origin/main^{commit}'))
             except (OSError, subprocess.SubprocessError):
-                continue  # One dirty/unreadable tree must not starve later candidates.
-    try:
+                sha = git('rev-parse', '--verify', 'HEAD^{commit}')
+                stale = stale or 'main_unavailable'
+            path = root / sha
+            if path.exists() and not valid(path):
+                raise RuntimeError('run_tree_invalid')
+            if not path.exists():
+                git('worktree', 'add', '--detach', path, sha)
+            os.utime(path, None)  # Startup grace also covers spawnd's adapter-to-record handoff.
+            if os.name != 'nt':
+                lease = resources.enter_context((root / (sha + '.lease')).open('a+b'))
+                fcntl.flock(lease, fcntl.LOCK_SH)
+            # Unknown/corrupt records withhold cleanup, never admission.
+            try:
+                live = set()
+                for record in (state / 'runs').glob('*/record.json'):
+                    row = json.loads(record.read_text(encoding='utf-8'))
+                    # Python and Rust status is authoritative even without ended.
+                    terminal = ('completed', 'failed', 'cancelled', 'stalled', 'timeout',
+                                'timed_out', 'refused', 'limited', 'dry_run', 'needs_input',
+                                'orphaned', 'terminated_after_answer')
+                    if row.get('survivors') or row.get('status') not in terminal:
+                        live.add(row.get('tree_sha'))
+            except (OSError, ValueError, TypeError, AttributeError):
+                live = None
+            # Windows has no shared lease implementation: spawn, but never reap there.
+            for old in existing if live is not None and os.name != 'nt' else ():
+                try:
+                    if old == path or old.name in live:
+                        continue
+                    _cleanup_tree(old, root, git)
+                except (OSError, subprocess.SubprocessError):
+                    continue  # One dirty/unreadable tree must not starve later candidates.
         yield dict(tree_sha=sha, tree_path=str(path), **({'tree_stale': stale} if stale else {}))
-    finally:
-        if lease is not None:
-            lease.close()
+
+
+def _cleanup_tree(old, root, git):
+    """Reap one expired POSIX tree only after obtaining its exclusive lease."""
+    import fcntl
+    if time.time() - old.stat().st_mtime <= 7 * 86400:
+        return
+    lease_path = root / (old.name + '.lease')
+    with lease_path.open('a+b') as guard:
+        try:
+            fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        git('worktree', 'remove', old)  # Never force-remove a dirty tree.
+    lease_path.unlink(missing_ok=True)
 
 
 async def fresh_spawn(service, options):
@@ -119,7 +128,7 @@ async def fresh_spawn(service, options):
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             limit=4 * 1024 * 1024, **background_process_options(new_session=True, platform=os.name))
         payload = {k: v for k, v in options.items() if k != 'wait_seconds'}
-        child.stdin.write((json.dumps(dict(payload, state=str(state), _tree=tree,
+        child.stdin.write((json.dumps(dict(payload, state=str(state), _tree=tree, _admitted=True,
             _cwd=getattr(getattr(service, 'runner', None), 'default_cwd', os.getcwd()))) + '\n').encode())
         await child.stdin.drain()
         child.stdin.close()

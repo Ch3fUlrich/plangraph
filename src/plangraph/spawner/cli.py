@@ -78,6 +78,7 @@ def _supervise():
     payload = json.loads(sys.stdin.readline())
     tree = payload.pop('_tree', {})
     service = SpawnService(state=payload.pop('state'))
+    service._parent_admitted = payload.pop('_admitted', False) is True
     if '_cwd' in payload: service.runner.default_cwd = payload.pop('_cwd')
     save = service._save
     def save_tree(record):
@@ -385,6 +386,7 @@ raise SystemExit(code)
                 # rc 0 only while some seat can still deliver a verdict (planned, running or completed).
                 return 0 if any(r.get('status') in ('dry_run', 'running', 'completed') for r in (result.get('seats') or result['writers'])) else 1
             if 'status' not in result:
+                if 'seats' in result or 'writers' in result: return 1
                 return 2 if result.get('error') else 0
             code = result.get('exit_code')
             return code if code is not None else (0 if result.get('status') == 'running' else 1)

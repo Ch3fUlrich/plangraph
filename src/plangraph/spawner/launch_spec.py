@@ -182,17 +182,22 @@ def fresh_main():
         key = str(exc) if isinstance(exc, InvalidRequest) else 'json'
         sys.stderr.write(f'launch-spec failed: invalid request ({key})\n')
         return 1
-    with run_tree(request['state']) as tree:
-        env = dict(os.environ, PYTHONPATH=str(Path(tree['tree_path']) / 'src'),
-                   PLANGRAPH_RUN_TREE_SHA=tree['tree_sha'], PYTHONDONTWRITEBYTECODE='1')
-        result = subprocess.run([sys.executable, '-m', 'plangraph.spawner.cli',
-            '--state', request['state'], 'launch-spec'], input=json.dumps(request),
-            cwd=tree['tree_path'], env=env, text=True, stdout=subprocess.PIPE, timeout=60)
-        if result.returncode == 0:
-            spec = json.loads(result.stdout)
-            spec.setdefault('events', []).append(dict(event='run_tree', **tree))
-            print(json.dumps(spec))
-        return result.returncode
+    try:
+        with run_tree(request['state']) as tree:
+            env = dict(os.environ, PYTHONPATH=str(Path(tree['tree_path']) / 'src'),
+                       PLANGRAPH_RUN_TREE_SHA=tree['tree_sha'], PYTHONDONTWRITEBYTECODE='1')
+            result = subprocess.run([sys.executable, '-m', 'plangraph.spawner.cli',
+                '--state', request['state'], 'launch-spec'], input=json.dumps(request),
+                cwd=tree['tree_path'], env=env, text=True, encoding="utf-8", errors="replace",
+                stdout=subprocess.PIPE, timeout=60)
+            if result.returncode == 0:
+                spec = json.loads(result.stdout)
+                spec.setdefault('events', []).append(dict(event='run_tree', **tree))
+                print(json.dumps(spec))
+            return result.returncode
+    except Exception as exc:
+        sys.stderr.write(f'launch-spec failed: {type(exc).__name__}\n')
+        return 1
 
 
 def main(stdin, stdout, stderr) -> int:
