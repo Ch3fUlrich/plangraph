@@ -70,6 +70,12 @@ An empty provider snapshot is a failed read, not evidence that a leg is unreacha
 the HTTP provider contract rejects empty connection lists, and injected providers
 are checked at the same retry boundary. A second empty read goes through snapshot
 admission and a probe, retaining `ValueError: empty provider snapshot` on failure.
+This deliberately changes the generic adapter contract too: a healthy injected
+provider returning `{}` now yields `unknown`, not the former immediate `unreachable`.
+Every provider pays one additional snapshot read and, if both reads are empty and
+no fresh successful evidence exists, a liveness probe for each dispatched candidate
+(including reviews with probe TTL 0). Missing providers in a nonempty snapshot still
+yield `unreachable` without this recovery cost.
 Refresh failures are cached for the adapter TTL (60 seconds by default), with
 one type-only warning for the first failed read and detached type/message detail
 for the final failure; a successful refresh clears that detail.

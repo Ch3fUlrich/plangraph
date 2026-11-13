@@ -87,24 +87,31 @@ def test_resolved_slot_family_in_answer_and_record(service, dispatch):
 
 
 @pytest.mark.parametrize('reason', ['unknown', 'UNKNOWN', ' unknown ', None, ''])
-def test_unknown_adapter_skip_has_named_reason(service, monkeypatch, reason):
+def test_unknown_adapter_skip_has_named_reason(service, tmp_path, monkeypatch, reason):
+    from plangraph.routing_support.leg_state import LegAdapter, LegStateStore
+    from plangraph.routing_support.leg_state_flag import snapshot_admission
     from plangraph.spawner import leg_probe
-    probes = []
+    probes, reads = [], []
+
+    def snapshot():
+        reads.append(1)
+        raise PermissionError('snapshot read locked')
+
+    store = LegStateStore(tmp_path / 'leg-state.sqlite')
+    reader = LegAdapter(store, SimpleNamespace(snapshot=snapshot), models=(), enabled=True)
+    for candidate in (LUNA, SONNET, OPUS):
+        store.record_probe_pass(leg_probe.key(candidate), 'synthetic-provider-success')
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+
     async def probe(_runner, leg, **kwargs):
+        assert kwargs['store'] is store
         probes.append(leg.id)
         return dict(ok=False, reason='timeout')
     monkeypatch.setattr(leg_probe, 'probe', probe)
     svc = service()
-    plan = svc._route(CARD, 'review', ['mimo'], benchmark={})
-    if reason != 'unknown':
-        monkeypatch.setattr(svc, '_route', lambda *a, **k: plan)
-    svc.runner.leg_reader._snapshot_error = ('PermissionError', 'snapshot read locked')
-    svc.runner.leg_reader.leg_status = lambda model, **k: (
-        dict(state='unknown' if not reason else 'limited', reason=reason, evidence=None)
-        if model in (GEMINI.model, 'agy/' + GEMINI.model)
-        else dict(state='ok', evidence=None))
+    svc.leg_reader = svc.runner.leg_reader = reader
     answer = asyncio.run(svc.spawn(card=CARD, role='review', writer_families=['mimo'],
-                                   seats=True, wait_seconds=None, benchmark={}))
+                                    seats=True, wait_seconds=None, benchmark={}))
     run = next(r for r in answer['seats'] if any(
         isinstance(a['leg'], dict) and a['leg']['id'] == GEMINI.id for a in r['attempts']))
     saved = json.loads(svc._path(run['run_id']).read_text())
@@ -116,6 +123,14 @@ def test_unknown_adapter_skip_has_named_reason(service, monkeypatch, reason):
         assert attempt['skip_reason'] == 'leg_state_snapshot_error: PermissionError: snapshot read locked; probe: timeout'
         assert record['plan']['review_seats'] == [record['chosen_leg']]
     assert probes == [GEMINI.id]
+    assert reads == [1, 1]
+    assert reader._snapshot_error == ('PermissionError', 'snapshot read locked')
+    # Preserve the original normalization matrix as a separate unit boundary;
+    # dispatch above uses only real adapter reads, never these status variants.
+    status_variant = SimpleNamespace(_snapshot_error=reader._snapshot_error,
+        leg_status=lambda *a, **k: dict(state='unknown' if not reason else 'limited', reason=reason))
+    assert snapshot_admission(status_variant, GEMINI.model, lambda text: text) == (
+        'leg_state_snapshot_error: PermissionError: snapshot read locked')
 
 
 def test_unfilled_slot_names_distinct_family_refusal(service, monkeypatch):

@@ -268,14 +268,16 @@ def test_snapshot_path_whitespace_suffix_is_withheld(prefix):
     assert leg_state_flag.snapshot_detail(reader, lambda text: text) == 'PermissionError: locked: "[path]"; retry'
 
 
+@pytest.mark.parametrize('model', ['snapshot/sample', 'agy/sample', 'opencode-go/sample'])
 @pytest.mark.parametrize('recovered', [False, True])
 @pytest.mark.parametrize('probe_ok', [False, True])
-def test_empty_snapshot_retries_then_recovers_or_probes(case, monkeypatch, recovered, probe_ok):
+def test_empty_snapshot_retries_then_recovers_or_probes(case, monkeypatch, recovered, probe_ok, model):
     reads, probes = [], []
+    case.leg.model = model
 
     def snapshot():
         reads.append(1)
-        return ({'snapshot': SimpleNamespace(available=True, stale=False)}
+        return ({model.split('/')[0]: SimpleNamespace(available=True, stale=False)}
                 if recovered and len(reads) == 2 else {})
 
     async def probe(*args, **kwargs):
@@ -291,3 +293,30 @@ def test_empty_snapshot_retries_then_recovers_or_probes(case, monkeypatch, recov
     assert reason == (None if recovered or probe_ok else
         'leg_state_snapshot_error: ValueError: empty provider snapshot; probe: timeout')
     assert case.reader._snapshot_error == (None if recovered else ('ValueError', 'empty provider snapshot'))
+
+
+def test_provider_contract_rejects_empty_connections():
+    from datetime import datetime, timezone
+    from plangraph.routing_support.omniroute_state import _build
+    with pytest.raises(ValueError):
+        _build('{"connections": []}', datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+
+def test_snapshot_changelog_separates_observations_and_injected_inputs():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    changelog = (root / 'changelog.d/SPAWNER-LEG-STATE-SNAPSHOT-ERROR.md').read_text()
+    observed = next(line for line in changelog.splitlines() if line.startswith('Observed fixture:'))
+    assert 'only leg names, statuses and skip reasons' in observed
+    assert 'These rows do not establish a chosen-leg field, overall run status, served-model witness' in observed
+    assert 'unwitnessed' not in observed
+    contract = 'every `LegAdapter` provider, including healthy injected providers returning `{}`'
+    assert contract in changelog and 'pays one additional snapshot read' in changelog
+    docs = (root / 'docs/spawner-leg-state.md').read_text()
+    assert 'now yields `unknown`, not the former immediate `unreachable`' in docs
+    assert '(including reviews with probe TTL 0)' in docs
+    evidence = (root / 'docs/evidence/SPAWNER-LEG-STATE-SNAPSHOT-ERROR.md').read_text()
+    assert 'git archive "$baseline" src tests tools pyproject.toml pytest.ini' in evidence
+    assert 'python3 -m pytest -q tests/test_leg_snapshot_replay.py --tb=short' in evidence
+    assert "E   assert [] == ['agy-gemini-3.8-flash']" in evidence
+    assert '3 failed in 7.11s' in evidence

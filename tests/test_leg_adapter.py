@@ -217,9 +217,6 @@ def snapshot_attempt(tmp_path, monkeypatch):
 
     store = leg_state.LegStateStore(tmp_path / 'leg-state.sqlite')
     reader = leg_state.LegAdapter(store, SimpleNamespace(snapshot=snapshot), models=(), enabled=True)
-    read = reader.leg_status
-    reader.leg_status = lambda model, **scope: (dict(state='ok') if model == leg_probe.key(legs[2])
-                                               else read(model, **scope))
     runner = _Runner()
     svc = spawn_service(runner, state=tmp_path / 'state', leg_reader=reader)
     monkeypatch.setattr(SpawnService, '_leg_prompt', lambda *a, **k: 'review')
@@ -240,6 +237,12 @@ def test_snapshot_error_retries_then_probes(snapshot_attempt, monkeypatch, error
     from plangraph.spawner import leg_probe
     case = snapshot_attempt
     assert case.reader.store is case.store
+    real_probe = leg_probe.probe
+
+    if infra and probe_state is None:
+        def broken_probe_git(*a, **k):
+            raise OSError('synthetic probe git infrastructure failure')
+        monkeypatch.setattr(subprocess, 'check_output', broken_probe_git)
 
     def snapshot():
         case.reads.append(1)
@@ -248,6 +251,11 @@ def test_snapshot_error_retries_then_probes(snapshot_attempt, monkeypatch, error
     async def probe(*a, **k):
         assert k['store'] is case.store
         case.probes.append(case.legs[0].id)
+        if infra and probe_state is None:
+            result = await real_probe(*a, **k)
+            assert result['ok'] is False and result['infra'] is True
+            assert result.get('state') is None and result['reason'] == 'probe infra: git'
+            return result
         return dict(ok=probe_ok, reason='timeout', state=probe_state, infra=infra)
 
     monkeypatch.setattr(case.reader.provider, 'snapshot', snapshot)
@@ -263,9 +271,12 @@ def test_snapshot_error_retries_then_probes(snapshot_attempt, monkeypatch, error
         assert reason is None
     else:
         assert f'leg_state_snapshot_error: {type(error).__name__}: {error}' in reason
-        assert 'timeout' in reason
+        assert ('probe infra: git' if infra and probe_state is None else 'timeout') in reason
     if infra:
         assert case.store.last_probe_attempt_ts(leg_probe.key(case.legs[0])) is None
+        assert case.store.leg_status(leg_probe.key(case.legs[0])) == dict(state='ok', evidence=None)
+        with case.store._connect() as db:
+            assert db.execute('SELECT source, status FROM leg_events').fetchall() == []
 
 
 def test_snapshot_retry_recovers_without_probe(snapshot_attempt, monkeypatch):
@@ -319,7 +330,7 @@ def test_snapshot_seat_uses_witnessed_non_writer_before_opus(snapshot_attempt, m
     from plangraph.spawner import leg_probe
     case = snapshot_attempt
     assert [case.reader.leg_status(leg_probe.key(leg)).get('reason', 'ok') for leg in case.legs] == [
-        'unknown', 'unknown', 'ok']
+        'unknown', 'unknown', 'unknown']
     serving = case.legs[serving_index]
     spawn = case.svc.runner.spawn
 

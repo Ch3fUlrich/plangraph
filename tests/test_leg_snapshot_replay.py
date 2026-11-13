@@ -1,4 +1,4 @@
-"""Replay the recorded decisions; injected reads/probe/witnesses are not telemetry."""
+"""Replay the recorded roster through routing; external inputs are synthetic."""
 import asyncio
 import json
 from pathlib import Path
@@ -7,12 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.planner.legs import DEFAULT_LEGS
-from plangraph.planner.routing import SpawnPlan
+from plangraph.planner import routing
 from plangraph.routing_support import resolver
 from plangraph.routing_support.leg_state import LegAdapter, LegStateStore
 from plangraph.spawner import leg_probe
 from plangraph.spawner.runner import spawn_service
-from plangraph.spawner.service import SpawnService
+from plangraph.spawner.notify import FileInbox
 from registry_route_util import _Runner
 
 
@@ -29,23 +29,31 @@ def test_recorded_snapshot_attempt_order_retries_and_probes(tmp_path, monkeypatc
 
     def snapshot():
         reads.append(1)
-        # The record has NO exception text. This error is a replay input only.
+        # The fixture has no exception text; this is an injected outage.
         raise RuntimeError('replay-injected snapshot failure; recorded exception unavailable')
 
     store = LegStateStore(tmp_path / 'leg-state.sqlite')
-    reader = LegAdapter(store, SimpleNamespace(snapshot=snapshot), models=(), enabled=True)
-    read = reader.leg_status
-    recorded = {leg_probe.key(by_id[row['leg']]): row for row in rows}
-
-    def admission(model, **scope):
-        if model in {leg_probe.key(leg) for leg in errors}:
-            return read(model, **scope)
-        # Replay only the other recorded admission decisions, not invented state.
-        row = recorded[model]
-        return (dict(state='ok') if row['skip_reason'] in (None, 'earlier_leg_succeeded')
-                else dict(state='limited', reason=row['skip_reason']))
-
-    reader.leg_status = admission
+    roster = tuple(by_id[row['leg']] for row in rows)
+    models = tuple({model for leg in roster for model in (leg.model, leg_probe.key(leg))})
+    reader = LegAdapter(store, SimpleNamespace(snapshot=snapshot), models=models,
+                        enabled=True)
+    store.record_provider_response(roster[0].model, 429, 'synthetic replay limit',
+                                    {'retry-after': '600'}, 'replay-input')
+    # Synthetic recent provider evidence for the later fallback, not a status stub
+    # or a claim that the recorded response had a served-model witness.
+    store.record_probe_pass(leg_probe.key(opus), 'replay-input')
+    policy = tmp_path / 'policy.json'
+    policy.write_text(json.dumps(dict(off_families=['glm'])))
+    monkeypatch.setenv('PLANGRAPH_ROUTE_POLICY', str(policy))
+    host_root = tmp_path / 'host-config'
+    host_root.mkdir()
+    (host_root / 'opencode.jsonc').write_text('{"providers": {}}')
+    monkeypatch.setenv('AUTOOS_ROOT', str(host_root))
+    monkeypatch.setitem(routing.plan_spawn.__kwdefaults__, 'legs', roster)
+    monkeypatch.setitem(routing.plan_spawn.__kwdefaults__, 'catalog_rows', ())
+    # Exercise real host admission with an injected standalone-model listing.
+    monkeypatch.setattr(resolver, 'served_models', lambda *a, **k:
+        frozenset(model for model in models if model != 'omniroute/deepseek-flash'))
     runner = _Runner()
     spawn = runner.spawn
 
@@ -63,32 +71,43 @@ def test_recorded_snapshot_attempt_order_retries_and_probes(tmp_path, monkeypatc
         probes.append(leg.id)
         return dict(ok=leg == serving, reason='replay-injected probe timeout')
 
-    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '0')
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
     monkeypatch.setattr(runner, 'spawn', response)
     monkeypatch.setattr(leg_probe, 'probe', probe)
-    monkeypatch.setattr(resolver, 'host_skip_reason', lambda *a, **k: None)
-    monkeypatch.setattr(SpawnService, '_leg_prompt', lambda *a, **k: 'review')
-    monkeypatch.setattr('plangraph.spawner.notify.completion_event', lambda *a: {})
-    svc = spawn_service(runner, state=tmp_path / 'state', leg_reader=reader)
-    # Preserve the recorded order and policy skips; replay the real dispatch loop.
-    legs = tuple(by_id[row['leg']] for row in rows[:6] + rows[15:])
-    plan = SpawnPlan(legs, tuple(dict(leg=row['leg'], reason=row['skip_reason'])
-        for row in rows[6:15]), 'recorded-attempt replay', (errors[0],), ())
-    run = asyncio.run(svc.spawn(card={'estimate_tokens': 1000}, role='review',
-        writer_families=['gpt'], _plan=plan, wait_seconds=None))
+    runner.default_cwd = str(tmp_path)
+    svc = spawn_service(runner, state=tmp_path / 'state', leg_reader=reader,
+                        keeper_sink=FileInbox(tmp_path / 'keeper-inbox'))
+    card = {'estimate_tokens': 1000}
+    plan = svc._route(card, 'review', ['gpt'], benchmark={})
+    assert [leg.id for leg in plan.legs] == [row['leg'] for row in
+        [rows[3], rows[2], *rows[4:6], *rows[15:]]]
+    assert plan.review_seats == (errors[0], roster[2]) and plan.error is None
+    run = asyncio.run(svc.spawn(card=card, prompt='Review the supplied document.', role='review',
+        writer_families=['gpt'], benchmark={}, wait_seconds=None))
     attempts = [dict(leg=a['leg']['id'] if isinstance(a['leg'], dict) else a['leg'],
                      status=a['status'], skip_reason=a.get('skip_reason')) for a in run['attempts']]
-    # On origin/main this fails with EXACTLY all 19 rows and Opus chosen, no probes.
+    chosen = (run.get('chosen_leg') or {}).get('id')
     assert attempts != rows, (
-        f"all 19 recorded rows reproduced; chosen={run['chosen_leg']['id']}; probes={probes}")
-    assert run['status'] == 'completed', run.get('error')
-    assert run['chosen_leg']['id'] == (serving or opus).id
-    assert attempts[:3] == rows[:3] and attempts[-4:] == rows[15:]
-    assert [row for row in attempts if row['leg'] in {r['leg'] for r in rows[6:15]}] == rows[6:15]
+        f'all 19 recorded rows reproduced; chosen={chosen}; probes={probes}')
     expected = errors if serving is None else errors[:serving_index + 1]
-    assert probes == [leg.id for leg in expected] and reads == [1, 1]
-    assert [row['leg'] for row in attempts[:3 + len(expected)]] == [
-        row['leg'] for row in rows[:3]] + [leg.id for leg in expected]
+    # Fails on origin/main: the real route admits the candidates but reviews never probe.
+    assert probes == [leg.id for leg in expected], (
+        f'expected snapshot recovery probes; chosen={chosen}; probes={probes}; attempts={attempts}')
+    assert run['status'] == 'completed', run.get('error')
+    assert chosen == (serving or opus).id
+    assert reads == [1, 1]
+    dispatched = [leg.id for leg in expected] + ([] if serving else [opus.id])
+    # Routing, not recorded statuses, generates every policy skip and all 19 attempts.
+    # Host skips precede dispatch; planner exclusions are appended at final save.
+    expected_order = ([rows[2]['leg']] + dispatched + [rows[0]['leg'], rows[1]['leg']]
+                      + [row['leg'] for row in rows[6:15]]
+                      + ([errors[1].id] if serving_index == 0 else [])
+                      + ([opus.id] if serving else []) + [row['leg'] for row in rows[15:]])
+    assert len(attempts) == len({row['leg'] for row in attempts}) == 19
+    assert [row['leg'] for row in attempts] == expected_order
+    actual = {row['leg']: row for row in attempts}
+    for row in rows[:3] + rows[6:]:
+        assert actual[row['leg']] == row
     for leg in expected:
         attempt = next(row for row in attempts if row['leg'] == leg.id)
         if leg == serving:
@@ -106,3 +125,5 @@ def test_recorded_snapshot_attempt_order_retries_and_probes(tmp_path, monkeypatc
         assert run['served_model'] == 'unwitnessed'
     saved = svc.result(run['run_id'])
     assert saved['attempts'] == run['attempts'] and saved['chosen_leg'] == run['chosen_leg']
+    assert saved['completion']['event'] == 'DONE'
+    assert len(runner.calls) == 1 and runner.calls[0]['prompt'] == 'Review the supplied document.'
