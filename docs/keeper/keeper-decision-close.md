@@ -63,15 +63,34 @@ HTTP `POST /v1/close_merged` and MCP `close_merged` take
 `{key, decision_id, families}`. The keeper resolves `merged_on_default`
 Plan-Item commits to their introducing default-ref merge's second parent
 (the PR head), never a later direct follow-up or caller-supplied head.
-Missing or unknown proof refuses `evidence_unverified: merged_on_default_missing`.
+Missing, unknown or failing Git proof refuses `evidence_unverified: merged_on_default_missing`.
 The existing decisions index must verify the D-id; only its DECISION cell
-authorizes, beginning with `GO <head>` (8+ hex prefix, optional backticks,
-not a negated or quoted GO), uniquely bound to an actual merged PR head.
+authorizes, beginning with `GO <head>` (8+ hex prefix, optional backticks) or
+`GO #PR ... GO-HEAD <sha40>`, optionally prefixed by `(HH:MMZ, date -u)`.
+The PR number may be backticked or followed by punctuation (for example,
+`GO #786, ...` or ``GO `#786` ...``).
+The latter requires exactly one full-length GO-HEAD binding; later review
+narrative is not a verdict. A negated or quoted leading GO never authorizes;
+the head must uniquely match an actual merged PR head.
 
-Standard needs at least one known non-Anthropic seat family; high needs at
-least two distinct families, each backed by a successful finished `record_run`
-seat. Model aliases normalize. Duplicates and any recorded writer family
+Standard needs at least one known cross-writer-family seat; high needs at
+least two distinct families. Every supplied family, for either tier, must be
+backed by a `pass` seat in a finished `record_run` with `rc=0`; a started,
+failed or missing run cannot back a family. Model aliases normalize.
+Duplicates and any recorded writer family
 (commit writers, writer model, owner/claimant/delegate and run writers) refuse.
+An Anthropic-family seat counts when no Claude family wrote (D-5529).
+Cards tagged `auth` or `secrets` require two non-Anthropic seat families,
+even if their item has standard tier; an Anthropic seat cannot replace either.
+Stored card tags must be a JSON list of strings from the card schema's exact
+lowercase vocabulary (`auth`, `secrets`, `money`, `migration`, `public-contract`,
+`live-step`). Family validation and the ordinary tier minimum run first:
+too few families refuse `coverage: insufficient_seat_families` before tags
+are read. Once that minimum passes, NULL, malformed JSON, non-lists and
+invalid entries (including case/whitespace variants) refuse
+`validation: card_risk_tags_invalid` before the auth/secrets seat minimum,
+writer exclusion and recorded-run backing checks. Invalid tags never skip
+the seat gate. A missing card retains the ordinary tier-based gate.
 Checks repeat inside the write lock; changed proof-bearing item/head refuses
 `conflict`, while lease touches do not.
 

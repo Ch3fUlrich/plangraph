@@ -1,10 +1,9 @@
 """Fail-closed and concurrency contracts for the router-only merged close."""
-from contextlib import contextmanager
 from types import SimpleNamespace
 import pytest
 
-from test_keeper_close_merged import (HEAD, KEY, MERGE, _close,
-                                      _counts, _refused, doors, w)
+from test_keeper_close_merged import (HEAD, KEY, MERGE, _at_write_lock, _close,
+                                      _counts, _refused, doors, unseated_w, w)
 
 
 def test_unknown_key_refuses(w):
@@ -50,37 +49,29 @@ def test_seats_must_have_recorded_successful_runs(w, phase, rc, verdict):
                                          ("review_tier", "high"),
                                          ("writer_model", "deepseek-test")])
 def test_item_proof_changes_conflict(w, monkeypatch, field, value):
-    original = w.store._write
-
-    @contextmanager
     def changed():
         w.conn.execute(f"UPDATE items SET {field}=? WHERE key=?", (value, KEY))
-        with original():
-            yield
 
-    monkeypatch.setattr(w.store, "_write", changed)
+    entered = _at_write_lock(w, monkeypatch, changed)
     _refused(w, "conflict", "changed under the transaction")
+    assert entered == ["BEGIN IMMEDIATE"]
+    assert not w.conn.in_transaction
 
 
 def test_lease_touch_does_not_conflict(w, monkeypatch):
-    original = w.store._write
-
-    @contextmanager
     def touched():
         w.conn.execute("UPDATE items SET updated_at='touch', lease_until='touch' WHERE key=?",
                        (KEY,))
-        with original():
-            yield
 
-    monkeypatch.setattr(w.store, "_write", touched)
+    entered = _at_write_lock(w, monkeypatch, touched)
     assert _close(w)["state"] == "done"
+    assert entered == ["BEGIN IMMEDIATE"]
+    assert not w.conn.in_transaction
 
 
 def test_merged_head_change_conflicts(w, monkeypatch):
-    original = w.store._write
     new_head = HEAD[:8] + "0" * 32
 
-    @contextmanager
     def changed():
         monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits",
                             lambda *a, **kw: [{"sha": new_head}])
@@ -88,11 +79,11 @@ def test_merged_head_change_conflicts(w, monkeypatch):
         monkeypatch.setattr(git, "merge_commit_of", lambda *a: (MERGE, "fixture"))
         monkeypatch.setattr(git, "_run", lambda *a: type("Reply", (), {
             "returncode": 0, "stdout": f"{'2' * 40} {new_head}"})())
-        with original():
-            yield
 
-    monkeypatch.setattr(w.store, "_write", changed)
+    entered = _at_write_lock(w, monkeypatch, changed)
     _refused(w, "conflict", "merged_on_default_changed")
+    assert entered == ["BEGIN IMMEDIATE"]
+    assert not w.conn.in_transaction
 
 
 def test_followup_commit_does_not_replace_merged_head(w, monkeypatch):

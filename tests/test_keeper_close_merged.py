@@ -1,5 +1,4 @@
 """D-852 hermetic regressions for the router GO close (D-5504/D-5506)."""
-from contextlib import contextmanager
 from itertools import count
 from types import SimpleNamespace
 
@@ -15,6 +14,36 @@ from plangraph.keeper.evidence_decisions import DecisionsAdapter
 KEY = "demo:A"
 HEAD = "abcdef0123456789" * 2 + "abcdef01"
 MERGE = "1" * 40
+
+
+class _ConnectionProxy:
+    """Override one SQL seam without narrowing the connection interface."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def execute(self, sql, *args, **kwargs):
+        return self._conn.execute(sql, *args, **kwargs)
+
+
+def _at_write_lock(w, monkeypatch, change):
+    """Inject only after the actual database lock, not a Store helper name."""
+    entered = []
+
+    class LockedConnection(_ConnectionProxy):
+        def execute(self, sql, *args, **kwargs):
+            cursor = super().execute(sql, *args, **kwargs)
+            if sql == "BEGIN IMMEDIATE":
+                assert self.in_transaction, "the write transaction must hold the lock"
+                entered.append(sql)
+                change()
+            return cursor
+
+    monkeypatch.setattr(w.store, "conn", LockedConnection(w.conn))
+    return entered
 
 
 class MergedGit:
@@ -34,7 +63,7 @@ class MergedGit:
 
 
 @pytest.fixture
-def w(tmp_path, monkeypatch):
+def unseated_w(tmp_path, monkeypatch):
     tokens = count()
     monkeypatch.setattr(auth, "_mint_token", lambda: f"fixture-token-{next(tokens)}")
     world = World(tmp_path, backend="sqlite")
@@ -55,13 +84,19 @@ def w(tmp_path, monkeypatch):
     world.real_plan_item_commits = context_sources.plan_item_commits
     monkeypatch.setattr(context_sources, "plan_item_commits", lambda *a, **kw: [
         {"sha": HEAD, "date": "2026-01-01", "merge": {"pr": 1}}])
+    yield world
+    world.close()
+
+
+@pytest.fixture
+def w(unseated_w):
+    world = unseated_w
     for key in (KEY, "demo:H"):
         world.store.record_run(world.p("spawner"), key, {
             "run_id": "fixture-seats", "phase": "finished", "rc": 0,
             "seats": [{"model": "gemini-test", "verdict": "pass"},
                       {"model": "deepseek-test", "verdict": "pass"}]})
-    yield world
-    world.close()
+    return world
 
 
 def _close(w, key=KEY, families=None, decision="D-5504", who="router"):
@@ -162,8 +197,9 @@ def test_head_in_another_cell_cannot_authorize_close(w):
     (["google"], "coverage", "insufficient_seat_families"),
     (["google", " Google "], "same_family", "duplicate_seat_family"),
     (["google", "gemini-test"], "same_family", "duplicate_seat_family"),
-    (["google", "Anthropic"], "same_family", "anthropic_seat_family"),
-    (["google", "claude-sonnet"], "same_family", "anthropic_seat_family"),
+    (["google", "Anthropic"], "same_family", "writer_seat_family"),
+    (["google", "claude-sonnet"], "same_family", "writer_seat_family"),
+    (["Anthropic", "claude-sonnet"], "same_family", "duplicate_seat_family"),
     (["google", " "], "family_unknown", "seat_family_empty"),
     (["google", "foo"], "family_unknown", "seat_family_unknown"),
     (["google", "gpt-claude"], "family_unknown", "seat_family_unknown"),
@@ -173,6 +209,8 @@ def test_head_in_another_cell_cannot_authorize_close(w):
     ("google", "validation", "families must be a list"),
 ])
 def test_invalid_seat_families_refuse(w, families, code, reason):
+    if reason == "writer_seat_family":
+        w.conn.execute("UPDATE items SET writer_model='claude-sonnet' WHERE key='demo:H'")
     _refused(w, code, reason, key="demo:H", families=families)
 
 
@@ -245,16 +283,13 @@ def test_no_seat_waiver_reduces_the_high_tier_gate(w):
 
 
 def test_proofs_are_rechecked_inside_the_write_lock(w, monkeypatch):
-    original = w.store._write
-
-    @contextmanager
     def swapped():
         w.decision_path.write_text("| D-5504 | demo | GO 12345678 |\n", encoding="utf-8")
-        with original():
-            yield
 
-    monkeypatch.setattr(w.store, "_write", swapped)
+    entered = _at_write_lock(w, monkeypatch, swapped)
     _refused(w, "evidence_unverified", "go_row_head_mismatch")
+    assert entered == ["BEGIN IMMEDIATE"]
+    assert not w.conn.in_transaction
 
 
 @pytest.fixture

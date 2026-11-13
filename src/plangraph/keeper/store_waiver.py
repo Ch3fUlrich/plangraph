@@ -27,6 +27,7 @@ from . import auth, context_sources
 from .coverage import writer_families
 from .errors import Refused
 from .evidence_types import Result, valid_commit_ref
+from .schema import RISK_TAGS
 from ..review.family import FAMILIES, model_family
 
 
@@ -53,8 +54,11 @@ class WaiverMixin:
 
     def _merged_go_proof(self, item, decision_id, now):
         git = self._adapter("git")
-        commits = context_sources.plan_item_commits(
-            git, item["project"], item["key"], fetch=False)
+        try:
+            commits = context_sources.plan_item_commits(
+                git, item["project"], item["key"], fetch=False)
+        except Exception:  # noqa: BLE001 - an unreadable git proof never authorizes
+            commits = None
         heads = set()
         # A trailer-bearing commit may be inside a multi-commit PR, or a later
         # direct follow-up. Bind to the introducing merge's second parent only.
@@ -84,12 +88,22 @@ class WaiverMixin:
         except Exception:  # noqa: BLE001 - absent/unreadable row text never authorizes
             text = None
         # DecisionsAdapter.text returns ONLY the DECISION cell (D-276).
-        # Authority starts with GO; a quoted or negated GO is not a verdict.
-        if not isinstance(text, str) or not re.match(r"^GO(?=$|\s)", text) \
-                or re.search(r"(?i)\b(?:no|not)\b.*\bgo\b", text):
+        # Only the router's timestamp prefix may precede the GO verdict.
+        if isinstance(text, str):
+            text = re.sub(r"^\([0-2][0-9]:[0-5][0-9]Z, date -u\)\s+", "", text)
+        if not isinstance(text, str) or not re.match(r"^GO(?=$|\s)", text):
             raise Refused("evidence_unverified", "go_row_not_go")
-        bound = re.match(r"^GO\s+`?([0-9a-fA-F]{8,64})(?![\w])", text)
-        matched = {head for head in heads if bound and head.startswith(bound[1].lower())}
+        if re.match(r"^GO\s+(?:#[0-9]+|`#[0-9]+`)(?=$|[\s,;:.])", text):
+            # Review prose may itself discuss a NO GO; authority is the leading
+            # GO verdict and its one explicit, full-length GO-HEAD token.
+            bounds = re.findall(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])", text)
+        else:
+            if re.search(r"(?i)\b(?:no|not)\b.*\bgo\b", text):
+                raise Refused("evidence_unverified", "go_row_not_go")
+            bound = re.match(r"^GO\s+`?([0-9a-fA-F]{8,64})(?![\w])", text)
+            bounds = [bound[1]] if bound else []
+        matched = {head for head in heads if len(bounds) == 1
+                   and head.startswith(bounds[0].lower())}
         if len(matched) != 1:
             raise Refused("evidence_unverified", "go_row_head_mismatch")
         return matched.pop(), result
@@ -107,14 +121,28 @@ class WaiverMixin:
             family = _known_family(family)
             if family is None:
                 raise Refused("family_unknown", "seat_family_unknown")
-            if family == "anthropic":
-                raise Refused("same_family", "anthropic_seat_family")
             if family in seats:
                 raise Refused("same_family", "duplicate_seat_family")
             seats.append(family)
         need = 2 if item["review_tier"] == "high" else 1
         if len(seats) < need:
             raise Refused("coverage", f"insufficient_seat_families: need {need}")
+        card = self.conn.execute("SELECT risk_tags FROM cards WHERE key=?",
+                                 (item["key"],)).fetchone()
+        tags = []
+        if card is not None:
+            try:
+                tags = json.loads(card["risk_tags"])
+            except (ValueError, TypeError, RecursionError):
+                raise Refused("validation", "card_risk_tags_invalid") from None
+            # Match put_card's canonical vocabulary, not a permissive JSON
+            # iterable. Noncanonical spelling is invalid, never lower risk.
+            if not isinstance(tags, list) or any(
+                    not isinstance(tag, str) or tag not in RISK_TAGS for tag in tags):
+                raise Refused("validation", "card_risk_tags_invalid")
+        if {"auth", "secrets"}.intersection(tags) \
+                and len(set(seats) - {"anthropic"}) < 2:
+            raise Refused("coverage", "insufficient_non_anthropic_seat_families: need 2")
         writers = writer_families(self, item, self._ctx(item, now))
         writers.append(item.get("owner_family"))
         if item.get("writer_model"):
