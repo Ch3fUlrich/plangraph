@@ -47,7 +47,7 @@ TOOLS_METADATA = [
             "properties": {
                 "prompt": {"type": "string", "description": "The task instructions for the agent"},
                 "model_or_combo": {"type": "string", "description": "Target model or combo (default 'l2-worker')"},
-                "role": {"type": "string", "enum": ["implement", "review", "orchestrate", "drive"], "default": "implement"},
+                "role": {"type": "string", "enum": ["implement", "review", "orchestrate", "drive", "research"], "default": "implement"},
                 "risk": {"type": "string", "enum": ["low", "normal", "high", "critical"], "default": "normal"},
                 "dry_run": {"type": "boolean", "description": "Plan without starting subprocess", "default": False},
                 "wait_seconds": {"type": "number", "description": "Seconds to wait synchronously before returning", "default": 0.0},
@@ -115,6 +115,7 @@ TOOLS_METADATA = [
 CARD_SCHEMA = {'type': 'object', 'required': ['estimate_tokens'], 'properties': {
     'stall_min': {'type': 'number', 'exclusiveMinimum': 0},
     'first_edit_min': {'type': 'number', 'exclusiveMinimum': 0},
+    'cwd': {'type': 'string', 'description': 'absolute path to an existing git checkout'},
     'max_min': {'type': 'number', 'exclusiveMinimum': 0},
     'estimate_tokens': {'type': 'integer', 'minimum': 1, 'description': 'required: expected tokens of the run'},
     'diff_ref': {'type': 'object', 'description': 'review: {repo, base, head}; inlined for inline-only seats'}}}
@@ -130,7 +131,7 @@ for _tool in TOOLS_METADATA:
             'review_scope': {'type': 'string', 'enum': ['per-fixer', 'batch']},
             'review_of': {'type': 'string'}, 'no_fallthrough': {'type': 'boolean'},
             'seats': {'type': 'boolean', 'description': 'role review: spawn every seat route picks (per writer part); inline-only legs get card.diff_ref inlined'}})
-        _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review']
+        _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review', 'research']
         _tool['inputSchema']['properties']['model_or_combo']['description'] = 'Exceptional audited override only; requires override_reason'
 TOOLS_METADATA.extend(SESSION_TOOLS)
 
@@ -182,7 +183,7 @@ class MCPSpawnerServer:
             try:
                 return await probe_many(self.runner, arguments.get('leg', ()),
                                         arguments.get('all_writers', False), arguments.get('timeout'))
-            except ValueError as exc:
+            except ParameterRefused as exc:
                 return {'status': 'refused', 'refusal': 'ParameterRefused', 'error': str(exc), 'exit_code': 2}
         try:
             options = benchmark_options(arguments.get('require_bench', False), arguments.get('bench_db')) if name in ('plangraph_agent_route', 'plangraph_agent_spawn') else {}

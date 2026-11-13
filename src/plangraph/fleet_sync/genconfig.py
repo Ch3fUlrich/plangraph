@@ -30,10 +30,11 @@ def generate(registry):
         if not re.fullmatch(r'[a-z][a-z0-9-]{0,31}', name) or not re.fullmatch(pattern, live):
             raise ValueError('invalid host id or live directory')
         src = live.rstrip('/\\') + '/src'
-        ps.append(dict(name=name, target=name, **{
+        target = host.get('ssh_target') or name
+        ps.append(dict(name=name, target=target, **{
             'win_src' if host['os'] == 'windows' else 'src': src}))
         if host['os'] == 'linux':
-            overflow[name] = {'ssh': name, 'repo': live, 'spawner_src': src,
+            overflow[name] = {'ssh': target, 'repo': live, 'spawner_src': src,
                               'floor_mb': host['caps']['mem_floor_mb']}
     return {'ps-hosts.json': {'hosts': ps},
             'overflow-hosts.json': {'hosts': overflow, 'public_repos': []}}

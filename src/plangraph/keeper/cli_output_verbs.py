@@ -9,6 +9,12 @@ from .brief import creation_error
 from .credential_guard import mask_all
 
 
+def cmd_close_merged(args, session):
+    from .cli_verbs import write
+    return write(session, "close_merged", {"key": args.key,
+                 "decision_id": args.decision_id, "families": args.families})
+
+
 def cmd_legacy(args, session):
     from .cli_verbs import write
     return write(session, "set_legacy_state",
@@ -29,7 +35,10 @@ def cmd_define(args, session):
         fields = payload.get("fields", payload) if isinstance(payload, dict) else payload
         return write(session, "edit_definition", {"key": args.key, "fields": fields})
     items = payload.get("items") if isinstance(payload, dict) else payload
-    if error := creation_error(items):
+    # The store checks decisions after duplicate/conflict/lock refusals.
+    checked = [item for item in items if isinstance(item, dict)
+               and item.get("kind") != "decision"] if isinstance(items, list) else []
+    if error := creation_error(checked):
         return _refuse(error)
     if tier := getattr(args, "tier", None):
         for definition in (items if isinstance(items, list) else [items]):

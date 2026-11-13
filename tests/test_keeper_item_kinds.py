@@ -29,7 +29,8 @@ def _item(w, key):
     ("question", "answer"), ("decision", "answer"), ("operator_task", "task")])
 def test_defaults_per_kind(w, kind, wait):
     w.store.create_items(w.p("router"), [
-        defn("Q", kind=kind, operator=None), defn("G2", ["Q"], kind="goal")])
+        defn("Q", kind=kind, operator=None, description="Why: choose\nHow: answer"),
+        defn("G2", ["Q"], kind="goal")])
     q = _item(w, "demo:Q")
     assert q["kind"] == kind and q["wait"] == wait and q["operator"] == 1
     info = w.store.show(w.p("reader"), "demo:Q")
@@ -47,7 +48,8 @@ def test_defaults_when_keys_absent(w):
 def test_explicit_values_win(w):
     w.store.create_items(w.p("router"), [
         defn("Q", kind="question", operator=False, wait="task"),
-        defn("N", kind="decision", wait=None, operator=None),
+        defn("N", kind="decision", wait=None, operator=None,
+             description="Why: choose\nHow: answer"),
         defn("G2", ["Q", "N"], kind="goal")])
     q, n = _item(w, "demo:Q"), _item(w, "demo:N")
     assert q["operator"] == 0 and q["wait"] == "task"
@@ -118,7 +120,8 @@ def test_importer_unknown_kind(tmp_path):
 def test_export_import_round_trip_keeps_explicit_null_wait(w, tmp_path):
     w.store.create_items(w.p("router"), [
         defn("Q", kind="question", operator=None),
-        defn("N", kind="decision", wait=None, operator=None),
+        defn("N", kind="decision", wait=None, operator=None,
+             description="Why: choose\nHow: answer"),
         defn("G2", ["Q", "N"], kind="goal")])
     out = tmp_path / "plan"
     importer.export_yaml(w.store, out)

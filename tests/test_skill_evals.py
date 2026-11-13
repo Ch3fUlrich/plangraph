@@ -4,6 +4,7 @@ from pathlib import Path
 
 SKILLS = Path(__file__).resolve().parents[1] / "skills"
 KEYS = {"id", "prompt", "must", "must_not"}
+OPTIONAL_KEYS = {"note"}
 
 
 def _skills():
@@ -30,7 +31,8 @@ def test_evals_shape_and_unique_ids():
         items = _load(skill)
         assert 2 <= len(items) <= 3, f"{skill.name}: need 2-3 evals, got {len(items)}"
         for item in items:
-            assert set(item) == KEYS, f"{skill.name}: keys must be exactly {sorted(KEYS)}"
+            assert KEYS <= set(item) <= KEYS | OPTIONAL_KEYS, (
+                f"{skill.name}: required keys {sorted(KEYS)}, optional keys {sorted(OPTIONAL_KEYS)}")
             assert isinstance(item["id"], str) and item["id"], f"{skill.name}: bad id"
             assert isinstance(item["prompt"], str) and item["prompt"].strip(), (
                 f"{skill.name}/{item['id']}: empty prompt")

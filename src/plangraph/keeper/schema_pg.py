@@ -283,6 +283,8 @@ CREATE TRIGGER trg_oversight_tokens_append_only_truncate BEFORE TRUNCATE ON over
     FOR EACH STATEMENT EXECUTE FUNCTION pgk_reject('oversight tokens are revoke-only');
 """
 
+from .host_samples_rollup import DDL as HOST_SAMPLES_DDL
+
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
               Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
@@ -293,10 +295,11 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
                            "/exec_principal/exec_retired_runs", _V7),
               Migration(8, "oversight: tokens, ops audit", _V8),
               Migration(9, "bus: durable messages", MESSAGES_DDL), Migration(10, "federation jobs", SPAWNER_DDL),
-              Migration(11, "placement rules", PLACEMENT_RULES_DDL))
+              Migration(11, "placement rules", PLACEMENT_RULES_DDL),
+              Migration(12, "host samples", HOST_SAMPLES_DDL))
 LATEST = MIGRATIONS[-1].version
 
-_TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\);", re.S)
+_TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)
 _COLUMN = re.compile(r'^    "?(\w+)"?\s+\S')
 _NOT_COLUMNS = frozenset({"PRIMARY", "CHECK", "UNIQUE", "CONSTRAINT", "FOREIGN"})
 

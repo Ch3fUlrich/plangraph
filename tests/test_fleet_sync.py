@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import jsonschema
@@ -6,6 +8,9 @@ import pytest
 
 from plangraph.fleet_sync import drift, genconfig, release
 from plangraph.spawner import overflow, remote_ps
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(autouse=True)
@@ -93,7 +98,7 @@ def test_fleet_sync_scan_bounded_and_stops(tmp_path, monkeypatch):
     calls = []
     green = set()
     def git(*args):
-        assert args == ('rev-list', '--max-count=50', 'origin/main')
+        assert args == ('rev-list', '--first-parent', '--max-count=50', 'origin/main')
         return '\n'.join(str(i) for i in range(100))
     def query(endpoint):
         if endpoint.endswith('required_status_checks'):
@@ -117,6 +122,39 @@ def test_fleet_sync_scan_bounded_and_stops(tmp_path, monkeypatch):
     assert len(calls) == 2
 
 
+def test_fleet_sync_release_skips_merged_pr_heads(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    env = dict(os.environ, GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='test@example.invalid',
+               GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@example.invalid')
+    def git(*args, data=None):
+        return subprocess.check_output(['git', *args], input=data, text=True, env=env).strip()
+    git('init', '--quiet')
+    tree = git('mktree', data='')
+    dates = iter(range(5))
+    def commit(title, *parents):
+        env['GIT_AUTHOR_DATE'] = env['GIT_COMMITTER_DATE'] = f'200{next(dates)}-01-01T00:00:00Z'
+        return git('commit-tree', tree, *[arg for p in parents for arg in ('-p', p)],
+                   data=title + '\n')
+    base = commit('base')
+    merged_pr = commit('merged PR', base)
+    merge = commit('green merge on main', base, merged_pr)
+    pr_head = commit('newer PR head', merge)
+    tip = commit('pending merge on main', merge, pr_head)
+    git('update-ref', 'refs/remotes/origin/main', tip)
+    queried = []
+    def query(endpoint):
+        if endpoint.endswith('required_status_checks'):
+            return {'contexts': ['ci']}
+        sha = endpoint.split('/')[4]
+        queried.append(sha)
+        return {'check_runs': [], 'statuses': [
+            {'context': 'ci', 'state': 'failure' if sha == tip else 'success'}]}
+    path = tmp_path / 'release.json'
+    assert release.record(query, path=path)['sha'] == merge
+    assert json.loads(path.read_text())['sha'] == merge
+    assert pr_head not in queried
+
+
 def test_fleet_sync_configs(tmp_path, monkeypatch):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
     monkeypatch.setenv('HOME', str(tmp_path))
@@ -135,7 +173,7 @@ def test_fleet_sync_configs(tmp_path, monkeypatch):
                                  'mem_available_mb': 5048,
                                  'checked_at': release.datetime.now(release.UTC).isoformat()}))
     assert 'run_cap' not in config['hosts']['host-a']
-    assert overflow.decide(50, 5000, 2048, 3000, overflow.ready_records(config), True).host == 'host-a'
+    assert overflow.decide(5000, 2048, 3000, overflow.ready_records(config), True).host == 'host-a'
     assert genconfig.sync(registry) == 0
     (genconfig.config_dir() / 'ps-hosts.json').write_text('{"hosts": []}')
     assert genconfig.sync(registry) == 1
@@ -152,8 +190,9 @@ def test_fleet_sync_unreachable(capsys, tmp_path):
     assert drift.rows({'hosts': [{'id': 'host-a'}]}, 'a' * 40, unreachable)[0]['behind'] == 'unknown'
 
 
-def test_fleet_sync_hosts_schema():
-    schema = json.loads(Path('docs/schemas/hosts.schema.json').read_text())
+def test_fleet_sync_hosts_schema(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    schema = json.loads((ROOT / 'docs/schemas/hosts.schema.json').read_text())
     repo = {'root': '/srv/repo', 'worktrees_root': '/srv/trees', 'remote': 'example',
             'import_roots': [], 'cache_env': {}, 'live_dir': '/srv/live/current'}
     jsonschema.validate(repo, {'$ref': '#/$defs/repoEntry', '$defs': schema['$defs']})
@@ -186,3 +225,44 @@ def test_fleet_sync_windows_config(tmp_path, monkeypatch, live):
     config = json.loads((genconfig.config_dir() / 'overflow-hosts.json').read_text())
     assert config == {'hosts': {}, 'public_repos': []}
     assert overflow.ready_records(config) == {}
+
+
+@pytest.mark.parametrize('system', ['linux', 'windows'])
+@pytest.mark.parametrize('target', [None, 'remote-user@worker.example.invalid'])
+@pytest.mark.parametrize('consumer', ['drift', 'ps', 'overflow'])
+def test_fleet_sync_ssh_target_every_consumer(monkeypatch, system, target, consumer):
+    host = dict(id='host-a', os=system, transport='ssh', caps={'mem_floor_mb': 1},
+                repos={'plangraph': {'live_dir': 'C:/live/current' if system == 'windows'
+                                    else '/srv/live/current'}})
+    if target:
+        host['ssh_target'] = target
+    if consumer == 'drift':
+        calls = []
+        def output(command, **kwargs):
+            calls.append(command)
+            assert command[0] == 'ssh'
+            assert command[-2] == (target or host['id'])
+            return 'a' * 40
+        monkeypatch.setattr(drift.subprocess, 'check_output', output)
+        assert drift.transport(host) == 'a' * 40
+        assert len(calls) == 1
+        return
+    generated = genconfig.generate({'hosts': [host]})
+    live = host['repos']['plangraph']['live_dir']
+    if consumer == 'ps':
+        assert generated['ps-hosts.json'] == {'hosts': [dict(
+            name=host['id'], target=target or host['id'], **{
+                'win_src' if system == 'windows' else 'src': live + '/src'})]}
+    elif system == 'linux':
+        assert generated['overflow-hosts.json'] == {'hosts': {'host-a': {
+            'ssh': target or host['id'], 'repo': live, 'spawner_src': live + '/src',
+            'floor_mb': host['caps']['mem_floor_mb']}}, 'public_repos': []}
+    else:
+        assert generated['overflow-hosts.json'] == {'hosts': {}, 'public_repos': []}
+
+
+def test_hosts_example_demonstrates_remote_ssh_target(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    registry = json.loads((ROOT / 'docs/schemas/examples/hosts.example.json').read_text())
+    assert any(h.get('ssh_target') for h in registry['hosts'] if h['transport'] == 'ssh')
+    assert all('ssh_target' not in h for h in registry['hosts'] if h['transport'] == 'local')

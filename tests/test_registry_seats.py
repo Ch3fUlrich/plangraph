@@ -240,7 +240,7 @@ def test_inline_failure_does_not_decide_a_launched_run(tmp_path, monkeypatch):
     card = dict(HIGH, diff_ref={"repo": str(tmp_path / "nope"), "base": "a1", "head": "b2"})
     seat_plan = plan_spawn(card, role="review", writer_families=("claude",))
     inline = next(l for l in seat_plan.legs if l.tool_mode == "inline-only")
-    tools = next(l for l in seat_plan.legs if l.tool_mode == "tools")
+    tools = next(l for l in seat_plan.legs if l.tool_mode == "tools" and l.harness == "agy")
     monkeypatch.setattr(svc, "_route", lambda *a, **k: SpawnPlan((), (), "operator-order", (), (), "all limited"))
     record = asyncio.run(svc._spawn(card=card, prompt="r", role="review", writer_families=("claude",),
                                     _plan=replace(seat_plan, legs=(inline, tools)), wait_seconds=None))
@@ -285,10 +285,10 @@ def test_spares_use_keeper_families(tmp_path, monkeypatch):
 @pytest.mark.parametrize("writer", ["alibaba", " OpenAI ", "anthropic", "QWEN"])
 def test_keeper_writer_names_exclude_their_legs(writer):
     # qwen MED/LOW: keeper family names and case/space variants map to leg families.
-    from plangraph.review.family import writer_key
+    from plangraph.review.family import writer_key, _family_key
     canon = writer_key(writer)
     plan = plan_spawn(HIGH, role="review", writer_families=(writer,))
-    assert plan.review_seats and canon not in {writer_key(l.family) for l in plan.review_seats}
+    assert plan.review_seats and canon not in {_family_key(l.family) for l in plan.review_seats}
     assert all(c["covers"] == [canon] for c in plan.seat_coverage)
 
 

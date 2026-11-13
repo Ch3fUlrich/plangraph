@@ -121,7 +121,7 @@ fn listing_order_skips_lifts_and_marker() {
         ("run-b", json!({"run_id":"b","started":"bad"})),
         (
             "run-c",
-            json!({"run_id":"c","started":9,"completion":{"parent_session":"p","item":"i"}}),
+            json!({"run_id":"c","started":9,"completion":{"parent_session":"p","item":"plangraph:D-5047"}}),
         ),
         ("run-d", json!({"run_id":"d","started":9})),
         ("run-e", json!([])),
@@ -138,7 +138,7 @@ fn listing_order_skips_lifts_and_marker() {
     success(
         call(&mut client, "agent_ps", json!({})),
         json!({"runs":[
-            {"run_id":"c","started":9,"completion":{"parent_session":"p","item":"i"},"parent_session":"p","item_key":"i","_completion_acknowledged":true},
+            {"run_id":"c","started":9,"completion":{"parent_session":"p","item":"plangraph:D-5047"},"parent_session":"p","item_key":"plangraph:D-5047","_completion_acknowledged":true},
             {"run_id":"d","started":9},{"run_id":"a"},{"run_id":"b","started":"bad"}
         ]}),
     );

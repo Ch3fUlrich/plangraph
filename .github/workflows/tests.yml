@@ -100,6 +100,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
+      - uses: ./.github/actions/setup-rust
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+      - name: Build fleet projection helper
+        run: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with: {python-version: "3.12"}
@@ -209,7 +219,9 @@ jobs:
           POSTGRES_DB: keeper
         ports:
           - 5432
+        # Per-test schemas grow PG16 shared statistics beyond Docker's 64 MiB default.
         options: >-
+          --shm-size=256m
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s
           --health-timeout 5s
@@ -223,6 +235,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
+      - uses: ./.github/actions/setup-rust
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+      - name: Build fleet projection helper
+        run: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with: {python-version: "3.12"}
@@ -271,7 +293,7 @@ jobs:
       CARGO_BUILD_JOBS: "4"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
           targets: x86_64-pc-windows-gnu
@@ -305,7 +327,7 @@ jobs:
         working-directory: rust
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - uses: actions/cache@v4
         with:
           path: |
@@ -330,7 +352,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
       - uses: actions/cache@v4
@@ -382,7 +404,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - uses: actions/cache@v4
         with:
           path: |

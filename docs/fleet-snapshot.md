@@ -1,4 +1,4 @@
-# Fleet snapshot wiring (slice 1)
+# Fleet snapshot wiring
 
 The persisted keeper snapshot writer attaches `fleet` using
 `plangraph.fleet_snapshot.load_fleet`. This is a read-only projection outside
@@ -8,7 +8,12 @@ type and a fixed short summary (no traceback, exception message or private paths
 `fleet_error: "projection_failed"`, making a broken store API visible. Direct store snapshot reads remain
 unchanged.
 
-`build_fleet(registry, samples=None, runs=None)` is pure. Every registry host
+`src/plangraph/fleet_snapshot.py` is now a thin caller of the private
+`pg-spawnd fleet-snapshot` subcommand (`rust/pg-spawnd/src/fleet_snapshot.rs`).
+`build_fleet(registry, samples=None, runs=None)` projects JSON inputs without probing.
+Infrastructure failures (including nonzero helper exits) raise a fixed `RuntimeError`
+without subprocess diagnostics; JSON registry validation errors remain `ValueError`.
+Both preserve the existing `load_fleet` snapshot fallback. Every registry host
 appears once, sorted by id, with `host_id`, `class`, `caps`, `sample`, `samples`
 and `running_agents`. The live loader reads the existing persisted `bus_hosts`
 registry; it has no class/caps columns, so those fields are null. It reads the
@@ -34,3 +39,17 @@ Old snapshots without `fleet` retain the unavailable message. The SQLite-to-
 snapshot-to-page integration test exercises this path. Registry aliases shared
 by different hosts (including canonical ids) are refused, never last-wins.
 Aliases must be a list or tuple of nonempty strings; other containers are refused.
+The helper lookup checks `rust/target/release/pg-spawnd`, then
+`rust/target/release/pg-spawnd.exe`, then `pg-spawnd` on PATH. A missing binary
+makes `build_fleet` fail closed with `RuntimeError` and the named reason
+`pg-spawnd binary missing (build the release helper)`. Tests that need the binary
+use one shared helper: when `CI` is set (as in GitHub Actions), they fail with
+that same reason; outside CI, they skip with that reason. This includes fleet
+bridge tests. The two pytest CI lanes already build the release helper using
+the shared Cargo cache; any other lane invoking these tests must also provide it.
+The private protocol returns fixed registry validation errors in JSON, not
+subprocess stderr. Rust alone selects and validates host ids, including malformed
+and duplicate keys (`ValueError`); its private registry indices let Python attach
+opaque class/caps metadata without reselecting ids or JSON-coercing the metadata.
+The fleet projection port is complete: only serialization, opaque metadata and
+persisted-input loading remain in Python, so its new-code allowlist waiver is removed.

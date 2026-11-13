@@ -72,6 +72,16 @@ pub(crate) fn pattern() -> String {
         .join("|")
 }
 
+pub(crate) fn redact_url_userinfo(text: &str) -> String {
+    static URL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    URL.get_or_init(|| {
+        regex::Regex::new(r#"(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:"']+:)[^\s"']*(@)"#)
+            .expect("userinfo pattern compiles")
+    })
+    .replace_all(text, "$1[REDACTED]$2")
+    .into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +134,11 @@ mod tests {
                         &input
                     };
                     assert_eq!(crate::redact::redact(&input), expected, "family {index}");
+                    assert_eq!(
+                        crate::redact::redact_source(&input),
+                        expected,
+                        "family {index}"
+                    );
                 }
                 let input = format!("{prefix}{body}; retained");
                 let expected = if len == spec.floor {
@@ -132,6 +147,11 @@ mod tests {
                     &input
                 };
                 assert_eq!(crate::redact::redact(&input), expected, "family {index}");
+                assert_eq!(
+                    crate::redact::redact_source(&input),
+                    expected,
+                    "family {index}"
+                );
             }
         }
     }

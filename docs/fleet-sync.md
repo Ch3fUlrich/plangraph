@@ -1,12 +1,14 @@
 # Fleet code sync
 
 Run `python3 -m plangraph.fleet_sync release record` after fetching origin/main.
-The newest of the last 50 locally known main commits with successful required branch checks is
+The newest of the last 50 locally known first-parent main commits with successful required branch checks is
 recorded privately and atomically in `~/.local/state/plangraph/release.json`.
 The CLI queries `gh api`; missing protection or required checks fails closed.
 `release show` prints the record. No checkout is changed.
 The Python `record(max_commits=50)` API can configure the scan window; scanning
 stops at the first green commit and fails closed if none is found in the window.
+The `git rev-list --first-parent` scan excludes merged PR heads; merge commits
+on main are eligible, not their second-parent commits.
 Check results are selected by completed/started (or status updated/created)
 timestamp, not API response order; equal-time conflicting results fail closed.
 
@@ -14,8 +16,8 @@ timestamp, not API response order; equal-time conflicting results fail closed.
 under `$XDG_CONFIG_HOME/plangraph` (default `~/.config/plangraph`). Each file is
 atomically replaced; the pair is not a transaction. `genconfig check` exits 1
 on semantic drift, including hand edits. Both print a one-line summary.
-The default registry is that directory's hosts.json. SSH ids must resolve through
-SSH configuration. Set optional `repos.plangraph.live_dir` to the pinned live
+The default registry is that directory's hosts.json. SSH destinations must resolve
+through SSH configuration or `ssh_target`. Set optional `repos.plangraph.live_dir` to the pinned live
 checkout; no fallback to a developer checkout is allowed. Local entries are
 excluded from remote configs; keeper entries fail closed. Windows SSH hosts
 are ps-only. Overflow retains a deny-by-default empty public_repos allowlist.
@@ -73,3 +75,30 @@ After a crash, inspect the rollout before manually removing a stale lock
 (`~/.local/state/plangraph/fleet-sync.lock` or `<live_root>/.advance.lock`).
 Selected ps-only hosts, missing health checks, and unknown host ids are refused
 before contacting any host (exit 2, one diagnostic line per problem).
+
+Each host may set `ssh_target` for advance, drift, and generated ps/overflow
+SSH destinations (for example a user-qualified SSH alias); when omitted, they
+use the host id. Logs and selection still use the id. Regenerate consumer
+configs after changing the override.
+For fresh release health checks, the local registry entry's optional `env.PATH`
+is the complete executable search path for doctor, including installed `pg-spawnd`
+and harnesses. Doctor selects `PLANGRAPH_HOST_NAME` or registry `self`, resolving
+ids/aliases case-insensitively. No build artifacts in a release tree are needed.
+Windows registry `env.Path` is accepted case-insensitively. A present but unusable
+registry reports `host_path: fail`; an unmatched identity is named explicitly.
+Doctor restores the inherited PATH after its checks, including on exceptions.
+
+## Keeper lazy-import review disposition
+
+The admin import LOW does not apply: `src/plangraph/keeper/cli.py:308`
+already imports `cli_admin` only inside `main`'s admin branch. The oversight
+import LOW does not apply: `src/plangraph/keeper/cli_oversight.py:166-167`
+already imports `db` and `oversight` inside `cmd_oversight_check`. The review's
+`cla_oversight.py` refers to `cli_oversight.py`; no `cla_oversight.py` exists.
+The fresh-interpreter guard covers help/whoami without `fcntl`, then real
+admin init/verify and oversight dispatch. No keeper source change is needed.
+
+Fleet-sync schema/example tests resolve fixtures relative to their test file
+and exercise reads after changing to an unrelated directory. The imports at
+`tests/test_fleet_sync.py:4` (`Path`) and `tests/test_fleet_sync.py:9` (`drift`)
+predate this PR.
