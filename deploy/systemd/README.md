@@ -13,7 +13,7 @@ All units are user units (`systemctl --user`), not system units.
 | plangraph-projector-reconcile.service | one nightly run: reconcile open Temporal workflows vs keeper state | keeper host |
 | plangraph-projector-reconcile.timer | nightly timer (03:30) starting the reconcile service | keeper host |
 | plangraph-oversight-check.service + .timer | oversight check (digest files + projector_alarms) every 30 min | keeper host |
-| plangraph-quota-alarms.service + .timer | quota 50/75/90 % alarms from the gateway quota_snapshots to routing every 15 min (read-only; `systemctl --user enable --now plangraph-quota-alarms.timer` on the gateway host after copying both files) | gateway host |
+| plangraph-quota-alarms.service + .timer | quota 50/75/90 % alarms from the gateway quota_snapshots to routing every 15 min (read-only; set `QUOTA_SNAPSHOT_DB` in `~/.config/plangraph/quota-alarms.env` to a read-only mount or copy of the gateway sqlite so no docker group is needed, else it falls back to `docker exec`; `systemctl --user enable --now plangraph-quota-alarms.timer` on the gateway host after copying both files) | gateway host |
 | plangraph-render.service | one tick: follow the gated head, render the static page, check the stamp | render host |
 | plangraph-render.timer | timer driving plangraph-render.service every 5 min | render host |
 | render.env.example | environment template for plangraph-render.service (paths, not secrets) | render host |

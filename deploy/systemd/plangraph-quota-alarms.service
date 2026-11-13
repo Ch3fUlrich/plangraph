@@ -5,5 +5,10 @@ Description=Subscription quota alarms (50/75/90 % per window) to routing
 Type=oneshot
 WorkingDirectory=%h/code/plangraph
 Environment=PYTHONPATH=%h/code/plangraph/src
+# optional: QUOTA_SNAPSHOT_DB=<read-only mount or copy of the gateway storage.sqlite> reads the
+# table directly (no docker group needed); unset, the program falls back to docker exec on
+# QUOTA_GATEWAY_CONTAINER.
+EnvironmentFile=-%h/.config/plangraph/quota-alarms.env
+NoNewPrivileges=yes
 ExecStart=/usr/bin/python3 -m plangraph.keeper.quota_alarms
 TimeoutStartSec=2min
