@@ -81,3 +81,11 @@ def test_local_run_refuses_full_suite_fallback(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(module.subprocess, 'run', lambda *a, **kw: pytest.fail('full suite launched'))
     assert module.main(tmp_path) == 2
     assert 'full suite' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('asset', ['tests/shared.py', 'tests/fixtures/capture.json'])
+def test_local_file_only_mode_keeps_shared_asset_consumers(tmp_path, asset):
+    _repo(tmp_path, {asset: '', 'tests/test_consumer.py':
+                    'import shared\n# capture.json', 'tests/test_unrelated.py': ''})
+    plan = selector().select_tests(tmp_path, [asset], local=True, files_only=True)
+    assert plan['tests'] == ['tests/test_consumer.py']

@@ -427,6 +427,6 @@ def test_local_tests_use_main_while_policy_keeps_push_base(repo, monkeypatch):
     assert preflight.main(['--base', 'HEAD'], repo) == 0
     tests = next(cmd for cmd, _, _ in calls if Path(cmd[1]).name == 'affected_tests.py')
     assert tests[tests.index('--base') + 1] == 'origin/main'
-    assert '--local' in tests
+    assert '--local' in tests and '--files-only' in tests
     assert all(env['FILESIZE_REQUIRE_BASE'] == 'HEAD' for cmd, _, env in calls
                if Path(cmd[1]).name == 'check_file_size.py')
