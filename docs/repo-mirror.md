@@ -91,3 +91,4 @@ retries). Keeper mirror wiring remains a later slice.
 
 The context crate also exports the decisions-log index parser; see [Decisions index](ctx-decisions-index.md).
 Instruction linting is also available in the shared crate; see the [crate guide](../rust/pg-ctx/README.md).
+The context crate exports rule-scope validation alongside mirroring; see [Rule scopes](rule-scopes.md).

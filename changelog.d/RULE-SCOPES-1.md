@@ -1,0 +1,1 @@
+- Add the pg-ctx rule-scope parser, deterministic DECISIONS coverage validator, item-tag derivation and pure role/tag matching with hermetic Rust fixtures; data TSV, CI wiring and CLI integration follow separately.

@@ -1,0 +1,7 @@
+# roles	all,writer,reviewer
+# tags	all,code,ops
+# project	demo	code
+# kind	deploy	ops
+0.2a	writer	code
+1.1	all	all
+9.14	writer,reviewer	ops
