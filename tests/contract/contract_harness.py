@@ -241,11 +241,30 @@ def start_local(base: Path, signing: bool = False) -> Keeper:
     batch_dir, runs_dir = base / "batches", base / "runs"
     batch_dir.mkdir()
     runs_dir.mkdir()
-    (base / "DECISIONS.md").write_text(DECISIONS, encoding="utf-8")
+    # Production decisions_file is an origin/main authority, not a loose file.
+    # Keep the black-box fixture local and independent of caller Git settings.
+    origin, data = base / "origin.git", base / "data"
+    git_env = {
+        "PATH": os.environ.get("PATH", os.defpath), "HOME": str(base),
+        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_ALLOW_PROTOCOL": "file", "GIT_TERMINAL_PROMPT": "0",
+        "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.invalid",
+        "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.invalid",
+    }
+    for args in (["init", "--bare", "--initial-branch=main", str(origin)],
+                 ["clone", str(origin), str(data)]):
+        subprocess.run(["git", *args], check=True, capture_output=True,
+                       env=git_env, timeout=30)
+    decisions = data / "DECISIONS.md"
+    decisions.write_text(DECISIONS, encoding="utf-8")
+    for args in (["add", "DECISIONS.md"], ["commit", "-m", "Fixture decisions"],
+                 ["push", "origin", "main"]):
+        subprocess.run(["git", "-C", str(data), *args], check=True,
+                       capture_output=True, env=git_env, timeout=30)
     cfg = base / "keeper.json"
     cfg.write_text(json.dumps({
         "db": str(base / "keeper.db"), "snapshot": str(base / "plan.snapshot.json"),
-        "decisions_file": str(base / "DECISIONS.md"), "runs_dir": str(runs_dir),
+        "decisions_file": str(decisions), "runs_dir": str(runs_dir),
         "batch_roots": [str(batch_dir)], "reap_interval": 3600,
     }), encoding="utf-8")
     cfg.chmod(0o600)
@@ -273,10 +292,15 @@ def start_local(base: Path, signing: bool = False) -> Keeper:
         tokens[name] = _token_of(out.stdout)
     ready_file = base / "ready.json"
     ready_file.unlink(missing_ok=True)
+    # Runtime fetches need the same isolation as setup, including removal of
+    # inherited repository selectors and command-line Git configuration pairs.
+    env = {name: value for name, value in _env({"PYTHONFAULTHANDLER": "1"}).items()
+           if not name.startswith("GIT_")}
+    env.update(git_env)
     proc = subprocess.Popen(
         [sys.executable, "-m", "plangraph.keeper.daemon", "--config", str(cfg),
          "--host", "127.0.0.1", "--port", "0", "--ready-file", str(ready_file)],
-        env=_env({"PYTHONFAULTHANDLER": "1"}), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     keeper = Keeper("", tokens,
                     {"decisions", "runs", "batch", "admin"}, True, base, cfg,
                     batch_dir, runs_dir, proc)

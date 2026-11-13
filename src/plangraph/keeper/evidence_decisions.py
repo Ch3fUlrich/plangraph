@@ -1,4 +1,8 @@
-"""Decision adapter: does ``| D-NNN |`` exist in the configured DECISIONS.md?
+"""Decision adapter: does ``| D-NNN |`` exist in the decisions authority?
+
+Keeper contexts read the configured file's repository-relative path from a
+freshly fetched origin/main, never the checkout. Direct parser users retain
+the local-document view unless ``from_origin=True`` is explicitly requested.
 
 The contract's marker is the literal line start ``^\\| D-([0-9]+) \\|`` — a table
 row with spaces around the id.  ``[0-9]`` rather than ``\\d`` because the latter
@@ -25,7 +29,9 @@ by a non-space) do not act as boundaries.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 __all__ = ["DecisionsAdapter", "DECISION_LINE_RE"]
@@ -48,6 +54,49 @@ _WS_RE = re.compile(r"\s+")
 # A whole ``project:ID`` key (the same shape tools/apply_batch.py accepts).
 _KEY_TOKEN_RE = re.compile(r"[^:@/\s,]+:[^:@/\s,]+\Z")
 _CLOSES_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}\Z")
+
+
+class DecisionsFetchFailed(OSError):
+    """The decisions repository could not fetch origin/main."""
+
+
+class DecisionsOriginUnreadable(OSError):
+    """The configured repository or origin/main decisions blob is unreadable."""
+
+
+def _origin_git_env() -> dict[str, str]:
+    """Ignore caller repository/config overrides; retain transport safety guards."""
+    env = {name: value for name, value in os.environ.items()
+           if not name.startswith("GIT_") or name in {"GIT_ALLOW_PROTOCOL", "GIT_TERMINAL_PROMPT"}}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    return env
+
+
+def read_decisions_origin(path: Path) -> str:
+    """Discover the repo, fetch main and read its configured blob; never fall back."""
+    env = _origin_git_env()
+    try:
+        path = path.resolve()
+        root = subprocess.run(
+            ["git", "-C", str(path.parent), "rev-parse", "--show-toplevel"],
+            check=True, capture_output=True, env=env, timeout=30).stdout.decode("utf-8").strip()
+        repo = Path(root).resolve()
+        relative = path.relative_to(repo).as_posix()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise DecisionsOriginUnreadable from None
+    try:
+        subprocess.run(
+            ["git", "-C", str(repo), "fetch", "origin",
+             "+refs/heads/main:refs/remotes/origin/main"],
+            check=True, capture_output=True, env=env, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        raise DecisionsFetchFailed from None
+    try:
+        return subprocess.run(
+            ["git", "-C", str(repo), "cat-file", "blob", f"origin/main:{relative}"],
+            check=True, capture_output=True, env=env, timeout=30).stdout.decode("utf-8")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise DecisionsOriginUnreadable from None
 
 
 def _parse_closes_token(token: str) -> tuple[str, str | None] | None:
@@ -96,24 +145,30 @@ def _prose_lines(text: str):
 class DecisionsAdapter:
     """Read-only view of one decisions document, injected via ``ctx.decisions``."""
 
-    def __init__(self, path: str | Path | None) -> None:
+    def __init__(self, path: str | Path | None, *, from_origin: bool = False) -> None:
         self._path = Path(path) if path else None
+        self._from_origin = from_origin
 
     def _rows_strict(self) -> dict[str, list[str]]:
         return self._rows(_strict=True)
 
     def _rows(self, *, _strict=False) -> dict[str, list[str]]:
-        """Prose table rows keyed by normalised id (empty when unreadable)."""
-        if self._path is None or not self._path.is_file():
-            if _strict and self._path is not None:
-                raise OSError("decisions path is not a regular file")
+        """Normalised prose rows; origin failures raise, local reads can be best effort."""
+        if self._path is None:
             return {}
-        try:
-            text = self._path.read_text(encoding="utf-8")
-        except OSError:
-            if _strict:
-                raise
-            return {}
+        if self._from_origin:
+            text = read_decisions_origin(self._path)
+        else:
+            if not self._path.is_file():
+                if _strict:
+                    raise OSError("decisions path is not a regular file")
+                return {}
+            try:
+                text = self._path.read_text(encoding="utf-8")
+            except OSError:
+                if _strict:
+                    raise
+                return {}
         rows: dict[str, list[str]] = {}
         for line in _prose_lines(text):
             match = DECISION_LINE_RE.match(line)
