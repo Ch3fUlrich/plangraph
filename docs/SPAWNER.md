@@ -2,7 +2,11 @@
 
 ### ROUND-CAP
 
-An `implement` spawn is refused with reason `round_cap` once the same `item_key` (and PR or branch, card `pr`/`pr_number`/`branch`, stored as `round_ref`) has 3 earlier implement runs (D-5813, rule 3.35); refused, dry-run and continuation records do not count. The refusal message is JSON with `replan_required`: item, PR, rounds, findings source, `replan_leg` (first leg the route table gives role `research`; fixed fallback order sol, hydrogen, sonnet high only if the route fails) and a replan card template. Review and other roles are never capped.
+An `implement` spawn is refused with reason `round_cap` once the same `item_key` and PR or branch (card `pr`/`pr_number`/`branch`, stored as `round_ref`) has 3 earlier implement runs (D-5813, rule 3.35). Rounds are counted per exact (item, ref): a run stored without a ref counts only for a card that names no ref. Refused, dry-run and continuation records do not count; review and other roles are never capped. The check runs in the public `spawn` entry before overflow admission and again in `_spawn`.
+
+The refusal message is JSON with `replan_required`: item, PR, rounds, the open `findings` (verbatim card findings), `replan_leg` and `replan_leg_order` (the route table's legs for role `research`), `replan_route_error` (the routing refusal, when no planning leg is available; any other routing error surfaces) and `replan` (status, run id).
+
+The refusal also starts the replan job once per item and PR (marker `replan/<hash>.json` in the spawner state; a second refusal reports the marker status, a `running` marker older than an hour is retried). The job runs a `research` spawn on the routed planning leg with the item, the PR diff (`diff_ref` through git, else `gh pr diff`) and the findings, then reads `{"slices": [...]}` from its output: at most 12 slices of at most 300 lines, every finding assigned. The keeper DEFINE (`create_items`, one lane per slice under the item, findings copied verbatim, definitions also saved as `replan/<hash>.items.json`) runs first, then `gh pr close` closes the PR unmerged, then one line (`DONE`, `FAIL` or `BLOCKED`) goes to the `routing` alert outbox. A failed step leaves the PR open. The keeper principal in `PG_URL`/`PG_TOKEN_FILE` must be allowed to create items (router or L1 of the project); otherwise the line names `define_failed` and the saved definitions file.
 
 ### QUOTA-PAUSE-GATE
 

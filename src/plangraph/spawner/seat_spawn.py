@@ -160,7 +160,9 @@ class SeatSpawnMixin:
             if cwd is not None:
                 options['cwd'] = bound.arguments['cwd'] = cwd
             from .prompt_guard import admit_prompt
+            from .round_cap import enforce_round_cap
             from plangraph.planner.routing import SpawnRefused
+            await enforce_round_cap(self, card, options.get('role', 'implement'), dry_run=options.get('dry_run'))
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
             admitted = await asyncio.to_thread(self.admit_spawn, options, card=card)
