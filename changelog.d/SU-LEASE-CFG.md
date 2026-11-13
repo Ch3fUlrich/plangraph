@@ -1,0 +1,1 @@
+- **SU-LEASE-CFG:** Apply `default_lease`, `lease_warn_s` and `review_overdue_s` from keeper config at daemon start; refuse non-positive or non-integer values at load, keeping absent-key defaults unchanged.
