@@ -88,5 +88,22 @@
   {"id": "hex-64", "input_parts": ["ab12ab12ab12ab12", "ab12ab12ab12ab12", "ab12ab12ab12ab12", "ab12ab12ab12ab12"], "expected": ["ab12ab12ab12ab12", "ab12ab12ab12ab12", "ab12ab12ab12ab12", "ab12ab12ab12ab12"], "output_only": true, "output": "[REDACTED]"},
   {"id": "blob-mixed", "input_parts": ["Zq9_Ab/2Zq9_Ab/2", "Zq9_Ab/2Zq9_Ab/2", "Zq9_Ab/2=="], "expected": ["Zq9_Ab/2Zq9_Ab/2", "Zq9_Ab/2Zq9_Ab/2", "Zq9_Ab/2=="], "output_only": true, "output": "[REDACTED]"},
   {"id": "blob-letters", "input_parts": ["Zq_Ab/Zq_Ab/Zq_Ab/", "Zq_Ab/Zq_Ab/Zq_Ab/", "Zq_Ab/Zq_Ab/=="], "expected": ["Zq_Ab/Zq_Ab/Zq_Ab/", "Zq_Ab/Zq_Ab/Zq_Ab/", "Zq_Ab/Zq_Ab/=="], "output_only": true, "output": ["Zq_Ab/Zq_Ab/Zq_Ab/", "Zq_Ab/Zq_Ab/Zq_Ab/", "Zq_Ab/Zq_Ab/=="]},
-  {"id": "blob-digits", "input_parts": ["1234567890", "1234567890", "1234567890", "1234567890=="], "expected": ["1234567890", "1234567890", "1234567890", "1234567890=="], "output_only": true, "output": "[REDACTED]=="}
+  {"id": "blob-digits", "input_parts": ["1234567890", "1234567890", "1234567890", "1234567890=="], "expected": ["1234567890", "1234567890", "1234567890", "1234567890=="], "output_only": true, "output": "[REDACTED]=="},
+  {"id": "py-name-scope-my-secret-colon", "input": "MY_SECRET: v", "expected": "MY_SECRET: [REDACTED]", "source": "MY_SECRET: v"},
+  {"id": "py-name-scope-my-secret-equals", "input": "MY_SECRET=v", "expected": "MY_SECRET=[REDACTED]", "source": "MY_SECRET=v"},
+  {"id": "py-name-scope-short-before-my-secret-lf", "input_parts": ["x ", "gh", "p_", "A9A9A9A9A9A9A9", "\nMY_SECRET: v"], "expected": "x [REDACTED]: [REDACTED]", "source": "x [REDACTED]: v"},
+  {"id": "py-name-scope-short-before-my-secret-crlf", "input_parts": ["x ", "gh", "p_", "A9A9A9A9A9A9A9", "\r\nMY_SECRET: v"], "expected": "x [REDACTED]: [REDACTED]", "source": "x [REDACTED]: v"},
+  {"id": "py-name-scope-db-password", "input": "DB_PASSWORD=v", "expected": "DB_PASSWORD=[REDACTED]", "source": "DB_PASSWORD=v"},
+  {"id": "py-name-scope-auth-token", "input": "AUTH_TOKEN: v", "expected": "AUTH_TOKEN: [REDACTED]", "source": "AUTH_TOKEN: v"},
+  {"id": "py-name-scope-private-key-placeholder", "input": "PRIVATE_KEY=[REDACTED]", "expected": "PRIVATE_KEY=[REDACTED]", "source": "PRIVATE_KEY=[REDACTED]"},
+  {"id": "py-name-scope-passwd", "input": "DB_PASSWD_NEXT=v", "expected": "DB_PASSWD_NEXT=[REDACTED]", "source": "DB_PASSWD_NEXT=v"},
+  {"id": "py-name-scope-apikey", "input": "2APIKEY3=v", "expected": "2APIKEY3=[REDACTED]", "source": "2APIKEY3=v"},
+  {"id": "py-name-scope-accesskey", "input": "MY_ACCESSKEY_NEXT=v", "expected": "MY_ACCESSKEY_NEXT=[REDACTED]", "source": "MY_ACCESSKEY_NEXT=v"},
+  {"id": "py-name-scope-access-key", "input": "MY_ACCESS_KEY_NEXT=v", "expected": "MY_ACCESS_KEY_NEXT=[REDACTED]", "source": "MY_ACCESS_KEY_NEXT=v"},
+  {"id": "py-name-scope-privatekey", "input": "MY_PRIVATEKEY_NEXT=v", "expected": "MY_PRIVATEKEY_NEXT=[REDACTED]", "source": "MY_PRIVATEKEY_NEXT=v"},
+  {"id": "py-name-scope-credential", "input": "client_credentials=v", "expected": "client_credentials=[REDACTED]", "source": "client_credentials=v"},
+  {"id": "py-name-scope-max-tokens", "input": "max_tokens=123", "expected": "max_tokens=[REDACTED]", "source": "max_tokens=123"},
+  {"id": "py-name-scope-token-count", "input": "token_count: 4", "expected": "token_count: [REDACTED]", "source": "token_count: 4"},
+  {"id": "py-name-scope-double-quotes", "input": "\"MY_SECRET\": \"v\"", "expected": "\"MY_SECRET\": \"[REDACTED]\"", "rust_expected": "\"MY_SECRET\": [REDACTED]", "source": "\"MY_SECRET\": \"v\""},
+  {"id": "py-name-scope-single-quotes", "input": "'AUTH_TOKEN' = 'v'", "expected": "'AUTH_TOKEN' = '[REDACTED]'", "rust_expected": "'AUTH_TOKEN' = [REDACTED]", "source": "'AUTH_TOKEN' = 'v'"}
 ]

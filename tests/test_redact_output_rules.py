@@ -128,6 +128,24 @@ def test_wrapped_token_in_prompt_and_tail(monkeypatch, tmp_path, newline):
     assert job.stdout == job.stderr == '[REDACTED]; retained\n'
 
 
+@pytest.mark.parametrize('name', ['MY_SECRET', 'DB_PASSWORD', 'AUTH_TOKEN',
+                                  'max_tokens', 'token_count'])
+def test_widened_names_at_prompt_output_record_and_notification_boundaries(monkeypatch, tmp_path, name):
+    text, expected = name + '=v\n', name + '=[REDACTED]\n'
+    assert capture(monkeypatch, tmp_path, text) == expected
+    child, job = asyncio.run(collect(text, tmp_path, monkeypatch))
+    assert job.stdout == job.stderr == expected
+    assert (tmp_path / 'live.log').read_text().count(expected) == 2
+    svc = SpawnService(runner=child, state=tmp_path)
+    record = dict(run_id='run-names', status='completed', exit_code=0, reason=text,
+                  stdout_tail=text, stderr_tail=text)
+    svc._save(record)
+    stored = json.loads(svc._path(record['run_id']).read_text())
+    assert stored['stdout_tail'] == stored['stderr_tail'] == stored['reason'] == expected
+    assert notify.completion_event(stored, str(tmp_path))['reason'] == expected
+    assert notify.leg_refused_event(stored, 'synthetic', text)['reason'] == expected
+
+
 @pytest.mark.parametrize('newline', ['\n', '\r\n'])
 @pytest.mark.parametrize('prefix, suffix', [
     ('API_KEY="', '"'), ('export API_KEY=', ''), ('token: ', ''),

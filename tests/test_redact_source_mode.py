@@ -166,6 +166,20 @@ def test_direct_caller_prompt_keeps_full_strength(monkeypatch, tmp_path):
     assert capture(monkeypatch, tmp_path, CODE) == env_redact.redact(CODE)
 
 
+@pytest.mark.parametrize('name', ['MY_SECRET', 'DB_PASSWORD', 'AUTH_TOKEN',
+                                  'max_tokens', 'token_count'])
+def test_widened_names_stay_readable_only_in_producer_source_spans(monkeypatch, tmp_path, name):
+    text = name + '=ordinary_expression()\n'
+    assert env_redact.redact_source(text) == text
+    assert capture(monkeypatch, tmp_path, text) == name + '=[REDACTED]\n'
+    assert '+' + text in capture(monkeypatch, tmp_path,
+                                diff_prompt(monkeypatch, tmp_path, extra=text))
+    (tmp_path / 'sample.py').write_text(text)
+    monkeypatch.setattr(context_pack, 'tracked', lambda root: frozenset({'sample.py'}))
+    prompt = context_pack.pack_prompt('', {'context': ['sample.py:1-1']}, tmp_path)
+    assert text in capture(monkeypatch, tmp_path, prompt)
+
+
 def test_serialized_diff_is_untrusted_caller_text(monkeypatch, tmp_path):
     caller = str(diff_prompt(monkeypatch, tmp_path))
     out = capture(monkeypatch, tmp_path, caller)

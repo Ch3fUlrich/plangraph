@@ -36,6 +36,14 @@ Python and Rust order: complete/truncated PEM, Bearer, then plain-mode pre-pass 
 shield every matched assignment's name/quote/separator with an indexed marker
 `U+E000 + decimal index + U+E001`, leaving values untouched; run the wrapped join,
 then restore the names.
+Python now includes Rust's case-insensitive assignment-name set:
+`[A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*`,
+including `MY_SECRET`, `DB_PASSWORD`, `AUTH_TOKEN`, `max_tokens` and `token_count`;
+Python also retains `PG_DSN` and `\w*_KEY`. P uses the same widened Python rule.
+The D-5279 R3 value difference remains: Python keeps quoted-value quotes, Rust
+drops them, explicitly recorded as `expected` versus `rust_expected` in the shared
+parity fixture. Separator whitespace and value/closing-delimiter rules remain
+language-specific; this change widens only Python's credential names.
 P is skipped entirely if either shield character already occurs in the text.
 Then main's order runs: full assignments, wrapped prefixed tokens, URL userinfo,
 token catalog and JWT. The shielded join cannot cross/eat a credential name while

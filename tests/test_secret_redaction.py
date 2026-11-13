@@ -72,6 +72,19 @@ def test_quoted_secret_preserves_structure(quote, separator):
     assert env_redact.redact(text) == expected
 
 
+@pytest.mark.parametrize('key', ['PG_DSN', 'OTHER_KEY', 'lookup_key', 'é_KEY', '_KEY'])
+def test_python_only_assignment_names_stay_masked(key):
+    text = key + '=v'
+    assert env_redact.redact(text) == key + '=[REDACTED]'
+    assert env_redact.redact_source(text) == text
+
+
+def test_widened_assignment_names_do_not_change_record_key_policy():
+    record = {'max_tokens': 123, 'counts': ['token_count: 4'], 'password': 'v'}
+    assert env_redact.redact(record) == {
+        'max_tokens': '[REDACTED]', 'counts': ['token_count: [REDACTED]'], 'password': 'v'}
+
+
 @pytest.mark.parametrize('payload', ['dsn', 'reserved_dsn', 'json', 'escaped_json'])
 @pytest.mark.parametrize('split', [False, True])
 @pytest.mark.parametrize('failure', [False, True])

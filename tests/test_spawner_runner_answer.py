@@ -304,7 +304,9 @@ def test_display_answer_prevents_reasoning_retry(tmp_path, monkeypatch, framing)
         output = diagnostic + '\n' + output
     assert answer_text(output, raw_fallback=False).strip()
     job = _monitor(tmp_path, monkeypatch, output, stderr='Error: output-limit', denied=True)
-    assert job.stdout == answer_text(output) and verdict in job.stdout
+    # Rust-name parity masks the mixed diagnostic's TOKEN metadata assignment.
+    expected = answer_text(output).replace('"tokens": {"output": 0}}}', '"tokens": [REDACTED]')
+    assert job.stdout == expected and verdict in job.stdout
     assert not any(e['event'] == 'opencode_reasoning_exhausted' for e in job.events)
 
 

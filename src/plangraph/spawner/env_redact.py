@@ -21,7 +21,9 @@ def _redact_pem(text):
 
 
 _ASSIGNMENT = re.compile(
-    r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
+    r'(?im)((?:["\x27])?\b(?:\w*_KEY|PG_DSN|'
+    r'[A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|'
+    r'ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)'
     r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
     r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)")
 

@@ -51,13 +51,29 @@ def test_catalog_is_exactly_rust_specs():
 
 
 def test_prefixed_line_before_my_secret_retains_main_assignment_scope():
+    # Keep the regression's stable ID; MY_SECRET's scope now agrees with Rust.
     value = 'hunter' + '2value'
-    standalone = 'MY_' + 'SECRET: ' + value
-    # Main's Python assignment regex does not match MY_SECRET, even standalone.
-    assert redact(standalone) == standalone
-    for nl in ('\n', '\r\n'):
-        text = 'x ' + 'gh' + 'p_' + 'A9' * 7 + nl + standalone
-        assert redact(text) == 'x [REDACTED]: ' + value
+    for sep in (': ', '='):
+        standalone = 'MY_' + 'SECRET' + sep + value
+        assert redact(standalone) == 'MY_SECRET' + sep + '[REDACTED]'
+        for nl in ('\n', '\r\n'):
+            text = 'x ' + 'gh' + 'p_' + 'A9' * 7 + nl + standalone
+            assert redact(text) == 'x [REDACTED]' + sep + '[REDACTED]'
+
+
+@pytest.mark.parametrize('name', ['MY_SECRET', 'DB_PASSWORD', 'AUTH_TOKEN', 'DB_PASSWD',
+                                  'APIKEY', 'ACCESSKEY', 'PRIVATEKEY', 'CREDENTIALS',
+                                  'max_tokens', 'token_count'])
+@pytest.mark.parametrize('nl', ['\n', '\r\n'])
+def test_widened_names_are_shielded_before_wrapped_join(name, nl):
+    short = 'gh' + 'p_' + 'A9' * 7
+    text = 'x ' + short + nl + '"' + name + '" : v'
+    assert env_redact.join_shielded_assignments(text, env_redact._ASSIGNMENT) == text
+    assert redact(text) == 'x ' + short + nl + '"' + name + '" : [REDACTED]'
+    text = name + '=' + short + nl + 'B8' * 8 + nl + 'next retained'
+    expected = name + '=[REDACTED]' + nl + 'next retained'
+    assert env_redact.join_shielded_assignments(text, env_redact._ASSIGNMENT) == expected
+    assert redact(text) == expected
 
 
 def main_order(text):

@@ -164,7 +164,11 @@ def test_dispatch_record_carries_the_review_text_and_the_raw_stream_sits_beside_
     assert attempt["stdout_tail"] == ANSWER and record["stdout_tail"] == ANSWER
     assert sv.parse_verdict(attempt["stdout_tail"]) == (True, 2)
     raw = (run_dir / "claude-stream.jsonl").read_text()
-    assert raw.splitlines() == lines and "weigh the diff" in raw
+    # Rust-name parity masks APIKEY/TOKEN metadata in plain-mode raw diagnostics.
+    expected_lines = lines.copy()
+    expected_lines[2] = expected_lines[2].replace('"apiKeySource":"none"', '"apiKeySource":"[REDACTED]"')
+    expected_lines[3] = '{"type":"system","subtype":"thinking_tokens","estimated_tokens":[REDACTED]'
+    assert raw.splitlines() == expected_lines and "weigh the diff" in raw
     assert [e for e in record["events"] if e["event"] == "claude_stream_rendered"] == [
         {"event": "claude_stream_rendered", "raw": "claude-stream.jsonl", "stop_reason": "end_turn"}]
     assert "claude-stream.jsonl" not in (run_dir / "live.log").read_text()   # live.log keeps its activity feed untouched
@@ -188,5 +192,9 @@ def test_a_failed_claude_run_keeps_its_raw_stdout_for_diagnosis(tmp_path, monkey
     lines = transcript(ANSWER, is_error=True)
     record, run_dir = run_review(tmp_path, monkeypatch, lines, exit_code=1)
     assert record["status"] == "failed"
-    assert record["attempts"][-1]["stdout_tail"].splitlines() == lines
+    # Failed-run diagnostics use the same widened APIKEY/TOKEN name scope.
+    expected_lines = lines.copy()
+    expected_lines[2] = expected_lines[2].replace('"apiKeySource":"none"', '"apiKeySource":"[REDACTED]"')
+    expected_lines[3] = '{"type":"system","subtype":"thinking_tokens","estimated_tokens":[REDACTED]'
+    assert record["attempts"][-1]["stdout_tail"].splitlines() == expected_lines
     assert not (run_dir / "claude-stream.jsonl").exists()

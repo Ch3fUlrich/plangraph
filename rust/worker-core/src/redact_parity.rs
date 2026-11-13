@@ -24,6 +24,8 @@ struct Row {
     #[serde(default)]
     input_parts: Vec<String>,
     expected: Option<Text>,
+    // D-5279 R3: Python retains quoted values' quotes; Rust drops them.
+    rust_expected: Option<Text>,
     source: Option<Text>,
     output: Option<Text>,
 }
@@ -44,7 +46,10 @@ fn redact_shared_parity_table() {
                 .unwrap_or_else(|| row.input_parts.concat());
             for (expected, actual) in [
                 (
-                    row.output.as_ref().or(row.expected.as_ref()),
+                    row.rust_expected
+                        .as_ref()
+                        .or(row.output.as_ref())
+                        .or(row.expected.as_ref()),
                     redact(&input),
                 ),
                 (row.source.as_ref(), redact_source(&input)),
@@ -94,18 +99,19 @@ fn redact_wrapped_assignments_are_masked_whole() {
 }
 
 #[test]
-fn redact_prefixed_line_before_my_secret_retains_main_assignment_scope() {
+fn redact_my_secret_assignment_shapes_are_masked() {
     let value = ["hunter", "2value"].concat();
-    let standalone = format!("MY_SECRET: {value}");
-    // Main's Rust assignment regex matches MY_SECRET, unlike Python's regex.
-    assert_eq!(redact(&standalone), "MY_SECRET: [REDACTED]");
-    for nl in ["\n", "\r\n"] {
-        let text = format!(
-            "x {}{}{nl}{standalone}",
-            ["gh", "p_"].concat(),
-            "A9".repeat(7)
-        );
-        assert_eq!(redact(&text), "x [REDACTED]: [REDACTED]");
+    for sep in [": ", "="] {
+        let standalone = format!("MY_SECRET{sep}{value}");
+        assert_eq!(redact(&standalone), format!("MY_SECRET{sep}[REDACTED]"));
+        for nl in ["\n", "\r\n"] {
+            let text = format!(
+                "x {}{}{nl}{standalone}",
+                ["gh", "p_"].concat(),
+                "A9".repeat(7)
+            );
+            assert_eq!(redact(&text), format!("x [REDACTED]{sep}[REDACTED]"));
+        }
     }
 }
 
