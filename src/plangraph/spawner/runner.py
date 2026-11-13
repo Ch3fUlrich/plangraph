@@ -1011,7 +1011,7 @@ def spawn_service(*args, **kwargs):
         async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
-                        seats=False, _plan=None, run_worktree=False, _placement=None):
+                        seats=False, _plan=None, run_worktree=False, _placement=None, _review_writer=None):
             from .private_io import SAVE_READ_ATTEMPTS
             from .run_watchdog import leg_limits, terminal_status, thresholds
             from .question_bridge import rounds_exhausted
@@ -1025,7 +1025,7 @@ def spawn_service(*args, **kwargs):
                     review_of=review_of, model=model, leg=leg, override_reason=override_reason,
                     dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=not seats or no_fallthrough,
                     benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
-                    seats=seats, run_worktree=run_worktree, _placement=_placement,
+                    seats=seats, run_worktree=run_worktree, _placement=_placement, _review_writer=_review_writer,
                 )
             from plangraph.settings import admit_review_scope
             admit_review_scope(card, role, review_scope)
@@ -1047,7 +1047,7 @@ def spawn_service(*args, **kwargs):
             from .context_pack import annotate
             from .item_key import annotate_item
             pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
-            annotate_item(record, card)
+            annotate_item(record, card, review_writer=_review_writer)
             for skipped in plan.to_dict()['skipped']:
                 if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
                     record.setdefault('skipped', []).append(skipped)

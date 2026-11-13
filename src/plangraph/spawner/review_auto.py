@@ -11,11 +11,23 @@ from .item_key import valid_item
 from .service import SpawnService
 
 
+async def supervise_tasks(service, record):
+    """Drain dynamic review work without attributing another run's failure here."""
+    own = {r['run_id'] for r in record.get('seats', [record])}
+    while pending := [task for task in service.tasks.values() if not task.done()]:
+        await asyncio.gather(*pending, return_exceptions=True)
+    for run_id in tuple(own):
+        source = service.result(run_id)
+        own.update(set(source.get('review_runs', [])) - set(source.get('review_voided', [])))
+    for key, task in service.tasks.items():
+        if key in own or any(key.startswith('review-' + run_id + '-') for run_id in own):
+            task.result()
+
+
 def terminal(service, record):
     """Queue from the terminal persistence door, never from a session caller."""
     head = (record.get('completion') or {}).get('head_sha')
     if (record.get('role') != 'implement' or record.get('status') != 'completed'
-            or record.get('review_auto_status') == 'voided'
             or record.get('exit_code') != 0 or record.get('ended') is None
             or not valid_item(record.get('item_key')) or not re.fullmatch('[0-9a-f]{40}', head or '')):
         return
@@ -27,9 +39,14 @@ def terminal(service, record):
     requested[key] = head
     changed = getattr(service, '_review_changed', {})
     service._review_changed = changed
-    if record['item_key'] in changed:
-        changed[record['item_key']].set()
-    changed[record['item_key']] = signal = asyncio.Event()
+    voided = record.get('review_auto_status') == 'voided' and record.get('review_head') == head
+    for (run_id, prior_head), event in changed.items():
+        if ((run_id == key and prior_head != head) or (not voided and run_id != key
+                and service.result(run_id).get('item_key') == record['item_key'])):
+            event.set()
+    if voided:
+        return
+    changed[key, head] = signal = asyncio.Event()
     async def run():
         locks = getattr(service, '_review_locks', {})
         service._review_locks = locks
@@ -45,6 +62,7 @@ def terminal(service, record):
                     return
                 writer.update(review_auto_status='blocked', review_auto_error=type(exc).__name__)
                 SpawnService._save(service, writer)
+                requested.pop(key, None)  # Transient failures may retry this exact head.
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -65,24 +83,25 @@ async def reviews(service, writer, head, changed):
     keeper = service.keeper_sink
     if not getattr(keeper, 'url', None) or not os.environ.get('PG_REVIEWER_TOKEN_DIR'):
         raise ValueError('review posting host not configured')
-    previous = writer
-    if not writer.get('review_head'):
-        older = [r for r in service.ps()['runs'] if r.get('item_key') == writer['item_key']
-                 and r.get('role') == 'implement' and r.get('review_head')]
-        previous = max(older, key=lambda r: r.get('started', 0), default=writer)
-    old_head = previous.get('review_head')
-    if old_head == head and previous.get('review_auto_status') in ('accepted', 'changes', 'exhausted'):
+    old_head = writer.get('review_head')
+    if old_head == head and writer.get('review_auto_status') in ('accepted', 'changes', 'exhausted', 'voided'):
         return
-    if old_head and old_head != head:
+    fix_delta = bool(old_head and old_head != head)
+    voided = []
+    for previous in service.ps()['runs']:
+        if (previous.get('item_key') != writer['item_key'] or previous.get('role') != 'implement'
+                or not previous.get('review_head')
+                or (previous['run_id'] == writer['run_id'] and not fix_delta)):
+            continue
         previous['review_auto_status'] = 'voided'
         SpawnService._save(service, previous)
+        voided.extend(previous.get('review_runs', []))
         for run_id in previous.get('review_runs', []):
             run = service.result(run_id)
             if run.get('ended') is None:
                 cancelled = await service.cancel(run_id)
                 if cancelled.get('survivors'):
                     raise ValueError('old review kill incomplete')
-        writer['review_voided'] = previous.get('review_runs', [])
     repo = writer['cwd']
     checks = await asyncio.to_thread(CIAdapter().check_runs, repo, head)
     # The remote exact-SHA lookup also proves the head was pushed. No exit-0 inference.
@@ -94,19 +113,21 @@ async def reviews(service, writer, head, changed):
     writers = sorted(writer_parts([*writer.get('given_writer_families', []), writer.get('writer_family')]))
     if not writers:
         raise ValueError('writer family unavailable')
-    decisions = await asyncio.to_thread(keeper.decisions, item.get('linked_decisions', []))
-    card = dict(estimate_tokens=20000, item_key=item['key'], review_writer=writer['run_id'],
+    decisions = await asyncio.to_thread(keeper.decisions, item['linked_decisions'])
+    card = dict(estimate_tokens=20000, item_key=item['key'],
                 review_tier=item['review_tier'], writer_family=writers,
                 done_criteria=item['done_criteria'], decisions=decisions,
                 diff_ref=dict(repo=repo, base=old_head or (writer.get('diff_ref') or {}).get('base', 'origin/main'), head=head))
     plan = service._route(card, 'review', writers)
     if not plan.legs:
         raise ValueError('review route unavailable')
-    if changed.is_set():
+    writer = service.result(writer['run_id'])
+    if changed.is_set() or writer['completion']['head_sha'] != head:
         return
-    need = 1 if old_head else (2 if item['review_tier'] == 'high' else 1)
+    need = 1 if fix_delta else (2 if item['review_tier'] == 'high' else 1)
     writer.update(review_head=head, review_runs=[], review_findings=[], review_auto_status='running',
                   review_checks=dict(head_sha=head, green=True))
+    writer['review_voided'] = voided
     SpawnService._save(service, writer)
     families = set()
     prompt = ('Review this card against its current done criteria and decisions. '
@@ -121,6 +142,7 @@ async def reviews(service, writer, head, changed):
         if not (Path(os.environ['PG_REVIEWER_TOKEN_DIR']) / f'reviewer-{family}.token').is_file():
             raise ValueError('review family token unavailable')
         run = await service.spawn(card=card, prompt=prompt, role='review', writer_families=writers,
+            _review_writer=writer['run_id'],
             _plan=replace(plan, legs=(leg,), review_seats=(leg,), error=None), no_fallthrough=True)
         writer = service.result(writer['run_id'])
         writer['review_runs'].append(run['run_id'])
@@ -134,6 +156,7 @@ async def reviews(service, writer, head, changed):
                 await asyncio.wait((task, wake), return_when=asyncio.FIRST_COMPLETED)
             finally:
                 wake.cancel()
+                await asyncio.gather(wake, return_exceptions=True)
             if changed.is_set():
                 return
         run = service.result(run['run_id'])

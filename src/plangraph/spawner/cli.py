@@ -88,8 +88,8 @@ def _supervise():
             return record['exit_code']
         print(json.dumps(record), flush=True)
         sys.stdout.close()
-        while pending := [task for task in service.tasks.values() if not task.done()]:
-            await asyncio.gather(*pending)
+        from .review_auto import supervise_tasks
+        await supervise_tasks(service, record)
         return 0
     return asyncio.run(run())
 

@@ -261,7 +261,7 @@ def completion_event(record, cwd):
                                        text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL).strip()
     except (OSError, subprocess.CalledProcessError):
         head = None
-    if record.get('review_writer'):
+    if record.get('role') == 'review' and record.get('review_writer'):
         head = (record.get('diff_ref') or {}).get('head')
     rc = record.get('exit_code')
     return redact(dict(event_id=record['run_id'] + ':completion', run_id=record['run_id'],

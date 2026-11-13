@@ -11,13 +11,19 @@ decision authority rows (missing rows block closed). One existing route call
 supplies all legs; standard needs one independent family, high two. Failed/empty
 seats consume the next leg, CHANGES stops with `review_findings`, and `review_runs`
 records every seat. A changed completion head cancels live seats before a single
-fix-delta seat. Posting reuses the locked `seat_verdict.main()` outbox, bound to the
+fix-delta seat only for the same writer run; a replacement writer retains its full
+tier requirement and voids/cancels prior seats even at the same head. Signals bind
+to (writer run, head), and completion is re-read after authority awaits. Missing
+`linked_decisions` blocks closed; blocked heads can retry after recovery. Only
+driver arguments, never card metadata, grant automatic posting authority.
+Posting reuses the locked `seat_verdict.main()` outbox, bound to the
 writer's checked review head rather than the review process's checkout HEAD.
 Automatic seats retain record-only evidence so a response artifact cannot shadow
 the existing record-derived poster.
 Missing keeper/reviewer transport or uncertain cancellation blocks closed with
 `review_auto_status=blocked`. Temporal card workflow and live proof remain outside
-this slice; the supervisor owns and awaits the interim driver.
+this slice; the supervisor awaits all tasks but propagates only its own run/group
+seat or review-driver failures, not unrelated failures or cancellations.
 
 ### QUOTA-PAUSE-GATE
 

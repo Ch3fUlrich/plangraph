@@ -203,7 +203,7 @@ class SpawnService(SeatSpawnMixin):
     async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                     review_of=None, model=None, leg=None, override_reason=None,
                     dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
-                    seats=False, _plan=None, run_worktree=False, _placement=None):
+                    seats=False, _plan=None, run_worktree=False, _placement=None, _review_writer=None):
         from plangraph.settings import admit_review_scope
         admit_review_scope(card, role, review_scope)
         from plangraph.planner.routing import hand_picked, SpawnRefused, SpawnPlan
@@ -300,7 +300,7 @@ class SpawnService(SeatSpawnMixin):
             served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
              started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
-        pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
+        pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card, review_writer=_review_writer); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
         async def execute():
             try:
                 from .run_watchdog import leg_limits, prepare_run, terminal_record
