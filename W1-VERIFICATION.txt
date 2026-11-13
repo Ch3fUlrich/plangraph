@@ -1,0 +1,152 @@
+Package W1 local handoff
+
+Processed W1-1 through W1-7 in order on the supplied branch. No push, merge,
+remote ref change, live worker installation, host cleanup, or model launch.
+SKIPPED in STATUS means the task's complete live/merge evidence is unavailable;
+its implemented Rust tools, tests and documentation are committed.
+ALL DONE means all package tasks were processed, not that live criteria passed.
+
+commits:
+c74f356e feat: sample fleet history and attribute host OOM increments
+545cd5ac feat: choose package hosts from fresh fleet capacity
+d81693b5 feat: check package host readiness without model calls
+377db063 feat: alert on main checkout Git configuration drift
+5944929c feat: discover and fast-forward host checkouts with exact alerts
+2fe9600c feat: report disk pressure and clean protected idle worktrees
+8ca0e0fb feat: retry admitting hosts before queueing package writers
+17f7036e feat: launch selected hosts through existing spawner shims
+9e7ba6a7 feat: expose ordered overflow in package host spawn command
+6364f240 fix: honor host admission limits and preflight readiness exclusions
+a41de937 fix: compare local identity overrides without trimming values
+83013575 chore: finish host tool formatting and bounded remote probes
+A final status/report commit follows these implementation commits.
+
+verification:
+Commands below run from rust/ unless otherwise stated. Linux uses Ubuntu WSL
+with CARGO_TARGET_DIR=$HOME/.cache/pg-w1-target as prescribed by the package.
+
+cargo test -p pg-worker-core --test fleet_series --test package_placement
+  --test host_readiness --test disk_hygiene --test host_overflow
+  --test host_launch --test package_spawn
+Windows: 23 focused tests passed; Linux: 25 focused tests passed.
+Verbatim per-binary summaries (timings omitted here only in this overview):
+  Windows: disk_hygiene 4, fleet_series 3, host_launch 1, host_overflow 4,
+           host_readiness 5, package_placement 5, package_spawn 1; all failed=0.
+  Linux: disk_hygiene 5, fleet_series 3, host_launch 2, host_overflow 4,
+         host_readiness 5, package_placement 5, package_spawn 1; all failed=0.
+
+cargo test -p pg-repo-sync
+  Windows and Linux: 3 drift tests and 4 sync tests passed (7 each).
+  Total focused verification: Windows 30/30; Linux 32/32.
+
+cargo fmt --check: exit 0.
+cargo clippy -p pg-worker-core -p pg-repo-sync --all-targets: Windows exit 0
+  with existing warnings in Windows process control and platform-specific tests.
+Same Clippy command with -- -D warnings: Linux exit 0; Windows fails on the
+  existing unnecessary_unwrap and collapsible_if warnings in untouched files.
+
+Full crate runs were attempted as required, and are not green:
+  cargo test -p pg-worker-core (Windows):
+  test result: FAILED. 885 passed; 15 failed; 1 ignored; 0 measured; 0 filtered out; finished in 77.77s
+  Retried serially to investigate concurrent Git environment interference:
+  cargo test -p pg-worker-core --lib -- --test-threads=1
+  test result: FAILED. 899 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 468.86s
+  Remaining test is writer_salvage::tests::bundle_failure_runs_cleanup_and_reports_cleanup_failure,
+  which expects /dev/null/missing to fail on Windows.
+  cargo test -p pg-worker-core (Linux):
+  test result: FAILED. 1102 passed; 15 failed; 1 ignored; 0 measured; 0 filtered out; finished in 707.59s
+  Failures occur in existing sandbox-push, seat-pool and writer-cleanup fixtures.
+  The sandbox-push fixture attempts to interpret the Windows checkout pointer
+  as a Linux Git path; the other fixtures fail existing ownership verification.
+  No changes were made to these tests or production paths to hide failures.
+
+Live local sampler smoke tests (temporary state only): Windows emitted
+reachable=true, 32 cores, available memory and disk percentage. Linux probe
+emitted reachable=true, 32 cores, memory, PSI, OOM counter and disk percentage.
+No Git commands or deletions were used by these probes.
+
+Repository checks:
+  check-file-size: ok - 2444 tracked file(s) measured, 2 binary file(s) skipped, 130 baseline entr(y/ies)
+  check-changelog-docs: ok - 38 path(s), changelog yes, docs-map 0 warning(s)/0 error(s)
+  phase-batch skill validator: Skill is valid!
+  git diff --check: exit 0.
+  Public scrub of all changed tracked files: scrub_check: 0 hit(s) in 0 file(s).
+  No private-word list was available; the private-word rule was inactive.
+
+not done:
+- Deploy fleet and disk timers and obtain samples on live worker hosts.
+- Prove live host choice and readiness with real host authorization/configuration.
+- Verify Codex's CLI-owned persisted hook hashes. Hosts with hooks/plugins
+  conservatively report MISSING; no bypass or trust mutation is performed.
+- Connect disk-hygiene.json's alarm to the external orchestrator heartbeat.
+- Perform a real host cleanup; only disposable fixture cleanup was performed.
+- Merge, remote CI and independent two-family reviews, per the no-push rule.
+- The Rust run-record path carries sampled OOM deltas; the legacy Python
+  recorder is unchanged. Ready work is measured from queued run records,
+  not a live keeper ready-graph query. See docs/host-tools.md for semantics.
+
+refusals:
+Public scrub initially reported "docs/host-tools.md:22: email" for a systemd
+timer example. The documentation was corrected without changing scrub rules.
+One transient Windows linker Permission denied on an executing test binary
+passed on rerun. No approval or harness refusal occurred.
+
+files:
+.docs-map
+STATUS-package-w1.txt
+W1-VERIFICATION.txt
+changelog.d/PACKAGE-W1-HOST-TOOLS.md
+deploy/systemd/pg-disk-hygiene.service
+deploy/systemd/pg-disk-hygiene.timer
+deploy/systemd/pg-fleet-series@.service
+deploy/systemd/pg-fleet-series@.timer
+docs/host-tools.md
+rust/Cargo.lock
+rust/Cargo.toml
+rust/pg-repo-sync/Cargo.toml
+rust/pg-repo-sync/src/drift.rs
+rust/pg-repo-sync/src/main.rs
+rust/pg-repo-sync/tests/drift.rs
+rust/pg-repo-sync/tests/sync.rs
+rust/worker-core/Cargo.toml
+rust/worker-core/src/bin/pg-disk-hygiene.rs
+rust/worker-core/src/bin/pg-fleet-series.rs
+rust/worker-core/src/bin/pg-host-readiness.rs
+rust/worker-core/src/bin/pg-package-host.rs
+rust/worker-core/src/disk_hygiene.rs
+rust/worker-core/src/fleet_collect.rs
+rust/worker-core/src/fleet_series.rs
+rust/worker-core/src/host_command.rs
+rust/worker-core/src/host_launch.rs
+rust/worker-core/src/host_overflow.rs
+rust/worker-core/src/host_readiness.rs
+rust/worker-core/src/lib.rs
+rust/worker-core/src/package_placement.rs
+rust/worker-core/src/run/record.rs
+rust/worker-core/tests/disk_hygiene.rs
+rust/worker-core/tests/fleet_series.rs
+rust/worker-core/tests/host_launch.rs
+rust/worker-core/tests/host_overflow.rs
+rust/worker-core/tests/host_readiness.rs
+rust/worker-core/tests/package_placement.rs
+rust/worker-core/tests/package_spawn.rs
+skills/phase-batch-orchestration/SKILL.md
+
+Verbatim final focused test summaries:
+w1-windows-focused.log:
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.21s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.27s
+w1-linux-focused.log:
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+Raw full-suite and focused logs are retained locally in .devstack/package-w1/verification/.

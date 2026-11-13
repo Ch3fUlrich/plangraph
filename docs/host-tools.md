@@ -19,7 +19,7 @@ The Rust command replaces the proposed Python fleet-series entry point.
 
 Install the fleet service and timer in `~/.config/systemd/user/`, and create
 `~/.config/plangraph/fleet-worker.env` with `PLANGRAPH_HOST_NAME` set to the
-registry ID. Enable with `systemctl --user enable --now pg-fleet-series@worker.timer`.
+registry ID. Enable the timer's worker instance with `systemctl --user enable --now`.
 Deployment and multi-host evidence require operator access and are not local tests.
 
 Before each package start, call `pg-package-host` with the existing
