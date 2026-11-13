@@ -18,7 +18,7 @@ RECORDED = '\x1b[0m\n> build · mimo-v2.6-flash\n' + CALLS
 
 @pytest.mark.parametrize('role', ['review', 'implement'])
 @pytest.mark.parametrize('fallback', [False, True])
-def test_recorded_output_fails_and_falls_through(tmp_path, role, fallback, monkeypatch):
+def test_recorded_output_fails_and_falls_through(tmp_path, role, fallback, monkeypatch, fake_base_fresh):
     async def launch(plan, **kwargs):
         return plan
     monkeypatch.setattr('plangraph.spawner.resolver.plan_for_launch_async', launch)

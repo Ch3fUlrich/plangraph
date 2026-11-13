@@ -90,7 +90,7 @@ def test_ttl_and_writer_only(monkeypatch):
     assert len(calls) == 1
 
 
-def test_execute_probe_falls_through(tmp_path, monkeypatch):
+def test_execute_probe_falls_through(tmp_path, monkeypatch, fake_base_fresh):
     from mechanics_legs import install_fallthrough_legs
     install_fallthrough_legs(monkeypatch)
     from plangraph.spawner import leg_probe

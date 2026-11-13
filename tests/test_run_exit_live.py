@@ -21,6 +21,7 @@ def test_live_smoke_contract():
 
 
 @pytest.mark.parametrize('visible', [True, False])
+@pytest.mark.real_base_fresh
 def test_smoke_requires_live_readback(tmp_path, monkeypatch, visible):
     """Execute the shipped smoke offline; a marker alone must never pass."""
     for args in (['init', '--bare', str(tmp_path / 'origin.git')], ['init', '-b', 'main'],

@@ -12,7 +12,7 @@ import pytest
 
 
 @pytest.mark.parametrize('explicit', [False, True])
-def test_real_binary_unavailable_and_secret(tmp_path, monkeypatch, caplog, explicit):
+def test_real_binary_unavailable_and_secret(tmp_path, monkeypatch, caplog, explicit, fake_base_fresh):
     from plangraph.spawner.runner import SpawnerRunner
     first = replace(DEFAULT_LEGS[0], harness='opencode', model='omniroute/cx-gpt-6.1-sol')
     second = replace(first, id='second', model='opencode-go/gemini-4-argon')
@@ -81,7 +81,7 @@ def test_real_launch_plan_skips_unserved(monkeypatch):
     assert filtered.skipped[0]['skip_reason'] == 'not_served_on_host: test/absent'
 
 
-def test_explicit_leg_unavailable_one_attempt(tmp_path, monkeypatch):
+def test_explicit_leg_unavailable_one_attempt(tmp_path, monkeypatch, fake_base_fresh):
     from plangraph.spawner.runner import SpawnerRunner
     leg = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-xhigh')
     binary = tmp_path / 'opencode'

@@ -36,7 +36,7 @@ def test_terminal_record_without_earlier_events_and_for_other_statuses():
     assert terminal_record(record, job("completed")) is False and record["events"] == ANNOTATED
 
 
-def test_dispatch_timeout_keeps_the_big_file_event(tmp_path, monkeypatch):
+def test_dispatch_timeout_keeps_the_big_file_event(tmp_path, monkeypatch, fake_base_fresh):
     """The dispatch loop's own terminal branch (runner.py), driven end to end by the run timeout."""
     repo = tmp_path / "repo"
     repo.mkdir()

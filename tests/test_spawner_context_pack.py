@@ -73,7 +73,7 @@ def test_tool_leg_gets_no_pack(tree):
     assert out == "do it"
 
 
-def test_big_named_file_warns_in_spawn_result(tree, tmp_path, monkeypatch):
+def test_big_named_file_warns_in_spawn_result(tree, tmp_path, monkeypatch, fake_base_fresh):
     svc = _service(tmp_path / "state", monkeypatch)
     svc.runner.default_cwd = str(tree)
     out = asyncio.run(svc.spawn(card=dict(CARD), prompt="edit big.py and a.py", dry_run=True))
@@ -82,7 +82,7 @@ def test_big_named_file_warns_in_spawn_result(tree, tmp_path, monkeypatch):
     assert out["status"] != "refused"
 
 
-def test_sliced_big_file_no_warning(tree, tmp_path, monkeypatch):
+def test_sliced_big_file_no_warning(tree, tmp_path, monkeypatch, fake_base_fresh):
     svc = _service(tmp_path / "state", monkeypatch)
     svc.runner.default_cwd = str(tree)
     out = asyncio.run(svc.spawn(card=dict(CARD, context=["big.py:1-5"]), prompt="edit big.py", dry_run=True))

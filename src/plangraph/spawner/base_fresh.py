@@ -26,7 +26,12 @@ def _check(repo, default=None, fetch=True, timeout=60, ref='HEAD'):
         git('check-ref-format', 'refs/heads/' + default)
         if fetch:
             fetching = True
-            git('fetch', '-q', 'origin', default)
+            refspec = '+refs/heads/' + default + ':refs/remotes/origin/' + default
+            try:
+                git('fetch', '-q', 'origin', refspec)
+            except subprocess.CalledProcessError:
+                time.sleep(0.1)  # A parallel fetch may briefly hold the tracking ref lock.
+                git('fetch', '-q', 'origin', refspec)
             fetching = False
         origin = git('rev-parse', '--verify', 'refs/remotes/origin/' + default + '^{commit}').stdout.strip()
         base = git('rev-parse', '--verify', '--end-of-options', str(ref) + '^{commit}').stdout.strip()

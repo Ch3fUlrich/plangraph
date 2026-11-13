@@ -37,7 +37,7 @@ def test_bad_env_timeout_refused(monkeypatch):
         thresholds()
 
 
-def test_bad_env_timeout_refused_before_launch(tmp_path, monkeypatch):
+def test_bad_env_timeout_refused_before_launch(tmp_path, monkeypatch, fake_base_fresh):
     from plangraph.spawner.runner import spawn_service
     from plangraph.planner.routing import SpawnPlan
     from plangraph.planner.legs import DEFAULT_LEGS
@@ -121,7 +121,7 @@ def test_running_record_saved(tmp_path):
     assert saved['last_activity_ts'] == 123
 
 
-def test_refused_before_launch(tmp_path):
+def test_refused_before_launch(tmp_path, fake_base_fresh):
     from plangraph.spawner.runner import spawn_service
     from plangraph.planner.routing import SpawnPlan
     from plangraph.planner.legs import DEFAULT_LEGS

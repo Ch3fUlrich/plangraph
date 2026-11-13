@@ -340,7 +340,7 @@ def test_each_file_is_read_once_and_listed_once_per_spawn(tree, monkeypatch):
     assert [w.split(" ")[1] for w in pack.warnings] == ["big.py"]
 
 
-def test_service_spawn_builds_the_pack_once_for_its_legs(tree, tmp_path, monkeypatch):
+def test_service_spawn_builds_the_pack_once_for_its_legs(tree, tmp_path, monkeypatch, fake_base_fresh):
     track(tree, "a.py", "".join(f"a{i}\n" for i in range(1, 10)))
     svc = _service(tmp_path / "state", monkeypatch)
     svc.runner.default_cwd = str(tree)
@@ -353,7 +353,7 @@ def test_service_spawn_builds_the_pack_once_for_its_legs(tree, tmp_path, monkeyp
     assert calls["opened"] == ["a.py"] and calls["ls_files"] == 1
 
 
-def test_dispatch_spawn_builds_the_pack_once_for_its_legs(tree, tmp_path, monkeypatch):
+def test_dispatch_spawn_builds_the_pack_once_for_its_legs(tree, tmp_path, monkeypatch, fake_base_fresh):
     from plangraph.spawner.runner import SpawnerRunner, spawn_service
     track(tree, "a.py", "".join(f"a{i}\n" for i in range(1, 10)))
     monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:9/v1")

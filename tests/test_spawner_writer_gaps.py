@@ -45,7 +45,7 @@ def test_parse(text, expected):
     assert remaining_gaps(text) == expected
 
 
-def test_continuation(tmp_path):
+def test_continuation(tmp_path, fake_base_fresh):
     from plangraph.spawner.service import SpawnService
     class Runner:
         async def spawn(self, **kwargs):
@@ -77,7 +77,7 @@ def test_continuation(tmp_path):
 
 
 @pytest.mark.parametrize('hardened', [False, True])
-def test_dispatch_paths(tmp_path, hardened):
+def test_dispatch_paths(tmp_path, hardened, fake_base_fresh):
     from plangraph.spawner.runner import JobInfo, spawn_service
     from plangraph.spawner.service import SpawnService
     from plangraph.planner.routing import SpawnPlan

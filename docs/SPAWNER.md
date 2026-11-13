@@ -1,6 +1,7 @@
 # Plangraph Spawner & Model Routing Architecture
 
 Spawn admission fetches origin's default branch and refuses `base_stale` (behind count or fetch failure) before any model call; workers check their run cwd/source repo, reviews/judges check `diff_ref.head` ancestry (no diff means no check), and only card `base_decision: D-NNN` waives an older base, recording the decision and fetched `base_sha` on successful run/card admission; there is no flag, environment or settings bypass (D-5661).
+The fetch explicitly updates `refs/remotes/origin/<default>` even without a matching remote fetch refspec, retrying a failed fetch once for concurrent ref locks. Detached non-dry CLI spawn returns 0 before child admission; inspect `status`/`result` for a later `base_stale` refusal. Test-only gate fakes are opt-in for spawn mechanics with unfetchable fake repositories; unmarked tests keep real admission.
 
 ### QUOTA-PAUSE-GATE
 

@@ -159,7 +159,7 @@ def test_credit_and_auth_refusal_books_leg_unavailable_until(tmp_path, name):
     assert state['evidence']['reset_at'] > time.time() + 1000      # unavailable_until, not a 10-minute hint
 
 
-def test_refusal_notifies_parent_once_with_run_leg_reason(tmp_path):
+def test_refusal_notifies_parent_once_with_run_leg_reason(tmp_path, fake_base_fresh):
     from plangraph.spawner.runner import spawn_service, JobInfo
     from plangraph.planner.routing import SpawnPlan
     from plangraph.planner.legs import DEFAULT_LEGS

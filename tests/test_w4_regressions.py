@@ -55,7 +55,7 @@ def _open_catalog(monkeypatch):
         dict(row, available=1, active=True) for row in rows])
 
 
-def test_running_records_release_every_attempt_job(tmp_path, monkeypatch):
+def test_running_records_release_every_attempt_job(tmp_path, monkeypatch, fake_base_fresh):
     """Q13/M8: a run that fell through releases every attempt's job, not just the
     record's last job_id (the leak kept saving a stale record on every sample)."""
     from test_spawner_exit_outcome import QUOTA
@@ -80,7 +80,7 @@ def test_running_records_release_every_attempt_job(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
-def test_cancelled_run_stays_cancelled_and_never_falls_through(tmp_path, monkeypatch):
+def test_cancelled_run_stays_cancelled_and_never_falls_through(tmp_path, monkeypatch, fake_base_fresh):
     """Q14: cancel is terminal. The record ends status='cancelled', reason
     'cancelled' -- never 'failed' carrying the earlier fallthrough leg's reason."""
     from test_spawner_exit_outcome import QUOTA
@@ -127,7 +127,7 @@ def test_cancelled_run_stays_cancelled_and_never_falls_through(tmp_path, monkeyp
     asyncio.run(run())
 
 
-def test_watchdog_timed_out_leg_records_its_attempt_row(tmp_path, monkeypatch):
+def test_watchdog_timed_out_leg_records_its_attempt_row(tmp_path, monkeypatch, fake_base_fresh):
     """Q15/M16: a watchdog stall/timeout ends the run AND records the attempt row
     with the leg id and the served model/family -- the launched leg must not be
     listed as 'skipped, run_terminated_before_leg'."""

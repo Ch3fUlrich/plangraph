@@ -35,7 +35,7 @@ def test_review_card_cap_is_a_hard_wall():
 @pytest.mark.parametrize('max_min', [None, 30])
 @pytest.mark.parametrize('timeout', [None, '', '7'])
 def test_mimo_verdict_seat_passes_review_role_to_thresholds(
-        monkeypatch, tmp_path, factory, leg_id, max_min, timeout):
+        monkeypatch, tmp_path, factory, leg_id, max_min, timeout, fake_base_fresh):
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.routing import SpawnPlan
     from plangraph.spawner import run_watchdog

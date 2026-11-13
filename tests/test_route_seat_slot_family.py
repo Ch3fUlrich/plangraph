@@ -42,7 +42,7 @@ class Runner(_Runner):
 
 
 @pytest.fixture
-def service(tmp_path, monkeypatch):
+def service(tmp_path, monkeypatch, fake_base_fresh):
     monkeypatch.setitem(routing.plan_spawn.__kwdefaults__, 'legs', (GEMINI, LUNA, SONNET, OPUS))
     monkeypatch.setitem(routing.plan_spawn.__kwdefaults__, 'catalog_rows', ())
     # Exercise the real seat planner and dispatch, without Git, probes or a child.

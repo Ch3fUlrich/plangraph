@@ -55,7 +55,7 @@ def test_bad_diff_ref_refused(ref):
         plan_spawn(dict(CARD, diff_ref=ref), role="review")
 
 
-def test_inline_only_seat_gets_diff_inlined(tmp_path, monkeypatch, pre_d3552_policy, inline_seat_table):
+def test_inline_only_seat_gets_diff_inlined(tmp_path, monkeypatch, pre_d3552_policy, inline_seat_table, fake_base_fresh):
     repo, base, head = _repo(tmp_path)
     card = dict(CARD, diff_ref={"repo": str(repo), "base": base, "head": head})
     svc = _service(tmp_path / "state", monkeypatch)
@@ -69,7 +69,7 @@ def test_inline_only_seat_gets_diff_inlined(tmp_path, monkeypatch, pre_d3552_pol
     assert {r["chosen_leg"]["family"] for r in out["seats"]} == {"qwen", "gpt"}
 
 
-def test_mcp_dispatch_seats_inline_diff(tmp_path, monkeypatch, pre_d3552_policy, inline_seat_table):
+def test_mcp_dispatch_seats_inline_diff(tmp_path, monkeypatch, pre_d3552_policy, inline_seat_table, fake_base_fresh):
     # The production path (runner.spawn_service DispatchService) via MCP.
     from plangraph.spawner.mcp import MCPSpawnerServer
     repo, base, head = _repo(tmp_path)
@@ -89,7 +89,7 @@ def test_mcp_dispatch_seats_inline_diff(tmp_path, monkeypatch, pre_d3552_policy,
     assert all(c["covers"] == ["anthropic"] for c in out["seat_coverage"])
 
 
-def test_inline_diff_failure_falls_to_next_leg(tmp_path, monkeypatch, pre_d3552_policy, inline_seat_table):
+def test_inline_diff_failure_falls_to_next_leg(tmp_path, monkeypatch, pre_d3552_policy, inline_seat_table, fake_base_fresh):
     from plangraph.spawner.mcp import MCPSpawnerServer
     runner = _Runner()
     server = MCPSpawnerServer(runner, state=tmp_path / "state")
@@ -153,7 +153,7 @@ def test_inline_diff_size_cap(tmp_path):
         inline_diff_prompt("p", ref, max_chars=10)
 
 
-def test_seat_records_carry_own_coverage_and_group(tmp_path, monkeypatch):
+def test_seat_records_carry_own_coverage_and_group(tmp_path, monkeypatch, fake_base_fresh):
     repo, base, head = _repo(tmp_path)
     card = dict(HIGH, diff_ref={"repo": str(repo), "base": base, "head": head})
     svc = _service(tmp_path / "state", monkeypatch)
@@ -167,7 +167,7 @@ def test_seat_records_carry_own_coverage_and_group(tmp_path, monkeypatch):
     assert saved["runs"] == [r["run_id"] for r in out["seats"]]
 
 
-def test_one_seat_refusal_keeps_the_other_seat(tmp_path, monkeypatch):
+def test_one_seat_refusal_keeps_the_other_seat(tmp_path, monkeypatch, fake_base_fresh):
     from plangraph.spawner.service import SpawnService
     repo, base, head = _repo(tmp_path)
     card = dict(HIGH, diff_ref={"repo": str(repo), "base": base, "head": head})
@@ -213,7 +213,7 @@ class _StopRunner(_Runner):
         return job
 
 
-def test_seat_reroute_stays_on_its_own_legs(tmp_path, monkeypatch):
+def test_seat_reroute_stays_on_its_own_legs(tmp_path, monkeypatch, fake_base_fresh):
     repo, base, head = _repo(tmp_path)
     runner = _StopRunner()
     server = _dispatch(tmp_path, monkeypatch, runner)
@@ -231,7 +231,7 @@ def test_seat_reroute_stays_on_its_own_legs(tmp_path, monkeypatch):
     assert len(models) == len(set(models))   # no two seats share a launched leg
 
 
-def test_inline_failure_does_not_decide_a_launched_run(tmp_path, monkeypatch):
+def test_inline_failure_does_not_decide_a_launched_run(tmp_path, monkeypatch, fake_base_fresh):
     # luna MED: an inline_diff_failed skip must not mark a run failed when a later
     # leg launched and the run ended on route exhaustion.
     from plangraph.planner.routing import SpawnPlan
@@ -249,7 +249,7 @@ def test_inline_failure_does_not_decide_a_launched_run(tmp_path, monkeypatch):
     assert record["status"] == "limited", record.get("error")
 
 
-def test_all_legs_inline_failed_reports_reasons(tmp_path, monkeypatch):
+def test_all_legs_inline_failed_reports_reasons(tmp_path, monkeypatch, fake_base_fresh):
     runner = _StopRunner()
     svc = _dispatch(tmp_path, monkeypatch, runner).service
     card = dict(HIGH, diff_ref={"repo": str(tmp_path / "nope"), "base": "a1", "head": "b2"})

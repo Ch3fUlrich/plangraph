@@ -354,7 +354,7 @@ def test_spawn_item_key(tmp_path, monkeypatch, dispatch, item, env, expected):
 
 
 @pytest.mark.parametrize('item', [KEY, None, 'bad/item'])
-def test_continuation_identity(tmp_path, monkeypatch, item):
+def test_continuation_identity(tmp_path, monkeypatch, item, fake_base_fresh):
     service = _service(tmp_path, monkeypatch)
     monkeypatch.setenv('PLANGRAPH_SPAWN_ITEM', OTHER_KEY)
     parent = dict(run_id='run-parent', role='implement', exit_code=0,

@@ -104,7 +104,7 @@ def test_tools_invalid_diff_ref_refused(diff_ref):
     ('stalled', 1, False), ('retry-stalled', 2, False), ('retry-cancelled', 2, False),
     ('ordinary-timeout', 1, False), ('ordinary-cancelled', 1, False),
 ])
-def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scenario, launches, terminal):
+def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scenario, launches, terminal, fake_base_fresh):
     """Use real spawn/render/monitor/record paths; only transport and witnesses are fake."""
     import asyncio
     import json

@@ -106,7 +106,7 @@ def main(argv=None):
     parser.add_argument('--state')
     commands = parser.add_subparsers(dest='verb', required=True)
     for verb in ('route', 'spawn'):
-        p = commands.add_parser(verb)
+        p = commands.add_parser(verb, description='Detached non-dry spawn returns 0 before admission; check status/result for child refusals such as base_stale.' if verb == 'spawn' else None)
         p.add_argument('--card', type=_card)
         p.add_argument('--require-bench', action='store_true')
         p.add_argument('--bench-db', action='append')

@@ -118,6 +118,8 @@ def test_run_record_and_runner_cwd(repository, tmp_path, monkeypatch, hardened, 
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.spawner import resolver, seat_spawn
     origin, repo, configured = repository
+    git(repo, 'fetch', 'origin', 'main')
+    git(repo, 'merge', '--ff-only', 'origin/main')
     root = configured if configured_root else tmp_path / 'state' / 'worktrees'
     monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 1000000))
     async def available(*a, **k):
@@ -223,6 +225,8 @@ def test_cli_overflow_forwards_worktree_flag(repository, tmp_path, monkeypatch, 
     from plangraph.planner.routing import SpawnPlan
     from plangraph.planner.legs import DEFAULT_LEGS
     _, repo, _ = repository
+    git(repo, 'fetch', 'origin', 'main')
+    git(repo, 'merge', '--ff-only', 'origin/main')
     monkeypatch.chdir(repo)
     config = tmp_path / 'overflow.json'
     config.write_text(json.dumps({'public_repos': [str(repo)], 'hosts': {'invented': {}}}))

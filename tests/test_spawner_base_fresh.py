@@ -7,7 +7,6 @@ import subprocess
 
 import pytest
 
-pytestmark = pytest.mark.real_base_fresh
 
 def git(repo, *args):
     return subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Test', '-c',
@@ -50,6 +49,48 @@ def test_base_fresh_contract(repository, monkeypatch):
         default_branch='main', origin_sha=sha, behind=0, base_sha=sha)
     assert list(inspect.signature(base_fresh).parameters) == ['repo', 'default', 'fetch', 'timeout']
     assert base_fresh.__kwdefaults__ == dict(default=None, fetch=True, timeout=60)
+
+
+def test_unmarked_tests_keep_real_gate(tmp_path):
+    from plangraph.spawner import base_fresh
+    for check in (base_fresh.base_fresh, base_fresh._check):
+        result = check(tmp_path)
+        assert not result['ok'] and result['reason'] == 'base_stale: fetch_failed'
+        assert result['origin_sha'] is None
+
+
+@pytest.mark.parametrize('refspec', ['', '+refs/heads/side:refs/remotes/origin/side'])
+def test_fetch_refreshes_tracking_ref_without_matching_remote_refspec(repository, refspec):
+    from plangraph.spawner.base_fresh import base_fresh
+    origin, repo = repository
+    config = repo / '.git' / 'config'
+    config.write_text(config.read_text().replace('+refs/heads/*:refs/remotes/origin/*', refspec)
+                      .replace('\tfetch = \n', ''))
+    old = advance(origin, repo)
+    assert git(repo, 'rev-parse', 'origin/main') == old
+    result = base_fresh(repo)
+    assert not result['ok'] and result['reason'] == 'base_stale: behind=2'
+    assert result['origin_sha'] == git(origin, 'rev-parse', 'main')
+    assert git(repo, 'rev-parse', 'origin/main') == result['origin_sha']
+
+
+@pytest.mark.parametrize('failures', [1, 2])
+def test_fetch_ref_lock_retries_once_then_fails_closed(repository, monkeypatch, failures):
+    from plangraph.spawner import base_fresh
+    origin, repo = repository
+    advance(origin, repo)
+    run, calls = subprocess.run, []
+    def locked(args, **kwargs):
+        if 'fetch' in args:
+            calls.append(args)
+            if len(calls) <= failures:
+                raise subprocess.CalledProcessError(1, args, stderr='cannot lock ref')
+        return run(args, **kwargs)
+    monkeypatch.setattr(base_fresh.subprocess, 'run', locked)
+    result = base_fresh.base_fresh(repo)
+    assert len(calls) == 2 and not result['ok']
+    assert result['reason'] == ('base_stale: behind=2' if failures == 1 else 'base_stale: fetch_failed')
+    assert result['origin_sha'] == (git(origin, 'rev-parse', 'main') if failures == 1 else None)
 
 
 def test_default_branch_and_fallback(repository):
@@ -213,9 +254,10 @@ def test_worktree_head_and_unfetched_remote(repository):
     from plangraph.spawner.base_fresh import base_fresh
     origin, repo = repository
     git(repo, 'worktree', 'add', '--detach', str(repo.parent / 'worker'), 'HEAD')
-    for _ in range(2):
-        git(repo, 'commit', '--allow-empty', '-m', 'new main')
-    git(repo, 'push', 'origin', 'HEAD:main')
+    old = advance(origin, repo)
+    assert git(repo, 'rev-parse', 'origin/main') == old
+    assert base_fresh(repo)['reason'] == 'base_stale: behind=2'
+    git(repo, 'merge', '--ff-only', 'origin/main')
     assert base_fresh(repo)['ok']
     assert base_fresh(repo.parent / 'worker')['reason'] == 'base_stale: behind=2'
     git(repo, 'commit', '--allow-empty', '-m', 'lane ahead of main')
@@ -228,12 +270,22 @@ def test_fetch_timeout_refuses(repository, monkeypatch):
     run = subprocess.run
     def timeout(args, **kwargs):
         if 'fetch' in args:
-            assert args[-4:] == ['fetch', '-q', 'origin', 'main']
+            assert args[-4:] == ['fetch', '-q', 'origin', '+refs/heads/main:refs/remotes/origin/main']
             assert kwargs['timeout'] == 60
             raise subprocess.TimeoutExpired(args, 60)
         return run(args, **kwargs)
     monkeypatch.setattr(base_fresh.subprocess, 'run', timeout)
     assert base_fresh.base_fresh(repository[1])['reason'] == 'base_stale: fetch_failed'
+
+
+def test_cli_help_documents_detached_admission(capsys):
+    from plangraph.spawner import cli
+    with pytest.raises(SystemExit) as exc:
+        cli.main(['spawn', '--help'])
+    assert exc.value.code == 0
+    help_text = ' '.join(capsys.readouterr().out.split())
+    assert 'Detached non-dry spawn returns 0 before admission' in help_text
+    assert 'base_stale' in help_text and 'status/result' in help_text
 
 
 def test_continuation_rechecks_base(repository, dispatch):
