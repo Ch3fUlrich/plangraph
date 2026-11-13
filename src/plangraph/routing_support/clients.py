@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from plangraph.routing_support.claude_seat import claude_access_args
-from plangraph.routing_support.review_mode import leg_tool_mode, prompt_only_command, review_prompt
+from plangraph.routing_support.review_mode import leg_tool_mode, load_prompt_transport_contract, prompt_only_command, review_prompt
 
 #: Environment variable naming the model gateway base URL (see ``gateway_url``).
 GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
@@ -27,7 +27,7 @@ GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
 OMNIROUTE_BASE_URL_ENV_VAR = "OMNIROUTE_BASE_URL"
 
 #: Harnesses whose prompts are delivered via stdin instead of argv (I9).
-STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode", "claude", "agy", "qodercli", "codex", "gemini", "qwen")
+STDIN_PROMPT_HARNESSES: tuple[str, ...] = tuple(mode["harness"] for mode in load_prompt_transport_contract()["modes"])
 
 
 def without_prompt_env(env):

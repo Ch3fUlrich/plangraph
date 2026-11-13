@@ -1,0 +1,1 @@
+- D-5595 / D-5233 (D-5632), S01: add the packaged prompt-transport registry, single reason-name loader and hermetic I1 fixtures; preserve compatibility exports with no behavior change for any launch.
