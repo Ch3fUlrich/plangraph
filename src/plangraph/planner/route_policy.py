@@ -29,6 +29,16 @@ _ROLES = ("implement", "review", "orchestrate")
 _KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_families")
 
 
+def legacy_route_refusal(*values):
+    """D-5696 legacy identities are refused before ranking or live admission."""
+    replacements = {'gemini-3.8-flash': 'gemini-4-hydrogen',
+                    'gpt-6-luna': 'gpt-6.1-terra'}
+    for legacy, replacement in replacements.items():
+        if any(legacy in value.lower() for value in values):
+            return 'legacy model refused: ' + legacy + '; use ' + replacement
+    return None
+
+
 def review_priority(leg) -> int:
     """D-4147 role order within a cost tier; no new family preferences."""
     return 2 if "haiku" in leg.model.lower() else 0 if leg.family == "mimo" else 1

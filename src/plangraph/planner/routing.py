@@ -17,6 +17,7 @@ from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # n
 from .legs import DEFAULT_LEGS, READINESS_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
 from .provider_stop import next_leg_after_provider_stop
 from .review_order import review_key, catalog_tiers
+from .route_policy import legacy_route_refusal
 from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts  # noqa: F401
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
@@ -242,16 +243,10 @@ class SpawnPlan:
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
                 legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, placement=None,
                 catalog_rows=None) -> SpawnPlan:
-    """Plan by canonical rules; benchmark utility can only permute one tier.
-    Measured inputs rank within cost tiers; implement writer priority is final.
-    ``exclude_families`` excludes the specified family names from candidate legs.
-    ``policy`` (default :func:`load_route_policy`) skips banned/off families and
-    paused harnesses.  A review leg whose family is ANY writer family is
-    excluded; seats cover each writer part (:func:`pick_seats`).  An inline-only
-    review leg needs ``card["diff_ref"]``: the spawner inlines that diff.
-    ``catalog_rows`` injects tier/admission data; None reads the live catalog once.
-    Readers may be a LegStateStore or a callable with the leg_status contract.
-    Account/combo scope comes from the card and is never a wildcard.
+    """Plan admitted legs; benchmarks only permute a tier, writer priority is final.
+    Policy defaults to load_route_policy; review seats exclude all writer families.
+    Inline-only reviews require diff_ref; readers follow the leg_status contract.
+    catalog_rows=None reads the live catalog once; account/combo are never wildcards.
     """
     placement = dict(placement) if placement is not None else dict(host=None, reason='placement_not_evaluated', free_mb=None)
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
@@ -303,7 +298,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
     from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS, get_catalog_models
     catalog_rows = tuple(get_catalog_models() if catalog_rows is None else catalog_rows)
-    legs = catalog_tiers(tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS), catalog_rows)
+    legacy_skips = [{"leg": l.id, "reason": reason, "evidence": None} for l in legs
+                    if (reason := legacy_route_refusal(l.id, l.model))]
+    legs = catalog_tiers(tuple(l for l in legs if not legacy_route_refusal(l.id, l.model)
+                              and l.model not in OPERATOR_REMOVED_MODELS), catalog_rows)
     for candidate in legs:
         validate_model(candidate.model, allow_inactive=not leg_active(candidate, now=now), catalog_rows=catalog_rows)
     candidates = tuple(l for l in legs if role in l.roles and leg_active(l, now=now))
@@ -336,7 +334,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
                        "evidence": {"kind": "leg_disabled", "reason": l.disabled}}
                for l in legs if role in l.roles and not leg_active(l, now=now)]
-    skipped = []
+    skipped = legacy_skips
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
     for leg in candidates:
@@ -445,6 +443,8 @@ def validate_model(model, *, allow_inactive=False, catalog_rows=None):
     from . import legs as _legs   # read at call time: explicit legs are registered too
     if not isinstance(model, str) or not model:
         raise SpawnRefused('model must be a nonempty string')
+    if reason := legacy_route_refusal(model):
+        raise SpawnRefused(reason)
     check_mimo_path(model)
     rows = get_catalog_models() if catalog_rows is None else catalog_rows
     inactive = {row['id'] for row in rows if not catalog_row_admitted(row)} if not allow_inactive else set()
