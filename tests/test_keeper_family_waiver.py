@@ -136,11 +136,25 @@ def test_same_family_case_differences_refused(w, second_family):
 
 def test_case_insensitive_family_reaches_done_under_waiver(w):
     to_in_review(w, KEY)
-    w.store.waive_second_family(w.p("router"), KEY, DECISION)
     w.store.verdict(w.p("reviewer"), KEY, True, "ok")
+    w.store.waive_second_family(w.p("router"), KEY, DECISION)
     twin = _reviewer(w, "twin", " TEAMC ")
     result = w.store.verdict(twin, KEY, True, "waived")
     assert result["state"] == "done"
+    assert w.store.verify_integrity() == []
+
+
+def test_waiver_before_first_verdict_normalises_same_family(w):
+    to_in_review(w, KEY)
+    w.store.waive_second_family(w.p("router"), KEY, DECISION)
+    twin = _reviewer(w, "twin", " TEAMC ")
+    assert w.store.verdict(twin, KEY, True, "waived") == {
+        "key": KEY, "state": "done", "reviews_passed": 1}
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("reviewer"), KEY, True, "same family after close")
+    assert exc.value.code == "locked"
+    assert w.store.show(w.p("reader"), KEY)["reviews"] == [
+        {"reviewer": "twin", "family": "teamc"}]
     assert w.store.verify_integrity() == []
 
 
@@ -286,11 +300,20 @@ def test_digest_lists_pending_waiver_claimed(w):
         digest["waivers"]
 
 
-def test_digest_keeps_done_waiver_shape(w):
+@pytest.mark.parametrize("waiver_first", [False, True])
+def test_digest_keeps_done_waiver_shape(w, waiver_first):
     to_in_review(w, KEY)
-    w.store.waive_second_family(w.p("router"), KEY, DECISION)
     twin = _reviewer(w, "twin", "teamC")
+    if waiver_first:
+        w.store.waive_second_family(w.p("router"), KEY, DECISION)
     w.store.verdict(w.p("reviewer"), KEY, True, "ok")
-    w.store.verdict(twin, KEY, True, "ok")
+    if waiver_first:
+        assert w.store._item(KEY)["state"] == "done"
+        with pytest.raises(Refused) as exc:
+            w.store.verdict(twin, KEY, True, "ok")
+        assert exc.value.code == "locked"
+    else:
+        w.store.waive_second_family(w.p("router"), KEY, DECISION)
+        w.store.verdict(twin, KEY, True, "ok")
     digest = w.store.digest(w.p("router"))
     assert {"key": KEY, "decision_id": DECISION} in digest["waivers"]
