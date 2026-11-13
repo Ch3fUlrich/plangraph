@@ -671,7 +671,8 @@ Cross-host ps: see [site configuration and transport](spawner-ps.md); [host read
 
 Run readers persist expired `queued`/`queue_claimed` records as failed `queue_timeout` at `queued_until`, even without an owner, rechecking under the record lock.
 Legacy bounds use `started` (default 0) plus `queue_bound_s` (default 900 seconds). Invalid bounds and unexpired/terminal records stay untouched; dry-run never writes. Expired queues no longer suppress finished-child or idle-claim findings.
-The SSH ps endpoint serializes only running and queued records; terminal history does not consume the 1 MiB transport budget.
+The SSH ps endpoint serializes only running and queued records. Terminal history
+does not consume the 1 MiB transport budget.
 Malformed terminal fields do not hide live runs; malformed live or oversized replies name the queried host as unknown rather than silently omitting it.
 Rust source-filter tests and pytest's real `configured_hosts` checks consume
 `tests/fixtures/doctor_sources.json`, binding both validators and probe limits

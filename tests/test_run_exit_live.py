@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from plangraph.spawner.runner import SpawnerRunner, spawn_service
+from test_spawner_base_fresh import repository  # noqa: F401 isolated origin fixture
 
 
 def test_live_smoke_contract():
@@ -21,7 +22,7 @@ def test_live_smoke_contract():
 
 
 @pytest.mark.parametrize('visible', [True, False])
-def test_smoke_requires_live_readback(tmp_path, monkeypatch, visible):
+def test_smoke_requires_live_readback(tmp_path, monkeypatch, visible, repository):
     """Execute the shipped smoke offline; a marker alone must never pass."""
     runs = []
 
@@ -53,12 +54,19 @@ def test_smoke_requires_live_readback(tmp_path, monkeypatch, visible):
     monkeypatch.setenv('PLANGRAPH_NOTIFY_SMOKE_TIMEOUT', '.2')
     root = Path.cwd()
     monkeypatch.setenv('PYTHONPATH', str(root / 'src'))
+    registry = tmp_path / 'config/plangraph/hosts.json'
+    registry.parent.mkdir(parents=True)
+    registry.write_text(json.dumps({'self': 'smoke', 'hosts': [{
+        'id': 'smoke', 'caps': {'mem_floor_mb': 0},
+        'warmup': {'ramp_mb': {'implement': 1}}}]}))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config'))
+    monkeypatch.setenv('PLANGRAPH_HOST_NAME', 'smoke')
     try:
         result = subprocess.run(['bash', str(root / 'tools/smoke-run-exit-notify.sh')],
-                                cwd=tmp_path, capture_output=True, text=True, timeout=15)
+                                cwd=repository[1], capture_output=True, text=True, timeout=15)
         assert (result.returncode == 0) == visible, result.stderr
         assert len(runs) == 1
-        assert len(list(tmp_path.glob('.notify-smoke-*/runs/*/keeper.delivered'))) == 1
+        assert len(list(repository[1].glob('.notify-smoke-*/runs/*/keeper.delivered'))) == 1
     finally:
         server.shutdown()
         thread.join()
