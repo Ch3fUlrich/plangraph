@@ -1,5 +1,7 @@
 # Plangraph Spawner & Model Routing Architecture
 
+MCP snapshots its source-tree Git HEAD (or a hash of spawner Python files without Git) at startup; a changed identity blocks real spawns and makes health `stale` with `restart required: <old> -> <new>, run /mcp reconnect` (12-character identities), while dry runs, route, ps, status and cancel remain available.
+
 ### QUOTA-PAUSE-GATE
 
 The usage owner creates `quota-pause` in the spawner state directory at usage

@@ -19,7 +19,10 @@ import sys
 import threading
 from typing import Any, Mapping
 
+from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
+from plangraph.spawner import bench_entry, leg_probe, remote_ps
 from plangraph.spawner.clients import effective_child_base_url
+from plangraph.spawner.git_guard import SourceChanged, SourceGuard
 from plangraph.spawner.leg_state import leg_status
 from plangraph.spawner.mcp_limits import encode_reply, ps_reply
 from plangraph.spawner.resolver import (
@@ -31,7 +34,8 @@ from plangraph.spawner.resolver import (
     score_model,
 )
 from plangraph.spawner.risk import evaluate_risk
-from plangraph.spawner.runner import JobInfo, SpawnerRunner
+from plangraph.spawner.runner import JobInfo, SpawnerRunner, spawn_service
+from plangraph.spawner.sessions import Sessions
 from plangraph.spawner.session_tools import SESSION_TOOLS, _session_arg_errors, dispatch_session_tool
 
 TOOLS_METADATA = [
@@ -154,17 +158,16 @@ class MCPSpawnerServer:
     """Server implementing the Model Context Protocol (MCP) JSON-RPC standard."""
 
     def __init__(self, runner: SpawnerRunner | None = None, *, state=None,
-                 session_run=None, session_sleep=None):
+                 session_run=None, session_sleep=None, source_identity=None):
+        self._source_guard = SourceGuard(source_identity)
         self.runner = runner or SpawnerRunner()
         self._session_run = session_run
         self._session_sleep = session_sleep
-        from .runner import spawn_service
         self.service = spawn_service(self.runner, state=state)
 
     def _sessions(self):
         """Fresh Sessions bound to the service state root (SESSION-SPAWN-MCP)."""
         import os
-        from .sessions import Sessions
         return Sessions(state_root=self.service.state, run=self._session_run,
                         config_path=os.environ.get('PLANGRAPH_SESSIONS_CONFIG'),
                         sleep=self._session_sleep)
@@ -176,16 +179,17 @@ class MCPSpawnerServer:
         """Execute tool and return structured payload."""
         if isinstance(name, str) and name.startswith('plangraph_session_'):
             return await self._session_tool(name, arguments)
-        from .bench_entry import benchmark_options
+        if name == 'plangraph_agent_spawn' and not arguments.get('dry_run', False):
+            if message := self._source_guard.restart_required():
+                raise SourceChanged(message)
         if name == 'plangraph_agent_probe':
-            from .leg_probe import probe_many
             try:
-                return await probe_many(self.runner, arguments.get('leg', ()),
+                return await leg_probe.probe_many(self.runner, arguments.get('leg', ()),
                                         arguments.get('all_writers', False), arguments.get('timeout'))
             except ParameterRefused as exc:
                 return {'status': 'refused', 'refusal': 'ParameterRefused', 'error': str(exc), 'exit_code': 2}
         try:
-            options = benchmark_options(arguments.get('require_bench', False), arguments.get('bench_db')) if name in ('plangraph_agent_route', 'plangraph_agent_spawn') else {}
+            options = bench_entry.benchmark_options(arguments.get('require_bench', False), arguments.get('bench_db')) if name in ('plangraph_agent_route', 'plangraph_agent_spawn') else {}
         except Exception as exc:
             if name in ('plangraph_agent_route', 'plangraph_agent_spawn'):
                 self.service.save_refusal(exc, arguments.get('role', 'implement'))
@@ -194,8 +198,7 @@ class MCPSpawnerServer:
             return self.service.route(arguments['card'], arguments.get('role', 'implement'),
                 arguments.get('writer_families', ()), arguments.get('review_of'), **options).to_dict()
         if name == 'plangraph_agent_ps':
-            from .remote_ps import list_runs
-            return ps_reply(await asyncio.to_thread(list_runs, self.service.ps()['runs']))
+            return ps_reply(await asyncio.to_thread(remote_ps.list_runs, self.service.ps()['runs']))
         if name == 'plangraph_agent_result' or (name == 'plangraph_agent_status' and 'run_id' in arguments):
             return self.service.result(arguments['run_id'])
         if name == 'plangraph_agent_cancel' and 'run_id' in arguments:
@@ -206,7 +209,6 @@ class MCPSpawnerServer:
                 self.service.save_refusal(exc, arguments.get('role', 'implement'))
                 raise exc
             if not arguments.get('card'):
-                from plangraph.planner.routing import SpawnRefused
                 exc = ParameterRefused('spawn by card; card required')
                 self.service.save_refusal(exc, arguments.get('role', 'implement'))
                 raise exc
@@ -257,10 +259,12 @@ class MCPSpawnerServer:
             return {"count": len(matched), "models": matched}
 
         if name == "plangraph_agent_health":
+            restart = self._source_guard.restart_required()
             all_models = get_catalog_models()
             active_jobs = [j for j in self.runner.jobs.values() if j.status == "running"]
             return {
-                "status": "healthy",
+                "status": "stale" if restart else "healthy",
+                **({'error': restart} if restart else {}),
                 "spawner_version": "2.0.0",
                 "runner_jobs_total": len(self.runner.jobs),
                 "active_jobs_count": len(active_jobs),
@@ -320,7 +324,6 @@ class MCPSpawnerServer:
                     },
                 }
             except Exception as exc:
-                from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
                 if isinstance(exc, SpawnRefused):
                     return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32602 if isinstance(exc, (BenchmarkError, ParameterRefused)) else -32000, 'message': str(exc), 'data': {'type': type(exc).__name__, 'exit_code': 3 if isinstance(exc, BenchmarkError) else 2, 'legs': list(exc.legs) if isinstance(exc, BenchRequired) else []}}}
                 return {

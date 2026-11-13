@@ -14,6 +14,7 @@ event: the run is neither failed nor restored.
 """
 from pathlib import Path
 from contextlib import contextmanager
+import hashlib
 import os
 import re
 import subprocess
@@ -22,6 +23,41 @@ import time
 import uuid
 
 from plangraph.routing_errors import SpawnRefused
+
+
+def current_source_identity(source=None):
+    """Identify the spawner's own tree, independent of cwd or inherited Git context."""
+    source = Path(source) if source is not None else Path(__file__).resolve().parent
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    try:
+        head = subprocess.run(['git', '-C', str(source), 'rev-parse', '--verify', 'HEAD'],
+                              env=env, capture_output=True, text=True, check=True,
+                              timeout=2).stdout.strip()
+        if re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', head):
+            return head[:12]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    digest = hashlib.sha256()
+    for path in sorted(source.rglob('*.py')):
+        digest.update(path.relative_to(source).as_posix().encode() + b'\0')
+        digest.update(path.read_bytes() + b'\0')
+    return digest.hexdigest()[:12]
+
+
+class SourceChanged(SpawnRefused):
+    """The MCP process must reconnect before launching from a changed source tree."""
+
+
+class SourceGuard:
+    def __init__(self, identity=None):
+        self.identity = identity or current_source_identity
+        self.started = self.identity()
+
+    def restart_required(self):
+        current = self.identity()
+        if current != self.started:
+            return f'restart required: {self.started[:12]} -> {current[:12]}, run /mcp reconnect'
+        return None
 
 
 class RunWorktreeDependencyNotMerged(SpawnRefused):
