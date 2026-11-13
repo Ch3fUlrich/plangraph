@@ -69,6 +69,16 @@ def _host_samples_loop(server, stop):
             break
 
 
+def _make_store(conn, cfg):
+    """Build the daemon's store before serving requests or starting loops."""
+    store = Store(conn, ctx=config_mod.verifier_context(cfg),
+                  batch_roots=cfg.batch_roots)
+    store.default_lease = cfg.default_lease
+    store.lease_warn_s = cfg.lease_warn_s
+    store.review_overdue_s = cfg.review_overdue_s
+    return store
+
+
 def run(cfg, *, host=None, port=None, ready=None):
     """Start the server and block until a signal; returns 0 on clean shutdown."""
     lock = kdb.lock_keeper(cfg.db, **cfg.db_options)
@@ -76,8 +86,7 @@ def run(cfg, *, host=None, port=None, ready=None):
     server = None
     cleanup_started = False
     try:
-        store = Store(conn, ctx=config_mod.verifier_context(cfg),
-                      batch_roots=cfg.batch_roots)
+        store = _make_store(conn, cfg)
         server = api.make_server(store, cfg, host=host, port=port)
         # M1: fail() may already have been recorded while the server was being
         # built (bus restore, a hook). Notice it before the writes below can
