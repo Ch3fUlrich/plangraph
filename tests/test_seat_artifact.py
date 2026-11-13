@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import seat_verdict as sv
-from plangraph.spawner import seat_record as sa
+from plangraph.spawner import seat_artifact as sa
 
 
 @pytest.fixture(autouse=True)

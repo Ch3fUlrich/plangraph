@@ -41,7 +41,7 @@ class SpawnService(SeatSpawnMixin):
         self._sync_seat(record)
         from .private_io import atomic_write_private
         from .runner import redact
-        from .seat_record import publish
+        from .seat_artifact import publish
         from .env_redact import IDENTIFIER_KEYS, redact_env_values
         # Host identity of the writing machine (C1): only PLANGRAPH_HOST may
         # override it; setdefault keeps a re-saved record's original host.

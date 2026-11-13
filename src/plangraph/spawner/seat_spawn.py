@@ -13,7 +13,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .seat_record import seat_reasons, sync_seat
+from .seat_artifact import reserve_seat_families, seat_reasons, sync_seat, sync_seat_group
 
 
 def resources(service):
@@ -240,8 +240,8 @@ class SeatSpawnMixin:
                            **options):
         """One review run per seat ``route`` picked; callers never name legs (D-3198).
 
-        Seat *i* falls through only to spare legs of a family no other seat holds,
-        dealt round-robin so two seats never land on the same spare.
+        Reserve entire canonical families, not individual spare indices, so
+        alternate legs of one family can never belong to different slots.
         """
         from plangraph.planner.routing import SpawnRefused
         if role != 'review' or model is not None or leg is not None:
@@ -251,25 +251,22 @@ class SeatSpawnMixin:
         if plan.error:
             raise SpawnRefused(plan.error)
         from plangraph.planner.seats import seat_family
-        # Keeper families: gpt/openai and claude/anthropic are one family each.
-        seat_families = {seat_family(s.family) for s in plan.review_seats}
-        if len(seat_families) != len(plan.review_seats):
-            raise SpawnRefused('two distinct review families unavailable: duplicate seat family')
-        spares = []
-        for spare in plan.legs:
-            if seat_family(spare.family) not in seat_families:
-                spares.append(spare)
-                seat_families.add(seat_family(spare.family))   # one spare per family
-        n = len(plan.review_seats)
+        writers = list(writer_families)
+        if review_of:
+            source = self.result(review_of)
+            writers.extend(source.get('given_writer_families') or [source.get('writer_family')])
+        spares, owners = reserve_seat_families(plan, writers)
         group = 'seats-' + uuid.uuid4().hex
         coverage = {c['leg']: c for c in plan.seat_coverage}
         # Each seat record carries only its own coverage entry plus the group id.
         own = [dict(coverage.get(seat.id, {'leg': seat.id}), seat_group=group,
-                    family=seat.family, keeper_family=seat_family(seat.family)) for seat in plan.review_seats]
+                    family=seat.family, keeper_family=seat_family(seat.family),
+                    eligible_families=[f for f, owner in owners.items() if owner == i])
+               for i, seat in enumerate(plan.review_seats)]
         runs = await asyncio.gather(*(
             self._spawn(card=card, prompt=prompt, role=role, writer_families=writer_families,
                         review_of=review_of, _plan=replace(
-                             plan, legs=(seat, *spares[i::n]), review_seats=(seat,), seat_coverage=(own[i],)),
+                             plan, legs=(seat, *spares[i]), review_seats=(seat,), seat_coverage=(own[i],)),
                         **options)
             for i, seat in enumerate(plan.review_seats)), return_exceptions=True)
         # A seat that raised still gets a record (with its group and coverage); the
@@ -278,6 +275,7 @@ class SeatSpawnMixin:
                 if isinstance(r, Exception) else r
                 for i, (seat, r) in enumerate(zip(plan.review_seats, runs))]
         records = [r for r in runs if not isinstance(r, BaseException)]
+        sync_seat_group(records, self._save)
         resolved = [r['plan']['seat_coverage'][0] for r in records]
         families = [c.get('family') for c in resolved]
         reasons = self._seat_reasons(families, [c['reason'] for c in resolved if c.get('reason')])

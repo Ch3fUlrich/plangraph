@@ -14,6 +14,7 @@ returns `{"seat_group": "seats-<hex>", "seats": [records], "seat_coverage": [...
 `plan.seat_coverage` holds only its own entry with the `seat_group`. A seat
 refused before launch still gets its own refused record. A seat that fails over
 falls through only to a spare leg of a family no other seat holds.
+`route.review_seats` names planned slots; their family is final only after dispatch.
 After fallthrough, each run's `plan.review_seats` contains only its chosen leg;
 its coverage entry and the returned group's coverage name that leg and its actual
 `family`, plus the canonical `keeper_family` (for example claude / anthropic).
@@ -21,8 +22,14 @@ Unfilled terminal slots have no resolved family and report
 `distinct_family_unavailable` with the attempt's named reasons. Adapter snapshot
 failures use `leg_state_snapshot_error`, never an `unknown` skip. The planned
 route and resolved group explicitly say `second review family is anthropic`
-when applicable. Spare families remain disjoint, including keeper aliases;
+when applicable. Whole spare families are reserved to one slot, including keeper
+aliases and alternate legs; `eligible_families` records that reservation. Both
+dispatch and record saves reject duplicate or unreserved resolved families.
+The next leg's slot metadata is updated on re-route before launch or save;
 neither route leg order nor policy rows change.
+Live probe failures without a reason use `leg_probe_failed`; a missing host
+readiness reason uses `host_not_ready`. Unfilled slots are never normalized as
+families or advertised as a second Anthropic family.
 
 * **Per writer part** (DECISIONS 3.2, D-3084): each writer family is covered by
   seats of other families (1 standard, 2 on high risk incl. one non-Claude),

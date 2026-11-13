@@ -1024,9 +1024,9 @@ def spawn_service(*args, **kwargs):
             from plangraph.settings import admit_review_scope
             admit_review_scope(card, role, review_scope)
             # A seat run (_plan from _spawn_seats) keeps to its own legs on re-route.
-            allowed = {l.id for l in _plan.legs} if _plan is not None else None
-            def restrict(p):
-                return p if allowed is None else replace(p, legs=tuple(l for l in p.legs if l.id in allowed), review_seats=_plan.review_seats, seat_coverage=_plan.seat_coverage)
+            def restrict(p, tried):
+                from .seat_artifact import restrict_seat_plan
+                return p if _plan is None else restrict_seat_plan(p, _plan, tried)
             plan = _plan if _plan is not None else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
             from .resolver import plan_for_launch_async
             if hasattr(plan, '__dataclass_fields__'):
@@ -1162,7 +1162,7 @@ def spawn_service(*args, **kwargs):
                             return
                         current = plan if unavailable else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         if hasattr(current, '__dataclass_fields__'):
-                            current = restrict(await plan_for_launch_async(replace(current, placement=_placement or current.placement), dry_run=dry_run))
+                            current = restrict(await plan_for_launch_async(replace(current, placement=_placement or current.placement), dry_run=dry_run), tried)
                         for skipped in current.to_dict()['skipped']:
                             if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')) and skipped not in record.setdefault('skipped', []):
                                 record['skipped'].append(skipped)
