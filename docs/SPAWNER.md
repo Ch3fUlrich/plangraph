@@ -339,8 +339,7 @@ MCP `route`, `spawn`, `ps`, `result`, `status`, `cancel` (with `plangraph_agent_
 Result/status/cancel accept `run_id`; legacy job-id operations remain available.
 MCP `ps` is compact (all running/queued runs, the newest 20 ended, `total`, `omitted`); use `result` or CLI `ps` for full records.
 No JSON-RPC notification is answered or dispatched. A reply over 8 MiB becomes a `ReplyTooLarge` error (code -32000, same request id); stdio keeps serving.
-Only actual probe results write liveness state. Gateway adapters call
-`runner.provider_response` with actual captured responses.
+Only actual probe results write liveness state. Snapshot errors retry once, then use the existing probe even for reviews; failed recovery retains the scrubbed exception type/message (see [leg state](spawner-leg-state.md)). Gateway adapters call `runner.provider_response` with actual captured responses.
 
 Runtime path: `src/plangraph/planner/routing.py` is the only module allowed to
 import `plangraph.spawner` at runtime; the boundary is enforced by

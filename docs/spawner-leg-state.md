@@ -63,9 +63,13 @@ book `down`; one is a `reprobe` hint. `PLANGRAPH_LEG_DOWN_S` defaults to 1800; a
 is `reprobe`. A later successful probe clears it. State is local to this host's
 state directory. `PLANGRAPH_LEG_PROBE_TIMEOUT_S` defaults to 180 seconds.
 Before a normal writer dispatch, stale or missing probe evidence triggers a
-probe; failure skips that leg and tries the next. Reviews and dry runs never
-probe. `PLANGRAPH_LEG_PROBE_TTL_S` defaults to 1800 seconds; 0 disables
-automatic probing. Explicit probes still run when TTL is 0.
+probe; failure skips that leg and tries the next. Dry runs never probe. Reviews
+probe only after a snapshot error: provider/discovery reads retry once before
+caching the error, then the existing single-flight probe admits a serving leg.
+A failed probe includes `leg_state_snapshot_error`, scrubbed exception type/message
+and probe reason; infrastructure failure alone is not serving evidence. Known
+provider limits still win. `PLANGRAPH_LEG_PROBE_TTL_S` defaults to 1800 seconds;
+0 disables ordinary automatic probes, not snapshot-error recovery or explicit probes.
 
 A `running` record on the same model/harness wins over a failed probe when its
 nonempty `live.log` grew within `LIVE_RUN_WRITE_WINDOW_S` (120 seconds).

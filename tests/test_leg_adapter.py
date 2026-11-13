@@ -1,6 +1,10 @@
 """Synthetic boundary regressions, not live acceptance."""
 import socket
 import subprocess
+import asyncio
+import json
+import sqlite3
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -188,3 +192,149 @@ def test_enabled_probe_recovery(tmp_path, monkeypatch):
     monkeypatch.setattr(leg_probe, 'probe', recover)
     assert asyncio.run(leg_probe.before_launch(runner, leg, 'implement', False)) is None
     assert probes == calls == [1]
+
+
+@pytest.fixture
+def snapshot_attempt(tmp_path, monkeypatch):
+    """Seat 2 attempt shape from run-e99aae2287e541b48886d0f04e46c37e; no live record."""
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.spawner import leg_probe
+    from plangraph.spawner.runner import spawn_service
+    from plangraph.spawner.service import SpawnService
+    from registry_route_util import _Runner
+    legs = tuple(next(l for l in DEFAULT_LEGS if l.id == name) for name in
+                 ('agy-gemini-3.8-flash', 'agy-sonnet-5.5', 'agy-opus-5.5'))
+    reads, probes = [], []
+    error = RuntimeError('snapshot changed during concurrent writer')
+
+    def snapshot():
+        reads.append(1)
+        raise error
+
+    store = leg_state.LegStateStore(tmp_path / 'leg-state.sqlite')
+    reader = leg_state.LegAdapter(store, SimpleNamespace(snapshot=snapshot), models=(), enabled=True)
+    read = reader.leg_status
+    reader.leg_status = lambda model, **scope: (dict(state='ok') if model == leg_probe.key(legs[2])
+                                               else read(model, **scope))
+    runner = _Runner()
+    svc = spawn_service(runner, state=tmp_path / 'state', leg_reader=reader)
+    monkeypatch.setattr(SpawnService, '_leg_prompt', lambda *a, **k: 'review')
+    monkeypatch.setattr('plangraph.spawner.notify.completion_event', lambda *a: {})
+
+    return SimpleNamespace(svc=svc, reader=reader, legs=legs, reads=reads, probes=probes)
+
+
+@pytest.mark.parametrize('error', [FileNotFoundError('snapshot missing'),
+                                  sqlite3.OperationalError('database is locked'),
+                                  json.JSONDecodeError('partial snapshot', '', 0),
+                                  RuntimeError('snapshot changed during concurrent writer')])
+@pytest.mark.parametrize('probe_ok,probe_state,infra', [(False, None, False), (True, None, False),
+    (False, 'probe_failed_leg_serving', False), (False, 'host-not-ready', True)])
+@pytest.mark.parametrize('role,ttl', [('review', '0'), ('implement', '0'), ('implement', '1800')])
+@pytest.mark.parametrize('declared_fallback', [False, True])
+def test_snapshot_error_retries_then_probes(snapshot_attempt, monkeypatch, error, probe_ok, probe_state, infra, role, ttl, declared_fallback):
+    from plangraph.spawner import leg_probe
+    case = snapshot_attempt
+
+    def snapshot():
+        case.reads.append(1)
+        raise error
+
+    async def probe(*a, **k):
+        assert k['store'] is case.reader.store
+        case.probes.append(case.legs[0].id)
+        return dict(ok=probe_ok, reason='timeout', state=probe_state, infra=infra)
+
+    monkeypatch.setattr(case.reader.provider, 'snapshot', snapshot)
+    if declared_fallback:  # default_reader keeps unknown even when local state says ok.
+        read = case.reader.leg_status
+        monkeypatch.setattr(case.reader, 'leg_status', lambda *a, **k: dict(read(*a, **k), state='ok'))
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', ttl)
+    reason = asyncio.run(leg_probe.before_launch(case.svc.runner, case.legs[0], role, False))
+    assert case.probes == [case.legs[0].id]
+    assert len(case.reads) == 2
+    if probe_ok or probe_state == 'probe_failed_leg_serving':
+        assert reason is None
+    else:
+        assert f'leg_state_snapshot_error: {type(error).__name__}: {error}' in reason
+        assert 'timeout' in reason
+
+
+def test_snapshot_retry_recovers_without_probe(snapshot_attempt, monkeypatch):
+    from plangraph.spawner import leg_probe
+    case = snapshot_attempt
+
+    def snapshot():
+        case.reads.append(1)
+        if len(case.reads) == 1:
+            raise RuntimeError('concurrent refresh')
+        return {'agy': SimpleNamespace(available=True, stale=False)}
+
+    case.reader.models = [leg_probe.key(case.legs[0])]
+    monkeypatch.setattr(case.reader.provider, 'snapshot', snapshot)
+    async def unexpected_probe(*a, **k):
+        pytest.fail('a recovered snapshot needs no review probe')
+    monkeypatch.setattr(leg_probe, 'probe', unexpected_probe)
+    assert asyncio.run(leg_probe.before_launch(case.svc.runner, case.legs[0], 'review', False)) is None
+    assert len(case.reads) == 2 and not case.probes
+
+
+def test_snapshot_failed_probe_reason_scrubs_paths_and_secrets(snapshot_attempt, monkeypatch):
+    from plangraph.spawner import leg_probe
+    case = snapshot_attempt
+    secret = '/'.join(('synthetic-snapshot', 'credential'))
+    home_path = str(Path.home() / 'private' / 'snapshot.json')
+    monkeypatch.setenv('SNAPSHOT_SECRET', secret)
+
+    def snapshot():
+        raise PermissionError(f'snapshot locked: {home_path}; Bearer {secret}')
+
+    async def probe(*a, **k):
+        return dict(ok=False, reason='timeout')
+
+    monkeypatch.setattr(case.reader.provider, 'snapshot', snapshot)
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    reason = asyncio.run(leg_probe.before_launch(case.svc.runner, case.legs[0], 'review', False))
+    assert 'PermissionError: snapshot locked:' in reason
+    assert secret not in reason and home_path not in reason
+
+
+@pytest.mark.parametrize('serving_index', [0, 1])
+def test_snapshot_seat_uses_witnessed_non_writer_before_opus(snapshot_attempt, monkeypatch, serving_index):
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner import leg_probe
+    case = snapshot_attempt
+    serving = case.legs[serving_index]
+    spawn = case.svc.runner.spawn
+
+    async def witnessed(**kwargs):
+        job = await spawn(**kwargs)
+        job.exit_code = 0
+        job.stdout, job.response_finish_reason = 'VERDICT: PASS\nTEST_GAMING: no\n', 'stop'
+        if kwargs['model_or_combo'] != case.legs[2].model:
+            job.served_model, job.served_family = kwargs['model_or_combo'], serving.family
+            job.served_witness_reason = 'response-side fixture'
+        return job
+
+    async def probe(_runner, leg, **kwargs):
+        case.probes.append(leg.id)
+        return dict(ok=leg.id == serving.id, reason='timeout')
+
+    monkeypatch.setattr(case.svc.runner, 'spawn', witnessed)
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    plan = SpawnPlan(case.legs, (case.legs[0],), 'fixture', (), (), seat_coverage=(
+        dict(seat_group='seats-fixture', seat_index=2, eligible_families=['google', 'anthropic']),))
+    run = asyncio.run(case.svc.spawn(card={'estimate_tokens': 1000}, role='review',
+                                   writer_families=['gpt'], _plan=plan, wait_seconds=None))
+    assert run['status'] == 'completed', run.get('error')
+    assert run['chosen_leg']['id'] == serving.id
+    assert run['served_model'] == serving.model and run['served_family'] != 'gpt'
+    assert case.probes == [leg.id for leg in case.legs[:serving_index + 1]]
+    assert all(c['model_or_combo'] != case.legs[2].model for c in case.svc.runner.calls)
+    saved = case.svc.result(run['run_id'])
+    assert saved['chosen_leg'] == run['chosen_leg']
+    if serving_index:
+        skipped = run['attempts'][0]
+        assert skipped['status'] == 'skipped'
+        assert 'RuntimeError: snapshot changed during concurrent writer' in skipped['skip_reason']

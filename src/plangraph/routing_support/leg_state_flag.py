@@ -2,11 +2,33 @@
 from dataclasses import replace
 from functools import lru_cache
 import os
+from pathlib import Path
+import re
 from plangraph.routing_errors import SpawnRefused
 
 
 def enabled():
     return os.environ.get('PLANGRAPH_OMNIROUTE_LEG_STATE') != '0'
+
+
+def read_snapshot(reader):
+    """Retry the provider/discovery boundary once, never cache a partial refresh."""
+    for attempt in range(2):
+        try:
+            return reader.provider.snapshot(), {reader.identity(mid) for mid in (
+                reader.models() if callable(reader.models) else reader.models)}
+        except Exception:
+            if attempt:
+                raise
+
+
+def snapshot_detail(reader, scrub):
+    """Scrub secrets before removing locations, so paths cannot split a secret."""
+    error = getattr(reader, '_snapshot_error', None)
+    detail = f'{type(error).__name__}: {error}' if error else 'SnapshotError: detail unavailable'
+    detail = scrub(detail)
+    detail = detail.replace(str(Path.home()), '[home]')
+    return re.sub(r'''(?:[A-Za-z]:[\\/]|/|~[/\\])[^\s'";,]+''', '[path]', detail)
 
 
 @lru_cache(maxsize=1)

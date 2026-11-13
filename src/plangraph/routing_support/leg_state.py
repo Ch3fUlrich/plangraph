@@ -376,12 +376,12 @@ class LegAdapter:
         now = self.clock()
         if self._at is None or now - self._at >= self.ttl_s:
             try:
-                states = self.provider.snapshot()
-                served = {self.identity(mid) for mid in (self.models() if callable(self.models) else self.models)}
-                self._states, self._served = states, served
-                self._error = None if states else 'unreachable'
-            except Exception:
-                self._error = 'unknown'
+                from .leg_state_flag import read_snapshot
+                self._states, self._served = read_snapshot(self)
+                self._snapshot_error = None
+                self._error = None if self._states else 'unreachable'
+            except Exception as exc:
+                self._error, self._snapshot_error = 'unknown', exc
             self._at = now
         state = self._error
         if not state:

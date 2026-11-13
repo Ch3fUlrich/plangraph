@@ -316,7 +316,7 @@ async def before_launch(runner, leg, role, dry_run):
     from .target import quota_paused
     root = (getattr(runner, 'state', None) or getattr(runner, '_state', None)
             or getattr(runner, 'state_root', None))
-    # Refuse before resolving a store that may create state or raise.
+    # Refuse quota pauses and dry runs before resolving a possibly writable store.
     if quota_paused(root, role, leg):
         return 'quota pause'
     if dry_run:
@@ -332,29 +332,26 @@ async def before_launch(runner, leg, role, dry_run):
         root = Path(path).parent
     if quota_paused(root, role, leg):
         return 'quota pause'
-
     def admission():
         if adapter:
             status = adapter.leg_status(key(leg), account=getattr(leg, 'account', None),
                                         combo=getattr(leg, 'combo', None))
-            if status['state'] != 'ok':
-                reason = status.get('reason') or status['state']
-                return 'leg_state_snapshot_error' if reason.strip().lower() == 'unknown' else reason
+            reason = status.get('reason') or status['state']
+            if reason.strip().lower() == 'unknown' or reason.startswith('leg_state_snapshot_error'):
+                from .env_redact import redact_output, redact_env_values
+                from plangraph.routing_support.leg_state_flag import snapshot_detail
+                detail = snapshot_detail(adapter, lambda text: redact_output(redact_env_values(text, os.environ)))
+                return 'leg_state_snapshot_error: ' + ' '.join(detail.split())
+            return reason if status['state'] != 'ok' else None
         return None
-    # D-3685: a leg booked limited is known-unusable until its reset. Skip it
-    # before any freshness or probe logic -- every role, TTL 0 included --
-    # without a probe run or a probe row; a newer success lifts the booking
-    # and leg_status then says ok again.
-    status = state.leg_status(key(leg))
+    status = state.leg_status(key(leg))  # D-3685: provider limits still win.
     if status.get('state') == 'limited':
         return 'limited until ' + reset_iso((status.get('evidence') or {}).get('reset_at'))
-    if not ttl or role not in ('implement', 'fix'):
-        return admission()
-    ts = state.last_probe_ts(key(leg))  # successes only: a failed probe is not fresh evidence
-    if ts is not None and time.time() - ts < ttl:
-        return admission()
-    # Single flight per leg: concurrent launches share one in-flight probe and
-    # its verdict, fresh failure included, instead of each paying a model run.
+    skip = None
+    ts = state.last_probe_ts(key(leg)) if ttl and role in ('implement', 'fix') else None
+    if not ttl or role not in ('implement', 'fix') or (ts is not None and time.time() - ts < ttl):
+        skip = admission()
+        if not (skip or '').startswith('leg_state_snapshot_error:'): return skip
     pending = _INFLIGHT.get(key(leg))
     if pending is None:
         pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state))
@@ -363,9 +360,12 @@ async def before_launch(runner, leg, role, dry_run):
     reason = result.get('reason')
     if not reason or reason.strip().lower() == 'unknown':
         reason = 'host_not_ready' if result.get('state') == 'host-not-ready' else 'leg_probe_failed'
+    skip = skip or admission()
+    if (skip or '').startswith('leg_state_snapshot_error:'):
+        return None if result['ok'] or result.get('state') == 'probe_failed_leg_serving' else skip + '; probe: ' + reason
     if result.get('state') == 'host-not-ready':
         return reason
-    return admission() if result['ok'] or result.get('infra') or result.get('state') == 'probe_failed_leg_serving' else 'down: ' + reason
+    return skip if result['ok'] or result.get('infra') or result.get('state') == 'probe_failed_leg_serving' else 'down: ' + reason
 
 
 async def probe_many(runner, legs=(), all_writers=False, timeout=None):

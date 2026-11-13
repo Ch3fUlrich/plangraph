@@ -88,6 +88,12 @@ def test_resolved_slot_family_in_answer_and_record(service, dispatch):
 
 @pytest.mark.parametrize('reason', ['unknown', 'UNKNOWN', ' unknown ', None, ''])
 def test_unknown_adapter_skip_has_named_reason(service, monkeypatch, reason):
+    from plangraph.spawner import leg_probe
+    probes = []
+    async def probe(_runner, leg, **kwargs):
+        probes.append(leg.id)
+        return dict(ok=False, reason='timeout')
+    monkeypatch.setattr(leg_probe, 'probe', probe)
     svc = service()
     plan = svc._route(CARD, 'review', ['mimo'], benchmark={})
     if reason != 'unknown':
@@ -106,8 +112,9 @@ def test_unknown_adapter_skip_has_named_reason(service, monkeypatch, reason):
                    for a in record['attempts'] if a['status'] == 'skipped')
         attempt = next(a for a in record['attempts'] if isinstance(a['leg'], dict)
                        and a['leg']['id'] == GEMINI.id)
-        assert attempt['skip_reason'] == 'leg_state_snapshot_error'
+        assert attempt['skip_reason'] == 'leg_state_snapshot_error: SnapshotError: detail unavailable; probe: timeout'
         assert record['plan']['review_seats'] == [record['chosen_leg']]
+    assert probes == [GEMINI.id]
 
 
 def test_unfilled_slot_names_distinct_family_refusal(service, monkeypatch):
