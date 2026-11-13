@@ -173,14 +173,17 @@ CREDIT_AUTH_MARKER = re.compile(
     r'credits? (?:exhausted|depleted|exceeded|ran out)|out of credits|insufficient (?:credits?|balance|quota)'
     r'|payment required|unauthori[sz]ed|authentication (?:failed|error|required)|invalid api key', re.I)
 _QUOTA_MARKER = re.compile(
-    r'quota reached|quota exceeded|quota threshold|exhausted their quota|rate limit|resets in'
+    r'quota reached|quota exceeded|quota threshold|quota policy filtered|resource_exhausted|exhausted their quota|rate limit|resets in'
     r'|too many requests|\bHTTP 429\b|' + CREDIT_AUTH_MARKER.pattern, re.I)
 #: D-3685: OmniRoute appends "(reset after N)" to its quota line. The suffix is
 #: not quota evidence on its own: a line merely starting with it never marks a
 #: leg (prose stays out, D-3257). It counts only on an error-shaped line or
 #: next to a quota/rate-limit name.
 _RESET_AFTER = re.compile(r'\(reset after \d', re.I)
-_ERROR_SHAPED = re.compile(r'\s*(?:error:|HTTP \d{3}:)', re.I)
+# Gateway (omniroute) and agy refusal lines are quota evidence at the start of a line, no "Error:" prefix needed.
+_ERROR_SHAPED = re.compile(
+    r'\s*(?:error:|HTTP \d{3}:|RESOURCE_EXHAUSTED \(code \d{3}\):|quota policy filtered \d+ account'
+    r'|All \S+ accounts reached configured quota)', re.I)
 _USAGE_LIMIT = re.compile(
     r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:free |go )?usage limit '
     r'(?:reached|exceeded)(?:\s*[.!]?(?:\s*\(reset after \d[^\n)]*\))?'

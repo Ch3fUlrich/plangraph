@@ -226,6 +226,46 @@ def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=No
         raise LookupError('call log unreadable: ' + type(exc).__name__) from None
 
 
+QUOTA_POLL_IDLE_S = 60.0   # a gateway leg silent this long is checked against the call log
+QUOTA_POLL_EVERY_S = 30.0
+
+
+def quota_refusal(rows, tag):
+    """First quota refusal line the gateway logged for ``tag`` (429 row or quota error text), else None.
+
+    The stalled-run case: the harness printed nothing, but the call log row
+    carries the gateway's error text, including its reset time.
+    """
+    from .env_redact import early_refusal
+    for row in rows if isinstance(rows, list) else ():
+        if not isinstance(row, dict) or row.get('sessionTag') != tag:
+            continue
+        text = ' '.join(str(row.get(k) or '') for k in ('error_summary', 'errorSummary', 'error')).strip()
+        try:
+            status = int(row.get('status'))
+        except (TypeError, ValueError):
+            status = 0
+        if not text or 200 <= status < 300:
+            continue
+        line = ' '.join(text.split())[:300]
+        found = early_refusal(line) or early_refusal('Error: ' + line)
+        if found:
+            return found
+        if status == 429:
+            return 'HTTP 429: ' + line
+    return None
+
+
+def poll_quota(job_id, job, env, *, fetch=None):
+    """Quota refusal text for a running gateway leg, or None; never raises."""
+    if not gateway_leg(job.model_or_combo, env):
+        return None
+    try:
+        return quota_refusal((fetch or fetch_rows)(session_tag(job_id), env), session_tag(job_id))
+    except Exception:
+        return None
+
+
 def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
     """Record the gateway-served model on ``job`` through the runner's adapter check."""
     fetch = fetch or fetch_rows
