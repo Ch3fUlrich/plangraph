@@ -1,0 +1,1 @@
+Rust package probes persist bounded exact-session snapshots, progress deltas, completion markers and stalled/dead verdicts. Server-side package waits replace SSH polling loops; Windows process identity includes creation time.

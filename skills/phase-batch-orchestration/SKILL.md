@@ -17,7 +17,7 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
   HIGH survives a fix round, the same host or tooling failure twice in a shift,
   a replan, or an operator audit): cuts packages, briefs writers, folds, runs
   CI waits and reviews, sends one GO request, merges with its own keeper token.
-- **Package writer**: Codex `gpt-6.1-sol` high in its native CLI does the bulk;
+- **Package writer**: Codex `gpt-6.1-sol` medium in its native CLI does the bulk;
   a Claude Sonnet subagent only small fixes.
 - **Reviewer**: at least one review per checkpoint. Codex reviews Claude-written
   code; a cheap reviewer of another family or Claude Sonnet reviews Sol-written code.
@@ -57,10 +57,16 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
 
 - Check the host first (`plangraph:CODEX-HOST-READINESS`): login, trust and
   update prompts answered, a commit works.
-- Start: `herdr workspace create --cwd <worktree> --label <name>`, then
-  `herdr agent start <name> --kind codex --pane <pane> -- -m gpt-6.1-sol -c model_reasoning_effort="high" -c approval_policy="never" --sandbox danger-full-access`,
-  then `herdr agent prompt <name> "<read PACKAGE-x.md and carry it out>"`.
-  The sandboxed modes failed on our hosts (no commits, or no start at all).
+- Start with `plangraph_package_launch(host, base_ref, branch, keys, extra_text)`.
+  The Rust spawner claims current keys, creates the fresh worktree and launches
+  Linux via herdr or Windows via a scheduled task. Default reasoning is medium;
+  higher effort requires matching `card.effort` and `card.effort_decision=D-…`.
+- Inspect with `plangraph_package_probe(run)` or `run="all"`; wait with
+  `plangraph_package_wait(runs, until="any_done"|"stalled", timeout=...)`.
+  Use these bounded server helpers for log/status/commit progress and exact
+  session liveness. Do not build SSH polling loops or process-name watchers.
+- Steer with `plangraph_package_send(run, text)`; Windows writers read STEER
+  before each task. Keep package status files untracked.
 - Review: `codex exec ... --json -o <file> - < prompt`, read-only by instruction.
 - One ledger row per package and per review (tokens, minutes, done, skipped,
   findings). Fleet spawner writers stay paused while the burn limiters are unmerged.

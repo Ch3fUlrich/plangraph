@@ -109,6 +109,13 @@ pub(crate) fn save(state: &Path, run: &Value) -> Result<(), ToolError> {
     };
     write().map_err(|_| ToolError::Internal("could not save package record".into()))
 }
+pub(crate) fn view(mut run: Value) -> Value {
+    if let Some(object) = run.as_object_mut() {
+        object.remove("package_text");
+        object.remove("snapshot");
+    }
+    run
+}
 pub(crate) fn list(state: &Path) -> Vec<Value> {
     let mut runs: Vec<_> = std::fs::read_dir(state.join("package-runs"))
         .into_iter()
@@ -264,7 +271,7 @@ fn launch(
     Ok(run)
 }
 pub(crate) fn handle(state: &Path, name: &str, args: &Args) -> Result<Value, ToolError> {
-    let mut backend = crate::package_transport::Native;
+    let mut backend = crate::package_transport::Native::default();
     match name {
         "plangraph_package_launch" => {
             let host = configured_host(state, string(args, "host")?)?;
@@ -279,7 +286,11 @@ pub(crate) fn handle(state: &Path, name: &str, args: &Args) -> Result<Value, Too
             }
             backend.remote(&host, &crate::package_scripts::send(&host, &run, text))
         }
-        "plangraph_package_list" => Ok(json!({"runs":list(state)})),
+        "plangraph_package_probe" => crate::package_probe::probe(state, args),
+        "plangraph_package_wait" => crate::package_probe::wait(state, args),
+        "plangraph_package_list" => {
+            Ok(json!({"runs":list(state).into_iter().map(view).collect::<Vec<_>>()}))
+        }
         _ => Err(parameter("unknown package tool")),
     }
 }

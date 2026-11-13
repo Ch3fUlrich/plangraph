@@ -38,6 +38,7 @@ git config user.email | LC_ALL=C grep -Eq '^([0-9]+\+)?[A-Za-z0-9._-]+@users\.no
 mkdir -p {root}
 git worktree add -b {branch} {work} {base}
 printf '%s' {text} > {package}
+git -C {work} rev-parse HEAD > {work}/.package-base
 herdr workspace create --cwd {work} --label {id}
 "#,
         root = sh(&host.root),
@@ -99,6 +100,7 @@ if ((Git config user.email) -cnotmatch '^([0-9]+\+)?[A-Za-z0-9._-]+@users\.norep
 New-Item -ItemType Directory -Force -Path {root} | Out-Null
 Git worktree add -b {branch} {work} {base}
 [IO.File]::WriteAllText({package}, {text})
+Git -C {work} rev-parse HEAD | Set-Content -LiteralPath (Join-Path {work} .package-base)
 [IO.File]::WriteAllText({runner_path}, {runner})
 $action='powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + {runner_path} + '"'
 & schtasks /Create /TN {task} /TR $action /SC ONCE /ST 23:59 /F | Out-Null
@@ -109,7 +111,7 @@ Start-Sleep -Seconds 30
 $launchedPid=[int](Get-Content -LiteralPath {pid})
 $process=Get-Process -Id $launchedPid -ErrorAction SilentlyContinue
 if (!$process) {{ throw 'detached package died' }}
-@{{pid=$launchedPid;task={task};alive=$true;started=$process.StartTime.ToUniversalTime().ToString('o')}} | ConvertTo-Json -Compress
+@{{pid=$launchedPid;task={task};alive=$true;started_process=$process.StartTime.ToUniversalTime().ToString('o')}} | ConvertTo-Json -Compress
 "#,
         repo = ps(&host.repo),
         root = ps(&host.root),

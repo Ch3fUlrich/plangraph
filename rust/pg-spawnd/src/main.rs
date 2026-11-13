@@ -17,6 +17,8 @@ mod jobs;
 mod launch;
 mod leg_ref;
 mod package;
+mod package_probe;
+mod package_probe_scripts;
 mod package_scripts;
 mod package_transport;
 mod placement;

@@ -8,11 +8,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) struct Native;
+#[derive(Default)]
+pub(crate) struct Native {
+    pub deadline: Option<Instant>,
+}
 fn error(message: &str) -> ToolError {
     ToolError::Internal(message.into())
 }
-fn capture(command: &mut Command, input: &str) -> Result<(i32, String, String), ToolError> {
+fn capture(
+    command: &mut Command,
+    input: &str,
+    timeout: Duration,
+) -> Result<(i32, String, String), ToolError> {
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -57,7 +64,7 @@ fn capture(command: &mut Command, input: &str) -> Result<(i32, String, String), 
         if let Ok(Some(status)) = child.try_wait() {
             break status;
         }
-        if start.elapsed() > Duration::from_secs(120) {
+        if start.elapsed() >= timeout {
             #[cfg(unix)]
             unsafe {
                 libc::killpg(child.id() as i32, libc::SIGKILL);
@@ -82,12 +89,25 @@ fn capture(command: &mut Command, input: &str) -> Result<(i32, String, String), 
     }
     Ok((status.code().unwrap_or(-1), out, err))
 }
+impl Native {
+    fn timeout(&self) -> Result<Duration, ToolError> {
+        let timeout = self
+            .deadline
+            .map(|d| d.saturating_duration_since(Instant::now()))
+            .unwrap_or(Duration::from_secs(120))
+            .min(Duration::from_secs(120));
+        if timeout.is_zero() {
+            return Err(error("package deadline exceeded"));
+        }
+        Ok(timeout)
+    }
+}
 impl Backend for Native {
     fn keeper(&mut self, verb: &str, key: &str) -> Result<Value, ToolError> {
         let mut command =
             Command::new(std::env::var_os("PG_SPAWND_PYTHON").unwrap_or_else(|| "python3".into()));
         command.args(["-m", "plangraph.keeper.cli", verb, key, "--json"]);
-        let (code, out, err) = capture(&mut command, "")?;
+        let (code, out, err) = capture(&mut command, "", self.timeout()?)?;
         if code == 0 {
             serde_json::from_str(&out).map_err(|_| error("invalid keeper reply"))
         } else if code == 2 {
@@ -116,7 +136,7 @@ impl Backend for Native {
         } else {
             command.arg("sh -s");
         }
-        let (code, out, _) = capture(&mut command, script)?;
+        let (code, out, _) = capture(&mut command, script, self.timeout()?)?;
         if code != 0 {
             return Err(error("remote package command failed; inspect package run"));
         }

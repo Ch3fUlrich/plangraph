@@ -517,6 +517,55 @@
   "name": "plangraph_package_send"
  },
  {
+  "description": "Long-lived Codex package probe (Rust spawner)",
+  "inputSchema": {
+   "properties": {
+    "run": {
+     "default": "all",
+     "type": "string"
+    },
+    "stalled_min": {
+     "default": 10,
+     "type": "number"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "plangraph_package_probe"
+ },
+ {
+  "description": "Long-lived Codex package wait (Rust spawner)",
+  "inputSchema": {
+   "properties": {
+    "runs": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "stalled_min": {
+     "type": "number"
+    },
+    "timeout": {
+     "type": "number"
+    },
+    "until": {
+     "enum": [
+      "any_done",
+      "stalled"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [
+    "runs"
+   ],
+   "type": "object"
+  },
+  "name": "plangraph_package_wait"
+ },
+ {
   "description": "Long-lived Codex package list (Rust spawner)",
   "inputSchema": {
    "properties": {},

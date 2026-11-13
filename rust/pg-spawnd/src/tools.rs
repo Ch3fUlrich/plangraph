@@ -153,7 +153,11 @@ pub(crate) fn dispatch(
             match name {
                 "plangraph_agent_ps" => {
                     let mut runs = crate::records::list_runs(state);
-                    runs.extend(crate::package::list(state));
+                    runs.extend(
+                        crate::package::list(state)
+                            .into_iter()
+                            .map(crate::package::view),
+                    );
                     Ok(json!({"runs": runs}))
                 }
                 "plangraph_agent_result" => crate::records::read_record(state, required("run_id")?),
@@ -338,7 +342,7 @@ mod tests {
         let listed = list_tools().tools;
         let fixture: serde_json::Value = serde_json::from_str(TOOLS_JSON).expect("fixture");
         assert_eq!(serde_json::to_value(&listed).expect("tools"), fixture);
-        assert_eq!(listed.len(), 18);
+        assert_eq!(listed.len(), 20);
     }
 
     #[test]

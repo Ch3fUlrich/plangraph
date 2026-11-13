@@ -162,6 +162,11 @@ for _name, _properties, _required in (
                 'effort': {'type': 'string', 'default': 'medium'}, 'card': {'type': 'object'}},
                ['host', 'base_ref', 'branch', 'keys']),
     ('send', {'run': {'type': 'string'}, 'text': {'type': 'string'}}, ['run', 'text']),
+    ('probe', {'run': {'type': 'string', 'default': 'all'},
+               'stalled_min': {'type': 'number', 'default': 10}}, []),
+    ('wait', {'runs': {'type': 'array', 'items': {'type': 'string'}},
+              'until': {'type': 'string', 'enum': ['any_done', 'stalled']},
+              'timeout': {'type': 'number'}, 'stalled_min': {'type': 'number'}}, ['runs']),
     ('list', {}, ()),
 ):
     TOOLS_METADATA.append({'name': 'plangraph_package_' + _name,
