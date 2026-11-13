@@ -124,11 +124,17 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
     evidence = {"head_sha": head_sha, "source": "record.json", "run_id": run_id}
     if "item_key" in record:
         evidence["item_key"] = record["item_key"]
-    # F3: finish_reason is only ever recorded; never hard-coded.  With no
-    # record finish field the key is omitted, so a PASS is refused downstream.
+    # F3: finish_reason is only ever recorded; never hard-coded.  The last
+    # finish event is final even if unusable, so an earlier stop cannot win.
     finish = record.get("finish_reason")
     if not (isinstance(finish, str) and finish) and isinstance(completion, dict):
         finish = completion.get("finish_reason")
+    if not (isinstance(finish, str) and finish):
+        events = record.get("events")
+        for event in reversed(events) if isinstance(events, list) else ():
+            if isinstance(event, dict) and event.get("event") == "opencode_step_finish":
+                finish = event.get("finish_reason")
+                break
     if isinstance(finish, str) and finish:
         evidence["finish_reason"] = finish
     if isinstance(served, str) and served and served != "unwitnessed":

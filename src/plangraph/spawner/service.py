@@ -336,8 +336,11 @@ class SpawnService(SeatSpawnMixin):
                     if unavailable:
                         job.status = 'failed'
                         job.exit_code = job.exit_code or 1
-                    reason = unavailable or ('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}'
+                    reason = unavailable or (('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}')
                         if job.status in ('failed', 'skipped') else None)
+                    if stop and any(isinstance(slot, dict) and slot.get('seat_group')
+                            and slot.get('leg') == chosen.id for slot in (plan.seat_coverage or ())):
+                        reason = reason or 'provider_stop'
                     stop_status = stop.get('status') if isinstance(stop, dict) else None
                     down_token = (unavailable or '').split(':', 1)[0].strip()
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,

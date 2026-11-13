@@ -290,7 +290,7 @@ implemented, and enabling by default and the Rust port remain later slices.
 Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
 chosen leg, served model/family with witness kind (a structured claude `system/init` model is a native witness; a mismatch with the requested leg sets `served_model_mismatch`), writer family, status, started/ended timestamps,
 attempts with provider stop details, job id, pid, and stdout tail.
-These records are the only source for `--review-of`; unknown ids refuse.
+These records are the only source for `--review-of`; unknown ids refuse. Linux supervisors record their process start-time token; non-Linux supervisor startup skips the `/proc` import and lookup. POSIX orphan checks attempt the `/proc` lookup when a recorded start-time token is present, even on non-Linux hosts. A reused supervisor pid ends the run as `orphaned` before signaling; matching or unreadable start-time evidence retains the POSIX missing-process check (permission denied means alive). Windows orphan checks return before importing process-stat helpers or signaling.
 
 On terminal save the supervisor publishes a completion per run to
 `inbox/parent.jsonl` and the authenticated live keeper HTTP sink. Events
@@ -307,6 +307,7 @@ must deduplicate by event_id: external delivery is at-least-once across crashes.
 Failed hooks are logged and retried on re-save; local inbox replay is idempotent.
 `PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds each child execution in seconds; unset gives a 25-minute review cap, while empty means no review cap;
 expiry kills its process tree and records rc 124 with FAILED completion.
+Terminal stall/timeout records preserve their outcome and events even without a watchdog event (`watchdog: null`). A provider stop leaves the harness status and exit code unchanged (completed with exit 0 stays completed), adding `provider_stop` only when no reason exists and the stopped leg's own coverage slot names a seat group, preserving it in the attempt and unfilled-slot error while leaving completed non-seat reasons unset and tolerating empty, absent or non-dict coverage entries.
 The detached supervisor must survive the child; killing the supervisor itself
 requires a future recovery service. This interim event contract carries over to
 the later Temporal implementation (also covers FLEET-STATUS-HOOK).
@@ -318,7 +319,8 @@ audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
 The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md](spawner-seats.md) (D-3198).
 
 CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
-A probe with its harness binary missing reports `host-not-ready` and books no leg event.
+A probe with its harness binary missing reports `host-not-ready` and books no leg event. Probe timeouts must be finite and strictly positive; TTL remains nonnegative (zero disables automatic probes). Invalid settings refuse before probe state writes, and CLI parameter refusals are JSON `ParameterRefused` with exit 2. Timeout errors name `--timeout` for an explicit CLI argument, `timeout_s` for a direct probe argument, or `PLANGRAPH_LEG_PROBE_TIMEOUT_S` for the environment. CLI and MCP probe refusal handlers catch only parameter-validation errors, not internal `ValueError`s. Spawn-call exceptions report probe infrastructure failure and never book leg liveness.
+Probe and quota bookkeeping key a leg by its model string: only a bare model of an agy leg gets the `agy/` prefix, a provider-qualified model is its own key, and legacy record rows without a harness keep their model-only key.
 Failed probes retain a scrubbed, single-line excerpt of the last 400 stderr
 characters in their result, output line and leg-state event. A `running` record
 on the same model/harness with a nonempty `live.log` grown within
