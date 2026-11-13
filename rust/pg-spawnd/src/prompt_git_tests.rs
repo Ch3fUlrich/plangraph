@@ -332,3 +332,6 @@ fn oversized_stdout_is_drained_before_checkout_cleanup() {
 
 #[path = "prompt_git_race_tests.rs"]
 mod race;
+
+#[path = "prompt_git_boundary_tests.rs"]
+mod boundary;

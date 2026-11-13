@@ -80,15 +80,12 @@ fn collect_diff_with_clock(
     });
     let result = rx.recv_timeout(deadline.saturating_duration_since(now()));
     let mut exited = child.try_wait().map_err(|_| InlineDiffError::Git)?;
-    while result.is_ok() && (exited.is_none() || !reader.is_finished()) {
-        let remaining = deadline.saturating_duration_since(now());
-        if remaining.is_zero() {
-            break;
-        }
-        sleep(remaining.min(Duration::from_millis(5)));
-        exited = child.try_wait().map_err(|_| InlineDiffError::Git)?;
-    }
-    let completed = result.is_ok() && exited.is_some() && reader.is_finished() && now() < deadline;
+    let completed = result.is_ok()
+        && wait_before_deadline(deadline, now, sleep, || {
+            exited = child.try_wait()?;
+            Ok(exited.is_some() && reader.is_finished())
+        })
+        .map_err(|_| InlineDiffError::Git)?;
     let status = reap_after_kill(&mut child, |child| {
         // This group was created by this invocation; never signal a registry process.
         if exited.is_none() && child.try_wait()?.is_none() {
@@ -119,6 +116,26 @@ fn collect_diff_with_clock(
         return Err(InlineDiffError::Git);
     }
     Ok(bytes)
+}
+
+fn wait_before_deadline(
+    deadline: Instant,
+    now: impl Fn() -> Instant,
+    sleep: impl Fn(Duration),
+    mut complete: impl FnMut() -> std::io::Result<bool>,
+) -> std::io::Result<bool> {
+    loop {
+        // One sample per observation; never retime an accepted completion.
+        let observed = now();
+        if complete()? {
+            return Ok(observed < deadline);
+        }
+        let remaining = deadline.saturating_duration_since(observed);
+        if remaining.is_zero() {
+            return Ok(false);
+        }
+        sleep(remaining.min(Duration::from_millis(5)));
+    }
 }
 
 fn reap_after_kill(

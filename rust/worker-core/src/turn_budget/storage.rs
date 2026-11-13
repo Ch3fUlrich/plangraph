@@ -2,10 +2,12 @@ use super::{poll::parse, safe_name, Config};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+#[cfg(not(windows))]
+use std::io::Write;
 use std::{
     collections::BTreeSet,
     fs::{self, File},
-    io::{Read, Write},
+    io::Read,
     path::{Component, Path, PathBuf},
 };
 
@@ -14,6 +16,13 @@ pub const FILE_MAX: u64 = 1024 * 1024;
 #[cfg(any(windows, test))]
 #[path = "rename.rs"]
 mod rename;
+
+#[cfg(windows)]
+#[path = "windows_rename.rs"]
+mod windows_rename;
+#[cfg(any(windows, test))]
+#[path = "windows_write.rs"]
+mod windows_write;
 
 pub fn read_json(path: &Path) -> Option<Value> {
     let mut bytes = Vec::new();
@@ -32,24 +41,25 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if bytes.len() as u64 > FILE_MAX {
         return Err(std::io::Error::other("status too large"));
     }
-    let parent = path.parent().unwrap();
-    #[cfg(not(windows))]
-    let mut file = tempfile::NamedTempFile::new_in(parent)?;
     #[cfg(windows)]
-    let mut file = {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::{
-            DELETE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
-        };
-        // Rename by handle needs DELETE access. Unlike NamedTempFile::new_in,
-        // this creates a normal file, without FILE_ATTRIBUTE_TEMPORARY.
-        tempfile::Builder::new().make_in(parent, |name| {
-            fs::OpenOptions::new()
-                .access_mode(DELETE | FILE_GENERIC_READ | FILE_GENERIC_WRITE)
-                .create_new(true)
-                .open(name)
-        })?
-    };
+    return windows_write::atomic_write(
+        path,
+        bytes,
+        &mut windows_write::Calls {
+            before: |_| Ok(()),
+            report: |stage, error: &std::io::Error| {
+                eprintln!("turn-budget-hook: atomic_write step={stage:?} failed: {error}");
+            },
+        },
+    );
+    #[cfg(not(windows))]
+    atomic_write_portable(path, bytes)
+}
+
+#[cfg(not(windows))]
+fn atomic_write_portable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().unwrap();
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
     file.write_all(bytes)?;
     match fs::metadata(path) {
         Ok(metadata) => file.as_file().set_permissions(metadata.permissions())?,
@@ -57,82 +67,9 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         Err(e) => return Err(e),
     }
     file.as_file().sync_all()?;
-    #[cfg(not(windows))]
     file.persist(path).map_err(|e| e.error)?;
-    #[cfg(windows)]
-    replace_status(&mut file, path)?;
     #[cfg(unix)]
     File::open(parent)?.sync_all()?;
-    Ok(())
-}
-
-#[cfg(windows)]
-fn replace_status(file: &mut tempfile::NamedTempFile, path: &Path) -> std::io::Result<()> {
-    use rename::{wide, Step};
-    use std::{mem, os::windows::io::AsRawHandle};
-    use windows_sys::Win32::Storage::FileSystem::{
-        FileRenameInfo, FileRenameInfoEx, MoveFileExW, SetFileInformationByHandle,
-        FILE_RENAME_INFO, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-    };
-    let name = wide(&std::path::absolute(path)?);
-    let offset = mem::offset_of!(FILE_RENAME_INFO, FileName);
-    let name_bytes = u32::try_from((name.len() - 1) * mem::size_of::<u16>())
-        .map_err(|_| std::io::ErrorKind::InvalidInput)?;
-    // Cover the full C header (including tail padding) and the UTF-16 tail.
-    let size = mem::size_of::<FILE_RENAME_INFO>() + name_bytes as usize + 2;
-    let size_u32 = u32::try_from(size).map_err(|_| std::io::ErrorKind::InvalidInput)?;
-    let mut storage = vec![0usize; size.div_ceil(mem::size_of::<usize>())];
-    let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
-    // SAFETY: word-aligned, zeroed storage covers header, name and NUL. The
-    // absolute target shares the tempfile's directory/volume; handle has DELETE.
-    unsafe {
-        (*info).RootDirectory = std::ptr::null_mut();
-        (*info).FileNameLength = name_bytes; // BYTES, excluding NUL
-        std::ptr::copy_nonoverlapping(
-            name.as_ptr(),
-            storage.as_mut_ptr().cast::<u8>().add(offset).cast::<u16>(),
-            name.len(),
-        );
-    }
-    let replacing = match fs::symlink_metadata(path) {
-        Ok(_) => true,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Err(e) => return Err(e),
-    };
-    rename::rename_with_fallback(replacing, |step| {
-        let class = if step == Step::Legacy {
-            FileRenameInfo
-        } else {
-            FileRenameInfoEx
-        };
-        // SAFETY: buffer/handle remain live; MoveFileExW names include NUL and
-        // omit COPY_ALLOWED, so no non-atomic cross-volume copy can occur.
-        let result = unsafe {
-            (*info).Anonymous.Flags = 0;
-            match step {
-                Step::Posix => (*info).Anonymous.Flags = 0x1 | 0x2,
-                Step::Replace => (*info).Anonymous.Flags = 0x1,
-                Step::Legacy => (*info).Anonymous.ReplaceIfExists = true,
-                Step::Move => (),
-            }
-            if step == Step::Move {
-                let source = wide(file.path());
-                MoveFileExW(
-                    source.as_ptr(),
-                    name.as_ptr(),
-                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-                )
-            } else {
-                SetFileInformationByHandle(file.as_raw_handle(), class, info.cast(), size_u32)
-            }
-        };
-        if result == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(())
-    })?;
-    // Never let TempPath remove a future file reusing the old temporary name.
-    file.disable_cleanup(true);
     Ok(())
 }
 

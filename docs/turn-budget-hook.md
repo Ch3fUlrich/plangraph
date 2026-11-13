@@ -40,8 +40,8 @@ are counted; only Bash pre-tool events are candidates for polling refusals.
   Replacement retains an existing status file's permissions; new files keep the
   private tempfile default. The file is synced before rename and, on Unix, the
   parent status directory is synced after rename for crash durability.
-  On Windows, `storage.rs:atomic_write` creates the same-directory temporary
-  file with DELETE access; `storage.rs:replace_status` uses
+  On Windows, `windows_write.rs:atomic_write` creates the same-directory temporary
+  file with read/write creation flags and DELETE access; `windows_rename.rs` uses
   `SetFileInformationByHandle(FileRenameInfoEx)` with REPLACE_IF_EXISTS and
   POSIX_SEMANTICS. The concurrent-reader test
   retains a Rust `File::open` reader (which permits `FILE_SHARE_DELETE`) across
@@ -51,16 +51,27 @@ are counted; only Bash pre-tool events are candidates for polling refusals.
   violation and a skipped count. The Windows-only storage regression asserts
   that this failure preserves the old bytes and leaves no temporary entry, not
   that the update succeeds. There is no truncate/remove fallback or retry loop;
-  filesystems without this rename support likewise report IO failure without
-  publishing partial state. For first publication only, refusal codes 87, 1 and
+  filesystems without any supported rename report IO failure without
+  publishing partial state. For first publication and replacement, refusal codes 87, 1 and
   50 advance through Ex/POSIX -> Ex/REPLACE_IF_EXISTS -> FileRenameInfo/boolean
   ReplaceIfExists -> MoveFileExW/REPLACE_EXISTING|WRITE_THROUGH. Other errors stop.
-  Only POSIX semantics guarantee both retained snapshots and fresh opens during
-  replacement; the other steps are excluded when a destination exists, rather
-  than weakening the held-reader test. First publication has no old snapshot,
-  and the per-session lock serializes participating writers. External writers
+  POSIX is preferred for retained snapshots and fresh opens during replacement;
+  unsupported classes/flags fall back even when a destination exists. Sharing,
+  access and cross-volume errors stop without changing the destination. The
+  held-reader tests retain their original assertions. The per-session lock
+  serializes participating writers. External writers
   bypassing that lock are outside this protocol. The injected-call tests run on
   every platform; native Windows execution is still required for OS acceptance.
+  The API buffer length is `offset_of!(FILE_RENAME_INFO, FileName) + name_bytes + 2`,
+  not the padded struct size; FileNameLength excludes NUL, RootDirectory is null,
+  and legacy uses the boolean union member. Preparation also has bounded fallback:
+  absolute-path refusal canonicalizes the existing parent; DELETE-create refusal
+  creates an ordinary read/write temp and uses MoveFileExW; write/sync refusal
+  reopens the temp, permission-copy refusal uses the path API, and metadata refusal
+  queries an opened destination. Sync and permission errors on those alternate
+  paths remain fatal. Every unexpected failed call prints `atomic_write step=...`
+  with the original OS error, including recoverable failures; expected absent
+  metadata during first publication is silent. No diagnostic includes a path.
 - One model call is one distinct `assistant.message.id` in the session's JSONL
   transcript. Multiple streamed blocks or tool uses from that response count
   once. User/tool-result, progress, sidechain and missing-ID records do not count.
@@ -274,7 +285,7 @@ ignore is used. Both crate manifests explicitly identify the existing windows-sy
 features used by these paths; Windows test-target compilation checks their uses.
 
 The no-delete-sharing publication finding remains open in
-`storage.rs:replace_status`: supporting an indefinitely retained incompatible
+`windows_write.rs:replace_status`: supporting an indefinitely retained incompatible
 reader needs a different publication/read protocol, not a rename flag or retry.
 The Windows-only preservation regression is cross-compiled here, not executed;
 native Windows runtime acceptance is still required. The successful concurrent
@@ -286,3 +297,37 @@ strict native clippy for both crates, and Windows test-target compilation.
 `affected_tests.py -n 2` requires `--base`; with `--base origin/main` it selects
 the full Python suite because the existing changelog fragment is unmapped. That
 fallback is not executed under this lane's targeted-tests-only constraint.
+This fix round runs the selector with `--base origin/main -n 2 --within
+tests/test_check_changelog_docs.py tests/test_ci_select_rust_inputs.py
+tests/test_split_make_public.py --run`: these are the fragment/docs, Rust-input
+and public-diff contracts relevant to this Rust-only lane, not the Python suite.
+
+### Windows workstation acceptance (not executed on the Linux builder)
+
+Capture the native 20-run proof under an explicit run label; keep its log outside
+the repository and attach its path and run label to the workstation evidence:
+
+```powershell
+$run = "win-atomic-" + [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
+$log = Join-Path ([IO.Path]::GetTempPath()) ($run + ".log")
+"run=$run log=$log" | Tee-Object -FilePath $log
+Push-Location rust
+try {
+  1..20 | ForEach-Object {
+    "iteration=$_" | Tee-Object -FilePath $log -Append
+    cargo test -p pg-worker-core --lib turn_budget::storage -- --nocapture 2>&1 |
+      Tee-Object -FilePath $log -Append
+    if ($LASTEXITCODE -ne 0) { throw "storage tests failed" }
+    cargo test -p pg-worker-core --test turn_budget_hook -- --nocapture 2>&1 |
+      Tee-Object -FilePath $log -Append
+    if ($LASTEXITCODE -ne 0) { throw "hook tests failed" }
+  }
+} finally { Pop-Location }
+```
+
+`Absolute`, `CreateDelete`, `Permissions`, `Sync`, `Posix`, `Replace`, `Legacy`
+and `Move` identify the failing call, not just its final fallback. Fault tests use
+the production preparation path, actual files, exact publication bytes, held
+snapshots, copied permissions and exact directory entries; they are not native
+OS acceptance evidence. The previous error-87 workstation call is not known from
+this Linux run, and no Windows run ID or completed proof is claimed here.
