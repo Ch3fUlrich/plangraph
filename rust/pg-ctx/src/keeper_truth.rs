@@ -9,6 +9,8 @@ pub struct Commit {
     pub date: String,
     pub subject: String,
     pub keys: Vec<String>,
+    #[serde(default)]
+    pub prs: Vec<u64>,
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
@@ -83,6 +85,7 @@ pub fn parse_commits(log: &str) -> Result<Vec<Commit>, String> {
             .map(str::to_owned)
             .collect();
         commits.push(Commit {
+            prs: vec![],
             sha: fields[0].into(),
             date: fields[1].into(),
             subject: fields[2].into(),
@@ -92,14 +95,15 @@ pub fn parse_commits(log: &str) -> Result<Vec<Commit>, String> {
     Ok(commits)
 }
 
-fn history(repo: &Path, revision: &str) -> Result<Vec<Commit>, String> {
-    parse_commits(&run(
+pub fn history(repo: &Path, revision: &str) -> Result<Vec<Commit>, String> {
+    crate::truth_graph::history(&run(
         repo,
         "git",
         &[
             "log",
+            "--topo-order",
             "--no-show-signature",
-            "--format=%H%x1f%cI%x1f%s%x1f%(trailers:key=Plan-Item,valueonly,separator=%x1e)%x1d",
+            "--format=%H%x1f%cI%x1f%s%x1f%(trailers:key=Plan-Item,valueonly,separator=%x1e)%x1f%P%x1d",
             "--end-of-options",
             revision,
         ],

@@ -1,0 +1,10 @@
+[Unit]
+Description=List merged keeper work hourly for %i
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=pg-reconcile-merged@%i.service
+
+[Install]
+WantedBy=timers.target
