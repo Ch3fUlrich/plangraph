@@ -58,6 +58,14 @@ fn stdin_metadata_carrier(argv: &[String], prompt: &str) -> bool {
                 .unwrap_or((arg, argv.get(i + 1).map(String::as_str).unwrap_or("")));
             matches!(flag, "--title" | "--model")
                 && value.contains(prompt)
+                // Match Python: short metadata prompts must occupy whole text tokens.
+                && (prompt.len() >= 16
+                    || value.match_indices(prompt).any(|(start, _)| {
+                        let before = &value[..start];
+                        let after = &value[start + prompt.len()..];
+                        (before.is_empty() || before.ends_with(char::is_whitespace))
+                            && (after.is_empty() || after.starts_with(char::is_whitespace))
+                    }))
                 && !(flag == "--title"
                     && "plangraph-job-".contains(prompt)
                     && value.strip_prefix("plangraph-job-").is_some_and(|id| {

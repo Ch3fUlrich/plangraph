@@ -23,9 +23,12 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
         f'#!{sys.executable}\n'
         'import hashlib, json, sys\n'
         'data = sys.stdin.buffer.read()\n'
-        'prompt = json.loads(data)["message"]["content"]\n'
+        'prompt = json.loads(data)["message"]["content"].encode()\n'
+        'digest = hashlib.sha256(prompt).hexdigest()\n'
+        'digest = ":".join(digest[i:i + 8] for i in range(0, len(digest), 8))\n'
+        'proof = f"bytes={len(prompt)} sha256={digest}"\n'
         'print(json.dumps({"event":"result", "result":{"status":"SUCCESS",'
-        '"response":"VERDICT: ACCEPT " + json.dumps(list(hashlib.sha256(prompt.encode()).digest()))}}))\n'
+        '"response":"VERDICT: ACCEPT " + proof}}))\n'
     )
     binary.chmod(0o700)
     # No inherited PATH, gateway endpoint, state, credentials, or notification hook.
@@ -54,8 +57,10 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt=prompt,
             role='review', writer_families=['gpt'], wait_seconds=None)
         assert record['status'] == 'completed', record.get('error')
-        # All 256 digest bits survive as numbers; output redaction still masks hex tokens.
-        assert record['stdout_tail'] == 'VERDICT: ACCEPT ' + json.dumps(list(hashlib.sha256(prompt.encode()).digest()))
+        # Keep every digest bit, separated so output redaction cannot mistake it for a secret.
+        digest = hashlib.sha256(prompt.encode()).hexdigest()
+        digest = ':'.join(digest[i:i + 8] for i in range(0, len(digest), 8))
+        assert record['stdout_tail'].strip() == f'VERDICT: ACCEPT bytes={len(prompt.encode())} sha256={digest}'
         assert record['attempts'][0]['status'] == 'completed'
         assert runner.jobs[record['job_id']].command[0] == 'agy'
         assert runner.jobs[record['job_id']].exit_code == 0
@@ -112,10 +117,10 @@ def test_prompt_only_launcher_is_a_known_stdin_reader(monkeypatch):
     assert launch_stdin_payload(cmd, prompt, cmd[0]) == prompt.encode()
 
 
-@pytest.mark.parametrize('prompt', ['p', 'json', 'plangraph'])
+@pytest.mark.parametrize('prompt', ['p', 'json', 'plangraph', '1', 'x'])
 def test_opencode_metadata_is_not_a_short_prompt_carrier(prompt):
     cmd = ['opencode', 'run', '--format', 'json', '--model', 'fixture/model',
-           '--title', 'plangraph-job-12345678']
+           '--title', 'plangraph-job-1a2b3c4d']
     assert launch_stdin_payload(cmd, prompt, cmd[0]) == prompt.encode()
 
 
@@ -132,10 +137,11 @@ def test_extra_non_prompt_operand_is_not_duplicate_transport(harness):
 @pytest.mark.parametrize('flag', ['--title', '--model', '--format', '--output-format', '--input-format'])
 @pytest.mark.parametrize('prompt', ['tiny task', 'x', 'é', 'sk-learn'])
 @pytest.mark.parametrize('inline', [False, True])
-def test_short_metadata_prompt_carriers_refuse(harness, flag, prompt, inline):
+@pytest.mark.parametrize('embedded', [False, True])
+def test_short_metadata_prompt_carriers_refuse(harness, flag, prompt, inline, embedded):
     from plangraph.routing_support.clients import PromptTransportError
     cmd = build_command(prompt, 'fixture/model', client=harness)
-    value = 'prefix ' + prompt + ' suffix'
+    value = 'prefix ' + prompt + ' suffix' if embedded else prompt
     cmd.extend([flag + '=' + value] if inline else [flag, value])
     with pytest.raises(PromptTransportError, match='^stdin_prompt_argv_conflict:'):
         launch_stdin_payload(cmd, prompt, harness)

@@ -35,6 +35,20 @@ _PREFIX = re.compile(r'\b(?:' + '|'.join('(' + s.prefix + ')' for s in SPECS) + 
 _BODY = tuple(re.compile(s.body + '+') for s in SPECS)
 
 
+def join_shielded_assignments(text, assignment):
+    """P: join untouched values without crossing or eating a credential name."""
+    if '\ue000' in text or '\ue001' in text:
+        return text
+    names = []
+
+    def shield(m):
+        names.append(m[1])
+        return '\ue000' + str(len(names) - 1) + '\ue001' + m[0][len(m[1]):]
+
+    text = redact_wrapped(assignment.sub(shield, text))
+    return re.sub('\ue000([0-9]+)\ue001', lambda m: names[int(m[1])], text)
+
+
 def redact_wrapped(text):
     """Consume contiguous bodies across LF/CRLF, exactly like redact_wrapped.rs.
 

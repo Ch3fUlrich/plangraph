@@ -17,7 +17,8 @@
         "implement"
       ],
       "tool_mode": "tools",
-      "disabled": null
+      "disabled": null,
+      "effort": null
     },
     "expected": "agy/sample-model"
   },
@@ -39,7 +40,8 @@
         "implement"
       ],
       "tool_mode": "tools",
-      "disabled": null
+      "disabled": null,
+      "effort": null
     },
     "expected": "provider/sample-model"
   },
@@ -61,7 +63,8 @@
         "implement"
       ],
       "tool_mode": "tools",
-      "disabled": null
+      "disabled": null,
+      "effort": null
     },
     "expected": "sample-model"
   }

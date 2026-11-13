@@ -51,12 +51,12 @@ def test_role_automatically_falls_back(role, state, monkeypatch):
     card = {'estimate_tokens': 1000}
     kwargs = dict(role=role, writer_families=('claude',))
     clear = lambda *a, **k: {'state': 'ok', 'evidence': None}
-    first = plan_spawn(card, leg_reader=clear, **kwargs)
+    first = plan_spawn(card, leg_reader=clear, catalog_rows=(), **kwargs)
     assert len(first.legs) >= 2
     blocked = first.legs[0].model
     def reader(model, **kwargs):
         return {'state': state if model == blocked else 'ok', 'evidence': None}
-    fallback = plan_spawn(card, leg_reader=reader, **kwargs)
+    fallback = plan_spawn(card, leg_reader=reader, catalog_rows=(), **kwargs)
     assert fallback.legs[0] == first.legs[1]
     assert all(leg.model != blocked for leg in fallback.legs)
     assert any(s['leg'] == first.legs[0].id and s['reason'] == state
@@ -64,8 +64,11 @@ def test_role_automatically_falls_back(role, state, monkeypatch):
 
 
 def test_route_free_first_keys():
+    from dataclasses import replace
+    from plangraph.planner.legs import spawnable_legs, TIERS
+    from plangraph.planner.review_order import review_key
     from plangraph.planner.route_policy import implement_key
-    sol = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol')
+    sol = next(l for l in spawnable_legs() if l.id == 'cx-gpt-6.1-sol')
     free = replace(sol, id='free-test', tier='free', family='gemini')
     for key in (review_key, implement_key):
         assert key(free, TIERS.index('free'), 1) < key(sol, TIERS.index('subscription'), 0)
@@ -131,9 +134,12 @@ def test_catalog_tier_identity_and_route_output(tier, source):
 @pytest.mark.parametrize('role', ['implement', 'review'])
 def test_catalog_tier_survives_planning_and_cli(tier, role, monkeypatch, tmp_path, capsys):
     import json
+    from dataclasses import replace
+    from plangraph.planner.legs import spawnable_legs, TIERS
+    from plangraph.planner.routing import plan_spawn
     from plangraph.routing_support import resolver
     from plangraph.spawner.cli import main
-    base = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol')
+    base = next(l for l in spawnable_legs() if l.id == 'cx-gpt-6.1-sol')
     legs = (replace(base, roles=(role,)), replace(base, id='free-review',
             model='test/free-review', family='gemini', tier='free', roles=(role,)))
     monkeypatch.setattr('plangraph.planner.legs.DEFAULT_LEGS', legs)

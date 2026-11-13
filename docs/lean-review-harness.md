@@ -18,7 +18,7 @@ Config size does not grow the command line, including on Windows.
 Stdin task transport is allowlisted for OpenCode (including its prompt-only launcher),
 Claude print mode, agy, qodercli, Codex, Gemini and Qwen. Other helpers keep argv
 without prompt stdin; malformed known stdin modes refuse. Duplicate carriers refuse as
-`stdin_prompt_argv_conflict`, including short embedded metadata values and nonempty agy/Qoder `-p` values; unsupported operands use `stdin_prompt_command_unknown`. The shared registry and legacy `clients` exports stay aligned. Child
+`stdin_prompt_argv_conflict`, including short whole-text metadata carriers and nonempty agy/Qoder `-p` values; unsupported operands use `stdin_prompt_command_unknown`. Metadata substring detection has the same 16-byte floor in Python and Rust; shorter matches require whitespace boundaries, so `1` in `plangraph-job-1a2b3c4d` or `x` in `fixture/model` is not a carrier. The shared registry and legacy `clients` exports stay aligned. Child
 environments discard known inherited or overlaid legacy task-prompt carriers before
 launch-spec serialization, while retaining unrelated prompt-template/theme settings.
 

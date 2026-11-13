@@ -86,49 +86,28 @@ impl Runs {
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
+        if let Some(warnings) = launch.warnings {
+            base["warnings"] = json!(warnings);
+        }
+        let mut events: Vec<Value> = launch
+            .events
+            .unwrap_or_default()
+            .into_iter()
+            .map(Value::Object)
+            .collect();
+        crate::records::annotate_item(&mut base, &args["card"], &mut events);
         if !dry && crate::gitconfig_guard::writer_role(&role) {
             let dir = crate::gitconfig_guard::run_dir(state, &run_id)
                 .map_err(|_| internal("invalid run id"))?;
             match crate::gitconfig_guard::capture(&launch.cwd, &dir) {
                 Ok(armed) => base["gitconfig_guard"] = json!(armed),
                 Err(_) => {
+                    base["events"] = json!(events);
                     base["reason"] = json!("gitconfig_capture_refused");
                     return Ok(create(state, &run_id, host, base, Status::Refused)?.to_value());
                 }
             }
         }
-        if let Some(warnings) = launch.warnings {
-            base["warnings"] = json!(warnings);
-        }
-        let item = args["card"]["item"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned)
-            .or_else(|| {
-                std::env::var("PLANGRAPH_SPAWN_ITEM")
-                    .ok()
-                    .filter(|s| !s.is_empty())
-            });
-        base["item_key"] = match item {
-            Some(s) if crate::records::valid_item(&s) => json!(s),
-            Some(_) => {
-                if base.get("warnings").is_none() {
-                    base["warnings"] = json!([]);
-                }
-                base["warnings"]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(json!("invalid item_key; stored as null"));
-                Value::Null
-            }
-            None => Value::Null,
-        };
-        let events: Vec<Value> = launch
-            .events
-            .unwrap_or_default()
-            .into_iter()
-            .map(Value::Object)
-            .collect();
         let attempt_id = book_attempt(&mut base, &leg);
         if dry {
             let mut tail = format!("[dry-run] Planned command: {}", launch.argv.join(" "));
@@ -162,7 +141,7 @@ impl Runs {
                     .collect(),
                 stdin: launch.stdin.map(String::into_bytes),
                 base: base.as_object().unwrap().clone(),
-                events,
+                events: events.clone(),
                 finish: Some(Box::new(move |record, status| {
                     finish(record, status, &leg, attempt_id)
                 })),
@@ -170,6 +149,7 @@ impl Runs {
             match self.supervisor.start(spec) {
                 Ok(()) => {}
                 Err(SupervisorError::QueueFull) => {
+                    base["events"] = json!(events);
                     base["refusal"] = json!("QueueFull");
                     base["error"] = json!("run queue full");
                     base["exit_code"] = json!(2);

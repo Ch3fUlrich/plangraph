@@ -47,3 +47,38 @@ fetch, unreadable log, absent/duplicate row, missing exact `CLOSE` token, or
 failed commit proof. Locked items refuse `locked`, inactive or ineligible items
 refuse `bad_state`, and an epoch or keeper item-row change during close refuses
 `conflict`. Refused closes do not mark the item done.
+
+### Router GO close for merged reviews (D-5504/D-5506)
+
+`close_merged(p, key, decision_id, families)` closes ONE merged `in_review`
+item (`standard`/`high`) through `review_passed`, preserving the SQL locks,
+token revocation and fold of a passed review. Only the router may call it:
+
+```sh
+pg close-merged demo:A D-5504 --family google
+pg close-merged demo:H D-5504 --family google --family deepseek
+```
+
+HTTP `POST /v1/close_merged` and MCP `close_merged` take
+`{key, decision_id, families}`. The keeper resolves `merged_on_default`
+Plan-Item commits to their introducing default-ref merge's second parent
+(the PR head), never a later direct follow-up or caller-supplied head.
+Missing or unknown proof refuses `evidence_unverified: merged_on_default_missing`.
+The existing decisions index must verify the D-id; only its DECISION cell
+authorizes, beginning with `GO <head>` (8+ hex prefix, optional backticks,
+not a negated or quoted GO), uniquely bound to an actual merged PR head.
+
+Standard needs at least one known non-Anthropic seat family; high needs at
+least two distinct families, each backed by a successful finished `record_run`
+seat. Model aliases normalize. Duplicates and any recorded writer family
+(commit writers, writer model, owner/claimant/delegate and run writers) refuse.
+Checks repeat inside the write lock; changed proof-bearing item/head refuses
+`conflict`, while lease touches do not.
+
+Success writes exactly one verified `decision` evidence record
+`{id, families, merged_head, caller}` and one audit line. Every refusal is
+audited without evidence or state changes. All other states, including a
+second call on DONE, refuse `bad_state`; all other roles refuse `forbidden`.
+This is not a batch op and changes no `verdict`, `claim`, `evidence`, or `close`
+rule. The Python MCP schema table lives in `mcp_tools.py` so the stdio
+transport stays below its 400-line limit without unrelated formatting churn.

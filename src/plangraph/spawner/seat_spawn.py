@@ -6,7 +6,7 @@ an inline-only seat leg gets the card's diff inlined in its prompt.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 import os
 import time
@@ -200,6 +200,97 @@ class SeatSpawnMixin:
             return await asyncio.wait_for(work, timeout=remaining)
         except asyncio.TimeoutError:
             raise InlineDiffError('review prompt packaging deadline exceeded') from None
+
+    async def _launch_leg(self, record, chosen, *, routed=False, **options):
+        """One normal launch, at most one capped review retry; never recurse or reroute."""
+        async def launch(prompt_record, **kwargs):
+            job = await self.runner.spawn(prompt_record=prompt_record, **kwargs)
+            self._running_records[job.job_id] = record
+            process = self.runner._processes.get(job.job_id)
+            owned = getattr(self.runner, '_owned', {}).get(job.job_id, {})
+            record.update(job_id=job.job_id, pid=process.pid if process else None,
+                cwd=getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd()))
+            if routed:
+                record.update(writer_family=chosen.family,
+                    **{k: bool(v) if k == 'job_object' else v for k, v in owned.items() if k != 'pid'})
+            else:
+                record.update(pid_start=owned.get('pid_start'),
+                    **{k: v for k, v in owned.items() if k in ('job_name', 'escapees')})
+            self._save(record)
+            task = self.runner._tasks.get(job.job_id)
+            if task:
+                if not routed:
+                    await asyncio.shield(task)  # preserve base dispatch's inner/outer cancellation contract
+                else:
+                    await asyncio.wait([task])  # monitor cancellation ends the leg, not dispatch
+                    if task.cancelled():
+                        from .cancel_job import publish_cancel
+                        publish_cancel(job)
+                    elif task.exception() is not None:
+                        raise task.exception()
+            if kwargs.get('reasoning_cap') and self._path(record['run_id']).with_name('cancelled').exists():
+                job.status = 'cancelled'
+            return job
+
+        def protected(job):
+            return (job.status not in ('completed', 'failed')
+                or record.get('status') in ('cancelled', 'timeout', 'timed_out', 'stalled')
+                or getattr(job, 'survivors', ()) or record.get('reason') in
+                ('cancelled', 'timeout', 'timed_out', 'stalled', 'kill_incomplete', 'git_config_mutated', 'writer_no_changes')
+                or any(e.get('event') in ('watchdog_timeout', 'watchdog_stalled') for e in job.events))
+
+        def exhausted(job):
+            if record.get('role') != 'review' or protected(job):
+                return None
+            return next((e for e in getattr(job, 'events', ())
+                         if e.get('event') == 'opencode_reasoning_exhausted'), None)
+
+        def record_attempt(job):
+            record['attempts'].append(dict(leg=asdict(chosen), job_id=job.job_id,
+                status='failed', skip_reason='reasoning_output_limit',
+                served_model=job.served_model, served_family=job.served_family,
+                served_witness_reason=job.served_witness_reason,
+                **(dict(request_side_model=job.request_side_model, witness_kind=job.witness_kind) if routed else {}),
+                stdout_tail=job.stdout, stderr_tail=job.stderr, events=job.events))
+            record.setdefault('events', []).extend(job.events)
+
+        job = await launch(**options)
+        evidence = exhausted(job)
+        if evidence is None:
+            return job
+        if self._path(record['run_id']).with_name('cancelled').exists():
+            job.status = 'cancelled'
+            return job
+        limits = options.get('watchdog') or {}
+        remaining = record['started'] + limits.get('max_s', 1500) - time.time()
+        if evidence.get('cap_available') and not record.get('reasoning_retry') and remaining > 30:
+            record_attempt(job)
+            record['events'].append(dict(event='reasoning_capped_retry', leg=chosen.id,
+                                         thinking='disabled'))
+            record['reasoning_retry'] = 1  # durable before launching the sole retry
+            self._save(record)
+            job = await launch(**dict(options, reasoning_cap=True,
+                watchdog=dict(limits, max_s=remaining, hard_max=True)))
+            if protected(job):
+                return job
+            cap_unavailable = any(e.get('event') == 'render_refused' and
+                str(e.get('reason', '')).startswith('reasoning_output_limit:') for e in job.events)
+            if exhausted(job) is None and not cap_unavailable:
+                return job
+        job.status, job.exit_code = 'failed', job.exit_code or 1
+        job.events.append(dict(event='reasoning_output_limit'))
+        record_attempt(job)
+        if routed:
+            record.update(request_side_model=job.request_side_model, witness_kind=job.witness_kind,
+                served_model_mismatch=any(e.get('event') == 'served_model_mismatch' for e in job.events))
+        record.update(status='failed', reason='reasoning_output_limit', exit_code=job.exit_code,
+            served_model=job.served_model, served_family=job.served_family,
+            served_witness_reason=job.served_witness_reason,
+            writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
+            stdout_tail=record.get('stdout_tail', '') + job.stdout,
+            stderr_tail=record.get('stderr_tail', '') + job.stderr)
+        self._save(record)  # terminal evidence must survive even if the caller never saves again
+        return job
 
     def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
         """Bound reviews; preserve opt-in strict admission for other roles."""

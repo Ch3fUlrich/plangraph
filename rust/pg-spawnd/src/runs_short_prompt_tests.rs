@@ -61,6 +61,39 @@ fn generated_title_prefix_is_not_a_prompt_carrier() {
 }
 
 #[test]
+fn short_metadata_substrings_are_not_prompt_carriers() {
+    for (raw, flag, value) in [
+        ("1", "--title", "plangraph-job-1a2b3c4d"),
+        ("x", "--model", "fixture/model"),
+    ] {
+        for inline in [false, true] {
+            let mut argv = vec!["opencode".into(), "run".into()];
+            argv.extend(if inline {
+                vec![format!("{flag}={value}")]
+            } else {
+                vec![flag.into(), value.into()]
+            });
+            let mut launch = crate::launch::LaunchSpec {
+                argv,
+                cwd: std::env::temp_dir(),
+                env: BTreeMap::new(),
+                stdin: Some(raw.into()),
+                prompt: Some(raw.into()),
+                warnings: None,
+                events: None,
+            };
+            assert!(!crate::launch::prompt_carrier(&launch, raw), "{raw}");
+            launch.argv.extend(if inline {
+                vec![format!("{flag}={raw}")]
+            } else {
+                vec![flag.into(), raw.into()]
+            });
+            assert!(crate::launch::prompt_carrier(&launch, raw), "{raw}");
+        }
+    }
+}
+
+#[test]
 fn short_secret_embedded_in_argv_and_env_is_redacted() {
     let dir = std::env::temp_dir().join(new_run_id());
     for raw in ["sk-learn", "TOKEN=abc"] {

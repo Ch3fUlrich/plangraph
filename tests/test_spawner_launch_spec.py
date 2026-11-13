@@ -145,7 +145,8 @@ def test_real_producer_prompt_stays_out_of_env(request_data, monkeypatch, leg_id
 def test_transport_refusal_is_named(request_data, monkeypatch, harness, leg, tail):
     request_data['leg'] = {'id': leg}
     monkeypatch.setattr(spec.runner, 'build_command', lambda **kw: [harness, *tail])
-    assert invoke(request_data) == (2, '', 'stdin_prompt_flag_missing: expected -p with an empty value\n')
+    expected = 'stdin_prompt_argv_conflict: prompt already present in argv' if tail == ['-p', 'private task'] else 'stdin_prompt_flag_missing: expected -p with an empty value'
+    assert invoke(request_data) == (2, '', expected + '\n')
 
 
 def test_dry(request_data, monkeypatch):

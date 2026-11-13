@@ -124,7 +124,10 @@ def launch_stdin_payload(cmd, prompt, exe, *, is_nt=False):
                 and not (flag == '--title' and prompt in 'plangraph-job-'
                          and re.fullmatch(r'plangraph-job-[0-9a-f]{8}', value))]
     operands = positional[len(expected):] if positional[:len(expected)] == expected else positional
-    if (prompt and any(prompt in value for value in [*operands, *inline, *metadata])) or (
+    # Short metadata matches need whole whitespace-delimited text, not an ID substring.
+    metadata_carrier = any(prompt in value and (len(prompt.encode('utf-8')) >= 16 or
+        re.search(r'(?<!\S)' + re.escape(prompt) + r'(?!\S)', value)) for value in metadata)
+    if (prompt and (metadata_carrier or any(prompt in value for value in [*operands, *inline]))) or (
             harness in ('qodercli', 'agy') and any(isinstance(value, str) and value
                 and value not in value_flags for value in options.get('-p', []))):
         raise PromptTransportError('stdin_prompt_argv_conflict: prompt already present in argv')
