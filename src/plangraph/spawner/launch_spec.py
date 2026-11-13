@@ -175,7 +175,13 @@ def fresh_main():
     import subprocess
     import sys
     from .git_guard import run_tree
-    request = json.load(sys.stdin)
+    try:
+        request = json.load(sys.stdin)
+        _validate(request)
+    except (ValueError, UnicodeError, InvalidRequest) as exc:
+        key = str(exc) if isinstance(exc, InvalidRequest) else 'json'
+        sys.stderr.write(f'launch-spec failed: invalid request ({key})\n')
+        return 1
     with run_tree(request['state']) as tree:
         env = dict(os.environ, PYTHONPATH=str(Path(tree['tree_path']) / 'src'),
                    PLANGRAPH_RUN_TREE_SHA=tree['tree_sha'], PYTHONDONTWRITEBYTECODE='1')

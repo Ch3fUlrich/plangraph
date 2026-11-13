@@ -1,4 +1,6 @@
 use super::*;
+#[path = "run_tree_tests.rs"]
+mod run_tree;
 
 #[test]
 fn gitconfig_guard_only_arms_writers() {

@@ -3,6 +3,7 @@ import json
 import re
 from decimal import Decimal
 from .redact_tokens import TOKENS, JWT, redact_wrapped, join_shielded_assignments
+from .redact_tokens import redact_wide_assignments
 
 
 def _redact_pem(text):
@@ -69,6 +70,7 @@ def _redact(value, *, source):
             value = _redact_pem(value)
             value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
             if not source:
+                value = redact_wide_assignments(value, _ASSIGNMENT)
                 # P joins values behind shielded names, then main's order runs.
                 value = join_shielded_assignments(value, _ASSIGNMENT)
                 value = _redact_assignments(value)

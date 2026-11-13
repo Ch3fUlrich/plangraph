@@ -224,6 +224,7 @@ def main(argv=None):
                 result = asyncio.run(service.spawn(**payload, wait_seconds=None))
             else:
                 from .git_guard import worker_environment
+                service.fresh_tree = not getattr(service, 'injected_runner', True)
                 service.state = service.state.resolve()
                 env, context = worker_environment(service)
                 # Drain fd 2 in the child so Python AND native writes rotate, even
@@ -352,11 +353,11 @@ raise SystemExit(code)
                                          ('\n' + tail if tail else ''))
                 result = json.loads(line)
                 deadline = time.monotonic() + max(0, args.wait)
-                runs = result['seats'] if 'seats' in result else [result]   # --seats: group envelope
+                runs = result.get('seats') or result.get('writers') or [result]
                 while any(r.get('status') == 'running' for r in runs) and time.monotonic() < deadline:
                     time.sleep(min(.02, max(0, deadline - time.monotonic())))
                     runs[:] = [service.result(r['run_id']) if r.get('status') == 'running' else r for r in runs]
-                result = result if 'seats' in result else runs[0]
+                result = result if result.get('seats') or result.get('writers') else runs[0]
         elif args.verb == 'ps':
             from .remote_ps import list_runs
             result = {'runs': list_runs(service.ps()['runs'])}
@@ -380,9 +381,9 @@ raise SystemExit(code)
                     seen.add(line)
         print(json.dumps(result, indent=2))
         if isinstance(result, dict):
-            if 'seats' in result:
+            if result.get('seats') or result.get('writers'):
                 # rc 0 only while some seat can still deliver a verdict (planned, running or completed).
-                return 0 if any(r.get('status') in ('dry_run', 'running', 'completed') for r in result['seats']) else 1
+                return 0 if any(r.get('status') in ('dry_run', 'running', 'completed') for r in (result.get('seats') or result['writers'])) else 1
             if 'status' not in result:
                 return 2 if result.get('error') else 0
             code = result.get('exit_code')

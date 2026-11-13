@@ -18,7 +18,7 @@ from .item_key import annotate_item
 class SpawnService(SeatSpawnMixin):
     code_tree = staticmethod(run_tree)
     def __init__(self, runner=None, state=None, leg_reader=None):
-        self.fresh_tree = False  # Library/injected services stay in-process; MCP opts into workers.
+        self.fresh_tree, self.injected_runner = False, runner is not None  # MCP/CLI opt into trees.
         self.runner = runner or SpawnerRunner()
         self.state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE',
             Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
