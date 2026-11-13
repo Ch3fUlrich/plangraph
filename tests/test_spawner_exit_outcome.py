@@ -1,7 +1,9 @@
 import asyncio
+import json
 import os
 import sqlite3
 import subprocess
+from pathlib import Path
 import pytest
 from types import SimpleNamespace
 
@@ -9,6 +11,7 @@ from plangraph.spawner.env_redact import first_reason, harness_limit_line
 from plangraph.spawner.git_guard import writer_launch
 from plangraph.spawner.exit_outcome import fallthrough_reason, terminal_reason
 from plangraph.routing_support.leg_state import LegStateStore
+from test_spawner_seat_fallthrough import CAPTURE, attempts_by_leg, recorded_plan, replay
 
 
 QUOTA = 'error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 10h40m26s.'
@@ -180,3 +183,57 @@ def test_refusal_classification_does_not_rewrite_run_reason(role, status, reason
                           events=[dict(event='model_refusal')])
     assert fallthrough_reason(SimpleNamespace(leg_reader=None), None, job, record) is None
     assert record == dict(role=role, status=status, reason=reason)
+
+
+@pytest.mark.parametrize('prefix,evidence', [
+    ('usage_limit', 'error: usage limit reached'),
+    ('credit_limit', 'error: credits exhausted')])
+def test_review_quota_diagnostic_books_only_recognized_payload(replay, monkeypatch, prefix, evidence):
+    from plangraph.spawner import exit_outcome
+    from plangraph.spawner.leg_probe import key
+    notifications = []
+    monkeypatch.setattr(exit_outcome, 'notify_leg_refused',
+                        lambda *args: notifications.append(args[-1]))
+    assert harness_limit_line(1, '', evidence) == evidence
+    record = replay.run(succeed='agy-opus-5.5',
+                        failures={'agy-claude-opus': prefix + ': ' + evidence}, include_skips=False)
+    reason = 'harness_limit: ' + evidence
+    assert attempts_by_leg(record)['agy-claude-opus']['skip_reason'] == reason
+    assert replay.service.leg_reader.leg_status(key(replay.plan.legs[0]))['state'] == 'limited'
+    assert notifications == [reason]
+    assert replay.calls == ['agy-claude-opus', 'agy-opus-5.5']
+    assert record['status'] == 'completed' and 'reason' not in record
+
+
+def test_replay_capture_does_not_claim_an_unavailable_source_hash():
+    assert 'source_sha256' not in CAPTURE
+    fragment = Path(__file__).parents[1] / 'changelog.d/SPAWNER-SEAT-FALLTHROUGH.md'
+    assert 'hash-identified' not in fragment.read_text()
+
+
+@pytest.mark.parametrize('refusal_event', [False, True])
+@pytest.mark.parametrize('stop_status', [402, 429])
+def test_provider_stop_is_redacted_before_recording(replay, monkeypatch, refusal_event, stop_status):
+    from plangraph.spawner.env_redact import redact
+    secret = 'sk-' + 'fixture' * 6
+    body = 'rate limited for ' + secret
+    seen = []
+    save = replay.service._save
+
+    def check_before_save(record):
+        for attempt in record.get('attempts', ()):
+            stop = attempt.get('provider_response')
+            if stop:
+                seen.append(stop)
+                assert stop['body'] == redact(body)
+        assert secret not in json.dumps(record)
+        save(record)
+
+    monkeypatch.setattr(replay.service, '_save', check_before_save)
+    record = replay.run(succeed='agy-opus-5.5', provider_stop='failed', stop_status=stop_status,
+                        refusal_event=refusal_event, stop_body=body)
+    assert seen and all(stop['status'] == stop_status for stop in seen)
+    assert attempts_by_leg(record)['agy-claude-opus']['provider_response']['body'] == redact(body)
+    assert secret not in replay.service._path(record['run_id']).read_text()
+    assert replay.calls == (['agy-claude-opus'] if refusal_event else ['agy-claude-opus', 'agy-opus-5.5'])
+    assert record['status'] == ('failed' if refusal_event else 'completed')

@@ -189,6 +189,11 @@ def fallthrough_reason(service, chosen, job, record):
             for e in (*record.get('events', ()), *getattr(job, 'events', ()))):
         return None   # terminal verdicts must stop dispatch, not merely keep their name
     streams = (job.stdout, job.stderr)
+    if record.get('role') == 'review':
+        # A diagnostic label alone is not quota evidence; validate its payload.
+        streams = tuple('\n'.join(line.split(':', 1)[1].strip()
+                        if line.strip().startswith(('usage_limit:', 'credit_limit:')) else line
+                        for line in text.splitlines()) for text in streams)
     line = harness_limit_line(job.exit_code, *(map(without_progress, streams) if is_opencode(job) else streams))
     if not line and getattr(job, 'refusal', None) and job.exit_code == 7:
         # F3: a confirmed refusal (e.g. a 402 provider envelope whose reason is

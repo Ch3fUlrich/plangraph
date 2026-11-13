@@ -1,6 +1,6 @@
 """Per-host card dispatch and private run records shared by CLI and MCP."""
 from __future__ import annotations
-from .env_redact import first_reason, harness_limit_line, unavailable_reason
+from .env_redact import first_reason, harness_limit_line, redact, unavailable_reason
 from .gateway_witness import witness_order, witness_gate_legs
 from .exit_outcome import fallthrough_reason, refusal_record, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
@@ -327,7 +327,7 @@ class SpawnService(SeatSpawnMixin):
                         prompt_record=(self._path(record['run_id']).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                     if record.get('reason') == 'reasoning_output_limit':
                         break
-                    stop = self.runner.provider_responses.get(job.job_id)
+                    stop = redact(self.runner.provider_responses.get(job.job_id))
                     if terminal_record(record, job) or refusal_record(record, job):
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status if job.status in ('stalled', 'timeout') else 'failed', skip_reason=record['reason'],
                             served_model=job.served_model, served_family=job.served_family,

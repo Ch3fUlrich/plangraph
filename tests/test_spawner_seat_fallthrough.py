@@ -70,7 +70,7 @@ def replay(request, tmp_path, monkeypatch, recorded_plan):
     def run(*, succeed=None, role='review', no_fallthrough=False, duration=2,
              max_s=60, terminal=None, failures=None, limited=None, provider_stop=False,
              refusal_event=False, prepare_s=0, seat=False, include_skips=True,
-             dry_run=False, stop_status=429, refusal_reason=None, initial_s=0):
+             dry_run=False, stop_status=429, refusal_reason=None, initial_s=0, stop_body='rate limited'):
         if initial_s:
             from plangraph.spawner import run_watchdog
             original = run_watchdog.leg_limits
@@ -119,7 +119,7 @@ def replay(request, tmp_path, monkeypatch, recorded_plan):
             runner.jobs[job.job_id] = job
             if provider_stop and index == 0:
                 job.status, job.exit_code = provider_stop, 0 if provider_stop == 'completed' else 1
-                runner.provider_responses[job.job_id] = {'status': stop_status, 'body': 'rate limited'}
+                runner.provider_responses[job.job_id] = {'status': stop_status, 'body': stop_body}
             Path(kwargs['live_log']).write_text(stderr)
             clock[0] += duration
             return job
@@ -207,6 +207,11 @@ def test_ordinary_review_failure_has_no_health_side_effects(replay, monkeypatch,
     from plangraph.planner.measured_down import measured_down
     from plangraph.spawner import exit_outcome
     from plangraph.spawner.leg_probe import key
+    from plangraph.spawner.env_redact import harness_limit_line, unavailable_reason
+    assert harness_limit_line(1, '', diagnostic) is None
+    assert unavailable_reason(1, '', diagnostic) is None
+    if diagnostic.startswith(('usage_limit:', 'credit_limit:')):
+        assert harness_limit_line(1, '', diagnostic.split(':', 1)[1].strip()) is None
     effects = []
     monkeypatch.setattr(exit_outcome, '_book_failure', lambda *a: effects.append('book'))
     monkeypatch.setattr(exit_outcome, 'notify_leg_refused', lambda *a: effects.append('notify'))

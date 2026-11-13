@@ -1109,7 +1109,7 @@ def spawn_service(*args, **kwargs):
                             return
                         if self._path(run_id).with_name('cancelled').exists():   # D-3505: a CLI cancel from
                             job.status = 'cancelled'   # another process ends the run, never a fall-through leg
-                        stop = self.runner.provider_responses.get(job.job_id)
+                        stop = redact(self.runner.provider_responses.get(job.job_id))
                         if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
                             record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
                                 served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))

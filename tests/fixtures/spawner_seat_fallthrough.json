@@ -1,6 +1,5 @@
 {
   "source_run": "run-cb082cf01dc5429f8c3d74c70595b5c0",
-  "source_sha256": "c8d83deaa59b59e9b96204701ce8f607579399d46e1b0fbbef72095bc6374053",
   "projection": "Extracted from record.json: plan leg routing fields, plan skips without evidence, attempt leg IDs/status/reasons/tails, and run events. Host, paths, identity, timing and availability-store evidence omitted. Redacted max_request_tokens replaced only at test construction. Unlaunched tail outcomes are injected, not claimed as recorded executions.",
   "legs": [
     {"id":"agy-gemini-4-argon","tier":"subscription","harness":"agy","model":"gemini-4-argon-high","family":"gemini","windows":["128k","256k","1m"],"trains_on_data":false,"roles":["implement","review"],"tool_mode":"tools"},
