@@ -269,9 +269,11 @@ def fixed_catalog_rows(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
-    """UNKNOWN host; tests may opt into config with monkeypatch.setenv('AUTOOS_ROOT', ...)."""
+    """UNKNOWN host; tests opt into providers with PLANGRAPH_PROVIDERS_FILE."""
     root = tmp_path_factory.mktemp('empty-autoos')
     monkeypatch.setenv('AUTOOS_ROOT', str(root))
+    providers = tmp_path_factory.mktemp('empty-providers') / 'providers.json'
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(providers))
     state = tmp_path_factory.mktemp('xdg-state')  # never the production spawner/leg state (D-2844)
     monkeypatch.setenv('XDG_STATE_HOME', str(state))
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
