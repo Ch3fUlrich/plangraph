@@ -35,7 +35,7 @@ def test_cli_spawn_seats_prints_group(tmp_path, monkeypatch, capsys, statuses, c
     monkeypatch.setattr(cli, '_start_supervisor', _fake_supervisor(envelope, seen))
     monkeypatch.setattr(SpawnService, 'route', lambda self, *a, **kw: None)
     monkeypatch.setattr(SpawnService, 'result', lambda self, run_id: {'run_id': run_id, 'status': 'completed'})
-    rc = cli.main(['--state', str(tmp_path), 'spawn', 'x', '--card', '{"estimate_tokens":1000}',
+    rc = cli.main(['--state', str(tmp_path), 'spawn', 'x', '--card', '{"estimate_tokens":1000,"item":"demo:REVIEW"}',
                    '--role', 'review', '--writer-family', 'claude', '--seats', '--wait', '0.05'])
     out = json.loads(capsys.readouterr().out)
     assert rc == code
@@ -54,7 +54,7 @@ def test_excluded_writer_family_override_leaves_no_audit_line(tmp_path):
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-flash')
     service = SpawnService(state=tmp_path)
     with pytest.raises(SpawnRefused, match='excluded writer family'):
-        asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x', role='review', model=leg.model,
+        asyncio.run(service.spawn(card={'estimate_tokens': 100, 'item': 'demo:REVIEW'}, prompt='x', role='review', model=leg.model,
                                   writer_families=[leg.family], override_reason='operator selection', dry_run=True))
     assert not (tmp_path / 'spawn-overrides.jsonl').exists()
 
@@ -117,7 +117,7 @@ def test_opencode_go_qwen_never_a_seat(tmp_path, monkeypatch):
     assert not plan.legs and plan.skipped[0]['reason'] == 'no_verdict_seat'
     service = SpawnService(state=tmp_path)
     with pytest.raises(SpawnRefused, match='no-verdict seat'):
-        asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x', role='review',
+        asyncio.run(service.spawn(card={'estimate_tokens': 100, 'item': 'demo:REVIEW'}, prompt='x', role='review',
                                   model='opencode-go/qwen3.8-flash', writer_families=['claude'],
                                   override_reason='operator selection', dry_run=True))
     assert not (tmp_path / 'spawn-overrides.jsonl').exists()

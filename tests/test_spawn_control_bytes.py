@@ -49,7 +49,7 @@ def test_service(tmp_path, monkeypatch, hardened, dry_run, fixer):
     assert len(records) == 1
     record = json.loads(records[0].read_text())
     assert (record['status'], record['refusal'], record['exit_code']) == ('refused', 'SpawnRefused', 2)
-    assert asyncio.run(service.spawn(prompt='\x0b', role='review')) == 'launched'
+    assert asyncio.run(service.spawn(card={'item': 'demo:REVIEW'}, prompt='\x0b', role='review')) == 'launched'
 
 
 def test_launch_spec(tmp_path, monkeypatch):

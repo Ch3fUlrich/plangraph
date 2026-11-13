@@ -48,7 +48,7 @@ def test_mimo_verdict_seat_passes_review_role_to_thresholds(
     repo, base, head = _repo(tmp_path)
     chosen = next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
     plan = SpawnPlan((chosen,), (), 'operator-order', (chosen,), ())
-    card = {'estimate_tokens': 100, 'hard_first_edit': True,
+    card = {'estimate_tokens': 100, 'item': 'demo:REVIEW', 'hard_first_edit': True,
             'diff_ref': {'repo': str(repo), 'base': base, 'head': head}}
     if max_min is not None:
         card['max_min'] = max_min

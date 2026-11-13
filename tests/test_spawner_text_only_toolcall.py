@@ -46,7 +46,7 @@ def test_recorded_output_fails_and_falls_through(tmp_path, role, fallback, monke
     async def run():
         service = spawn_service(runner=Runner(), state=tmp_path / 'state')
         service._route = lambda *a, **kw: SpawnPlan(legs if fallback else legs[:1], (), 'test', (), ())
-        return await service.spawn({'estimate_tokens': 1000}, role=role, wait_seconds=None)
+        return await service.spawn({'estimate_tokens': 1000, 'item': 'demo:REVIEW'}, role=role, wait_seconds=None)
 
     record = asyncio.run(run())
     assert record['attempts'][0]['status'] == 'failed'

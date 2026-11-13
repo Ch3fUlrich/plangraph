@@ -13,6 +13,11 @@ from plangraph.spawner.exit_outcome import terminal_reason
 from plangraph.spawner.seat_spawn import SeatSpawnMixin
 
 
+@pytest.fixture(autouse=True)
+def seat_identity(monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_SPAWN_ITEM', 'demo:REVIEW')
+
+
 @pytest.mark.parametrize('text', ['', 'Looks good.', 'In prose VERDICT: pass',
                                      '```\nVERDICT: pass\n```', '> VERDICT: pass',
                                      'VERDICT: pass', 'VERDICT: fix'])

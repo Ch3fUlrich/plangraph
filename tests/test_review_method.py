@@ -148,7 +148,7 @@ def test_finding_9_mcp_review_scope_passthrough(tmp_path, monkeypatch):
     # 1. MCP passes review_scope='per-fixer' to spawn, which refuses under batch mode
     with pytest.raises(SpawnRefused, match='review_method_batch_per_fixer'):
         asyncio.run(server.call_tool('plangraph_agent_spawn', {
-            'card': {'key': 'demo:C', 'estimate_tokens': 1000},
+            'card': {'key': 'demo:C', 'item': 'demo:C', 'estimate_tokens': 1000},
             'prompt': 'review task',
             'role': 'review', 'writer_families': ['claude'],
             'review_scope': 'per-fixer',
@@ -158,7 +158,7 @@ def test_finding_9_mcp_review_scope_passthrough(tmp_path, monkeypatch):
         }))
     # 2. MCP passes review_scope='batch' to spawn, which is admitted
     res = asyncio.run(server.call_tool('plangraph_agent_spawn', {
-        'card': {'key': 'demo:C', 'estimate_tokens': 1000},
+        'card': {'key': 'demo:C', 'item': 'demo:C', 'estimate_tokens': 1000},
         'prompt': 'review task',
         'role': 'review', 'writer_families': ['claude'],
         'review_scope': 'batch',
@@ -176,14 +176,14 @@ def test_finding_9_cli_spawn_refused_audited(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
     saved_records = []
     orig_save = SpawnService.save_refusal
-    def mock_save(self, exc, role):
-        rec = orig_save(self, exc, role)
+    def mock_save(self, exc, role, **kwargs):
+        rec = orig_save(self, exc, role, **kwargs)
         saved_records.append((exc, role, rec))
         return rec
     monkeypatch.setattr(SpawnService, 'save_refusal', mock_save)
 
     code = main(['--state', str(state_dir), 'spawn', 'task',
-                 '--card', '{"key":"demo:C"}',
+                 '--card', '{"key":"demo:C","item":"demo:C"}',
                  '--role', 'review', '--review-scope', 'per-fixer', '--dry-run'])
     assert code == 2
     err = capsys.readouterr().err
@@ -210,8 +210,8 @@ def test_cli_settings_errors_audited_as_review_method_invalid(tmp_path, monkeypa
     path.write_text('{')
     monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
     calls = []
-    monkeypatch.setattr(SpawnService, 'save_refusal', lambda self, exc, role: calls.append((exc, role)))
-    rc = main(['--state', str(tmp_path / 'state'), 'spawn', 'task', '--card', '{"key":"demo:C"}',
+    monkeypatch.setattr(SpawnService, 'save_refusal', lambda self, exc, role, **kw: calls.append((exc, role)))
+    rc = main(['--state', str(tmp_path / 'state'), 'spawn', 'task', '--card', '{"key":"demo:C","item":"demo:C"}',
                '--role', 'review', '--review-scope', 'batch', '--dry-run'])
     assert rc == 2
     assert len(calls) == 1
@@ -969,7 +969,7 @@ def test_production_path_card_phase_batch_refuses_per_fixer(tmp_path, monkeypatc
     monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
     service = SpawnService(runner=object(), state=tmp_path / 'state')
     with pytest.raises(SpawnRefused) as caught:
-        asyncio.run(service.spawn(card={'key': 'demo:C', 'phase': 'demo:P',
+        asyncio.run(service.spawn(card={'key': 'demo:C', 'item': 'demo:C', 'phase': 'demo:P',
                                         'estimate_tokens': 1000},
                                   prompt='review task', role='review',
                                   review_scope='per-fixer'))

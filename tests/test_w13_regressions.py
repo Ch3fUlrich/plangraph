@@ -11,7 +11,7 @@ def test_refusal_role_and_evidence(tmp_path, monkeypatch):
         raise BenchRequired('missing', [{'leg': 'x', 'reason': 'missing'}])
     monkeypatch.setattr(service, '_spawn', refuse)
     with pytest.raises(BenchRequired):
-        asyncio.run(service.spawn({}, '', 'review'))
+        asyncio.run(service.spawn({'item': 'demo:REVIEW'}, '', 'review'))
     record = service.ps()['runs'][0]
     assert record['role'] == 'review'
     assert record['legs'] == ['x']
@@ -24,7 +24,7 @@ def test_explicit_leg_preserved(tmp_path, monkeypatch):
     from plangraph.planner.legs import DEFAULT_LEGS
     target = replace(next(l for l in DEFAULT_LEGS if l.id == 'mimo-v2.6-flash'), id='duplicate-model-leg')
     monkeypatch.setattr(legs, 'DEFAULT_LEGS', (*DEFAULT_LEGS, target))
-    result = asyncio.run(SpawnService(state=tmp_path).spawn(card={'estimate_tokens': 100}, role='review', writer_families=('gpt',), leg=target.id, override_reason='audited test override', dry_run=True))
+    result = asyncio.run(SpawnService(state=tmp_path).spawn(card={'estimate_tokens': 100, 'item': 'demo:REVIEW'}, role='review', writer_families=('gpt',), leg=target.id, override_reason='audited test override', dry_run=True))
     assert result['chosen_leg']['id'] == target.id
 
 

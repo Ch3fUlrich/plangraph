@@ -103,7 +103,7 @@ def test_route_is_terminal_only_for_claude(tmp_path, monkeypatch, harness, tool_
         async def continuation(*a):
             assert harness != 'claude', 'continued refused writer'
         monkeypatch.setattr(service, '_continue_writer', continuation)
-        return await service.spawn(card={'estimate_tokens': 1000}, prompt='review', role='review',
+        return await service.spawn(card={'estimate_tokens': 1000, 'item': 'demo:REVIEW'}, prompt='review', role='review',
                                    writer_families=('mimo',), wait_seconds=None)
     monkeypatch.setattr('shutil.which', lambda name, **k: name)
     if harness == 'opencode':

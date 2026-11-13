@@ -130,7 +130,7 @@ for _tool in TOOLS_METADATA:
             'review_scope': {'type': 'string', 'enum': ['per-fixer', 'batch']},
             'review_of': {'type': 'string'}, 'no_fallthrough': {'type': 'boolean'},
             'seats': {'type': 'boolean', 'description': 'role review: spawn every seat route picks (per writer part); inline-only legs get card.diff_ref inlined'}})
-        _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review', 'research']
+        _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review', 'judge', 'research']
         _tool['inputSchema']['properties']['model_or_combo']['description'] = 'Exceptional audited override only; requires override_reason'
 TOOLS_METADATA.extend(SESSION_TOOLS)
 

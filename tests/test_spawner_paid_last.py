@@ -8,6 +8,11 @@ from plangraph.planner.routing import SpawnRefused
 from plangraph.spawner.service import SpawnService
 
 
+@pytest.fixture(autouse=True)
+def seat_identity(monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_SPAWN_ITEM', 'demo:PAID-SEAT')
+
+
 def use_table(monkeypatch, table):
     import plangraph.planner.routing as routing
     original = routing.plan_spawn

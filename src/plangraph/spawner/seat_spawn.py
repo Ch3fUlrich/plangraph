@@ -152,6 +152,18 @@ class SeatSpawnMixin:
             bound = inspect.signature(self._spawn).bind(*args, **kwargs)
             options = dict(bound.arguments)
             card = options.get('card')
+            from .item_key import admit_seat
+            if options.get('role') in ('review', 'judge'):
+                card = options['card'] = await asyncio.to_thread(admit_seat, card, options['role'])
+                options['role'] = 'review'  # judge is a review seat, including routing/family fences
+                if len(args) > 2:
+                    args = (*args[:2], 'review', *args[3:])
+                else:
+                    kwargs['role'] = 'review'
+                if args:
+                    args = (card, *args[1:])
+                else:
+                    kwargs['card'] = card
             from .prompt_guard import admit_prompt
             from plangraph.planner.routing import SpawnRefused
             if options.get('role', 'implement') == 'implement':

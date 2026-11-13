@@ -106,6 +106,7 @@
      "enum": [
       "implement",
       "review",
+      "judge",
       "research"
      ],
      "type": "string"

@@ -66,7 +66,7 @@ def test_render_unresolved_base_url_fails_closed(tmp_path, monkeypatch):
 
     async def run():
         record = await service.spawn(
-            card={"estimate_tokens": 1000},
+            card={"estimate_tokens": 1000, "item": "demo:REVIEW"},
             role="review", writer_families=("gpt",),
             leg="mimo-v2.6-pro", model="mimo/mimo-v2.6-pro",
             override_reason="testing manual model override",

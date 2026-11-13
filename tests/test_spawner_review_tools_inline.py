@@ -193,7 +193,7 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     monkeypatch.setattr(service, '_continue_writer', continuation)
     monkeypatch.setattr(service, '_route', lambda *a, **kw: plan)
     options = {'leg': chosen.id, 'override_reason': 'hermetic reasoning retry test'} if dispatch == 'explicit' else {}
-    card = {'estimate_tokens': 1000, **({'diff_ref': diff_ref} if role == 'review' else {})}
+    card = {'estimate_tokens': 1000, 'item': 'demo:REVIEW', **({'diff_ref': diff_ref} if role == 'review' else {})}
     record = asyncio.run(service.spawn(card, 'Review this change', role=role,
                                      writer_families=['deepseek'], wait_seconds=None, **options))
     assert len(calls) == launches

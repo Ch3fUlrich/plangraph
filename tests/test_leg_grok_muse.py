@@ -124,7 +124,7 @@ def test_grok_never_automatic_even_if_lifted(role):
 
 def test_explicit_grok_requires_reason_and_still_works(tmp_path):
     svc = SpawnService(SpawnerRunner(), state=tmp_path)
-    kwargs = dict(card=CARD, prompt="Review public material", role="review",
+    kwargs = dict(card=dict(CARD, item='demo:REVIEW'), prompt="Review public material", role="review",
                   writer_families=("gpt",), leg=GROK, dry_run=True)
     with pytest.raises(SpawnRefused, match="override"):
         asyncio.run(svc.spawn(**kwargs))
@@ -144,7 +144,7 @@ def test_muse_fence_does_not_ban_other_meta_families(family, role):
 @pytest.mark.parametrize("mid", MUSE)
 def test_explicit_muse_requires_reason_and_still_works(tmp_path, mid):
     svc = SpawnService(SpawnerRunner(), state=tmp_path)
-    kwargs = dict(card=CARD, prompt="Review public material", role="review",
+    kwargs = dict(card=dict(CARD, item='demo:REVIEW'), prompt="Review public material", role="review",
                   writer_families=("gpt",), leg=mid, dry_run=True)
     with pytest.raises(SpawnRefused, match="override"):
         asyncio.run(svc.spawn(**kwargs))

@@ -27,6 +27,7 @@ from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _r
 
 @pytest.fixture(autouse=True)
 def fixed_seat_table(monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_SPAWN_ITEM', 'demo:REVIEW')
     # Exercise seat transport/failures independently of provider credits.
     legs = tuple(replace(leg, disabled=None) if leg.id == "qodercli-qwen3.8-flash"
                  else leg for leg in DEFAULT_LEGS)
@@ -93,7 +94,15 @@ def test_inline_diff_failure_falls_to_next_leg(tmp_path, monkeypatch, pre_d3552_
     from plangraph.spawner.mcp import MCPSpawnerServer
     runner = _Runner()
     server = MCPSpawnerServer(runner, state=tmp_path / "state")
-    card = dict(HIGH, diff_ref={"repo": str(tmp_path / "nope"), "base": "a1", "head": "b2"})
+    repo, base, head = _repo(tmp_path)
+    card = dict(HIGH, diff_ref={"repo": str(repo), "base": base, "head": head})
+    from plangraph.spawner.inline_diff import InlineDiffError
+    real_prompt = server.service._leg_prompt
+    def fail_inline(prompt, card, role, leg, *args, **kwargs):
+        if leg.tool_mode == 'inline-only':
+            raise InlineDiffError('test diff reader failure')
+        return real_prompt(prompt, card, role, leg, *args, **kwargs)
+    monkeypatch.setattr(server.service, '_leg_prompt', fail_inline)
     out = asyncio.run(server.call_tool("plangraph_agent_spawn", {
         "card": card, "prompt": "review", "role": "review", "writer_families": ["claude"],
         "seats": True, "dry_run": True}))
@@ -276,7 +285,9 @@ def test_spares_use_keeper_families(tmp_path, monkeypatch):
     base = plan_spawn(HIGH, role="review", writer_families=("claude",))
     plan = replace(base, legs=(luna, qwen, oss, mimo), review_seats=(luna, qwen), error=None)
     monkeypatch.setattr(svc, "_route", lambda *a, **k: plan)
-    out = asyncio.run(svc.spawn(card=HIGH, prompt="r", role="review", writer_families=("claude",),
+    repo, start, head = _repo(tmp_path)
+    card = dict(HIGH, diff_ref=dict(repo=str(repo), base=start, head=head))
+    out = asyncio.run(svc.spawn(card=card, prompt="r", role="review", writer_families=("claude",),
                                 seats=True, dry_run=True))
     legs = [leg["id"] for run in out["seats"] for leg in run["plan"]["legs"]]
     assert "openai-spare" not in legs and legs.count("mimo-v2.6-flash") == 1
@@ -310,7 +321,7 @@ def test_review_without_writer_family_is_refused(tmp_path, monkeypatch, model):
     # Round-3 qwen MED: no writer named = no family excluded; refuse, fail closed.
     svc = _service(tmp_path / "state", monkeypatch)
     with pytest.raises(SpawnRefused, match="review needs a writer family"):
-        asyncio.run(svc.spawn(card=RCARD | HIGH, prompt="r", role="review", model=model,
+        asyncio.run(svc.spawn(card=CARD, prompt="r", role="review", model=model,
                               override_reason="registry seat test" if model else None, dry_run=True))
     # Round-4 qwen LOW: the refusal comes before the override audit line.
     assert not (tmp_path / "state" / "spawn-overrides.jsonl").exists()
@@ -344,8 +355,10 @@ def test_base_exception_seat_still_saves_the_group(tmp_path, monkeypatch):
             raise Stop()
         return await original(self, *a, _plan=_plan, **kw)
     monkeypatch.setattr(SpawnService, "_spawn", flaky)
+    repo, base, head = _repo(tmp_path)
+    card = dict(HIGH, diff_ref=dict(repo=str(repo), base=base, head=head))
     with pytest.raises(Stop):
-        asyncio.run(svc.spawn(card=RCARD | HIGH, prompt="r", role="review", writer_families=("claude",),
+        asyncio.run(svc.spawn(card=card, prompt="r", role="review", writer_families=("claude",),
                               seats=True, dry_run=True))
     (saved,) = [json.loads(p.read_text()) for p in (tmp_path / "state" / "seat-groups").iterdir()]
     assert len(saved["runs"]) == 1

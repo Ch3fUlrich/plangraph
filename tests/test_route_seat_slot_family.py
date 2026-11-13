@@ -13,6 +13,7 @@ from plangraph.planner.seats import seat_family
 from plangraph.spawner.runner import spawn_service
 from plangraph.spawner.service import SpawnService
 from registry_route_util import _Runner
+from test_seat_spawn_admission import seat_setup
 
 
 def leg(name):
@@ -42,10 +43,14 @@ class Runner(_Runner):
 
 
 @pytest.fixture
-def service(tmp_path, monkeypatch):
+def service(tmp_path, monkeypatch, seat_setup):
+    repo, base, git = seat_setup
+    git('commit', '--allow-empty', '-qm', 'head')
+    monkeypatch.setitem(CARD, 'item', 'demo:REVIEW')
+    monkeypatch.setitem(CARD, 'diff_ref', dict(repo=str(repo), base=base, head='HEAD'))
     monkeypatch.setitem(routing.plan_spawn.__kwdefaults__, 'legs', (GEMINI, LUNA, SONNET, OPUS))
     monkeypatch.setitem(routing.plan_spawn.__kwdefaults__, 'catalog_rows', ())
-    # Exercise the real seat planner and dispatch, without Git, probes or a child.
+    # Exercise real admission/planning with local Git, without probes or a child.
     monkeypatch.setattr(SpawnService, '_leg_prompt', lambda *a, **k: 'review')
     store = SimpleNamespace(leg_status=lambda *a, **k: dict(state='ok', evidence=None))
     reader = SimpleNamespace(enabled=True, store=store, leg_status=store.leg_status,

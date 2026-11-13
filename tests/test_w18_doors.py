@@ -119,7 +119,7 @@ def test_admission_entry_matrix(tmp_path, monkeypatch, capsys, entry, kind):
                          {'active': kind != 'inactive', 'available': 1}))])
     chosen = replace(legs.DEFAULT_LEGS[0], model=model, disabled=None, roles=('implement',))
     monkeypatch.setattr(legs, 'DEFAULT_LEGS', (chosen,))
-    card = {'estimate_tokens': 100}
+    card = {'estimate_tokens': 100, 'item': 'demo:REVIEW'}
     options = dict(card=card, prompt='test', role='review', writer_families=('gpt',), override_reason='explicit operator selection', dry_run=True)
     def invoke():
         if entry == 'route':
@@ -132,7 +132,7 @@ def test_admission_entry_matrix(tmp_path, monkeypatch, capsys, entry, kind):
             return asyncio.run(spawn_service(state=tmp_path).spawn(**options,
                 **({'leg': chosen.id} if entry == 'leg' else {'model': model})))
         if entry == 'cli':
-            return main(['--state', str(tmp_path), 'spawn', 'test', '--card', '{"estimate_tokens":100}',
+            return main(['--state', str(tmp_path), 'spawn', 'test', '--card', '{"estimate_tokens":100,"item":"demo:REVIEW"}',
                          '--role', 'review', '--writer-family', 'gpt',
                          '--model', model, '--override-reason', options['override_reason'], '--dry-run'])
         return asyncio.run(MCPSpawnerServer(state=tmp_path).handle_rpc_request({

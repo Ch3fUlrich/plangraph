@@ -51,7 +51,7 @@ def test_catalog_db_errors_use_registered_offline_rows(tmp_path, monkeypatch, ca
             asyncio.run(SpawnerRunner().spawn('test', model_or_combo='unregistered/model', dry_run=True))
         from plangraph.spawner.cli import main
         for model, rc in [('mimo/mimo-v2.6-flash', 0), ('unregistered/model', 2)]:
-            assert main(['--state', str(tmp_path), 'spawn', 'test', '--card', '{"estimate_tokens":100}',
+            assert main(['--state', str(tmp_path), 'spawn', 'test', '--card', '{"estimate_tokens":100,"item":"demo:REVIEW"}',
                          '--role', 'review', '--writer-family', 'gpt',
                          '--model', model, '--override-reason', 'test fallback admission', '--dry-run']) == rc
     finally:

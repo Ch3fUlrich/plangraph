@@ -85,7 +85,7 @@ def test_override_writer_family_excluded(tmp_path):
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-flash')
     service = spawn_service(state=tmp_path)
     with pytest.raises(SpawnRefused, match='excluded writer family'):
-        asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x', role='review',
+        asyncio.run(service.spawn(card={'estimate_tokens': 100, 'item': 'demo:REVIEW'}, prompt='x', role='review',
             model=leg.model, writer_families=[leg.family], override_reason='operator selection', dry_run=True))
 
 

@@ -118,13 +118,13 @@ def _svc(tmp_path):
 @pytest.mark.parametrize('leg_id', ['agy-claude-sonnet-5-5-high', 'agy-claude-opus-5-5-high'])
 def test_explicit_claude_review_seat(tmp_path, leg_id):
     result = asyncio.run(_svc(tmp_path).spawn(
-        card={'estimate_tokens': 20000}, prompt='Review public code', role='review',
+        card={'estimate_tokens': 20000, 'item': 'demo:REVIEW'}, prompt='Review public code', role='review',
         writer_families=('gpt',), leg=leg_id, dry_run=True,
         override_reason='operator 2026-11-09 claude seats'))
     assert result['chosen_leg']['id'] == leg_id
     with pytest.raises(SpawnRefused, match='excluded writer family'):
         asyncio.run(_svc(tmp_path).spawn(
-            card={'estimate_tokens': 20000}, prompt='Review public code', role='review',
+            card={'estimate_tokens': 20000, 'item': 'demo:REVIEW'}, prompt='Review public code', role='review',
             writer_families=('claude',), leg=leg_id, dry_run=True,
             override_reason='operator 2026-11-09 claude seats'))
 
@@ -166,7 +166,7 @@ def test_claude_seat_refused_for_a_claude_run_named_by_review_of(tmp_path, monke
     monkeypatch.setattr(svc, 'result', lambda *a, **k: {'given_writer_families': ['claude'],
                                                         'writer_family': 'claude'})
     with pytest.raises(SpawnRefused, match='excluded writer family'):
-        asyncio.run(svc.spawn(card={'estimate_tokens': 20000}, prompt='Review public code',
+        asyncio.run(svc.spawn(card={'estimate_tokens': 20000, 'item': 'demo:REVIEW'}, prompt='Review public code',
                               role='review', review_of='run-' + '0' * 32,
                               leg='agy-claude-opus-5-5-high', dry_run=True,
                               override_reason='operator 2026-11-09 claude seats'))

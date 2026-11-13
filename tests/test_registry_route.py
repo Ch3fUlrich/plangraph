@@ -104,7 +104,7 @@ def test_override_with_catalog_harness_spawns(tmp_path, monkeypatch):
                     ("opencode-go/gemini-4-argon",))
     db.conn.commit()
     svc = _service(tmp_path, monkeypatch, db)
-    record = asyncio.run(svc.spawn(card=CARD, prompt="task", role="review", writer_families=("gpt",),
+    record = asyncio.run(svc.spawn(card=dict(CARD, item='demo:REVIEW'), prompt="task", role="review", writer_families=("gpt",),
                                    model="opencode-go/gemini-4-argon",
                                    override_reason="registry route test", dry_run=True))
     assert record["status"] == "dry_run"
@@ -119,7 +119,7 @@ def test_override_without_catalog_harness_is_refused(tmp_path, monkeypatch):
     db.conn.commit()
     svc = _service(tmp_path, monkeypatch, db)
     with pytest.raises(SpawnRefused, match="override model missing registry data: harness"):
-        asyncio.run(svc.spawn(card=CARD, prompt="task", role="review", writer_families=("gpt",),
+        asyncio.run(svc.spawn(card=dict(CARD, item='demo:REVIEW'), prompt="task", role="review", writer_families=("gpt",),
                               model="claude/claude-haiku-4-5",
                               override_reason="registry route test", dry_run=True))
 

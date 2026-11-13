@@ -11,6 +11,7 @@ import time
 import uuid
 _start_supervisor = subprocess.Popen
 from .runner import spawn_service as SpawnService, redact_output
+from .item_key import admit_seat
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
 from plangraph.routing_support import background_process_options
 
@@ -98,7 +99,6 @@ def _supervise():
 def _card(value):
     return json.loads(Path(value[1:]).read_text(encoding='utf-8') if value.startswith('@') else value)
 
-
 def main(argv=None):
     if (argv if argv is not None else sys.argv[1:]) == ['--supervise']:
         return _supervise()
@@ -110,7 +110,7 @@ def main(argv=None):
         p.add_argument('--card', type=_card)
         p.add_argument('--require-bench', action='store_true')
         p.add_argument('--bench-db', action='append')
-        p.add_argument('--role', choices=('implement', 'review', 'orchestrate', 'research'), default='implement')
+        p.add_argument('--role', choices=('implement', 'review', 'judge', 'orchestrate', 'research'), default='implement')
         p.add_argument('--writer-family', action='append', default=[])
         p.add_argument('--review-of')
         p.add_argument('--json', action='store_true')
@@ -205,12 +205,13 @@ def main(argv=None):
                 no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
             from plangraph.settings import admit_review_scope
             try:
+                payload['card'] = args.card = admit_seat(args.card, args.role)
+                payload['role'] = args.role = 'review' if args.role == 'judge' else args.role
                 admit_review_scope(args.card, args.role, args.review_scope)
             except SpawnRefused as exc:
-                service.save_refusal(exc, args.role)
+                service.save_refusal(exc, args.role, card=args.card)
                 raise
-            # Explicit model/leg overrides intentionally bypass routing, not admission.
-            if not args.model and not args.leg:
+            if not args.model and not args.leg:  # Overrides bypass routing, not admission.
                 # service.route saves the refusal record itself (one record per route error).
                 service.route(args.card, args.role, args.writer_family, args.review_of, **options)
             if args.dry_run:
@@ -394,7 +395,6 @@ raise SystemExit(code)
     except (ValueError, KeyError, OSError, SpawnRefused) as exc:
         print(((f'{args.run_id}: ' if hasattr(args, 'run_id') else '') + type(exc).__name__) if isinstance(exc, PermissionError) else str(exc), file=sys.stderr)
         return 3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1
-
 
 if __name__ == '__main__':
     raise SystemExit(main())

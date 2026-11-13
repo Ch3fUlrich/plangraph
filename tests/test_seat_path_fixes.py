@@ -165,7 +165,7 @@ def test_inline_only_plain_card_dry_run_path_parity(monkeypatch, tmp_path):
         return None
 
     monkeypatch.setattr("plangraph.spawner.leg_probe.before_launch", no_probe)
-    card = {"estimate_tokens": 100}
+    card = {"estimate_tokens": 100, "item": "demo:REVIEW"}
 
     async def check():
         previews = []

@@ -273,17 +273,18 @@ def test_spawn_missing_seat_identity_is_persisted(tmp_path, monkeypatch, dispatc
 
     monkeypatch.setattr(service.runner, 'spawn', completed)
     monkeypatch.setattr(service, '_prepare_leg_prompt', prepare)
-    result = asyncio.run(service.spawn(card={'estimate_tokens': 100},
-        prompt=f'Review {KEY} now', role='review', writer_families=('google',),
-        dry_run=dry_run, wait_seconds=5))
-    assert result['status'] == ('dry_run' if dry_run else 'completed')
-    assert result['exit_code'] == 0
-    assert len(service.runner.calls) == 1
-    assert service.runner.calls[0]['dry_run'] is dry_run
+    with pytest.raises(SpawnRefused, match='seat_item_missing: card needs item_key'):
+        asyncio.run(service.spawn(card={'estimate_tokens': 100},
+            prompt=f'Review {KEY} now', role='review', writer_families=('google',),
+            dry_run=dry_run, wait_seconds=5))
+    result, = service.ps()['runs']
+    assert result['status'] == 'refused'
+    assert result['exit_code'] == 2
+    assert service.runner.calls == []
     assert result['role'] == 'review'
     assert result['item_key'] is None
     assert result['events'].count(MISSING_EVENT) == 1
-    assert launch_event in result['events']
+    assert launch_event not in result['events']
     stored = json.loads(service._path(result['run_id']).read_text())
     assert stored['role'] == 'review'
     assert stored['item_key'] is None

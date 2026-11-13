@@ -1,0 +1,1 @@
+- Refuse Python CLI/MCP review and judge spawns without valid item identity before launch or overflow; derive missing identity from the reviewed head's unique valid Plan-Item trailer and retain it in the seat record. Review ranges resolving to the same commit now refuse before a run starts; writer behavior and mismatched-key posting refusals are unchanged (D-5648, D-5658 part B).

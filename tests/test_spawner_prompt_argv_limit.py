@@ -54,7 +54,7 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
         service = spawn_service(runner, state=tmp_path / 'state', completion_sink=sink, keeper_sink=sink)
         monkeypatch.setattr(service, 'admit_spawn', lambda *a, **kw: None)
         monkeypatch.setattr(service, '_route', lambda *a, **kw: SpawnPlan((leg,), (), 'test', (), ()))
-        record = await service.spawn(card={'estimate_tokens': 1000}, prompt=prompt,
+        record = await service.spawn(card={'estimate_tokens': 1000, 'item': 'demo:REVIEW'}, prompt=prompt,
             role='review', writer_families=['gpt'], wait_seconds=None)
         assert record['status'] == 'completed', record.get('error')
         # Keep every digest bit, separated so output redaction cannot mistake it for a secret.
@@ -135,7 +135,7 @@ def test_runner_transport_refusal_is_named(tmp_path, monkeypatch, harness, tail,
         service.completion_sink = service.keeper_sink = sink
         monkeypatch.setattr(service, 'admit_spawn', lambda *a, **kw: None)
         monkeypatch.setattr(service, '_route', lambda *a, **kw: SpawnPlan((leg,), (), 'test', (), ()))
-        record = await service.spawn(card={'estimate_tokens': 100}, prompt='private task',
+        record = await service.spawn(card={'estimate_tokens': 100, 'item': 'demo:REVIEW'}, prompt='private task',
             role='review', writer_families=['gpt'], wait_seconds=None)
         assert 'job_id' in record, record
         job = runner.jobs[record['job_id']]
@@ -164,7 +164,7 @@ def test_over_leg_limit_has_named_record_reason(tmp_path, monkeypatch, routed):
         service = spawn_service(state=tmp_path) if routed else base.SpawnService(state=tmp_path)
         service.runner.default_cwd = str(tmp_path)
         monkeypatch.setattr(service, '_route', lambda *a, **kw: SpawnPlan((leg,), (), 'test', (), ()))
-        record = await service.spawn(card={'estimate_tokens': 100}, prompt='x' * 301,
+        record = await service.spawn(card={'estimate_tokens': 100, 'item': 'demo:REVIEW'}, prompt='x' * 301,
             role='review', writer_families=['gpt'], wait_seconds=None)
         assert record['status'] == 'failed'
         assert record['reason'] == 'prompt_too_large'

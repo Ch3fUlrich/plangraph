@@ -55,7 +55,7 @@ def test_fallback_refusal_preserves_original_and_placement(orchestration, monkey
 
     monkeypatch.setattr(service, '_spawn', refuse)
     with pytest.raises(SpawnRefused) as caught:
-        asyncio.run(service.spawn({'estimate_tokens': 100}, 'task', 'review'))
+        asyncio.run(service.spawn({'estimate_tokens': 100, 'item': 'demo:REVIEW'}, 'task', 'review'))
     assert caught.value is original
     records = service.ps()['runs']
     assert len(records) == 1

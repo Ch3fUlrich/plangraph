@@ -64,7 +64,7 @@ def test_given_family_and_review_of_review(tmp_path, monkeypatch, dispatch):
     monkeypatch.setattr(service, '_route', lambda *a, **kw: plan)
     monkeypatch.setattr(service, '_leg_prompt', lambda *a, **kw: 'review')
     monkeypatch.setattr('plangraph.spawner.resolver.plan_for_launch_async', _identity)
-    record = asyncio.run(service.spawn(card=CARD, role='review', writer_families=['gpt'], dry_run=True))
+    record = asyncio.run(service.spawn(card=dict(CARD, item='demo:REVIEW'), role='review', writer_families=['gpt'], dry_run=True))
     assert record['given_writer_families'] == ['gpt']
     assert record['writer_family'] == 'qwen'
     seen = []
@@ -112,7 +112,7 @@ def test_review_family_overlap_and_empty_fallback(tmp_path, monkeypatch, dispatc
     source = asyncio.run(service.spawn(card=CARD, writer_families=families, dry_run=True))
     source.update(given_writer_families=families, writer_family='gpt')
     service._save(source)
-    record = asyncio.run(service.spawn(card=CARD, role='review', review_of=source['run_id'], dry_run=True))
+    record = asyncio.run(service.spawn(card=dict(CARD, item='demo:REVIEW'), role='review', review_of=source['run_id'], dry_run=True))
     assert record['given_writer_families'] == (families or ['gpt'])
     from plangraph.planner import routing
     seen = []

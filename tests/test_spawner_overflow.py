@@ -347,7 +347,7 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
     host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src=str(source))
     options = ['--role', 'review', '--leg', 'agy-gemini-3.8-flash', '--writer-family', 'gpt',
                '--override-reason', 'hermetic prompt transport regression', '--dry-run', '--json']
-    record = o.remote_spawn('invented', host, {'estimate_tokens': 1000}, prompt, options)
+    record = o.remote_spawn('invented', host, {'estimate_tokens': 1000, 'item': 'demo:REVIEW'}, prompt, options)
     assert received == [record]
     assert record['status'] == 'dry_run'
     assert record['prompt_sha256'] == hashlib.sha256(prompt.encode('utf-8')).hexdigest()
