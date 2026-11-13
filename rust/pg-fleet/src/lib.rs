@@ -1,7 +1,16 @@
+pub mod carried;
+pub mod digest;
+pub mod digest_card;
+pub mod digest_git;
+pub mod digest_keeper;
+pub mod digest_sources;
+pub mod digest_text;
 pub mod fleet_name;
 pub mod handoff;
+pub mod keeper_wrapper;
 pub mod path_check;
 pub mod process;
+pub mod projects;
 pub mod question_count;
 
 /// The private data checkout remains the source of operational data during cutover.
