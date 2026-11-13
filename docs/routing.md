@@ -40,6 +40,32 @@ plan, saved `chosen_leg`, and attempt rows; omitted or explicit `null` effort
 stays `null`. All other validated leg fields are retained too. The per-run
 renderer declares cx effort models; see [SPAWNER.md](SPAWNER.md#card-driven-routing-core).
 
+## Free review legs (D-5743, slice 1)
+
+For a GPT writer, the review route includes `opencode/mimo-v2.6-flash-free`
+(`mimo`), `opencode/big-pickle` (`glm`), `opencode-go/longcat-2.5-free`
+(`longcat`), and `console-openrouter/openrouter/free` (`openrouter`). Each keeps
+its own family. Existing cost-tier ordering puts every eligible free review leg
+before subscription and paid legs, including when benchmark data is present.
+The exact Big Pickle review leg is lifted from GLM's off switch; other GLM legs,
+implementation policy, family bans, paused harnesses and writer-family fences
+remain unchanged. The three new registrations are review-only and do not widen
+role-neutral keeper readiness. Free MiMo is an exact path exception, not a
+direct-MiMo gateway-rendering exemption. No paid leg or Argon role changes here.
+New legs leave privacy unknown (`null`), which fails closed on sensitive cards;
+no training-policy boolean is assigned. Sourced classification is slice 3. These are offline route tests,
+not evidence of serving availability or live review verdicts (slice 4).
+
+Slice 1 validation gaps (not waived):
+- `tests/test_benchmark_data_contract.py:218` requires sourced benchmark rows for
+  the three new registrations (also exercised by the partial-resolution test at
+  line 364). They are absent; no seed, pending ceiling or contract was weakened.
+- `tests/test_leg_served_ids.py:20` has a measured 2026-11-06 Go allowlist without
+  LongCat. This run could not obtain a successful model listing; the historical
+  witness is unchanged rather than inventing serving or verdict evidence.
+- Broad affected subsets exceeded their command time limits. The whole suite
+  was not run. Targeted route and policy checks do not establish live verdicts.
+
 ## Replan-0438 CI reconciliation
 
 All existing test names and #763 checks remain. The lane diff was searched for

@@ -55,7 +55,7 @@ class Leg:
     family: str
     windows: tuple[str, ...]
     max_request_tokens: int
-    trains_on_data: bool
+    trains_on_data: bool | None
     claude_family: bool = False
     note: str = ""
     roles: tuple[str, ...] = ("orchestrate",)
@@ -175,6 +175,20 @@ READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'i
                                    'D-3828: writer disabled; no retained review or orchestrate role'
                                    if leg.roles == ('implement',) else None))
                        if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
+
+# D-5743: review-only additions must not widen keeper readiness or writer roles.
+# Unknown privacy is not a training-policy claim; sourced values belong to slice 3.
+_free_review = _replace(next(leg for leg in DEFAULT_LEGS if leg.id == "opencode-big-pickle"),
+                        trains_on_data=None)
+DEFAULT_LEGS = tuple(candidate for leg in DEFAULT_LEGS for candidate in (
+    (_replace(_free_review, id="opencode-mimo-v2.6-flash-free",
+              model="opencode/mimo-v2.6-flash-free", family="mimo", roles=("review",)),
+     leg,
+     _replace(_free_review, id="opencode-go-longcat-2.5-free",
+              model="opencode-go/longcat-2.5-free", family="longcat", roles=("review",)),
+     _replace(_free_review, id="console-openrouter-free",
+              model="console-openrouter/openrouter/free", family="openrouter", roles=("review",)))
+    if leg.id == _free_review.id else (leg,)))
 
 # D-5206/D-5212 change writer priority, not the registered fallback roles.
 WRITER_ORDER: tuple[str, ...] = (
@@ -303,6 +317,8 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         if not _is_int(mrt) or mrt <= 0:
             problems.append(f"{where}.max_request_tokens: must be a positive int")
     for key in ("trains_on_data", "claude_family"):
+        if key == "trains_on_data" and raw.get(key) is None:
+            continue
         if key in raw and not isinstance(raw[key], bool):
             problems.append(f"{where}.{key}: must be a bool")
     if len(problems) > start:

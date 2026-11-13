@@ -41,5 +41,23 @@ def test_glm_never_a_review_option():
     # The low-level route_card orders eligible legs; plan_spawn applies policy.
     route = plan_spawn({'estimate_tokens': 1000}, role='review',
                        writer_families=('gpt',), policy=policy, catalog_rows=())
-    assert 'glm' not in {leg.family for leg in route.legs}
-    assert {s['leg']: s['reason'] for s in route.skipped}['opencode-big-pickle'] == 'off_family'
+    assert [leg.id for leg in route.legs if leg.family == 'glm'] == ['opencode-big-pickle']
+    reasons = {s['leg']: s['reason'] for s in route.skipped}
+    assert 'opencode-big-pickle' not in reasons
+    assert reasons['opencode-go-glm-5.2'].startswith('disabled: D-3605')
+    assert reasons['opencode-glm-5.3-flash-free'].startswith('disabled: D-4196')
+
+
+def test_big_pickle_review_lift_does_not_bypass_other_policy_guards():
+    from plangraph.planner.route_policy import RoutePolicy
+    pickle = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-big-pickle')
+    policy = load_route_policy(Path('src/plangraph/planner/route_policy.json'))
+    assert policy.skip_reason(pickle, 'review') is None
+    for role in ('implement', 'orchestrate'):
+        assert policy.skip_reason(pickle, role) == 'off_family'
+    assert RoutePolicy(banned_families=('glm',)).skip_reason(pickle, 'review') == 'banned_family'
+    assert RoutePolicy(off_families=('glm',), paused_harnesses={'opencode': ()}).skip_reason(
+        pickle, 'review') == 'paused_harness'
+    for other in (replace(pickle, id='other-glm'), replace(pickle, model='opencode/other-glm'),
+                  replace(pickle, tier='subscription')):
+        assert policy.skip_reason(other, 'review') == 'off_family'

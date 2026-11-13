@@ -148,7 +148,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
             why = "unavailable"
         elif leg.family in exclude_fams:
             why = "excluded_family"
-        elif no_train and leg.trains_on_data:
+        elif no_train and leg.trains_on_data is not False:
             why = "trains_on_data"
         elif window_class not in leg.windows:
             why = "window_class"

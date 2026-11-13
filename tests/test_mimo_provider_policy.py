@@ -10,14 +10,19 @@ import pytest
 from plangraph.spawner.mimo_policy import MimoPathError, check_mimo_path
 
 
-GOOD = ("mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro")
+GOOD = ("mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro", "opencode/mimo-v2.6-flash-free")
 BAD = ("omniroute/mimo-v2.6-flash", "mimo-v2.6-flash",
-       "opencode/mimo-v2.6-flash-free", "mimo-v2.6-pro", "other/mimo-new")
+       "opencode/mimo-v2.6-pro-free", "mimo-v2.6-pro", "other/mimo-new")
 
 
 @pytest.mark.parametrize("model", GOOD + ("other/model", "l2-worker"))
 def test_allowed(model):
     assert check_mimo_path(model) == model
+
+
+def test_free_mimo_does_not_claim_direct_gateway_rendering():
+    from plangraph.routing_support.resolver import admitted_by_render
+    assert not admitted_by_render("opencode/mimo-v2.6-flash-free")
 
 
 @pytest.mark.parametrize("model", BAD)

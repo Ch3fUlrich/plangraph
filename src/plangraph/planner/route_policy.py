@@ -96,7 +96,11 @@ class RoutePolicy:
         if not lifted:
             if listed(self.banned_families):
                 return "banned_family"
-            if listed(self.off_families):
+            # D-5743 lifts only this exact free review leg, not other GLM legs.
+            free_pickle_review = (role == "review" and leg.id == "opencode-big-pickle"
+                                  and leg.model == "opencode/big-pickle" and leg.family == "glm"
+                                  and leg.tier == "free")
+            if listed(self.off_families) and not free_pickle_review:
                 return "off_family"
         if not self.allows(leg.harness, role):
             return "paused_harness"

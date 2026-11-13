@@ -117,7 +117,7 @@ def test_review_route_keeps_lifted_families():
     plan = plan_spawn(CARD, role="review", writer_families=("xiaomi",), leg_reader=_clear_limiter)
     ids = {leg.id for leg in plan.legs}
     assert "opencode-go-deepseek-v4-flash" in ids
-    assert not {leg.family for leg in plan.legs} & {"glm"}
+    assert [leg.id for leg in plan.legs if leg.family == "glm"] == ["opencode-big-pickle"]
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
     assert not (set(NEW_IDS) - {"opencode-go-qwen3.8-max", "opencode-go-glm-5.2"}) & set(reasons)
     assert reasons["opencode-go-glm-5.2"].startswith("disabled:")

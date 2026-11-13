@@ -12,17 +12,20 @@ pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 
 
 def assert_review_seat_safety(estimate):
-    """Retain main's exact diff/no-diff seats and writer-family fence."""
+    """D-5743 free seats for small reviews; retain large-review seats and fences."""
     from plangraph.planner.route_policy import DEFAULT_POLICY_PATH, load_route_policy
     for diff in ({"diff_ref": {"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}}, {}):
         review = plan_spawn({"estimate_tokens": estimate, **diff}, role="review",
                             writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH), catalog_rows=())
         assert len({leg.family for leg in review.review_seats}) == 2
         assert all(leg.family != "gpt" for leg in review.review_seats)
-        exception = not diff
+        small = estimate <= 72089
+        exception = not diff and not small
         fenced = review.review_seats[:-1] if exception else review.review_seats
         assert not any(leg.claude_family or leg.family in ("claude", "anthropic") for leg in fenced)
-        if exception:
+        if small:
+            assert [leg.id for leg in review.review_seats] == ["opencode-mimo-v2.6-flash-free", "agy-gemini-3.8-flash"]
+        elif exception:
             assert [leg.id for leg in review.review_seats] == ["agy-gemini-3.8-flash", "agy-sonnet-5.5"]
         else:
             assert [leg.id for leg in review.review_seats] == ["agy-gemini-3.8-flash", "mimo-v2.6-flash"]

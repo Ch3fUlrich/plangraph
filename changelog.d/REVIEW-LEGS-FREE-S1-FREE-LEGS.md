@@ -1,0 +1,1 @@
+- Review routing adds free MiMo, LongCat and console OpenRouter legs alongside Big Pickle, each with a distinct family, before subscription and paid legs; writer and keeper-readiness admission remain unchanged (D-5743).

@@ -60,21 +60,21 @@ def test_seats_and_impossible_fence():
     legs = tuple(dataclasses.replace(l, disabled=None) if l.family == "qwen" else l
                  for l in DEFAULT_LEGS)
     p = plan_spawn(CARD, role="review", writer_families=("gpt",), legs=legs)
-    # Equal-cost seats retain table order; Claude review legs retain their family flag.
-    assert [l.family for l in p.review_seats] == ["qwen", "gemini"]
+    # D-5743: free MiMo leads; Claude review legs retain their family flag.
+    assert [l.family for l in p.review_seats] == ["mimo", "qwen"]
     assert {l.id for l in p.legs if l.family == "claude"} == {
         "agy-sonnet-5.5", "agy-claude-opus", "agy-opus-5.5", "agy-opus", "claude-haiku-5.5"}
     assert all(l.claude_family for l in p.legs if l.family == "claude")
-    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "gemini"
+    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "mimo"
     # With all other automatic families fenced, only Claude remains.
     p = plan_spawn(CARD, role="review",
                    writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo", "muse"),
-                   exclude_families=("openai",), legs=legs)
+                   exclude_families=("openai", "longcat", "openrouter"), legs=legs)
     assert [l.family for l in p.review_seats] == ["claude"]
     assert p.error == "two distinct review families unavailable"
     # Impossible fence: every family but the single writer's is excluded.
     p = plan_spawn(CARD, role="review", writer_families=("qwen",),
-                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude", "grok"))
+                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude", "grok", "longcat", "openrouter"))
     assert not p.review_seats and p.error
 
 
@@ -86,7 +86,8 @@ def test_operator_order_and_roles_roundtrip(tmp_path):
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
         "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
-        "agy-gemini-4-argon", "opencode-big-pickle", "agy-gpt-oss-120b", "mimo-v2.6-flash", "mimo-v2.6-pro",
+        "agy-gemini-4-argon", "opencode-mimo-v2.6-flash-free", "opencode-big-pickle",
+        "opencode-go-longcat-2.5-free", "console-openrouter-free", "agy-gpt-oss-120b", "mimo-v2.6-flash", "mimo-v2.6-pro",
         "agy-sonnet-5.5", "agy-claude-opus", "agy-opus-5.5", "omniroute-deepseek-flash", "omniroute-muse-spark",
         "agy-opus", "opencode-gemini-4-argon", "opencode-go-gemini-4-argon",
         "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
