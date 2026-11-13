@@ -1,1 +1,3 @@
 - **ROUND-CAP-AUTO-REPLAN:** Refuse the fourth implement spawn per exact item/PR before admission. Persist verbatim findings and raise a keeper alarm plus routing request for an L1 to replan, close the PR unmerged and define <=300-line slices. The spawner keeps its existing authority and never creates items.
+
+Local push checks select affected files against origin/main and refuse full-suite execution (operator package R2). The host-view integration test declares its Rust projection-helper dependency through the shared helper; CI still requires that binary.
