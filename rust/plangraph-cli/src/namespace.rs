@@ -5,6 +5,8 @@ use crate::{
     setup::Mode,
 };
 use serde::Deserialize;
+#[path = "namespace_order.rs"]
+mod order;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -101,7 +103,7 @@ fn commit_move(
     // Keep the destination intact; the next apply resumes or reports a conflict.
     let index = transaction.record(old, new, source);
     link(old, new).map_err(|_| ActionError { partial: source })?;
-    transaction.linked(index);
+    transaction.linked(index, new);
     Ok(())
 }
 #[cfg(unix)]
@@ -179,6 +181,23 @@ fn action(
     if !matches!(entry.kind.as_str(), "non-secret" | "state") {
         return Ok("operator-only");
     }
+    if old_exists && present(&new)? && entry.name == "breaker-state" {
+        if mode == Mode::Check {
+            return Ok("drift");
+        }
+        if mode == Mode::DryRun {
+            return Ok("would-archive-and-link");
+        }
+        let archive = new.parent().unwrap().join("legacy-namespace/breaker");
+        ancestors(&archive)?;
+        fs::create_dir_all(archive.parent().unwrap())?;
+        transaction.hold(atomic::lock(&new)?);
+        rename_new(&old, &archive)?;
+        let index = transaction.record(&old, &archive, true);
+        link(&old, &new).map_err(|_| ActionError { partial: true })?;
+        transaction.linked(index, &new);
+        return Ok("moved");
+    }
     if old_exists && present(&new)? {
         return Err(io::Error::other("migration conflict; reconcile without overwrite").into());
     }
@@ -221,6 +240,25 @@ fn run_with(
     };
     if !home.is_absolute() || !data.is_absolute() {
         return (2, vec!["namespace refused absolute roots required".into()]);
+    }
+    if order::check(home, data, &manifest.namespace).is_err() {
+        return (
+            2,
+            vec![
+                "namespace refused: run migrate-breaker and cost-gate migrate imports first".into(),
+            ],
+        );
+    }
+    let _migration_lock = if mode == Mode::Apply {
+        match order::lock(home, data, &manifest.namespace) {
+            Ok(lock) => lock,
+            Err(_) => return (2, vec!["namespace refused migration busy".into()]),
+        }
+    } else {
+        None
+    };
+    if mode == Mode::Apply && order::check(home, data, &manifest.namespace).is_err() {
+        return (2, vec!["namespace refused: import state changed".into()]);
     }
     let mut code = 0;
     let mut moved = false;
@@ -306,69 +344,5 @@ pub fn cli(home: &Path, args: &[String]) -> i32 {
 }
 
 #[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-    #[test]
-    fn shim_failure_preserves_new_and_recreated_old() {
-        let root = tempfile::tempdir().unwrap();
-        let old = root.path().join("old");
-        let new = root.path().join("new");
-        fs::write(&old, b"original").unwrap();
-        assert!(
-            commit_move(&old, &new, true, &mut Transaction::default(), |old, _| {
-                fs::write(old, b"concurrent").unwrap();
-                Err(io::Error::from(io::ErrorKind::AlreadyExists))
-            })
-            .is_err()
-        );
-        assert_eq!(fs::read(old).unwrap(), b"concurrent");
-        assert_eq!(fs::read(new).unwrap(), b"original");
-    }
-    #[test]
-    fn interrupted_single_move_reports_partial_failure() {
-        let root = tempfile::tempdir().unwrap();
-        let home = root.path().join("home");
-        let data = root.path().join("data");
-        fs::create_dir(&home).unwrap();
-        fs::write(home.join("old"), b"original").unwrap();
-        let manifest = "files=[]\n[[namespace]]\nname='fixture'\nold='old'\nnew='@DATA@/new'\nkind='state'\nconsumers=[]\n";
-        let (code, _) = run_with(&home, &data, manifest, Mode::Apply, |old, _| {
-            fs::write(old, b"concurrent").unwrap();
-            Err(io::Error::from(io::ErrorKind::AlreadyExists))
-        });
-        assert_eq!(code, 3);
-        assert_eq!(fs::read(data.join("new")).unwrap(), b"original");
-    }
-    #[test]
-    fn later_shim_failure_rolls_back_every_successful_move() {
-        let root = tempfile::tempdir().unwrap();
-        let home = root.path().join("home");
-        let data = root.path().join("data");
-        fs::create_dir(&home).unwrap();
-        fs::write(home.join("first"), b"one").unwrap();
-        fs::write(home.join("second"), b"two").unwrap();
-        let manifest="files=[]\n[[namespace]]\nname='first'\nold='first'\nnew='@DATA@/first'\nkind='state'\nconsumers=[]\n[[namespace]]\nname='second'\nold='second'\nnew='@DATA@/second'\nkind='state'\nconsumers=[]\n";
-        let (code, _) = run_with(&home, &data, manifest, Mode::Apply, |old, new| {
-            if old.file_name().unwrap() == "second" {
-                Err(io::Error::other("injected failure"))
-            } else {
-                shim(old, new)
-            }
-        });
-        assert_eq!(code, 3);
-        for name in ["first", "second"] {
-            assert!(!fs::symlink_metadata(home.join(name))
-                .unwrap()
-                .file_type()
-                .is_symlink());
-            assert!(!data.join(name).exists());
-        }
-    }
-    #[test]
-    fn metadata_errors_are_not_absence() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("loop");
-        std::os::unix::fs::symlink("loop", &path).unwrap();
-        assert!(present(&path.join("child")).is_err());
-    }
-}
+#[path = "namespace_tests.rs"]
+mod tests;

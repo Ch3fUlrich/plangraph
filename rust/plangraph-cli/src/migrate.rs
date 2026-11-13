@@ -3,8 +3,21 @@ use crate::atomic;
 use std::fs;
 use std::io;
 use std::path::Path;
+pub fn relocated(old: &Path, new: &Path) -> io::Result<bool> {
+    if !old.exists() || !new.exists() {
+        return Ok(false);
+    }
+    Ok(fs::canonicalize(old)? == fs::canonicalize(new)?)
+}
+pub fn migration_lock(root: &Path) -> io::Result<fs::File> {
+    fs::create_dir_all(root)?;
+    atomic::lock(&root.join("namespace-migration"))
+}
 pub fn breaker(old: &Path, new: &Path, dry_run: bool) -> io::Result<usize> {
     if !old.exists() {
+        return Ok(0);
+    }
+    if relocated(old, new)? {
         return Ok(0);
     }
     if old.symlink_metadata()?.file_type().is_symlink() || !old.is_dir() {
@@ -13,6 +26,10 @@ pub fn breaker(old: &Path, new: &Path, dry_run: bool) -> io::Result<usize> {
     if dry_run {
         return Ok(fs::read_dir(old)?.count());
     }
+    let _migration_lock = migration_lock(
+        new.parent()
+            .ok_or_else(|| io::Error::other("missing state root"))?,
+    )?;
     fs::create_dir_all(new)?;
     let marker = new.join(".autoos-imported");
     let _lock = atomic::lock(&marker)?;

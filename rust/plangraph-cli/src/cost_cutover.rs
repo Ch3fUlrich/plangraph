@@ -8,7 +8,10 @@ pub fn import(old: &Path, new: &Path, dry_run: bool) -> io::Result<usize> {
     if !old.exists() {
         return Ok(0);
     }
-    if fs::symlink_metadata(old)?.file_type().is_symlink() {
+    if crate::migrate::relocated(old, new)? {
+        return Ok(0);
+    }
+    if fs::symlink_metadata(old)?.file_type().is_symlink() || !old.is_dir() {
         return Err(io::Error::other("invalid legacy root"));
     }
     if dry_run {
@@ -17,6 +20,7 @@ pub fn import(old: &Path, new: &Path, dry_run: bool) -> io::Result<usize> {
             .filter(|name| old.join(name).is_file())
             .count());
     }
+    let _migration_lock = crate::migrate::migration_lock(new)?;
     fs::create_dir_all(new)?;
     let marker = new.join(".daily-gate-imported");
     if marker.exists() {

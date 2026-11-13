@@ -71,3 +71,7 @@ container aliases, conflict reconciliation and rollback.
 `deploy/requirements-host.json`. See `docs/host-packages.md` for Linux/WSL2,
 private temporary downloads, user-local npm, skip behavior and remaining host
 validation. Bootstrap calls this installer without reading a legacy checkout.
+
+State imports must complete before namespace writes. The shared migration lock
+and completion markers enforce that order; old breaker state is archived before
+its path becomes a shim, without replacing active state.

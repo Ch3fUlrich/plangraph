@@ -14,6 +14,7 @@ struct Undo {
     new: PathBuf,
     source: bool,
     linked: bool,
+    link_target: PathBuf,
 }
 impl Transaction {
     pub fn hold(&mut self, file: File) {
@@ -25,17 +26,19 @@ impl Transaction {
             new: new.into(),
             source,
             linked: false,
+            link_target: new.into(),
         });
         self.moves.len() - 1
     }
-    pub fn linked(&mut self, index: usize) {
+    pub fn linked(&mut self, index: usize, target: &Path) {
         self.moves[index].linked = true;
+        self.moves[index].link_target = target.into();
     }
     pub fn rollback(&mut self) -> bool {
         let mut ok = true;
         for undo in self.moves.iter().rev() {
             if undo.linked {
-                if fs::read_link(&undo.old).is_ok_and(|target| target == undo.new) {
+                if fs::read_link(&undo.old).is_ok_and(|target| target == undo.link_target) {
                     if fs::remove_file(&undo.old).is_err() {
                         ok = false;
                         continue;

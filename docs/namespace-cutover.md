@@ -21,9 +21,14 @@ Operator-only inventory rows are informational during apply; check still reports
 them as drift until the operator completes that work. No secret contents or values
 are printed or logged.
 
-Existing targets are never overwritten. In particular, reconcile legacy breaker
-state with the earlier copy-once import before namespace apply: archive the old
-copy privately and create its old-path shim to the current new state. Unknown
+Run `migrate-breaker` and `cost-gate migrate` before `namespace apply --yes`.
+Namespace check/preview/apply refuse when existing legacy state lacks its import
+completion marker. Imports and namespace writes share one migration lock.
+When breaker state was copied already, namespace apply archives the old directory
+under the new state root at `legacy-namespace/breaker`, then creates its old-path
+shim. Active state always wins; the legacy copy remains available for rollback.
+Already relocated roots make repeated imports no-ops. Existing archive paths are
+never overwritten. Unknown
 remaining state/share entries require operator classification; the root namespaces
 are never recursively moved by the program. A crash after rename can be resumed:
 the destination remains intact and the next apply creates the missing shim.

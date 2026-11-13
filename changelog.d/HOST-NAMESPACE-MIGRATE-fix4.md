@@ -1,0 +1,1 @@
+- Enforce import-first namespace ordering with completion markers and a shared migration lock; archive legacy breaker copies without overwriting active state, support rollback and repeated imports after relocation.
