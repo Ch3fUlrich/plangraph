@@ -229,6 +229,11 @@ excluded for that spawn; when none can accept, a queued record lists safe
 refusal reasons. Without overflow config, admitted local runs have no annotation;
 below-floor runs queue with matching `reason` and `overflow_reason`. Dry runs do not overflow.
 Local benchmark databases cannot be forwarded. CLI/MCP use public `admit_spawn` once in the shared wrapper, not the CLI parent; the service persists queued/remote records.
+Standalone `python -m plangraph.spawner.overflow spawn` requires the invoking
+spawn's `--state`; local CLI launches place it before `spawn`, and refusals are
+saved there, never forwarded remotely. No placement means immediate
+`host_memory_floor` refusal (exit 2), with memory measurements and each host's
+safe refusal in `error` and `overflow_reason`, including at the retry limit.
 Per-host `orchestration_only: true` in `hosts.json` (or the local overflow hosts entry; default false)
 makes implement/review/research remote-first: rank MemAvailable minus floor, then config order; no run-count caps.
 Local fallback requires RAM admission, `local_min_available_mb` (overflow config, default 4096) and

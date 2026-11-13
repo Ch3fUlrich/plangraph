@@ -10,7 +10,9 @@ from pathlib import Path
 import secrets
 import shlex
 import subprocess
+import sys
 import tempfile
+import time
 import uuid
 from typing import NamedTuple
 
@@ -21,15 +23,12 @@ from plangraph.routing_errors import ParameterRefused
 from . import cli
 from .private_io import atomic_write_private
 
-
 class Decision(NamedTuple):
     host: str | None
     reason: str
 
-
 class RemoteRefusal(ValueError):
     """Safe, value-free remote failure reason."""
-
 
 def failure_reason(exc):
     """Describe the failure without exposing exception values or private paths."""
@@ -41,7 +40,6 @@ def failure_reason(exc):
         return 'remote spawn input has an invalid type'
     return 'remote spawn input or receipt has an invalid value'
 
-
 def registry_caps():
     """Read the same registry location and JSON format as fleet-sync."""
     try:
@@ -52,7 +50,6 @@ def registry_caps():
     except (OSError, ValueError, KeyError, TypeError):
         logging.warning('hosts registry missing or malformed; overflow disabled, local RAM defaults 3000/2048 MB')
         return {'hosts': [], 'self': None}
-
 
 def host_config(registry, name):
     for host in registry.get('hosts', []):
@@ -66,7 +63,6 @@ def host_config(registry, name):
         return host
     return {}
 
-
 def placement_policy(registry, config):
     name = os.environ.get('PLANGRAPH_HOST_NAME') or registry.get('self')
     host = host_config(registry, name)
@@ -75,7 +71,6 @@ def placement_policy(registry, config):
     local = hosts.get(name, {}) if isinstance(hosts, dict) else {}
     return name, (host.get('orchestration_only') is True or
                   isinstance(local, dict) and local.get('orchestration_only') is True)
-
 
 def host_caps(registry, name, role='implement'):
     host = host_config(registry, name)
@@ -90,13 +85,11 @@ def host_caps(registry, name, role='implement'):
     logging.warning('host %r: missing or malformed registry caps; not an overflow target', name)
     return None
 
-
 def local_limits(registry, role='implement'):
     caps = host_caps(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry.get('self'), role)
     if caps is None:
         logging.warning('local admission using conservative RAM defaults: floor 3000 MB, role 2048 MB')
     return caps or (2048, 3000)
-
 
 def memory_refusal(free_mb, reservation_mb, floor_mb):
     """Worker-core mem_fit: effective_free_mb - reservation_mb >= mem_floor_mb.
@@ -108,6 +101,11 @@ def memory_refusal(free_mb, reservation_mb, floor_mb):
         return None
     return f'memory: free {free_mb} MB, floor {floor_mb} MB, role {reservation_mb} MB'
 
+def memory_floor_record(memory, role_mb, floor, detail, role='implement'):
+    return dict(run_id='run-' + uuid.uuid4().hex, status='refused', role=role,
+                reason='host_memory_floor', overflow_reason=detail, exit_code=2,
+                mem_available_mb=memory, floor_mb=floor, role_mb=role_mb, ended=time.time(),
+                error=f'host_memory_floor: MemAvailable {memory} MB, floor {floor} MB, role {role_mb} MB; {detail}')
 
 def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
             remote_first=False, local_refusal=None, host_order=()):
@@ -150,7 +148,6 @@ def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
         return Decision(None, local_reason or 'local_fallback_no_remote')
     return Decision(None, local_reason + '; queue: ' + ('; '.join(refused) or 'no overflow hosts configured'))
 
-
 def ready_records(config, role='implement'):
     records = {}
     registry = registry_caps()
@@ -179,8 +176,8 @@ def ready_records(config, role='implement'):
     return records
 
 
-def local_resources():
-    runs = cli.SpawnService().ps()['runs']
+def local_resources(state=None):
+    runs = cli.SpawnService(state=state).ps()['runs']
     return sum(row.get('status') == 'running' for row in runs), available_memory_mb()
 
 
@@ -323,7 +320,9 @@ def main(argv=None):
     parser.add_argument('--prompt', required=True)
     parser.add_argument('--role', default='implement')
     parser.add_argument('--cwd')
+    parser.add_argument('--state', required=True, help='invoking spawn state directory (local only)')
     args, options = parser.parse_known_args(argv)
+    local = ['--state', args.state, 'spawn', '--card', '@' + args.card]
     if args.cwd is not None:
         options.extend(['--cwd', args.cwd])
     if args.role != 'implement':
@@ -335,12 +334,11 @@ def main(argv=None):
         except (OSError, ValueError):
             config = {}
         if placement_policy(registry_caps(), config)[1]:
-            return cli.main(['spawn', '--card', '@' + args.card,
-                             Path(args.prompt).read_text(), *options])
+            return cli.main([*local, Path(args.prompt).read_text(), *options])
         role_mb, floor_mb = local_limits(registry_caps(), args.role)
-        _, memory = local_resources()
+        _, memory = local_resources(args.state)
         if decide(memory, role_mb, floor_mb, {}, False).reason == 'local room':
-            return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
+            return cli.main([*local, Path(args.prompt).read_text(), *options])
         card = json.loads(Path(args.card).read_text())
         from .prompt_input import resolve_cwd
         cwd = resolve_cwd(args.cwd, card)
@@ -354,13 +352,20 @@ def main(argv=None):
         attempts = 0
         while True:
             decision = decide(memory, role_mb, floor_mb, records, public)
-            if decision.host is None:
-                print(json.dumps({'overflow_reason': decision.reason}))
-                return 5
-            if attempts == 2:
-                print(json.dumps({'overflow_reason': 'queue: ' + '; '.join(
-                    name + ': ' + row.get('refusal', 'retry limit') for name, row in sorted(records.items()))}))
-                return 5
+            if decision.host is None or attempts == 2:
+                detail = decision.reason if decision.host is None else 'refused: retry limit'
+                detail = detail.replace('; queue:', '; refused:')
+                refusals = [f'{name}: {row["refusal"]}' for name, row in sorted(records.items())
+                            if row.get('refusal')]
+                reported = detail.replace('; refused: ', '; ').removeprefix('refused: ').split('; ')
+                detail = '; '.join([detail, *(reason for reason in refusals if reason not in reported)])
+                record = memory_floor_record(memory, role_mb, floor_mb, detail, args.role)
+                if not memory_refusal(memory, role_mb, floor_mb):
+                    record.update(reason=detail, error=detail)
+                cli.SpawnService(state=args.state)._save(record)
+                print(json.dumps(record))
+                print(record['error'], file=sys.stderr)
+                return 2
             name = decision.host
             attempts += 1
             try:
@@ -376,7 +381,7 @@ def main(argv=None):
                 return 0
             records[name]['refusal'] = refusal
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        print('overflow input or resource check failed', file=__import__('sys').stderr)
+        print('overflow input or resource check failed', file=sys.stderr)
         return 1
 
 
