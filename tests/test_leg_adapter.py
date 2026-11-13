@@ -195,6 +195,43 @@ def test_enabled_probe_recovery(tmp_path, monkeypatch):
     assert probes == [1] and calls == [1, 1]
 
 
+@pytest.mark.parametrize('initial_read_error', [False, True])
+def test_probe_success_admits_after_snapshot_reread_error(tmp_path, monkeypatch, caplog,
+                                                         initial_read_error):
+    import asyncio
+    from plangraph.spawner import leg_probe
+    reader, _ = adapter(tmp_path, available=False)
+    leg = SimpleNamespace(model='opencode-go/sample', harness='opencode')
+    runner = SimpleNamespace(leg_reader=reader)
+    events = []
+
+    def broken_snapshot():
+        events.append('read error')
+        raise OSError('snapshot unavailable')
+
+    def initial_snapshot():
+        events.append('read')
+        return {'opencode-go': SimpleNamespace(available=False, stale=False)}
+
+    reader.provider.snapshot = broken_snapshot if initial_read_error else initial_snapshot
+
+    async def probe(actual_runner, actual_leg, **kwargs):
+        assert actual_runner is runner and actual_leg is leg
+        assert kwargs['store'] is reader.store
+        events.append('probe')
+        reader.store.record_probe_pass(leg.model, 'test')
+        reader.provider.snapshot = broken_snapshot
+        return dict(ok=True)
+
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    assert asyncio.run(leg_probe.before_launch(runner, leg, 'implement', False)) is None
+    assert events == (['read error', 'read error', 'probe'] if initial_read_error else
+                      ['read', 'probe', 'read error', 'read error'])
+    assert reader.store.last_probe_ts(leg.model) is not None
+    assert 'leg_state_snapshot_error: OSError: snapshot unavailable' in caplog.text
+
+
 @pytest.mark.parametrize('error', [OSError('snapshot missing'), ValueError('partial snapshot'),
                                   RuntimeError('refresh rejected')])
 def test_snapshot_refresh_keeps_error(tmp_path, error):

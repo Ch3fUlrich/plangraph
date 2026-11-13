@@ -2,14 +2,27 @@ use super::{poll::parse, safe_name, Config};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+#[cfg(not(windows))]
+use std::io::Write;
 use std::{
     collections::BTreeSet,
     fs::{self, File},
-    io::{Read, Write},
+    io::Read,
     path::{Component, Path, PathBuf},
 };
 
 pub const FILE_MAX: u64 = 1024 * 1024;
+
+#[cfg(any(windows, test))]
+#[path = "rename.rs"]
+mod rename;
+
+#[cfg(any(windows, test))]
+#[path = "windows_rename.rs"]
+mod windows_rename;
+#[cfg(any(windows, test))]
+#[path = "windows_write.rs"]
+mod windows_write;
 
 pub fn read_json(path: &Path) -> Option<Value> {
     let mut bytes = Vec::new();
@@ -28,6 +41,23 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if bytes.len() as u64 > FILE_MAX {
         return Err(std::io::Error::other("status too large"));
     }
+    #[cfg(windows)]
+    return windows_write::atomic_write(
+        path,
+        bytes,
+        &mut windows_write::Calls {
+            before: |_| Ok(()),
+            report: |stage, error: &std::io::Error| {
+                eprintln!("turn-budget-hook: atomic_write step={stage:?} failed: {error}");
+            },
+        },
+    );
+    #[cfg(not(windows))]
+    atomic_write_portable(path, bytes)
+}
+
+#[cfg(not(windows))]
+fn atomic_write_portable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = path.parent().unwrap();
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
     file.write_all(bytes)?;
@@ -43,6 +73,39 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(all(test, windows))]
+#[test]
+fn reader_without_delete_sharing_blocks_replace_without_corrupting_status() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::{
+        Foundation::ERROR_SHARING_VIOLATION,
+        Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("status.json");
+    let original = br#"{"wake_calls":1}"#;
+    let replacement = br#"{"wake_calls":2}"#;
+    atomic_write(&path, original).unwrap();
+    let mut held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(&path)
+        .unwrap();
+    // This documents an unresolved publication limitation, not a successful
+    // counter update: the hook reports this IO error without denying ordinary work.
+    let error = atomic_write(&path, replacement).unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(ERROR_SHARING_VIOLATION as i32));
+    let mut snapshot = Vec::new();
+    held.read_to_end(&mut snapshot).unwrap();
+    assert_eq!(snapshot, original);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    let entries: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, ["status.json"]);
+}
+
 pub fn successful(payload: &Value) -> bool {
     let response = &payload["tool_response"];
     !response.is_null()
@@ -53,10 +116,8 @@ pub fn successful(payload: &Value) -> bool {
 
 pub fn changed_paths(payload: &Value, command: Option<&str>) -> Vec<std::path::PathBuf> {
     let cwd = payload["cwd"].as_str().unwrap_or("");
-    if matches!(
-        payload["tool_name"].as_str(),
-        Some("Edit" | "Write" | "NotebookEdit")
-    ) {
+    let tool = payload["tool_name"].as_str();
+    if matches!(tool, Some("Edit" | "Write" | "NotebookEdit")) {
         return ["file_path", "notebook_path"]
             .iter()
             .filter_map(|key| payload["tool_input"][key].as_str())

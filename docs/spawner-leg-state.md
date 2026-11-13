@@ -78,11 +78,14 @@ a successful read. `src/plangraph/spawner/leg_probe.py:before_launch` retries
 that read once before any snapshot-error skip. If it still fails, admission
 probes the same leg, including reviews and TTL 0. A successful retry restores
 ordinary admission; a successful probe admits despite the read error, while
-a failed probe skips with both the underlying read error and probe reason.
+a failed probe skips with both the underlying read error and probe reason. Read errors are logged even when a probe succeeds or the retry recovers; an ordinary successful probe also admits if its snapshot re-read fails again.
 Infrastructure failure alone does not admit a leg with an unreadable snapshot.
-Successful probe evidence from before the failure cannot suppress this recovery
+Successful probe evidence, including passes during an unreadable snapshot, cannot suppress this recovery
 probe. Booked provider limits and quota pauses still take precedence; dry runs
 remain read/probe-free. This slice changes neither seat ordering nor route slots.
+The default service reader retains its declared-state fallback for snapshot read
+errors (as for the former `unknown` reason), preserving the detailed reason so
+`before_launch` still retries and probes instead of mistaking fallback for a read.
 
 A `running` record on the same model/harness wins over a failed probe when its
 nonempty `live.log` grew within `LIVE_RUN_WRITE_WINDOW_S` (120 seconds).

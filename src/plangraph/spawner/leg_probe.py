@@ -1,6 +1,7 @@
 """Bounded commit-task liveness checks, shared by dispatch, CLI and MCP."""
 import asyncio
 import json
+import logging
 import math
 import os
 import shutil
@@ -304,12 +305,11 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
                 continue
         cleanup_task.result()
 
-
 _INFLIGHT = {}
-
 
 async def before_launch(runner, leg, role, dry_run):
     from .target import quota_paused
+    from .env_redact import redact_output, redact_env_values
     root = (getattr(runner, 'state', None) or getattr(runner, '_state', None)
             or getattr(runner, 'state_root', None))
     if quota_paused(root, role, leg):
@@ -327,15 +327,17 @@ async def before_launch(runner, leg, role, dry_run):
         root = Path(path).parent
     if quota_paused(root, role, leg):
         return 'quota pause'
-    def admission(retry=True):
+    def admission(retry=True, probe_ok=False):
         if adapter:
-            status = adapter.leg_status(key(leg), account=getattr(leg, 'account', None),
-                                        combo=getattr(leg, 'combo', None))
-            if status['state'] != 'ok':
-                reason = status.get('reason') or status['state']
-                if retry and reason.startswith('leg_state_snapshot_error:'):
+            status = adapter.leg_status(key(leg), account=getattr(leg, 'account', None), combo=getattr(leg, 'combo', None))
+            reason = status.get('reason') or status['state']
+            if reason.startswith('leg_state_snapshot_error:'):
+                logging.getLogger(__name__).warning('%s: %s', key(leg), redact_output(redact_env_values(reason, os.environ)))
+                if retry:
                     adapter._at = None
-                    return admission(False)
+                    return admission(False, probe_ok)
+                return None if probe_ok else reason
+            if status['state'] != 'ok':
                 return 'leg_state_snapshot_error' if reason.strip().lower() == 'unknown' else reason
         return None
     def limit():  # D-3685: booked provider limits win before and after probes.
@@ -359,14 +361,12 @@ async def before_launch(runner, leg, role, dry_run):
     if not reason or reason.strip().lower() == 'unknown':
         reason = 'host_not_ready' if result.get('state') == 'host-not-ready' else 'leg_probe_failed'
     if snapshot_error:
-        from .env_redact import redact_output, redact_env_values
         return limit() or (None if result['ok'] else redact_output(redact_env_values(skip, os.environ)) + '; probe: ' + reason)
     if result.get('state') == 'host-not-ready':
         return reason
     if adapter:
         adapter._at = None  # Re-read after an ordinary probe.
-    return admission() if result['ok'] or result.get('infra') or result.get('state') == 'probe_failed_leg_serving' else 'down: ' + reason
-
+    return (limit() or admission(probe_ok=result['ok'])) if result['ok'] or result.get('infra') or result.get('state') == 'probe_failed_leg_serving' else 'down: ' + reason
 
 async def probe_many(runner, legs=(), all_writers=False, timeout=None):
     from plangraph.planner.legs import DEFAULT_LEGS, leg_active, spawnable_legs
