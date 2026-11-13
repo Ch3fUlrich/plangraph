@@ -35,6 +35,7 @@ def test_single_verdict_stays_in_review(w):
     to_in_review(w, KEY)
     result = w.store.verdict(w.p("reviewer"), KEY, True, "ok")
     assert result["state"] == "in_review"
+    assert result["reviews_passed"] == 1
     assert w.store._item(KEY)["state"] == "in_review"
     assert _count(w, KEY, "review_verdict") == 1
     assert _count(w, KEY, "review_passed") == 0
