@@ -322,7 +322,7 @@ and retains ordered creation evidence in `worktree_attempts`; `base_sha` is the
 attempt's starting commit (main head or continuation tip). A failed fixer creation
 records no worktree and a null cwd, never its parent's path. Runner `JobInfo.cwd`,
 process cwd and child PWD use that path. With the flag off, cwd is unchanged;
-dry runs create nothing. No worktrees are removed, no pg-reap lock sharing is
+dry runs create nothing. Admission fetches origin's default branch and refuses stale workers, continuations and seats (`base_stale`); only card `base_decision: D-<digits>` waives known lag; clean refused worktrees are removed; detached CLI waits for admission (180-second timeout: `base_admission_timeout`, exit 1); no pg-reap lock sharing is
 implemented, and enabling by default and the Rust port remain later slices.
 
 Private `runs/<run_id>/record.json` contains card hash, role, complete plan,

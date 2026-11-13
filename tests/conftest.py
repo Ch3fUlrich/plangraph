@@ -244,6 +244,7 @@ def pytest_configure(config):
         atexit.register(_remove_windows_basetemp, root)
     config.addinivalue_line('markers', 'real_probe: exercise the real served-model probe, not the host stub')
     config.addinivalue_line('markers', 'writer_change_check: keep the D-3236 writer no-change check live')
+    config.addinivalue_line('markers', 'real_base_fresh: use real admission against a local origin')
 
 
 @pytest.fixture
@@ -323,8 +324,15 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     yield
     probe.cache_clear()
 
-_PG = os.environ.get("PG_KEEPER_BACKEND") == "postgres"
+@pytest.fixture(autouse=True)
+def fake_base_fresh(monkeypatch, request):
+    if request.node.get_closest_marker('real_base_fresh') is None:
+        from plangraph.spawner import base_fresh
+        fresh = lambda *a, **k: dict(ok=True, reason=None, origin_sha='0' * 40, base_sha='0' * 40, behind=0)
+        monkeypatch.setattr(base_fresh, 'base_fresh', fresh)
+        monkeypatch.setattr(base_fresh, '_check', fresh)
 
+_PG = os.environ.get("PG_KEEPER_BACKEND") == "postgres"
 #: tests that read the SQLite file itself (contract: dump/copy ``keeper.db`` via stdlib sqlite3).
 _READS_SQLITE_FILE = {
     "tests/test_keeper_brief.py::test_brief_stats_reports_median_and_p90",   # opens the file mode=ro

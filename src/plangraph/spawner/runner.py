@@ -49,6 +49,7 @@ _keeper_unconfigured_last_warned = None
 from .env_redact import first_reason, redact, redact_output, _redact_prompt
 from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, refusal_record, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
+from .base_fresh import admit_base
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
@@ -1044,6 +1045,7 @@ def spawn_service(*args, **kwargs):
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
             from .context_pack import annotate
             from .item_key import annotate_item
+            if not await admit_base(self, record, card): return self.result(run_id)
             pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
             annotate_item(record, card)
             for skipped in plan.to_dict()['skipped']:
@@ -1094,7 +1096,8 @@ def spawn_service(*args, **kwargs):
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
-                        worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
+                        record['base_admitted'] = False; worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
+                        if not await admit_base(self, record, card, launch=True): return
                         if (watchdog := leg_limits(record, limits)) is None:
                             self._save(record); return
                         job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,

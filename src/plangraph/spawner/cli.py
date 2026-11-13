@@ -13,7 +13,7 @@ _start_supervisor = subprocess.Popen
 from .runner import spawn_service as SpawnService, redact_output
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
 from plangraph.routing_support import background_process_options
-
+from .base_fresh import admitted_spawn
 
 def _drain_chunks(chunks, write, observe=lambda size: None):
     """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""
@@ -79,7 +79,7 @@ def _supervise():
     service = SpawnService(state=payload.pop('state'))
     async def run():
         try:
-            record = await service.spawn(**payload, wait_seconds=0)
+            record = await admitted_spawn(service, payload)
         except Exception as exc:
             record = next((r for r in service.ps()['runs'] if r.get('error') == str(exc)), None)
             if record is None:
@@ -91,7 +91,7 @@ def _supervise():
         for run in record.get('seats') or [record]:
             if run['run_id'] in service.tasks:
                 await service.tasks[run['run_id']]
-        return 0
+        return (record.get('exit_code') or 1) if any(r.get('status') == 'failed' for r in record.get('seats') or [record]) else 0
     return asyncio.run(run())
 
 
