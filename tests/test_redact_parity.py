@@ -9,6 +9,7 @@ import pytest
 from plangraph.spawner import env_redact
 from plangraph.spawner.env_redact import redact
 from plangraph.spawner.redact_tokens import JWT, SPECS, TOKENS, redact_wrapped
+from test_redact_assign_scope import pre_a1
 
 
 TABLE = json.loads(
@@ -26,6 +27,8 @@ def input_text(row):
 
 @pytest.mark.parametrize("row", [r for r in TABLE if "expected" in r])
 def test_redact_parity(row):
+    if row.get('known_gap'):
+        assert row['accepted_by'] == 'D-5703' and row['readable_parts']
     assert redact(input_text(row)) == joined(row['expected'])
 
 
@@ -42,20 +45,16 @@ def test_redact_output_parity(row):
         assert env_redact.redact_source(input_text(row)) == input_text(row)
 
 
-def test_a1_changed_shapes_have_explicit_rust_expectations(monkeypatch):
+def test_a1_changed_shapes_have_explicit_rust_expectations(pre_a1):
     rows = json.loads((Path(__file__).parent / 'fixtures/redact_name_scope.json').read_text())
-    wide = env_redact.redact_wide_assignments
     covered = {input_text(row): row for row in TABLE if 'rust_expected' in row}
     changed = set()
     for row in rows:
         if row.get('mode') == 'source':
             continue
         text = ''.join(row['input_parts']) * row.get('repeat', 1)
-        monkeypatch.setattr(env_redact, 'redact_wide_assignments', wide)
         current = redact(text)
-        # Exactly e7964367's pipeline: A1 added only this stage/call.
-        monkeypatch.setattr(env_redact, 'redact_wide_assignments', lambda text, assignment: text)
-        if current != redact(text):
+        if current != pre_a1.redact(text):
             changed.add(row['id'])
             assert text in covered, row['id']
             assert joined(covered[text]['expected']) == current
@@ -66,12 +65,18 @@ def test_a1_engine_difference_inventory():
     # D-5694: explicit golden differences, not a claim that the engines agree.
     shapes = {'N03', 'N06', 'N07', 'N48', 'N53', 'A04', 'A04-dict', 'M02',
               'wide-categories', 'python-blanks', 'glued-tail',
-              'delimiters', 'bare-closer', 'wrapped-lf', 'wrapped-crlf',
-              'wrapped-quoted', 'placeholder-tail', 'later-old-label'}
+              'delimiters', 'bare-closer', 'placeholder-tail', 'later-old-label'}
     by_id = {row['id']: row for row in TABLE if 'rust_expected' in row}
     for shape in shapes:
         row = by_id['a1-' + shape]
         assert joined(row['expected']) != joined(row['rust_expected']), shape
+    for shape in ('wrapped-lf', 'wrapped-crlf', 'wrapped-quoted'):
+        row = by_id['a1-' + shape]
+        assert joined(row['expected']) == joined(row['rust_expected']), shape
+    for row in by_id.values():
+        if re.search(r'V[12]|B8(?:B8)*', joined(row['rust_expected'])):
+            assert row['rust_known_gap'] == 'plangraph:REDACT-RUST-NAME-SCOPE-ALIGN', row['id']
+            assert row['rust_accepted_by'] == 'D-5703'
 
 
 def test_catalog_is_exactly_rust_specs():

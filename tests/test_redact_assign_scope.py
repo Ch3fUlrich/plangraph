@@ -1,8 +1,12 @@
 """Python-only A1 decisions; A2, slice C and main's joins stay explicit."""
 import ast
+import importlib.util
 import json
 import py_compile
+import re
+import subprocess
 import sys
+import types
 from pathlib import Path
 import pytest
 from plangraph.spawner import redact_tokens
@@ -12,11 +16,89 @@ TABLE = json.loads((Path(__file__).parent / 'fixtures/redact_name_scope.json').r
 NAME, MASK = 'MY_' + 'SECRET', '[REDACTED]'
 
 
+@pytest.fixture(scope='module')
+def pre_a1(tmp_path_factory):
+    """Load both historical modules from local git objects, never current helpers."""
+    root = Path(__file__).resolve().parents[1]
+    directory = tmp_path_factory.mktemp('pre_a1')
+    package = types.ModuleType('_redact_pre_a1')
+    package.__path__ = [str(directory)]
+    modules = {package.__name__: package}
+    try:
+        sys.modules.update(modules)
+        for name in ('redact_tokens', 'env_redact'):
+            path = directory / (name + '.py')
+            path.write_bytes(subprocess.check_output(
+                ['git', 'show', 'e7964367:src/plangraph/spawner/' + name + '.py'], cwd=root))
+            spec = importlib.util.spec_from_file_location(package.__name__ + '.' + name, path)
+            module = importlib.util.module_from_spec(spec)
+            modules[spec.name] = sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+        yield module
+    finally:
+        for name in modules:
+            sys.modules.pop(name, None)
+
+
+def _visible_positions(text, output):
+    # Scrubbers replace spans with MASK; map every remaining byte/character to input.
+    pattern = r'[\s\S]*?'.join('(' + re.escape(part) + ')' for part in output.split(MASK))
+    match = re.fullmatch(pattern, text)
+    assert match is not None, (text, output)
+    return {i for group in range(1, len(match.groups()) + 1)
+            for i in range(*match.span(group))}
+
+
+def _assert_known_gap(row, historical, current):
+    assert row['known_gap'] in ('A2', 'slice C', 'plangraph:REDACT-RUST-NAME-SCOPE-ALIGN')
+    assert row['accepted_by'] == 'D-5703'
+    assert row['readable_parts']
+    for piece in row['readable_parts']:
+        assert piece in current and historical.count(piece) == current.count(piece), row['id']
+
+
+@pytest.mark.parametrize('fixture', ['redact_name_scope', 'redact_parity'])
+@pytest.mark.parametrize('mode', ['redact', 'redact_output', 'redact_source'])
+def test_a1_masks_only_grow_against_pre_a1(pre_a1, fixture, mode):
+    from plangraph.spawner import env_redact
+    rows = json.loads((Path(__file__).parent / ('fixtures/' + fixture + '.json')).read_bytes())
+    for row in rows:
+        text = row.get('input', ''.join(row.get('input_parts', []))) * row.get('repeat', 1)
+        old, current = getattr(pre_a1, mode)(text), getattr(env_redact, mode)(text)
+        assert _visible_positions(text, current) <= _visible_positions(text, old), row.get('id')
+        if mode == ('redact_source' if row.get('mode') == 'source' else 'redact'):
+            expected = text if row.get('expected') == 'I' else ''.join(row.get('expected', ''))
+            # Sweep both tables, including unlabelled tails and below-floor bodies.
+            readable = re.findall(r'V[12]|B8(?:B8)*|A_-9[A_9-]*|A9(?:A9)+', expected)
+            unchanged_assignment = row.get('id', '').startswith('a1-') and expected == text and any(c in text for c in '=:')
+            if readable or unchanged_assignment or row.get('known_gap'):
+                _assert_known_gap(row, old, current)
+                assert set(readable) <= set(row['readable_parts']), row.get('id')
+
+
+@pytest.mark.parametrize('nl', ['\n', '\r\n'])
+@pytest.mark.parametrize('quote', ['', '"', "'"])
+@pytest.mark.parametrize('marker', ['', '\ue000', '\ue001', '\ue0000\ue001'])
+def test_a1_wrapped_regressions_keep_pre_a1_masks(pre_a1, nl, quote, marker):
+    for name in (NAME, 'os.environ["' + NAME + '"]', 'e\u0301api_' + 'token'):
+        text = marker + name + '=' + quote + 'gh' + 'p_' + 'A9' * 7 + nl + 'B8' * 8 + quote + nl + 'next retained'
+        old, current = pre_a1.redact(text), redact(text)
+        assert 'B8' not in old and 'B8' not in current
+        assert _visible_positions(text, current) <= _visible_positions(text, old)
+
+
+def test_a1_stray_closing_bracket(pre_a1):
+    text = 'API_' + 'KEY=[REDACTED]]'
+    assert pre_a1.redact(text) == redact(text) == redact_output(text) == 'API_' + 'KEY=' + MASK
+
+
 @pytest.mark.parametrize('row', TABLE, ids=lambda r: r['id'])
 @pytest.mark.parametrize('scrub', [redact, redact_output])
 def test_a1_decisions(row, scrub):
     text = ''.join(row['input_parts']) * row.get('repeat', 1)
     expected = text if row['expected'] == 'I' else ''.join(row['expected'])
+    if row.get('known_gap'):
+        assert row['accepted_by'] == 'D-5703' and row['readable_parts']
     assert (redact_source if row.get('mode') == 'source' else scrub)(text) == expected
 
 
@@ -72,8 +154,19 @@ def test_x05_empty_and_horizontal_only(tail):
 
 def test_a1_artifacts_parse(tmp_path):
     root = Path(__file__).parent
-    rows = json.loads((root / 'fixtures/redact_name_scope.json').read_text(encoding='utf-8'))
-    assert rows == TABLE
+    for fixture in ('redact_name_scope', 'redact_parity'):
+        raw = (root / ('fixtures/' + fixture + '.json')).read_bytes()
+        rows = json.loads(raw)  # Strict JSON rejects literal CR/LF inside strings.
+        assert rows
+        for row in rows:
+            for part in row.get('input_parts', []):
+                assert isinstance(part, str)
+                encoded = json.dumps(part)
+                assert '\r' not in encoded and '\n' not in encoded
+                assert json.loads(encoded) == part
+        for broken in (b'["raw\nline"]', b'["raw\rline"]', b'["broken]'):
+            with pytest.raises(json.JSONDecodeError):
+                json.loads(broken)
     for name in ('test_redact_assign_scope', 'test_redact_parity', 'test_spawner_runner_answer'):
         py_compile.compile(str(root / (name + '.py')), cfile=str(tmp_path / (name + '.pyc')), doraise=True)
     tree = ast.parse((root / 'test_opencode_json_limit.py').read_text())
@@ -81,7 +174,7 @@ def test_a1_artifacts_parse(tmp_path):
     assert {'json', 'pytest'} <= imports
 
 
-def test_a1_marker_and_deferred_gap_coverage():
+def test_a1_marker_and_deferred_gap_coverage(pre_a1):
     for marker in ('\ue000', '\ue001', '\ue0000\ue001'):
         assert any(marker in ''.join(row['input_parts']) and row['expected'] != 'I' for row in TABLE)
     gaps = ('N16', 'N19', 'N20', 'N21', 'A02', 'A07', 'A08', 'N59', 'N60')
@@ -89,9 +182,9 @@ def test_a1_marker_and_deferred_gap_coverage():
         row = next(row for row in TABLE if row['id'] == 'a1-' + suffix)
         assert row.get('gap', '').startswith(('A2', 'D-5685')), row['id']
     wrapped = next(row for row in TABLE if row['id'] == 'a1-J04')
-    assert wrapped['gap'].startswith('D-5685')
     text = ''.join(wrapped['input_parts'])
-    assert redact_tokens.redact_wrapped(text) == text  # Joined body is still below the floor.
+    _assert_known_gap(wrapped, pre_a1.redact(text), redact(text))
+    assert _visible_positions(text, redact(text)) < _visible_positions(text, pre_a1.redact(text))
 
 
 @pytest.mark.parametrize('scrub', [redact, redact_output])
