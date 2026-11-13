@@ -89,6 +89,8 @@ SHA explicitly in a reviewed PR when needed, not the shared Rust release pin.
 
 ## Lanes
 
+`tools/keeper_deploy.py` replaces stale managed overrides, verifies systemd's effective working directory and Python path, and smokes with claimant-scoped checks before accepting a deployment. Failed checks restore the previous drop-ins; see `docs/RUNBOOK.md`.
+
 Completed Rust ports remove only their own Python waiver from
 `tools/new_code_allowlist.txt`; preserve unrelated exceptions when merging main.
 SPAWNER-RUST-PORT slice 2 also removes the stale doctor-source waiver retired by

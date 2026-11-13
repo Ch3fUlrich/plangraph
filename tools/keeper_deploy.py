@@ -3,14 +3,15 @@
 
     keeper_deploy.py --tag <tag> --sha <sha> --tree <worktree> --probe-key <key> [--dry-run]
 
-Writes the systemd user drop-in ``live-sync-<tag>-<sha>.conf`` (WorkingDirectory
-and PYTHONPATH of the new tree), runs daemon-reload + restart, then a live smoke
+Replaces managed systemd overrides with ``zzzz-plangraph-live-sync.conf`` (WorkingDirectory
+and PYTHONPATH of the new tree), runs daemon-reload + restart, verifies the effective tree, then a live smoke
 within ``--smoke-timeout`` seconds (default 60):
 
 * ``/v1/health`` answers;
 * claim + release of the dedicated probe item (the claim guard reads the
   origin decisions fresh, so "bad_state: cannot read decisions file" shows here);
-* the authenticated ``close_merged`` route returns an explicit dry-run answer.
+* ``close_merged`` returns the expected role refusal (claimants lack router scope),
+  or an explicit dry-run answer for a separately authorized session.
 
 On any failure the previous drop-in set is restored byte for byte, then
 daemon-reload, restart and a health check run, and the exit code is 1 with the
@@ -18,6 +19,7 @@ reason on stderr.  Environment as for ``pg``: PG_URL, PG_TOKEN_FILE.
 """
 import argparse
 from contextlib import contextmanager
+import shlex
 import signal
 import subprocess
 import sys
@@ -30,6 +32,8 @@ from plangraph.keeper.cli_verbs import RefusedCli, Session, Unreachable  # noqa:
 
 UNIT = "plangraph-keeper.service"
 DROPIN_DIR = Path.home() / ".config/systemd/user" / (UNIT + ".d")
+MANAGED_DROPIN = "zzzz-plangraph-live-sync.conf"
+SHOW = ("show", UNIT, "--property=WorkingDirectory", "--property=Environment")
 
 
 def systemctl(*args):
@@ -37,6 +41,7 @@ def systemctl(*args):
     done = subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True, timeout=60)
     if done.returncode:
         raise RuntimeError(f"systemctl {' '.join(args)}: {done.stderr.strip()}")
+    return done.stdout
 
 
 def snapshot_dropins(dropin_dir):
@@ -76,6 +81,7 @@ def wait_health(session, deadline, sleep=time.sleep, clock=time.monotonic):
 @contextmanager
 def smoke_deadline(timeout):
     """Bound even a blocked request on this systemd deployment CLI's main thread."""
+    # SIGALRM handlers can only be installed on the main thread; this is a CLI helper.
     def expired(*_):
         raise TimeoutError('smoke deadline exceeded')
     previous = signal.signal(signal.SIGALRM, expired)
@@ -112,6 +118,8 @@ def _smoke(session, probe_key, timeout, sleep=time.sleep, clock=time.monotonic):
         if not isinstance(answer, dict) or answer.get('dry_run') is not True or answer.get('route') != 'close_merged':
             return 'close_merged did not return a dry-run answer'
     except RefusedCli as exc:
+        if exc.code == "forbidden":
+            return None  # route exists; the successful claimant has no router role
         if exc.code == "not_found":
             return "close_merged route missing"
         return f"close_merged dry-run refused: {exc.code}: {exc.msg}"
@@ -120,16 +128,31 @@ def _smoke(session, probe_key, timeout, sleep=time.sleep, clock=time.monotonic):
     return None
 
 
+def verify_tree(ctl, tree):
+    """Refuse to smoke an older checkout selected by another systemd override."""
+    properties = dict(line.split("=", 1) for line in ctl(*SHOW).splitlines() if "=" in line)
+    environment = dict(entry.split("=", 1) for entry in
+                       shlex.split(properties.get("Environment", "")) if "=" in entry)
+    working = properties.get("WorkingDirectory")
+    if not working or Path(working).resolve() != Path(tree).resolve():
+        raise RuntimeError("effective WorkingDirectory does not select the requested tree")
+    if environment.get("PYTHONPATH") != str(Path(tree) / "src"):
+        raise RuntimeError("effective PYTHONPATH does not select the requested tree")
+
+
 def deploy(tag, sha, tree, probe_key, session, dropin_dir=DROPIN_DIR, ctl=systemctl,
            timeout=60, sleep=time.sleep, clock=time.monotonic):
     """Return ``(0, "ok")`` or ``(1, reason)``; the previous drop-in set survives a failed smoke."""
     saved = snapshot_dropins(dropin_dir)
-    dropin_dir.mkdir(parents=True, exist_ok=True)
-    (dropin_dir / f"live-sync-{tag}-{sha}.conf").write_text(dropin_text(tag, sha, tree))
     reason = None
     try:
+        dropin_dir.mkdir(parents=True, exist_ok=True)
+        for path in dropin_dir.glob("live-sync-*.conf"):
+            path.unlink()
+        (dropin_dir / MANAGED_DROPIN).write_text(dropin_text(tag, sha, tree))
         ctl("daemon-reload")
         ctl("restart", UNIT)
+        verify_tree(ctl, tree)
         reason = smoke(session, probe_key, timeout, sleep, clock)
     except Exception as exc:
         reason = str(exc)

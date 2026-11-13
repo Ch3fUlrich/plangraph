@@ -38,7 +38,17 @@ def setup(tmp_path):
     d.mkdir()
     (d / "live-sync-old-aaaa.conf").write_text("OLD\n")
     ctl_calls = []
-    return d, ctl_calls, lambda *a: ctl_calls.append(a)
+    def ctl(*args):
+        ctl_calls.append(args)
+        if args[0] == 'show':
+            effective = {}
+            for path in sorted(d.glob('*.conf')):
+                for line in path.read_text().splitlines():
+                    key, _, value = line.partition('=')
+                    if key in ('WorkingDirectory', 'Environment'):
+                        effective[key] = value
+            return '\n'.join(f'{key}={value}' for key, value in effective.items())
+    return d, ctl_calls, ctl
 
 
 def run(d, ctl, session):
@@ -50,10 +60,10 @@ def test_smoke_ok_keeps_new_dropin(setup):
     d, calls, ctl = setup
     session = FakeSession()
     assert run(d, ctl, session) == (0, "ok")
-    assert (d / "live-sync-t1-bbbb.conf").exists()
-    assert "PYTHONPATH=/tree/live-bbbb/src" in (d / "live-sync-t1-bbbb.conf").read_text()
+    assert (d / "zzzz-plangraph-live-sync.conf").exists()
+    assert "PYTHONPATH=/tree/live-bbbb/src" in (d / "zzzz-plangraph-live-sync.conf").read_text()
     assert session.calls == ["health", "claim", "release", "close_merged"]
-    assert calls == [("daemon-reload",), ("restart", kd.UNIT)]
+    assert calls == [("daemon-reload",), ("restart", kd.UNIT), kd.SHOW]
 
 
 def test_smoke_fail_restores_previous_and_restarts(setup):
@@ -63,14 +73,14 @@ def test_smoke_fail_restores_previous_and_restarts(setup):
     assert code == 1 and "cannot read decisions file" in msg and "restored" in msg
     assert sorted(p.name for p in d.iterdir()) == ["live-sync-old-aaaa.conf"]
     assert (d / "live-sync-old-aaaa.conf").read_text() == "OLD\n"
-    assert calls == [("daemon-reload",), ("restart", kd.UNIT)] * 2
+    assert calls == [("daemon-reload",), ("restart", kd.UNIT), kd.SHOW, ("daemon-reload",), ("restart", kd.UNIT)]
 
 
 def test_missing_close_merged_route_fails(setup):
     d, _, ctl = setup
     code, msg = run(d, ctl, FakeSession(missing_route=True))
     assert code == 1 and "close_merged route missing" in msg
-    assert not (d / "live-sync-t1-bbbb.conf").exists()
+    assert not (d / "zzzz-plangraph-live-sync.conf").exists()
 
 
 @pytest.mark.parametrize('error', [RuntimeError('restart failed'), OSError('restart failed')])
@@ -84,7 +94,7 @@ def test_restart_error_rolls_back(setup, error):
 
     code, msg = run(d, ctl, FakeSession())
     assert code == 1 and "restart failed" in msg
-    assert not (d / "live-sync-t1-bbbb.conf").exists()
+    assert not (d / "zzzz-plangraph-live-sync.conf").exists()
 
 
 def test_validation_refusal_is_not_a_successful_dry_run(setup):
@@ -101,7 +111,7 @@ def test_missing_dry_run_answer_rolls_back(setup, answer):
                 return answer
             return super().call(method, verb, params, body)
     assert run(d, ctl, Wrong())[0] == 1
-    assert not (d / 'live-sync-t1-bbbb.conf').exists()
+    assert not (d / 'zzzz-plangraph-live-sync.conf').exists()
 
 
 @pytest.mark.parametrize('error', [AttributeError('bad response'), ValueError('bad JSON')])
@@ -114,7 +124,7 @@ def test_unexpected_smoke_exception_rolls_back(setup, error):
             return super().call(method, verb, params, body)
     code, msg = run(d, ctl, Broken())
     assert code == 1 and str(error) in msg and 'restored' in msg
-    assert calls == [('daemon-reload',), ('restart', kd.UNIT)] * 2
+    assert calls == [('daemon-reload',), ('restart', kd.UNIT), kd.SHOW, ('daemon-reload',), ('restart', kd.UNIT)]
     assert sorted(p.name for p in d.iterdir()) == ['live-sync-old-aaaa.conf']
 
 
@@ -155,3 +165,59 @@ def test_close_merged_dry_run_route_is_authenticated_and_preserves_items(tmp_pat
         if doors:
             doors.close()
         world.close()
+
+
+def test_claimant_token_smokes_real_role_checks(tmp_path, monkeypatch):
+    from door_util import Doors
+    from keeper_util import World, seed
+    world = World(tmp_path)
+    doors = None
+    try:
+        seed(world, [('PROBE', [])])
+        doors = Doors(world, tmp_path)
+        token = tmp_path / 'deploy.token'
+        token.write_text(world.tok('l1main'))
+        token.chmod(0o600)
+        monkeypatch.setenv('PG_TOKEN_FILE', str(token))
+        assert doors.http('router', 'POST', '/v1/claim', {'key': 'demo:PROBE'})[0] == 403
+        assert doors.http('l1main', 'POST', '/v1/close_merged', {'dry_run': True})[0] == 403
+        assert kd.smoke(kd.Session(url=doors.url), 'demo:PROBE', 5) is None
+        assert world.store.show(world.p('router'), 'demo:PROBE')['state'] == 'open'
+    finally:
+        if doors:
+            doors.close()
+        world.close()
+
+
+def test_later_managed_override_is_replaced(setup):
+    d, calls, ctl = setup
+    stale = d / 'live-sync-zzzz-ffff.conf'
+    stale.write_text('[Service]\nWorkingDirectory=/stale\nEnvironment=PYTHONPATH=/stale/src\n')
+    assert run(d, ctl, FakeSession()) == (0, 'ok')
+    assert not stale.exists()
+    assert sorted(p.name for p in d.glob('*.conf')) == ['zzzz-plangraph-live-sync.conf']
+    assert any(call[0] == 'show' for call in calls)
+
+
+def test_unmanaged_override_mismatch_rolls_back_before_smoke(setup):
+    d, _, ctl = setup
+    (d / 'zzzzz-operator.conf').write_text('[Service]\nWorkingDirectory=/stale\nEnvironment=PYTHONPATH=/stale/src\n')
+    saved = kd.snapshot_dropins(d)
+    session = FakeSession()
+    code, reason = run(d, ctl, session)
+    assert code == 1 and 'effective' in reason
+    assert session.calls == ['health']  # rollback health only; never smoke the wrong tree
+    assert kd.snapshot_dropins(d) == saved
+
+
+@pytest.mark.parametrize('effective', [
+    'WorkingDirectory=/tree/live-bbbb\nEnvironment=PYTHONPATH=/stale/src',
+    'Environment=PYTHONPATH=/tree/live-bbbb/src',
+])
+def test_effective_unit_requires_both_tree_and_import_path(setup, effective):
+    d, _, ctl = setup
+    def wrong(*args):
+        return effective if args[0] == 'show' else ctl(*args)
+    session = FakeSession()
+    assert run(d, wrong, session)[0] == 1
+    assert session.calls == ['health']

@@ -59,8 +59,8 @@ a write still exits 3.  MCP is stdio JSON-RPC (`tools/list`, `tools/call`) and
 never logs the token.
 
 Switch the live keeper to a new tree with `python tools/keeper_deploy.py --tag T --sha S --tree DIR --probe-key KEY`
-(PG_URL and PG_TOKEN_FILE set): it writes the `live-sync-T-S.conf` drop-in, restarts, and within 60 s smokes
-`/v1/health`, a claim+release of the dedicated probe item (reads origin decisions) and an authenticated `close_merged` dry-run answer (`{"dry_run":true,"route":"close_merged"}`).
+(PG_URL and PG_TOKEN_FILE set): it replaces stale `live-sync-*.conf` overrides with `zzzz-plangraph-live-sync.conf`, restarts, verifies effective WorkingDirectory and PYTHONPATH, and within 60 s smokes
+`/v1/health`, a claim+release of the dedicated probe item (reads origin decisions) and the expected `forbidden` response from router-only `close_merged` (or its explicit dry-run answer for an authorized session). Claimant and router roles remain disjoint.
 The smoke uses one overall deadline for all API calls; malformed responses and all exceptions restore the previous drop-ins.
 `--dry-run` prints the proposed drop-in without changing files or services;
 on failure it restores the previous drop-ins, restarts, and exits 1 with the reason.
