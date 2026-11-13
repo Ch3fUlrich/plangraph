@@ -56,3 +56,11 @@ operation without fetching files or creating state; activation remains cutover.
 `docs/cost-gate.md` specifies private config, complete call-log exports, exact
 arithmetic, fail-closed paid admission, migration and the 24-hour overlap guard.
 No budget or gateway credential is installed by the public setup manifest.
+
+## Namespace inventory and migration
+
+The embedded manifest now records consumer paths and the paired operator task
+for host namespace cutover. `namespace inventory|check|apply --dry-run` supports
+review without host changes. Explicit `namespace apply` only handles allowlisted
+non-secret/state paths. See `docs/namespace-cutover.md` for operator-only secrets,
+container aliases, conflict reconciliation and rollback.

@@ -33,3 +33,79 @@ Persistent=false
 [Install]
 WantedBy=timers.target
 '''
+
+# Inventory only for setup apply; namespace moves require the explicit command.
+[[namespace]]
+name = "non-secret-daily-config"
+old = ".config/autoos/daily-gate.conf"
+new = "@DATA@/host/daily-gate.conf"
+kind = "non-secret"
+consumers = ["cost-gate: operator converts private limits to .config/plangraph/daily-gate.toml"]
+
+[[namespace]]
+name = "breaker-state"
+old = ".local/state/autoos/breaker"
+new = ".local/state/plangraph/breaker"
+kind = "state"
+consumers = ["unit-breaker", "routerctl UNIT_BREAKER"]
+
+[[namespace]]
+name = "fleet-poll-state"
+old = ".local/state/autoos/fleet-poll"
+new = ".local/state/plangraph/fleet-poll"
+kind = "state"
+consumers = ["fleet-poll timer and service"]
+
+[[namespace]]
+name = "ctx-watchdog-state"
+old = ".local/state/autoos/ctx-watchdog"
+new = ".local/state/plangraph/ctx-watchdog"
+kind = "state"
+consumers = ["ctx-watchdog", "watchdog hooks and user units"]
+
+[[namespace]]
+name = "private-config"
+old = ".config/autoos"
+new = ".config/plangraph"
+kind = "secret"
+consumers = ["gateway keys", "fleet-poll", "hooks", "user units: operator-only file inventory"]
+
+[[namespace]]
+name = "omnigraph-environment"
+old = ".autoos-omnigraph.env"
+new = ".config/plangraph/omnigraph.env"
+kind = "secret"
+consumers = ["shell profile: source new env path", "hooks", "gateway units"]
+
+[[namespace]]
+name = "environment-d-shim"
+old = ".config/environment.d/60-autoos-omnigraph.conf"
+new = ".config/environment.d/60-plangraph-omnigraph.conf"
+kind = "operator"
+consumers = ["environment.d: new symlink to .config/plangraph/omnigraph.env"]
+
+[[namespace]]
+name = "gateway-container-data"
+old = ".local/share/autoos/ai-stack"
+new = ".local/share/plangraph/ai-stack"
+kind = "container"
+consumers = ["omniroute bind mount", "qoder-home bind mount", "opencode-home bind mount: preserve bind-path alias"]
+
+[[namespace]]
+name = "remaining-state-inventory"
+old = ".local/state/autoos"
+new = ".local/state/plangraph"
+kind = "operator"
+consumers = ["cost-gate daily-gate files: copy-once import", "all remaining state: operator classifies names before move"]
+
+[[namespace]]
+name = "remaining-share-inventory"
+old = ".local/share/autoos"
+new = ".local/share/plangraph"
+kind = "operator"
+consumers = ["taildrop installed script: retire after timer replacement", "remaining installed files: removal guard"]
+
+[[operator_tasks]]
+task = "plangraph:HOST-NAMESPACE-OPERATOR"
+requires = ["plangraph:HOST-NAMESPACE-MIGRATE"]
+gates = ["autoos:REMOVE-AUTOOS"]

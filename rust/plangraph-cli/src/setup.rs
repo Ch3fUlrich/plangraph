@@ -8,6 +8,10 @@ pub const MANIFEST: &str = include_str!("../../../setup/manifest.toml");
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub files: Vec<Entry>,
+    #[serde(default)]
+    pub namespace: Vec<crate::namespace::Entry>,
+    #[serde(default)]
+    pub operator_tasks: Vec<crate::namespace::Gate>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

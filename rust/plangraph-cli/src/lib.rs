@@ -5,6 +5,7 @@ pub mod cost_cutover;
 pub mod env;
 pub mod merge;
 pub mod migrate;
+pub mod namespace;
 pub mod paths;
 pub mod setup;
 pub mod taildrop;

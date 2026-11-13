@@ -61,6 +61,9 @@ fn run() -> i32 {
     if args.first().is_some_and(|a| a == "cost-gate") {
         return plangraph_cli::cost::cli(&home, &args[1..]);
     }
+    if args.first().is_some_and(|a| a == "namespace") {
+        return plangraph_cli::namespace::cli(&home, &args[1..]);
+    }
     let mode = match args
         .iter()
         .map(String::as_str)
