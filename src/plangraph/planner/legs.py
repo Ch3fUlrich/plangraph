@@ -219,10 +219,10 @@ READINESS_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
     leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)
-# Declared identities, not catalog prices; this does not enable explicit-only legs.
+# Active routed identities, not catalog prices; exclude explicit-only legs.
 SUBSCRIPTION_WRITER_IDENTITIES = frozenset(
-    (leg.harness, leg.model) for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS)
-    if leg.tier == "subscription" and "implement" in leg.roles)
+    (leg.harness, leg.model) for leg in DEFAULT_LEGS
+    if leg.tier == "subscription" and "implement" in leg.roles and leg.disabled is None)
 
 
 def spawnable_legs() -> tuple[Leg, ...]:

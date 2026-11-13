@@ -36,13 +36,16 @@ renderer declares cx effort models; see [SPAWNER.md](SPAWNER.md#card-driven-rout
 
 D-5622 rulings 1, 5 and 6 put eligible subscriptions before pay-as-you-go for
 implement, and for review when Amber is present, exhausting subscriptions first.
-Amber is paid for those roles even if the catalog says otherwise, and precedes
-paid DeepSeek. Other roles and reviews without Amber retain their existing order.
-In `src/plangraph/planner/review_order.py`, `catalog_tiers()` projects costs and
+Amber is paid for those roles even in raw registrations or if the catalog says
+otherwise, and precedes paid DeepSeek. Other roles and reviews without Amber
+retain their existing order. In `src/plangraph/planner/review_order.py`,
+`payment_tier()` classifies costs for all entries, including `catalog_tiers()`.
 `payment_order()` enforces the boundary after ranking, retaining the Sol/Gemini
 implement prefix unless it crosses that boundary. `next_cost_leg()` skips tried
-legs, rotates within a tier, promotes across tiers, and parks when exhausted.
-This core is not wired into any route until slice 1a-2.
+and lower-tier legs, rotates within a tier for implement/review, promotes only
+to higher tiers, and parks when no eligible successor remains. Explicit-only
+identities do not count as serving subscription writers. Tests use only the
+core's actual inputs; route wiring and end-to-end plan tests wait for slice 1a-2.
 
 ## Replan-0438 CI reconciliation
 

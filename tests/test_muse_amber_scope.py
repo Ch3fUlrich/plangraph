@@ -11,7 +11,6 @@ import pytest
 
 from plangraph.planner import legs as registrations, review_order
 from plangraph.planner.legs import Leg
-from plangraph.planner.route_policy import RoutePolicy
 
 AMBER_ID = 'opencode-console-muse-spark'
 AMBER_MODEL = 'console-meta/muse-spark-1.3-contributor'
@@ -70,26 +69,18 @@ def muse_legs():
                      roles=('implement', 'review')) for id, tier, model, family in specs)
 
 
-@pytest.fixture
-def muse_plan_inputs(muse_legs, muse_catalog_rows):
-    return dict(legs=muse_legs, catalog_rows=muse_catalog_rows,
-                policy=RoutePolicy(banned_families=(), off_families=(), paused_harnesses={}),
-                leg_reader=lambda *a, **k: {'state': 'ok', 'evidence': {'kind': 'fixed'}},
-                benchmark={}, strict=False, now=1000.0)
-
-
 def ids(legs):
     return tuple(leg.id for leg in legs)
 
 
 @pytest.mark.parametrize('role', ('implement', 'review'))
 @pytest.mark.parametrize('repriced', (False, True))
-def test_subscription_boundary_survives_ranking(muse_plan_inputs, role, repriced):
-    rows = muse_plan_inputs['catalog_rows']
+def test_subscription_boundary_survives_ranking(muse_legs, muse_catalog_rows, role, repriced):
+    rows = muse_catalog_rows
     if repriced:
         rows = tuple(dict(row, tier='paid') if row['id'] in (
             'omniroute/cx-gpt-6.1-sol-xhigh', 'agy/gemini-3.8-flash') else row for row in rows)
-    legs = review_order.catalog_tiers(muse_plan_inputs['legs'], rows, role=role)
+    legs = review_order.catalog_tiers(muse_legs, rows, role=role)
     result = review_order.payment_order(tuple(reversed(legs)), role)
     costs = [leg.tier for leg in result if leg.tier in ('subscription', 'paid')]
     assert costs == sorted(costs, key=('subscription', 'paid').index)
@@ -97,22 +88,28 @@ def test_subscription_boundary_survives_ranking(muse_plan_inputs, role, repriced
         assert ids(result) == (('omniroute-muse-spark', 'mimo-v2.6-pro', 'agy-gemini-4-argon',
                                'cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash', AMBER_ID, 'deepseek')
                               if repriced else ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash',
-                               'omniroute-muse-spark', 'mimo-v2.6-pro', 'agy-gemini-4-argon', AMBER_ID, 'deepseek'))
+                                'omniroute-muse-spark', 'mimo-v2.6-pro', 'agy-gemini-4-argon', AMBER_ID, 'deepseek'))
+    else:
+        assert ids(result) == (('omniroute-muse-spark', 'mimo-v2.6-pro', 'agy-gemini-4-argon',
+                                AMBER_ID, 'deepseek', 'agy-gemini-3.8-flash', 'cx-gpt-6.1-sol-xhigh')
+                               if repriced else ('omniroute-muse-spark', 'mimo-v2.6-pro',
+                                'agy-gemini-4-argon', 'cx-gpt-6.1-sol-xhigh', AMBER_ID, 'agy-gemini-3.8-flash', 'deepseek'))
     assert review_order.payment_order(result, role) == result
 
 
 @pytest.mark.parametrize('role', ('implement', 'review'))
 def test_paid_amber_precedes_deepseek(muse_legs, role):
-    sol, free, sub, mimo, pool, amber, deepseek = muse_legs
+    free, sub, mimo, pool, amber, deepseek = muse_legs[1:]
     trial = replace(free, id='trial', tier='trial')
     other = replace(amber, id='other-paid', model='fixture/other', family='gpt')
     legs = (deepseek, trial, sub, other, free, amber, mimo, pool)
+    before = tuple(vars(leg).copy() for leg in legs)
     result = review_order.payment_order(legs, role)
     assert ids(result) == (('agy-gemini-3.8-flash', 'agy-gemini-4-argon', 'trial',
                            'mimo-v2.6-pro', 'omniroute-muse-spark', AMBER_ID, 'deepseek', 'other-paid')
                           if role == 'implement' else ('agy-gemini-4-argon', 'trial',
                            'mimo-v2.6-pro', 'omniroute-muse-spark', 'agy-gemini-3.8-flash', AMBER_ID, 'deepseek', 'other-paid'))
-    assert muse_legs[0] == sol and legs[0] == deepseek
+    assert tuple(vars(leg) for leg in legs) == before
     if role == 'review':
         assert result[1] is trial and result[4] is free
 
@@ -132,7 +129,7 @@ def test_subscription_walk_without_amber(muse_legs, role):
 def test_failure_walk_exhausts_subscriptions(muse_legs, role, explicit_tried):
     legs = review_order.payment_order((muse_legs[-1], muse_legs[3], muse_legs[-2], muse_legs[2]), role)
     last, walked = legs[0], [legs[0].id]
-    tried = [last.id] if explicit_tried else []
+    tried = [legs[1].id] if explicit_tried else []
     while True:
         action, successor = review_order.next_cost_leg(legs, tried, last, role=role)
         if successor is None:
@@ -140,13 +137,14 @@ def test_failure_walk_exhausts_subscriptions(muse_legs, role, explicit_tried):
             break
         assert action == ('rotate' if successor.tier == last.tier else 'promote')
         assert successor.id not in walked
-        tried.extend([last.id] if not tried else [])
-        tried.append(successor.id)
+        tried.append(last.id)
         walked.append(successor.id)
         last = successor
-    assert walked == ['mimo-v2.6-pro', 'agy-gemini-4-argon', AMBER_ID, 'deepseek']
-    first_tried = [legs[0].id] if explicit_tried else []
-    assert review_order.next_cost_leg(legs, first_tried, legs[0], role=role) == ('rotate', legs[1])
+    assert walked == (['mimo-v2.6-pro', AMBER_ID, 'deepseek'] if explicit_tried else
+                      ['mimo-v2.6-pro', 'agy-gemini-4-argon', AMBER_ID, 'deepseek'])
+    first_tried = [legs[1].id] if explicit_tried else []
+    assert review_order.next_cost_leg(legs, first_tried, legs[0], role=role) == (
+        ('promote', legs[2]) if explicit_tried else ('rotate', legs[1]))
 
 
 @pytest.mark.parametrize('role', (None, 'orchestrate', 'research', 'review'))
@@ -203,7 +201,6 @@ def test_declared_subscription_writer_identities():
     assert registrations.AMBER_LEG_ID == AMBER_ID and registrations.AMBER_MODEL == AMBER_MODEL
     identities = registrations.SUBSCRIPTION_WRITER_IDENTITIES
     for pair in (('opencode', 'omniroute/cx-gpt-6.1-sol-xhigh'),
-                 ('opencode', 'omniroute/cx-gpt-6.1-sol'), ('agy', 'claude-sonnet-5-5-high'),
                  ('agy', 'gemini-4-argon-high'), ('opencode', 'mimo/mimo-v2.6-pro'),
                  ('opencode', 'omniroute/muse-spark-1.3-contributor')):
         assert pair in identities
@@ -212,3 +209,40 @@ def test_declared_subscription_writer_identities():
     assert {('opencode', 'mimo/mimo-v2.6-flash'),
             ('opencode', 'omniroute/deepseek-flash')} <= identities
     assert ('opencode', AMBER_MODEL) not in identities
+    assert not identities & {(leg.harness, leg.model) for leg in registrations.EXPLICIT_LEGS}
+    assert identities == frozenset((leg.harness, leg.model) for leg in registrations.DEFAULT_LEGS
+                                  if leg.tier == 'subscription' and 'implement' in leg.roles
+                                  and leg.disabled is None)
+
+
+@pytest.mark.parametrize('role', ('implement', 'review'))
+@pytest.mark.parametrize('entry', ('raw', 'catalog', 'role-catalog'))
+def test_raw_registrations_keep_amber_after_subscriptions(role, entry):
+    amber = next(leg for leg in registrations.READINESS_LEGS if leg.id == AMBER_ID)
+    assert amber.tier == 'subscription'
+    subscriptions = tuple(leg for leg in registrations.DEFAULT_LEGS
+                          if leg.tier == 'subscription' and leg.id != AMBER_ID
+                          and role in leg.roles and leg.disabled is None)
+    deepseek = next(leg for leg in registrations.DEFAULT_LEGS if leg.id == 'deepseek')
+    legs = (deepseek, amber, *subscriptions)
+    if entry != 'raw':
+        legs = review_order.catalog_tiers(legs, (), role=role if entry == 'role-catalog' else None)
+    amber = next(leg for leg in legs if leg.id == AMBER_ID)
+    result = ids(review_order.payment_order(legs, role))
+    assert all(result.index(leg.id) < result.index(AMBER_ID) for leg in subscriptions)
+    assert result.index(AMBER_ID) < result.index(deepseek.id)
+    assert review_order.next_cost_leg(legs, ids(subscriptions), subscriptions[0], role=role) == ('promote', amber)
+    assert review_order.next_cost_leg(legs, (), amber, role=role) == ('rotate', deepseek)
+
+
+@pytest.mark.parametrize('role', (None, 'orchestrate', 'implement', 'review'))
+@pytest.mark.parametrize('tier', ('subscription', 'paid'))
+@pytest.mark.parametrize('cheaper', ('trial', 'free'))
+def test_failure_walk_never_promotes_a_lower_tier(muse_legs, role, tier, cheaper):
+    last = replace(muse_legs[3], id='last', tier=tier)
+    cheap = replace(muse_legs[1], id='cheap', tier=cheaper)
+    paid = muse_legs[-1]
+    expected = ('promote', paid) if tier == 'subscription' else (
+        ('rotate', paid) if role in ('implement', 'review') else ('park', None))
+    assert review_order.next_cost_leg((last, cheap, paid), (), last, role=role) == expected
+    assert review_order.next_cost_leg((last, cheap), (), last, role=role) == ('park', None)
