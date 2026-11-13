@@ -76,7 +76,7 @@ def smoke_tests(texts, path):
     return set(near) | ({SMOKE_TEST} if SMOKE_TEST in texts else set())
 
 
-def select_tests(root, changed, within=None):
+def select_tests(root, changed, within=None, *, local=False):
     root = Path(root)
     paths = sorted(p for folder in ("src", "tests") for p in (root / folder).rglob("*.py"))
     modules = {}
@@ -149,7 +149,7 @@ def select_tests(root, changed, within=None):
             # scratch files stay skippable here.
             if not revision_asset(root, path, asset_cache):
                 continue
-        if p.name == "conftest.py" or (path.startswith("tests/") and not p.name.startswith("test_")):
+        if p.name == "conftest.py" or (not local and path.startswith("tests/") and not p.name.startswith("test_")):
             return fallback("shared fixture")
         if p.parts[0] in {"src", "tests", "tools"} and path not in texts and p.suffix == ".py":
             selected.update(smoke_tests(texts, path))
@@ -191,6 +191,7 @@ def main(root=None):
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
     parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
     parser.add_argument("-n", "--workers", default="auto")
     parser.add_argument("--within", nargs="+", action="extend", help="restrict selection to given paths")
@@ -206,8 +207,11 @@ def main(root=None):
             if not (root / w).exists():
                 print(f"unknown --within path: {w}", file=sys.stderr)
                 return 2
-    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within)
+    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, local=args.local)
     print(json.dumps(plan), flush=True)
+    if args.local and args.run and "tests" in plan["tests"]:
+        print('local preflight refuses the full suite; specify affected test files with --within', file=sys.stderr)
+        return 2
     if args.within is not None and not plan["tests"]:
         print("no pg-affected tests")
         return 0

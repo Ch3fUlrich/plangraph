@@ -87,6 +87,16 @@ def test_environment(root, env):
             and not key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
 
 
+def test_baseline(root, fallback):
+    """Local tests cover this branch's changes, excluding inherited upstream commits."""
+    try:
+        subprocess.check_output(['git', 'rev-parse', '--verify', 'origin/main^{commit}'],
+                                cwd=root, stderr=subprocess.DEVNULL, timeout=CHECK_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return fallback
+    return 'origin/main'
+
+
 def main(argv=None, root=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="origin/main")
@@ -121,8 +131,8 @@ def main(argv=None, root=None):
     if words:
         scrubs.append(python("preflight_private_scrub.py", "--base", args.base,
                              "--head", args.head, "--words", words))
-    tests = python("affected_tests.py", "--base", args.base, "--head", args.head,
-                   "--root", str(root), "--run")
+    tests = python("affected_tests.py", "--base", test_baseline(root, args.base), "--head", args.head,
+                   "--root", str(root), "--run", "--local")
     if importlib.util.find_spec("xdist") is not None:
         tests += ["--workers", "2"]
     families = [("scrub", scrubs),

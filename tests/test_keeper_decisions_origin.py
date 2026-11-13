@@ -2,53 +2,72 @@
 import os
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from plangraph.keeper import evidence
+from git_helpers import decisions_git as git, data_repos
 
 
-def git(repo, *args):
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], check=True, capture_output=True,
-        text=True, timeout=30).stdout.strip()
+def test_credential_carry_is_helper_only_and_preserves_reset_order(tmp_path, monkeypatch):
+    from plangraph.keeper import evidence_decisions as ed
+    from git_helpers import git_cli
+    git_cli(tmp_path, monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / 'global.gitconfig'
+    config.write_text('[credential]\n helper = first\n helper =\n helper = second\n username = secret-user\n'
+                      '[credential "https://example.invalid"]\n helper = scoped\n useHttpPath = true\n')
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(config))
+    env = ed._origin_git_env()
+    pairs = [(env[f'GIT_CONFIG_KEY_{i}'], env[f'GIT_CONFIG_VALUE_{i}'])
+             for i in range(int(env['GIT_CONFIG_COUNT']))]
+    assert pairs == [('credential.helper', 'first'), ('credential.helper', ''),
+                     ('credential.helper', 'second'), ('credential.https://example.invalid.helper', 'scoped')]
 
 
-@pytest.fixture
-def data_repos(tmp_path, monkeypatch, request):
-    # Ignore caller hooks/config and repository-local Git environment, including
-    # the context inherited when these tests run inside the pre-push hook.
-    for name in list(os.environ):
-        if name.startswith("GIT_"):
-            monkeypatch.delenv(name)
-    for name, value in {
-        "HOME": str(tmp_path), "XDG_CONFIG_HOME": str(tmp_path / "config"),
-        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
-        "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.invalid",
-        "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.invalid",
-        "GIT_TERMINAL_PROMPT": "0", "GIT_ALLOW_PROTOCOL": "file",
-    }.items():
-        monkeypatch.setenv(name, value)
-    origin = tmp_path / "origin.git"
-    git(tmp_path, "init", "--bare", "--initial-branch=main", str(origin))
-    clone = tmp_path / "data"
-    git(tmp_path, "clone", str(origin), str(clone))
-    relative = getattr(request, "param", "router/docs/decisions-log.md")
-    log = clone / relative
-    log.parent.mkdir(parents=True)
-    initial = "| D-1 | demo | Initial decision |\n"
-    log.write_text(initial, encoding="utf-8")
-    git(clone, "add", ".")
-    git(clone, "commit", "-m", "Initial decisions")
-    git(clone, "push", "origin", "main")
-    base = git(clone, "rev-parse", "HEAD")
-    worktree = tmp_path / "writer"
-    git(clone, "worktree", "add", "-b", "decisions-update", str(worktree))
-    return SimpleNamespace(
-        origin=origin, clone=clone, log=log, relative=relative,
-        worktree=worktree, base=base, initial=initial,
-        ctx=evidence.default_context({"decisions_file": str(log)}))
+def test_credential_reader_timeout_kills_and_reaps_child(tmp_path, monkeypatch):
+    from plangraph.keeper import evidence_decisions as ed
+    calls = []
+    class Stuck:
+        returncode = None
+        def communicate(self, timeout=None):
+            calls.append(('communicate', timeout))
+            if timeout:
+                raise subprocess.TimeoutExpired('git', timeout)
+            return b'', b''
+        def kill(self):
+            calls.append(('kill',))
+    monkeypatch.setattr(ed.subprocess, 'Popen', lambda *a, **kw: Stuck())
+    assert ed._global_credential_entries() == []
+    assert calls == [('communicate', 10), ('kill',), ('communicate', None)]
+
+
+def test_authenticated_origin_uses_helper_and_isolates_hostile_global_config(data_repos, tmp_path, monkeypatch, capsys, caplog):
+    from git_helpers import git_cli, authenticated_git_origin
+    from plangraph.keeper import evidence_decisions as ed
+    fixture_git, _ = git_cli(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    with authenticated_git_origin(tmp_path) as url:
+        fixture_git(data_repos.clone, 'remote', 'set-url', 'origin', url)
+        helper = tmp_path / 'credential-helper'
+        helper.write_text('#!/bin/sh\ncat >/dev/null\nif [ "$1" = get ]; then\n'
+                          'printf "username=fixture-user\\npassword=fixture-password\\n"\nfi\n')
+        helper.chmod(0o700)
+        included = tmp_path / 'included.gitconfig'
+        included.write_text('[credential]\n helper = !touch INCLUDED-HELPER-RAN\n')
+        config = tmp_path / 'global.gitconfig'
+        config.write_text(f'[credential]\n helper = {helper}\n[core]\n fsmonitor = touch HOSTILE-RAN\n'
+                          f'[url "file:///missing/"]\n insteadOf = http://127.0.0.1:\n'
+                          f'[include]\n path = {included}\n[http]\n extraHeader = X-Fixture-Secret: fake-header-value\n')
+        monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(config))
+        monkeypatch.setenv('GIT_ALLOW_PROTOCOL', 'http:file')
+        assert ed._global_credential_entries() == [('credential.helper', str(helper))]
+        assert ed.read_decisions_origin(data_repos.log) == data_repos.initial
+        assert not list(tmp_path.rglob('HOSTILE-RAN')) and not list(tmp_path.rglob('INCLUDED-HELPER-RAN'))
+        monkeypatch.setattr(ed, '_global_credential_entries', lambda: [])
+        with pytest.raises(ed.DecisionsFetchFailed):
+            ed.read_decisions_origin(data_repos.log)  # the original credential-loss defect
+        assert 'fixture-password' not in repr(capsys.readouterr()) + caplog.text
 
 
 def verify(ctx, decision="D-5571"):
