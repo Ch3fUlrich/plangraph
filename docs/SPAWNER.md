@@ -41,6 +41,7 @@ Then main's order runs: full assignments, wrapped prefixed tokens, URL userinfo,
 token catalog and JWT. P protects only OLD matched names; the unchanged joins can still eat wider names.
 Source mode (`redact_source`) skips P and both assignment stages; its order is unchanged.
 Python masks wider plain assignments and exact `os.environ` subscript assignments through the physical line end (CR/LF only), before P; OLD behavior and both joins are unchanged.
+Python's PEM and numeric helpers live in `redact_tokens`; their behavior and stage order are unchanged.
 Exact new double-quoted colon keys remain open gap A2, the JSON-key rule. Next-line and backslash continuation forms remain open gap slice C REDACT-ASSIGN-JOIN-GAPS; neither join is fixed.
 JSON-tail limit-loss: a wider plain assignment hides the rest of its line, including later limit evidence inside JSON strings or dict-style text. Structured 429/402 JSON readers can lose limit evidence after scrubbing; dict-style lines are not read even raw, while raw streaming refusal detection and raw step accounting still run before scrubbing.
 Slice A2 also owns three known gaps: a wider name starting where an older-rule match ends is not masked yet; a wider name hides the whole rest of its line, including a later older-rule label; and quoted keys with blanks before the colon stay as on main.

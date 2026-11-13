@@ -3,22 +3,7 @@ import json
 import re
 from decimal import Decimal
 from .redact_tokens import TOKENS, JWT, redact_wrapped, join_shielded_assignments
-from .redact_tokens import redact_wide_assignments
-
-
-def _redact_pem(text):
-    # Scan markers once: a lazy complete-block regex retries every unterminated
-    # BEGIN against the whole suffix, quadratic on adversarial prompt text.
-    out, copied, start = [], 0, None
-    for match in re.finditer(r'-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----', text):
-        if match[1] == 'BEGIN' and start is None:
-            start = match.start()
-        elif match[1] == 'END' and start is not None:
-            out.extend((text[copied:start], '[REDACTED]'))
-            copied, start = match.end(), None
-    if start is not None:
-        return ''.join((*out, text[copied:start], '[REDACTED]'))
-    return ''.join((*out, text[copied:]))
+from .redact_tokens import _redact_pem, _is_numeric, redact_wide_assignments
 
 
 _ASSIGNMENT = re.compile(
@@ -208,17 +193,6 @@ def busy_refusal(text):
         except (ValueError, TypeError, AttributeError):
             pass
     return None
-
-
-def _is_numeric(value):
-    """True for optionally signed decimal digits only: "-1", "+8080", "8080".
-
-    Such values are configuration (sentinel, port, limit), never credential
-    material, so a configured provider env name may expose them. Every other
-    literal form stays redacted: "1_000" (digit grouping), "0x1F", "1.5" and
-    friends can carry a secret payload.
-    """
-    return re.fullmatch(r'[+-]?\d+', value) is not None
 
 
 def normalize(text):
