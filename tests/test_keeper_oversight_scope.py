@@ -80,7 +80,7 @@ def _seed(w):
         defn("HIGH", [], project=P, review_tier="high"),
         defn("GATE", [], project=P, kind="gate", review_tier="high"),
         defn("DEC", [], project=P, kind="decision", review_tier="none",
-             evidence_kinds=["decision"]),
+             evidence_kinds=["decision"], description="Why: choose\nHow: answer"),
         defn("OPTASK", [], project=P, kind="operator_task",
              review_tier="standard"),
         defn("GOAL", ["HOST", "OTHER", "LINK", "CLAIMED", "HIGH", "GATE",
