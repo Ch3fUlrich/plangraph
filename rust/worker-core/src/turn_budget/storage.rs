@@ -82,7 +82,8 @@ fn replace_status(file: &mut tempfile::NamedTempFile, path: &Path) -> std::io::R
     // UTF-16 name (including NUL); file owns the handle for the entire call.
     let result = unsafe {
         // FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS:
-        // old reader handles remain valid; new opens get the complete new file.
+        // Delete-sharing reader handles remain valid; new opens get the new
+        // file. POSIX semantics do not override a reader denying delete sharing.
         (*info).Anonymous.Flags = 0x1 | 0x2;
         (*info).FileNameLength = (name.len() * mem::size_of::<u16>()) as u32;
         std::ptr::copy_nonoverlapping(
@@ -104,6 +105,39 @@ fn replace_status(file: &mut tempfile::NamedTempFile, path: &Path) -> std::io::R
     // file that happens to reuse it. Errors above retain ordinary temp cleanup.
     file.disable_cleanup(true);
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn reader_without_delete_sharing_blocks_replace_without_corrupting_status() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::{
+        Foundation::ERROR_SHARING_VIOLATION,
+        Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("status.json");
+    let original = br#"{"wake_calls":1}"#;
+    let replacement = br#"{"wake_calls":2}"#;
+    atomic_write(&path, original).unwrap();
+    let mut held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(&path)
+        .unwrap();
+    // This documents an unresolved publication limitation, not a successful
+    // counter update: the hook fails open when this IO error reaches it.
+    let error = atomic_write(&path, replacement).unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(ERROR_SHARING_VIOLATION as i32));
+    let mut snapshot = Vec::new();
+    held.read_to_end(&mut snapshot).unwrap();
+    assert_eq!(snapshot, original);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    let entries: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, ["status.json"]);
 }
 
 pub fn successful(payload: &Value) -> bool {

@@ -76,8 +76,10 @@ fn concurrent_reader_only_observes_complete_atomic_status_documents() {
     document["other"] = json!("x".repeat(128 * 1024));
     fs::write(&path, document.to_string()).unwrap();
     std::thread::scope(|scope| {
-        let (ready_tx, ready_rx) = mpsc::sync_channel(0);
-        let (written_tx, written_rx) = mpsc::sync_channel(0);
+        // Failure watchdog only: allow a loaded runner ample time per write,
+        // without measuring production latency or retrying a failed read.
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (written_tx, written_rx) = mpsc::channel();
         let path = &path;
         let reader = scope.spawn(move || {
             let mut reads = 0;
@@ -90,12 +92,14 @@ fn concurrent_reader_only_observes_complete_atomic_status_documents() {
                 let old: Value = serde_json::from_slice(&original).unwrap();
                 assert_eq!(old["turn_budget"]["wake_calls"], index - 1);
                 ready_tx.send(()).unwrap();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
                 loop {
                     match written_rx.try_recv() {
                         Ok(()) => break,
                         Err(mpsc::TryRecvError::Disconnected) => panic!("writer disconnected"),
                         Err(mpsc::TryRecvError::Empty) => (),
                     }
+                    assert!(std::time::Instant::now() < deadline, "writer timed out");
                     // Each concurrent observation must parse; neither missing
                     // nor partial documents are retried or ignored.
                     let raw = fs::read(path).unwrap();
@@ -127,7 +131,9 @@ fn concurrent_reader_only_observes_complete_atomic_status_documents() {
             reads
         });
         for index in 1..=30 {
-            ready_rx.recv().unwrap();
+            ready_rx
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap();
             f.call(&format!("atomic-{index}"), index);
             f.event("Stop", START + index);
             written_tx.send(()).unwrap();

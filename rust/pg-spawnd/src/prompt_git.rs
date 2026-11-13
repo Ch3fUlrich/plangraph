@@ -79,20 +79,18 @@ fn collect_diff(
     }
     let completed =
         result.is_ok() && exited.is_some() && reader.is_finished() && Instant::now() < deadline;
-    // This group was created by this invocation; never signal a registry process.
-    if exited.is_none()
-        && child
-            .try_wait()
-            .map_err(|_| InlineDiffError::Git)?
-            .is_none()
-    {
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(-(child.id() as i32), libc::SIGKILL);
+    let status = reap_after_kill(&mut child, |child| {
+        // This group was created by this invocation; never signal a registry process.
+        if exited.is_none() && child.try_wait()?.is_none() {
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGKILL);
+            }
+            return child.kill();
         }
-        child.kill().map_err(|_| InlineDiffError::Git)?;
-    }
-    let status = child.wait().map_err(|_| InlineDiffError::Git)?;
+        Ok(())
+    })
+    .map_err(|_| InlineDiffError::Git)?;
     // A descendant outside our owned group may still hold stdout. Never wait
     // for its EOF on failure; the detached reader exits when that holder closes.
     if !completed {
@@ -111,6 +109,16 @@ fn collect_diff(
         return Err(InlineDiffError::Git);
     }
     Ok(bytes)
+}
+
+fn reap_after_kill(
+    child: &mut std::process::Child,
+    kill: impl FnOnce(&mut std::process::Child) -> std::io::Result<()>,
+) -> std::io::Result<std::process::ExitStatus> {
+    // Exit can race termination (including a preceding group signal). Never
+    // propagate a kill error before waiting and reaping the owned child.
+    let _ = kill(child);
+    child.wait()
 }
 
 pub(crate) fn validate(diff: &DiffRef) -> Result<(), InlineDiffError> {
