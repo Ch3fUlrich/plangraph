@@ -1,0 +1,1 @@
+- Select standalone Rust crates by their own manifest in pre-push preflight.

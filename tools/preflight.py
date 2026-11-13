@@ -97,19 +97,28 @@ def rust_commands(root, base, head, env=None):
     for manifest in (root / "rust").rglob("Cargo.toml"):
         if "target" in manifest.parts:
             continue
-        if members is not None and manifest.parent.resolve() not in members:
-            continue
         data = tomllib.loads(manifest.read_text())
         if "package" in data:
             manifests[manifest.parent.relative_to(root).as_posix()] = data["package"]["name"]
     selected = set()
     for path in changed:
         owners = [p for p in manifests if path.startswith(p + "/")]
-        selected.update([max(owners, key=len)] if owners else manifests)
-    packages = [arg for p in sorted(selected) for arg in ("-p", manifests[p])]
-    return [["cargo", "fmt", "--check"],
-            ["cargo", "clippy", *packages, "--all-targets", "--", "-D", "warnings"],
-            ["cargo", "test", *packages]]
+        selected.update([max(owners, key=len)] if owners else
+                        [p for p in manifests if members is None or (root / p).resolve() in members])
+    workspace_selected = [p for p in sorted(selected)
+                          if members is None or (root / p).resolve() in members]
+    packages = [arg for p in workspace_selected for arg in ("-p", manifests[p])]
+    commands = []
+    if workspace_selected:
+        commands += [["cargo", "fmt", "--check"],
+                     ["cargo", "clippy", *packages, "--all-targets", "--", "-D", "warnings"],
+                     ["cargo", "test", *packages]]
+    for path in sorted(selected - set(workspace_selected)):
+        manifest = ["--manifest-path", str(root / path / 'Cargo.toml')]
+        commands += [["cargo", "fmt", *manifest, "--check"],
+                     ["cargo", "clippy", *manifest, "--all-targets", "--", "-D", "warnings"],
+                     ["cargo", "test", *manifest]]
+    return commands
 
 
 def test_environment(root, env):

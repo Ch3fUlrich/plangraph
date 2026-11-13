@@ -337,3 +337,7 @@ Local preflight invokes `affected_tests.py --files-only`: changed test files and
 Pre-push checks each pushed ref in a temporary detached worktree, including file-size,
 policy and affected tests. Staged and unstaged edits in the pushing checkout do not
 participate; the temporary worktree is removed after success or refusal.
+
+Preflight resolves changed Rust paths to their nearest package manifest. Workspace
+members use package selection; standalone crates (including `rust/worker`) run
+format, clippy and test with their own `--manifest-path`.

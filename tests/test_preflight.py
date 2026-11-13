@@ -213,6 +213,28 @@ def test_rust_selection(repo, monkeypatch):
     assert commands[2] == ["cargo", "test", "-p", "one"]
 
 
+def test_standalone_worker_selection_runs_own_manifest(repo, monkeypatch):
+    rust = repo / 'rust'
+    worker = rust / 'worker'
+    worker.mkdir(parents=True)
+    (rust / 'Cargo.toml').write_text('[workspace]\nmembers = []\nexclude = ["worker"]\n')
+    manifest = worker / 'Cargo.toml'
+    manifest.write_text('[package]\nname = "pg-worker"\n[workspace]\n')
+    subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
+    subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                    'commit', '-qm', 'manifests'], cwd=repo, check=True)
+    (worker / 'lib.rs').write_text('// worker change\n')
+    subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
+    subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                    'commit', '-qm', 'worker'], cwd=repo, check=True)
+    monkeypatch.setattr(preflight.shutil, 'which', lambda *a, **kw: '/fake/cargo')
+    calls = fake_runner(monkeypatch)
+    assert preflight.main(['--base', 'HEAD~1', '--fast'], repo) == 0
+    commands = [c for c, _, _ in calls if c[0] == 'cargo']
+    assert ['cargo', 'test', '--manifest-path', str(manifest)] in commands
+    assert all('-p' not in c for c in commands)
+
+
 @pytest.mark.parametrize("rust_changed", [False, True])
 def test_cargo_absent(repo, monkeypatch, capsys, rust_changed):
     if rust_changed:
