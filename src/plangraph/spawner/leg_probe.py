@@ -192,14 +192,10 @@ async def _await_completion(runner, job, deadline):
 
 
 async def probe(runner, leg, *, timeout_s=None, store=None):
-    """One real commit task in a disposable repo.
+    """One real commit task in a disposable repo; infra failures book no leg state.
 
-    Probe infrastructure failures (git/gpg/hooks in the temp repo) are reported
-    with ``infra=True`` and never recorded as leg failures.  After the run the
-    caller's cwd-repo HEAD must be unchanged: a moved HEAD means the writer
-    leaked out of the temp repo into the caller's repo (D-3465) and is
-    reported as ``ok=False`` with reason "probe leaked into caller repo" --
-    the caller's repo is never auto-reset.
+    D-3465: a moved caller HEAD reports ``ok=False``, "probe leaked into caller
+    repo"; the caller's repo is never auto-reset.
     """
     timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout_s, positive=True, parameter='timeout_s')
     state = store if store is not None else leg_state
@@ -316,7 +312,6 @@ async def before_launch(runner, leg, role, dry_run):
     from .target import quota_paused
     root = (getattr(runner, 'state', None) or getattr(runner, '_state', None)
             or getattr(runner, 'state_root', None))
-    # Refuse before resolving a store that may create state or raise.
     if quota_paused(root, role, leg):
         return 'quota pause'
     if dry_run:
@@ -332,30 +327,30 @@ async def before_launch(runner, leg, role, dry_run):
         root = Path(path).parent
     if quota_paused(root, role, leg):
         return 'quota pause'
-
-    def admission():
+    def admission(retry=True):
         if adapter:
             status = adapter.leg_status(key(leg), account=getattr(leg, 'account', None),
                                         combo=getattr(leg, 'combo', None))
             if status['state'] != 'ok':
                 reason = status.get('reason') or status['state']
+                if retry and reason.startswith('leg_state_snapshot_error:'):
+                    adapter._at = None
+                    return admission(False)
                 return 'leg_state_snapshot_error' if reason.strip().lower() == 'unknown' else reason
         return None
-    # D-3685: a leg booked limited is known-unusable until its reset. Skip it
-    # before any freshness or probe logic -- every role, TTL 0 included --
-    # without a probe run or a probe row; a newer success lifts the booking
-    # and leg_status then says ok again.
-    status = state.leg_status(key(leg))
-    if status.get('state') == 'limited':
-        return 'limited until ' + reset_iso((status.get('evidence') or {}).get('reset_at'))
-    if not ttl or role not in ('implement', 'fix'):
-        return admission()
-    ts = state.last_probe_ts(key(leg))  # successes only: a failed probe is not fresh evidence
+    def limit():  # D-3685: booked provider limits win before and after probes.
+        if (status := state.leg_status(key(leg))).get('state') == 'limited':
+            return 'limited until ' + reset_iso((status.get('evidence') or {}).get('reset_at'))
+    if booked := limit():
+        return booked
+    skip = admission()
+    snapshot_error = (skip or '').startswith('leg_state_snapshot_error:')
+    if not snapshot_error and (not ttl or role not in ('implement', 'fix')):
+        return skip
+    ts = None if snapshot_error else state.last_probe_ts(key(leg))
     if ts is not None and time.time() - ts < ttl:
-        return admission()
-    # Single flight per leg: concurrent launches share one in-flight probe and
-    # its verdict, fresh failure included, instead of each paying a model run.
-    pending = _INFLIGHT.get(key(leg))
+        return skip  # Only ordinary admission may reuse pre-failure probe evidence.
+    pending = _INFLIGHT.get(key(leg))  # Share concurrent probes, failures included.
     if pending is None:
         pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state))
         pending.add_done_callback(lambda _: _INFLIGHT.pop(key(leg), None))
@@ -363,8 +358,13 @@ async def before_launch(runner, leg, role, dry_run):
     reason = result.get('reason')
     if not reason or reason.strip().lower() == 'unknown':
         reason = 'host_not_ready' if result.get('state') == 'host-not-ready' else 'leg_probe_failed'
+    if snapshot_error:
+        from .env_redact import redact_output, redact_env_values
+        return limit() or (None if result['ok'] else redact_output(redact_env_values(skip, os.environ)) + '; probe: ' + reason)
     if result.get('state') == 'host-not-ready':
         return reason
+    if adapter:
+        adapter._at = None  # Re-read after an ordinary probe.
     return admission() if result['ok'] or result.get('infra') or result.get('state') == 'probe_failed_leg_serving' else 'down: ' + reason
 
 
