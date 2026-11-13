@@ -98,6 +98,7 @@ def test_unknown_adapter_skip_has_named_reason(service, monkeypatch, reason):
     plan = svc._route(CARD, 'review', ['mimo'], benchmark={})
     if reason != 'unknown':
         monkeypatch.setattr(svc, '_route', lambda *a, **k: plan)
+    svc.runner.leg_reader._snapshot_error = ('PermissionError', 'snapshot read locked')
     svc.runner.leg_reader.leg_status = lambda model, **k: (
         dict(state='unknown' if not reason else 'limited', reason=reason, evidence=None)
         if model in (GEMINI.model, 'agy/' + GEMINI.model)
@@ -112,7 +113,7 @@ def test_unknown_adapter_skip_has_named_reason(service, monkeypatch, reason):
                    for a in record['attempts'] if a['status'] == 'skipped')
         attempt = next(a for a in record['attempts'] if isinstance(a['leg'], dict)
                        and a['leg']['id'] == GEMINI.id)
-        assert attempt['skip_reason'] == 'leg_state_snapshot_error: SnapshotError: detail unavailable; probe: timeout'
+        assert attempt['skip_reason'] == 'leg_state_snapshot_error: PermissionError: snapshot read locked; probe: timeout'
         assert record['plan']['review_seats'] == [record['chosen_leg']]
     assert probes == [GEMINI.id]
 

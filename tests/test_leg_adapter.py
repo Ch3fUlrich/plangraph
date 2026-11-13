@@ -100,8 +100,12 @@ def test_stale_and_unreachable(tmp_path):
     reader.provider.snapshot = lambda: {'opencode-go': SimpleNamespace(available=True, stale=True)}
     assert reader('opencode-go/sample')['reason'] == 'stale'
     reader._at = None
-    reader.provider.snapshot = lambda: {}
+    reader.provider.snapshot = lambda: {'other-provider': SimpleNamespace(available=True, stale=False)}
     assert reader('opencode-go/sample')['reason'] == 'unreachable'
+    reader._at = None
+    reader.provider.snapshot = lambda: {}
+    assert reader('opencode-go/sample')['reason'] == 'unknown'
+    assert reader._snapshot_error == ('ValueError', 'empty provider snapshot')
 
 
 def test_catalog_policy_is_not_mutated(tmp_path):
@@ -229,7 +233,7 @@ def snapshot_attempt(tmp_path, monkeypatch):
                                   json.JSONDecodeError('partial snapshot', '', 0),
                                   RuntimeError('synthetic snapshot refresh failure')])
 @pytest.mark.parametrize('probe_ok,probe_state,infra', [(False, None, False), (True, None, False),
-    (False, 'probe_failed_leg_serving', False), (False, 'host-not-ready', True)])
+    (False, 'probe_failed_leg_serving', False), (False, 'host-not-ready', True), (False, None, True)])
 @pytest.mark.parametrize('role,ttl', [('review', '0'), ('implement', '0'), ('implement', '1800')])
 @pytest.mark.parametrize('declared_fallback', [False, True])
 def test_snapshot_error_retries_then_probes(snapshot_attempt, monkeypatch, error, probe_ok, probe_state, infra, role, ttl, declared_fallback):
@@ -260,6 +264,8 @@ def test_snapshot_error_retries_then_probes(snapshot_attempt, monkeypatch, error
     else:
         assert f'leg_state_snapshot_error: {type(error).__name__}: {error}' in reason
         assert 'timeout' in reason
+    if infra:
+        assert case.store.last_probe_attempt_ts(leg_probe.key(case.legs[0])) is None
 
 
 def test_snapshot_retry_recovers_without_probe(snapshot_attempt, monkeypatch):

@@ -266,3 +266,28 @@ def test_snapshot_path_whitespace_suffix_is_withheld(prefix):
     private = prefix + 'fixture/private snapshot opaque-value'
     reader = SimpleNamespace(_snapshot_error=('PermissionError', f'locked: "{private}"; retry'))
     assert leg_state_flag.snapshot_detail(reader, lambda text: text) == 'PermissionError: locked: "[path]"; retry'
+
+
+@pytest.mark.parametrize('recovered', [False, True])
+@pytest.mark.parametrize('probe_ok', [False, True])
+def test_empty_snapshot_retries_then_recovers_or_probes(case, monkeypatch, recovered, probe_ok):
+    reads, probes = [], []
+
+    def snapshot():
+        reads.append(1)
+        return ({'snapshot': SimpleNamespace(available=True, stale=False)}
+                if recovered and len(reads) == 2 else {})
+
+    async def probe(*args, **kwargs):
+        probes.append(1)
+        return dict(ok=probe_ok, reason='timeout')
+
+    case.reader.provider.snapshot = snapshot
+    case.reader.models = [case.leg.model]
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    reason = asyncio.run(leg_probe.before_launch(case.runner, case.leg, 'review', False))
+    assert reads == [1, 1]
+    assert probes == ([] if recovered else [1])
+    assert reason == (None if recovered or probe_ok else
+        'leg_state_snapshot_error: ValueError: empty provider snapshot; probe: timeout')
+    assert case.reader._snapshot_error == (None if recovered else ('ValueError', 'empty provider snapshot'))

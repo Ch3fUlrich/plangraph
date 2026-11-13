@@ -16,7 +16,10 @@ def read_snapshot(reader):
     """Retry the provider/discovery boundary once, never cache a partial refresh."""
     for attempt in range(2):
         try:
-            return reader.provider.snapshot(), {reader.identity(mid) for mid in (
+            states = reader.provider.snapshot()
+            if not states:
+                raise ValueError('empty provider snapshot')
+            return states, {reader.identity(mid) for mid in (
                 reader.models() if callable(reader.models) else reader.models)}
         except Exception as exc:
             if attempt:

@@ -379,7 +379,7 @@ class LegAdapter:
             try:
                 self._states, self._served = read_snapshot(self)
                 self._snapshot_error = None
-                self._error = None if self._states else 'unreachable'
+                self._error = None
             except Exception as exc:
                 self._error, self._snapshot_error = 'unknown', (type(exc).__name__, str(exc))
             self._at = now

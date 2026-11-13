@@ -66,12 +66,19 @@ Before a normal writer dispatch, stale or missing probe evidence triggers a
 probe; failure skips that leg and tries the next. Dry runs never probe. Reviews
 probe only after a snapshot error: provider/discovery reads retry once before
 caching the error, then the existing single-flight probe admits a serving leg.
+An empty provider snapshot is a failed read, not evidence that a leg is unreachable:
+the HTTP provider contract rejects empty connection lists, and injected providers
+are checked at the same retry boundary. A second empty read goes through snapshot
+admission and a probe, retaining `ValueError: empty provider snapshot` on failure.
 Refresh failures are cached for the adapter TTL (60 seconds by default), with
 one type-only warning for the first failed read and detached type/message detail
 for the final failure; a successful refresh clears that detail.
 A failed probe includes `leg_state_snapshot_error`, scrubbed exception type/message
-and probe reason; infrastructure failure alone is not serving evidence. Known
-provider limits still win: dispatch retains D-3685's unscoped booking read even
+and probe reason; infrastructure failure alone is not serving evidence. In particular,
+`ok=False, state=None, infra=True` retains the snapshot error and skips without
+booking a leg failure: unlike ordinary snapshot-ok admission, it has neither a
+readable snapshot nor successful/serving evidence. This is intentionally fail-closed.
+Known provider limits still win: dispatch retains D-3685's unscoped booking read even
 for scoped legs, also checks their exact scope, and rechecks both plus adapter
 admission after each probe. Absent scope values are omitted for both readers. A pass or
 serving result overrides only a snapshot-error reason, never `limited`, quota,
