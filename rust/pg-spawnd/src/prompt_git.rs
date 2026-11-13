@@ -48,11 +48,22 @@ pub(crate) fn read_diff(
 }
 
 fn collect_diff(
-    mut child: std::process::Child,
+    child: std::process::Child,
     cap: usize,
     timeout: Duration,
 ) -> Result<Vec<u8>, InlineDiffError> {
-    let deadline = Instant::now() + timeout;
+    collect_diff_with_clock(child, cap, timeout, Instant::now, std::thread::sleep)
+}
+
+// Clock/sleep injection proves the EOF bound without scheduler-dependent timing.
+fn collect_diff_with_clock(
+    mut child: std::process::Child,
+    cap: usize,
+    timeout: Duration,
+    now: impl Fn() -> Instant,
+    sleep: impl Fn(Duration),
+) -> Result<Vec<u8>, InlineDiffError> {
+    let deadline = now() + timeout;
     let mut stdout = child.stdout.take().ok_or(InlineDiffError::Git)?;
     let (tx, rx) = mpsc::sync_channel(1);
     let reader = std::thread::spawn(move || {
@@ -67,18 +78,17 @@ fn collect_diff(
         drop(stdout);
         let _ = tx.send(result.map(|_| bytes));
     });
-    let result = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    let result = rx.recv_timeout(deadline.saturating_duration_since(now()));
     let mut exited = child.try_wait().map_err(|_| InlineDiffError::Git)?;
     while result.is_ok() && (exited.is_none() || !reader.is_finished()) {
-        let remaining = deadline.saturating_duration_since(Instant::now());
+        let remaining = deadline.saturating_duration_since(now());
         if remaining.is_zero() {
             break;
         }
-        std::thread::sleep(remaining.min(Duration::from_millis(5)));
+        sleep(remaining.min(Duration::from_millis(5)));
         exited = child.try_wait().map_err(|_| InlineDiffError::Git)?;
     }
-    let completed =
-        result.is_ok() && exited.is_some() && reader.is_finished() && Instant::now() < deadline;
+    let completed = result.is_ok() && exited.is_some() && reader.is_finished() && now() < deadline;
     let status = reap_after_kill(&mut child, |child| {
         // This group was created by this invocation; never signal a registry process.
         if exited.is_none() && child.try_wait()?.is_none() {

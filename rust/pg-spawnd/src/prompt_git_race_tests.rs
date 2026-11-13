@@ -248,24 +248,54 @@ fn oversized_hung_producer_is_a_bounded_timeout_not_too_large() {
 #[test]
 fn eof_and_reader_join_do_not_extend_child_deadline() {
     deadline_ends_wait("closed", 4096);
+    deadline_ends_wait_with_clock("closed", 4096, true);
 }
 
 pub(super) fn deadline_ends_wait(mode: &str, cap: usize) {
+    deadline_ends_wait_with_clock(mode, cap, false);
+}
+
+fn deadline_ends_wait_with_clock(mode: &str, cap: usize, logical_clock: bool) {
     let (root, child, mut control) = producer(mode);
     #[cfg(unix)]
     let pid = child.id() as i32;
     let (tx, rx) = mpsc::channel();
     let collector = std::thread::spawn(move || {
-        tx.send(collect_diff(child, cap, Duration::from_millis(30)))
-            .unwrap();
+        let (result, clock) = if logical_clock {
+            use std::cell::Cell;
+            // Keep the virtual deadline at this real instant, so a regression
+            // using a fresh real clock for its grace is caught as well.
+            let start = Instant::now() - WATCHDOG;
+            let reads = Cell::new(0);
+            let current = Cell::new(start);
+            let slept = Cell::new(false);
+            let now = || {
+                reads.set(reads.get() + 1);
+                // The first two samples establish the deadline and receive
+                // budget. After EOF, expire it without a wall-clock race.
+                if reads.get() == 3 {
+                    current.set(start + WATCHDOG);
+                }
+                current.get()
+            };
+            let sleep = |_| {
+                slept.set(true);
+                // Let an injected one-second grace finish and reap the child
+                // before asserting, rather than leaving a failing peer alive.
+                current.set(current.get() + Duration::from_secs(2));
+            };
+            let result = collect_diff_with_clock(child, cap, WATCHDOG, now, sleep);
+            (result, Some((reads.get(), slept.get())))
+        } else {
+            (collect_diff(child, cap, Duration::from_millis(30)), None)
+        };
+        tx.send((result, clock)).unwrap();
     });
     // No release is sent until after the result. The producer cannot finish
     // normally (its read watchdog is 4x our failure watchdog), so only the
     // collector's deadline can end this wait, regardless of scheduler latency.
-    assert_eq!(
-        rx.recv_timeout(WATCHDOG).unwrap(),
-        Err(InlineDiffError::Git)
-    );
+    let (result, clock) = rx.recv_timeout(WATCHDOG).unwrap();
+    assert_eq!(result, Err(InlineDiffError::Git));
     collector.join().unwrap();
     #[cfg(unix)]
     assert_eq!(
@@ -292,4 +322,8 @@ pub(super) fn deadline_ends_wait(mode: &str, cap: usize) {
     }
     assert!(!root.join("drained").exists());
     std::fs::remove_dir_all(root).unwrap();
+    if let Some((reads, slept)) = clock {
+        assert!(reads >= 3, "EOF must reach the child-exit deadline check");
+        assert!(!slept, "EOF added a wait after the original child deadline");
+    }
 }
