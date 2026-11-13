@@ -1,5 +1,6 @@
 """Offline inputs shared by the prompt-transport invariant tests."""
 import json
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -15,10 +16,10 @@ def transport_sandbox(monkeypatch, tmp_path):
     from plangraph.planner import legs
     from plangraph.routing_support import catalog_db, resolver
 
-    for name in ("OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "PLANGRAPH_GATEWAY_URL",
-                 "OMNIROUTE_BASE_URL", "PROMPT", "PROMPT_TEXT", "PROMPT_SUFFIX",
-                 "TASK_PROMPT", "PLANGRAPH_TASK_PROMPT"):
-        monkeypatch.delenv(name, raising=False)
+    platform = {name.upper() for name in ("PATH", "SYSTEMROOT", "COMSPEC", "PATHEXT", "TEMP", "TMP")}
+    for name in list(os.environ):
+        if name.upper() not in platform:
+            monkeypatch.delenv(name)
     for name in ("HOME", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"):
         directory = tmp_path / name.lower()
         directory.mkdir(mode=0o700)

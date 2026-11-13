@@ -5,49 +5,65 @@ import os
 import subprocess
 import sys
 import tempfile
+from copy import deepcopy
+from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
 
 
 def _contract_object(pairs):
     result = {}
-    for key, value in pairs:
-        if key in result:
+    for dup, value in pairs:
+        if dup in result:
             raise ValueError("duplicate prompt transport contract key")
-        result[key] = value
+        result[dup] = value
     return result
 
 
-def load_prompt_transport_contract(raw=None):
-    """Read packaged v1 data; optional JSON must match the authoritative document.
-
-    This loads data only: admission/grammar enforcement belongs to later slices.
-    Return a fresh object so consumers cannot mutate another caller's contract.
-    """
-    text = (files("plangraph").joinpath("config/prompt_transport_v1.json")
-            .read_text(encoding="utf-8") if raw is None else raw)
+def _parse_contract(text):
     doc = json.loads(text, object_pairs_hook=_contract_object)
     if not isinstance(doc, dict) or type(doc.get("version")) is not int or doc["version"] != 1:
         raise ValueError("unsupported prompt transport contract version")
     reasons = doc.get("reasons")
-    if (not isinstance(reasons, dict) or set(reasons) != set("PCAUFMEXS")
-            or not all(isinstance(name, str) and name for name in reasons.values())
-            or len(set(reasons.values())) != len(reasons)):
-        raise ValueError("invalid or duplicate prompt transport reasons")
-    if raw is not None:
-        authoritative = load_prompt_transport_contract()
-        if json.dumps(doc, sort_keys=True) != json.dumps(authoritative, sort_keys=True):
-            raise ValueError("unknown prompt transport contract data or reason name")
+    if not isinstance(reasons, dict) or set(reasons) != set("PCAUFMEXS"):
+        raise ValueError("invalid prompt transport reason IDs")
+    if not all(isinstance(name, str) and name for name in reasons.values()):
+        raise ValueError("unknown prompt transport reason name")
+    if len(set(reasons.values())) != len(reasons):
+        raise ValueError("duplicate prompt transport reason name")
     modes, names = doc.get("modes"), set()
     if not isinstance(modes, list) or not modes:
         raise ValueError("missing prompt transport modes")
     for mode in modes:
         if not isinstance(mode, dict) or not isinstance(mode.get("aliases"), list):
             raise ValueError("invalid prompt transport mode")
-        for name in [mode.get("harness"), *mode["aliases"]]:
+        for name, kind in [(mode.get("harness"), "harness"),
+                           *((alias, "alias") for alias in mode["aliases"])]:
             if not isinstance(name, str) or not name or name in names:
-                raise ValueError("invalid or duplicate prompt transport harness")
+                raise ValueError(f"invalid or duplicate prompt transport {kind}")
             names.add(name)
+    return doc
+
+
+@lru_cache(maxsize=1)
+def _packaged_contract():
+    """Lazy parsed authority; cache_clear() resets resource reads for tests."""
+    return _parse_contract(files("plangraph").joinpath("config/prompt_transport_v1.json").read_text(encoding="utf-8"))
+
+
+def load_prompt_transport_contract(raw=None):
+    """Return isolated data; validate raw structure before authoritative equality.
+
+    Admission/grammar enforcement belongs to later slices, not this data loader.
+    """
+    if raw is None:
+        return deepcopy(_packaged_contract())
+    doc = _parse_contract(raw)
+    authoritative = _packaged_contract()
+    if doc["reasons"] != authoritative["reasons"]:
+        raise ValueError("unknown prompt transport reason name")
+    if json.dumps(doc, sort_keys=True) != json.dumps(authoritative, sort_keys=True):
+        raise ValueError("unknown prompt transport contract data")
     return doc
 
 
