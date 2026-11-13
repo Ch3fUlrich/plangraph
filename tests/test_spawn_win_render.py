@@ -83,15 +83,15 @@ def test_render_unresolved_base_url_fails_closed(tmp_path, monkeypatch):
 
 
 def test_render_linux_root_fixture_parity(tmp_path, monkeypatch):
-    """(c) AutoOS-root fixture + no env gives provider blocks equal to today's overlay (I7)."""
+    """(c) Providers-file fixture + no env gives provider blocks equal to today's overlay (I7)."""
     fake_root = tmp_path / "fake-autoos"
     fake_root.mkdir()
-    (fake_root / "opencode.jsonc").write_text(json.dumps({"providers": {"mimo": {
+    (fake_root / "providers.json").write_text(json.dumps({"providers": {"mimo": {
         "package": "@opencode/ai/providers/openai-compatible", "name": "MiMo direct gateway legs",
         "env": ["AUTOOS_OMNIROUTE_KEY"], "settings": {"baseURL": "http://127.0.0.1:20128/v1"},
         "models": {m.split("/", 1)[1]: {"modelID": m} for m in ACCEPTED_MIMO_IDS},
     }}}))
-    monkeypatch.setenv("AUTOOS_ROOT", str(fake_root))
+    monkeypatch.setenv("PLANGRAPH_PROVIDERS_FILE", str(fake_root / "providers.json"))
 
     child_env = build_child_env()
     overlaid_env = overlay_env(dict(child_env))
@@ -282,12 +282,12 @@ def test_root_base_url_normalized_in_fallback(tmp_path, monkeypatch):
     """LOW: the /v1 rule applies to a root-supplied baseURL like to an override."""
     fake_root = tmp_path / "fake-autoos"
     fake_root.mkdir()
-    (fake_root / "opencode.jsonc").write_text(json.dumps({"providers": {"mimo": {
+    (fake_root / "providers.json").write_text(json.dumps({"providers": {"mimo": {
         "package": "@opencode/ai/providers/openai-compatible",
         "env": ["AUTOOS_OMNIROUTE_KEY"], "settings": {"baseURL": "http://root:20128"},
         "models": {m.split("/", 1)[1]: {"modelID": m} for m in ACCEPTED_MIMO_IDS},
     }}}))
-    monkeypatch.setenv("AUTOOS_ROOT", str(fake_root))
+    monkeypatch.setenv("PLANGRAPH_PROVIDERS_FILE", str(fake_root / "providers.json"))
     env = overlay_env(build_child_env())
     assert render_gateway_providers(env, "mimo/mimo-v2.6-pro") is None
     cfg = json.loads(env["OPENCODE_CONFIG_CONTENT"])
