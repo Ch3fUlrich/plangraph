@@ -195,6 +195,7 @@ def main(root=None):
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--maxfail", type=int, default=0)
     parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
     parser.add_argument("-n", "--workers", default="auto")
     parser.add_argument("--within", nargs="+", action="extend", help="restrict selection to given paths")
@@ -225,8 +226,8 @@ def main(root=None):
         start = time.monotonic()
         parallel = (["-n", args.workers, "--dist", "loadgroup"]
                     if importlib.util.find_spec("xdist") is not None else [])
-        result = subprocess.run([sys.executable, "-m", "pytest", *parallel,
-                                 *plan["tests"]], cwd=root)
+        result = subprocess.run([sys.executable, "-m", "pytest", *parallel, "--durations=30",
+                                 *(["--maxfail", str(args.maxfail)] if args.maxfail else []), *plan["tests"]], cwd=root)
         print(f"affected wall seconds: {time.monotonic() - start:.3f}")
         return result.returncode
     return 0

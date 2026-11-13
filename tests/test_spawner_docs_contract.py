@@ -83,13 +83,27 @@ def _load_sweep_module():
     return module
 
 @pytest.mark.usefixtures("restore_import_state")
-def test_sensitivity_json_reproducible(tmp_path: Path) -> None:
-    committed = (ROOT / "docs" / "spawner-sensitivity.json").read_bytes()
-    out = tmp_path / "spawner-sensitivity.json"
+@pytest.mark.parametrize('seed', (20261022, 11, 22, 33, 44))
+def test_sensitivity_json_reproducible(seed: int) -> None:
+    committed = json.loads((ROOT / "docs" / "spawner-sensitivity.json").read_bytes())
     module = _load_sweep_module()
-    rc = module.main(["--out", str(out), "--catalogs", "200"])
-    assert rc == 0
-    assert out.read_bytes() == committed
+    result = module.run(200, seed)
+    stability = committed.pop('stability_seeds')
+    assert list(module.STABILITY_SEEDS) == stability['seeds']
+    if seed == module.SEED:
+        assert result == committed
+    module.STABILITY_SEEDS = (seed,)
+    assert module.stability_seeds(200, result)['intel_pm1_max_flip_rate'][str(seed)] == stability['intel_pm1_max_flip_rate'][str(seed)]
+
+
+@pytest.mark.usefixtures('restore_import_state')
+def test_sensitivity_cli_serialization(tmp_path):
+    module = _load_sweep_module()
+    out = tmp_path / 'sweep.json'
+    expected = module.run(1)
+    expected['stability_seeds'] = module.stability_seeds(1, expected)
+    assert module.main(['--out', str(out), '--catalogs', '1']) == 0
+    assert out.read_bytes() == (json.dumps(expected, indent=2, sort_keys=True) + '\n').encode()
 
 
 def test_sweep_loader_does_not_leak_state() -> None:
@@ -156,3 +170,10 @@ def test_stability_seeds_meet_threshold() -> None:
         entry = rates[str(seed)]
         assert entry["high"] <= 0.10
         assert entry["critical"] <= 0.10
+
+
+@pytest.mark.usefixtures('restore_import_state')
+def test_sensitivity_never_reads_ambient_leg_state(monkeypatch):
+    from plangraph.routing_support import resolver
+    monkeypatch.setattr(resolver, 'leg_status', lambda *a, **k: pytest.fail('offline sweep read ambient leg state'))
+    assert _load_sweep_module().run(1)['catalogs'] == 1

@@ -392,3 +392,21 @@ def test_gate_cancelled_selected_suite_is_a_problem():
     needs = {"select": {"result": "success", "outputs": outs}, "pytest": {"result": "cancelled"}}
     needs.update({j: {"result": "success"} for j in ci_select.ALWAYS})
     assert gate(needs) == ["pytest: cancelled"]
+
+
+def test_fast_path_profiles_shards_and_failure_cancellation():
+    import tomllib
+    import yaml
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    manifest = tomllib.loads((root / 'rust/Cargo.toml').read_text())
+    assert manifest['profile']['dev']['package']['*']['opt-level'] == 3
+    jobs = yaml.safe_load((root / '.github/workflows/tests.yml').read_text())['jobs']
+    for name in ('pytest', 'pytest-postgres'):
+        assert jobs[name]['strategy']['matrix']['shard'] == [0, 1, 2]
+        assert jobs[name]['strategy']['fail-fast'] is True
+        text = '\n'.join(step.get('run', '') for step in jobs[name]['steps'])
+        assert '--dist loadgroup' in text and '--maxfail 10' in text
+    assert jobs['cancel-on-failure']['permissions']['actions'] == 'write'
+    script = '\n'.join(step.get('run', '') for step in jobs['cancel-on-failure']['steps'])
+    assert '/cancel' in script and 'failure' in script

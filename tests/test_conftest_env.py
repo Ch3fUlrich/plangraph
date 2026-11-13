@@ -75,3 +75,14 @@ def test_git_config_guard_detects_change_at_teardown(tmp_path, worktree):
     with pytest.raises(AssertionError, match='repository .git/config changed during pytest session'):
         with conftest.git_config_guard(repo):
             config.write_text('[core]\n bare = true\n')
+
+
+def test_pytest_shards_preserve_groups_and_cover_every_case(shard_selector):
+    from types import SimpleNamespace
+    def item(name, group=None):
+        return SimpleNamespace(nodeid=name, get_closest_marker=lambda _: SimpleNamespace(args=(group,), kwargs={}) if group else None)
+    items = [item('a', 'together'), item('b', 'together'), item('c'), item('d')]
+    shards = [shard_selector(items, f'{n}/3') for n in range(3)]
+    assert sorted(x.nodeid for shard in shards for x in shard) == ['a', 'b', 'c', 'd']
+    assert sum(any(x.nodeid == 'a' for x in shard) and any(x.nodeid == 'b' for x in shard) for shard in shards) == 1
+    assert [[x.nodeid for x in shard_selector(list(reversed(items)), f'{n}/3')][::-1] for n in range(3)] == [[x.nodeid for x in shard] for shard in shards]

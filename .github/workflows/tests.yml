@@ -93,6 +93,12 @@ jobs:
         run: python3 tools/check_changelog_docs.py
 
   pytest:
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: [0, 1, 2]
+    env:
+      PYTEST_SHARD: ${{ matrix.shard }}/3
     needs: select
     if: needs.select.outputs.pytest == 'true'
     runs-on: ubuntu-24.04
@@ -107,7 +113,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
       - name: Build fleet projection helper
         run: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
       - name: Set up Python 3.12
@@ -172,7 +178,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            python tools/affected_tests.py --base "$BASE_SHA" --run -n auto
+            python tools/affected_tests.py --base "$BASE_SHA" --run -n auto --maxfail 10
           else
             python -m pytest -q -n auto --dist loadgroup --durations=30 tests
           fi
@@ -207,6 +213,10 @@ jobs:
           if-no-files-found: warn
 
   pytest-postgres:
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: [0, 1, 2]
     needs: select
     if: needs.select.outputs.pytest-postgres == 'true'
     runs-on: ubuntu-24.04
@@ -227,6 +237,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      PYTEST_SHARD: ${{ matrix.shard }}/3
       PG_KEEPER_BACKEND: postgres
       # per-route keeper latency table at the end of the run (tests/contract/conftest.py)
       PG_CONTRACT_LATENCY_DIR: /tmp/pg-contract-latency
@@ -242,7 +253,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
       - name: Build fleet projection helper
         run: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
       - name: Set up Python 3.12
@@ -275,7 +286,7 @@ jobs:
           FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
                   | xargs grep -L sqlite3 | tr '\n' ' ')
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run -n auto
+            python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run -n auto --maxfail 10
             exit $?
           fi
           # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
@@ -303,7 +314,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
       - name: cargo fmt --check
         run: cargo fmt --check
       - name: cargo clippy
@@ -334,7 +345,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
       - name: cargo test -p pg-spawnd
         run: cargo test -p pg-spawnd
       - name: cargo test -p pg-worker-core
@@ -414,6 +425,32 @@ jobs:
           key: temporal-spike-${{ hashFiles('rust/spikes/temporal-spike/Cargo.lock') }}
       - name: cargo test replay
         run: cargo test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay
+
+  cancel-on-failure:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Cancel this run on its first failed job
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in $(seq 1 90); do
+            jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '[.jobs[] | select(.name != "cancel-on-failure")]')
+            if jq -e 'any(.[]; .conclusion == "failure")' <<< "$jobs" >/dev/null; then
+              gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+              exit 0
+            fi
+            if jq -e 'any(.[]; .name == "ci-gate" and .status == "completed")' <<< "$jobs" >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "CI cancellation monitor exceeded its bound" >&2
+          exit 1
 
   ci-gate:
     name: ci-gate

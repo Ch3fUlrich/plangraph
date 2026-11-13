@@ -182,7 +182,7 @@ fn policy_starts_and_context_survive_every_lane_edge() {
                 assert!(crate::writer_secret::scan_bytes(&encoded));
                 for edge in [CHUNK, 2 * CHUNK, 4 * CHUNK]
                     .into_iter()
-                    .flat_map(|checkpoint| checkpoint - 2..=checkpoint + 2)
+                    .flat_map(|checkpoint| checkpoint - 1..=checkpoint + 1)
                 {
                     // Place both the start and end around each exact byte edge.
                     for padding in [

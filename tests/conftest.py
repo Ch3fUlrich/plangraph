@@ -9,6 +9,7 @@ re-checks the chain over HTTP (head after each write == sha256(previous head + e
 head against SQLite through the adapter.
 """
 import re
+import hashlib
 import atexit
 import os
 import shutil
@@ -405,7 +406,30 @@ def pytest_ignore_collect(collection_path, config):
     return None
 
 
+def shard_items(items, shard):
+    try:
+        index, count = map(int, shard.split('/'))
+        if not 0 <= index < count:
+            raise ValueError
+    except (ValueError, AttributeError):
+        raise pytest.UsageError('PYTEST_SHARD must be INDEX/COUNT with 0 <= INDEX < COUNT') from None
+    def bucket(item):
+        group = item.get_closest_marker('xdist_group')
+        key = str(group.kwargs.get('name', group.args[0] if group.args else 'default')) if group else item.nodeid
+        return int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], 'big') % count
+    return [item for item in items if bucket(item) == index]
+
+@pytest.fixture
+def shard_selector():
+    return shard_items
+
+
 def pytest_collection_modifyitems(config, items):
+    if os.environ.get('PYTEST_SHARD'):
+        selected = shard_items(items, os.environ['PYTEST_SHARD'])
+        identities = {id(item) for item in selected}
+        config.hook.pytest_deselected(items=[item for item in items if id(item) not in identities])
+        items[:] = selected
     if sys.platform == "win32":
         from win_skips import skip_reason
         for item in items:
