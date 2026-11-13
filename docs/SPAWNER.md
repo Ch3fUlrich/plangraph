@@ -708,3 +708,5 @@ Standalone overflow accepts omitted `--state` using the service environment defa
 Review admission fetches the worker’s default branch once per admission boundary; the following diff-head ancestry check reuses tracking refs with `fetch=False`.
 
 Worktree creation uses `base_fresh.fresh_worktree_base`: fetch the main and requested `phase/*` tracking refs, refuse stale creation bases, then fast-forward a clean main checkout (or its unoccupied branch ref). Dirty or diverged main is refused. Continuations must include current main; missing cached trees cannot be recreated after a failed fetch. Existing cached trees can still be leased offline, subject to normal launch admission. The routing repository’s `fleet-launch` and package-worktree callers must invoke this shared helper before cutting their trees; those scripts are outside this checkout.
+
+Watchdog silent-run alerts use `kind=stall` with `stalled_at` (the silence deadline) and `noticed_at` (the observing tick); durable episode throttling prevents duplicate alerts. Healthy ticks also write a non-empty status. Completed runs without an item keep their parent Inbox delivery and skip the keeper item sink.

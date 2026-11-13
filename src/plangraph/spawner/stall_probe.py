@@ -78,6 +78,7 @@ def probe_run(state, record, now, *, dry_run=False, hung=None):
                 return None
             event['rule'] = 'run-silent'
             event['episode'] = log.stat().st_mtime
+            event.update(stalled_at=event['episode'] + limit, noticed_at=now)
             if silent >= 2 * limit and not dry_run:
                 from .runner import spawn_service
                 result = asyncio.run(spawn_service(state=state).cancel(record['run_id']))
