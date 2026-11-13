@@ -33,3 +33,17 @@ Exit 5 means queue: no host admits. `--reservation-mb` sets package memory.
 This admission module is also the Rust overflow spawner's policy source.
 The phase-batch-orchestration skill is absent from this checkout; its caller
 must invoke this command before launch when that skill is available.
+
+Before launching Codex, run `pg-host-readiness --project PATH --sandbox workspace-write`.
+It checks version, login, native sandbox startup, and a commit in an independent
+temporary repository's worktree, with a 30 second command timeout and no model call.
+`--scratch-root` chooses a filesystem matching the intended workspace.
+`--codex` selects the executable. It reads `CODEX_HOME/config.toml` (or `HOME/.codex`),
+requires folder trust, disabled startup updates and at least 3000 MB free RAM.
+It prints `READY` only with no missing checks, otherwise `MISSING` lines and exit 1.
+Configured hooks/plugins currently report unverified trust: persisted hook hashes
+are CLI-owned and this tool does not assume their storage schema. This is a known
+limitation for hosts using hooks; it never accepts an unproven hook trust state.
+The phase-batch skill must call the check on the chosen host before a package.
+See the official [configuration reference](https://developers.openai.com/codex/config-reference)
+and [sandbox command reference](https://developers.openai.com/codex/cli/reference).

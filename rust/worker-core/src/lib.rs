@@ -43,6 +43,8 @@ pub mod health_rates;
 pub mod health_until;
 pub mod host_metrics;
 pub mod host_probe;
+pub mod host_readiness;
+pub mod host_command;
 pub mod hosts;
 pub mod janitor;
 pub mod live_probe;
