@@ -293,6 +293,9 @@ path-free guidance and its safer parsing/subagent handling rather than push advi
 The scan cursor lives in sibling state directory `autoos/ctx-guard-scan`; rewrites
 before the cursor are not detected (transcripts are append-only), and records over
 1 MiB are skipped.
+Masked usage counters are unknown, never zero: the context guard uses a hard-cap
+safety surrogate rather than stale usage, and the usage report returns no result
+instead of reporting partial totals.
 
 The standalone Rust `turn-budget-hook` lives in `rust/worker-core`, beside the
 existing watchdog binaries; `tools/hooks/install_hooks.sh` remains Python-only.
