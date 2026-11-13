@@ -1,7 +1,8 @@
 # Plangraph Spawner & Model Routing Architecture
 
-Spawn admission fetches origin's default branch and refuses `base_stale` (behind count or fetch failure) before any model call; workers check their run cwd/source repo and recheck each prepared run-worktree's HEAD before launch, including initial card-declared continuations from `lane_branch`; reviews/judges check `diff_ref.head` ancestry (no diff means no check), and only card `base_decision: D-NNN` waives an older base, recording the decision and fetched `base_sha` on successful run/card admission; there is no flag, environment or settings bypass (D-5661).
+Spawn admission fetches origin's default branch and refuses `base_stale` (behind count or fetch failure) before any model call; workers check their run cwd/source repo and recheck each prepared run-worktree's HEAD before launch, including initial card-declared continuations from `lane_branch`; reviews/judges check `diff_ref.head` ancestry (no diff means no check), and only card `base_decision: D-NNN` waives an older base, recording the decision, fetched `base_sha`, and actual checked HEAD/diff `checked_base_sha` on successful run/card admission; there is no flag, environment or settings bypass (D-5661).
 The fetch explicitly updates `refs/remotes/origin/<default>` even without a matching remote fetch refspec, retrying a failed fetch once for concurrent ref locks. Detached non-dry CLI spawn returns 0 before child admission; inspect `status`/`result` for a later `base_stale` refusal. Test-only gate fakes are opt-in for spawn mechanics with unfetchable fake repositories; unmarked tests keep real admission.
+The supervisor itself waits for all local seat tasks, reloads their terminal records, and exits nonzero if any seat refused `base_stale`, even when another seat succeeds.
 
 ### QUOTA-PAUSE-GATE
 
@@ -292,7 +293,9 @@ and retains ordered creation evidence in `worktree_attempts`; `base_sha` is the
 attempt's starting commit (main head or continuation tip). A failed fixer creation
 records no worktree and a null cwd, never its parent's path. Runner `JobInfo.cwd`,
 process cwd and child PWD use that path. With the flag off, cwd is unchanged;
-dry runs create nothing. No worktrees are removed, no pg-reap lock sharing is
+dry runs create nothing. Base-admission refusals remove the unlaunched attempt under
+the creation lock and record `run_worktree.removed`; cleanup errors retain evidence
+with `worktree_cleanup_error` and never allow launch. Other worktrees remain retained; no pg-reap lock sharing is
 implemented, and enabling by default and the Rust port remain later slices.
 
 Private `runs/<run_id>/record.json` contains card hash, role, complete plan,

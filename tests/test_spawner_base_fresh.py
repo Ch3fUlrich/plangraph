@@ -4,6 +4,7 @@ import inspect
 import json
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -169,6 +170,7 @@ def test_decision_and_fetch_failure(repository, dispatch, hardened, decision):
     if decision == 'D-123':
         assert record['base_decision'] == decision
         assert record['base_sha'] == card['base_sha'] == git(origin, 'rev-parse', 'main')
+        assert record['checked_base_sha'] == card['checked_base_sha'] == git(repo, 'rev-parse', 'HEAD')
     git(repo, 'remote', 'set-url', 'origin', str(repo / 'missing-origin'))
     calls.clear()
     record = asyncio.run(service.spawn(card, 'Implement a tested change', wait_seconds=None))
@@ -204,6 +206,7 @@ def test_review_diff_not_callers_head(repository, dispatch, hardened, role, curr
         assert record['status'] == 'dry_run', record.get('error')
         if current is not None:
             assert record['base_sha'] == card['base_sha'] == git(origin, 'rev-parse', 'main')
+            assert record['checked_base_sha'] == card['checked_base_sha'] == head
         if current is False:
             assert record['base_decision'] == decision
 
@@ -270,16 +273,21 @@ def test_initial_continuation_checks_worktree_base(repository, dispatch, hardene
     assert service.result(record['run_id']) == record
     metadata = record['run_worktree']
     assert record['cwd'] == metadata['path']
-    assert metadata['base_sha'] == git(metadata['path'], 'rev-parse', 'HEAD') == (old if stale else current)
+    assert metadata['base_sha'] == (old if stale else current)
     assert git(repo, 'rev-parse', 'HEAD') == current
     if stale and decision != 'D-123':
         assert record['status'] == 'failed' and record['exit_code'] != 0
         assert record['reason'] == 'base_stale: behind=2'
         assert not calls and not service.runner.jobs and 'job_id' not in record
+        assert not Path(metadata['path']).exists()
+        assert metadata['path'] not in git(repo, 'worktree', 'list', '--porcelain')
+        assert metadata['removed'] is True
     else:
+        assert metadata['base_sha'] == git(metadata['path'], 'rev-parse', 'HEAD')
         assert record['status'] == 'completed' and len(calls) == 1
         assert calls[0]['cwd'] == metadata['path']
         assert record['base_sha'] == card['base_sha'] == current
+        assert record['checked_base_sha'] == card['checked_base_sha'] == metadata['base_sha']
         if decision == 'D-123':
             assert record['base_decision'] == decision
 

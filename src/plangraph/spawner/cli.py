@@ -82,8 +82,7 @@ def _supervise():
             record = await service.spawn(**payload, wait_seconds=0)
         except Exception as exc:
             record = next((r for r in service.ps()['runs'] if r.get('error') == str(exc)), None)
-            if record is None:
-                record = service.save_refusal(exc, payload.get('role', 'implement'))
+            if record is None: record = service.save_refusal(exc, payload.get('role', 'implement'))
             print(json.dumps(record), flush=True)
             return record['exit_code']
         print(json.dumps(record), flush=True)
@@ -91,7 +90,8 @@ def _supervise():
         for run in record.get('seats') or [record]:
             if run['run_id'] in service.tasks:
                 await service.tasks[run['run_id']]
-        return (record.get('exit_code') or 1) if str(record.get('reason', '')).startswith('base_stale:') else 0
+                run.update(service.result(run['run_id']))
+        return (record.get('exit_code') or 1) if any(str(r.get('reason', '')).startswith('base_stale:') for r in record.get('seats') or [record]) else 0
     return asyncio.run(run())
 
 

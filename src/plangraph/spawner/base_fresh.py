@@ -70,6 +70,7 @@ async def admit_base(service, record, card):
               and result['reason'] == f"base_stale: behind={result['behind']}")
     if result['ok'] or waived:
         record['base_sha'] = card['base_sha'] = result['origin_sha']
+        record['checked_base_sha'] = card['checked_base_sha'] = result.get('base_sha')
         if isinstance(decision, str) and re.fullmatch(r'D-[0-9]+', decision):
             record['base_decision'] = decision
         return True
@@ -77,5 +78,22 @@ async def admit_base(service, record, card):
     annotate_item(record, card)
     record.update(status='failed', reason=result['reason'], error=result['reason'],
                   behind=result['behind'], exit_code=1, ended=time.time())
+    if record.get('run_worktree'):
+        await asyncio.to_thread(_remove_refused_worktree, service, record)
     service._save(record)
     return False
+
+
+def _remove_refused_worktree(service, record):
+    """Remove only this unlaunched attempt; dirty or locked evidence is never forced."""
+    from pathlib import Path
+    from .git_guard import run_worktree_lock
+    metadata = record['run_worktree']
+    repo = getattr(service.runner, 'default_cwd', None) or os.getcwd()
+    try:
+        with run_worktree_lock(Path(metadata['path']).parent):
+            subprocess.run(['git', '-C', repo, 'worktree', 'remove', metadata['path']],
+                check=True, capture_output=True, timeout=30)
+        metadata['removed'] = True
+    except (OSError, subprocess.SubprocessError) as exc:
+        record['worktree_cleanup_error'] = type(exc).__name__
