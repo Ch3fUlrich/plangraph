@@ -34,7 +34,7 @@ def payment_tier(leg, role):
     return tier if tier in TIERS else None
 
 
-def payment_order(legs, role):
+def payment_order(legs, role, *, order_class=None, writer_families=(), diff_tokens=None, verdicts=None):
     """Pure post-ranking subscription/paid barrier for implement and review.
 
     Designated implement writers stay first, regardless of their catalog tiers.
@@ -42,10 +42,44 @@ def payment_order(legs, role):
     A trial or free slot keeps its position unless it is a writer-prefix leg.
     Same-payment-tier ranking stays stable, apart from Amber before paid DeepSeek.
     Unknown payment classes retain their original slots. No admission or I/O.
+    An explicit order_class selects D-5696/D-5706 catalog order instead; callers
+    supply already-admitted legs, writer families, diff size and cheaper verdicts.
     """
     from .legs import TIERS, WRITER_ORDER
     from .route_policy import implement_key
     ordered = list(legs)
+    if order_class is not None:
+        from plangraph.routing_support.catalog_seed import (
+            LEGACY_ROUTE_REPLACEMENTS, OPERATOR_ROUTE_ORDERS, OPERATOR_REVIEW_CHEAP_LEGS)
+        from .seats import seat_family, writer_parts
+        if order_class not in ('standard', 'high', 'complex'):
+            raise ValueError('unknown order class: ' + str(order_class))
+        for leg in ordered:
+            for legacy, replacement in LEGACY_ROUTE_REPLACEMENTS.items():
+                if any(legacy in value.lower() for value in (leg.id, leg.model)):
+                    raise ValueError('legacy model refused: ' + leg.model + '; use ' + replacement)
+        if role not in OPERATOR_ROUTE_ORDERS:
+            raise ValueError('unknown ordered role: ' + str(role))
+        table = OPERATOR_ROUTE_ORDERS[role]
+        table = table[order_class] if role == 'review' else table
+        writers = writer_parts(writer_families) if role == 'review' else set()
+        if role == 'review' and not writers:
+            raise ValueError('review needs a writer family')
+        if diff_tokens is not None and (type(diff_tokens) is not int or diff_tokens < 0):
+            raise ValueError('diff_tokens must be a nonnegative integer')
+        effective_role = 'orchestrate' if role == 'planning' else role
+        if len({leg.id for leg in ordered}) != len(ordered):
+            raise ValueError('duplicate route leg id')
+        by_id = {leg.id: leg for leg in ordered if effective_role in leg.roles}
+        if role == 'review':
+            by_id = {id: leg for id, leg in by_id.items() if seat_family(leg.family) not in writers}
+            if diff_tokens is None or diff_tokens >= 100000:
+                by_id.pop('claude-haiku-5.5', None)
+            votes = {id: verdict for id, verdict in (verdicts or {}).items()
+                     if id in OPERATOR_REVIEW_CHEAP_LEGS and id in by_id and verdict in ('PASS', 'FIX')}
+            if len(votes) < 2 or len(set(votes.values())) < 2:
+                by_id.pop('muse-ember-max', None)
+        return tuple(by_id[id] for id in table if id in by_id)
     if role not in ('implement', 'review'):
         return tuple(ordered)
     prefix_slots = set()

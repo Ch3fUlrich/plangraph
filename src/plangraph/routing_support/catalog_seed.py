@@ -20,6 +20,65 @@ TIER_RUNG: dict[str, int] = {
     "paid": 4,
 }
 
+# D-5696/D-5706 fixed-order inputs. No production utility or host admission is
+# implied. payment_order is the only consumer that orders these registrations.
+LEGACY_ROUTE_REPLACEMENTS = {
+    'gemini-3.8-flash': 'gemini-4-hydrogen', 'gpt-6-luna': 'gpt-6.1-terra',
+}
+OPERATOR_ROUTE_ORDERS = {
+    'implement': ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high',
+                  'agy-claude-sonnet-5-5-high'),
+    'review': {
+        'standard': ('mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash',
+                     'claude-haiku-5.5', 'muse-ember-max', 'omniroute-deepseek-flash'),
+        'high': ('cx-gpt-6.1-sol-medium', 'cx-gpt-6.1-terra-medium', 'agy-gemini-4-hydrogen-medium',
+                 'mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash',
+                 'claude-haiku-5.5', 'muse-ember-max', 'omniroute-deepseek-flash'),
+        'complex': ('cx-gpt-6.1-sol-xhigh', 'cx-gpt-6.1-terra-xhigh', 'agy-gemini-4-hydrogen-high',
+                    'mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash',
+                    'claude-haiku-5.5', 'muse-ember-max', 'omniroute-deepseek-flash'),
+    },
+    'planning': ('claude-fable-5.2-high',),
+}
+OPERATOR_REVIEW_CHEAP_LEGS = ('mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash',
+                             'mimo-v2.6-flash', 'claude-haiku-5.5')
+# Rows use the existing Leg schema; role-specific effort variants share no
+# mutable registration. Keep the served identities from parked PR #818.
+OPERATOR_ROUTE_CATALOG = tuple(dict(
+    id=id, tier='subscription', harness=harness, model=model, family=family,
+    windows=('128k', '256k', '1m'), max_request_tokens=context, trains_on_data=False,
+    claude_family=family == 'claude', roles=roles, effort=effort, tool_mode=mode)
+    for id, harness, model, family, context, roles, effort, mode in (
+        ('cx-gpt-6.1-sol-xhigh', 'opencode', 'omniroute/cx-gpt-6.1-sol-xhigh', 'gpt', 900000,
+         ('implement', 'review'), 'xhigh', 'tools'),
+        ('agy-gemini-4-hydrogen-high', 'agy', 'gemini-4-hydrogen-high', 'gemini', 900000,
+         ('implement', 'review'), 'high', 'tools'),
+        ('agy-claude-sonnet-5-5-high', 'agy', 'claude-sonnet-5-5-high', 'claude', 900000,
+         ('implement',), 'high', 'tools'),
+        ('cx-gpt-6.1-sol-medium', 'opencode', 'omniroute/cx-gpt-6.1-sol-medium', 'gpt', 900000,
+         ('review',), 'medium', 'tools'),
+        ('cx-gpt-6.1-terra-medium', 'opencode', 'omniroute/cx-gpt-6.1-terra-medium', 'gpt', 900000,
+         ('review',), 'medium', 'inline-only'),
+        ('cx-gpt-6.1-terra-xhigh', 'opencode', 'omniroute/cx-gpt-6.1-terra-xhigh', 'gpt', 900000,
+         ('review',), 'xhigh', 'inline-only'),
+        ('agy-gemini-4-hydrogen-medium', 'agy', 'gemini-4-hydrogen-medium', 'gemini', 900000,
+         ('review',), 'medium', 'tools'),
+        ('mimo-v2.6-pro', 'opencode', 'mimo/mimo-v2.6-pro', 'mimo', 200000,
+         ('review',), 'medium', 'inline-only'),
+        ('opencode-go-deepseek-v4-flash', 'opencode', 'opencode-go/deepseek-v4.1-flash', 'deepseek', 100000,
+         ('review',), 'medium', 'tools'),
+        ('mimo-v2.6-flash', 'opencode', 'mimo/mimo-v2.6-flash', 'mimo', 200000,
+         ('review',), 'medium', 'inline-only'),
+        ('claude-haiku-5.5', 'claude', 'claude-haiku-5-5', 'claude', 180000,
+         ('review',), 'xhigh', 'prompt-only'),
+        ('muse-ember-max', 'opencode', 'omniroute/muse-ember-max', 'muse', 100000,
+         ('review',), 'max', 'tools'),
+        ('omniroute-deepseek-flash', 'opencode', 'omniroute/deepseek-v4.1-flash', 'deepseek', 100000,
+         ('review',), 'medium', 'tools'),
+        ('claude-fable-5.2-high', 'claude', 'claude-fable-5-2', 'claude', 900000,
+         ('orchestrate',), 'high', 'tools'),
+    ))
+
 SEED_QUOTA_POOLS: list[dict[str, Any]] = [
     {
         "pool_id": "agy-3p-partner",
