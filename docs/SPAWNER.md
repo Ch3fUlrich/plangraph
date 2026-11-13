@@ -704,3 +704,5 @@ Review and judge freshness admission requires both the worker checkout HEAD and 
 Run listing is read-only. Watchdog sweeps own queue-timeout persistence and corrupt-record diagnostic delivery; dry sweeps only project the results.
 
 Standalone overflow accepts omitted `--state` using the service environment default; explicit state still owns local records. Importing overflow defers the CLI import, allowing source-only `python -m plangraph.spawner.cli` execution without runpy warnings.
+
+Review admission fetches the worker’s default branch once per admission boundary; the following diff-head ancestry check reuses tracking refs with `fetch=False`.

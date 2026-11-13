@@ -325,3 +325,5 @@ Event-log seat reviews use completed step text only. A stop answer survives empt
 CI runs pytest in three deterministic `PYTEST_SHARD=INDEX/COUNT` shards while keeping xdist groups together and loadgroup scheduling; PR runs stop at ten failures and same-repository runs cancel on the first failed job. Synthetic sensitivity sweeps never consult host quota databases.
 
 CI timing measurements and pending PR-run evidence are tracked in `docs/ci-performance.csv`. Sensitivity reproducibility runs one case per seed so all five seeds retain coverage across workers.
+
+Python sessions and Rust workspace/writer fixtures compare the real checkout’s worktree registry metadata before and after tests. Worktree tests must create their repositories inside temporary roots; the guard reads metadata directly and never runs Git on the real checkout.

@@ -19,12 +19,14 @@ fn git(root: &Path, args: &[&str]) -> String {
 }
 
 struct Fixture {
+    _repo_guard: crate::test_repo_guard::RepoGuard,
     temp: TempDir,
     repo: RepoEntry,
     sha: String,
 }
 impl Fixture {
     fn new() -> Self {
+        let repo_guard = crate::test_repo_guard::RepoGuard::real();
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         git(root, &["init", "--bare", "origin"]);
@@ -39,6 +41,7 @@ impl Fixture {
         let checkout = root.join("checkout");
         git(&checkout, &["remote", "set-url", "origin", &origin]);
         Self {
+            _repo_guard: repo_guard,
             repo: RepoEntry {
                 live_dir: None,
                 health_checks: None,

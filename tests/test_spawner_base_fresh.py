@@ -384,7 +384,7 @@ def test_review_requires_fresh_checkout_and_diff(tmp_path, monkeypatch, role, la
     worker, reviewed = str(tmp_path / 'worker'), str(tmp_path / 'reviewed')
     calls, saved = [], []
     def check(repo, default=None, fetch=True, timeout=60, ref='HEAD'):
-        calls.append((repo, ref))
+        calls.append((repo, ref, fetch))
         fresh = worker_fresh if repo == worker else diff_fresh
         return dict(ok=fresh, reason=None if fresh else 'base_stale: behind=1',
                     origin_sha='b' * 40, base_sha=('b' if fresh else 'a') * 40, behind=int(not fresh))
@@ -393,9 +393,9 @@ def test_review_requires_fresh_checkout_and_diff(tmp_path, monkeypatch, role, la
     card = dict(diff_ref=dict(repo=reviewed, head='reviewed-head'))
     record = dict(role=role, cwd=worker)
     assert asyncio.run(base_fresh.admit_base(service, record, card, launch=launch)) == (worker_fresh and diff_fresh)
-    assert (worker, 'HEAD') in calls
+    assert (worker, 'HEAD', True) in calls
     if worker_fresh:
-        assert (reviewed, 'reviewed-head') in calls
+        assert (reviewed, 'reviewed-head', False) in calls
     if worker_fresh and diff_fresh:
         assert record['checked_base_sha'] == 'b' * 40
     else:

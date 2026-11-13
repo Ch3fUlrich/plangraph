@@ -110,14 +110,23 @@ def git_config_guard(root):
         common = metadata
         if (metadata / 'commondir').is_file():
             common = (metadata / (metadata / 'commondir').read_text().strip()).resolve()
-        return tuple((str(path), path.read_bytes() if path.exists() else None)
-                     for path in (common / 'config', metadata / 'config.worktree'))
+        configs = tuple((str(path), path.read_bytes() if path.exists() else None)
+                        for path in (common / 'config', metadata / 'config.worktree'))
+        # The registry is what supplies `git worktree list`; read metadata directly.
+        paths = [common / 'HEAD']
+        for entry in sorted((common / 'worktrees').glob('*')):
+            paths.extend(entry / name for name in ('gitdir', 'HEAD', 'locked'))
+        registry = tuple((str(path), path.read_bytes() if path.exists() else None) for path in paths)
+        return configs, registry
     before = snapshot()
     try:
         yield
     finally:
-        if snapshot() != before:
+        after = snapshot()
+        if after[0] != before[0]:
             raise AssertionError('repository .git/config changed during pytest session')
+        if after[1] != before[1]:
+            raise AssertionError('repository worktree registry changed during pytest session')
 
 
 @pytest.fixture(scope='session', autouse=True)
