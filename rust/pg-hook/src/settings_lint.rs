@@ -12,6 +12,8 @@ struct Permissions {
     _allow: Vec<Rule>,
     #[serde(default, rename = "deny")]
     _deny: Vec<Rule>,
+    #[serde(default, rename = "ask")]
+    _ask: Vec<Rule>,
 }
 struct Rule;
 impl<'de> Deserialize<'de> for Rule {
@@ -47,6 +49,8 @@ mod tests {
         assert!(error.to_string().contains("MCP"));
         assert!(check(r#"{"permissions":{"allow":["mcp__terminal__run","Bash(git:*)"],"deny":["mcp__shell__run"]}}"#).is_ok());
         assert!(check(r#"{"permissions":{"deny":["mcp__shell__run(*)"]}}"#).is_err());
+        assert!(check(r#"{"permissions":{"ask":["mcp__shell__run(*)"]}}"#).is_err());
+        assert!(check(r#"{"permissions":{"ask":["mcp__shell__run"]}}"#).is_ok());
         assert!(check(r#"{"permissions":{"allow":["mcp__shell__run\u0028*\u0029"]}}"#).is_err());
     }
 }
