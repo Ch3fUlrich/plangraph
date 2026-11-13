@@ -1,0 +1,1 @@
+- Refuse unplaceable memory-floor spawns with measured RAM by default; opt-in bounded waits retry transient reads and terminal writes, wake on timers and run exits, preserve planning failure reasons, and cancel safely without queueing findings cards.

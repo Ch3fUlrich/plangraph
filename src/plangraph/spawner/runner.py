@@ -1009,8 +1009,9 @@ def spawn_service(*args, **kwargs):
         async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
-                        seats=False, _plan=None, run_worktree=False, _placement=None):
+                        seats=False, _plan=None, run_worktree=False, _placement=None, _queued_record=None):
             from .private_io import SAVE_READ_ATTEMPTS
+            from .cancel_recorded import register_execute
             from .run_watchdog import leg_limits, terminal_status, thresholds
             from .question_bridge import rounds_exhausted
             if rounds_exhausted(self, card, role):
@@ -1023,7 +1024,7 @@ def spawn_service(*args, **kwargs):
                     review_of=review_of, model=model, leg=leg, override_reason=override_reason,
                     dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=not seats or no_fallthrough,
                     benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
-                    seats=seats, run_worktree=run_worktree, _placement=_placement,
+                    seats=seats, run_worktree=run_worktree, _placement=_placement, _queued_record=_queued_record,
                 )
             from plangraph.settings import admit_review_scope
             admit_review_scope(card, role, review_scope)
@@ -1035,8 +1036,8 @@ def spawn_service(*args, **kwargs):
             from .resolver import plan_for_launch_async
             if hasattr(plan, '__dataclass_fields__'):
                 plan = await plan_for_launch_async(replace(plan, placement=_placement or plan.placement), dry_run=dry_run)
-            run_id = 'run-' + uuid.uuid4().hex
-            record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
+            run_id = (_queued_record or {}).get('run_id') or 'run-' + uuid.uuid4().hex
+            record = dict(_queued_record or {}, run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
                 role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
                 served_family=None, request_side_model=None, witness_kind=None,
                 writer_family=None, status='running', started=time.time(),
@@ -1051,8 +1052,7 @@ def spawn_service(*args, **kwargs):
                     record.setdefault('skipped', []).append(skipped)
                     record['attempts'].append(dict(leg=skipped.get('leg'), status='skipped',
                         skip_reason=skipped.get('skip_reason') or skipped.get('reason')))
-            self._save(record)
-
+            if not _queued_record: self._save(record)
             if not plan.legs or plan.error:
                 host_skips = [s for s in plan.skipped if any(marker in str(s) for marker in ('not_served_on_host', 'harness_missing'))]
                 from plangraph.routing_support.liveness import provider_exhausted
@@ -1061,7 +1061,7 @@ def spawn_service(*args, **kwargs):
                               exit_code=1 if host_skips else 4 if exhausted else 2, ended=time.time(),
                               error='; '.join(s.get('skip_reason') or s.get('reason', '') for s in host_skips) if host_skips else plan.error,
                               evidence=plan.to_dict()['skipped'])
-                self._save(record)
+                await register_execute(self, record, None, _queued_record)
                 return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
 
             async def execute():
@@ -1196,8 +1196,7 @@ def spawn_service(*args, **kwargs):
                     release_attempts(self, record)
                     self._save(record)
 
-            task = asyncio.create_task(execute())
-            self.tasks[run_id] = task
+            if (task := await register_execute(self, record, execute, _queued_record)) is None: return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
             if dry_run or wait_seconds is None:
                 await task
             elif wait_seconds > 0:

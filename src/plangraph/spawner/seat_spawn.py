@@ -80,10 +80,14 @@ def admit(service, options, *, card=None, preview=False):
             if decision.host is None and decision.reason in ('local_fallback_no_remote', 'local_benchmark_database'):
                 return None
         if decision.host is None:
-            record = {'run_id': 'run-' + uuid.uuid4().hex,
-                      'status': 'refused' if remote_first else 'queued',
-                      'reason': decision.reason, 'overflow_reason': decision.reason,
-                      'exit_code': 2 if remote_first else 5}
+            record = dict(run_id='run-' + uuid.uuid4().hex, status='refused', role=role,
+                          reason='host_memory_floor', overflow_reason=decision.reason, exit_code=2, ended=time.time(),
+                          mem_available_mb=memory, floor_mb=floor, role_mb=role_mb,
+                          error=f'host_memory_floor: MemAvailable {memory} MB, floor {floor} MB, role {role_mb} MB; {decision.reason}')
+            if not overflow.memory_refusal(memory, role_mb, floor): record.update(reason=decision.reason, error=decision.reason)
+            elif not remote_first and config.get('queue_memory_wait') is True and not options.get('seats') and not (card or {}).get('findings'):
+                from .cancel_recorded import enqueue_memory
+                enqueue_memory(service, record, options, card, config)
             break
         name = decision.host
         try:
