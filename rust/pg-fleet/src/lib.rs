@@ -1,4 +1,8 @@
+pub mod backfill;
+pub mod backfill_apply;
+pub mod backfill_cli;
 pub mod carried;
+pub mod cli;
 pub mod digest;
 pub mod digest_card;
 pub mod digest_git;
