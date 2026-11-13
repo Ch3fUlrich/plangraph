@@ -713,3 +713,5 @@ The no-leg timer skips `queued` and `queue_claimed` runs; their queue watchdog o
 An RC-required session without a bridge retains its running state and session ID, with `rc_missing=true`, while launch reports `RC-MISSING`.
 
 Review liveness probes normalize `OK` answers and retain the shared two-failure booking rule.
+
+Capped-first MiMo review exhaustion is terminal without retry; cancellation and watchdog outcomes retain priority.
