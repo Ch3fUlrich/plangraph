@@ -47,7 +47,7 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason, redact, redact_output, _redact_prompt
-from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
+from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, refusal_record, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
@@ -1117,13 +1117,9 @@ def spawn_service(*args, **kwargs):
                                 watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
                                 events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s events
                             return
-                        refusal = next((e for e in job.events if e.get('event') == 'model_refusal'), None)
-                        if refusal is not None:   # terminal safety stop: no booking, reroute, or writer continuation
-                            record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason='model_refusal',
-                                stdout_tail=job.stdout, stderr_tail=job.stderr))
-                            record.update(status='failed', reason='model_refusal', exit_code=job.exit_code,
-                                stop_reason=refusal['stop_reason'], refusal_text_chars=refusal['refusal_text_chars'],
-                                events=record.get('events', []) + job.events)
+                        if refusal_record(record, job):   # no booking, reroute, or writer continuation
+                            record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason=record['reason'],
+                                stdout_tail=job.stdout, stderr_tail=job.stderr, provider_response=stop))
                             return
                         reason = None
                         unavailable = fallthrough_reason(self, chosen, job, record)

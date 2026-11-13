@@ -2,6 +2,7 @@ import asyncio
 import os
 import sqlite3
 import subprocess
+import pytest
 from types import SimpleNamespace
 
 from plangraph.spawner.env_redact import first_reason, harness_limit_line
@@ -168,3 +169,14 @@ def test_orphan_check_never_signals_on_windows(tmp_path, monkeypatch):
     record = {'status': 'running', 'ended': None, 'supervisor_stderr_path': str(log)}
     assert exit_outcome.orphaned(record, 1.0) is None
     assert calls == []
+
+
+@pytest.mark.parametrize('role', ['review', 'implement', 'fix'])
+@pytest.mark.parametrize('status', ['completed', 'failed', 'model_refusal'])
+@pytest.mark.parametrize('reason', [None, 'git_config_mutated', 'cancelled', 'kill_incomplete', 'other_diagnostic'])
+def test_refusal_classification_does_not_rewrite_run_reason(role, status, reason):
+    record = dict(role=role, status=status, reason=reason)
+    job = SimpleNamespace(status=status, role=role, exit_code=1, stdout='', stderr=QUOTA,
+                          events=[dict(event='model_refusal')])
+    assert fallthrough_reason(SimpleNamespace(leg_reader=None), None, job, record) is None
+    assert record == dict(role=role, status=status, reason=reason)

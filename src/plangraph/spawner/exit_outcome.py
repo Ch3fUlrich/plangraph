@@ -27,6 +27,21 @@ def failure_reason(job, stop=None):
     return first_reason(text) or ('provider_stop' if stop else f'harness exit code {job.exit_code}')
 
 
+def refusal_record(record, job):
+    """Persist a safety stop at dispatch, not in the fallthrough classifier."""
+    refusal = next((e for e in getattr(job, 'events', ()) if e.get('event') == 'model_refusal'), None)
+    if refusal is None and job.status != 'model_refusal' and record.get('reason') != 'model_refusal':
+        return False
+    reason = record.get('reason')
+    if reason in (None, 'harness_limit', 'credit_limit', 'usage_limit', 'tool_call_only'):
+        reason = 'model_refusal'
+    record.update(status='failed', exit_code=job.exit_code or 1, reason=reason,
+                  events=record.get('events', []) + getattr(job, 'events', []))
+    if refusal is not None:
+        record.update({k: refusal[k] for k in ('stop_reason', 'refusal_text_chars') if k in refusal})
+    return True
+
+
 def _booking_seconds():
     """H1: the booked-down window is clamped to [60, 86400] seconds.
 
@@ -162,7 +177,6 @@ def fallthrough_reason(service, chosen, job, record):
     if question_exit(job, record):
         return None
     if record.get('reason') == 'model_refusal' or getattr(job, 'status', None) == 'model_refusal' or any(e.get('event') == 'model_refusal' for e in getattr(job, 'events', ())):
-        record['reason'] = 'model_refusal'
         return None   # safety stops are not provider limits or leg-health evidence
     # Before the terminal check: text-call output replaces writer_no_changes; tool_call_only keeps the other terminals.
     if tool_call_only(job, record):
@@ -207,8 +221,8 @@ def fallthrough_reason(service, chosen, job, record):
         _book_failure(service, chosen, 'model_unavailable: ' + reason)
         notify_leg_refused(service, record, chosen, reason)
     stop = getattr(getattr(service, 'runner', None), 'provider_responses', {}).get(getattr(job, 'job_id', None))
-    if (not reason and record.get('role') == 'review' and isinstance(stop, dict)
-            and stop.get('status') in (402, 429) and not getattr(job, 'survivors', ())
+    if (not reason and record.get('role') == 'review' and stop
+            and not getattr(job, 'survivors', ())
             and job.status in ('failed', 'skipped', 'limited')):
         return 'provider_stop'
     # Review/seat failures exhaust the existing route, not the whole run.

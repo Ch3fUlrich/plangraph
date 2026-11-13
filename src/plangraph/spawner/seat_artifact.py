@@ -107,6 +107,8 @@ def sync_seat(record, held_families=()):
     if len(own) != 1:
         return
     chosen = record.get('chosen_leg')
+    if chosen and len(plan.get('seat_coverage') or []) != 1 and own[0].get('leg') != chosen['id']:
+        return  # a mixed plan's non-seat leg cannot resolve its seat slot
     if chosen:
         family = seat_family(chosen['family'])
         eligible = own[0].get('eligible_families')
