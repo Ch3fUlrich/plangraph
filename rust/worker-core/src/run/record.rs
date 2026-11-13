@@ -28,6 +28,7 @@ pub enum Status {
     Failed,
     Cancelled,
     Stalled,
+    StalledNoLeg,
     Timeout,
     Refused,
     Limited,
@@ -45,6 +46,7 @@ impl Status {
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
             Self::Stalled => "stalled",
+            Self::StalledNoLeg => "stalled_no_leg",
             Self::Timeout => "timeout",
             Self::Refused => "refused",
             Self::Limited => "limited",
@@ -61,6 +63,7 @@ impl Status {
             Self::Failed,
             Self::Cancelled,
             Self::Stalled,
+            Self::StalledNoLeg,
             Self::Timeout,
             Self::Refused,
             Self::Limited,
@@ -163,11 +166,20 @@ impl RunRecord {
         }
         if !matches!(
             (from, to),
-            (Queued, Running | Cancelled | Failed | Refused | NeedsInput)
-                | (
-                    Running,
-                    Completed | Failed | Cancelled | Stalled | Timeout | NeedsInput | Orphaned
-                )
+            (
+                Queued,
+                Running | Cancelled | Failed | Refused | NeedsInput | StalledNoLeg
+            ) | (
+                Running,
+                Completed
+                    | Failed
+                    | Cancelled
+                    | Stalled
+                    | StalledNoLeg
+                    | Timeout
+                    | NeedsInput
+                    | Orphaned
+            )
         ) {
             return Err(RecordError::BadTransition);
         }

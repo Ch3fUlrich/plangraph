@@ -16,6 +16,7 @@ mod health_report_rows;
 mod jobs;
 mod launch;
 mod leg_ref;
+mod no_leg_watch;
 mod placement;
 mod prompt;
 mod prompt_git;
