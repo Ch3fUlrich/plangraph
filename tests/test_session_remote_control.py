@@ -20,7 +20,8 @@ def test_required_rc_launch_is_bounded(site, platform, bridge):
     else:
         assert result['ok'] is False
         assert 'RC-MISSING' in result['error']
-        assert record['state'] == 'rc_missing'
+        assert record['state'] == 'running'
+        assert record['rc_missing'] is True
         assert record['session_id'] == UUID1
     assert len(run.calls) <= 4
 

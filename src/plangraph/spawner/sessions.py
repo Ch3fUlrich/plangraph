@@ -92,6 +92,9 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         the original exception re-raised. The marker is unlinked only after
         the "running"/"unknown" write. Returns (session_id, warning)."""
         rec.pop('bridgeSessionId', None)
+        rec.pop('rc_missing', None)
+        if rec.get('reason') == 'RC-MISSING':
+            rec.pop('reason')
         launched_ms = self._now() * 1000.0  # before the start: rows near it count
         # The write-ahead keeps any existing launched_ts: only SUCCESSFUL launches stamp it.
         rec.update({"state": "launching", "session_id": None, "job_id": None,
@@ -138,7 +141,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         if rec.get('require_remote_control'):
             bridge = self._wait_bridge(sid)
             if bridge is None:
-                rec.update(state='rc_missing', reason='RC-MISSING', ts=self._now())
+                rec.update(rc_missing=True, reason='RC-MISSING', ts=self._now())
                 self._write_record(name, rec)
                 raise _ActionFailed('RC-MISSING: launch has no bridgeSessionId within bound', session_id=sid)
             rec['bridgeSessionId'] = bridge

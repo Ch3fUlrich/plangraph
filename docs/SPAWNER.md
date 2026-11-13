@@ -709,3 +709,5 @@ RC startup waits use a monotonic deadline; the lesson-gate reference covers the 
 `wait()` gives a `pid_gone` status snapshot 0.5 seconds for the supervisor to persist its final outcome; caller timeouts still apply.
 
 The no-leg timer skips `queued` and `queue_claimed` runs; their queue watchdog owns the queue deadline.
+
+An RC-required session without a bridge retains its running state and session ID, with `rc_missing=true`, while launch reports `RC-MISSING`.
