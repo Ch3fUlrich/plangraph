@@ -34,7 +34,7 @@ def current_source_identity(source=None):
     env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
     try:
         head = subprocess.run(['git', '-C', str(source), 'rev-parse', '--verify', 'HEAD'],
-                              env=env, capture_output=True, text=True, check=True,
+                              env=env, capture_output=True, text=True, encoding='utf-8', errors='replace', check=True,
                               timeout=2).stdout.strip()
         if re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', head):
             return head[:12]
