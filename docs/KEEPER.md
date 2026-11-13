@@ -595,12 +595,10 @@ The keeper writes no backups itself; operators leave ad-hoc copies (`backup-pre-
 - Alternative to the hook: run `pg admin prune-backups --dir DIR --apply` from a Semaphore playbook or cron job.
 
 ## Placement rules migration-gates
-Migration 11 requires operator GO naming the reviewed SHA and scope, verified
-backup and disposable-schema rehearsal before application through the migrate role.
+Migration 11 requires operator GO naming the reviewed SHA and scope, verified backup and disposable-schema rehearsal before application through the migrate role.
 Verify runtime DML-only grants, approve API restart, and rehearse rollback first.
 Writers have no live authority; tests use only fixture-owned temporary schemas.
-Keep application writers stopped during rollback and restore: fixed tables and
-indexes become `*_retired_v11` under migration and exclusive table locks.
+Keep application writers stopped during rollback and restore: fixed tables and indexes become `*_retired_v11` under migration and exclusive table locks.
 Preserve audit rows; reapplication requires an explicit restore plan.
 SQLite rollback retains tables; C4 owns forward audit events, not item events.
 Mandatory ephemeral PostgreSQL CI must pass before merge; storage is not closure.
