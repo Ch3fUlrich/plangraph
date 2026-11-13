@@ -188,6 +188,10 @@ def main():
 
 def push_main():
     global PYTHON
+    if os.environ.get('PLANGRAPH_HOOK_DISABLE') == '1':
+        print('pre-push: SKIPPED PLANGRAPH_HOOK_DISABLE=1 (all hook gates disabled)',
+              file=sys.stderr)
+        return 0
     cargo_bin = Path.home() / '.cargo/bin'
     if cargo_bin.is_dir():
         os.environ['PATH'] = str(cargo_bin) + os.pathsep + os.environ.get('PATH', '')

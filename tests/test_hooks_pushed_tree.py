@@ -8,6 +8,27 @@ from pathlib import Path
 HOOK = Path(__file__).resolve().parents[1] / 'tools/hooks/pre-push'
 
 
+def test_disable_switch_reports_skipped_without_changing_files(tmp_path):
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith('GIT_')}
+    env.update(GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1', HOME=str(tmp_path))
+    original_mode = HOOK.stat().st_mode
+    original_bytes = HOOK.read_bytes()
+    command = [sys.executable, str(HOOK)]
+    env['PLANGRAPH_HOOK_DISABLE'] = '1'
+    result = subprocess.run(command, cwd=tmp_path, env=env, input='malformed\n',
+                            text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert 'SKIPPED PLANGRAPH_HOOK_DISABLE=1' in result.stderr
+    env['PLANGRAPH_HOOK_DISABLE'] = '0'
+    result = subprocess.run(command, cwd=tmp_path, env=env, input='malformed\n',
+                            text=True, capture_output=True)
+    assert result.returncode == 1
+    assert 'malformed push record' in result.stderr
+    assert HOOK.stat().st_mode == original_mode
+    assert HOOK.read_bytes() == original_bytes
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_file_size_uses_each_pushed_tree(tmp_path):
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith('GIT_')}
     env.update(GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1',

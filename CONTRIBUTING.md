@@ -349,3 +349,11 @@ that contract; its check operation refuses completion until branch policy passes
 Public scrub permits IPv6 loopback (`::1`) and the documentation network
 `2001:db8::/32`, parsed as addresses rather than string prefixes. Other IPv6
 addresses remain subject to the public scrub rule.
+
+Temporarily disable the entire pre-push hook with
+`PLANGRAPH_HOOK_DISABLE=1 git push` (PowerShell: set
+`$env:PLANGRAPH_HOOK_DISABLE="1"` for that invocation, then remove the variable).
+The hook prints `SKIPPED PLANGRAPH_HOOK_DISABLE=1` and exits successfully. Unset
+or any other value runs normal checks. Do not disable a hook by changing its
+executable bit: that creates a tracked mode change and can block fast-forwards.
+`PREFLIGHT_SKIP=1` remains the narrower preflight-only bypass.

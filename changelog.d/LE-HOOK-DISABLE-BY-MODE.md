@@ -1,0 +1,1 @@
+- Add an explicit, documented pre-push disable environment switch without mode changes.
