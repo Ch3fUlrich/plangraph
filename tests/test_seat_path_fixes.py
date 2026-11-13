@@ -71,10 +71,10 @@ def test_verdict_commentary_and_parser_parity(tools_importable):
 def test_review_default_wall_cap(monkeypatch, tmp_path):
     monkeypatch.delenv("PLANGRAPH_SPAWN_RUN_TIMEOUT", raising=False)
     limits = thresholds(role="review")
-    assert limits["max_s"] == 1500 and limits["hard_max"]
+    assert limits["max_s"] == 600 and limits["hard_max"]
     watchdog = Watchdog(limits, start=0, edit=None, writer=False)
-    assert watchdog.decide(1499, None, None, None) is None
-    event = watchdog.decide(1500, None, None, None)
+    assert watchdog.decide(599, None, None, None) is None
+    event = watchdog.decide(600, None, None, None)
     assert event["rule"] == "max"
     assert thresholds()["max_s"] == thresholds(role="orchestrate")["max_s"] == 5400
     assert thresholds({"max_min": 2}, role="review")["max_s"] == 120
@@ -113,13 +113,15 @@ def test_review_default_wall_cap(monkeypatch, tmp_path):
 
 def test_empty_run_timeout_keeps_default_limits(monkeypatch):
     monkeypatch.setenv("PLANGRAPH_SPAWN_RUN_TIMEOUT", "")
-    for role in ("review", "implement", "orchestrate", None):
+    for role, maximum, hard in (("review", 600, True), ("implement", 2700, True),
+                                ("fix", 2700, True), ("orchestrate", 5400, False),
+                                (None, 5400, False)):
         limits = thresholds(role=role)
-        assert limits["max_s"] == 5400
-        assert limits["hard_max"] is (role == "review")
+        assert limits["max_s"] == maximum
+        assert limits["hard_max"] is hard
     monkeypatch.delenv("PLANGRAPH_SPAWN_RUN_TIMEOUT")
     limits = thresholds(role="review")
-    assert limits["max_s"] == 1500
+    assert limits["max_s"] == 600
     assert limits["hard_max"] is True
 
 

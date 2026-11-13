@@ -327,12 +327,12 @@ def test_review_without_numeric_cap_has_no_deadline(monkeypatch):
     assert record == dict(role='review', started=1000)
 
 
-def test_empty_review_timeout_keeps_ordinary_maximum(monkeypatch):
+def test_empty_review_timeout_keeps_role_maximum(monkeypatch):
     monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', '')
     monkeypatch.setattr('time.time', lambda: 1000)
     limits = thresholds(role='review')
-    assert limits['max_s'] == 90 * 60
-    assert leg_limits(dict(role='review', started=1000), limits)['deadline'] == 6400
+    assert limits['max_s'] == 10 * 60
+    assert leg_limits(dict(role='review', started=1000), limits)['deadline'] == 1600
 
 
 def test_uncapped_review_dispatch_can_fall_through(replay):
