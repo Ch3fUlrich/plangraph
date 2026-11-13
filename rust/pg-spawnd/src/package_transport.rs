@@ -147,3 +147,17 @@ impl Backend for Native {
             .ok_or_else(|| error("remote package command returned no JSON"))
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    #[test]
+    fn package_wait_ignores_pattern_in_its_own_argv() {
+        let mut command=Command::new("sh");
+        command.args(["-c", "sleep 0.03 & target=$!; wait \"$target\"; printf done", "codex exec -m fixture"]);
+        let started=Instant::now();
+        let (code,out,_)=capture(&mut command,"",Duration::from_secs(1)).unwrap_or_else(|_|panic!("exact child wait"));
+        assert_eq!(code,0);assert_eq!(out,"done");
+        assert!(started.elapsed()<Duration::from_secs(1));
+    }
+}
