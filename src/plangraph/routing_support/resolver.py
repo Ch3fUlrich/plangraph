@@ -238,7 +238,7 @@ OPERATOR_REMOVED_MODELS = frozenset({
 
 def admission_models() -> set[str]:
     """Registered offline routes, excluding models removed by the operator."""
-    return {leg.model for leg in DEFAULT_LEGS} - OPERATOR_REMOVED_MODELS
+    return {leg.model for leg in DEFAULT_LEGS if leg.roles} - OPERATOR_REMOVED_MODELS
 
 
 _fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS if leg.model in admission_models()}

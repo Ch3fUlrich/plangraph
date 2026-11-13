@@ -23,12 +23,12 @@ D25_IDS = [
     "agy-gemini-3.8-flash", "agy-gemini-4-argon", "opencode-big-pickle", "agy-gpt-oss-120b",
     "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "agy-claude-opus", "agy-opus-5.5", "omniroute-deepseek-flash", "omniroute-muse-spark", "agy-opus", "opencode-gemini-4-argon",
     "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
-    "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark", "opencode-go-deepseek-v4-flash", "omniroute-gemini-3.8-flash", "deepseek",
-    "claude-haiku-5.5",  # D-3605 Haiku leg
+    "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark", "opencode-go-deepseek-v4-flash", "omniroute-gemini-3.8-flash",
+    "agy-gemini-4-hydrogen-high", "agy-gemini-4-hydrogen-medium", "cx-gpt-6.1-terra-medium", "cx-gpt-6.1-terra-xhigh", "muse-ember-max", "claude-fable-5.2-high", "deepseek", "claude-haiku-5.5",
 ]
 #: Route order: tiers ascending, so the subscription Haiku leg precedes paid deepseek.
 ROUTE_IDS = [D25_IDS[i] for i in (0, 1, 2, 3, 6, 8, 18, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17,
-                                19, 20, 21, 22, 23, 24, 25, 26, 28, 27)]
+                                19, 20, 21, 22, 23, 24, 25, 26, 34, 33)]
 
 
 def card(**kw):

@@ -395,4 +395,6 @@ def test_main_policy_gpt_first_and_retained_routes():
         "omniroute-grok-4.7", "opencode-console-muse-spark",
         "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek", "claude-haiku-5.5", "omniroute-gemini-3.8-flash",
         "agy-gemini-4-argon", "opencode-big-pickle", "agy-claude-opus",
-        "omniroute-deepseek-flash", "omniroute-muse-spark", "agy-gpt-oss-120b"}
+        "omniroute-deepseek-flash", "omniroute-muse-spark", "agy-gpt-oss-120b",
+        "agy-gemini-4-hydrogen-high", "agy-gemini-4-hydrogen-medium", "cx-gpt-6.1-terra-medium",
+        "cx-gpt-6.1-terra-xhigh", "muse-ember-max", "claude-fable-5.2-high"}

@@ -45,12 +45,14 @@ def payment_order(legs, role, *, order_class=None, writer_families=(), diff_toke
     An explicit order_class selects D-5696/D-5706 catalog order instead; callers
     supply already-admitted legs, writer families, diff size and cheaper verdicts.
     """
-    from .legs import TIERS, WRITER_ORDER
+    from .legs import CX_EFFORTS, TIERS, WRITER_ORDER
     from .route_policy import implement_key
     ordered = list(legs)
     if order_class is not None:
         from plangraph.routing_support.catalog_seed import (
-            LEGACY_ROUTE_REPLACEMENTS, OPERATOR_ROUTE_ORDERS, OPERATOR_REVIEW_CHEAP_LEGS)
+            IMPLEMENT_SONNET_REFUSAL, LEGACY_ROUTE_REPLACEMENTS,
+            OPERATOR_ROUTE_ORDERS, OPERATOR_REVIEW_CHEAP_LEGS)
+        from dataclasses import replace
         from .seats import seat_family, writer_parts
         if order_class not in ('standard', 'high', 'complex'):
             raise ValueError('unknown order class: ' + str(order_class))
@@ -67,10 +69,17 @@ def payment_order(legs, role, *, order_class=None, writer_families=(), diff_toke
             raise ValueError('review needs a writer family')
         if diff_tokens is not None and (type(diff_tokens) is not int or diff_tokens < 0):
             raise ValueError('diff_tokens must be a nonnegative integer')
-        effective_role = 'orchestrate' if role == 'planning' else role
         if len({leg.id for leg in ordered}) != len(ordered):
             raise ValueError('duplicate route leg id')
+        effective_role = 'orchestrate' if role == 'planning' else role
         by_id = {leg.id: leg for leg in ordered if effective_role in leg.roles}
+        if role == 'implement':
+            for leg in ordered:
+                if 'sonnet' in (leg.id + leg.model).lower() and leg.harness == 'claude':
+                    raise ValueError(IMPLEMENT_SONNET_REFUSAL)
+                if (leg.id in by_id and leg.id == 'agy-sonnet-5.5'
+                        and leg.harness != 'claude' and leg.model == 'claude-sonnet-5-5-high'):
+                    by_id.setdefault('agy-claude-sonnet-5-5-high', leg)
         if role == 'review':
             by_id = {id: leg for id, leg in by_id.items() if seat_family(leg.family) not in writers}
             if diff_tokens is None or diff_tokens >= 100000:
@@ -79,7 +88,10 @@ def payment_order(legs, role, *, order_class=None, writer_families=(), diff_toke
                      if id in OPERATOR_REVIEW_CHEAP_LEGS and id in by_id and verdict in ('PASS', 'FIX')}
             if len(votes) < 2 or len(set(votes.values())) < 2:
                 by_id.pop('muse-ember-max', None)
-        return tuple(by_id[id] for id in table if id in by_id)
+        return tuple(replace(by_id[id], effort=(id.rsplit('-', 1)[-1]
+                     if id.rsplit('-', 1)[-1] in CX_EFFORTS else
+                     'xhigh' if id == 'claude-haiku-5.5' else 'medium'))
+                     for id in table if id in by_id)
     if role not in ('implement', 'review'):
         return tuple(ordered)
     prefix_slots = set()

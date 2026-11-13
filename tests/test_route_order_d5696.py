@@ -3,14 +3,23 @@ from dataclasses import replace
 
 import pytest
 
-from plangraph.planner.legs import Leg
 from plangraph.planner.review_order import payment_order
 
 
 @pytest.fixture
 def catalog():
-    from plangraph.routing_support.catalog_seed import OPERATOR_ROUTE_CATALOG
-    return tuple(Leg(**row) for row in OPERATOR_ROUTE_CATALOG)
+    from plangraph.planner.legs import spawnable_legs
+    from plangraph.routing_support.catalog_seed import OPERATOR_ROUTE_ORDERS
+    tables = OPERATOR_ROUTE_ORDERS
+    ids = dict.fromkeys((*tables['implement'], *tables['review']['high'],
+                         *tables['review']['complex'], *tables['planning']))
+    registered = {leg.id: leg for leg in spawnable_legs()}
+    # Hermetic admission projects table roles; live policy is deliberately not
+    # activated by these registrations (see test_live_legacy_door_keeps_d5696_open).
+    return tuple(replace(registered[id], roles=tuple(dict.fromkeys(role for role, table in (
+        ('implement', tables['implement']), ('review', tables['review']['high']),
+        ('review', tables['review']['complex']), ('orchestrate', tables['planning']))
+        if id in table))) for id in ids)
 
 
 def ordered(catalog, role, *, order_class='standard', **kwargs):
@@ -24,7 +33,10 @@ def signature(legs):
 def test_implement_order_efforts_and_limited_fallthrough(catalog):
     expected = [('cx-gpt-6.1-sol-xhigh', 'xhigh'),
                 ('agy-gemini-4-hydrogen-high', 'high'),
-                ('agy-claude-sonnet-5-5-high', 'high')]
+                ('agy-claude-sonnet-5-5-high', 'high'),
+                ('mimo-v2.6-pro', 'medium'), ('opencode-go-deepseek-v4-flash', 'medium'),
+                ('mimo-v2.6-flash', 'medium'), ('muse-ember-max', 'max'),
+                ('omniroute-deepseek-flash', 'medium')]
     assert signature(ordered(catalog, 'implement')) == expected
     # Admission remains upstream: the ordering core cannot resurrect a limited leg.
     assert signature(ordered(catalog[1:], 'implement')) == expected[1:]
@@ -32,13 +44,19 @@ def test_implement_order_efforts_and_limited_fallthrough(catalog):
     from plangraph.planner.route_policy import RoutePolicy
     # Use the real admission boundary rather than pretending the ordering core
     # reads provider state. Live default-table activation remains out of slice.
+    # Unknown Hydrogen capabilities are test evidence only, never live defaults.
+    inputs = (catalog[0], replace(catalog[1], disabled=None, windows=('128k',),
+                                max_request_tokens=1000, trains_on_data=False), catalog[2])
     admitted = plan_spawn({'estimate_tokens': 1000}, role='implement',
-        legs=catalog[:3], catalog_rows=tuple({'id': leg.model, 'active': True, 'available': 1}
-                                           for leg in catalog[:3]), policy=RoutePolicy(),
+        legs=inputs, catalog_rows=tuple({'id': leg.model, 'active': True, 'available': 1}
+                                      for leg in inputs), policy=RoutePolicy(),
         leg_reader=lambda model, **kw: {'state': 'limited' if model == catalog[0].model else 'ok',
                                        'evidence': None})
     assert signature(ordered(admitted.legs, 'implement')) == expected[1:2]
     assert any(row['leg'] == expected[0][0] and row['reason'] == 'limited'
+               for row in admitted.skipped)
+    # Not a one-leg trim: live D-3828 still fences AgY Sonnet (D-5696 stays open).
+    assert any(row['leg'] == expected[2][0] and row['reason'] == 'excluded_family'
                for row in admitted.skipped)
 
 
@@ -48,10 +66,12 @@ def test_standard_review_order_efforts_and_writer_fence(catalog):
                 ('mimo-v2.6-flash', 'medium'),
                 ('claude-haiku-5.5', 'xhigh'),
                 ('omniroute-deepseek-flash', 'medium')]
-    result = ordered(catalog, 'review', writer_families=('openai',), diff_tokens=99999)
+    result = ordered(catalog, 'review', writer_families=('gpt',), diff_tokens=99999)
     assert signature(result) == expected
     assert signature(ordered(catalog, 'review', writer_families=('mimo', 'anthropic'),
                              diff_tokens=99999)) == [expected[1], expected[-1]]
+    fenced = ordered(catalog, 'review', order_class='high', writer_families=('openai',))
+    assert fenced[0].id == 'agy-gemini-4-hydrogen-medium' and all(l.family != 'gpt' for l in fenced)
 
 
 @pytest.mark.parametrize('order_class', ['high', 'complex'])
@@ -77,13 +97,20 @@ def test_planning_fable_high(catalog):
     assert signature(ordered(catalog, 'planning')) == [('claude-fable-5.2-high', 'high')]
 
 
-def test_catalog_uses_valid_existing_leg_schema(tmp_path):
+def test_catalog_uses_valid_existing_leg_schema(tmp_path, catalog):
     import json
     from plangraph.planner.legs import load_legs
-    from plangraph.routing_support.catalog_seed import OPERATOR_ROUTE_CATALOG
     path = tmp_path / 'legs.json'
-    path.write_text(json.dumps({'legs': OPERATOR_ROUTE_CATALOG}))
-    assert len(load_legs(path)) == len(OPERATOR_ROUTE_CATALOG)
+    from dataclasses import asdict
+    from plangraph.planner.legs import spawnable_legs
+    registrations = tuple(leg for leg in spawnable_legs() if leg.id in {l.id for l in catalog})
+    path.write_text(json.dumps({'legs': [asdict(leg) for leg in registrations]}))
+    assert load_legs(path) == registrations
+    unknown = next(asdict(leg) for leg in registrations if not leg.windows)
+    for change in ({'disabled': None}, {'expires': 10}, {'roles': ['implement']}):
+        path.write_text(json.dumps({'legs': [dict(unknown, **change)]}))
+        with pytest.raises(ValueError):
+            load_legs(path)
 
 
 @pytest.mark.parametrize('diff_tokens,haiku', [(None, False), (99999, True),
@@ -141,3 +168,67 @@ def test_unknown_role_and_duplicate_ids_fail_closed(catalog):
         ordered(catalog, 'unknown')
     with pytest.raises(ValueError, match='duplicate'):
         ordered((*catalog, catalog[0]), 'implement')
+
+
+def test_order_rows_share_the_existing_leg_registry(catalog):
+    from plangraph.planner.legs import spawnable_legs
+    registered = {leg.id: leg for leg in spawnable_legs()}
+    assert {leg.id for leg in catalog} <= registered.keys()
+    for leg in catalog:
+        assert leg.model == registered[leg.id].model
+    assert all(leg.disabled and not leg.windows and leg.max_request_tokens is None
+               and leg.trains_on_data is None and not leg.roles for leg in registered.values()
+               if leg.id in ('agy-gemini-4-hydrogen-high', 'agy-gemini-4-hydrogen-medium',
+                             'cx-gpt-6.1-terra-medium', 'cx-gpt-6.1-terra-xhigh',
+                             'muse-ember-max', 'claude-fable-5.2-high'))
+
+
+def test_order_capabilities_are_existing_facts_or_unset(catalog):
+    from plangraph.planner.legs import spawnable_legs
+    registered = {leg.model: leg for leg in spawnable_legs()}
+    for leg in catalog:
+        source = registered.get(leg.model)
+        actual = (leg.windows, leg.max_request_tokens, leg.trains_on_data)
+        assert actual == ((source.windows, source.max_request_tokens, source.trains_on_data)
+                          if source else ((), None, None)), leg.id
+    haiku = next(leg for leg in catalog if leg.id == 'claude-haiku-5.5')
+    assert (haiku.windows, haiku.max_request_tokens) == (('128k', '256k'), 180000)
+    hydrogen = next(leg for leg in catalog if leg.id == 'agy-gemini-4-hydrogen-high')
+    assert (hydrogen.windows, hydrogen.max_request_tokens, hydrogen.trains_on_data) == ((), None, None)
+
+
+def test_d5712_sonnet_source_and_position_2_to_4(catalog):
+    sonnet = next(leg for leg in catalog if leg.id == 'agy-claude-sonnet-5-5-high')
+    with pytest.raises(ValueError, match='D-5712: claude_code_subscription_forbidden_for_implement'):
+        ordered((replace(sonnet, harness='claude'),), 'implement')
+    agy = replace(sonnet, id='agy-sonnet-5.5')
+    assert ordered((agy,), 'implement') == (replace(agy, effort='high'),)
+    other = replace(sonnet, harness='opencode')
+    assert ordered((other,), 'implement') == (replace(other, effort='high'),)
+    absent = tuple(leg for leg in catalog if leg.id != sonnet.id)
+    assert [leg.id for leg in ordered(absent, 'implement')][:3] == [
+        'cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high', 'mimo-v2.6-pro']
+
+
+def test_live_legacy_door_keeps_d5696_open():
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import plan_spawn
+    legacy = next(leg for leg in DEFAULT_LEGS if leg.id == 'agy-gemini-3.8-flash')
+    plan = plan_spawn({'estimate_tokens': 1000}, role='implement', legs=(legacy,),
+                      catalog_rows=(), leg_reader=lambda *a, **kw: dict(state='ok', evidence=None))
+    assert plan.legs == (legacy,)  # No claim of global legacy fencing or DONE.
+
+
+def test_order_never_bypasses_role_admission(catalog):
+    assert not ordered((replace(catalog[0], roles=('orchestrate',)),), 'implement')
+    sonnet = replace(catalog[2], id='agy-sonnet-5.5', roles=('review',))
+    assert not ordered((sonnet,), 'implement')
+
+
+def test_unknown_capability_declarations_are_not_live_admissions():
+    from plangraph.routing_support.resolver import DEFAULT_FALLBACK_MODELS
+    unknown = {'gemini-4-hydrogen-high', 'gemini-4-hydrogen-medium',
+               'cx-gpt-6.1-terra-medium', 'cx-gpt-6.1-terra-xhigh', 'muse-ember-max',
+               'claude-fable-5-2'}
+    rows = [row for row in DEFAULT_FALLBACK_MODELS if row['id'].rsplit('/', 1)[-1] in unknown]
+    assert len(rows) == 6 and all(not row['active'] and row['available'] == 0 for row in rows)

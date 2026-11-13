@@ -1,37 +1,25 @@
 # Implement route defaults (D-5206)
 
-## D-5696 slice 1: fixed-order core, not live route activation
+## Fixed-order reference (D-5696/D-5706/D-5712)
 
-`routing_support/catalog_seed.py` now carries `OPERATOR_ROUTE_CATALOG` and the
-role/class tables consumed by the existing `payment_order` function when its
-`order_class` keyword is supplied. Implement is Sol xhigh, Hydrogen high, Sonnet
-high; planning is Fable 5.2 high (the existing orchestrate role). Standard review
-starts with Mimo Pro, OpenCode DeepSeek and Mimo Flash, without Sol or Hydrogen.
-High review uses Sol medium, Terra medium, Hydrogen medium; complex review uses
-Sol xhigh, Terra xhigh, Hydrogen high. Terra immediately follows Sol as its
-same-family fallback, not an independent review seat. Writer families are skipped.
-Haiku xhigh requires a known diff strictly below 100k tokens. Ember Max requires
-opposing PASS/FIX verdicts from two eligible cheaper legs; unknown, expensive or
-writer-family verdicts do not unlock it. The core refuses legacy Gemini Flash
-and Luna ids with Hydrogen and Terra replacements named. Admission stays upstream.
-The new catalog is not yet persisted through `catalog_data.SEED_MODELS`; its
-provider schemas, effort rendering and benchmark evidence need the same follow-up.
+| Position | Implement | Standard review | High review | Complex review |
+| --- | --- | --- | --- | --- |
+| 1 | Sol xhigh | Mimo Pro medium | Sol medium | Sol xhigh |
+| 2 | Hydrogen high | OpenCode Go DeepSeek medium | Terra medium | Terra xhigh |
+| 3 | Sonnet high, non-Claude-Code only | Mimo Flash medium | Hydrogen medium | Hydrogen high |
+| 4 | Mimo Pro medium | Haiku xhigh | Mimo Pro medium | Mimo Pro medium |
+| 5 | OpenCode Go DeepSeek medium | Ember Max | OpenCode Go DeepSeek medium | OpenCode Go DeepSeek medium |
+| 6 | Mimo Flash medium | OmniRoute DeepSeek medium (dead) | Mimo Flash medium | Mimo Flash medium |
+| 7 | Ember Max | — | Haiku xhigh | Haiku xhigh |
+| 8 | OmniRoute DeepSeek medium (dead) | — | Ember Max | Ember Max |
+| 9 | — | — | OmniRoute DeepSeek medium (dead) | OmniRoute DeepSeek medium (dead) |
 
-**Deferred activation:** `planner/routing.py:306` still feeds the old registrations
-to `plan_spawn`; its admission, benchmark ordering and explicit `validate_model`
-door are unchanged. `routing_support/resolver.py:841` and `:1083` retain utility
-selection. Thus the legacy refusal is scoped to the new core mode, not a claim
-that every live door is migrated. Completing those shared doors and their old
-test contracts exceeds this slice's ~400-line budget. Do not deploy these tables
-as a second route implementation. L1 still owns live probes and host catalogs.
-PR #818's corrected `omniroute/deepseek-v4.1-flash` identity is retained in the new catalog, but the
-recorded listing did not serve it; launch still refuses it when absent. The
-OpenCode Go DeepSeek identity remains `opencode-go/deepseek-v4.1-flash`.
-Its global default-leg mutation is left out: `tests/test_benchmark_data_contract.py:48`
-freezes the old identity's missing-row waiver; changing it creates an unlisted
-violation. No new waiver, score or publisher evidence is invented in this lane.
-The keeper item command was unavailable (`plangraph.keeper` has no `__main__`),
-so this slice follows the supplied operator brief; no live probe was run.
+Planning: Fable 5.2 high. Terra is Sol's same-family fallback. Review excludes
+writer families; Haiku needs diff <100k; Ember needs opposing eligible cheaper
+verdicts. D-5712 refuses Claude Code Sonnet for implement; AgY Sonnet is allowed
+by this core, otherwise skip position 3. Admission remains upstream.
+**D-5696 remains OPEN:** live legacy/admission migration is not complete; see
+`changelog.d/SPAWNER-ROUTE-ORDER-D5696-1.md` for scope and dead-leg evidence.
 
 ## Existing live defaults (until activation)
 

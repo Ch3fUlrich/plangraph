@@ -181,4 +181,6 @@ def test_agy_leg_models_use_agy_model_ids():
                     "agy-gemini-4-argon": "gemini-4-argon-high",
                     "agy-opus-5.5": "claude-opus-5-5-high", "agy-opus": "claude-opus-5-5-medium",
                     "agy-claude-opus": "claude-opus-4-6-thinking",
-                   "agy-sonnet-5.5": "claude-sonnet-5-5-medium"}
+                   "agy-sonnet-5.5": "claude-sonnet-5-5-medium",
+                   "agy-gemini-4-hydrogen-high": "gemini-4-hydrogen-high",
+                   "agy-gemini-4-hydrogen-medium": "gemini-4-hydrogen-medium"}

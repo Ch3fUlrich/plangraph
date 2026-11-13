@@ -54,8 +54,8 @@ class Leg:
     model: str
     family: str
     windows: tuple[str, ...]
-    max_request_tokens: int
-    trains_on_data: bool
+    max_request_tokens: int | None
+    trains_on_data: bool | None
     claude_family: bool = False
     note: str = ""
     roles: tuple[str, ...] = ("orchestrate",)
@@ -162,6 +162,24 @@ DEFAULT_LEGS = (
         roles=("review",),
         disabled="D-4193 upstream route not verified",
         note="D-4193 upstream route not verified, conservative"),
+    # D-5696: declarations, NOT capability or admission evidence. Unknown facts
+    # stay unset and permanently disabled; existing registrations are reused.
+    *(Leg(id, 'subscription', harness, model, family, (), None, None,
+          claude_family=family == 'claude', roles=(), effort=effort,
+          tool_mode=mode, disabled='D-5696: capability evidence required')
+      for id, harness, model, family, effort, mode in (
+          ('agy-gemini-4-hydrogen-high', 'agy', 'gemini-4-hydrogen-high', 'gemini',
+           'high', 'tools'),
+          ('agy-gemini-4-hydrogen-medium', 'agy', 'gemini-4-hydrogen-medium', 'gemini',
+           'medium', 'tools'),
+          ('cx-gpt-6.1-terra-medium', 'opencode', 'omniroute/cx-gpt-6.1-terra-medium', 'gpt',
+           'medium', 'inline-only'),
+          ('cx-gpt-6.1-terra-xhigh', 'opencode', 'omniroute/cx-gpt-6.1-terra-xhigh', 'gpt',
+           'xhigh', 'inline-only'),
+          ('muse-ember-max', 'opencode', 'omniroute/muse-ember-max', 'muse',
+           'max', 'tools'),
+          ('claude-fable-5.2-high', 'claude', 'claude-fable-5-2', 'claude',
+           'high', 'tools'))),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
@@ -279,6 +297,9 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         problems.append(f"{where}.tool_mode: {raw['tool_mode']!r} not in {TOOL_MODES}")
     windows = raw.get("windows")
     disabled = raw.get("disabled")
+    unknown = (isinstance(disabled, str) and bool(disabled.strip()) and raw.get('expires') is None
+               and raw.get('roles') == [] and windows == [] and raw.get('max_request_tokens') is None
+               and raw.get('trains_on_data') is None)
     if raw.get("effort") is not None and raw["effort"] not in CX_EFFORTS:
         problems.append(f"{where}.effort: must be one of {CX_EFFORTS} or null")
     expiry = raw.get('expires')
@@ -292,18 +313,18 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
             or any(not isinstance(r, str) or r not in ("implement", "review", "orchestrate") for r in roles)
             or len(set(roles)) != len(roles)):
         problems.append(f"{where}.roles: must be a subset of implement|review|orchestrate")
-    if "windows" in raw:
+    if "windows" in raw and not unknown:
         if (not isinstance(windows, (list, tuple)) or not windows
                 or any(not isinstance(w, str) or w not in WINDOW_CLASSES
                        for w in windows)):
             problems.append(f"{where}.windows: must be a non-empty subset of "
                             f"{WINDOW_CLASSES}")
-    if "max_request_tokens" in raw:
+    if "max_request_tokens" in raw and not unknown:
         mrt = raw["max_request_tokens"]
         if not _is_int(mrt) or mrt <= 0:
             problems.append(f"{where}.max_request_tokens: must be a positive int")
     for key in ("trains_on_data", "claude_family"):
-        if key in raw and not isinstance(raw[key], bool):
+        if key in raw and not (unknown and key == 'trains_on_data') and not isinstance(raw[key], bool):
             problems.append(f"{where}.{key}: must be a bool")
     if len(problems) > start:
         return None

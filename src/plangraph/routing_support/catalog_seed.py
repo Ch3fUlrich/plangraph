@@ -27,7 +27,9 @@ LEGACY_ROUTE_REPLACEMENTS = {
 }
 OPERATOR_ROUTE_ORDERS = {
     'implement': ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high',
-                  'agy-claude-sonnet-5-5-high'),
+                  'agy-claude-sonnet-5-5-high', 'mimo-v2.6-pro',
+                  'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash',
+                  'muse-ember-max', 'omniroute-deepseek-flash'),
     'review': {
         'standard': ('mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash',
                      'claude-haiku-5.5', 'muse-ember-max', 'omniroute-deepseek-flash'),
@@ -42,42 +44,8 @@ OPERATOR_ROUTE_ORDERS = {
 }
 OPERATOR_REVIEW_CHEAP_LEGS = ('mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash',
                              'mimo-v2.6-flash', 'claude-haiku-5.5')
-# Rows use the existing Leg schema; role-specific effort variants share no
-# mutable registration. Keep the served identities from parked PR #818.
-OPERATOR_ROUTE_CATALOG = tuple(dict(
-    id=id, tier='subscription', harness=harness, model=model, family=family,
-    windows=('128k', '256k', '1m'), max_request_tokens=context, trains_on_data=False,
-    claude_family=family == 'claude', roles=roles, effort=effort, tool_mode=mode)
-    for id, harness, model, family, context, roles, effort, mode in (
-        ('cx-gpt-6.1-sol-xhigh', 'opencode', 'omniroute/cx-gpt-6.1-sol-xhigh', 'gpt', 900000,
-         ('implement', 'review'), 'xhigh', 'tools'),
-        ('agy-gemini-4-hydrogen-high', 'agy', 'gemini-4-hydrogen-high', 'gemini', 900000,
-         ('implement', 'review'), 'high', 'tools'),
-        ('agy-claude-sonnet-5-5-high', 'agy', 'claude-sonnet-5-5-high', 'claude', 900000,
-         ('implement',), 'high', 'tools'),
-        ('cx-gpt-6.1-sol-medium', 'opencode', 'omniroute/cx-gpt-6.1-sol-medium', 'gpt', 900000,
-         ('review',), 'medium', 'tools'),
-        ('cx-gpt-6.1-terra-medium', 'opencode', 'omniroute/cx-gpt-6.1-terra-medium', 'gpt', 900000,
-         ('review',), 'medium', 'inline-only'),
-        ('cx-gpt-6.1-terra-xhigh', 'opencode', 'omniroute/cx-gpt-6.1-terra-xhigh', 'gpt', 900000,
-         ('review',), 'xhigh', 'inline-only'),
-        ('agy-gemini-4-hydrogen-medium', 'agy', 'gemini-4-hydrogen-medium', 'gemini', 900000,
-         ('review',), 'medium', 'tools'),
-        ('mimo-v2.6-pro', 'opencode', 'mimo/mimo-v2.6-pro', 'mimo', 200000,
-         ('review',), 'medium', 'inline-only'),
-        ('opencode-go-deepseek-v4-flash', 'opencode', 'opencode-go/deepseek-v4.1-flash', 'deepseek', 100000,
-         ('review',), 'medium', 'tools'),
-        ('mimo-v2.6-flash', 'opencode', 'mimo/mimo-v2.6-flash', 'mimo', 200000,
-         ('review',), 'medium', 'inline-only'),
-        ('claude-haiku-5.5', 'claude', 'claude-haiku-5-5', 'claude', 180000,
-         ('review',), 'xhigh', 'prompt-only'),
-        ('muse-ember-max', 'opencode', 'omniroute/muse-ember-max', 'muse', 100000,
-         ('review',), 'max', 'tools'),
-        ('omniroute-deepseek-flash', 'opencode', 'omniroute/deepseek-v4.1-flash', 'deepseek', 100000,
-         ('review',), 'medium', 'tools'),
-        ('claude-fable-5.2-high', 'claude', 'claude-fable-5-2', 'claude', 900000,
-         ('orchestrate',), 'high', 'tools'),
-    ))
+# D-5712: position 3 may use AgY or another non-Claude-Code subscription only.
+IMPLEMENT_SONNET_REFUSAL = 'D-5712: claude_code_subscription_forbidden_for_implement'
 
 SEED_QUOTA_POOLS: list[dict[str, Any]] = [
     {
