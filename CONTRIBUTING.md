@@ -123,9 +123,14 @@ For a transport-only `verdict.json` retry, use `python3 tools/seat_verdict.py --
 
 An unfinished event-log step without review text remains pending even with a
 nonempty `stdout_tail`; the bounded re-read waits for live text, never substitutes
-the stale tail. Empty tail persistence still waits, while a finished empty step
-with a nonempty tail refuses immediately. Unreadable companion records refuse on
-the `evidence.json` path before evidence/token reads or posting.
+the stale tail. Finished-but-textless steps, missing multi-attempt live logs and
+torn UTF-8 live logs also wait within that bound; a deleted record refuses without
+waiting out the deadline. Unreadable companion records refuse on the `evidence.json`
+path before evidence/token reads or posting. Token-read failures and proven pre-send
+exceptions preserve explicit transport retries; uninstrumented poster crashes and
+attempted sends remain ambiguous. Repost heads and writers are validated before
+journal writes. Only backfill entry points add repo `src` to the import path, and
+drive-mount mode exemptions use lexical absolute paths, never symlink targets.
 
 Backfill rejects pinned or explicitly overridden seats, incomplete/nonzero-exit records, writer-family seats, and records without a strict verdict. Family independence uses the same witnessed evidence model as the poster. Any eligible CHANGES takes precedence over ACCEPT in every discovery order; replay never falls through from a terminal or ambiguous CHANGES to another accepting seat. Apply JSON separates eligibility from `delivery` (`delivered`, `failed`, or `skipped`) and includes `verifier_exit` after a send. Corrupt journals and busy shared outbox locks skip with reasons without blocking other items. PR subprocesses have a 30-second timeout; lock acquisition is nonblocking. Exact completion-head equality remains required; backfill does not permit a different head via card ancestry.
 

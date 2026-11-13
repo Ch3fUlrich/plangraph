@@ -88,6 +88,8 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         if record is None:
             record = json.loads(record_path.read_text("utf-8"))
         stat = record_path.stat()
+    except FileNotFoundError as exc:
+        raise ValueError("record.json unreadable: FileNotFoundError") from exc
     except OSError as exc:
         raise RecordPending(f"record.json unreadable: {type(exc).__name__}") from exc
     except (ValueError, RecursionError) as exc:
@@ -96,7 +98,7 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         raise ValueError("record.json is not an object")
     # F6: bind the record to its directory and to this uid's write access.
     windows = os.name == "nt"
-    mode_unknown = windows or re.match(r"^/mnt/[a-zA-Z]/", record_path.resolve().as_posix())
+    mode_unknown = windows or re.match(r"^/mnt/[a-zA-Z]/", record_path.absolute().as_posix())
     if (not windows and stat.st_uid != os.getuid()
             or not mode_unknown and stat.st_mode & 0o022):
         raise ValueError("record.json must be owned by the current uid and "
@@ -120,27 +122,29 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         raise ValueError(f"record exit_code {exit_code!r} is not 0")
     completion = record.get("completion")
     head_sha = completion.get("head_sha") if isinstance(completion, dict) else None
-    if not isinstance(head_sha, str) or not _HEAD_SHA.match(head_sha):
+    if not isinstance(head_sha, str) or not _HEAD_SHA.fullmatch(head_sha):
         error = RecordPending if head_sha in (None, "") else ValueError
         raise error("record completion.head_sha missing or not 40 hex chars")
     try:
         live_log = (run_dir / "live.log").read_text("utf-8")
-    except OSError:
+    except FileNotFoundError:
         live_log = ""
-    unfinished = False
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RecordPending(f"live.log unreadable: {type(exc).__name__}") from exc
     if live_log.strip():
-        review_text, unfinished = _review_log_state(live_log)
+        review_text = _review_text_from_log(live_log)
     else:
         # F4: stdout_tail accumulates every leg (service.py/runner.py append to
         # it), so it may stand in for live.log only on a single-attempt record.
         attempts = record.get("attempts")
-        if not isinstance(attempts, list) or len(attempts) > 1:
+        if not isinstance(attempts, list):
             raise ValueError("stdout_tail accumulates every leg; live.log required")
+        if len(attempts) > 1:
+            raise RecordPending("stdout_tail accumulates every leg; live.log required")
         review_text = str(record.get("stdout_tail") or "")
     if not review_text.strip():
-        error = RecordPending if unfinished or not record.get("stdout_tail") else ValueError
         detail = "no final text in live.log" if live_log.strip() else "live.log and stdout_tail empty"
-        raise error(f"record has no review text ({detail})")
+        raise RecordPending(f"record has no review text ({detail})")
     served = record.get("served_model")
     leg = record.get("chosen_leg")
     chosen = leg.get("model") if isinstance(leg, dict) else None

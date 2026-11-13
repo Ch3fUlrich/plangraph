@@ -58,12 +58,15 @@ def test_completed_record_reread_until_fields_persist(run, field):
 
 
 @pytest.mark.parametrize("blank", [None, "", " \t\n"])
-def test_unfinished_live_step_rereads_nonempty_tail_before_posting(run, blank):
+@pytest.mark.parametrize("finish", [None, "stop", "length", "tool-calls"])
+def test_unfinished_live_step_rereads_nonempty_tail_before_posting(run, blank, finish):
     argv, seat, calls = run
     assert json.loads((seat / "record.json").read_text())["stdout_tail"] == REVIEW
     events = [event("step_start")]
     if blank is not None:
         events.append(event("text", text=blank))
+    if finish is not None:
+        events.append(event("step_finish", reason=finish))
     live = seat / "live.log"
     live.write_text(event_log(*events))
     ticks, waits = [0], []
@@ -95,8 +98,28 @@ def test_empty_live_step_wait_is_bounded_and_finished_tail_is_not_pending(
     ticks = [0]
     assert sv.main(argv, record_wait=2, clock=lambda: ticks[0],
                    sleep=lambda s: ticks.__setitem__(0, ticks[0] + s)) == sv.EXIT_REFUSED
-    assert ticks == [2 if finish is None or not tail else 0] and not calls
+    assert ticks == [2] and not calls
     assert "no final text in live.log" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("attempts,initial", [
+    (2, None), (2, b""), (2, b" \t\n"), (1, b"\xe2\x82"), (2, b"\xe2\x82")])
+def test_late_live_log_rereads_without_stale_tail(run, attempts, initial):
+    argv, seat, calls = run
+    path, live = seat / "record.json", seat / "live.log"
+    record = json.loads(path.read_text())
+    record["attempts"] *= attempts
+    path.write_text(json.dumps(record))
+    if initial is not None:
+        live.write_bytes(initial)
+    ticks = [0]
+    def advance(seconds):
+        assert not calls, "late live.log must never use the stale PASS tail"
+        ticks[0] += seconds
+        live.write_text("persisted final finding\nVERDICT: FIX")
+    assert sv.main(argv, clock=lambda: ticks[0], sleep=advance) == 0
+    assert ticks == [1] and len(calls) == 1
+    assert calls[0]["ok"] is False and "persisted final finding" in calls[0]["reason"]
 
 
 def test_missing_fields_wait_is_bounded_by_default_thirty_seconds(run, capsys):
@@ -127,11 +150,12 @@ def test_record_identity_rechecked_after_wait(run, capsys):
     assert "item_key does not match --key" in capsys.readouterr().err
 
 
-def test_invalid_fields_refuse_without_waiting(run):
+@pytest.mark.parametrize("head", ["invalid", HEAD_SHA + "\n"])
+def test_invalid_fields_refuse_without_waiting(run, head):
     argv, seat, calls = run
     path = seat / "record.json"
     record = json.loads(path.read_text())
-    record["completion"] = {"head_sha": "invalid"}
+    record["completion"] = {"head_sha": head}
     path.write_text(json.dumps(record))
     assert sv.main(argv, sleep=lambda _: pytest.fail("invalid SHA is not pending")) == 2
     assert calls == []
@@ -243,22 +267,78 @@ def test_transport_repost_keeps_verifier_and_outbox_gates(run, change):
 
 
 @pytest.mark.parametrize("error", [AttributeError("field"), KeyError("field"), SystemExit(2)])
-@pytest.mark.parametrize("source", ["apply", "poster"])
+@pytest.mark.parametrize("source", ["apply", "poster", "verifier", "send"])
 def test_transport_repost_reports_unexpected_apply_errors(run, monkeypatch, capsys, error, source):
     argv, seat, calls = run
     args = SimpleNamespace(seat_dir=seat, dry_run=False, head=HEAD_SHA,
-                           url="unused", token_dir=seat, key="demo:A")
+                           url="unused", token_dir=Path(argv[argv.index("--token-dir") + 1]), key="demo:A")
     def fail(*a, **kw):
         raise error
     if source == "apply":
         monkeypatch.setattr(sb, "apply_backfill", fail)
+    elif source in ("verifier", "send"):
+        monkeypatch.setattr(sv, "evidence_from_record" if source == "verifier" else "send", fail)
     before = list(sys.path)
     for _ in range(2):
-        (seat / "verdict.json").write_text(json.dumps({"status": "retry", "attempts": 1,
-            "reason": "keeper verdict transport not configured"}))
+        journal = {"status": "retry", "attempts": 1,
+                   "reason": "keeper verdict transport not configured"}
+        (seat / "verdict.json").write_text(json.dumps(journal))
         assert sb.repost_transport(args, fail if source == "poster" else sv.main) == 1
         assert "repost refused:" in capsys.readouterr().err
+        outcome = json.loads((seat / "verdict.json").read_text())
+        # An uninstrumented poster or an interrupted send cannot prove no POST.
+        assert outcome == (journal if source in ("apply", "verifier") else
+                           {"status": "sending", "attempts": 1})
+        assert not (seat / "verdict.delivered").exists()
     assert sys.path == before and calls == []
+
+
+@pytest.mark.parametrize("token", [None, b" \n", b"\xe2\x82"])
+def test_transport_repost_token_read_refusal_preserves_retry(run, token):
+    argv, seat, calls = run
+    index = argv.index("--writer-family")
+    del argv[index:index + 2]
+    argv += ["--repost-transport"]
+    journal = {"status": "retry", "attempts": 1,
+               "reason": "keeper verdict transport not configured"}
+    (seat / "verdict.json").write_text(json.dumps(journal))
+    path = Path(argv[argv.index("--token-dir") + 1]) / "reviewer-xiaomi.token"
+    path.unlink() if token is None else path.write_bytes(token)
+    assert sv.main(argv) == 1 and calls == []
+    assert json.loads((seat / "verdict.json").read_text()) == journal
+    assert not (seat / "verdict.delivered").exists()
+    path.write_text("dummy\n")
+    assert sv.main(argv) == 0 and len(calls) == 1
+
+
+@pytest.mark.parametrize("field,value", [
+    ("head_sha", "-head"), ("head_sha", HEAD_SHA + "\n"),
+    ("given_writer_families", ["-deepseek"]), ("given_writer_families", [""]),
+    ("given_writer_families", [" -deepseek"]),
+    ("given_writer_families", ["deepseek", "--url"])])
+@pytest.mark.parametrize("entry", ["repost", "apply"])
+def test_transport_repost_invalid_argv_preserves_journal_before_apply(run, monkeypatch, field, value, entry):
+    _, seat, calls = run
+    path = seat / "record.json"
+    record = json.loads(path.read_text())
+    (record["completion"] if field == "head_sha" else record)[field] = value
+    path.write_text(json.dumps(record))
+    journal = {"status": "retry", "attempts": 1,
+               "reason": "keeper verdict transport not configured"}
+    (seat / "verdict.json").write_text(json.dumps(journal))
+    args = SimpleNamespace(seat_dir=seat, dry_run=False, head=None,
+                           url="unused", token_dir=seat, key="demo:A")
+    if entry == "repost":
+        monkeypatch.setattr(sb, "apply_backfill", lambda *a, **kw: pytest.fail("invalid argv reached apply"))
+        assert sb.repost_transport(args, sv.main) == 1
+    else:
+        args.backfill_apply = True
+        assert sb.apply_backfill(args, {"key": args.key, "writer_families": record["given_writer_families"]},
+            {"seat_dir": seat, "head_sha": record["completion"]["head_sha"]},
+            lambda _: pytest.fail("invalid argv reached poster"), {"reasons": []}) == 1
+    assert calls == []
+    assert json.loads((seat / "verdict.json").read_text()) == journal
+    assert not (seat / "verdict.delivered").exists()
 
 
 def test_transport_repost_head_mismatch_refused_before_apply(run, monkeypatch):

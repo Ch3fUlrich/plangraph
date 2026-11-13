@@ -1,6 +1,8 @@
 """Portable F6 checks and completed OpenCode answer retention, without live data."""
 from types import SimpleNamespace
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -25,7 +27,7 @@ def test_drive_mount_mode_unknown_but_native_world_writable_refused(
     seat = rec_dir(tmp_path, live="VERDICT: FIX\n")
     path = seat / "record.json"
     path.chmod(0o777)
-    monkeypatch.setattr(Path, "resolve", lambda self: Path(root) / seat.name / self.name)
+    monkeypatch.setattr(Path, "absolute", lambda self: Path(root) / seat.name / self.name)
     if accepted:
         assert seat_record.evidence_from_record(seat)[1] == "VERDICT: FIX\n"
     else:
@@ -37,9 +39,41 @@ def test_drive_mount_still_requires_linux_owner(tmp_path, monkeypatch):
     seat = rec_dir(tmp_path, live="VERDICT: FIX\n")
     uid = (seat / "record.json").stat().st_uid
     monkeypatch.setattr(seat_record, "os", SimpleNamespace(name="posix", getuid=lambda: uid + 1))
-    monkeypatch.setattr(Path, "resolve", lambda self: Path("/mnt/c") / seat.name / self.name)
+    monkeypatch.setattr(Path, "absolute", lambda self: Path("/mnt/c") / seat.name / self.name)
     with pytest.raises(ValueError, match="owned by the current uid"):
         seat_record.evidence_from_record(seat)
+
+
+def test_native_record_link_into_drive_mount_keeps_mode_checks(tmp_path, monkeypatch):
+    seat = rec_dir(tmp_path, live="VERDICT: FIX\n")
+    path, target = seat / "record.json", tmp_path / "target.json"
+    path.rename(target)
+    target.chmod(0o777)
+    path.symlink_to(target)
+    monkeypatch.setattr(Path, "resolve", lambda self: Path("/mnt/c") / seat.name / self.name)
+    with pytest.raises(ValueError, match="not group/world-writable"):
+        seat_record.evidence_from_record(seat)
+
+
+def test_deleted_record_mid_wait_refuses_without_full_timeout(tmp_path, capsys):
+    from test_seat_verdict_record import record_dir
+    argv = record_dir(tmp_path, "deleted", completion={})
+    path = tmp_path / "deleted" / "record.json"
+    ticks = [0]
+    def advance(seconds):
+        ticks[0] += seconds
+        path.unlink()
+    assert sv.main(argv, clock=lambda: ticks[0], sleep=advance) == sv.EXIT_REFUSED
+    assert ticks == [1]
+    assert "record.json unreadable: FileNotFoundError" in capsys.readouterr().err
+
+
+def test_single_record_import_does_not_prepend_repo_src():
+    tools = Path(__file__).resolve().parents[1] / "tools"
+    script = (f"import sys; sys.path.insert(0, {str(tools)!r}); "
+              "before = list(sys.path); import seat_verdict; assert sys.path == before")
+    result = subprocess.run([sys.executable, "-I", "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("blank", [None, "", " \t\n"])

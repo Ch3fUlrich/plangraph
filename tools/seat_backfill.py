@@ -7,17 +7,32 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
+from contextvars import ContextVar
 from pathlib import Path
 
-_SRC = str(Path(__file__).resolve().parents[1] / "src")
-if _SRC not in sys.path:
-    sys.path.insert(0, _SRC)
+_SEND_STATE = ContextVar("seat_verdict_send_state", default=None)
+
+
+def _add_src():
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+
+
+def _validate_bindings(head, writers):
+    if not isinstance(head, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", head):
+        raise ValueError("transport repost requires completion.head_sha or --head as 40 hex chars")
+    if not isinstance(writers, list) or not writers or any(
+            not isinstance(w, str) or not w.strip() or w.lstrip().startswith("-") for w in writers):
+        raise ValueError("transport repost requires non-dash recorded given_writer_families")
 
 
 def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
     """Use the forward outbox lock without waiting; ambiguous state never sends."""
+    _add_src()
     from contextlib import redirect_stdout, redirect_stderr
     from io import StringIO
     from plangraph.spawner.notify import _verdict_outcome
@@ -32,6 +47,7 @@ def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
     journal = directory / "verdict.json"
     phase = "verdict outbox check"
     try:
+        _validate_bindings(seat["head_sha"], item["writer_families"])
         if journal.is_symlink() or Path(str(journal) + ".lock").is_symlink():
             row["reasons"].append("ambiguous verdict journal")
             return 0
@@ -64,23 +80,31 @@ def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
             atomic_write_private(journal, json.dumps(dict(status="sending",
                 attempts=previous.get("attempts", 0))) + "\n")
             phase = "verdict poster or verifier result"
-            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-                rc = poster(["--key", item["key"], "--seat-dir", str(directory), "--head", seat["head_sha"],
-                             "--writer-family", ",".join(item["writer_families"]), "--token-dir",
-                              str(args.token_dir), "--url", url])
+            state = {}
+            context = _SEND_STATE.set(state)
+            try:
+                with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                    rc = poster(["--key", item["key"], "--seat-dir", str(directory), "--head", seat["head_sha"],
+                                 "--writer-family", ",".join(item["writer_families"]), "--token-dir",
+                                  str(args.token_dir), "--url", url])
+            except (Exception, SystemExit):
+                if retry_reason is not None and state.get("started") is False:
+                    atomic_write_private(journal, json.dumps(previous) + "\n")
+                raise
+            finally:
+                _SEND_STATE.reset(context)
             if type(rc) is not int or rc < 0: raise ValueError("invalid verifier exit")
             row["verifier_exit"] = rc
             phase = "verdict outcome write"
-            # These exits precede token reads/send; only an explicit transport
-            # retry may retain its prior authorization after a verifier refusal.
-            if retry_reason is not None and rc in (2, 3, 4):
+            # Only a proven pre-send refusal retains explicit retry authority.
+            if retry_reason is not None and (rc in (2, 3, 4) or state.get("started") is False):
                 atomic_write_private(journal, json.dumps(previous) + "\n")
                 row["reasons"].append("repost verifier refused before send: " + str(rc))
             else:
                 _verdict_outcome(directory, "delivered" if rc == 0 else "skipped", "backfill verifier exit " + str(rc))
             row["delivery"] = "failed" if rc else "delivered"
             return int(bool(rc))
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         if phase == "verdict lock" and isinstance(exc, BlockingIOError):
             row["reasons"].append("verdict lock busy")
             return 0
@@ -103,15 +127,12 @@ def repost_transport(args, poster):
         if isinstance(record, dict) and "item_key" in record and record["item_key"] != args.key:
             raise ValueError("record item_key does not match --key")
         writers = record.get("given_writer_families") if isinstance(record, dict) else None
-        if not isinstance(writers, list) or not writers or any(not isinstance(w, str) for w in writers):
-            raise ValueError("transport repost requires recorded given_writer_families or explicit --writer-family")
         completion = record.get("completion")
         recorded_head = completion.get("head_sha") if isinstance(completion, dict) else None
         if args.head and recorded_head and args.head.strip().lower() != str(recorded_head).lower():
             raise ValueError("record completion.head_sha does not match --head")
         head = args.head or recorded_head
-        if not isinstance(head, str) or not head:
-            raise ValueError("transport repost requires completion.head_sha or --head")
+        _validate_bindings(head, writers)
         apply_backfill(SimpleNamespace(backfill_apply=True, url=args.url, token_dir=args.token_dir),
                        {"key": args.key, "writer_families": writers},
                        {"seat_dir": args.seat_dir, "head_sha": head}, poster, row,
@@ -127,6 +148,7 @@ def repost_transport(args, poster):
 
 def backfill(args, poster, pr_lookup=None):
     """Print TSV discovery and optionally invoke the existing single-seat CLI."""
+    _add_src()
     from collections import Counter
     from plangraph.keeper.evidence_git import GitAdapter
     from seat_record import record_index, snapshot_item, merged_pr, eligible_records

@@ -36,7 +36,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from seat_backfill import apply_backfill, repost_transport
+from seat_backfill import apply_backfill, repost_transport, _SEND_STATE
 from seat_record import evidence_from_record, RecordPending
 ROUTE = "/v1/verdict"
 TIMEOUT = 30
@@ -226,6 +226,9 @@ def read_record_identity(seat_dir, key=None):
 
 
 def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
+    send_state = _SEND_STATE.get()
+    if send_state is not None:
+        send_state["started"] = False
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--key", help="item key to review")
     ap.add_argument("--seat-dir", type=Path)
@@ -372,6 +375,14 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
         return EXIT_IO
     try:
         token = (args.token_dir / f"reviewer-{family}.token").read_text("utf-8").strip()
+        if not token:
+            raise ValueError("empty reviewer token")
+    except (OSError, ValueError) as exc:
+        print(f"seat_verdict: send failed (token read): {type(exc).__name__}", file=sys.stderr)
+        return EXIT_IO
+    try:
+        if send_state is not None:
+            send_state["started"] = True
         status, reply = send(args.url, token, payload)
     except (OSError, ValueError) as exc:
         print(f"seat_verdict: send failed: {type(exc).__name__}", file=sys.stderr)
