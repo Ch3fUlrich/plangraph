@@ -1,3 +1,5 @@
+use std::ffi::OsStr;
+use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::{env, fs};
@@ -7,7 +9,12 @@ fn git(repo: &Path, args: &[&str]) -> Command {
     command
         .arg("-C")
         .arg(repo)
-        .args(["-c", "core.hooksPath=/dev/null"])
+        .args([
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+        ])
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -86,6 +93,23 @@ fn sync(repo: &Path) -> Result<(), String> {
     }
 }
 
+fn escaped_label(label: &OsStr) -> String {
+    let mut escaped = String::new();
+    for chunk in label.as_encoded_bytes().utf8_chunks() {
+        for ch in chunk.valid().chars() {
+            if ch.is_control() || ch == '\\' {
+                escaped.extend(ch.escape_default());
+            } else {
+                escaped.push(ch);
+            }
+        }
+        for byte in chunk.invalid() {
+            write!(escaped, "\\x{byte:02x}").unwrap();
+        }
+    }
+    escaped
+}
+
 fn run() -> Result<bool, ()> {
     let mut repos = Vec::new();
     let mut args = env::args_os().skip(1);
@@ -101,17 +125,18 @@ fn run() -> Result<bool, ()> {
             if let Ok(entries) = fs::read_dir(PathBuf::from(home).join("code")) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.is_dir() && path.join(".git").exists() {
+                    if path.is_dir() && fs::symlink_metadata(path.join(".git")).is_ok() {
                         repos.push((entry.file_name(), path));
                     }
                 }
             }
         }
     }
+    repos.sort_by(|a, b| a.0.cmp(&b.0));
     let mut alerts = false;
     for (label, repo) in repos {
         if let Err(reason) = sync(&repo) {
-            println!("ALERT {} reason={reason}", label.to_string_lossy());
+            println!("ALERT {} reason={reason}", escaped_label(&label));
             alerts = true;
         }
     }
@@ -119,5 +144,11 @@ fn run() -> Result<bool, ()> {
 }
 
 fn main() -> ExitCode {
-    ExitCode::from(u8::from(run().unwrap_or(true)))
+    match run() {
+        Ok(alerts) => ExitCode::from(u8::from(alerts)),
+        Err(()) => {
+            eprintln!("Usage: pg-repo-sync [--repo PATH]...");
+            ExitCode::from(2)
+        }
+    }
 }

@@ -1,1 +1,1 @@
-- Add `pg-repo-sync`: discover direct `$HOME/code` repositories or use exact `--repo` labels, fetch and fast-forward the default branch silently, and report only the five closed alert reasons.
+- Add `pg-repo-sync`: discover direct `$HOME/code` repositories (including dangling `.git` entries) or use `--repo` labels, fetch/fast-forward silently with hooks/fsmonitor disabled, sort and losslessly escape alert labels within the five closed reasons, and diagnose usage errors with exit 2.

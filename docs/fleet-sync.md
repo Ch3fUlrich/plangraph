@@ -1,6 +1,9 @@
 # Fleet code sync
 
-`pg-repo-sync [--repo PATH]...` defaults to direct `$HOME/code` repos (symlinks included); default-branch fetch/ff is silent, alerts exit 1.
+`pg-repo-sync [--repo PATH]...` defaults to direct `$HOME/code` repos (symlinks included); success is silent (exit 0), alerts exit 1, usage errors exit 2 with one stderr line.
+Repositories require `refs/remotes/origin/HEAD` (normally created by clone); a missing default ref alerts `fetch-failed`.
+Merge refusals (including untracked-file conflicts or non-fast-forward races) and defensive probe failures map to the closed `fetch-failed` reason.
+Alerts sort by raw label; control characters/backslashes are escaped and invalid UTF-8 bytes use `\xNN`, preserving one reason per line.
 
 Run `python3 -m plangraph.fleet_sync release record` after fetching origin/main.
 The newest of the last 50 locally known first-parent main commits with successful required branch checks is
