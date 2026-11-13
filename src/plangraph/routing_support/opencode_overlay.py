@@ -1,4 +1,4 @@
-"""Read-only AutoOS provider overlay; credentials remain environment references."""
+"""Read-only plangraph provider-file overlay; credentials remain environment references."""
 import copy
 import json
 import os
@@ -64,14 +64,16 @@ def _strip_jsonc(text):
                   lambda m: m.group(1) or '', ''.join(out))
 
 
-def load_root_providers(root=None):
-    return _load_root_providers(root)[0]
+def load_root_providers(path=None):
+    return _load_root_providers(path)[0]
 
 
-def _load_root_providers(root=None):
+def _load_root_providers(path=None):
     global _parse_warned, _missing_warned
-    root = root or os.environ.get('AUTOOS_ROOT') or Path.home() / 'code/AutoOS'
-    path = Path(root) / 'opencode.jsonc'
+    if path is None:
+        path = os.environ.get('PLANGRAPH_PROVIDERS_FILE') or (
+            Path(__file__).resolve().parents[3] / 'configuration/opencode/providers.json')
+    path = Path(path)
     try:
         text = path.read_text(encoding='utf-8')
         text = _strip_jsonc(text)

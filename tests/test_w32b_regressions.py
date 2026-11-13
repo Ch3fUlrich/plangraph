@@ -47,9 +47,9 @@ def test_bare_agent_does_not_exempt_other_provider(monkeypatch):
 
 
 def test_unparseable_overlay_is_unknown_one_path_only_warning(tmp_path, monkeypatch, caplog):
-    monkeypatch.setenv('AUTOOS_ROOT', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(tmp_path / 'providers.json'))
     monkeypatch.setattr(o, '_parse_warned', False)
-    path = tmp_path / 'opencode.jsonc'
+    path = tmp_path / 'providers.json'
     path.write_text("{'private-secret': 1}")
     with caplog.at_level(logging.WARNING):
         for _ in range(2):
@@ -110,11 +110,12 @@ def test_readable_zero_rows_fallback_but_all_inactive_stays_empty(all_rows):
 
 
 def test_absent_overlay_normal_unreadable_overlay_unknown(tmp_path, monkeypatch, caplog):
-    assert o.load_root_providers(tmp_path) is None
-    (tmp_path / 'opencode.jsonc').mkdir()
+    path = tmp_path / 'providers.json'
+    assert o.load_root_providers(path) is None
+    path.mkdir()
     monkeypatch.setattr(o, '_parse_warned', False)
-    assert o.load_root_providers(tmp_path) is o.UNKNOWN_PROVIDERS
-    assert str(tmp_path / 'opencode.jsonc') in caplog.text
+    assert o.load_root_providers(path) is o.UNKNOWN_PROVIDERS
+    assert str(path) in caplog.text
 
 
 def test_legacy_unknown_fallback_but_explicit_unknown_rejected():
