@@ -35,7 +35,10 @@ def cmd_define(args, session):
         fields = payload.get("fields", payload) if isinstance(payload, dict) else payload
         return write(session, "edit_definition", {"key": args.key, "fields": fields})
     items = payload.get("items") if isinstance(payload, dict) else payload
-    if error := creation_error(items):
+    # The store checks decisions after duplicate/conflict/lock refusals.
+    checked = [item for item in items if isinstance(item, dict)
+               and item.get("kind") != "decision"] if isinstance(items, list) else []
+    if error := creation_error(checked):
         return _refuse(error)
     if tier := getattr(args, "tier", None):
         for definition in (items if isinstance(items, list) else [items]):
