@@ -94,9 +94,9 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         raise ValueError("record.json is not an object")
     # F6: bind the record to its directory and to this uid's write access.
     windows = os.name == "nt"
-    # Drive mounts synthesize modes; lexical paths prevent symlink exemptions.
+    # Drive mounts synthesize modes; only the real record location is exempt.
     mode_unknown = windows or re.match(
-        r"^/mnt/[a-zA-Z]/", posixpath.normpath(record_path.absolute().as_posix()))
+        r"^/mnt/[a-zA-Z]/", posixpath.normpath(record_path.resolve().as_posix()))
     if (not windows and stat.st_uid != os.getuid()
             or not mode_unknown and stat.st_mode & 0o022):
         raise ValueError("record.json must be owned by the current uid and "

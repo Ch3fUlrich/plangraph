@@ -82,13 +82,13 @@ def test_native_record_link_into_drive_mount_keeps_mode_checks(
     mounted = Path("/mnt") / drive / seat.name / path.name
     monkeypatch.setattr(Path, "absolute", lambda self: mounted)
     monkeypatch.setattr(Path, "resolve", lambda self: mounted)
-    # Synthetic drive modes are allowed only when the lexical path is on the drive.
+    # The real target is on the drive, including a native lexical alias.
     assert sv.main(argv) == 0
     capsys.readouterr()
     monkeypatch.setattr(Path, "absolute", lambda self: Path("/native") / seat.name / self.name)
-    assert sv.main(argv) == sv.EXIT_REFUSED
-    assert "not group/world-writable" in capsys.readouterr().err
-    assert len(sent) == 1
+    assert sv.main(argv) == 0
+    assert not capsys.readouterr().err
+    assert len(sent) == 2
 
 
 def test_mnt_prefix_with_dotdot_is_not_a_drive_path(posting, monkeypatch, capsys):
@@ -173,3 +173,16 @@ def test_spawn_normalizes_repeated_project_before_launch(tmp_path, monkeypatch, 
                                       writer_families=("google",), wait_seconds=5))
     assert result["status"] == "completed" and len(service.runner.calls) == 1
     assert result["item_key"] == json.loads(service._path(result["run_id"]).read_text())["item_key"] == key
+
+
+def test_drive_alias_to_native_record_enforces_real_mode(posting, monkeypatch, capsys):
+    argv, seat, sent = posting
+    path = seat / 'record.json'
+    path.chmod(0o666)
+    uid = path.stat().st_uid
+    monkeypatch.setattr(seat_record, 'os', SimpleNamespace(name='posix', getuid=lambda: uid))
+    monkeypatch.setattr(Path, 'absolute', lambda self: Path('/mnt/c/link') / seat.name / self.name)
+    monkeypatch.setattr(Path, 'resolve', lambda self: Path('/native/records') / seat.name / self.name)
+    assert sv.main(argv) == sv.EXIT_REFUSED
+    assert 'not group/world-writable' in capsys.readouterr().err
+    assert not sent
