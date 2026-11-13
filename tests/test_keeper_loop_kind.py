@@ -26,7 +26,7 @@ def _item(w, key):
 def test_loop_kind_accepted(w):
     w.store.create_items(w.p("router"), [
         defn("L", kind="loop"),
-        defn("EXIT", ["L"], kind="decision"),
+        defn("EXIT", ["L"], kind="decision", description="Why: exit\nHow: decide"),
         defn("G2", ["EXIT"], kind="goal")])
     loop = _item(w, "demo:L")
     assert loop["kind"] == "loop"
