@@ -1,4 +1,5 @@
 """Pending persistence and retention of a completed review, using synthetic logs."""
+import asyncio
 import json
 
 import pytest
@@ -24,7 +25,10 @@ def test_missing_live_review_is_record_pending_not_stale_tail(tmp_path, initial)
 
 @pytest.mark.parametrize("finished", [False, True])
 @pytest.mark.parametrize("blank", [None, "", " \t\n"])
-def test_completed_review_survives_unfinished_trailing_step(tmp_path, finished, blank):
+@pytest.mark.parametrize("malformed", [{"type": "step_finish"},
+    *({"type": "step_finish", "part": part} for part in (None, [], "x", 42))])
+def test_completed_review_survives_unfinished_trailing_step(tmp_path, finished, blank, malformed):
+    assert "unfinished" not in seat_record._review_text_from_log.__code__.co_varnames
     reply = "TEST_GAMING: no\nVERDICT: PASS"
     events = [event("step_start"), event("text", text=reply),
               event("step_finish", reason="stop"), event("step_start")]
@@ -32,6 +36,7 @@ def test_completed_review_survives_unfinished_trailing_step(tmp_path, finished, 
         events.append(event("text", text=blank))
     if finished:
         events.append(event("step_finish", reason="stop"))
+    events.append(malformed)
     live = event_log(*events)
     assert seat_record._review_text_from_log(live) == reply
     evidence, text = seat_record.evidence_from_record(rec_dir(tmp_path, live=live, tail=""))
@@ -41,3 +46,28 @@ def test_completed_review_survives_unfinished_trailing_step(tmp_path, finished, 
                         event("step_finish", reason="length")):
         assert sv.parse_verdict(seat_record._review_text_from_log(
             event_log(*events, event("step_start"), replacement)))[0] is None
+
+
+@pytest.mark.parametrize("source", ["item_key", "item", "env"])
+def test_spawn_normalizes_repeated_project_before_launch(tmp_path, monkeypatch, source):
+    from registry_route_util import _service
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PLANGRAPH_SPAWN_ITEM", "plangraph:KEY")
+    service = _service(tmp_path, monkeypatch)
+    monkeypatch.setattr(service, "admit_spawn", lambda *a, **kw: None)
+    spawn, card, key = service.runner.spawn, {"estimate_tokens": 100}, "plangraph:KEY"
+    if source == "env":
+        monkeypatch.setenv("PLANGRAPH_SPAWN_ITEM", "plangraph:" + key)
+    else:
+        card[source] = "plangraph:" + key
+    async def launch(**kwargs):
+        assert kwargs["prompt_record"][1]["item_key"] == key
+        assert json.loads(service._path(kwargs["prompt_record"][1]["run_id"]).read_text())["item_key"] == key
+        job = await spawn(**kwargs)
+        job.exit_code, job.stdout = 0, "VERDICT: FIX\n"
+        return job
+    monkeypatch.setattr(service.runner, "spawn", launch)
+    result = asyncio.run(service.spawn(card=card, prompt="Review the change", role="review",
+                                      writer_families=("google",), wait_seconds=5))
+    assert result["status"] == "completed" and len(service.runner.calls) == 1
+    assert result["item_key"] == json.loads(service._path(result["run_id"]).read_text())["item_key"] == key

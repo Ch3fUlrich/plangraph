@@ -1,1 +1,1 @@
-- Retry pending review-record persistence for at most 30 seconds, retain stop-completed review text across empty steps, and refuse missing records immediately without posting stale tails.
+- Retry pending review-record persistence for at most 30 seconds, retain stop-completed review text across empty steps, and refuse missing records immediately without posting stale tails. Normalize repeated project prefixes before Python seat launch; pin malformed lifecycle-part handling, exact refusal causes, strict completion SHAs and deterministic retry-clock tests.

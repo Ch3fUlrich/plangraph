@@ -15,7 +15,7 @@ def run(tmp_path, monkeypatch):
     argv.remove("--dry-run")
     argv += ["--url", "unused"]
     state = SimpleNamespace(argv=argv, seat=Path(argv[argv.index("--seat-dir") + 1]),
-                            calls=[], ticks=0, waits=[], reads=0, after_wait=lambda: None)
+                            calls=[], ticks=0, waits=[], reads=0, clock_reads=0, after_wait=lambda: None)
     original = sv.evidence_from_record
     def read(*args, **kwargs):
         state.reads += 1
@@ -29,10 +29,13 @@ def run(tmp_path, monkeypatch):
         state.waits.append(seconds)
         state.ticks += seconds
         state.after_wait()
+    def clock():
+        state.clock_reads += 1
+        return state.ticks
     def post(wait=2.5):
-        # Exercise base behaviour too: red proof must not be a missing-keyword error.
-        options = {"clock": lambda: state.ticks, "sleep": advance} if sv.main.__kwdefaults__ else {}
-        if options and wait is not None:
+        assert sv.main.__kwdefaults__, "bounded retry clock/sleep injection required; no real waits"
+        options = {"clock": clock, "sleep": advance}
+        if wait is not None:
             options["record_wait"] = wait
         try:
             return sv.main(argv, **options)
@@ -70,17 +73,23 @@ def test_completed_record_reread_until_fields_persist(run, field):
 
 
 @pytest.mark.parametrize("settles", [False, True])
-@pytest.mark.parametrize("attempts,initial", [
-    (2, None), (2, b""), (2, b" \t\n"), (1, b"\xe2\x82"), (2, b"\xe2\x82"),
-    *((1, event_log(event("step_start"), *([] if blank is None else
+@pytest.mark.parametrize("initial,reason", [
+    *((initial, "stdout_tail accumulates every leg; live.log required")
+      for initial in (None, b"", b" \t\n")),
+    (b"\xe2\x82", "live.log unreadable: UnicodeDecodeError"),
+    *((event_log(event("step_start"), malformed).encode(), "record has no review text (no final text in live.log)")
+      for malformed in ({"type": "step_finish"}, *({"type": "step_finish", "part": part}
+                                                 for part in (None, [], "x", 42)))),
+    *((event_log(event("step_start"), *([] if blank is None else
        [event("text", text=blank)]), *([] if finish is None else
-       [event("step_finish", reason=finish)])).encode())
-      for blank in (None, "", " \t\n") for finish in (None, "stop", "length", "tool-calls"))])
-def test_late_live_log_rereads_without_stale_tail(run, capsys, attempts, initial, settles):
+        [event("step_finish", reason=finish)])).encode(), "record has no review text (no final text in live.log)")
+       for blank in (None, "", " \t\n") for finish in (None, "stop", "length", "tool-calls"))])
+def test_late_live_log_rereads_without_stale_tail(run, capsys, initial, reason, settles):
     path, live = run.seat / "record.json", run.seat / "live.log"
     record = json.loads(path.read_text())
     assert record["stdout_tail"] == REVIEW
-    record["attempts"] *= attempts
+    if initial is None or not initial.strip():
+        record["attempts"] *= 2  # Only multi-attempt records require a nonempty live.log.
     path.write_text(json.dumps(record))
     if initial is not None:
         live.write_bytes(initial)
@@ -106,8 +115,7 @@ def test_late_live_log_rereads_without_stale_tail(run, capsys, attempts, initial
     else:
         assert not run.calls and not captured.out
         assert captured.err.count("seat_verdict: refused, record:") == 1
-        assert any(reason in captured.err for reason in
-                   ("live.log required", "UnicodeDecodeError", "no final text in live.log"))
+        assert captured.err == f"seat_verdict: refused, record: {reason}\n"
 
 
 def test_deleted_record_mid_wait_refuses_without_full_timeout(run, capsys):
@@ -168,6 +176,10 @@ def test_invalid_fields_refuse_without_waiting(run, capsys):
     record = json.loads(path.read_text())
     record["completion"] = {"head_sha": HEAD_SHA + "\n"}
     path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="completion.head_sha") as error:
+        seat_record.evidence_from_record(run.seat)
+    assert type(error.value) is ValueError  # Invalid, not pending; strict fullmatch is intentional.
     assert run.post() == sv.EXIT_REFUSED
     assert not run.waits and run.ticks == 0 and not run.calls
+    assert run.reads == 1 and run.clock_reads == 2  # Deadline set, one terminal read, no retry.
     assert "completion.head_sha" in capsys.readouterr().err
