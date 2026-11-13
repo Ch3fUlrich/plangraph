@@ -242,3 +242,12 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
         assert record['status'] == record['reason'] == 'stalled'
     if 'timeout' in scenario or 'stalled' in scenario:
         assert sum(e['event'].startswith('watchdog_') for e in record['events']) == 1
+
+
+def test_prompt_only_seat_always_inlines_or_refuses(diff_ref):
+    leg = SimpleNamespace(harness='claude', tool_mode='prompt-only', max_request_tokens=100000)
+    seat = SeatSpawnMixin()
+    seat.runner = SimpleNamespace(default_cwd=diff_ref['repo'])
+    assert 'diff --git' in seat._leg_prompt('review', {'diff_ref': diff_ref}, 'review', leg)
+    with pytest.raises(InlineDiffError):
+        seat._leg_prompt('review with no change', {}, 'review', leg, document_review=True)

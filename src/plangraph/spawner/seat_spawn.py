@@ -112,7 +112,7 @@ INLINE_DIFF_HARNESSES = frozenset({'opencode'})
 
 
 def _needs_inline_diff(leg, card):
-    return (getattr(leg, 'tool_mode', 'tools') == 'inline-only'
+    return (getattr(leg, 'tool_mode', 'tools') in ('inline-only', 'prompt-only')
             or (getattr(leg, 'harness', None) in INLINE_DIFF_HARNESSES
                 and card.get('diff_ref') is not None))
 
@@ -333,7 +333,7 @@ class SeatSpawnMixin:
             from .inline_diff import InlineDiffError, inline_diff_prompt
             try:
                 prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
-                                            allow_document=document_review, timeout=diff_timeout)
+                                            allow_document=document_review and leg.tool_mode != 'prompt-only', timeout=diff_timeout)
             except InlineDiffError as exc:
                 _refuse_oversized_diff(exc, leg)
                 raise

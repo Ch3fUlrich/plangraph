@@ -8,6 +8,8 @@ itself so no caller pastes diffs by hand.
 from __future__ import annotations
 
 import subprocess
+import re
+from pathlib import Path
 
 from plangraph.planner.seats import _check_diff_ref
 from plangraph.routing_errors import SpawnRefused
@@ -59,3 +61,26 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
         raise InlineDiffError(f"prompt_too_large: diff too large for leg: {len(proc.stdout)} > {max_chars} chars",
                               chars=len(proc.stdout), max_chars=max_chars)
     return prompt + HEADER.format(base=base, head=head) + _source_block(proc.stdout) + FOOTER
+
+
+def has_diff_text(prompt):
+    """Require a patch header plus patch data, never just an inline-diff label."""
+    return isinstance(prompt, str) and bool(re.search(
+        r'^diff --git .+\n(?:(?!diff --git ).*\n)*?(?:@@ |[+-]{3} |[+-](?![+-])|GIT binary patch|Binary files |(?:old|new|deleted file) mode )',
+        prompt + '\n', re.M))
+
+
+def prompt_only_void(record, directory):
+    """Check the persisted, dispatched prompt before accepting review evidence."""
+    if record.get('role') != 'review' or (record.get('chosen_leg') or {}).get('tool_mode') != 'prompt-only':
+        return False
+    try:
+        present = has_diff_text((Path(directory) / 'prompt.txt').read_text('utf-8'))
+    except (OSError, UnicodeError):
+        present = False
+    if not present:
+        record.update(verdict_status='void', verdict_void_reason='prompt_only_no_diff')
+        return True
+    record.pop('verdict_status', None)
+    record.pop('verdict_void_reason', None)
+    return False

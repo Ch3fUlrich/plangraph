@@ -703,3 +703,5 @@ Review and judge freshness admission requires both the worker checkout HEAD and 
 Run listing is read-only. Watchdog sweeps own queue-timeout persistence and corrupt-record diagnostic delivery; dry sweeps only project the results.
 
 Gateway routes and explicit launches refuse with `gateway not configured` before creating a child when the effective base URL or client credential is absent. Set `PLANGRAPH_GATEWAY_KEY_FILE` to a private client key file, or use the established credential resolver.
+
+Prompt-only review legs always receive the card diff inline, including explicit document-mode overrides. A missing diff refuses the launch. Completed prompt-only records whose dispatched `prompt.txt` lacks patch data have `verdict_status=void` and `verdict_void_reason=prompt_only_no_diff`; no review evidence is published.

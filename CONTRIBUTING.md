@@ -324,3 +324,5 @@ Event-log seat reviews use completed step text only. A stop answer survives empt
 
 The context guard suppresses handoff output for sidechain transcript records,
 including copied parent usage; main-session caps remain enforced.
+
+Record-derived prompt-only review evidence is void unless the saved dispatched prompt contains diff text.

@@ -39,6 +39,8 @@ class SpawnService(SeatSpawnMixin):
             raise ValueError('unknown run id') from None
 
     def _save(self, record):
+        from .inline_diff import prompt_only_void
+        prompt_only_void(record, self._path(record['run_id']).parent)
         self._sync_seat(record)
         from .private_io import atomic_write_private
         from .runner import redact

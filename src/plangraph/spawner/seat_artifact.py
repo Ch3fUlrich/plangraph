@@ -21,6 +21,9 @@ def publish(directory, record, job):
         evidence.unlink(missing_ok=True)
         review.unlink(missing_ok=True)
     clear()  # unlink entries, never open a stale pair (including symlinks)
+    from .inline_diff import prompt_only_void
+    if prompt_only_void(record, directory):
+        return
     if (job is None or record.get('status') != 'completed' or record.get('exit_code') != 0
             or record.get('job_id') not in (None, job.job_id) or job.status != 'completed'
             or job.exit_code != 0):
