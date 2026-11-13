@@ -12,7 +12,7 @@
     "plangraph-spawner": {
       "type": "stdio",
       "command": "sh",
-      "args": ["-c", "k=\"$HOME/.config/plangraph/omniroute-mgmt.key\"; [ -r \"$k\" ] || echo \"plangraph spawner: gateway log key unreadable: $k\" >&2; export PLANGRAPH_GATEWAY_LOG_TOKEN=\"$(tr -d '\\r\\n' < \"$k\" 2>/dev/null)\"; u=\"$HOME/.config/plangraph\"/omniroute-base-url; [ -r \"$u\" ] && export OMNIROUTE_BASE_URL=\"$(tr -d '\\r\\n' < \"$u\" 2>/dev/null)\"; [ -r \"$u\" ] || [ -n \"${OMNIROUTE_BASE_URL:-}\" ] || echo \"plangraph spawner: gateway base URL unset: $u\" >&2; exec python3 -m plangraph.spawner.mcp"],
+      "args": ["-c", "k=\"$HOME/.config/plangraph/omniroute-mgmt.key\"; [ -r \"$k\" ] || echo \"plangraph spawner: gateway log key unreadable: $k\" >&2; export PLANGRAPH_GATEWAY_LOG_TOKEN=\"$([ -r \"$k\" ] && tr -d '\\r\\n' < \"$k\" 2>/dev/null)\"; u=\"$HOME/.config/plangraph\"/omniroute-base-url; v=\"$([ -r \"$u\" ] && tr -d '\\r\\n' < \"$u\" 2>/dev/null)\"; [ -n \"$v\" ] && export OMNIROUTE_BASE_URL=\"$v\"; [ -n \"${OMNIROUTE_BASE_URL:-}\" ] || echo \"plangraph spawner: gateway base URL unset: $u\" >&2; exec python3 -m plangraph.spawner.mcp"],
       "env": {
         "PYTHONPATH": "src"
       }
