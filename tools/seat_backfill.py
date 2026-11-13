@@ -8,7 +8,12 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+_SRC = str(Path(__file__).resolve().parents[1] / "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
 
 def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
@@ -66,7 +71,13 @@ def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
             if type(rc) is not int or rc < 0: raise ValueError("invalid verifier exit")
             row["verifier_exit"] = rc
             phase = "verdict outcome write"
-            _verdict_outcome(directory, "delivered" if rc == 0 else "skipped", "backfill verifier exit " + str(rc))
+            # These exits precede token reads/send; only an explicit transport
+            # retry may retain its prior authorization after a verifier refusal.
+            if retry_reason is not None and rc in (2, 3, 4):
+                atomic_write_private(journal, json.dumps(previous) + "\n")
+                row["reasons"].append("repost verifier refused before send: " + str(rc))
+            else:
+                _verdict_outcome(directory, "delivered" if rc == 0 else "skipped", "backfill verifier exit " + str(rc))
             row["delivery"] = "failed" if rc else "delivered"
             return int(bool(rc))
     except Exception as exc:
@@ -83,26 +94,29 @@ def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
 
 def repost_transport(args, poster):
     """Explicit operator repost, sharing the outbox lock and all verifier gates."""
-    import sys
     from types import SimpleNamespace
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
     row = {"reasons": []}
     try:
         if (args.seat_dir / "evidence.json").exists() or args.dry_run:
             raise ValueError("transport repost requires a record seat without --dry-run")
         record = json.loads((args.seat_dir / "record.json").read_text("utf-8"))
+        if isinstance(record, dict) and "item_key" in record and record["item_key"] != args.key:
+            raise ValueError("record item_key does not match --key")
         writers = record.get("given_writer_families") if isinstance(record, dict) else None
         if not isinstance(writers, list) or not writers or any(not isinstance(w, str) for w in writers):
             raise ValueError("transport repost requires recorded given_writer_families or explicit --writer-family")
         completion = record.get("completion")
-        head = args.head or (completion.get("head_sha") if isinstance(completion, dict) else None)
+        recorded_head = completion.get("head_sha") if isinstance(completion, dict) else None
+        if args.head and recorded_head and args.head.strip().lower() != str(recorded_head).lower():
+            raise ValueError("record completion.head_sha does not match --head")
+        head = args.head or recorded_head
         if not isinstance(head, str) or not head:
             raise ValueError("transport repost requires completion.head_sha or --head")
         apply_backfill(SimpleNamespace(backfill_apply=True, url=args.url, token_dir=args.token_dir),
                        {"key": args.key, "writer_families": writers},
                        {"seat_dir": args.seat_dir, "head_sha": head}, poster, row,
                        retry_reason="keeper verdict transport not configured")
-    except (OSError, ValueError) as exc:
+    except (Exception, SystemExit) as exc:
         row["reasons"].append(str(exc))
     if row.get("delivery") != "delivered":
         print("seat_verdict: repost refused: " + "; ".join(row["reasons"]), file=sys.stderr)
@@ -113,7 +127,6 @@ def repost_transport(args, poster):
 
 def backfill(args, poster, pr_lookup=None):
     """Print TSV discovery and optionally invoke the existing single-seat CLI."""
-    import sys
     from collections import Counter
     from plangraph.keeper.evidence_git import GitAdapter
     from seat_record import record_index, snapshot_item, merged_pr, eligible_records

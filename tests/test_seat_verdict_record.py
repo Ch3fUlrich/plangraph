@@ -15,6 +15,11 @@ HEAD_SHA = "d" * 40
 REVIEW = "looks good overall\nVERDICT: PASS\nTEST_GAMING: no\n"
 
 
+@pytest.fixture(autouse=True)
+def no_record_wait(monkeypatch):
+    monkeypatch.setitem(sv.main.__kwdefaults__, "record_wait", 0)
+
+
 def record_dir(tmp_path, name, live_log=None, tail=REVIEW, writer="deepseek",
                head=HEAD_SHA, **rec):
     """Mirror real spawner records: run_id equals the dir name, writer_family is
@@ -128,6 +133,12 @@ def test_record_bad_head_sha_refused(tmp_path, capsys, completion):
     assert sv.main(record_dir(tmp_path, "d", live_log=REVIEW,
                               completion=completion), record_wait=0) == 2
     assert "head_sha" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("missing", [{"completion": {}}, {"stdout_tail": ""}])
+def test_pending_record_tests_never_sleep(tmp_path, monkeypatch, missing):
+    monkeypatch.setitem(sv.main.__kwdefaults__, "sleep", lambda _: pytest.fail("unit test slept"))
+    assert sv.main(record_dir(tmp_path, "pending", **missing)) == 2
 
 
 def test_record_fail_closed_on_role_and_status(tmp_path, capsys):

@@ -65,3 +65,26 @@ def test_empty_nonstop_step_cannot_revive_completed_review(tmp_path, reason):
                      event("step_finish", 5, reason=reason))
     with pytest.raises(ValueError, match="no review text"):
         seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
+
+
+@pytest.mark.parametrize("empty_stop", [False, True])
+@pytest.mark.parametrize("blank", [None, "", " \t\n"])
+def test_completed_review_survives_unfinished_trailing_step(tmp_path, empty_stop, blank):
+    reply = "TEST_GAMING: no\nVERDICT: PASS"
+    events = [event("step_start"), event("text", text=reply),
+              event("step_finish", reason="stop"), event("step_start")]
+    if empty_stop:
+        events += [event("step_finish", reason="stop"), event("step_start")]
+    if blank is not None:
+        events.append(event("text", text=blank))
+    evidence, text = seat_record.evidence_from_record(
+        rec_dir(tmp_path, live=event_log(*events), tail=reply))
+    assert text == reply and evidence["test_gaming"] == "no"
+
+
+@pytest.mark.parametrize("replacement", [event("text", text="new unfinished answer"),
+                                        event("tool_use")])
+def test_unfinished_step_activity_invalidates_retained_answer(replacement):
+    live = event_log(event("step_start"), event("text", text="VERDICT: PASS"),
+                     event("step_finish", reason="stop"), event("step_start"), replacement)
+    assert sv.parse_verdict(seat_record._review_text_from_log(live))[0] is None

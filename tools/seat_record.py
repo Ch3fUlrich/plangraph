@@ -35,8 +35,8 @@ def _canon_family(name):
     return family
 
 def _review_text_from_log(live_log: str) -> str:
-    """Final-step text, retaining a stop-completed answer across empty stop steps."""
-    event_log, texts, completed, empty_stop = False, [], None, False
+    """Final-step text, retaining a stop-completed answer across empty steps."""
+    event_log, texts, completed = False, [], None
     for line in live_log.split("\n"):
         line = line.removesuffix("\r")
         try:
@@ -48,7 +48,6 @@ def _review_text_from_log(live_log: str) -> str:
                 or not isinstance(event.get("part"), dict)):
             continue
         event_log |= event["type"] in ("step_start", "step_finish")
-        empty_stop = False
         if event["type"] == "step_start":
             texts.clear()
         elif event["type"] == "text":
@@ -63,11 +62,9 @@ def _review_text_from_log(live_log: str) -> str:
             if event["part"].get("reason") == "stop":
                 if any(t.strip() for t in texts):
                     completed = "\n".join(texts)
-                else:
-                    empty_stop = True  # An empty stop step did not replace the answer.
             else:
                 completed = None
-    text = completed if empty_stop and completed is not None else "\n".join(texts)
+    text = completed if completed is not None else "\n".join(texts)
     return text if event_log else live_log
 
 def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None) -> tuple[dict, str]:
@@ -86,9 +83,9 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
             record = json.loads(record_path.read_text("utf-8"))
         stat = record_path.stat()
     except OSError as exc:
-        raise ValueError(f"record.json unreadable: {type(exc).__name__}") from exc
+        raise RecordPending(f"record.json unreadable: {type(exc).__name__}") from exc
     except (ValueError, RecursionError) as exc:
-        raise ValueError(f"record.json is not valid JSON: {exc}") from exc
+        raise RecordPending(f"record.json is not valid JSON: {exc}") from exc
     if not isinstance(record, dict):
         raise ValueError("record.json is not an object")
     # F6: bind the record to its directory and to this uid's write access.

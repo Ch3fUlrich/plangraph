@@ -59,7 +59,7 @@ def test_unreadable_identity_cannot_be_laundered_by_evidence_builder(
     monkeypatch.setattr(sv, 'send', forbidden)
     assert sv.main(['--key', OTHER_KEY, '--seat-dir', str(tmp_path),
                     '--writer-family', 'xiaomi', '--token-dir', str(tmp_path),
-                    '--url', 'http://keeper.invalid']) == sv.EXIT_REFUSED
+                    '--url', 'http://keeper.invalid'], record_wait=0) == sv.EXIT_REFUSED
     assert 'cannot read record identity' in capsys.readouterr().err
 
 

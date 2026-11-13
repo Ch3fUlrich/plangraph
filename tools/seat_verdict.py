@@ -216,8 +216,8 @@ def read_record_identity(seat_dir, key=None):
         if record_path.is_symlink():
             raise ValueError("cannot read record identity") from exc
         return {}
-    except (OSError, ValueError) as exc:
-        raise ValueError("cannot read record identity") from exc
+    except (OSError, ValueError, RecursionError) as exc:
+        raise RecordPending("cannot read record identity") from exc
     if not isinstance(record, dict):
         raise ValueError("cannot read record identity")
     if key is not None and "item_key" in record and record["item_key"] != key:
@@ -229,7 +229,10 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--key", help="item key to review")
     ap.add_argument("--seat-dir", type=Path)
-    ap.add_argument("--writer-family")
+    single = ap.add_mutually_exclusive_group()
+    single.add_argument("--writer-family")
+    single.add_argument("--repost-transport", action="store_true",
+                        help="explicitly retry a transport-unconfigured verdict outbox")
     ap.add_argument("--token-dir", type=Path)
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--backfill-dry-run", action="store_true")
@@ -244,10 +247,9 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
                                   "binds the completion-time HEAD of the run cwd, not the launch commit")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
-    if (args.backfill_dry_run or args.backfill_apply) and any(v is not None for v in (args.key, args.seat_dir, args.head, args.writer_family)):
-        ap.error("backfill modes cannot use single-seat arguments: --key, --seat-dir, --head, --writer-family")
-    if args.backfill_dry_run or args.backfill_apply or (args.key is None and args.seat_dir is None):
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    if (args.backfill_dry_run or args.backfill_apply) and (args.repost_transport or any(v is not None for v in (args.key, args.seat_dir, args.head, args.writer_family))):
+        ap.error("backfill modes cannot use single-seat arguments: --key, --seat-dir, --head, --writer-family, --repost-transport")
+    if args.backfill_dry_run or args.backfill_apply or (args.key is None and args.seat_dir is None and not args.repost_transport):
         if args.backfill_apply and (not args.url or not args.token_dir or args.dry_run):
             ap.error("--backfill-apply requires --url and --token-dir, without --dry-run")
         from seat_record import backfill
@@ -256,14 +258,11 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
         ap.error("the following arguments are required: --key")
     if any(v is None for v in (args.key, args.seat_dir, args.token_dir)):
         ap.error("single-record mode requires --key, --seat-dir, --token-dir")
-    writer_families = parse_writer_families(args.writer_family)
-    try:
-        read_record_identity(args.seat_dir, args.key)
-    except ValueError as exc:
-        print(f"seat_verdict: refused, {exc}", file=sys.stderr)
-        return EXIT_REFUSED
-    if args.writer_family is None:
+    if args.writer_family is None and not args.repost_transport:
+        ap.error("single-record mode requires --writer-family (or explicit --repost-transport)")
+    if args.repost_transport:
         return repost_transport(args, main)
+    writer_families = parse_writer_families(args.writer_family)
     from_record = not (args.seat_dir / "evidence.json").exists() and (args.seat_dir / "record.json").exists()
     if from_record:
         deadline = clock() + record_wait
@@ -280,6 +279,11 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
                 print(f"seat_verdict: refused, record: {exc}", file=sys.stderr)
                 return EXIT_REFUSED
     else:
+        try:
+            read_record_identity(args.seat_dir, args.key)
+        except ValueError as exc:
+            print(f"seat_verdict: refused, {exc}", file=sys.stderr)
+            return EXIT_REFUSED
         try:
             evidence = json.loads((args.seat_dir / "evidence.json").read_text("utf-8"))
             text = (args.seat_dir / "review.txt").read_text("utf-8")
