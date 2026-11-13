@@ -1,6 +1,6 @@
 # Implement route defaults (D-5206)
 
-D-5696 live admission supersedes legacy routing below: `gemini-3.8-flash` → `gemini-4-hydrogen` and `gpt-6-luna` → `gpt-6.1-terra` are refusal guidance, not automatic substitutions; default/custom plans skip them and explicit/live admission refuses them for every role.
+See [card-driven routing and admission](SPAWNER.md#card-driven-routing-core) for the live policy.
 
 An implement card uses `cx-gpt-6.1-sol-xhigh` (model `omniroute/cx-gpt-6.1-sol-xhigh`,
 effort `xhigh`), then `agy-gemini-3.8-flash` (agy harness). Quota, cooldown, or a

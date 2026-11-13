@@ -31,10 +31,9 @@ _KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_
 
 def legacy_route_refusal(*values):
     """D-5696 legacy identities are refused before ranking or live admission."""
-    replacements = {'gemini-3.8-flash': 'gemini-4-hydrogen',
-                    'gpt-6-luna': 'gpt-6.1-terra'}
-    for legacy, replacement in replacements.items():
-        if any(legacy in value.lower() for value in values):
+    from plangraph.routing_support.catalog_seed import LEGACY_ROUTE_REPLACEMENTS
+    for legacy, replacement in LEGACY_ROUTE_REPLACEMENTS.items():
+        if any(isinstance(value, str) and legacy in value.lower() for value in values):
             return 'legacy model refused: ' + legacy + '; use ' + replacement
     return None
 

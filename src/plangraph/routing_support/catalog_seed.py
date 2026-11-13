@@ -20,6 +20,11 @@ TIER_RUNG: dict[str, int] = {
     "paid": 4,
 }
 
+# Trimmed D-5696 order-core identities; shared with every live admission fence.
+LEGACY_ROUTE_REPLACEMENTS = {
+    'gemini-3.8-flash': 'gemini-4-hydrogen', 'gpt-6-luna': 'gpt-6.1-terra',
+}
+
 SEED_QUOTA_POOLS: list[dict[str, Any]] = [
     {
         "pool_id": "agy-3p-partner",

@@ -1,1 +1,2 @@
 - Fence legacy Gemini 3.8 Flash and GPT-6 Luna identities at plan_spawn and live spawner admission for every role, name Hydrogen/Terra replacements, and preserve allowed audited leg pins without enabling new order tables.
+- Round 2 also fences keeper routing, shares the trimmed order-core legacy list, scopes skip evidence by role, tolerates non-string identities, and restores the writer guidance and original planning contracts.
