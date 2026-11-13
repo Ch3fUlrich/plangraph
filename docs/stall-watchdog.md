@@ -72,3 +72,5 @@ Dry-run reports without writing samples or cancelling/reaping anything. Platform
 without Linux process/socket evidence report that limitation in status only,
 without routing alerts or signalling.
 Check failures are isolated from completion and claim processing.
+
+`read_runs` only reads snapshots; `sweep_runs` owns queued-run expiry and corrupt-record diagnostics during a watchdog tick.

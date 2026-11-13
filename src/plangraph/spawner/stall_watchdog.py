@@ -108,6 +108,14 @@ def _expire_queue(record, now):
                 ended=now, exit_code=1)
 
 def read_runs(state, *, dry_run=False):
+    """Read run snapshots without expiry, diagnostics writes or delivery."""
+    return _read_runs(state, dry_run=dry_run)
+
+def sweep_runs(state, *, dry_run=False):
+    """Expire abandoned queues and report corrupt records during watchdog ticks."""
+    return _read_runs(state, dry_run=dry_run, sweep=True)
+
+def _read_runs(state, *, dry_run=False, sweep=False):
     from .item_key import valid_item
     from .notify import inbox_lock
     from .private_io import atomic_write_private, read_text_retry
@@ -117,7 +125,7 @@ def read_runs(state, *, dry_run=False):
             record = json.loads(read_text_retry(path))
             if not isinstance(record, dict) or not isinstance(record.get('run_id'), str):
                 raise ValueError('invalid run record')
-            expired = _expire_queue(record, time.time())
+            expired = _expire_queue(record, time.time()) if sweep else record
             if expired != record and not dry_run:
                 with inbox_lock(path):
                     record = json.loads(read_text_retry(path))
@@ -139,10 +147,10 @@ def read_runs(state, *, dry_run=False):
             bad.append(dict(path=str(path), error=type(exc).__name__))
             if dry_run:
                 runs.append(dict(run_id=path.parent.name))
-            else:
+            elif sweep:
                 finding = probe_run(state, dict(run_id=path.parent.name), time.time())
                 deliver_event(state, dict(finding, kind='completion'), budget=_budget.get())
-    if bad and not dry_run:
+    if bad and sweep and not dry_run:
         atomic_write_private(Path(state) / 'watchdog/bad-records.json', json.dumps(bad))
     return runs
 
@@ -345,7 +353,7 @@ def main(argv=None, *, hung_config=None):
     deliver = lambda e: deliver_event(state, e, budget=budget)
     token = _budget.set(budget)
     try:
-        runs = read_runs(state, dry_run=True) if args.dry_run else read_runs(state)
+        runs = sweep_runs(state, dry_run=True) if args.dry_run else sweep_runs(state)
     finally:
         _budget.reset(token)
     findings = tick(runs, [], lambda s: read_activity(state, s),

@@ -46,7 +46,7 @@ def test_unknown_reaches_outbox(tmp_path):
 def test_bridge_failure_status(tmp_path, monkeypatch):
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
     monkeypatch.setenv('PLANGRAPH_WATCHDOG_DELIVERY', '["bridge"]')
-    monkeypatch.setattr(w, 'read_runs', lambda state: [])
+    monkeypatch.setattr(w, 'sweep_runs', lambda state: [])
     monkeypatch.setattr(w, 'read_claims', lambda: [])
     monkeypatch.setattr(w, 'flush_outbox', lambda *a: dict(failures=2, last_error='OSError'))
     assert w.main(['tick']) == 1
@@ -62,7 +62,7 @@ def test_unknown_has_full_shape(tmp_path, monkeypatch, log_text):
         (directory / 'live.log').write_text(log_text)
         os.utime(directory / 'live.log', (900, 900))
     monkeypatch.setattr(w.time, 'time', lambda: 1000)
-    assert w.read_runs(tmp_path) == []
+    assert w.sweep_runs(tmp_path) == []
     event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
     expected = dict(run_id='run-fixture', rule='unknown', leg=None, role=None,
                     age=None, seconds_silent=100 if log_text is not None else None,
@@ -79,7 +79,7 @@ def test_corrupt_record_skipped_but_unknown_delivered(tmp_path, monkeypatch):
     path.write_text('{')
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
     monkeypatch.setenv('PLANGRAPH_PROBE_ROOT', 'fixture')
-    assert w.read_runs(tmp_path) == []
+    assert w.sweep_runs(tmp_path) == []
     assert 'run-bad' in (tmp_path / 'watchdog/bad-records.json').read_text()
     events = exchange([])
     assert len(events) == 1
@@ -94,7 +94,7 @@ def test_corrupt_record_skipped_but_unknown_delivered(tmp_path, monkeypatch):
             raise subprocess.CalledProcessError(1, argv)
     monkeypatch.setattr(subprocess, 'run', run)
     poll(['fixture'], 'notify', tmp_path)
-    assert w.read_runs(tmp_path) == []
+    assert w.sweep_runs(tmp_path) == []
     assert exchange([]) == events
     poll(['fixture'], 'notify', tmp_path)
     assert sent == [event, event]
@@ -102,14 +102,14 @@ def test_corrupt_record_skipped_but_unknown_delivered(tmp_path, monkeypatch):
 def test_unknown_without_bridge_is_durable_not_tick_failure(tmp_path, monkeypatch):
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
     monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
-    monkeypatch.setattr(w, 'read_runs', lambda state: [dict(run_id='run-fixture')])
+    monkeypatch.setattr(w, 'sweep_runs', lambda state: [dict(run_id='run-fixture')])
     monkeypatch.setattr(w, 'read_claims', lambda: [])
     assert w.main(['tick']) == 0
     event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
     assert event['rule'] == 'unknown' and event['event_id']
     assert 'outbox 1, no bridge' in (tmp_path / 'watchdog/status.txt').read_text()
     assert 'delivery-bridge-unconfigured' in (tmp_path / 'watchdog/status.txt').read_text()
-    monkeypatch.setattr(w, 'read_runs', lambda state: [])
+    monkeypatch.setattr(w, 'sweep_runs', lambda state: [])
     assert w.main(['tick']) == 0
     assert 'delivery-bridge-unconfigured' in (tmp_path / 'watchdog/status.txt').read_text()
 
@@ -197,7 +197,7 @@ def test_tick_cli_persists_status_and_delivers_w12(tmp_path, monkeypatch, capsys
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
     monkeypatch.setenv('PLANGRAPH_WATCHDOG_DELIVERY', '["bridge"]')
     monkeypatch.setattr(w.time, 'time', lambda: 10000)
-    monkeypatch.setattr(w, 'read_runs', lambda state: [dict(
+    monkeypatch.setattr(w, 'sweep_runs', lambda state: [dict(
         run_id='run-w12', status='completed', ended=4600, started=1,
         parent_session='parent', exit_code=0)])
     monkeypatch.setattr(w, 'read_activity', lambda state, session: 1)
@@ -277,7 +277,7 @@ def test_probe_timer_environment_fallback(tmp_path, monkeypatch, config_text):
 def test_findings_without_bridge_report_unconfigured(tmp_path, monkeypatch):
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
     monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
-    monkeypatch.setattr(w, 'read_runs', lambda state: [])
+    monkeypatch.setattr(w, 'sweep_runs', lambda state: [])
     monkeypatch.setattr(w, 'read_claims', lambda: [])
     def tick(*args, deliver, **kwargs):
         event = dict(rule='run-orphan', run_id='fixture', kind='completion')
@@ -293,7 +293,7 @@ def test_findings_without_bridge_report_unconfigured(tmp_path, monkeypatch):
 def test_tick_status_keeps_error_and_finding(tmp_path, monkeypatch, bridge):
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
     monkeypatch.setenv('PLANGRAPH_WATCHDOG_DELIVERY', '["bridge"]' if bridge != 'unconfigured' else '')
-    monkeypatch.setattr(w, 'read_runs', lambda state: [])
+    monkeypatch.setattr(w, 'sweep_runs', lambda state: [])
     monkeypatch.setattr(w, 'tick', lambda *args, **kw: [dict(rule='run-orphan', run_id='fixture')])
     def fail():
         raise ValueError('fixture')
@@ -312,7 +312,7 @@ def test_tick_status_keeps_error_and_finding(tmp_path, monkeypatch, bridge):
 def test_tick_keeper_unconfigured_skips_with_one_warning(tmp_path, monkeypatch):
     from plangraph.keeper.cli_verbs import MissingKeeperURL
     monkeypatch.setenv("PLANGRAPH_SPAWN_STATE", str(tmp_path))
-    monkeypatch.setattr(w, "read_runs", lambda state: [])
+    monkeypatch.setattr(w, "sweep_runs", lambda state: [])
     monkeypatch.setattr(w, "read_claims", lambda: (_ for _ in ()).throw(MissingKeeperURL()))
     assert w.main(["tick"]) == 0
     assert (tmp_path / "watchdog/status.txt").read_text().count("keeper skipped MissingKeeperURL") == 1

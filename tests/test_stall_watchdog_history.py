@@ -251,7 +251,7 @@ def queued(tmp_path, monkeypatch):
                                   dict(queue_bound_s=30), {}, dict(started=0)])
 def test_ownerless_queue_timeout_is_persisted(tmp_path, queued, fields):
     path, original = queued(**fields)
-    [record] = w.read_runs(tmp_path)
+    [record] = w.sweep_runs(tmp_path)
     assert record['status'] == 'failed'
     assert record == json.loads(path.read_text()) == dict(
         original, status='failed', reason='queue_timeout', error='queue_timeout',
@@ -264,7 +264,7 @@ def test_queue_sweep_leaves_bounded_record_untouched(tmp_path, queued, fields):
     queued(queued_until=9900)
     path, original = queued('bounded', **fields)
     before = path.read_bytes(), path.stat().st_mtime_ns
-    records = {r['run_id']: r for r in w.read_runs(tmp_path)}
+    records = {r['run_id']: r for r in w.sweep_runs(tmp_path)}
     assert records['run-expired']['reason'] == 'queue_timeout'
     assert records['run-bounded'] == original
     assert (path.read_bytes(), path.stat().st_mtime_ns) == before
@@ -273,20 +273,20 @@ def test_queue_sweep_leaves_bounded_record_untouched(tmp_path, queued, fields):
 def test_queue_sweep_is_idempotent(tmp_path, queued, monkeypatch):
     from plangraph.spawner import private_io
     path, _ = queued(queued_until=9900)
-    first = w.read_runs(tmp_path)
+    first = w.sweep_runs(tmp_path)
     assert first[0]['reason'] == 'queue_timeout'
     before = path.read_bytes(), path.stat().st_mtime_ns
     monkeypatch.setattr(private_io, 'atomic_write_private',
                         lambda *a, **kw: pytest.fail('terminal queue rewritten'))
     monkeypatch.setattr(w, 'time', SimpleNamespace(time=lambda: 20000))
-    assert w.read_runs(tmp_path) == first
+    assert w.sweep_runs(tmp_path) == first
     assert (path.read_bytes(), path.stat().st_mtime_ns) == before
 
 
 def test_queue_sweep_dry_run_projects_timeout_without_writing(tmp_path, queued):
     path, original = queued(queued_until=9900)
     before = {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
-    [record] = w.read_runs(tmp_path, dry_run=True)
+    [record] = w.sweep_runs(tmp_path, dry_run=True)
     assert record['reason'] == 'queue_timeout'
     assert json.loads(path.read_text()) == original
     assert {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()} == before
@@ -299,7 +299,7 @@ def test_queue_sweep_requires_valid_deadline(tmp_path, queued, fields):
     queued(queued_until=9900)
     path, _ = queued('invalid', **fields)
     before = path.read_bytes()
-    records = {r['run_id']: r for r in w.read_runs(tmp_path)}
+    records = {r['run_id']: r for r in w.sweep_runs(tmp_path)}
     assert records['run-expired']['reason'] == 'queue_timeout'
     assert records['run-invalid']['status'] == 'queued'
     assert path.read_bytes() == before
@@ -316,7 +316,7 @@ def test_queue_sweep_rechecks_under_owner_lock(tmp_path, queued, monkeypatch, st
         path.write_text(json.dumps(fresh))
         yield
     monkeypatch.setattr(notify, 'inbox_lock', lock)
-    assert w.read_runs(tmp_path) == [fresh]
+    assert w.sweep_runs(tmp_path) == [fresh]
     assert json.loads(path.read_text()) == fresh
 
 
@@ -336,3 +336,16 @@ def test_expired_queue_no_longer_suppresses_completion_or_claim(tmp_path, queued
     assert w.main(['tick']) == 0
     events = [json.loads(p.read_text()) for p in (tmp_path / 'watchdog/outbox').glob('*.json')]
     assert {e['rule'] for e in events} == {'finished-child', 'idle-claim'}
+
+
+@pytest.mark.parametrize('dry_run', [False, True])
+@pytest.mark.parametrize('corrupt', [False, True])
+def test_read_runs_is_read_only_for_expired_or_bad_records(tmp_path, queued, dry_run, corrupt):
+    path, original = queued(queued_until=9900)
+    if corrupt:
+        path.write_text('{')
+    before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    records = w.read_runs(tmp_path, dry_run=dry_run)
+    assert {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()} == before
+    if not corrupt:
+        assert records == [original]
