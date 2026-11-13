@@ -8,6 +8,9 @@ Duplicate JSON keys, reason names, harnesses/aliases and unknown reasons refuse.
 Clients keep literal exports; drift tests pin harness order and the two Windows
 argv limits, not POSIX or Windows environment capacities (later-slice data).
 Launch imports never read the resource; subprocess tests trap opener/loader calls.
+The fresh interpreter explicitly uses this checkout's `src/`, independent of an
+installed package or inherited `PYTHONPATH`; pytest's `sys.path` is not inherited.
+Both missing-resource and parse failures propagate only on the first loader use.
 Optional raw JSON validates reasons and harnesses/aliases before full-document
 equality rejects changes to capacity, flags, metadata, status, grammar or modes.
 The parsed authority is lazy-cached; callers get deep copies and tests can reset it.

@@ -28,8 +28,18 @@ with patch.object(resources, "files", unreadable):
     with patch.object(review_mode, "load_prompt_transport_contract", unreadable):
         from plangraph.routing_support import clients
 assert unreadable.call_count == 0
+try:
+    review_mode.load_prompt_transport_contract()
+except {error.__name__}:
+    pass
+else:
+    raise AssertionError("contract failure was not deferred until first use")
+assert unreadable.call_count == 1
 '''
-    subprocess.run([sys.executable, "-c", probe], check=True, capture_output=True, text=True)
+    # conftest's sys.path bootstrap is not inherited by a fresh interpreter.
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+    subprocess.run([sys.executable, "-c", probe], env=env,
+                   check=True, capture_output=True, text=True)
 
 
 def test_sandbox_preserves_platform_env(monkeypatch, tmp_path, request):
