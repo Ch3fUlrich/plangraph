@@ -1,4 +1,4 @@
-"""Opt-in order core; real registrations are never given invented roles."""
+"""Opt-in order core; real-registry drops and explicitly synthetic positive paths."""
 import json
 from dataclasses import asdict, replace
 
@@ -25,7 +25,15 @@ def signature(legs):
     ('mimo-v2.6-pro', 'medium'), ('mimo-v2.6-flash', 'medium'),
     ('opencode-go-deepseek-v4-flash', 'medium'), ('omniroute-deepseek-flash', 'medium')])
 def test_catalog_efforts_are_explicit(catalog, id, effort):
-    assert catalog[id].effort == effort
+    """Requested efforts stay unregistered until exact benchmark coverage exists."""
+    from plangraph.catalog_data import SEED_MODELS
+    from plangraph.routing_support.catalog_seed import SEED_BENCHMARKS
+    from test_benchmark_data_contract import _violations
+    assert catalog[id].effort is None
+    model = catalog[id].model
+    model = model if '/' in model else catalog[id].harness + '/' + model
+    assert ('missing_row', f'leg:{id}@{model}', effort) in _violations(
+        SEED_BENCHMARKS, SEED_MODELS, [replace(catalog[id], effort=effort)])
 
 
 def test_implement_order_efforts_and_limited_fallthrough(catalog):
@@ -38,6 +46,7 @@ def test_implement_order_efforts_and_limited_fallthrough(catalog):
     assert ordered(legs[1:], 'implement') == (legs[2],)  # Cannot resurrect absent Sol.
     assert not ordered([catalog[id] for id in (
         'mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash')], 'implement')
+    # Synthetic-only positive Hydrogen path; this does not admit its registration.
     admitted = [replace(leg, roles=('implement',)) for leg in legs]
     assert signature(ordered(admitted, 'implement')) == [(legs[0].id, 'xhigh'),
         (legs[1].id, 'high'), (legs[2].id, 'high')]
@@ -45,9 +54,9 @@ def test_implement_order_efforts_and_limited_fallthrough(catalog):
 
 def test_standard_review_order_efforts_and_writer_fence(catalog):
     result = ordered(catalog.values(), 'review', writer_families=('gpt',), diff_tokens=99999)
-    assert signature(result) == [('mimo-v2.6-pro', 'medium'),
-        ('opencode-go-deepseek-v4-flash', 'medium'), ('mimo-v2.6-flash', 'medium'),
-        ('claude-haiku-5.5', 'xhigh'), ('omniroute-deepseek-flash', 'medium')]
+    assert signature(result) == [('mimo-v2.6-pro', None),
+        ('opencode-go-deepseek-v4-flash', None), ('mimo-v2.6-flash', None),
+        ('claude-haiku-5.5', None), ('omniroute-deepseek-flash', None)]
     assert ordered(result, 'review', writer_families=('mimo', 'anthropic'),
                    diff_tokens=99999) == (result[1], result[-1])
 
@@ -58,21 +67,26 @@ def test_complex_review_sol_terra_hydrogen_and_efforts(catalog, order_class):
     effort, hydrogen = ('xhigh', 'high') if order_class == 'complex' else ('medium', 'medium')
     assert OPERATOR_ROUTE_ORDERS['review'][order_class][:3] == (
         f'cx-gpt-6.1-sol-{effort}', f'cx-gpt-6.1-terra-{effort}', f'agy-gemini-4-hydrogen-{hydrogen}')
+    assert all('review' not in catalog[id].roles
+               for id in OPERATOR_ROUTE_ORDERS['review'][order_class][:3])
     result = ordered(catalog.values(), 'review', order_class=order_class,
                      writer_families=('claude',), diff_tokens=1000)
-    assert signature(result) == [('mimo-v2.6-pro', 'medium'),
-        ('opencode-go-deepseek-v4-flash', 'medium'), ('mimo-v2.6-flash', 'medium'),
-        ('omniroute-deepseek-flash', 'medium')]
+    assert signature(result) == [('mimo-v2.6-pro', None),
+        ('opencode-go-deepseek-v4-flash', None), ('mimo-v2.6-flash', None),
+        ('omniroute-deepseek-flash', None)]
 
 
 def test_planning_fable_high(catalog):
     fable = catalog['claude-fable-5.2-high']
+    assert not fable.roles and fable.disabled and fable.expires is None
     assert fable.effort == 'high' and not ordered(catalog.values(), 'planning')
+    # Synthetic-only positive Fable path; real planning admission is empty.
     assert ordered((replace(fable, roles=('orchestrate',)),), 'planning')[0].effort == 'high'
 
 
 @pytest.mark.parametrize('order_class,effort,hydrogen', [('high', 'medium', 'medium'), ('complex', 'xhigh', 'high')])
 def test_explicit_upstream_roles_keep_full_high_review_order(catalog, order_class, effort, hydrogen):
+    """Synthetic-only upstream roles; real-registry prefix drops are tested above."""
     ids = (f'cx-gpt-6.1-sol-{effort}', f'cx-gpt-6.1-terra-{effort}', f'agy-gemini-4-hydrogen-{hydrogen}')
     admitted = [replace(catalog[id], roles=('review',)) for id in ids]
     result = ordered(admitted, 'review', order_class=order_class, writer_families=('claude',))
@@ -101,8 +115,8 @@ def test_payment_order_unmodified_registry_names_every_drop(catalog):
             cx-gpt-6-luna-medium cx-gpt-6-luna-high cx-gpt-6-luna-xhigh cx-gpt-6-luna-max''',
         'writer_family': 'mimo-v2.6-pro mimo-v2.6-flash', 'diff_size': 'claude-haiku-5.5'}
     dropped = {id: reason for reason, ids in reasons.items() for id in ids.split()}
-    assert signature(result) == [('opencode-go-deepseek-v4-flash', 'medium'),
-                                 ('omniroute-deepseek-flash', 'medium')]
+    assert signature(result) == [('opencode-go-deepseek-v4-flash', None),
+                                 ('omniroute-deepseek-flash', None)]
     assert catalog.keys() - {leg.id for leg in result} == dropped.keys()
     from plangraph.routing_support.catalog_seed import OPERATOR_ROUTE_ORDERS
     for id, reason in dropped.items():
@@ -125,15 +139,18 @@ def test_haiku_requires_diff_strictly_under_100k(catalog, diff_tokens, haiku):
     ({'mimo-v2.6-pro': 'PASS', 'opencode-go-deepseek-v4-flash': 'unknown'}, False),
     ({'mimo-v2.6-pro': 'PASS', 'opencode-go-deepseek-v4-flash': 'FIX'}, True)])
 def test_ember_only_after_two_cheaper_disagreeing_verdicts(catalog, verdicts, ember):
+    assert not catalog['muse-ember-max'].roles and catalog['muse-ember-max'].disabled
+    assert 'muse-ember-max' not in {leg.id for leg in ordered(catalog.values(), 'review',
+        writer_families=('gpt',), diff_tokens=1000, verdicts=verdicts)}
     # Hypothetical upstream admission only; the registry declaration stays role-less.
     admitted = (*[leg for leg in catalog.values() if leg.id != 'muse-ember-max'],
                 replace(catalog['muse-ember-max'], roles=('review',)))
     result = ordered(admitted, 'review', writer_families=('gpt',), diff_tokens=1000, verdicts=verdicts)
     assert ('muse-ember-max' in {leg.id for leg in result}) is ember
-    expected = [('mimo-v2.6-pro', 'medium'), ('opencode-go-deepseek-v4-flash', 'medium'),
-                ('mimo-v2.6-flash', 'medium'), ('claude-haiku-5.5', 'xhigh')]
+    expected = [('mimo-v2.6-pro', None), ('opencode-go-deepseek-v4-flash', None),
+                ('mimo-v2.6-flash', None), ('claude-haiku-5.5', None)]
     assert signature(result) == expected + ([('muse-ember-max', 'max')] if ember else []) + [
-        ('omniroute-deepseek-flash', 'medium')]
+        ('omniroute-deepseek-flash', None)]
 
 
 def test_expensive_or_excluded_verdicts_cannot_unlock_ember(catalog):
@@ -254,3 +271,12 @@ def test_unknown_capability_declarations_are_not_live_admissions(catalog):
     unknown = [leg for leg in catalog.values() if not leg.windows]
     assert len(unknown) == 6
     assert all(leg.disabled and leg.expires is None and not leg.roles for leg in unknown)
+
+
+@pytest.mark.parametrize('statement', [
+    'Hydrogen high is table-only until its registration is admitted',
+    'positive paths are synthetic-only'])
+def test_order_handoff_distinguishes_tables_from_registry(statement):
+    from pathlib import Path
+    doc = (Path(__file__).resolve().parents[1] / 'docs/routing.md').read_text()
+    assert statement in doc

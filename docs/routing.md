@@ -44,17 +44,22 @@ renderer declares cx effort models; see [SPAWNER.md](SPAWNER.md#card-driven-rout
 
 `payment_order(..., order_class="standard"|"high"|"complex")` selects catalog
 positions after registered role filtering; it never grants roles or capabilities.
-Implement has only Sol xhigh, Hydrogen high and non-Claude-Code Sonnet high.
+The implement table lists Sol xhigh, Hydrogen high and non-Claude-Code Sonnet high.
+Hydrogen high is table-only until its registration is admitted; the real registry
+returns only Sol xhigh and Sonnet high (subject to upstream eligibility).
 Review excludes writer families, requires diff <100k for Haiku, and needs opposing
-eligible cheaper verdicts for Ember. MiMo and both DeepSeek review legs register
-medium effort; Haiku registers xhigh. Non-table registrations are dropped; table
-identities with legacy models are refused. Six unknown-capability declarations
+eligible cheaper verdicts for Ember. Spec amendment: MiMo and both DeepSeek review
+legs retain null registered effort, as does Haiku; requested medium/xhigh efforts
+are deferred until authoritative benchmark coverage exists. Non-table registrations
+are dropped; table identities with legacy models are refused. Six unknown-capability declarations
 are explicit-only, permanently disabled and role-less; JSON overrides may not
 omit windows, max_request_tokens or trains_on_data even when disabled.
 Live default activation and admission migration belong to LIVE-FENCE, not this core.
-No benchmark evidence is invented: the frozen pending contract still names null
-effort for these five legs and rejects their corrected effort identities. Resolving
-that evidence debt requires authoritative benchmark rows, not a larger waiver.
+No benchmark evidence is invented; benchmark rows, pending file and frozen ceiling
+are unchanged, and the benchmark contract passes with the retained null efforts.
+Ember, high/complex review-prefix and planning Fable positive paths are synthetic-only
+tests of upstream admission, not real-registry coverage. Real-registry assertions
+pin their absence and missing roles (plus permanent disables for declarations).
 
 ## Replan-0438 CI reconciliation
 
