@@ -170,9 +170,17 @@ def setup_repo(directory):
         script.chmod(0o755)
         git("add", "--", "check.sh")
         git("commit", "-m", "Initialize isolated pilot")
-        staged.rename(repo)
-    with allow.open("x", encoding="utf-8") as stream:
-        stream.write("\n".join(card_keys("pilot:PILOT-1\npilot:PILOT-2\n")) + "\n")
+        staged_allow = staged / allow.name
+        with staged_allow.open("x", encoding="utf-8") as stream:
+            stream.write("\n".join(card_keys("pilot:PILOT-1\npilot:PILOT-2\n")) + "\n")
+        # Publish without replacing a concurrent allowlist, before moving the repo.
+        os.link(staged_allow, allow)
+        try:
+            staged_allow.unlink()
+            staged.rename(repo)
+        except OSError:
+            allow.unlink()
+            raise
     # Paths are explicit CLI operands, never environment values.
     emit("setup-repo", True, f"repo={ascii(str(repo))} allowlist={ascii(str(allow))}")
     return True

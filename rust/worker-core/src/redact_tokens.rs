@@ -87,6 +87,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn github_token_body_floor_is_bound_to_gh_family() {
+        let spec = &SPECS[1];
+        assert_eq!(spec.prefix, "gh[pousr]_");
+        assert_eq!(crate::GITHUB_TOKEN_BODY_FLOOR, spec.floor);
+    }
+
+    #[test]
     fn wrapped_xox_underscore_is_redacted() {
         let prefix = ["xo", "xb-"].concat();
         let plain = format!("{prefix}ab_cd_ef_gh; retained");

@@ -1,5 +1,6 @@
 """Regressions for the post-merge pilot safety findings."""
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import re
 import subprocess
@@ -93,6 +94,64 @@ def test_setup_git_failure_is_retryable(env, monkeypatch, capsys, failure, exist
     assert run(capsys, 'setup-repo', str(repo))[0] == 0
 
 
+@pytest.mark.parametrize('failure', ['open', 'write', 'publish', 'unlink', 'rename'])
+@pytest.mark.parametrize('existing', [False, True])
+def test_setup_allowlist_failure_is_retryable(env, monkeypatch, capsys, failure, existing):
+    repo = env / 'repo'
+    allow = env / 'repo.cards.allow'
+    if existing:
+        repo.mkdir()
+    original_open, original_link, original_rename = Path.open, os.link, Path.rename
+    original_unlink = Path.unlink
+    @contextmanager
+    def open_file(path, *args, **kwargs):
+        if path.name == allow.name and failure == 'open':
+            raise OSError('allowlist unavailable')
+        with original_open(path, *args, **kwargs) as stream:
+            if path.name == allow.name and failure == 'write':
+                stream.write('partial')
+                raise OSError('allowlist write failed')
+            yield stream
+    def publish(source, destination, *args, **kwargs):
+        if destination == allow and failure == 'publish':
+            raise OSError('allowlist publication failed')
+        return original_link(source, destination, *args, **kwargs)
+    def rename(source, destination):
+        if destination == repo and failure == 'rename':
+            raise OSError('repository publication failed')
+        return original_rename(source, destination)
+    def unlink(path, *args, **kwargs):
+        if path.name == allow.name and path != allow and failure == 'unlink':
+            raise OSError('staged allowlist cleanup failed')
+        return original_unlink(path, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, 'open', open_file)
+        patch.setattr(os, 'link', publish)
+        patch.setattr(Path, 'rename', rename)
+        patch.setattr(Path, 'unlink', unlink)
+        code, output = run(capsys, 'setup-repo', str(repo))
+        assert code == 2
+        assert 'REFUSE setup-repo ' in output
+    assert not repo.exists() or not list(repo.iterdir())
+    assert not os.path.lexists(allow)
+    assert run(capsys, 'setup-repo', str(repo))[0] == 0
+    assert allow.read_text().splitlines() == ['pilot:PILOT-1', 'pilot:PILOT-2']
+    assert not list(env.glob('.pilot-repo-*'))
+
+
+def test_setup_preserves_concurrent_allowlist(env, monkeypatch, capsys):
+    repo = env / 'repo'
+    allow = env / 'repo.cards.allow'
+    original = os.link
+    def publish(source, destination):
+        allow.write_text('pilot:PILOT-9\n')
+        return original(source, destination)
+    monkeypatch.setattr(os, 'link', publish)
+    assert run(capsys, 'setup-repo', str(repo))[0] == 2
+    assert not repo.exists()
+    assert allow.read_text() == 'pilot:PILOT-9\n'
+
+
 @pytest.mark.parametrize('kind', ['alias', 'overmount', 'resolve-error'])
 def test_mount_resolution_and_order(env, monkeypatch, kind):
     db = env / 'db'
@@ -153,6 +212,7 @@ def test_pilot_s3_documentation_evidence():
 def test_symlink_negative_control_documented():
     source = (ROOT / 'rust/worker/src/attempt.rs').read_text()
     comment = source.split('fn verify_refuses_a_worktree_whose_dot_git_is_a_symlink')[0]
+    assert 'The `.git` rule prevents redirecting a healthy worktree via a symlink.' in comment[-600:]
     assert 'a test that runs without the symlink rule fails here' in comment[-600:]
 
 
@@ -164,7 +224,7 @@ def test_refusal_vectors_reject_success_exit(env, monkeypatch, capsys, vector):
         original(argv)
         return 0
     monkeypatch.setattr(pilot, 'main', success_exit)
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match=r'assert 0 == 2'):
         if vector == 'malformed':
             test_malformed_values(env, monkeypatch, capsys, 'PG_BUILD_ID', 'bad build')
         else:
@@ -185,7 +245,7 @@ def test_cleanup_vector_detects_retained_home(env, monkeypatch, mutation):
             patch.setattr(pilot.tempfile, 'mkdtemp', mkdtemp)
             patch.setattr(pilot.shutil, 'rmtree', lambda *a, **kw: None)
             patch.setattr(pilot.os, 'unlink', lambda *a, **kw: None)
-            with pytest.raises(AssertionError):
+            with pytest.raises(AssertionError, match=r'assert not True\b[\s\S]*lexists'):
                 test_child_home_cleanup(env, mutation)
     finally:
         for home in homes:
@@ -194,3 +254,22 @@ def test_cleanup_vector_detects_retained_home(env, monkeypatch, mutation):
             else:
                 os.chmod(home, 0o700)
                 pilot.shutil.rmtree(home)
+
+
+@pytest.mark.parametrize('vector', ['malformed', 'non-utf8'])
+def test_refusal_meta_test_rejects_unrelated_assertion(env, monkeypatch, capsys, vector):
+    import test_pilot_preflight as vectors
+    def unrelated(*args):
+        raise AssertionError('unrelated setup failure')
+    name = 'test_malformed_values' if vector == 'malformed' else 'test_non_utf8_allowlist'
+    monkeypatch.setattr(vectors, name, unrelated)
+    with pytest.raises(AssertionError, match='Regex pattern did not match'):
+        test_refusal_vectors_reject_success_exit(env, monkeypatch, capsys, vector)
+
+
+@pytest.mark.parametrize('mutation', ['chmod', 'symlink'])
+def test_cleanup_meta_test_rejects_unrelated_returncode(env, monkeypatch, mutation):
+    monkeypatch.setattr(pilot, 'command', lambda *a, **kw:
+                        subprocess.CompletedProcess([], 0, stdout=b''))
+    with pytest.raises(AssertionError, match='Regex pattern did not match'):
+        test_cleanup_vector_detects_retained_home(env, monkeypatch, mutation)
