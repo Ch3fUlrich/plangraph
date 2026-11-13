@@ -29,6 +29,7 @@ windows-sys = { version = "0.61", features = [
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61", features = [
+    # prompt_git_race_tests closes the disposable producer's stdout handle.
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
