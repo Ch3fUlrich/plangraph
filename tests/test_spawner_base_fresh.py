@@ -293,3 +293,39 @@ def test_detached_cli_split_refusal_exits_nonzero(tmp_path, monkeypatch, capsys)
     output = capsys.readouterr()
     assert json.loads(output.out) == refused
     assert 'base_stale: behind=1' in output.err
+
+
+def test_admission_timeout_terminates_admitted_children_but_not_prior_runs(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from plangraph.spawner import base_fresh
+    from plangraph.spawner.service import SpawnService
+    runner = SimpleNamespace(jobs={'job-one': SimpleNamespace(survivors=[])}, cancel=AsyncMock())
+    service = SpawnService(runner, state=tmp_path)
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', .02)
+    async def hold():
+        await asyncio.Event().wait()
+    async def spawn(**kwargs):
+        runs = [dict(run_id='run-one', status='running', base_admitted=True, job_id='job-one'),
+                dict(run_id='run-two', status='running', base_admitted=False)]
+        for run in runs:
+            service._save(run)
+            service.tasks[run['run_id']] = asyncio.create_task(hold())
+        return {'writers': runs}
+    monkeypatch.setattr(service, 'spawn', spawn)
+    async def exercise():
+        service._save(dict(run_id='run-prior', status='running'))
+        prior = service.tasks['run-prior'] = asyncio.create_task(hold())
+        try:
+            result = await base_fresh.admitted_spawn(service, {})
+            assert result['reason'] == 'base_admission_timeout'
+            for name in ('run-one', 'run-two'):
+                record = service.result(name)
+                assert record['status'] == 'failed' and record['reason'] == 'base_admission_timeout'
+                assert service.tasks[name].done()
+            runner.cancel.assert_awaited_once_with('job-one')
+            assert not prior.done() and service.result('run-prior')['status'] == 'running'
+        finally:
+            for task in service.tasks.values(): task.cancel()
+            await asyncio.gather(*service.tasks.values(), return_exceptions=True)
+    asyncio.run(exercise())

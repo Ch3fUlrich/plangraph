@@ -98,6 +98,7 @@ def spawn_exit_code(record):
 
 async def admitted_spawn(service, payload):
     """The detached handshake acknowledges admission, not mere task creation."""
+    prior_tasks = set(service.tasks)
     async def wait():
         record = await service.spawn(**payload, wait_seconds=0)
         runs = spawn_runs(record)
@@ -111,10 +112,15 @@ async def admitted_spawn(service, payload):
     try:
         return await asyncio.wait_for(wait(), ADMISSION_TIMEOUT)
     except asyncio.TimeoutError:
-        for task in service.tasks.values(): task.cancel()
-        await asyncio.gather(*service.tasks.values(), return_exceptions=True)
-        for run in map(service.result, list(service.tasks)):
-            if run.get('status') == 'running' and not run.get('base_admitted'):
-                service._save(dict(run, status='failed', reason='base_admission_timeout', error='base_admission_timeout', exit_code=1, ended=time.time()))
+        owned = {key: task for key, task in service.tasks.items() if key not in prior_tasks}
+        for run_id, task in owned.items():
+            run = service.result(run_id)
+            if run.get('status') == 'running':
+                await service.cancel(run_id)  # stop already-admitted workers, not just their supervisors
+                run = service.result(run_id)
+                if run.get('reason') != 'kill_incomplete':
+                    service._save(dict(run, status='failed', reason='base_admission_timeout', error='base_admission_timeout', exit_code=1, ended=time.time()))
+            if not task.done(): task.cancel()
+        await asyncio.gather(*owned.values(), return_exceptions=True)
         return service.save_refusal(ValueError('base_admission_timeout'), payload.get('role', 'implement'),
                                     card=payload.get('card'), reason='base_admission_timeout')
