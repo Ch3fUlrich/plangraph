@@ -49,8 +49,9 @@ def fetch_rows_db(since_iso, db_path):
     """Read the snapshots from a sqlite file opened read-only: no docker, no write."""
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30)
     try:
-        con.row_factory = sqlite3.Row
-        return [dict(r) for r in con.execute(SQL, (since_iso,))]
+        cursor = con.execute(SQL, (since_iso,))
+        columns = [column[0] for column in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor]
     finally:
         con.close()
 

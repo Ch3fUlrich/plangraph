@@ -2,6 +2,7 @@
 import json
 import sqlite3
 import subprocess
+from pathlib import Path
 from datetime import UTC, datetime, timedelta
 
 from plangraph.keeper import quota_alarms
@@ -9,6 +10,13 @@ from plangraph.keeper.quota_alarms import evaluate, run
 
 T0 = datetime(2026, 11, 13, 10, 0, tzinfo=UTC)
 RESET = "2026-11-19T00:00:00.000Z"
+
+
+def test_timer_requires_read_only_snapshot_source():
+    unit = (Path(__file__).resolve().parents[1] / "deploy/systemd/plangraph-quota-alarms.service").read_text()
+    assert "EnvironmentFile=%h/.config/plangraph/quota-alarms.env" in unit
+    assert "ExecStartPre=/usr/bin/test -n ${QUOTA_SNAPSHOT_DB}" in unit
+    assert "--db ${QUOTA_SNAPSHOT_DB}" in unit
 
 
 def row(minutes, remaining, reset=RESET, provider="codex", window="weekly"):
