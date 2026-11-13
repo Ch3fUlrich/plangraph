@@ -355,3 +355,21 @@ def test_admission_timeout_removes_unlaunched_worktree(tmp_path, monkeypatch):
     assert result['reason'] == 'base_admission_timeout'
     record = service.result('run-pending')
     assert not attempt.exists() and record['run_worktree']['removed']
+
+
+def test_refused_continuation_cleanup_uses_selected_repository(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import base_fresh
+    selected = str(tmp_path / 'selected')
+    attempt = tmp_path / 'attempt'
+    record = dict(selected_cwd=selected, cwd=str(attempt), run_worktree={'path': str(attempt)})
+    calls = []
+    def remove(argv, **kwargs):
+        calls.append(argv)
+        if argv[2] != selected:
+            raise subprocess.CalledProcessError(128, argv)
+    monkeypatch.setattr(base_fresh.subprocess, 'run', remove)
+    service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(tmp_path / 'other')))
+    base_fresh._remove_refused_worktree(service, record)
+    assert record['run_worktree'].get('removed') is True
+    assert calls[0][2] == selected

@@ -75,9 +75,9 @@ async def admit_base(service, record, card, *, launch=False):
 def _remove_refused_worktree(service, record):
     """Remove only this unlaunched attempt; never force dirty or locked evidence."""
     from pathlib import Path
-    from .git_guard import run_worktree_lock
+    from .git_guard import run_worktree_lock, selected_checkout
     metadata = record['run_worktree']
-    repo = getattr(service.runner, 'default_cwd', None) or os.getcwd()
+    repo = selected_checkout(service, record)
     try:
         with run_worktree_lock(Path(metadata['path']).parent):
             subprocess.run(['git', '-C', repo, 'worktree', 'remove', metadata['path']],

@@ -695,3 +695,5 @@ An unavailable package tree produces a fresh source token on every check, so rea
 An admission timeout cancels every worker started by that request, including already-admitted split siblings, and persists failure; runs that existed before the request keep running.
 
 Admission timeout removes a created worktree when its worker never reached launch admission, using the same non-forced cleanup as a freshness refusal.
+
+Refused worktree cleanup uses the attempt record’s selected checkout, including continuations whose repository differs from the runner default.
