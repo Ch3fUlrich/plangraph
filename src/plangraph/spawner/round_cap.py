@@ -1,5 +1,4 @@
 """Round cap (D-5813, rule 3.35): no 4th implement spawn per item and PR; replan instead."""
-import asyncio
 import hashlib
 import json
 import os
@@ -96,12 +95,13 @@ def check_round_cap(service, card, role):
 
 
 async def enforce_round_cap(service, card, role, *, dry_run=False):
-    """Refuse the capped spawn and start the automatic replan job (once per item/PR)."""
+    """Refuse the capped spawn and request an L1 replan (once per item/PR)."""
     found = None if dry_run else round_cap_payload(service, card, role)
     if found is None:
         return
     payload, plan = found
-    payload['replan'] = start_replan(service, payload, plan)
+    import asyncio
+    payload['replan'] = await asyncio.to_thread(start_replan, service, payload, plan)
     raise RoundCapRefused(payload)
 
 
@@ -111,20 +111,13 @@ def marker_path(service, item, ref):
 
 
 def start_replan(service, payload, plan):
-    """Claim the (item, PR) marker and schedule the replan job as a service task."""
+    """Save the complete request and raise a keeper alarm for an L1; never launch work."""
     from .private_io import atomic_write_private
-    from .replan_job import default_io, run_marked
-    io = getattr(service, 'replan_io', None) or default_io(service)
-    item, ref = payload['item'], payload['pr']
-    if plan is None:
-        line = (f"BLOCKED {item} | round_cap replan not started: no planning leg ({payload['replan_route_error']}) "
-                "| fix the route, then re-spawn | -")
-        io.notify(item, None, line)
-        return dict(status='blocked', reason=payload['replan_route_error'], started=False)
-    path = marker_path(service, item, ref)
+    from .replan_job import request_replan
+    path = marker_path(service, payload['item'], payload['pr'])
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    record = dict(item=item, ref=ref, rounds=payload['rounds'], status='running',
-                  run_id='replan-' + uuid.uuid4().hex, started=time.time())
+    record = dict(item=payload['item'], ref=payload['pr'], rounds=payload['rounds'],
+                  request=payload, status='running', run_id='replan-' + uuid.uuid4().hex, started=time.time())
     for _ in range(2):
         try:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -132,8 +125,9 @@ def start_replan(service, payload, plan):
             try:
                 prior = json.loads(path.read_text(encoding='utf-8'))
             except (OSError, ValueError):
-                prior = dict(status='unreadable')
-            if prior.get('status') == 'running' and time.time() - prior.get('started', 0) > STALE_REPLAN_S:
+                prior = dict(status='running', started=path.stat().st_mtime)
+            if prior.get('status') == 'failed' or (prior.get('status') == 'running' and
+                    time.time() - prior.get('started', 0) > STALE_REPLAN_S):
                 path.unlink(missing_ok=True)
                 continue
             return dict(status=prior.get('status'), run_id=prior.get('run_id'),
@@ -141,9 +135,13 @@ def start_replan(service, payload, plan):
         os.close(fd)
         break
     else:
-        return dict(status='unreadable', started=False)
+        return dict(status='pending', started=False)
     atomic_write_private(path, json.dumps(record))
-    save = lambda: atomic_write_private(path, json.dumps(record))
-    task = asyncio.create_task(run_marked(service, payload, plan, io, record, save, path.with_suffix('.items.json')))
-    service.tasks[record['run_id']] = task
-    return dict(status='running', run_id=record['run_id'], started=True)
+    try:
+        request_replan(service, payload, record['run_id'], path)
+        record['status'] = 'requested'
+    except Exception as exc:
+        # Persist the full request even if the keeper is unavailable; retry on the next refusal.
+        record.update(status='failed', reason=type(exc).__name__)
+    atomic_write_private(path, json.dumps(record))
+    return dict(status=record['status'], run_id=record['run_id'], reason=record.get('reason'), started=False)

@@ -12,6 +12,11 @@ from plangraph.spawner.service import SpawnService
 ITEM = 'plangraph:ROUND-CAP-X'
 
 
+@pytest.fixture(autouse=True)
+def offline_keeper(monkeypatch):
+    monkeypatch.setattr('plangraph.keeper.cli_verbs.Session.call', lambda *a, **kw: None)
+
+
 def _seed(state, n, item=ITEM, pr='7', **extra):
     for i in range(n):
         d = state / 'runs' / f'run-{item.split(":")[1].lower().replace("-", "")}{pr}{i}'

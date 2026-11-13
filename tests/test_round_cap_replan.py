@@ -1,155 +1,126 @@
-"""The round cap starts the replan job: fixtures only (fake diff, findings, job runner; no network)."""
+"""Round-cap requests use spawner authority and leave L1 work to the L1."""
 import asyncio
 import json
-import subprocess
 from types import SimpleNamespace
 
 import pytest
 
+from plangraph.keeper.cli_verbs import Session, Unreachable
 from plangraph.routing_errors import SpawnRefused
-from plangraph.spawner.replan_job import (ReplanError, ReplanIO, SLICE_MAX_LINES, close_pr, git_diff)
-from plangraph.spawner.round_cap import RoundCapRefused
+from plangraph.spawner.round_cap import RoundCapRefused, marker_path
 from plangraph.spawner.service import SpawnService
 
 ITEM = 'plangraph:ROUND-CAP-X'
-FINDINGS = ['HIGH a.py:1 - first finding, verbatim', dict(text='MED b.py:2 - second finding'), 'LOW c.py:3 - third']
-DIFF = 'diff --git a/a.py b/a.py\n+fake_change = 1\n'
+FINDINGS = ['HIGH a.py:1 - first finding, verbatim', dict(text='MED b.py:2 - second finding')]
 
 
-def _seed(state, n=3, pr='7'):
-    for i in range(n):
+def _seed(state):
+    for i in range(3):
         d = state / 'runs' / f'run-seed{i}'
         d.mkdir(parents=True)
         (d / 'record.json').write_text(json.dumps(dict(
-            run_id=d.name, role='implement', item_key=ITEM, round_ref=pr, status='completed', started=i)))
+            run_id=d.name, role='implement', item_key=ITEM, round_ref='7', status='completed', started=i)))
 
 
-class Fake:
-    """Injected ReplanIO: records every call in order."""
-    def __init__(self, reply=None, define_error=None):
-        self.calls, self.prompts, self.lines = [], [], []
-        self.reply = reply if reply is not None else json.dumps(dict(slices=[
-            dict(title='first', scope='fix a', files=['a.py'], lines=120, findings=[1, 3]),
-            dict(title='second', scope='fix b', files=['b.py'], lines=80, findings=[2])]))
-        self.define_error = define_error
-
-    def io(self):
-        async def job(card, prompt, plan):
-            self.calls.append(('job', card['role'], plan.first_leg.id))
-            self.prompts.append(prompt)
-            return dict(status='completed', run_id='run-job1', stdout_tail='analysis...\n' + self.reply)
-
-        def define(items):
-            self.calls.append(('define', items))
-            if self.define_error:
-                raise self.define_error
-
-        return ReplanIO(
-            item=lambda key: dict(key=key, title='the item', description='ITEM-DESCRIPTION'),
-            diff=lambda card, ref: DIFF, job=job, define=define,
-            close_pr=lambda card, ref, comment: self.calls.append(('close', ref, comment)),
-            notify=lambda item, run_id, line: self.lines.append(line))
+@pytest.fixture
+def calls(monkeypatch):
+    seen = []
+    def call(self, method, verb, params=None, body=None):
+        seen.append((method, verb, body))
+        assert (method, verb) == ('POST', 'alarms'), 'spawner may only request a replan'
+    monkeypatch.setattr(Session, 'call', call)
+    return seen
 
 
-def _service(tmp_path, fake, route_error=None):
-    svc = SpawnService(object(), state=tmp_path)
-    svc.replan_io = fake.io()
+def _service(tmp_path, error=None):
+    _seed(tmp_path)
+    service = SpawnService(object(), state=tmp_path)
     leg = SimpleNamespace(id='planning-leg')
-
-    def route(card, role, *args, **kwargs):
-        if route_error:
-            raise route_error
-        assert role == 'research'
+    def route(*args, **kwargs):
+        if error:
+            raise error
         return SimpleNamespace(first_leg=leg, legs=[leg], error=None)
-    svc._route = route
-    return svc
+    service._route = route
+    return service
 
 
-def _cap(svc):
-    """A 4th implement spawn: refused, then the replan task runs to its end."""
-    card = dict(item_key=ITEM, pr='7', findings=FINDINGS)
-
+def _cap(service, **extra):
     async def go():
         with pytest.raises(RoundCapRefused) as err:
-            await svc._spawn(card=card, prompt='x')
-        payload = err.value.payload
-        run_id = payload['replan'].get('run_id')
-        if payload['replan']['started']:
-            await svc.tasks[run_id]
-        return payload
+            await service._spawn(card=dict(item_key=ITEM, pr='7', findings=FINDINGS, **extra), prompt='x')
+        return err.value.payload
     return asyncio.run(go())
 
 
-def test_cap_runs_replan_that_defines_slices_closes_pr_and_tells_routing(tmp_path):
-    _seed(tmp_path)
-    fake = Fake()
-    payload = _cap(_service(tmp_path, fake))
-    assert payload['replan']['status'] == 'running' and payload['replan_leg'] == 'planning-leg'
-    assert [c[0] for c in fake.calls] == ['job', 'define', 'close']  # define first: a failed define keeps the PR
-    assert fake.calls[0][1:] == ('research', 'planning-leg')
-    prompt = fake.prompts[0]
-    assert DIFF in prompt and 'ITEM-DESCRIPTION' in prompt
-    assert all(t in prompt for t in ('HIGH a.py:1 - first finding, verbatim', 'MED b.py:2 - second finding', 'LOW c.py:3 - third'))
-    items = fake.calls[1][1]
-    assert [i['id'] for i in items] == ['ROUND-CAP-X-S1', 'ROUND-CAP-X-S2']
-    assert all(i['project'] == 'plangraph' and i['under'] == ITEM and len(i['done_criteria']) <= 600 for i in items)
-    assert 'HIGH a.py:1 - first finding, verbatim' in items[0]['description'] and 'LOW c.py:3 - third' in items[0]['description']
-    assert 'MED b.py:2 - second finding' in items[1]['description']
-    assert fake.calls[2][1] == '7' and 'plangraph:ROUND-CAP-X-S1' in fake.calls[2][2]
-    assert len(fake.lines) == 1 and fake.lines[0].startswith(f'DONE {ITEM} 7 ') and '\n' not in fake.lines[0]
-    marker = next((tmp_path / 'replan').glob('*[!s].json'))
-    assert json.loads(marker.read_text())['status'] == 'done'
+def test_cap_requests_l1_replan_without_spawning_or_creating_items(tmp_path, calls):
+    service = _service(tmp_path)
+    payload = _cap(service)
+    assert payload['replan']['status'] == 'requested' and not payload['replan']['started']
+    assert payload['replan_leg'] == 'planning-leg'
+    assert calls[0][2]['card'] == ITEM and 'round_cap' in calls[0][2]['reason']
+    assert service.tasks == {} and len(list((tmp_path / 'runs').glob('*'))) == 3
+    saved = json.loads(marker_path(service, ITEM, '7').read_text())
+    assert saved['status'] == 'requested'
+    assert saved['request']['findings'] == [FINDINGS[0], FINDINGS[1]['text']]
+    events = list((tmp_path / 'watchdog/outbox').glob('*.json'))
+    assert len(events) == 1
+    event = json.loads(events[0].read_text())
+    assert event['recipient'] == 'routing' and event['replan_required']['findings'] == saved['request']['findings']
+    assert 'L1:' in event['text'] and '<=300 lines' in event['text'] and '\n' not in event['text']
 
 
-@pytest.mark.parametrize('reply,reason', [
-    (json.dumps(dict(slices=[dict(title='t', scope='s', lines=SLICE_MAX_LINES + 1, findings=[1, 2, 3])])), 'slice_too_large'),
-    (json.dumps(dict(slices=[dict(title='t', scope='s', lines=10, findings=[1, 2])])), 'findings_unassigned: 3'),
-    ('no json here', 'slices_missing')])
-def test_bad_slices_define_nothing_and_keep_the_pr(tmp_path, reply, reason):
-    _seed(tmp_path)
-    fake = Fake(reply=reply)
-    _cap(_service(tmp_path, fake))
-    assert [c[0] for c in fake.calls] == ['job']
-    assert len(fake.lines) == 1 and fake.lines[0].startswith(f'FAIL {ITEM} ') and reason in fake.lines[0]
+def test_second_refusal_requests_no_second_replan(tmp_path, calls):
+    service = _service(tmp_path)
+    _cap(service)
+    assert _cap(service)['replan']['status'] == 'requested'
+    assert len(calls) == 1
 
 
-def test_define_refused_keeps_pr_open_and_saves_definitions(tmp_path):
-    _seed(tmp_path)
-    fake = Fake(define_error=ReplanError('keeper call failed: RefusedCli: forbidden'))
-    _cap(_service(tmp_path, fake))
-    assert [c[0] for c in fake.calls] == ['job', 'define']
-    saved = json.loads(next((tmp_path / 'replan').glob('*.items.json')).read_text())
-    assert len(saved) == 2 and 'define_failed' in fake.lines[0] and '.items.json' in fake.lines[0]
+def test_no_planning_leg_still_requests_l1_help(tmp_path, calls):
+    payload = _cap(_service(tmp_path, SpawnRefused('no planning leg up')))
+    assert payload['replan']['status'] == 'requested'
+    assert payload['replan_route_error'] == 'no planning leg up' and len(calls) == 1
 
 
-def test_second_refusal_starts_no_second_replan(tmp_path):
-    _seed(tmp_path)
-    fake = Fake()
-    svc = _service(tmp_path, fake)
-    _cap(svc)
-    again = _cap(svc)
-    assert again['replan']['status'] == 'done' and again['replan']['started'] is False
-    assert [c[0] for c in fake.calls].count('job') == 1 and len(fake.lines) == 1
+def test_keeper_failure_preserves_request_and_retries(tmp_path, calls, monkeypatch):
+    service = _service(tmp_path)
+    normal_call = Session.call
+    def down(*args, **kwargs):
+        raise Unreachable('offline')
+    monkeypatch.setattr(Session, 'call', down)
+    assert _cap(service)['replan']['status'] == 'failed'
+    saved = json.loads(marker_path(service, ITEM, '7').read_text())
+    assert saved['request']['findings'][0] == FINDINGS[0] and saved['reason'] == 'Unreachable'
+    assert len(list((tmp_path / 'watchdog/outbox').glob('*.json'))) == 1
+    monkeypatch.setattr(Session, 'call', normal_call)
+    assert _cap(service)['replan']['status'] == 'requested' and len(calls) == 1
 
 
-def test_no_planning_leg_starts_no_job_and_blocks_to_routing(tmp_path):
-    _seed(tmp_path)
-    fake = Fake()
-    payload = _cap(_service(tmp_path, fake, route_error=SpawnRefused('no planning leg up')))
-    assert payload['replan']['status'] == 'blocked' and payload['replan_route_error'] == 'no planning leg up'
-    assert fake.calls == [] and len(fake.lines) == 1 and fake.lines[0].startswith(f'BLOCKED {ITEM} ')
+def test_request_preserves_execution_fence(tmp_path, calls):
+    _cap(_service(tmp_path), workflow_id='wf', run_id='run', attempt=2)
+    assert {key: calls[0][2][key] for key in ('workflow_id', 'run_id', 'attempt')} == dict(
+        workflow_id='wf', run_id='run', attempt=2)
 
 
-def test_default_commands(tmp_path):
-    seen = []
-
-    def run(args, **kwargs):
-        seen.append(args)
-        return subprocess.CompletedProcess(args, 0, stdout='DIFF', stderr='')
-    assert git_diff(str(tmp_path), dict(pr='7'), '7', run) == 'DIFF'
-    assert git_diff(str(tmp_path), dict(diff_ref=dict(repo='/r', base='b', head='h')), None, run) == 'DIFF'
-    close_pr(str(tmp_path), '7', 'why', run)
-    assert seen == [['gh', 'pr', 'diff', '7'], ['git', '-C', '/r', 'diff', '--no-ext-diff', '--no-color', 'b...h', '--'],
-                    ['gh', 'pr', 'close', '7', '--comment', 'why']]
-    with pytest.raises(ReplanError, match='gh failed'):
-        close_pr(str(tmp_path), '7', 'why', lambda args, **kw: subprocess.CompletedProcess(args, 1, stdout='', stderr='boom\n'))
+def test_spawner_can_alarm_but_cannot_define_slices(tmp_path, monkeypatch):
+    from keeper_util import World, seed, defn
+    from plangraph.keeper import auth
+    from plangraph.keeper.errors import Refused
+    with_world = tmp_path / 'keeper'
+    world = World(with_world)
+    try:
+        seed(world, [('ROUND-CAP-X', [])], project='plangraph')
+        token = auth.add_principal(world.conn, 'spawn', 'spawner', ['plangraph'])
+        principal = auth.authenticate(world.conn, token)
+        with pytest.raises(Refused):
+            world.store.create_items(principal, [defn('SLICE', project='plangraph', under=ITEM)])
+        def call(self, method, verb, params=None, body=None):
+            assert (method, verb) == ('POST', 'alarms')
+            world.store.worker_alarm(principal, body)
+        monkeypatch.setattr(Session, 'call', call)
+        payload = _cap(_service(tmp_path / 'spawner'))
+        assert payload['replan']['status'] == 'requested'
+        alarms = world.conn.execute('SELECT key,detail FROM projector_alarms').fetchall()
+        assert len(alarms) == 1 and alarms[0]['key'] == ITEM and 'round_cap' in alarms[0]['detail']
+    finally:
+        world.close()
