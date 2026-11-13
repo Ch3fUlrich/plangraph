@@ -59,6 +59,8 @@ def filter_within(selected_tests, within):
     return sorted(set(matched))
 
 
+# Under docs/ and status/ only these documentation files select no tests.
+DOC_SUFFIXES = {".md", ".rst", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico"}
 SMOKE_LIMIT = 12
 SMOKE_TEST = "tests/test_affected_tests.py"
 
@@ -138,7 +140,8 @@ def select_tests(root, changed, within=None):
             continue
         if p.parts[0] not in {"src", "tests", "tools"}:
             if p.name != "conftest.py":
-                if p.parts[0] in {"docs", "status"} or (p.parts[0] == "changelog.d" and p.suffix == ".md"):
+                if (p.parts[0] in {"docs", "status"} and p.suffix.lower() in DOC_SUFFIXES) or (
+                        p.parts[0] == "changelog.d" and p.suffix == ".md"):
                     continue
                 if not revision_asset(root, path, asset_cache):
                     continue

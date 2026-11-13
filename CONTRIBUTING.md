@@ -6,8 +6,8 @@ and affected tests, in that order. Each family ends with a timed PASS/FAIL/SKIP/
 summary; failed checks with HTTP 5xx output in any family (including policy) are
 inferred as INFRA and retried once; persistent INFRA exits 3, other failures exit 1.
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
-affected pytest has 900 seconds. The hook has no additional overall preflight bound.
-Use `--keep-going` to collect all failures or `--fast`
+affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
+Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
 to skip affected tests. The existing pre-push hook runs preflight too; set
 `PREFLIGHT_FAST=1` for its fast mode or `PREFLIGHT_SKIP=1` to bypass only that hook
 invocation (not the existing scrub/ref/file-size gates or direct CLI runs). Private
@@ -41,7 +41,7 @@ python -m pytest -q -n auto tests            # main merge + nightly full suite
 The affected selector falls back to the full suite for shared fixtures and suite
 configuration; unmapped code selects a bounded smoke set (tests naming its directory,
 at most 12, plus `tests/test_affected_tests.py`), and CI/main keep the full suite; documentation, `changelog.d/` fragments,
-status and build artifacts, and `.md`/`.rst`/`.txt` files no test names, select no tests. Do not bypass a conservative fallback on PRs.
+build artifacts, and `.md`/`.rst`/`.txt` files no test names, select no tests. Under `docs/` and `status/` only documentation files (`.md`, `.rst`, images) select no tests; any other file there (`docs/conf.py`, `status/x.toml`) goes through the normal mapping. Do not bypass a conservative fallback on PRs.
 Pass `--head <revision>` for a committed-only comparison, excluding staged,
 worktree and untracked changes; omit it to include checkout changes.
 Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;

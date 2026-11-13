@@ -2,6 +2,7 @@
 """Blocking local CI policy, Rust and affected-test preflight."""
 import argparse
 import importlib.util
+import json
 import os
 import re
 from pathlib import Path
@@ -15,7 +16,9 @@ CHECK_TIMEOUT = 60
 # Measured on a build host: pg-spawnd clippy 17.8 s, shim/windows_pipe tests 48.4 s.
 # Leave ample room for slower hosts, multiple affected crates and test suites.
 RUST_TIMEOUT = 600
-TEST_TIMEOUT = 900
+# The affected-test step is bounded well under the 5 minute push target; the
+# measured normal run is about 50 s.
+TEST_TIMEOUT = 240
 
 
 def check_timeout(command):
@@ -41,10 +44,29 @@ def run(command, cwd, env):
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 timeout=timeout)
         return result.returncode, result.stdout
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        if timeout == TEST_TIMEOUT and len(command) > 1 and Path(command[1]).name == "affected_tests.py":
+            return 1, (f"tests: affected-tests step exceeded its {timeout} second bound "
+                       f"({selected_count(exc.stdout)} selected test paths)\n")
         return 1, f"check exceeded {timeout} second timeout\n"
     except OSError as exc:
         return 1, f"unable to start check: {type(exc).__name__}\n"
+
+
+def selected_count(partial):
+    """Selected test count from the selector's first output line (JSON plan), else "unknown"."""
+    if isinstance(partial, bytes):
+        partial = partial.decode("utf-8", "replace")
+    try:
+        return len(json.loads((partial or "").splitlines()[0])["tests"])
+    except (ValueError, KeyError, IndexError, TypeError):
+        return "unknown"
+
+
+def first_error(output):
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    marked = [line for line in lines if re.search(r"FAIL|error|exceeded", line, re.I)]
+    return (marked or lines or ["no output"])[0]
 
 
 def rust_commands(root, base, head):
@@ -131,17 +153,20 @@ def main(argv=None, root=None):
                             python("ci_commit_gate.py", "check", "--base", args.base,
                                    "--head", args.head, "--exempt", str(tools / "ci_commit_exempt.txt"))]),
                 ("rust", None), ("tests", [] if args.fast else [tests])]
-    summary, exit_code, stopped = [], 0, False
+    summary, exit_code, stopped, scrub_bad = [], 0, False, False
     for family, commands in families:
         start = time.monotonic()
         status = "SKIP"
-        if not stopped:
+        if family == "tests" and scrub_bad and not stopped:
+            print("tests: SKIP: scrub failed, push is refused anyway", flush=True)
+        elif not stopped:
             try:
                 if commands is None:
                     commands = rust_commands(root, args.base, args.head)
                 family_env = policy_env if family == "policy" else env
                 if family == "tests" and commands:
                     family_env = test_environment(root, env)
+                failed = []  # policy runs every check and reports all failures
                 for command in commands:
                     cwd = root / "rust" if family == "rust" else root
                     code, output = run(command, cwd, family_env)
@@ -153,8 +178,16 @@ def main(argv=None, root=None):
                         print(output, end="", flush=True)
                         infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     status = "PASS" if not code else ("INFRA" if infra else "FAIL")
+                    if code and family == "policy":
+                        failed.append((status, Path(command[1]).name, first_error(output)))
+                        continue
                     if code:
                         break
+                if failed:
+                    status = "FAIL" if any(f[0] == "FAIL" for f in failed) else "INFRA"
+                    print(f"policy: {len(failed)} check(s) failed:", flush=True)
+                    for _, name, line in failed:
+                        print(f"  {name}: {line}", flush=True)
                 if family == "scrub" and not words and status == "PASS":
                     status = "SKIP"
                     print("scrub: private word list missing; public rules passed", flush=True)
@@ -166,6 +199,7 @@ def main(argv=None, root=None):
             except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
                 status = "FAIL"
             if status in {"FAIL", "INFRA"}:
+                scrub_bad = scrub_bad or (family == "scrub" and status == "FAIL")
                 if status == "FAIL" or exit_code == 1:
                     exit_code = 1
                 else:

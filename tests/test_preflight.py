@@ -131,9 +131,37 @@ def test_all_families_after_scrub_failure(repo, monkeypatch, capsys):
     calls = fake_runner(monkeypatch, "scrub_check.py")
     monkeypatch.setattr(preflight, "rust_commands", lambda *a: [["cargo", "fmt"]])
     assert preflight.main(["--base", "HEAD"], repo) == 1
-    assert len(calls) == 7
-    assert re.findall(r'^(?:PASS|FAIL|SKIP) (\w+) ', capsys.readouterr().out, re.M) == [
-        'scrub', 'policy', 'rust', 'tests']
+    assert len(calls) == 6 and not any(Path(c[0][1]).name == "affected_tests.py" for c in calls)
+    out = capsys.readouterr().out
+    assert re.findall(r'^(?:PASS|FAIL|SKIP) (\w+) ', out, re.M) == ['scrub', 'policy', 'rust', 'tests']
+    assert re.search(r"^SKIP tests ", out, re.M)  # scrub refused the push: no point running tests
+
+
+def test_policy_reports_every_failing_check(repo, monkeypatch, capsys):
+    def run(command, cwd, env):
+        name = Path(command[1]).name
+        bad = {"check_file_size.py": "FAIL a.py: too long\nmore", "check_changelog_docs.py": "FAIL no changelog entry"}
+        return (1, bad[name] + "\n") if name in bad else (0, "")
+
+    monkeypatch.setattr(preflight, "run", run)
+    monkeypatch.setattr(preflight, "rust_commands", lambda *a: [["cargo", "fmt"]])
+    assert preflight.main(["--base", "HEAD"], repo) == 1
+    out = capsys.readouterr().out
+    assert "policy: 2 check(s) failed:" in out
+    assert "  check_file_size.py: FAIL a.py: too long" in out
+    assert "  check_changelog_docs.py: FAIL no changelog entry" in out
+    assert re.search(r"^FAIL policy ", out, re.M)
+
+
+def test_affected_timeout_names_step_bound_and_count(monkeypatch, repo):
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"], output=b'{"tests": ["a", "b", "c"]}\n')
+
+    monkeypatch.setattr(preflight.subprocess, "run", timeout)
+    code, text = preflight.run(["python3", "tools/affected_tests.py"], repo, {})
+    assert code == 1
+    assert text == (f"tests: affected-tests step exceeded its {preflight.TEST_TIMEOUT} second bound "
+                    "(3 selected test paths)\n")
 
 
 def test_retry_recovers(repo, monkeypatch, capsys):
