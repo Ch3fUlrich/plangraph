@@ -75,3 +75,9 @@ validation. Bootstrap calls this installer without reading a legacy checkout.
 State imports must complete before namespace writes. The shared migration lock
 and completion markers enforce that order; old breaker state is archived before
 its path becomes a shim, without replacing active state.
+
+Atomic targets/backups retain private creation modes. Reused Unix lock files are
+restricted to 0600 and must be owned regular files with one link; no-follow opens
+and inode checks refuse swapped paths. Lock files remain persistent, and a held
+lock reports WouldBlock. Windows lock handles refuse reparse following/deletion;
+the user's private directory ACL remains the Windows privacy boundary.

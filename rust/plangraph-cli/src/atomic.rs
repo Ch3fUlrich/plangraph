@@ -26,20 +26,68 @@ pub fn regular(path: &Path) -> io::Result<()> {
 }
 
 pub fn lock(path: &Path) -> io::Result<File> {
-    let lock_path = path.with_file_name(format!(
-        "{}.plangraph-lock",
-        path.file_name().unwrap().to_string_lossy()
-    ));
+    lock_with(path, |_| {})
+}
+fn lock_with(path: &Path, after_check: impl FnOnce(&Path)) -> io::Result<File> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing target name"))?;
+    let lock_path = path.with_file_name(format!("{}.plangraph-lock", name.to_string_lossy()));
     regular(&lock_path)?;
-    let file = match private_options().open(&lock_path) {
+    after_check(&lock_path);
+    let mut options = private_options();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        options
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+    }
+    let file = match options.open(&lock_path) {
         Ok(file) => file,
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-            OpenOptions::new().write(true).open(&lock_path)?
+            options.create_new(false).open(&lock_path)?
         }
         Err(e) => return Err(e),
     };
-    file.try_lock()
-        .map_err(|_| io::Error::other("target busy"))?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(io::Error::other("invalid lock file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid is a read-only identity query.
+        if metadata.nlink() != 1 || metadata.uid() != unsafe { libc::geteuid() } {
+            return Err(io::Error::other("invalid lock ownership or links"));
+        }
+    }
+    match file.try_lock() {
+        Ok(()) => (),
+        Err(std::fs::TryLockError::WouldBlock) => return Err(io::ErrorKind::WouldBlock.into()),
+        Err(std::fs::TryLockError::Error(error)) => return Err(error),
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let current = fs::symlink_metadata(&lock_path)?;
+        if current.file_type().is_symlink()
+            || current.dev() != metadata.dev()
+            || current.ino() != metadata.ino()
+            || current.nlink() != 1
+        {
+            return Err(io::Error::other("lock path changed"));
+        }
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
     Ok(file)
 }
 
@@ -84,4 +132,20 @@ pub fn backup(path: &Path, bytes: &[u8]) -> io::Result<()> {
         fs::remove_file(old)?;
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    #[test]
+    fn lock_swap_to_symlink_cannot_open_or_modify_victim() {
+        let root = tempfile::tempdir().unwrap();
+        let victim = root.path().join("victim");
+        fs::write(&victim, b"unchanged").unwrap();
+        assert!(lock_with(&root.path().join("target"), |path| {
+            std::os::unix::fs::symlink(&victim, path).unwrap();
+        })
+        .is_err());
+        assert_eq!(fs::read(victim).unwrap(), b"unchanged");
+    }
 }

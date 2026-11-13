@@ -1,0 +1,1 @@
+- Harden atomic lock reuse with no-follow opens, private Unix modes, ownership/link checks and stable busy errors; verify atomic replacements and backups already retain private modes.
