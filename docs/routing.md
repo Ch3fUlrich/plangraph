@@ -13,6 +13,13 @@ Exhausting all eligible legs still yields no route; writer priority never bypass
 availability. Role-neutral keeper readiness retains its narrower admission, using
 the current Sol xhigh id so an unavailable default table cannot resurrect plain Sol.
 
+Muse-amber (`opencode-console-muse-spark`) is routed as a review seat and fallback
+writer (D-5198/D-5240). Subscription legs are always tried before pay-as-you-go
+legs; Muse-amber writes only when no subscription writer leg is available. Among
+pay-as-you-go legs, Muse-amber precedes DeepSeek Flash (`deepseek-v4.1-flash`) for
+both review and implement. It keeps `trains_on_data=True`, so privacy-sensitive
+risk-tagged cards skip it. No legs are removed.
+
 Plain Sol and other Sol effort variants remain active, explicit-only catalog legs
 requiring audited overrides. Claude/Fable/Opus/Sonnet/Haiku never enter automatic
 implement routes or fallbacks; explicit picks are unchanged. No legs are deleted.
