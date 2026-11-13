@@ -126,7 +126,7 @@ def test_record_fix_is_sent(tmp_path, capsys):
 @pytest.mark.parametrize("completion", [{}, {"head_sha": "abc"}, {"head_sha": "z" * 40}])
 def test_record_bad_head_sha_refused(tmp_path, capsys, completion):
     assert sv.main(record_dir(tmp_path, "d", live_log=REVIEW,
-                              completion=completion)) == 2
+                              completion=completion), record_wait=0) == 2
     assert "head_sha" in capsys.readouterr().err
 
 

@@ -1,0 +1,1 @@
+- Make seat-record ownership checks portable to Windows and mode checks tolerant of WSL drive mounts without relaxing native POSIX protection; preserve stop-completed OpenCode review text across empty stop steps, wait up to 30 seconds for late completion/output persistence, and document a locked operator repost for transport-only verdict retries (D-5648, D-5658 part B).

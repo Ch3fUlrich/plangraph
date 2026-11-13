@@ -31,12 +31,13 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-from seat_backfill import apply_backfill
-from seat_record import evidence_from_record
+from seat_backfill import apply_backfill, repost_transport
+from seat_record import evidence_from_record, RecordPending
 ROUTE = "/v1/verdict"
 TIMEOUT = 30
 EXIT_IO, EXIT_REFUSED, EXIT_NO_VERDICT, EXIT_PASS_REFUSED = 1, 2, 3, 4
@@ -206,7 +207,7 @@ def send(url, token, payload):
         return exc.code, exc.read(65536).decode("utf-8", "replace")
 
 
-def read_record_identity(seat_dir):
+def read_record_identity(seat_dir, key=None):
     """Read binding identity independently of evidence; absent fields are legacy."""
     record_path = seat_dir / "record.json"
     try:
@@ -219,10 +220,12 @@ def read_record_identity(seat_dir):
         raise ValueError("cannot read record identity") from exc
     if not isinstance(record, dict):
         raise ValueError("cannot read record identity")
+    if key is not None and "item_key" in record and record["item_key"] != key:
+        raise ValueError("record item_key does not match --key")
     return {"item_key": record["item_key"]} if "item_key" in record else {}
 
 
-def main(argv=None):
+def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--key", help="item key to review")
     ap.add_argument("--seat-dir", type=Path)
@@ -251,24 +254,31 @@ def main(argv=None):
         return backfill(args, main)
     if args.key is None:
         ap.error("the following arguments are required: --key")
-    if any(v is None for v in (args.key, args.seat_dir, args.writer_family, args.token_dir)):
-        ap.error("single-record mode requires --key, --seat-dir, --writer-family, --token-dir")
+    if any(v is None for v in (args.key, args.seat_dir, args.token_dir)):
+        ap.error("single-record mode requires --key, --seat-dir, --token-dir")
     writer_families = parse_writer_families(args.writer_family)
     try:
-        record_identity = read_record_identity(args.seat_dir)
+        read_record_identity(args.seat_dir, args.key)
     except ValueError as exc:
         print(f"seat_verdict: refused, {exc}", file=sys.stderr)
         return EXIT_REFUSED
-    if "item_key" in record_identity and record_identity["item_key"] != args.key:
-        print("seat_verdict: refused, record item_key does not match --key", file=sys.stderr)
-        return EXIT_REFUSED
+    if args.writer_family is None:
+        return repost_transport(args, main)
     from_record = not (args.seat_dir / "evidence.json").exists() and (args.seat_dir / "record.json").exists()
     if from_record:
-        try:
-            evidence, text = evidence_from_record(args.seat_dir, cli_writer_families=writer_families)
-        except ValueError as exc:
-            print(f"seat_verdict: refused, record: {exc}", file=sys.stderr)
-            return EXIT_REFUSED
+        deadline = clock() + record_wait
+        while True:
+            try:
+                read_record_identity(args.seat_dir, args.key)
+                evidence, text = evidence_from_record(args.seat_dir, cli_writer_families=writer_families)
+                break
+            except ValueError as exc:
+                remaining = deadline - clock()
+                if isinstance(exc, RecordPending) and remaining > 0:
+                    sleep(min(1, remaining))
+                    continue
+                print(f"seat_verdict: refused, record: {exc}", file=sys.stderr)
+                return EXIT_REFUSED
     else:
         try:
             evidence = json.loads((args.seat_dir / "evidence.json").read_text("utf-8"))

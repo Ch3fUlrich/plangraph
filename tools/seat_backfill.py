@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 
-def apply_backfill(args, item, seat, poster, row):
+def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
     """Use the forward outbox lock without waiting; ambiguous state never sends."""
     from contextlib import redirect_stdout, redirect_stderr
     from io import StringIO
@@ -52,6 +52,9 @@ def apply_backfill(args, item, seat, poster, row):
                     or previous.get("status") in ("sending", "delivered", "skipped")):
                 row["reasons"].append("verdict already terminal or sending")
                 return 0
+            if retry_reason is not None and (previous.get("status") != "retry"
+                                            or previous.get("reason") != retry_reason):
+                raise ValueError("not a transport-only retry")
             phase = "verdict sending journal write"
             atomic_write_private(journal, json.dumps(dict(status="sending",
                 attempts=previous.get("attempts", 0))) + "\n")
@@ -76,6 +79,36 @@ def apply_backfill(args, item, seat, poster, row):
         row["delivery"] = "failed"
         row["reasons"].append(f"{phase} failed: {type(exc).__name__}")
         return 1
+
+
+def repost_transport(args, poster):
+    """Explicit operator repost, sharing the outbox lock and all verifier gates."""
+    import sys
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    row = {"reasons": []}
+    try:
+        if (args.seat_dir / "evidence.json").exists() or args.dry_run:
+            raise ValueError("transport repost requires a record seat without --dry-run")
+        record = json.loads((args.seat_dir / "record.json").read_text("utf-8"))
+        writers = record.get("given_writer_families") if isinstance(record, dict) else None
+        if not isinstance(writers, list) or not writers or any(not isinstance(w, str) for w in writers):
+            raise ValueError("transport repost requires recorded given_writer_families or explicit --writer-family")
+        completion = record.get("completion")
+        head = args.head or (completion.get("head_sha") if isinstance(completion, dict) else None)
+        if not isinstance(head, str) or not head:
+            raise ValueError("transport repost requires completion.head_sha or --head")
+        apply_backfill(SimpleNamespace(backfill_apply=True, url=args.url, token_dir=args.token_dir),
+                       {"key": args.key, "writer_families": writers},
+                       {"seat_dir": args.seat_dir, "head_sha": head}, poster, row,
+                       retry_reason="keeper verdict transport not configured")
+    except (OSError, ValueError) as exc:
+        row["reasons"].append(str(exc))
+    if row.get("delivery") != "delivered":
+        print("seat_verdict: repost refused: " + "; ".join(row["reasons"]), file=sys.stderr)
+        return 1
+    print(f"key={args.key} repost=delivered")
+    return 0
 
 
 def backfill(args, poster, pr_lookup=None):

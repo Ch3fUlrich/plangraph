@@ -6,8 +6,8 @@ A spawner seat run dir (``~/.local/state/plangraph/runs/<run>/``) holds only
 ``evidence.json``/``review.txt`` pair tools/seat_verdict.py consumes, failing
 closed (ValueError) whenever the record cannot witness a completed review.
 The record is bound to its run dir (run_id must equal the dir name) and must be
-uid-owned, not group/world-writable.  ``--head`` binds the completion-time HEAD
-of the run cwd (record completion.head_sha), not the launch commit: the spawner
+uid-owned, not group/world-writable where POSIX metadata is known. ``--head``
+binds the completion-time HEAD of the run cwd (record completion.head_sha), not the launch commit: the spawner
 records no launch-time sha, so a launch binding cannot be checked here.
 """
 from __future__ import annotations
@@ -23,6 +23,9 @@ _HEAD_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 # F8: both spellings count (review/tail.md uses TEST-GAMING).
 _TEST_GAMING = re.compile(r"^TEST[_-]GAMING:[ \t]*(.*)$", re.I | re.M)
 
+class RecordPending(ValueError):
+    """Completion persistence may still supply missing fields."""
+
 def _canon_family(name):
     """Canonical family of a model or family name via seat_verdict's alias table."""
     from seat_verdict import model_family, KNOWN_FAMILIES  # local: seat_verdict imports this module
@@ -32,8 +35,8 @@ def _canon_family(name):
     return family
 
 def _review_text_from_log(live_log: str) -> str:
-    """Lifecycle events select OpenCode mode; otherwise keep plain logs intact."""
-    event_log, texts = False, []
+    """Final-step text, retaining a stop-completed answer across empty stop steps."""
+    event_log, texts, completed, empty_stop = False, [], None, False
     for line in live_log.split("\n"):
         line = line.removesuffix("\r")
         try:
@@ -45,13 +48,27 @@ def _review_text_from_log(live_log: str) -> str:
                 or not isinstance(event.get("part"), dict)):
             continue
         event_log |= event["type"] in ("step_start", "step_finish")
+        empty_stop = False
         if event["type"] == "step_start":
             texts.clear()
         elif event["type"] == "text":
             part = event["part"]
             if isinstance(part.get("text"), str):
                 texts.append(part["text"])
-    return "\n".join(texts) if event_log else live_log
+                if part["text"].strip():
+                    completed = None
+        elif event["type"] == "tool_use":
+            completed = None
+        elif event["type"] == "step_finish":
+            if event["part"].get("reason") == "stop":
+                if any(t.strip() for t in texts):
+                    completed = "\n".join(texts)
+                else:
+                    empty_stop = True  # An empty stop step did not replace the answer.
+            else:
+                completed = None
+    text = completed if empty_stop and completed is not None else "\n".join(texts)
+    return text if event_log else live_log
 
 def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None) -> tuple[dict, str]:
     """Return (evidence, review_text) for a record.json-only seat run dir.
@@ -75,7 +92,10 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
     if not isinstance(record, dict):
         raise ValueError("record.json is not an object")
     # F6: bind the record to its directory and to this uid's write access.
-    if stat.st_uid != os.getuid() or stat.st_mode & 0o022:
+    windows = os.name == "nt"
+    mode_unknown = windows or re.match(r"^/mnt/[a-zA-Z]/", record_path.resolve().as_posix())
+    if (not windows and stat.st_uid != os.getuid()
+            or not mode_unknown and stat.st_mode & 0o022):
         raise ValueError("record.json must be owned by the current uid and "
                          "not group/world-writable")
     run_id = record.get("run_id")
@@ -98,7 +118,8 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
     completion = record.get("completion")
     head_sha = completion.get("head_sha") if isinstance(completion, dict) else None
     if not isinstance(head_sha, str) or not _HEAD_SHA.match(head_sha):
-        raise ValueError("record completion.head_sha missing or not 40 hex chars")
+        error = RecordPending if head_sha in (None, "") else ValueError
+        raise error("record completion.head_sha missing or not 40 hex chars")
     try:
         live_log = (run_dir / "live.log").read_text("utf-8")
     except OSError:
@@ -113,7 +134,9 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
             raise ValueError("stdout_tail accumulates every leg; live.log required")
         review_text = str(record.get("stdout_tail") or "")
     if not review_text.strip():
-        raise ValueError("record has no review text (live.log and stdout_tail empty)")
+        error = RecordPending if not record.get("stdout_tail") else ValueError
+        detail = "no final text in live.log" if live_log.strip() else "live.log and stdout_tail empty"
+        raise error(f"record has no review text ({detail})")
     served = record.get("served_model")
     leg = record.get("chosen_leg")
     chosen = leg.get("model") if isinstance(leg, dict) else None
