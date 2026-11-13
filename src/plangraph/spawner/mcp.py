@@ -155,11 +155,12 @@ class MCPSpawnerServer:
 
     def __init__(self, runner: SpawnerRunner | None = None, *, state=None,
                  session_run=None, session_sleep=None):
-        self.runner = runner or SpawnerRunner()
         self._session_run = session_run
         self._session_sleep = session_sleep
         from .runner import spawn_service
-        self.service = spawn_service(self.runner, state=state)
+        self.service = spawn_service(runner, state=state)
+        self.runner = self.service.runner
+        self.service.fresh_tree = runner is None
 
     def _sessions(self):
         """Fresh Sessions bound to the service state root (SESSION-SPAWN-MCP)."""

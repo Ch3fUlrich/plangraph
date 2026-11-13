@@ -192,17 +192,19 @@ def test_cancel_injected_windows_killer(tmp_path):
 @pytest.mark.parametrize('wait', ['0', '0.05'])
 def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
     import plangraph.spawner.cli as cli
-    import threading
-    import io
+    import threading, io
+    from contextlib import contextmanager
+    @contextmanager
+    def local_tree(*args): yield dict(tree_sha='a' * 40, tree_path=str(tmp_path))
+    monkeypatch.setattr(SpawnService, 'code_tree', staticmethod(local_tree))
     threads = []
     class Supervisor:
         def __init__(self, *a, **kw):
-            self.stdin = io.StringIO()
-            self.stdout = self
+            self.stdin, self.stdout = io.StringIO(), self
         def readline(self):
             payload = json.loads(self.stdin.getvalue())
-            ready = threading.Event()
-            result = []
+            assert payload.pop('_tree')['tree_sha'] == 'a' * 40; payload.pop('_cwd')
+            ready, result = threading.Event(), []
             def worker():
                 async def run():
                     async def factory(*a, **kw):
@@ -212,13 +214,11 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
                             'time.sleep(.4); print("done")', **kw)
                     service = spawn_service(SpawnerRunner(process_factory=factory), payload.pop('state'))
                     record = await service.spawn(**payload)
-                    result.append(record)
-                    ready.set()
+                    result.append(record); ready.set()
                     await service.tasks[record['run_id']]
                 asyncio.run(run())
             thread = threading.Thread(target=worker)
-            threads.append(thread)
-            thread.start()
+            threads.append(thread); thread.start()
             assert ready.wait(3)
             return json.dumps(result[0])
         def close(self):

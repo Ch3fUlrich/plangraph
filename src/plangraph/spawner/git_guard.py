@@ -24,6 +24,138 @@ import uuid
 from plangraph.routing_errors import SpawnRefused
 
 
+@contextmanager
+def run_tree(state, repo=None):
+    """Pin one immutable code tree; leases bridge selection to durable run records."""
+    import fcntl
+    import json
+    state = Path(state).resolve()
+    repo = Path(os.environ.get('PLANGRAPH_SPAWNER_REPO') or repo or
+                Path(__file__).resolve().parents[3])
+    root = state / 'trees'
+    def git(*args):
+        return subprocess.run(['git', '-C', str(repo), *map(str, args)],
+            check=True, capture_output=True, text=True, timeout=10 if args[0] == 'fetch' else 30).stdout.strip()
+    def valid(path):
+        return (not path.is_symlink() and path.is_dir() and
+                re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', path.name))
+    with run_worktree_lock(root):
+        stale = None
+        try:
+            git('fetch', '--no-write-fetch-head', 'origin',
+                '+refs/heads/main:refs/remotes/origin/main')
+        except (OSError, subprocess.SubprocessError) as exc:
+            stale = 'fetch_timeout' if isinstance(exc, subprocess.TimeoutExpired) else 'fetch_failed'
+        existing = sorted((p for p in root.iterdir() if valid(p)),
+                          key=lambda p: p.stat().st_mtime, reverse=True)
+        try:
+            sha = (existing[0].name if stale and existing else
+                   git('rev-parse', '--verify', 'origin/main^{commit}'))
+        except (OSError, subprocess.SubprocessError):
+            sha = git('rev-parse', '--verify', 'HEAD^{commit}')
+            stale = stale or 'main_unavailable'
+        path = root / sha
+        if path.exists() and not valid(path):
+            raise RuntimeError('run_tree_invalid')
+        if not path.exists():
+            git('worktree', 'add', '--detach', path, sha)
+        os.utime(path, None)  # Startup grace also covers spawnd's adapter-to-record handoff.
+        lease = (root / (sha + '.lease')).open('a+b')
+        fcntl.flock(lease, fcntl.LOCK_SH)
+        # Unknown/corrupt records withhold cleanup, never admission.
+        try:
+            live = set()
+            for record in (state / 'runs').glob('*/record.json'):
+                row = json.loads(record.read_text())
+                if row.get('ended') is None or row.get('survivors') or row.get('status') in ('running', 'queued'):
+                    live.add(row.get('tree_sha'))
+            for old in existing:
+                if old == path or old.name in live or time.time() - old.stat().st_mtime <= 7 * 86400:
+                    continue
+                with (root / (old.name + '.lease')).open('a+b') as guard:
+                    try:
+                        fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        continue
+                    git('worktree', 'remove', old)  # Never force-remove a dirty tree.
+        except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError):
+            pass
+    try:
+        yield dict(tree_sha=sha, tree_path=str(path), **({'tree_stale': stale} if stale else {}))
+    finally:
+        lease.close()
+
+
+async def fresh_spawn(service, options):
+    """A fresh per-run supervisor, not a reload/restart of the owning MCP service."""
+    import asyncio
+    import json
+    import sys
+    state = service.state.resolve()
+    context = run_tree(state)
+    tree = await asyncio.to_thread(context.__enter__)
+    child = None
+    try:
+        env = dict(os.environ, PYTHONPATH=str(Path(tree['tree_path']) / 'src'),
+                   PLANGRAPH_RUN_TREE_SHA=tree['tree_sha'], PYTHONDONTWRITEBYTECODE='1')
+        child = await asyncio.create_subprocess_exec(sys.executable, '-m',
+            'plangraph.spawner.cli', '--supervise', cwd=tree['tree_path'], env=env,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            limit=4 * 1024 * 1024, start_new_session=True)
+        payload = {k: v for k, v in options.items() if k != 'wait_seconds'}
+        child.stdin.write((json.dumps(dict(payload, state=str(state), _tree=tree,
+            _cwd=getattr(getattr(service, 'runner', None), 'default_cwd', os.getcwd()))) + '\n').encode())
+        await child.stdin.drain()
+        child.stdin.close()
+        line = await child.stdout.readline()
+        if not line:
+            raise RuntimeError('run_tree_worker_failed')
+        result = json.loads(line)
+        async def finish():
+            try:
+                await child.wait()
+            finally:
+                context.__exit__(None, None, None)
+        task = asyncio.create_task(finish())
+        for record in result.get('seats', result.get('writers', [result])):
+            service.tasks[record['run_id']] = task
+        if options.get('wait_seconds', 0) is None:
+            await task
+        elif options.get('wait_seconds', 0) > 0:
+            try:
+                await asyncio.wait_for(asyncio.shield(task), options['wait_seconds'])
+            except asyncio.TimeoutError:
+                pass
+        if 'run_id' in result and hasattr(service, 'result'):
+            return service.result(result['run_id'])
+        return result
+    except BaseException:
+        if child is not None and child.returncode is None:
+            child.kill()
+            await child.wait()
+        context.__exit__(None, None, None)
+        raise
+
+
+def worker_environment(service):
+    """Real services select a tree; injected launcher-only services retain local imports."""
+    from contextlib import nullcontext
+    import plangraph
+    import sys
+    env = os.environ.copy()
+    if hasattr(service, 'code_tree'):
+        return env, service.code_tree(service.state)
+    root = str(Path(plangraph.__file__).resolve().parent.parent)
+    try:
+        subprocess.run([sys.executable, '-I', '-c', 'import plangraph'],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    env['PYTHONPATH'] = (root + os.pathsep + env.get('PYTHONPATH', '') if Path(root).name == 'src'
+                         else env.get('PYTHONPATH', '') + os.pathsep + root)
+    return env, nullcontext(None)
+
+
 class RunWorktreeDependencyNotMerged(SpawnRefused):
     """A declared finished dependency is absent from the fetched main history."""
 

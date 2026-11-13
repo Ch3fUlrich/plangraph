@@ -156,6 +156,9 @@ class SeatSpawnMixin:
             from plangraph.planner.routing import SpawnRefused
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
+            if getattr(self, 'fresh_tree', False) and not options.get('dry_run'):
+                from .git_guard import fresh_spawn
+                return await fresh_spawn(self, options)
             admitted = self.admit_spawn(options, card=card)
             if admitted is not None:
                 return admitted

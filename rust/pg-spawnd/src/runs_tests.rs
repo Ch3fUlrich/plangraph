@@ -45,12 +45,14 @@ fn gitconfig_guard_only_arms_writers() {
                         stdin: Some("unique-input".into()),
                         prompt: Some("unique-input".into()),
                         warnings: None,
-                        events: None,
+                        events: Some(vec![json!({"event":"run_tree", "tree_sha":"abc", "tree_stale":"fetch_failed"}).as_object().unwrap().clone()]),
                     })
                 },
             )
             .unwrap_or_else(|_| panic!("spawn failed"));
         let writer = role != "review" && role != "research";
+        assert_eq!(result["tree_sha"], "abc");
+        assert_eq!(result["tree_stale"], "fetch_failed");
         assert_eq!(
             result.get("gitconfig_guard"),
             writer.then_some(&json!(true))

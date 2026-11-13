@@ -218,11 +218,16 @@ def test_cli_flag_is_opt_in(tmp_path, monkeypatch, capsys):
 @pytest.mark.parametrize('enabled', [None, False, True])
 def test_cli_overflow_forwards_worktree_flag(repository, tmp_path, monkeypatch, capsys, enabled):
     import io
+    from contextlib import contextmanager
     from plangraph.spawner import cli, overflow, seat_spawn
     from plangraph.spawner.service import SpawnService
     from plangraph.planner.routing import SpawnPlan
     from plangraph.planner.legs import DEFAULT_LEGS
     _, repo, _ = repository
+    @contextmanager
+    def local_tree(*args):
+        yield dict(tree_sha='a' * 40, tree_path=str(repo))
+    monkeypatch.setattr(SpawnService, 'code_tree', staticmethod(local_tree))
     monkeypatch.chdir(repo)
     config = tmp_path / 'overflow.json'
     config.write_text(json.dumps({'public_repos': [str(repo)], 'hosts': {'invented': {}}}))
@@ -249,7 +254,10 @@ def test_cli_overflow_forwards_worktree_flag(repository, tmp_path, monkeypatch, 
             self.stdin, self.stdout = Input(), self
         def readline(self):
             payload = json.loads(self.stdin.getvalue())
+            assert payload.pop('_tree')['tree_sha'] == 'a' * 40
+            assert payload.pop('_cwd') == str(repo)
             service = cli.SpawnService(state=payload.pop('state'))
+            service.fresh_tree = False  # This fake is already the selected per-run worker.
             assert payload['run_worktree'] == (enabled is True)
             return json.dumps(asyncio.run(service.spawn(**payload))) + '\n'
         def close(self):

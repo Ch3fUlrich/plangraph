@@ -170,6 +170,25 @@ class WindowsEnvIncomplete(Exception):
     pass
 
 
+def fresh_main():
+    """spawnd's per-run adapter imports launch construction from the selected tree."""
+    import subprocess
+    import sys
+    from .git_guard import run_tree
+    request = json.load(sys.stdin)
+    with run_tree(request['state']) as tree:
+        env = dict(os.environ, PYTHONPATH=str(Path(tree['tree_path']) / 'src'),
+                   PLANGRAPH_RUN_TREE_SHA=tree['tree_sha'], PYTHONDONTWRITEBYTECODE='1')
+        result = subprocess.run([sys.executable, '-m', 'plangraph.spawner.cli',
+            '--state', request['state'], 'launch-spec'], input=json.dumps(request),
+            cwd=tree['tree_path'], env=env, text=True, stdout=subprocess.PIPE, timeout=60)
+        if result.returncode == 0:
+            spec = json.loads(result.stdout)
+            spec.setdefault('events', []).append(dict(event='run_tree', **tree))
+            print(json.dumps(spec))
+        return result.returncode
+
+
 def main(stdin, stdout, stderr) -> int:
     try:
         try:
@@ -196,3 +215,7 @@ def main(stdin, stdout, stderr) -> int:
     except Exception as exc:
         stderr.write(f'launch-spec failed: {type(exc).__name__}\n')
         return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(fresh_main())

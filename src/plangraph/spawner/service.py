@@ -3,7 +3,7 @@ from __future__ import annotations
 from .env_redact import first_reason
 from .gateway_witness import witness_order, witness_gate_legs
 from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
-from .git_guard import prepare_worktree, writer_launch
+from .git_guard import prepare_worktree, writer_launch, run_tree
 from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
 from dataclasses import asdict, replace
@@ -16,7 +16,9 @@ from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
 from .item_key import annotate_item
 class SpawnService(SeatSpawnMixin):
+    code_tree = staticmethod(run_tree)
     def __init__(self, runner=None, state=None, leg_reader=None):
+        self.fresh_tree = False  # Library/injected services stay in-process; MCP opts into workers.
         self.runner = runner or SpawnerRunner()
         self.state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE',
             Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))

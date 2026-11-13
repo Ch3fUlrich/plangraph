@@ -12,6 +12,12 @@ from plangraph.spawner.runner import JobInfo, spawn_service
 
 def test_supervisor_imports_without_install(tmp_path, monkeypatch, capsys):
     from pathlib import Path
+    from contextlib import contextmanager
+    from plangraph.spawner.service import SpawnService
+    @contextmanager
+    def code_tree(*args):
+        yield dict(tree_sha='a' * 40, tree_path=str(Path(cli.__file__).resolve().parents[3]))
+    monkeypatch.setattr(SpawnService, 'code_tree', staticmethod(code_tree))
     monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: SimpleNamespace(returncode=1))
     original = cli._start_supervisor
     received = []

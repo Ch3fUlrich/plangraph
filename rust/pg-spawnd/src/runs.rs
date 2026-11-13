@@ -86,6 +86,17 @@ impl Runs {
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
+        if let Some(tree) = launch.events.as_ref().and_then(|events| {
+            events
+                .iter()
+                .find(|e| e.get("event").and_then(Value::as_str) == Some("run_tree"))
+        }) {
+            for key in ["tree_sha", "tree_path", "tree_stale"] {
+                if let Some(value) = tree.get(key) {
+                    base[key] = value.clone();
+                }
+            }
+        }
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);

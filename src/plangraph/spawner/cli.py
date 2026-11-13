@@ -76,7 +76,14 @@ def _prune_supervisor_logs(state):
 
 def _supervise():
     payload = json.loads(sys.stdin.readline())
+    tree = payload.pop('_tree', {})
     service = SpawnService(state=payload.pop('state'))
+    if '_cwd' in payload: service.runner.default_cwd = payload.pop('_cwd')
+    save = service._save
+    def save_tree(record):
+        for key, value in tree.items(): record.setdefault(key, value)
+        return save(record)
+    service._save = save_tree
     async def run():
         try:
             record = await service.spawn(**payload, wait_seconds=0)
@@ -88,7 +95,7 @@ def _supervise():
             return record['exit_code']
         print(json.dumps(record), flush=True)
         sys.stdout.close()
-        for run in record.get('seats') or [record]:
+        for run in record.get('seats') or record.get('writers') or [record]:
             if run['run_id'] in service.tasks:
                 await service.tasks[run['run_id']]
         return 0
@@ -216,20 +223,9 @@ def main(argv=None):
             if args.dry_run:
                 result = asyncio.run(service.spawn(**payload, wait_seconds=None))
             else:
-                import plangraph
-                env = os.environ.copy()
-                root = str(Path(plangraph.__file__).resolve().parent.parent)
-                try:
-                    installed = subprocess.run([sys.executable, '-I', '-c', 'import plangraph'],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0
-                except (OSError, subprocess.TimeoutExpired):
-                    installed = False
-                checkout = (any((Path(root).parent / name).is_file() for name in ('pyproject.toml', 'setup.cfg'))
-                            or (Path(root).name == 'src' and (Path(root).parent / '.git').exists()))
-                if checkout:
-                    env['PYTHONPATH'] = root + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
-                elif not installed:
-                    env['PYTHONPATH'] = (env['PYTHONPATH'] + os.pathsep if env.get('PYTHONPATH') else '') + root
+                from .git_guard import worker_environment
+                service.state = service.state.resolve()
+                env, context = worker_environment(service)
                 # Drain fd 2 in the child so Python AND native writes rotate, even
                 # after the launching CLI exits. Keep the startup tail readable.
                 service.state.mkdir(parents=True, exist_ok=True)
@@ -319,12 +315,13 @@ finally:
     thread.join(timeout=5)
 raise SystemExit(code)
 '''
-                with os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
+                with context as tree, os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
+                    if tree: env.update(PYTHONPATH=str(Path(tree['tree_path']) / 'src'), PLANGRAPH_RUN_TREE_SHA=tree['tree_sha'], PYTHONDONTWRITEBYTECODE='1')
                     child = _start_supervisor([sys.executable, '-c', bootstrap, str(log_path)],
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
-                        env=env, text=True, encoding="utf-8", errors="replace", **background_process_options(new_session=True, platform=os.name))
+                        cwd=tree['tree_path'] if tree else None, env=env, text=True, encoding="utf-8", errors="replace", **background_process_options(new_session=True, platform=os.name))
                     try:
-                        child.stdin.write(json.dumps(dict(payload, state=str(service.state))) + '\n')
+                        child.stdin.write(json.dumps(dict(payload, state=str(service.state), **(dict(_tree=tree, _cwd=service.runner.default_cwd) if tree else {}))) + '\n')
                         child.stdin.close()
                     except BrokenPipeError:
                         pass  # Read the startup diagnostic below, including early import failures.
