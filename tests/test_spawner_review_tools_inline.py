@@ -97,7 +97,7 @@ def test_tools_invalid_diff_ref_refused(diff_ref):
 @pytest.mark.parametrize('scenario, launches, terminal', [
     ('verdict', 2, False), ('twice', 2, True), ('error', 2, True),
     ('no-cap', 1, True), ('normal', 1, False), ('non-review', 1, False),
-    ('already-capped', 1, True), ('stderr-error', 2, True),
+    ('already-capped', 2, True), ('stderr-error', 2, True),
     ('zero-exit', 2, True), ('cancelled', 1, False),
     ('timeout', 1, False), ('retry-timeout', 2, False), ('deadline', 1, True),
     ('provider-stop', 2, True), ('thin-budget', 1, True),
@@ -199,17 +199,21 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     assert len(calls) == launches
     assert service.result(record['run_id']) == record
     assert record['ended'] >= record['started'] and not service._running_records and not runner._tasks
-    assert (record.get('reason') == 'reasoning_output_limit') == terminal
+    reason = 'reasoning_output_limit' if scenario in ('error', 'stderr-error') else 'reasoning_only_length'
+    assert (record.get('reason') == reason) == terminal
     real = [a for a in record['attempts'] if a['status'] != 'skipped']
     assert len(real) == launches
     if launches == 2:
         first, second = [json.loads(c[1]['env']['OPENCODE_CONFIG_CONTENT']) for c in calls]
         model = chosen.model.split('/', 1)[1]
-        assert 'thinking' not in first['providers']['mimo']['models'][model].get('body', {})
+        assert first['providers']['mimo']['models'][model]['body']['thinking'] == {'type': 'disabled'}
         assert second['providers']['mimo']['models'][model]['body']['thinking'] == {'type': 'disabled'}
         assert first['permission'] == second['permission']
         assert all(c[0][c[0].index('--model') + 1] == chosen.model for c in calls)
-        assert runner.jobs[record['job_id']].task_prompt == next(iter(runner.jobs.values())).task_prompt
+        from plangraph.spawner.opencode_answer import retry_prompt
+        original = next(iter(runner.jobs.values())).task_prompt
+        assert runner.jobs[record['job_id']].task_prompt == retry_prompt(original)
+        assert retry_prompt(original).split('=== INLINE DIFF (', 1)[1] == original.split('=== INLINE DIFF (', 1)[1]
         assert runner.jobs[record['job_id']]._watchdog_limits['max_s'] < next(iter(runner.jobs.values()))._watchdog_limits['max_s']
         assert record['reasoning_retry'] == 1
         assert any(e['event'] == 'opencode_reasoning_exhausted' for e in record['events'])
@@ -223,12 +227,12 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
         assert record['writer_family'] == 'fixture-family'
         assert continuation.await_count == 0
         assert all(any(e['event'] == 'opencode_reasoning_exhausted' for e in a['events']) for a in real)
-        assert any(e['event'] == 'reasoning_output_limit' for e in record['events'])
+        assert any(e['event'] == reason for e in record['events'])
         if dispatch == 'routed':
             job = runner.jobs[record['job_id']]
             assert record['request_side_model'] == job.request_side_model and record['witness_kind'] == job.witness_kind
             assert record['served_model_mismatch'] == any(e.get('event') == 'served_model_mismatch' for e in job.events)
-            assert record['completion']['event'] == 'FAILED' and record['completion']['reason'] == 'reasoning_output_limit'
+            assert record['completion']['event'] == 'FAILED' and record['completion']['reason'] == reason
             assert record['error'] and record['completion']['rc'] == job.exit_code
             assert all(a['request_side_model'] == chosen.model and a['witness_kind'] == 'hermetic-witness' for a in real)
     if scenario in ('cancelled', 'ordinary-cancelled', 'retry-cancelled'):

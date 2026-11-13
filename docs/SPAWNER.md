@@ -110,27 +110,27 @@ Before decoding display stdout, `opencode_answer.record_steps` retains each
 `output_tokens` and `reasoning_tokens`; absent usage remains null, not zero.
 Structured `output-limit` errors and the matching OpenCode stderr diagnostic
 add `opencode_output_limit`. These are diagnostic events, not served-model witnesses.
-A final `length` step with output zero, or that error with no text/output,
+A final `length` step with positive reasoning usage and no answer text (even output 1), legacy output-zero length, or that error with no text/output,
 adds `opencode_reasoning_exhausted`; later completed output is not retried.
 Display-text decoding also protects plain/mixed stdout answers; diagnostic-only JSON, including blank separator lines, is not answer text.
 The monitor's events reach `record.json` through either dispatch path.
 
 For an OpenCode inline `review`, shared `SeatSpawnMixin._launch_leg` retries
-once with the same prompt, model and harness, never unchanged. MiMo v2.6 Flash
+once with the same evidence, model and harness, never unchanged. MiMo v2.6 Flash
 and Pro use model-local `body.thinking.type=disabled` (zero reasoning budget)
-in the isolated child config; the root config and other roles are unchanged.
-An already-disabled or unsupported control is unavailable, not an unchanged retry.
+in the isolated child's `OPENCODE_CONFIG_CONTENT.providers.mimo.models[model].body` on the first attempt too; the root config and other roles are unchanged.
+An already-disabled cap permits one changed-instruction retry; unsupported controls refuse.
 The failed attempt and its events stay in the record, with `reasoning_retry=1`
 saved before the retry. Tool denial, fresh job isolation and the original review
-wall deadline remain in force. No new retry loop or provider-health booking is added.
-The retry requires more than 30 seconds of remaining wall budget. Base-service launches keep their original shielded monitor cancellation and ownership fields.
+wall deadline remain in force; the retry is additionally capped at 120 seconds.
+Its instruction is `answer now, findings then VERDICT line, no further analysis`; inlined context/diff blocks are retained verbatim, replacing preceding instructions.
+Document-only evidence is retained in full. No provider-health booking is added. The retry requires more than 30 seconds of remaining wall budget. Base-service launches keep their original shielded monitor cancellation and ownership fields.
 Repeated zero-output exhaustion, an unavailable cap, or no remaining retry budget
-ends the run `failed` with terminal `reason: reasoning_output_limit`; no spare leg
-or writer continuation runs. Cancellation, timeout and kill-incomplete still win.
+ends the run `failed` with terminal `reason: reasoning_only_length` for recorded reasoning length stops (`reasoning_output_limit` for legacy output-limit errors); no spare leg or writer continuation runs. Cancellation, timeout and kill-incomplete still win.
 Terminal status, reason, attempts and events are saved at the shared launch boundary before either caller returns; routed exhaustion keeps normal failure witness metadata, and both callers finalize `ended` and release monitor registrations in `finally`.
-Normal output, nonzero-output truncation and non-review roles retain existing behavior except that base-service watchdog exits now retain one attempt row, matching routed dispatch; `terminal_record` adds no rows, retries do not duplicate watchdog rows, and cancellation rows are unchanged.
-Hermetic coverage is in `tests/test_spawner_review_tools_inline.py` and
-`tests/test_spawner_runner_answer.py`; the live #768 seat is an after-merge operator check.
+`run_watchdog.collect` detects reasoning-only length in stdout incrementally, reaps the hanging harness and returns its events immediately, before the wall timeout.
+Normal answer text, non-review roles and genuine watchdog/cancel/kill-incomplete outcomes retain their existing handling; retries do not duplicate attempt rows.
+Hermetic coverage is in `tests/test_spawner_review_tools_inline.py` and `tests/test_spawner_runner_answer.py`, plus recorded open-pipe regressions in `tests/test_spawner_reasoning_only_length.py`. Live proof and automatic prompt splitting are deferred to the next slice (D-5641/D-5642).
 
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:

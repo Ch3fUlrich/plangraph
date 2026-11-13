@@ -4,6 +4,53 @@ import json
 from .env_redact import normalize
 
 
+def reasoning_only_length(step):
+    return (step.get('finish_reason') == 'length'
+            and (step.get('reasoning_tokens') or 0) > 0)
+
+
+class ReasoningLengthGate:
+    """Wake collection on a reasoning-only length frame, even with open pipes."""
+    def __init__(self, job, stopped):
+        from .exit_outcome import is_opencode
+        self.active = is_opencode(job) and job.role == 'review'
+        self.stopped, self.exhausted = stopped, False
+        self.pending, self.saw_text = '', False
+
+    def feed(self, text):
+        if not self.active:
+            return
+        lines = (self.pending + text).split('\n')
+        self.pending = lines.pop()
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                self.saw_text |= bool(line.strip())
+                continue
+            if not isinstance(event, dict) or not isinstance(event.get('part'), dict):
+                continue
+            part = event['part']
+            if event.get('type') == 'text':
+                self.saw_text |= isinstance(part.get('text'), str) and bool(part['text'].strip())
+            if event.get('type') == 'step_finish' and not self.saw_text:
+                tokens = part.get('tokens')
+                reasoning = tokens.get('reasoning') if isinstance(tokens, dict) else None
+                if part.get('reason') == 'length' and type(reasoning) is int and reasoning > 0:
+                    self.exhausted = True
+        if self.saw_text:
+            self.exhausted = False
+        if self.exhausted:
+            self.stopped.set()
+
+
+def retry_prompt(prompt):
+    """Replace review instructions, retaining every inlined evidence block."""
+    starts = [prompt.find(marker) for marker in ('\n\n=== CONTEXT PACK ===', '\n\n=== INLINE DIFF (')]
+    start = min((i for i in starts if i >= 0), default=0)
+    return 'answer now, findings then VERDICT line, no further analysis\n\n' + prompt[start:]
+
+
 def record_steps(job, stdout, stderr, env):
     """Retain diagnostic step usage before stdout becomes display text, not a witness."""
     from .exit_outcome import is_opencode
@@ -36,16 +83,18 @@ def record_steps(job, stdout, stderr, env):
     job.events.extend(steps)
     if output_limit:
         job.events.append(dict(event='opencode_output_limit'))
-    # A zero-output length step followed by a real answer is already recovered.
-    if not saw_text and not any((s['output_tokens'] or 0) > 0 for s in steps) and (
+    length = bool(steps and reasoning_only_length(steps[-1]))
+    # Text, not an output-token counter (which can be 1 with no text), owns recovery.
+    if not saw_text and (length or not any((s['output_tokens'] or 0) > 0 for s in steps) and (
             steps and steps[-1]['finish_reason'] == 'length' and steps[-1]['output_tokens'] == 0
-            or output_limit):
-        # Probe the first child's isolated config on a copy; only the retry mutates its own env.
+            or output_limit)):
+        # Probe the isolated cap on a copy; retry also changes the instruction.
         job.events.append(dict(event='opencode_reasoning_exhausted',
-                               cap_available=cap_reasoning(dict(env), job.model_or_combo)))
+                               cap_available=cap_reasoning(dict(env), job.model_or_combo, allow_existing=True),
+                               **({'reason': 'reasoning_only_length'} if length else {})))
 
 
-def cap_reasoning(env, model):
+def cap_reasoning(env, model, *, allow_existing=False):
     """MiMo's documented thinking-off control: a zero reasoning budget for this run only."""
     from .mimo_policy import ACCEPTED_MIMO_IDS
     if model not in ACCEPTED_MIMO_IDS:
@@ -59,8 +108,10 @@ def cap_reasoning(env, model):
                 entry.get('package', block.get('package')) != '@opencode/ai/providers/openai-compatible'):
             return False
         body = entry.setdefault('body', {})
-        if not isinstance(body, dict) or body.get('thinking') == {'type': 'disabled'}:
+        if not isinstance(body, dict):
             return False
+        if body.get('thinking') == {'type': 'disabled'}:
+            return allow_existing
         body['thinking'] = {'type': 'disabled'}
         env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
         return True

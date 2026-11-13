@@ -451,7 +451,7 @@ class SpawnerRunner:
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
                 from .opencode_answer import cap_reasoning
-                if reasoning_cap and not cap_reasoning(child_env, model_or_combo):
+                if render_reason is None and (reasoning_cap or model_or_combo.startswith('mimo/')) and not cap_reasoning(child_env, model_or_combo, allow_existing=True):
                     render_reason = 'reasoning_output_limit: no supported reasoning cap'
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
@@ -1096,7 +1096,7 @@ def spawn_service(*args, **kwargs):
                         job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
                             role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
-                        if record.get('reason') == 'reasoning_output_limit':
+                        if record.get('reason') in ('reasoning_output_limit', 'reasoning_only_length'):
                             return
                         if job.survivors:   # kill_incomplete: terminal, no fall-through leg, no second writer
                             record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason='kill_incomplete'))

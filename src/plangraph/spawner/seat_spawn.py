@@ -252,7 +252,7 @@ class SeatSpawnMixin:
 
         def record_attempt(job):
             record['attempts'].append(dict(leg=asdict(chosen), job_id=job.job_id,
-                status='failed', skip_reason='reasoning_output_limit',
+                status='failed', skip_reason=failure,
                 served_model=job.served_model, served_family=job.served_family,
                 served_witness_reason=job.served_witness_reason,
                 **(dict(request_side_model=job.request_side_model, witness_kind=job.witness_kind) if routed else {}),
@@ -263,6 +263,7 @@ class SeatSpawnMixin:
         evidence = exhausted(job)
         if evidence is None:
             return job
+        failure = evidence.get('reason', 'reasoning_output_limit')
         if self._path(record['run_id']).with_name('cancelled').exists():
             job.status = 'cancelled'
             return job
@@ -274,21 +275,25 @@ class SeatSpawnMixin:
                                          thinking='disabled'))
             record['reasoning_retry'] = 1  # durable before launching the sole retry
             self._save(record)
+            from .opencode_answer import retry_prompt
             job = await launch(**dict(options, reasoning_cap=True,
-                watchdog=dict(limits, max_s=remaining, hard_max=True)))
+                prompt=retry_prompt(options.get('prompt', '')),
+                watchdog=dict(limits, max_s=min(remaining, 120), hard_max=True)))
             if protected(job):
                 return job
             cap_unavailable = any(e.get('event') == 'render_refused' and
                 str(e.get('reason', '')).startswith('reasoning_output_limit:') for e in job.events)
-            if exhausted(job) is None and not cap_unavailable:
+            evidence = exhausted(job)
+            if evidence is None and not cap_unavailable:
                 return job
+            failure = (evidence or {}).get('reason', failure)
         job.status, job.exit_code = 'failed', job.exit_code or 1
-        job.events.append(dict(event='reasoning_output_limit'))
+        job.events.append(dict(event=failure))
         record_attempt(job)
         if routed:
             record.update(request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                 served_model_mismatch=any(e.get('event') == 'served_model_mismatch' for e in job.events))
-        record.update(status='failed', reason='reasoning_output_limit', exit_code=job.exit_code,
+        record.update(status='failed', reason=failure, exit_code=job.exit_code,
             served_model=job.served_model, served_family=job.served_family,
             served_witness_reason=job.served_witness_reason,
             writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,

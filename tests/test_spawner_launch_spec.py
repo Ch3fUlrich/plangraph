@@ -20,7 +20,8 @@ def request_data(tmp_path, monkeypatch):
     from plangraph.planner import legs
     monkeypatch.setattr(legs, 'DEFAULT_LEGS', spec.DEFAULT_LEGS)
     monkeypatch.setattr(opencode_overlay, 'overlay_env', lambda env: env)
-    monkeypatch.setattr(opencode_render, 'render_gateway_providers', lambda *a: None)
+    monkeypatch.setattr(opencode_render, 'render_gateway_providers', lambda env, model:
+        env.update(OPENCODE_CONFIG_CONTENT=json.dumps({'providers': {'mimo': {'package': '@opencode/ai/providers/openai-compatible', 'models': {model.split('/', 1)[1]: {}}}}})) if model.startswith('mimo/') else None)
     monkeypatch.setattr(host_keys, 'add_host_keys', lambda *a, **kw: None)
     async def available(*a, **kw):
         return None
