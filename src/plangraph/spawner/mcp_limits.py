@@ -90,7 +90,8 @@ SPAWN_MODULES = (
         'runner', 'service', 'leg_state', 'target', 'private_io', 'opencode_overlay',
         'opencode_isolation', 'gateway_witness', 'opencode_answer', 'resolver', 'probe_cleanup',
         'run_watchdog', 'win_recorded', 'proc_kill', 'env_redact', 'question_bridge',
-        'cancel_job', 'hung_capture', 'seat_artifact', 'stall_watchdog', 'fixer', 'inline_diff')))
+        'cancel_job', 'hung_capture', 'seat_artifact', 'stall_watchdog', 'fixer', 'inline_diff',
+        'context_pack', 'prompt_guard')))
 GUARDED_TOOLS = ('plangraph_agent_spawn', 'plangraph_session_launch', 'plangraph_session_relaunch')
 
 

@@ -157,12 +157,27 @@ def test_session_starts_are_guarded_other_tools_are_not(tmp_path, name):
 
 
 def test_server_import_eagerly_loads_spawn_dependencies(tmp_path):
-    modules = ['plangraph.spawner.' + name for name in ('runner', 'bench_entry', 'leg_probe', 'remote_ps')]
-    modules.append('plangraph.planner.routing')
-    script = ('import sys; import plangraph.spawner.mcp; '
-              f'assert all(name in sys.modules for name in {modules!r}), '
-              f'[name for name in {modules!r} if name not in sys.modules]')
-    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src')}
+    script = r"""
+import asyncio, sys
+from pathlib import Path
+from plangraph.spawner.mcp import MCPSpawnerServer
+from plangraph.spawner import base_fresh, seat_spawn
+from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.planner.routing import SpawnPlan
+server = MCPSpawnerServer(state=Path.cwd() / 'state')
+base_fresh._check = lambda *a, **k: dict(ok=True, origin_sha='b'*40, base_sha='b'*40, behind=0, reason=None)
+seat_spawn.resources = lambda *a: (0, 1000000)
+leg = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-xhigh')
+server.service._route = lambda *a, **k: SpawnPlan((leg,), (), 'test', (), ())
+before = set(sys.modules)
+result = asyncio.run(server.service.spawn(card={'estimate_tokens':100}, prompt='Implement a tested change',
+    dry_run=True, wait_seconds=None))
+assert result['status'] == 'dry_run', result
+loaded = {name for name in sys.modules if name.startswith('plangraph.')}
+assert not loaded.difference(before), sorted(loaded.difference(before))
+"""
+    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src'),
+           'PLANGRAPH_OVERFLOW_HOSTS': str(tmp_path / 'absent-overflow.json')}
     done = subprocess.run([sys.executable, '-c', script], cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=30)
     assert done.returncode == 0, done.stderr
