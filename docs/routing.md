@@ -107,3 +107,5 @@ files: `139 passed in 63.38s (0:01:03)`. The untouched argv-limit file reproduce
 `2 failed, 44 passed in 5.38s`, both at its digest-versus-redaction assertion
 on line 57. The full suite was not run, following the brief's final prohibition
 on whole-suite runs; no test was skipped or weakened to hide those failures.
+
+Gateway legs require a configured child base URL and client credential before routing. The skip reason names `gateway not configured`; direct subscription legs retain their own admission.

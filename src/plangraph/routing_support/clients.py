@@ -129,6 +129,25 @@ def effective_child_base_url(env: Mapping[str, str] | None = None,
     return effective_gateway_base_url(source, config)
 
 
+def gateway_configuration_error(env=None, config=None):
+    """One admission result for health, routing and child launch; never expose keys."""
+    source = os.environ if env is None else env
+    if not effective_child_base_url(source, config):
+        return 'gateway not configured: base URL missing'
+    from .host_keys import add_host_keys, GATEWAY_KEY_ENV
+    child = dict(source)
+    add_host_keys(child, 'omniroute/admission', needs_gateway=True)
+    if not str(child.get(GATEWAY_KEY_ENV) or '').strip():
+        return 'gateway not configured: client key missing'
+    return None
+
+
+def gateway_leg_error(leg, env=None):
+    if leg.harness == 'opencode' and leg.model.startswith(('omniroute/', 'mimo/')):
+        return gateway_configuration_error(env)
+    return None
+
+
 @dataclass(frozen=True)
 class Client:
     """Client CLI adapter specification."""

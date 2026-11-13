@@ -1,0 +1,1 @@
+- Refuse gateway routes and explicit launches before retrying when the effective URL or client key is missing; report configuration health.

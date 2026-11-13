@@ -100,6 +100,9 @@ def build(request: dict) -> dict:
         raise LaunchRefused('leg_inactive', str(exc)) from None
     if request['role'] not in leg.roles:
         raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
+    from plangraph.routing_support.clients import gateway_leg_error
+    if reason := gateway_leg_error(leg):
+        raise LaunchRefused('gateway_not_configured', reason)
     service = SpawnService(state=request['state'])
     service.runner.default_cwd = request['cwd']
     service.runner._child_envs = _LaunchOwned()

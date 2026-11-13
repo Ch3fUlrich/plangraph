@@ -291,6 +291,9 @@ class SpawnService(SeatSpawnMixin):
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
         if plan.error or not plan.first_leg:
             raise SpawnRefused(plan.error or 'no eligible leg')
+        from plangraph.routing_support.clients import gateway_leg_error
+        if reason := gateway_leg_error(plan.first_leg):
+            raise SpawnRefused(reason)
         plan = replace(plan, legs=witness_gate_legs(card, role, plan.legs), placement=_placement or plan.placement)  # before run artifacts
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,

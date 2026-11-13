@@ -701,3 +701,5 @@ Refused worktree cleanup uses the attempt record’s selected checkout, includin
 Review and judge freshness admission requires both the worker checkout HEAD and the reviewed diff head to contain origin’s default branch; the worker checkout witness remains the recorded checked base.
 
 Run listing is read-only. Watchdog sweeps own queue-timeout persistence and corrupt-record diagnostic delivery; dry sweeps only project the results.
+
+Gateway routes and explicit launches refuse with `gateway not configured` before creating a child when the effective base URL or client credential is absent. Set `PLANGRAPH_GATEWAY_KEY_FILE` to a private client key file, or use the established credential resolver.

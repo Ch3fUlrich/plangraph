@@ -258,10 +258,13 @@ class MCPSpawnerServer:
 
         if name == "plangraph_agent_health":
             restart = self._source_guard.restart_required()
+            from plangraph.routing_support.clients import gateway_configuration_error
+            gateway_error = gateway_configuration_error()
             all_models = get_catalog_models()
             active_jobs = [j for j in self.runner.jobs.values() if j.status == "running"]
             return {
-                "status": "stale" if restart else "healthy",
+                "status": "stale" if restart else "degraded" if gateway_error else "healthy",
+                "gateway_error": gateway_error,
                 **({'error': restart} if restart else {}),
                 "spawner_version": "2.0.0",
                 "runner_jobs_total": len(self.runner.jobs),

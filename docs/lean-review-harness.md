@@ -32,3 +32,5 @@ Live startup-token savings: not measured. No live measurement run IDs exist in
 the repository's records, so a fixed 25k saving is not claimed.
 Open step: three-run before/after token probe with recorded run IDs and token
 counts for each run. Runner structure is unchanged.
+
+Gateway admission checks the effective child base URL and resolved client key before offering a gateway leg. `PLANGRAPH_GATEWAY_KEY_FILE` can name a private client key file; absent or empty keys refuse with `gateway not configured`. Health reports the same error without exposing credentials.

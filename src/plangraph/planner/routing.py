@@ -339,8 +339,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     skipped = []
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
+    from plangraph.routing_support.clients import gateway_leg_error
     for leg in candidates:
-        reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
+        reason = gateway_leg_error(leg) or policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
         if reason:
             pass
         elif leg.family in excluded:
@@ -368,7 +369,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
         "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat")}
     try:
-        route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
+        route = route_card(card, legs=candidates, unavailable=limited | policy_skipped | {s["leg"] for s in skipped if s["reason"].startswith("gateway not configured")},
                            exclude_families=excluded, role=role, now=now)
     except RouteError as exc:
         return SpawnPlan((), tuple(skipped), "operator-order", (),
