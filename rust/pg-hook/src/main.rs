@@ -15,8 +15,9 @@ fn run(args: &[std::ffi::OsString]) -> std::io::Result<i32> {
         pg_hook::record_harness_fault(entry, log, "stdin read failed");
         return Err(std::io::Error::other("stdin read failed"));
     }
-    let mut python = Command::new("python3");
-    python.arg(&args[4]);
+    let mut python =
+        Command::new(std::env::var_os("PG_HOOK_PYTHON").unwrap_or_else(|| "python3".into()));
+    python.arg("-I").arg(&args[4]);
     let output = pg_hook::shadow(
         entry,
         &payload,

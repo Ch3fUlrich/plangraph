@@ -1,18 +1,9 @@
+mod common;
+
+use common::python;
 use pg_hook::{shadow, Env, Hook, HookError, HookOutput};
 use serde_json::Value;
 use std::path::Path;
-use std::process::Command;
-
-fn python(script: &Path) -> Command {
-    let output = Command::new("python3")
-        .args(["-I", "-c", "import sys; print(sys.executable)"])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let mut command = Command::new(String::from_utf8(output.stdout).unwrap().trim());
-    command.arg("-I").arg(script);
-    command
-}
 
 struct Hex;
 impl Hook for Hex {

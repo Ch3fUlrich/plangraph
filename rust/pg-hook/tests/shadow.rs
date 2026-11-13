@@ -1,3 +1,6 @@
+mod common;
+
+use common::{python, python_executable};
 use pg_hook::{observe, registry, shadow, Env, Hook, HookError, HookOutput};
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -18,40 +21,13 @@ impl Hook for Fake {
         }
     }
 }
-fn python(script: &std::path::Path) -> Command {
-    // Resolve before shadow clears the environment, including non-system installs.
-    let mut command = Command::new(python_executable());
-    command.arg(script);
-    command
-}
-fn python_executable() -> std::path::PathBuf {
-    let output = Command::new("python3")
-        .args(["-I", "-c", "import sys; print(sys.executable)"])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let path = std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
-    assert!(path.is_absolute());
-    path
-}
-
-fn python_path(tmp: &std::path::Path) -> std::path::PathBuf {
-    let bin = tmp.join("bin");
-    std::fs::create_dir(&bin).unwrap();
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(python_executable(), bin.join("python3")).unwrap();
-    #[cfg(not(unix))]
-    std::fs::copy(python_executable(), bin.join("python3.exe")).unwrap();
-    bin
-}
-
 #[test]
 fn python_wins_over_rust_differences_errors_panics_and_log_failures() {
     let tmp = tempfile::tempdir().unwrap();
     let script = tmp.path().join("hook.py");
     std::fs::write(
         &script,
-        "import sys\nsys.stdout.write(sys.stdin.read()); sys.exit(7)\n",
+        "import sys\nsys.stdout.buffer.write(sys.stdin.buffer.read()); sys.exit(7)\n",
     )
     .unwrap();
     let env = Env::from([("HOME".into(), tmp.path().as_os_str().to_owned())]);
@@ -146,15 +122,15 @@ fn shadow_cli_returns_python_and_appends_not_implemented() {
     let tmp = tempfile::tempdir().unwrap();
     let script = tmp.path().join("hook.py");
     let log = tmp.path().join("shadow.jsonl");
-    let path = python_path(tmp.path());
-    std::fs::write(&script, "import sys\nsys.stdout.write(sys.stdin.read())\nsys.stderr.write('python diagnostic')\nsys.exit(7)\n").unwrap();
+    let executable = python_executable();
+    std::fs::write(&script, "import sys\nsys.stdout.buffer.write(sys.stdin.buffer.read())\nsys.stderr.write('python diagnostic')\nsys.exit(7)\n").unwrap();
     for _ in 0..2 {
         let mut child = Command::new(env!("CARGO_BIN_EXE_pg-hook"))
             .args(["shadow", "bash_guard"])
             .arg(&log)
             .arg(&script)
             .env_clear()
-            .env("PATH", &path)
+            .env("PG_HOOK_PYTHON", &executable)
             .env("HOME", tmp.path())
             .env("XDG_STATE_HOME", tmp.path().join("state"))
             .stdin(Stdio::piped())
@@ -177,6 +153,30 @@ fn shadow_cli_returns_python_and_appends_not_implemented() {
         assert_eq!(record["py"]["stdout"], "{not json\n");
         assert_eq!(record["rust"]["status"], "NotImplemented");
     }
+}
+
+#[test]
+fn shadow_cli_uses_in_place_isolated_python_without_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("interpreter.py");
+    std::fs::write(
+        &script,
+        "import struct, sys\nassert sys.flags.isolated == 1\nsys.stdout.buffer.write(sys.executable.encode('utf-8'))\n",
+    )
+    .unwrap();
+    let executable = python_executable();
+    let output = Command::new(env!("CARGO_BIN_EXE_pg-hook"))
+        .args(["shadow", "bash_guard"])
+        .arg(tmp.path().join("shadow.jsonl"))
+        .arg(&script)
+        .env_clear()
+        .env("PG_HOOK_PYTHON", &executable)
+        .env("PYTHONHOME", tmp.path().join("missing"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    assert_eq!(output.stdout, executable.to_str().unwrap().as_bytes());
 }
 
 #[cfg(unix)]
@@ -222,7 +222,7 @@ fn signal_exit_codes_match_the_logged_python_status() {
         .arg(tmp.path().join("cli.jsonl"))
         .arg(script)
         .env_clear()
-        .env("PATH", python_path(tmp.path()))
+        .env("PG_HOOK_PYTHON", python_executable())
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(143));
@@ -252,6 +252,7 @@ fn shadow_cli_fails_open_for_usage_and_python_spawn_errors() {
         .arg(tmp.path().join("hook.py"))
         .env_clear()
         .env("PATH", tmp.path())
+        .env("PG_HOOK_PYTHON", tmp.path().join("missing-python"))
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0));
@@ -273,6 +274,7 @@ fn shadow_cli_fails_open_for_usage_and_python_spawn_errors() {
             .current_dir(tmp.path())
             .env_clear()
             .env("PATH", tmp.path())
+            .env("PG_HOOK_PYTHON", tmp.path().join("missing-python"))
             .stderr(std::fs::File::open(&diagnostic).unwrap())
             .output()
             .unwrap();
@@ -299,7 +301,7 @@ fn shadow_cli_fails_open_for_stdin_read_errors() {
         .arg(&log)
         .arg(&script)
         .env_clear()
-        .env("PATH", python_path(tmp.path()))
+        .env("PG_HOOK_PYTHON", python_executable())
         .stdin(std::fs::File::open(tmp.path()).unwrap())
         .output()
         .unwrap();

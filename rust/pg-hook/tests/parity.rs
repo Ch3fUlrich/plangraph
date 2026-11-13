@@ -25,6 +25,16 @@ fn load(path: &Path) -> Corpus {
     // No port/redactor runs in this slice: retain symbolic secret fixtures.
     serde_json::from_str(&text).unwrap()
 }
+fn substitute_tmp(text: &str, tmp: &Path) -> String {
+    let path = tmp.to_str().unwrap();
+    if serde_json::from_str::<Value>(text).is_ok() {
+        // Native Windows separators (and quotes in any path) must stay JSON-escaped.
+        let escaped = serde_json::to_string(path).unwrap();
+        text.replace("{TMP}", &escaped[1..escaped.len() - 1])
+    } else {
+        text.replace("{TMP}", path)
+    }
+}
 fn differential(corpus: &Corpus, hooks: &BTreeMap<&str, &dyn Hook>) -> Vec<Value> {
     let mut records = Vec::new();
     for case in &corpus.payloads {
@@ -38,7 +48,7 @@ fn differential(corpus: &Corpus, hooks: &BTreeMap<&str, &dyn Hook>) -> Vec<Value
             continue;
         };
         let tmp = tempfile::tempdir().unwrap();
-        let sub = |text: &str| text.replace("{TMP}", tmp.path().to_str().unwrap());
+        let sub = |text: &str| substitute_tmp(text, tmp.path());
         for (relative, content) in &case.files {
             let path = tmp.path().join(relative);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -63,6 +73,15 @@ fn differential(corpus: &Corpus, hooks: &BTreeMap<&str, &dyn Hook>) -> Vec<Value
         );
     }
     records
+}
+
+#[test]
+fn windows_temporary_paths_preserve_valid_corpus_json() {
+    let path = Path::new(r"C:\hook temp");
+    let payload = substitute_tmp(r#"{"transcript_path":"{TMP}/t.jsonl"}"#, path);
+    let value: Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(value["transcript_path"], r"C:\hook temp/t.jsonl");
+    assert_eq!(substitute_tmp("HOME={TMP}", path), r"HOME=C:\hook temp");
 }
 
 #[test]

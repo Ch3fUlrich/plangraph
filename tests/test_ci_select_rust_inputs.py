@@ -151,3 +151,9 @@ def test_pg_hook_repository_inputs_are_explicitly_selected(path, expected):
     assert (ROOT / path).is_file()
     assert path in ci_select.RUST_INPUTS
     assert {job for job, selected in ci_select.select([path]).items() if selected} == expected
+
+
+def test_pg_hook_runs_in_windows_job():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())
+    steps = workflow["jobs"]["rust-windows"]["steps"]
+    assert {"name": "cargo test -p pg-hook", "run": "cargo test -p pg-hook"} in steps

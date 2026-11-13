@@ -1,6 +1,8 @@
 # Rust hook shadow harness (RUST-HOOKS slice 1)
 
 Run `pg-hook shadow ENTRY LOG_PATH PYTHON_HOOK_PATH` with the original payload on stdin.
+Python runs with `-I`; `PG_HOOK_PYTHON` can select an absolute interpreter path in
+its original installation (including adjacent Windows DLLs); otherwise it uses `python3`.
 Python's exit code, stdout and stderr remain authoritative; Rust errors, unwind panics
 and log-write failures cannot change that result. Logs append JSONL `{entry, same, py, rust}`;
 successful outputs use the existing parity fields `exit`, `stdout`, `stderr`.
@@ -38,8 +40,12 @@ through independent no-op test hooks: all six inject cases produce comparisons,
 including two intentional seeded-inbox mismatches and four matches. Together these
 exercise every one of the 29 corpus cases and the comparator
 without claiming that pending production hooks have passed parity. Replay tests
-resolve Python before clearing the environment; CLI tests use a private PATH with
-that interpreter, so non-system Python installations work without inherited state.
+resolve Python before clearing the environment; CLI tests select that absolute
+interpreter in place with no PATH, rather than copying or symlinking its executable.
+Both test helpers use `-I`, ignoring ambient Python configuration. Echo fixtures use
+binary streams to preserve bytes across Windows newline translation, and corpus
+substitution JSON-escapes native temporary paths. The `rust-windows` job runs
+`cargo test -p pg-hook`; Unix-only signal and permission tests remain Unix-gated.
 Only `rust/pg-hook/**` maps to this doc; the shared workspace manifest and lock
 file remain unmapped, as required by `.docs-map`'s shared-file policy.
 Merge policy tests retain the unique crate-local mapping and its existing doc,
