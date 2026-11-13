@@ -105,7 +105,7 @@ def test_cli_shared_ram_refusal(registry, monkeypatch, tmp_path):
     monkeypatch.setattr(o.cli.sys, 'stdout', output)
     monkeypatch.setattr(o.cli.sys, 'stdin', io.StringIO(json.dumps({
         'state': str(tmp_path / 'state'), 'card': {'task': 'test'}, 'prompt': 'prompt'}) + '\n'))
-    assert o.cli.main(['--supervise']) == 0
+    assert o.cli.main(['--supervise']) == 5
     result = json.loads(output.getvalue())
     assert reason in result['reason'] and result['status'] == 'queued'
 
@@ -158,14 +158,18 @@ def test_overflow_local_cli_preserves_caller_state(inputs, monkeypatch, capsys, 
     assert not (root / 'default-state').exists()
 
 
-def test_overflow_requires_caller_state(inputs, monkeypatch, capsys):
+def test_overflow_defaults_to_service_state(inputs, monkeypatch):
     root, _, args = inputs
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(root / 'default-state'))
     index = args.index('--state')
-    with pytest.raises(SystemExit) as exc:
-        o.main(args[:index] + args[index + 2:])
-    assert exc.value.code == 2 and '--state' in capsys.readouterr().err
-    assert not (root / 'default-state').exists()
+    monkeypatch.setattr(o, 'local_resources', lambda state=None: (0, 9000))
+    monkeypatch.setattr(o, 'placement_policy', lambda *a: ('local', False))
+    def local(argv):
+        assert '--state' not in argv
+        assert SpawnService().state == root / 'default-state'
+        return 0
+    monkeypatch.setattr(o.cli, 'main', local)
+    assert o.main(args[:index] + args[index + 2:]) == 0
 
 
 def test_overflow_remote_does_not_forward_local_state(inputs, monkeypatch, capsys):

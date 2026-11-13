@@ -320,9 +320,10 @@ def main(argv=None):
     parser.add_argument('--prompt', required=True)
     parser.add_argument('--role', default='implement')
     parser.add_argument('--cwd')
-    parser.add_argument('--state', required=True, help='invoking spawn state directory (local only)')
+    parser.add_argument('--state', help='invoking spawn state directory (local only; defaults to the service state)')
     args, options = parser.parse_known_args(argv)
-    local = ['--state', args.state, 'spawn', '--card', '@' + args.card]
+    local = [*(['--state', args.state] if args.state is not None else []),
+             'spawn', '--card', '@' + args.card]
     if args.cwd is not None:
         options.extend(['--cwd', args.cwd])
     if args.role != 'implement':
@@ -336,7 +337,7 @@ def main(argv=None):
         if placement_policy(registry_caps(), config)[1]:
             return cli.main([*local, Path(args.prompt).read_text(), *options])
         role_mb, floor_mb = local_limits(registry_caps(), args.role)
-        _, memory = local_resources(args.state)
+        _, memory = local_resources(args.state) if args.state is not None else local_resources()
         if decide(memory, role_mb, floor_mb, {}, False).reason == 'local room':
             return cli.main([*local, Path(args.prompt).read_text(), *options])
         card = json.loads(Path(args.card).read_text())

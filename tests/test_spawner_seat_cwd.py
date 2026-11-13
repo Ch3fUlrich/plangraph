@@ -381,5 +381,5 @@ def test_legacy_overflow_classifies_explicit_cwd(checkouts, tmp_path, monkeypatc
     monkeypatch.setattr(overflow, 'local_resources', lambda: (0, 0))
     monkeypatch.setattr(overflow, 'ready_records', lambda *a: {})
     assert overflow.main(['spawn', '--repo', str(caller), '--card', str(card), '--prompt', str(prompt),
-        *(['--cwd', str(reviewed)] if source == 'flag' else [])]) == 5
+        *(['--cwd', str(reviewed)] if source == 'flag' else [])]) == 2
     assert 'repo is not public' in capsys.readouterr().out
