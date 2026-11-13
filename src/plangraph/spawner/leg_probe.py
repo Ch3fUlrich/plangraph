@@ -19,6 +19,7 @@ PROMPT = 'Create a file ok.txt containing the single word ok, then git add it an
 #: config (M11): a host commit.gpgsign=true or global core.hooksPath must never
 #: turn probe infrastructure into a recorded leg failure.
 GIT_ISOLATION = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'}
+
 #: GIT_DIR and kin name the repo every ``git`` resolves regardless of the
 #: process cwd. Inherited from a caller inside a lane worktree or a git hook,
 #: they redirected the writer's ``git add/commit`` -- and the probe's own git
@@ -27,6 +28,7 @@ GIT_ISOLATION = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'}
 #: from the probe env, never inherited.
 GIT_REDIRECT_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE',
                      'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY')
+
 #: extra_env for the writer child: the same isolation as :func:`probe_env`,
 #: expressed as removals -- ``build_child_env`` drops a key whose extra_env
 #: value is None. Every harness child inherits this (D-3465).
@@ -128,10 +130,8 @@ def seconds(name, default, value=None, *, positive=False, parameter=None):
 
 def key(leg):
     """One leg key for probe and quota bookkeeping (Q16/M8).
-
-    'agy/<model>' only for an agy leg's bare model; a model that already names
-    its provider is its own key.  Legs without a harness attribute (legacy
-    record rows) key on the model string alone, keeping historical rows stable.
+    Prefix only bare agy models; provider-qualified models are their own keys.
+    Legacy rows without a harness keep their historical model-only keys.
     """
     return ('agy/' + leg.model if getattr(leg, 'harness', None) == 'agy' and '/' not in leg.model
             else leg.model)

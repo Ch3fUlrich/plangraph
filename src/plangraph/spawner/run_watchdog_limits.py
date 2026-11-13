@@ -6,7 +6,7 @@ import time
 
 def leg_limits(record, limits):
     """Review fallthroughs share one wall clock, including prompt preparation."""
-    if record.get('role') != 'review':
+    if record.get('role') != 'review' or limits['max_s'] is None:
         return limits
     deadline = record['started'] + limits['max_s']
     remaining = deadline - time.time()

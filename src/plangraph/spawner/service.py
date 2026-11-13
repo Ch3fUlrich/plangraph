@@ -1,6 +1,6 @@
 """Per-host card dispatch and private run records shared by CLI and MCP."""
 from __future__ import annotations
-from .env_redact import first_reason
+from .env_redact import first_reason, harness_limit_line, unavailable_reason
 from .gateway_witness import witness_order, witness_gate_legs
 from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
@@ -307,11 +307,11 @@ class SpawnService(SeatSpawnMixin):
                 limits, live_log = prepare_run(self, record, card)
                 launched = False
                 for chosen in plan.legs:
-                    if leg_limits(record, limits) is None: break
+                    if (watchdog := leg_limits(record, limits)) is None: break
                     from .inline_diff import InlineDiffError
                     try:
                         leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run,
-                            deadline=record['started'] + limits['max_s'] if role == 'review' else None)   # Dry runs never launch; live document reviews require --leg.
+                            deadline=watchdog.get('deadline'))   # Dry runs never launch; live document reviews require --leg.
                     except InlineDiffError as exc:
                         record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                             skip_reason='inline_diff_failed: ' + str(exc),
@@ -335,13 +335,14 @@ class SpawnService(SeatSpawnMixin):
                             stdout_tail=job.stdout, stderr_tail=job.stderr, events=job.events))
                         break
                     unavailable = fallthrough_reason(self, chosen, job, record)
-                    if unavailable:
-                        job.status = 'failed'
-                        job.exit_code = job.exit_code or 1
+                    if unavailable: job.status, job.exit_code = 'failed', job.exit_code or 1
                     reason = ('provider_stop' if stop and job.status in ('failed', 'skipped') else unavailable) or ((first_reason(job.stderr) or f'harness exit code {job.exit_code}')
                         if job.status in ('failed', 'skipped') else None)
+                    if stop and any(isinstance(slot, dict) and slot.get('seat_group')
+                            and slot.get('leg') == chosen.id for slot in (plan.seat_coverage or ())):
+                        reason = reason or 'provider_stop'
                     stop_status = stop.get('status') if isinstance(stop, dict) else None
-                    down_token = (unavailable or '').split(':', 1)[0].strip()
+                    down_token = (unavailable or '').split(':', 1)[0].strip() if (unavailable_reason(job.exit_code, job.stdout, job.stderr) or harness_limit_line(job.exit_code, job.stdout, job.stderr)) else ''
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
                         # Only failed/skipped attempts count; only 402/429 override unavailable.
                         down_reason=('credit_limit' if stop_status == 402 else 'usage_limit' if stop_status == 429 else
@@ -360,12 +361,11 @@ class SpawnService(SeatSpawnMixin):
                         stderr_tail=record.get('stderr_tail', '') + job.stderr, events=record.get('events', []) + getattr(job, 'events', []))
                     if role == 'review' and unavailable and not (no_fallthrough or dry_run): record.update(status='running', exit_code=None)
                     self._save(record)
-                    if (not stop and not unavailable) or no_fallthrough or dry_run:
-                        if not dry_run:
+                    if record.get('reason') == 'model_refusal' or (not stop and not unavailable) or no_fallthrough or dry_run:
+                        if not dry_run and record.get('reason') != 'model_refusal':
                             await self._continue_writer(record, job.stdout)
                         break
-                else:
-                    if role == 'review' and record['status'] == 'running': record.update(status='failed', exit_code=1)
+                if role == 'review' and record['status'] == 'running': record.update(status='failed', exit_code=1)
                 if not launched and record.get('status') != 'timed_out':
                     record.update(status='failed', exit_code=1, error='; '.join(
                         a['skip_reason'] for a in record['attempts']) or 'no leg launched')

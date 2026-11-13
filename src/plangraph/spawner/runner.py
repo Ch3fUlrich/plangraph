@@ -1072,7 +1072,8 @@ def spawn_service(*args, **kwargs):
                     live_log = str(self._path(run_id).parent / 'live.log')
                     record['live_log'] = live_log
                     for _ in range(len(plan.legs) + 2):
-                        if leg_limits(record, limits) is None: return
+                        if (watchdog := leg_limits(record, limits)) is None:
+                            self._save(record); return
                         chosen = next((l for l in current.legs if l.id not in tried), None)
                         if chosen is None or current.error:
                             break
@@ -1087,14 +1088,15 @@ def spawn_service(*args, **kwargs):
                             continue
                         from .inline_diff import InlineDiffError
                         try:
-                            leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run, deadline=record['started'] + limits['max_s'] if role == 'review' else None)
+                            leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run, deadline=watchdog.get('deadline'))
                         except InlineDiffError as exc:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
                         worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
-                        if (watchdog := leg_limits(record, limits)) is None: return
+                        if (watchdog := leg_limits(record, limits)) is None:
+                            self._save(record); return
                         job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
                             role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10

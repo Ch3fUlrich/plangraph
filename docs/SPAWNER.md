@@ -258,7 +258,9 @@ the waiting shell itself. Wait reads atomic run records, not process names;
 its timeout stops waiting, not the writer.
 `--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg.
 Review/seat routes record each failed, limited or not-served attempt with its reason
-and try the next leg in the same run, failing only after route exhaustion. Writer
+and try the next leg in the same run, failing only after route exhaustion. Ordinary
+failure diagnostics do not book cooldowns, mark legs down or emit LEG_REFUSED; only
+recognized availability/quota evidence does. Writer
 generic failures keep their stop rule; cancellation, safety refusals and watchdog
 terminals still stop immediately. OOM wrapper marker lines are not failure reasons.
 Plain stdout, including text saying 429, is never provider evidence.
@@ -309,9 +311,9 @@ it does not close items or bypass the keeper's authorization checks.
 it receives recipient as its final argument and event JSON on stdin. Consumers
 must deduplicate by event_id: external delivery is at-least-once across crashes.
 Failed hooks are logged and retried on re-save; local inbox replay is idempotent.
-`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds execution in seconds; reviews share one run deadline across all legs and prompt preparation (writers retain per-child limits); unset gives a 25-minute review cap, while empty means no review cap;
+`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds execution in seconds; reviews share one run deadline across all legs and prompt preparation (writers retain per-child limits); unset gives a 25-minute review cap, while empty means no review-specific cap (the ordinary 90-minute maximum still applies); internal `max_s: null` limits have no deadline;
 expiry kills its process tree and records rc 124 with FAILED completion.
-Terminal stall/timeout records preserve their outcome and events even without a watchdog event (`watchdog: null`). Provider responses label attempt reasons `provider_stop` only for failed/skipped jobs, not successful ones.
+Terminal stall/timeout records preserve their outcome and events even without a watchdog event (`watchdog: null`). A provider stop leaves the harness status and exit code unchanged (completed with exit 0 stays completed), adding `provider_stop` only when no reason exists and the stopped leg's own coverage slot names a seat group, preserving it in the attempt and unfilled-slot error while leaving completed non-seat reasons unset and tolerating empty, absent or non-dict coverage entries.
 The detached supervisor must survive the child; killing the supervisor itself
 requires a future recovery service. This interim event contract carries over to
 the later Temporal implementation (also covers FLEET-STATUS-HOOK).
@@ -324,6 +326,7 @@ The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md]
 
 CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
 A probe with its harness binary missing reports `host-not-ready` and books no leg event. Probe timeouts must be finite and strictly positive; TTL remains nonnegative (zero disables automatic probes). Invalid settings refuse before probe state writes, and CLI parameter refusals are JSON `ParameterRefused` with exit 2. Timeout errors name `--timeout` for an explicit CLI argument, `timeout_s` for a direct probe argument, or `PLANGRAPH_LEG_PROBE_TIMEOUT_S` for the environment. CLI and MCP probe refusal handlers catch only parameter-validation errors, not internal `ValueError`s. Spawn-call exceptions report probe infrastructure failure and never book leg liveness.
+Probe and quota bookkeeping key a leg by its model string: only a bare model of an agy leg gets the `agy/` prefix, a provider-qualified model is its own key, and legacy record rows without a harness keep their model-only key.
 Failed probes retain a scrubbed, single-line excerpt of the last 400 stderr
 characters in their result, output line and leg-state event. A `running` record
 on the same model/harness with a nonempty `live.log` grown within

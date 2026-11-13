@@ -60,6 +60,8 @@ class Watchdog:
         first_edit_s); once edited, or when the edit signal is unavailable, or for non-writers,
         max_s ends the run. Hard caps (including PLANGRAPH_SPAWN_RUN_TIMEOUT and the default
         review cap) are wall clocks, never extended. The opt-in first-edit stall is separate."""
+        if self.limits['max_s'] is None:
+            return float('inf')
         if 'deadline' in self.limits:
             return max(0, min(self.limits['max_s'], self.limits['deadline'] - self.start))
         if self.limits.get('hard_max'):

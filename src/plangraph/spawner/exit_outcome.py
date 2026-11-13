@@ -161,7 +161,8 @@ def fallthrough_reason(service, chosen, job, record):
     from .question_bridge import question_exit
     if question_exit(job, record):
         return None
-    if record.get('reason') == 'model_refusal' or any(e.get('event') == 'model_refusal' for e in getattr(job, 'events', ())):
+    if record.get('reason') == 'model_refusal' or getattr(job, 'status', None) == 'model_refusal' or any(e.get('event') == 'model_refusal' for e in getattr(job, 'events', ())):
+        record['reason'] = 'model_refusal'
         return None   # safety stops are not provider limits or leg-health evidence
     # Before the terminal check: text-call output replaces writer_no_changes; tool_call_only keeps the other terminals.
     if tool_call_only(job, record):
@@ -208,11 +209,10 @@ def fallthrough_reason(service, chosen, job, record):
     stop = getattr(getattr(service, 'runner', None), 'provider_responses', {}).get(getattr(job, 'job_id', None))
     if (not reason and record.get('role') == 'review' and isinstance(stop, dict)
             and stop.get('status') in (402, 429) and not getattr(job, 'survivors', ())
-            and job.status in ('completed', 'failed', 'skipped', 'limited')):
-        job.status, job.exit_code = 'failed', job.exit_code or 1
+            and job.status in ('failed', 'skipped', 'limited')):
         return 'provider_stop'
     # Review/seat failures exhaust the existing route, not the whole run.
-    # Keep generic writer failures terminal and never bypass the guards above.
+    # Ordinary failures carry diagnostics, not booking/notification evidence.
     return reason or (failure_reason(job) if record.get('role') == 'review'
                       and not getattr(job, 'survivors', ())
                       and job.status in ('failed', 'skipped', 'limited') else None)

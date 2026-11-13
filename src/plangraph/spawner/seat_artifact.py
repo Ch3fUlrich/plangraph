@@ -102,8 +102,9 @@ def sync_seat(record, held_families=()):
     """Keep the slot's audit metadata tied to the resolved leg on every save."""
     from plangraph.planner.seats import seat_family
     plan = record.get('plan') or {}
-    own = plan.get('seat_coverage') or []
-    if len(own) != 1 or not own[0].get('seat_group'):
+    own = [row for row in plan.get('seat_coverage') or []
+           if isinstance(row, dict) and row.get('seat_group')]
+    if len(own) != 1:
         return
     chosen = record.get('chosen_leg')
     if chosen:
