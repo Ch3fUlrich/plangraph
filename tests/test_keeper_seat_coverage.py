@@ -209,19 +209,19 @@ def test_two_claude_seats_are_one_family(w):
     assert exc.value.code in ("same_family", "coverage")
     assert w.store._item(plain)["state"] == "in_review"
 
-    # The waiver opens that gate; coverage still sees a single family.
+    # The waiver lowers need to one; sensitive coverage still refuses Claude alone.
     w.store.ctx = make_ctx(
         git=git_with(trailers),
         decisions=FakeDecisions(waiving={(DECISION, waived)}))
     w.store.waive_second_family(w.p("router"), waived, DECISION)
     assert w.store._item(waived)["review_waiver"] == DECISION
-    assert w.store.verdict(w.p("rAnthropic1"), waived, True, "one")["state"] == "in_review"
-    with pytest.raises(Refused) as exc:
-        w.store.verdict(w.p("rAnthropic2"), waived, True, "two")
-    assert exc.value.code == "coverage"
-    assert "xiaomi" in exc.value.msg
+    for reviewer in ("rAnthropic1", "rAnthropic2"):
+        with pytest.raises(Refused) as exc:
+            w.store.verdict(w.p(reviewer), waived, True, "claude only")
+        assert exc.value.code == "coverage"
+        assert "xiaomi" in exc.value.msg
     assert w.store._item(waived)["state"] == "in_review"
-    assert len(verdict_events(w, waived)) == 1
+    assert len(verdict_events(w, waived)) == 0
 
 
 # --------------------------------------------------------------------------
@@ -238,14 +238,13 @@ def test_sensitive_high_cannot_close_with_claude_seats_only(w):
         decisions=FakeDecisions(waiving={(DECISION, key)}))
     w.store.waive_second_family(w.p("router"), key, DECISION)
 
-    assert w.store.verdict(w.p("rAnthropic1"), key, True, "one")["state"] == "in_review"
-    for reviewer in ("rAnthropic2", "rAnthropic2"):
+    for reviewer in ("rAnthropic1", "rAnthropic2", "rAnthropic2"):
         with pytest.raises(Refused) as exc:
             w.store.verdict(w.p(reviewer), key, True, "claude only")
         assert exc.value.code == "coverage"
         assert "xiaomi" in exc.value.msg
     assert w.store._item(key)["state"] == "in_review"
-    assert len(verdict_events(w, key)) == 1
+    assert len(verdict_events(w, key)) == 0
 
 
 # --------------------------------------------------------------------------

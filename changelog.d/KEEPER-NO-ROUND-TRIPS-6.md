@@ -1,0 +1,1 @@
+- KEEPER-NO-ROUND-TRIPS round 3: require exact ASCII D-NNN waiver identifiers before verification, and use the same canonical check for second-family and verdict-count gates. Malformed stored waivers cannot admit a second same-family verdict; existing independence, coverage and auth/secrets requirements remain intact.
