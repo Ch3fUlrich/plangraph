@@ -50,3 +50,19 @@ def test_unmapped_code_selects_bounded_smoke_not_full_suite(tmp_path):
 def test_suite_config_and_shared_fixtures_still_run_full_suite(tmp_path, path):
     _repo(tmp_path)
     assert selector().select_tests(tmp_path, [path])["tests"] == ["tests"]
+
+
+@pytest.mark.parametrize("changed,expected", [
+    (["docs/conf.py"], ["tests/test_affected_tests.py"]),
+    (["status/x.toml"], ["tests/test_affected_tests.py"]),
+    (["docs/requirements.txt"], ["tests"]),
+    (["docs/x.md"], []),
+    (["docs/img/a.png", "status/y.rst"], []),
+])
+def test_docs_status_only_documentation_files_skip(tmp_path, changed, expected):
+    _repo(tmp_path, {
+        "docs/conf.py": "x = 1", "docs/requirements.txt": "sphinx", "docs/x.md": "# x",
+        "docs/img/a.png": "png", "status/x.toml": "a = 1", "status/y.rst": "y",
+        "tests/test_affected_tests.py": "",
+    })
+    assert selector().select_tests(tmp_path, changed)["tests"] == expected
