@@ -47,3 +47,34 @@ def test_log_age_does_not_claim_a_live_pid_has_exited(tmp_path, monkeypatch):
     record = stall_probe.reconcile_record({'status': 'running', 'pid': 123}, tmp_path, now=100)
     assert record['live_log_age_s'] == 90
     assert record['status'] == 'running'
+
+
+def test_wait_allows_supervisor_to_finish_after_pid_disappears(tmp_path, monkeypatch):
+    from plangraph.spawner.runner import spawn_service
+    service = spawn_service(runner=SimpleNamespace(), state=tmp_path)
+    records = iter([
+        dict(status='exited', reason='pid_gone', ended=100),
+        dict(status='completed', exit_code=0, ended=101),
+    ])
+    monkeypatch.setattr(service, 'result', lambda _: next(records))
+    import asyncio
+    final = asyncio.run(service.wait('run-fixture', timeout=1))
+    assert final['status'] == 'completed'
+    assert final['exit_code'] == 0
+
+
+@pytest.mark.parametrize('timeout', [None, 0.1])
+def test_wait_pid_gone_grace_is_bounded(tmp_path, monkeypatch, timeout):
+    import asyncio
+    import itertools
+    from plangraph.spawner import runner
+    service = runner.spawn_service(runner=SimpleNamespace(), state=tmp_path)
+    record = dict(status='exited', reason='pid_gone', ended=100)
+    monkeypatch.setattr(service, 'result', lambda _: record)
+    ticks = itertools.count(1, .1)
+    monkeypatch.setattr(runner, 'time', SimpleNamespace(monotonic=lambda: next(ticks), time=lambda: 100))
+    if timeout is None:
+        assert asyncio.run(service.wait('run-fixture')) == record
+    else:
+        with pytest.raises(TimeoutError):
+            asyncio.run(service.wait('run-fixture', timeout=timeout))
