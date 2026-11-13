@@ -706,3 +706,5 @@ Run listing is read-only. Watchdog sweeps own queue-timeout persistence and corr
 Standalone overflow accepts omitted `--state` using the service environment default; explicit state still owns local records. Importing overflow defers the CLI import, allowing source-only `python -m plangraph.spawner.cli` execution without runpy warnings.
 
 Review admission fetches the worker’s default branch once per admission boundary; the following diff-head ancestry check reuses tracking refs with `fetch=False`.
+
+Worktree creation uses `base_fresh.fresh_worktree_base`: fetch the main and requested `phase/*` tracking refs, refuse stale creation bases, then fast-forward a clean main checkout (or its unoccupied branch ref). Dirty or diverged main is refused. Continuations must include current main; missing cached trees cannot be recreated after a failed fetch. Existing cached trees can still be leased offline, subject to normal launch admission. The routing repository’s `fleet-launch` and package-worktree callers must invoke this shared helper before cutting their trees; those scripts are outside this checkout.
