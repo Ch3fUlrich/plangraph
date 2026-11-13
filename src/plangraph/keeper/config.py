@@ -34,6 +34,8 @@ __all__ = ["Config", "ConfigError", "load_config", "verifier_context",
            "REQUIRED_MODE"]
 
 REQUIRED_MODE = 0o600
+# Ten years keeps lease date arithmetic far below year 9999.
+_MAX_LEASE_SECONDS = 315360000
 _DEFAULT_SNAPSHOT = "plan.snapshot.json"
 _DEFAULT_DB = "keeper.db"
 
@@ -100,9 +102,9 @@ class Config:
         host, port = self._bind(data)
         self.host = host
         self.port = port
-        self.default_lease = int(data.get("default_lease", 7200))
-        self.review_overdue_s = int(data.get("review_overdue_s", 4 * 3600))
-        self.lease_warn_s = int(data.get("lease_warn_s", 15 * 60))
+        self.default_lease = self._positive_seconds(data, "default_lease", 7200)
+        self.review_overdue_s = self._positive_seconds(data, "review_overdue_s", 4 * 3600)
+        self.lease_warn_s = self._positive_seconds(data, "lease_warn_s", 15 * 60)
         self.reap_interval = float(data.get("reap_interval", 60))
         # KEEPER-SNAPSHOT-PG: the snapshot file is rebuilt after writes go quiet for this long
         # (<= 0: synchronously after every write) and at most max_delay_s after a change.
@@ -111,6 +113,15 @@ class Config:
         self.backup_prune = self._backup_prune(data.get("backup_prune"))
 
     # ------------------------------------------------------------- helpers
+    @staticmethod
+    def _positive_seconds(data, name, default) -> int:
+        value = data.get(name, default)
+        if (isinstance(value, bool) or not isinstance(value, int)
+                or not 1 <= value <= _MAX_LEASE_SECONDS):
+            raise ConfigError(
+                f"{name} must be an integer number of seconds between 1 and {_MAX_LEASE_SECONDS}")
+        return value
+
     @staticmethod
     def _seconds(data, name, default) -> float:
         value = data.get(name, default)
