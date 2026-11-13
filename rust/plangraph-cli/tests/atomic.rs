@@ -1,7 +1,7 @@
 use plangraph_cli::atomic;
-use std::io;
 #[cfg(unix)]
 use std::fs;
+use std::io;
 #[cfg(unix)]
 #[test]
 fn reused_locks_are_private_and_hard_links_are_refused() {

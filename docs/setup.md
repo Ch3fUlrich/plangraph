@@ -81,3 +81,8 @@ restricted to 0600 and must be owned regular files with one link; no-follow open
 and inode checks refuse swapped paths. Lock files remain persistent, and a held
 lock reports WouldBlock. Windows lock handles refuse reparse following/deletion;
 the user's private directory ACL remains the Windows privacy boundary.
+
+Rust prompt/diff Git fixtures clear every inherited GIT_* variable through the
+shared command builder, then set only isolated config/home controls. Regression
+children poison routing and injected-config variables using disposable paths;
+no fixture selects the actual checkout or its worktree list.

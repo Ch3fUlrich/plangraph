@@ -1,0 +1,1 @@
+- Isolate prompt/diff test Git commands from all inherited GIT_* variables and host configuration, including expected diff reads; add disposable child-process routing/config poisoning regressions.

@@ -1,12 +1,17 @@
 use super::*;
-fn git(root: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .current_dir(root)
+fn fixture_git_command(root: &Path) -> std::process::Command {
+    // Canonical helper removes every inherited GIT_* variable before safe overrides.
+    let mut command = workspace_resolver::git_command(root);
+    command
+        .env("HOME", root)
+        .env("XDG_CONFIG_HOME", root.join("config"))
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", root.join("absent"))
-        .args(args)
-        .output()
-        .unwrap();
+        .env("GIT_CONFIG_SYSTEM", root.join("absent"));
+    command
+}
+fn git(root: &Path, args: &[&str]) -> String {
+    let output = fixture_git_command(root).args(args).output().unwrap();
     assert!(output.status.success(), "git fixture failed");
     String::from_utf8_lossy(&output.stdout).trim().into()
 }
@@ -55,8 +60,7 @@ fn real_temp_git_commits_exact_diff() {
         head_sha: git(&root, &["rev-parse", "HEAD"]),
         ..diff
     };
-    let expected = std::process::Command::new("git")
-        .current_dir(&root)
+    let expected = fixture_git_command(&root)
         .args(["diff", "--binary", &diff.base_sha, &diff.head_sha])
         .output()
         .unwrap();
@@ -335,3 +339,6 @@ mod race;
 
 #[path = "prompt_git_boundary_tests.rs"]
 mod boundary;
+
+#[path = "prompt_git_env_tests.rs"]
+mod env_isolation;
