@@ -6,14 +6,16 @@ A spawner seat run dir (``~/.local/state/plangraph/runs/<run>/``) holds only
 ``evidence.json``/``review.txt`` pair tools/seat_verdict.py consumes, failing
 closed (ValueError) whenever the record cannot witness a completed review.
 The record is bound to its run dir (run_id must equal the dir name) and must be
-uid-owned, not group/world-writable.  ``--head`` binds the completion-time HEAD
-of the run cwd (record completion.head_sha), not the launch commit: the spawner
-records no launch-time sha, so a launch binding cannot be checked here.
+uid-owned, not group/world-writable where POSIX metadata is known. ``--head``
+binds the completion-time HEAD of the run cwd (record completion.head_sha), not
+the launch commit: the spawner records no launch-time sha, so a launch binding
+cannot be checked here.
 """
 from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import subprocess
 from pathlib import Path
@@ -75,7 +77,12 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
     if not isinstance(record, dict):
         raise ValueError("record.json is not an object")
     # F6: bind the record to its directory and to this uid's write access.
-    if stat.st_uid != os.getuid() or stat.st_mode & 0o022:
+    windows = os.name == "nt"
+    # Drive mounts synthesize modes; lexical paths prevent symlink exemptions.
+    mode_unknown = windows or re.match(
+        r"^/mnt/[a-zA-Z]/", posixpath.normpath(record_path.absolute().as_posix()))
+    if (not windows and stat.st_uid != os.getuid()
+            or not mode_unknown and stat.st_mode & 0o022):
         raise ValueError("record.json must be owned by the current uid and "
                          "not group/world-writable")
     run_id = record.get("run_id")

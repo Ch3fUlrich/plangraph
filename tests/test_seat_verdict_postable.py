@@ -110,6 +110,16 @@ def test_transport_repost_send_raising_keeps_retry_journal(run, monkeypatch):
     assert (seat / "verdict.json").read_bytes() == before and not (seat / "verdict.delivered").exists()
     monkeypatch.setattr(sv, "send", lambda *a: (calls.append(a) or (200, "recorded")))
     assert sv.main(argv) == 0 and len(calls) == 2
+    assert json.loads((seat / "verdict.json").read_text())["status"] == "delivered"
+    assert (seat / "verdict.delivered").exists()
+
+def test_transport_repost_unexpected_send_error_keeps_retry_journal(run, monkeypatch):
+    argv, seat, calls = run
+    before = (seat / "verdict.json").read_bytes()
+    def boom(*a): raise RuntimeError("boom")
+    monkeypatch.setattr(sv, "send", boom)
+    assert sv.main(argv) == 1
+    assert (seat / "verdict.json").read_bytes() == before and not (seat / "verdict.delivered").exists()
 
 @pytest.mark.parametrize("rc", [0, 1])
 def test_non_repost_apply_backfill_unchanged(run, rc):

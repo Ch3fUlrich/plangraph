@@ -375,8 +375,11 @@ def main(argv=None):
         if send_state is not None: send_state["started"] = False
         print(f"seat_verdict: send failed: {type(exc).__name__}", file=sys.stderr)
         return EXIT_IO
+    except BaseException:
+        if send_state is not None: send_state["started"] = False
+        raise
     short = " ".join(reply.split())[:120]
-    print(f"key={args.key} family={family} ok={ok} http={status} reply={short}")
+    print(f"key={args.key} family={family} ok={ok} http={status} reply={short}", flush=True)
     return 0 if 200 <= status < 300 else EXIT_IO
 if __name__ == "__main__":
     sys.exit(main())
