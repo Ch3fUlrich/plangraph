@@ -102,3 +102,5 @@ Fleet-sync schema/example tests resolve fixtures relative to their test file
 and exercise reads after changing to an unrelated directory. The imports at
 `tests/test_fleet_sync.py:4` (`Path`) and `tests/test_fleet_sync.py:9` (`drift`)
 predate this PR.
+
+Fleet advance runs the installed Rust `pg-settings-lint` against user and release `.claude/settings*.json` before health checks on each host. A lint failure refuses rollout before the live pointer changes. Install the binary alongside `pg-spawnd` on every host.

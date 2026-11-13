@@ -64,6 +64,11 @@ def worker(config):
         os.replace(temporary, pointer)
 
     def health(directory, post=False):
+        settings = [p for folder in (Path.home() / '.claude', Path(directory) / '.claude')
+                    for p in folder.glob('settings*.json') if p.is_file()]
+        if settings:
+            subprocess.run(['pg-settings-lint', *map(str, settings)], cwd=directory,
+                           check=True, timeout=30)
         for name in (('doctor', 'whoami', 'spawn') if post else ('doctor', 'whoami')):
             subprocess.run(repo['health_checks'][name], cwd=directory, check=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)

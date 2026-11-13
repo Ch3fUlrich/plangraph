@@ -58,3 +58,5 @@ Merge policy tests retain the unique crate-local mapping and its existing doc,
 and preserve all workspace members in main's path order, including `pg-reap`.
 Hook ports, property tests, 14-day zero-diff observation, rollback canary and settings
 integration remain deferred; the production switch belongs to **RUST-HOOKS-SWITCH**.
+
+`pg-settings-lint FILE...` rejects MCP allow/deny rules containing parentheses with the source file and line. The JSON parser checks decoded strings, including Unicode escapes. `--tracked REPO` checks all tracked settings.json/settings.local.json files; CI invokes it in the Rust job.

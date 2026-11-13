@@ -326,3 +326,5 @@ The context guard suppresses handoff output for sidechain transcript records,
 including copied parent usage; main-session caps remain enforced.
 
 Record-derived prompt-only review evidence is void unless the saved dispatched prompt contains diff text.
+
+CI selects Rust checks when a settings.json/settings.local.json changes and runs `pg-settings-lint --tracked ..` before clippy.

@@ -1,0 +1,1 @@
+- Reject parenthesized MCP permission rules with file and line in Rust lint, checked-in CI settings, and per-host fleet rollout health checks.

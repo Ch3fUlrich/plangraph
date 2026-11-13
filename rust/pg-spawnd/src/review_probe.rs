@@ -16,7 +16,10 @@ pub(crate) fn key_alert(state: &Path, key: &Path) -> Result<(), String> {
     let write = |path: &Path, bytes: &[u8]| {
         pg_worker_core::run::record_io::atomic_write_private(path, bytes).map_err(|e| e.to_string())
     };
-    write(&state.join("watchdog/outbox/review-manage-key-missing.json"), event.to_string().as_bytes())?;
+    write(
+        &state.join("watchdog/outbox/review-manage-key-missing.json"),
+        event.to_string().as_bytes(),
+    )?;
     write(&stamp, b"alerted")
 }
 
@@ -25,18 +28,34 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
         return Err("usage: pg-spawnd review-probe (configuration through environment)".into());
     }
     let state = crate::state::resolve_state(None, |key| std::env::var_os(key))?;
-    let config = std::env::var_os("AUTOOS_AI_STACK_CONFIG").map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(|p| Path::new(&p).join("autoos/ai-stack")))
+    let config = std::env::var_os("AUTOOS_AI_STACK_CONFIG")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("XDG_CONFIG_HOME").map(|p| Path::new(&p).join("autoos/ai-stack"))
+        })
         .or_else(|| std::env::var_os("HOME").map(|p| Path::new(&p).join(".config/autoos/ai-stack")))
         .ok_or("review probe config root missing")?;
     key_alert(&state, &config.join("manage.key"))?;
-    let (code, bytes, _) = crate::adapter::Adapter(&state).run(
-        &["probe".into(), "--all-reviews".into(), "--json".into(), "--timeout".into(), "45".into()],
-        Duration::from_secs(1800),
-    ).map_err(|_| "review probe adapter unavailable")?;
-    let result: Value = serde_json::from_slice(&bytes).map_err(|_| "review probe invalid result")?;
+    let (code, bytes, _) = crate::adapter::Adapter(&state)
+        .run(
+            &[
+                "probe".into(),
+                "--all-reviews".into(),
+                "--json".into(),
+                "--timeout".into(),
+                "45".into(),
+            ],
+            Duration::from_secs(1800),
+        )
+        .map_err(|_| "review probe adapter unavailable")?;
+    let result: Value =
+        serde_json::from_slice(&bytes).map_err(|_| "review probe invalid result")?;
     writeln!(out, "{result}").map_err(|e| e.to_string())?;
-    if code == 0 { Ok(()) } else { Err("review probe: unavailable legs booked down".into()) }
+    if code == 0 {
+        Ok(())
+    } else {
+        Err("review probe: unavailable legs booked down".into())
+    }
 }
 
 #[cfg(test)]

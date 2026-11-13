@@ -253,3 +253,16 @@ def test_fleet_sync_windows_transport_exact_argv(fleet, monkeypatch, ssh_target,
     monkeypatch.setattr(module.subprocess, 'check_output', check_output)
     assert module.transport(host, config)['ok']
     assert len(calls) == 1
+
+
+def test_settings_lint_blocks_each_host_before_switch(fleet):
+    root = fleet[1].parent
+    settings = root / '.claude/settings.json'
+    settings.parent.mkdir()
+    settings.write_text('{"permissions":{"allow":["mcp__terminal__run(*)"]}}')
+    linter = root / 'bin/pg-settings-lint'
+    linter.write_text('#!/bin/sh\nprintf "%s:1: invalid settings permission rule\\n" "$1" >&2\nexit 1\n')
+    linter.chmod(0o755)
+    assert invoke(fleet) == 1
+    assert (root / 'host-a/current').resolve().name == 'b' * 40
+    assert not (root / 'host-b/releases' / ('a' * 40)).exists()
