@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,6 +64,13 @@ def implement_family_excluded(leg):
             or not identities.intersection(MODEL_FAMILIES | {"grok", "openrouter"}))
 
 
+def private_paths(card):
+    """D-5768: sensitive paths cannot rely on optional card risk tags."""
+    return any(re.search(r"(^|[/_.-])(secrets?|auth|gateway)([/_.-]|$)|(^|/)site/data(/|$)",
+                         path.replace("\\", "/").lower())
+               for key in ("paths", "write_set") for path in card.get(key, ()))
+
+
 @dataclass(frozen=True)
 class RoutePolicy:
     banned_families: tuple[str, ...] = ()
@@ -96,11 +104,7 @@ class RoutePolicy:
         if not lifted:
             if listed(self.banned_families):
                 return "banned_family"
-            # D-5743 lifts only this exact free review leg, not other GLM legs.
-            free_pickle_review = (role == "review" and leg.id == "opencode-big-pickle"
-                                  and leg.model == "opencode/big-pickle" and leg.family == "glm"
-                                  and leg.tier == "free")
-            if listed(self.off_families) and not free_pickle_review:
+            if listed(self.off_families):
                 return "off_family"
         if not self.allows(leg.harness, role):
             return "paused_harness"

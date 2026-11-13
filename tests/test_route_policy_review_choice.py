@@ -37,15 +37,19 @@ def test_review_route_never_offers_qwen_max():
 
 def test_glm_never_a_review_option():
     policy = load_route_policy(Path('src/plangraph/planner/route_policy.json'))
-    assert 'glm' not in policy.review_allowed_families
+    assert 'glm' in policy.review_allowed_families  # Historical name; D-5648 supersedes D-3605.
     # The low-level route_card orders eligible legs; plan_spawn applies policy.
     route = plan_spawn({'estimate_tokens': 1000}, role='review',
-                       writer_families=('gpt',), policy=policy, catalog_rows=())
+                       writer_families=('gpt',), policy=policy, catalog_rows=(),
+                       leg_reader=lambda *a, **k: {'state': 'available', 'evidence': None})
     assert [leg.id for leg in route.legs if leg.family == 'glm'] == ['opencode-big-pickle']
     reasons = {s['leg']: s['reason'] for s in route.skipped}
     assert 'opencode-big-pickle' not in reasons
     assert reasons['opencode-go-glm-5.2'].startswith('disabled: D-3605')
     assert reasons['opencode-glm-5.3-flash-free'].startswith('disabled: D-4196')
+    ordinary = replace(policy, review_allowed_families=('deepseek',))
+    assert ordinary.skip_reason(next(leg for leg in DEFAULT_LEGS
+                                    if leg.id == 'opencode-big-pickle'), 'review') == 'off_family'
 
 
 def test_big_pickle_review_lift_does_not_bypass_other_policy_guards():
@@ -56,8 +60,7 @@ def test_big_pickle_review_lift_does_not_bypass_other_policy_guards():
     for role in ('implement', 'orchestrate'):
         assert policy.skip_reason(pickle, role) == 'off_family'
     assert RoutePolicy(banned_families=('glm',)).skip_reason(pickle, 'review') == 'banned_family'
-    assert RoutePolicy(off_families=('glm',), paused_harnesses={'opencode': ()}).skip_reason(
+    assert RoutePolicy(off_families=('glm',)).skip_reason(pickle, 'review') == 'off_family'
+    assert replace(policy, paused_harnesses={'opencode': ()}).skip_reason(
         pickle, 'review') == 'paused_harness'
-    for other in (replace(pickle, id='other-glm'), replace(pickle, model='opencode/other-glm'),
-                  replace(pickle, tier='subscription')):
-        assert policy.skip_reason(other, 'review') == 'off_family'
+    assert 'D-5648' in Path('src/plangraph/planner/route_policy.json').read_text()

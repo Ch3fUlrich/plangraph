@@ -10,9 +10,9 @@ import pytest
 from plangraph.spawner.mimo_policy import MimoPathError, check_mimo_path
 
 
-GOOD = ("mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro", "opencode/mimo-v2.6-flash-free")
+GOOD = ("mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro")
 BAD = ("omniroute/mimo-v2.6-flash", "mimo-v2.6-flash",
-       "opencode/mimo-v2.6-pro-free", "mimo-v2.6-pro", "other/mimo-new")
+       "opencode/mimo-v2.6-flash-free", "mimo-v2.6-pro", "other/mimo-new")
 
 
 @pytest.mark.parametrize("model", GOOD + ("other/model", "l2-worker"))
@@ -22,6 +22,8 @@ def test_allowed(model):
 
 def test_free_mimo_does_not_claim_direct_gateway_rendering():
     from plangraph.routing_support.resolver import admitted_by_render
+    from plangraph.mimo_policy import check_mimo_path as shared_check
+    assert shared_check is check_mimo_path  # The spawner module re-exports the shared policy.
     assert not admitted_by_render("opencode/mimo-v2.6-flash-free")
 
 
@@ -75,6 +77,23 @@ def test_catalog_and_filter():
             check_mimo_path(row["model_id"])
     for model in BAD:
         assert not is_model_available({"id": model})
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_deferred_free_mimo_cannot_enter_through_catalog_or_leg_json(tmp_path, enabled):
+    from plangraph.mimo_policy import mimo_path_allowed
+    from plangraph.planner.legs import DEFAULT_LEGS, load_legs
+    from plangraph.routing_support.leg_state import model_admitted
+    model = "opencode/mimo-v2.6-flash-free"
+    assert not mimo_path_allowed(model)
+    row = dict(id=model, active=True, available=1, harness="opencode", tool_mode="tools")
+    assert not model_admitted(row, enabled=enabled)
+    for role in ("implement", "review", "orchestrate"):
+        raw = dict(dataclasses.asdict(DEFAULT_LEGS[0]), model=model, roles=[role])
+        path = tmp_path / "legs.json"
+        path.write_text(json.dumps({"legs": [raw]}))
+        with pytest.raises(ValueError, match="Mimo requires"):
+            load_legs(path)
 
 
 def test_sweep(tmp_path):

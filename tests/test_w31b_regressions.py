@@ -137,10 +137,11 @@ def test_async_probe_offloads_real_function(monkeypatch):
 
 def test_jsonc_parse_warning_once_without_values(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(o, '_parse_warned', False)
-    (tmp_path / 'opencode.jsonc').write_text('{private-value-invalid')
+    path = tmp_path / 'providers.json'
+    path.write_text('{private-value-invalid')
     with caplog.at_level(logging.WARNING):
-        assert o.load_root_providers(tmp_path) is o.UNKNOWN_PROVIDERS
-        assert o.load_root_providers(tmp_path) is o.UNKNOWN_PROVIDERS
+        assert o.load_root_providers(path) is o.UNKNOWN_PROVIDERS
+        assert o.load_root_providers(path) is o.UNKNOWN_PROVIDERS
     assert len(caplog.records) == 1
     assert 'private-value' not in caplog.text
 
@@ -151,8 +152,9 @@ def test_jsonc_parse_warning_once_without_values(tmp_path, monkeypatch, caplog):
     '{"providers": {"x": {"url": "https://host/*keep*/"}},}',
 ])
 def test_jsonc_comments_strings_trailing_comma(tmp_path, text):
-    (tmp_path / 'opencode.jsonc').write_text(text)
-    providers = o.load_root_providers(tmp_path)
+    path = tmp_path / 'providers.json'
+    path.write_text(text)
+    providers = o.load_root_providers(path)
     assert providers is not None
     if providers:
         assert providers['x']['url'] == 'https://host/*keep*/'

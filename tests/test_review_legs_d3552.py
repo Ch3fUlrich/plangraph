@@ -1,4 +1,4 @@
-"""D-3552 review legs, updated for D-3605/D-4779: GLM is not a review leg.
+"""D-3552 review legs: D-5648/D-5768 lifts Big Pickle; other GLM legs stay disabled.
 
 * ``review_allowed_families`` loads, validates like ``banned_families``, refuses kimi;
 * the lift applies to the review role only: implement/orchestrate stay banned/off;
@@ -39,7 +39,7 @@ def _clear_limiter(model, **kwargs):
 # --- policy: the key loads, kimi is refused, the lift is review-only ----------
 
 def test_policy_loads_review_allowed_families():
-    assert load_route_policy().review_allowed_families == ("deepseek",)
+    assert load_route_policy().review_allowed_families == ("deepseek", "glm")
 
 
 def test_review_allowed_families_validates_like_banned_families(tmp_path):
@@ -75,7 +75,8 @@ def test_deepseek_glm_skipped_for_implement_but_not_review():
         assert policy.skip_reason(by_id[leg_id], "implement") == "banned_family"
         assert policy.skip_reason(by_id[leg_id], "orchestrate") == "banned_family"
     for leg_id in ("opencode-go-glm-5.2", "opencode-glm-5.3-flash-free"):
-        assert policy.skip_reason(by_id[leg_id], "review") == "off_family"
+        assert policy.skip_reason(by_id[leg_id], "review") is None
+        assert by_id[leg_id].disabled  # The policy lift never enables disabled registrations.
         assert policy.skip_reason(by_id[leg_id], "implement") == "off_family"
         assert policy.skip_reason(by_id[leg_id], "orchestrate") == "off_family"
 

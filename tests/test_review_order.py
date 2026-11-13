@@ -81,10 +81,7 @@ def test_big_pickle_uses_the_registered_glm_family_and_policy():
     from plangraph.review.family import writer_key
     leg = TABLE['opencode-big-pickle']
     assert writer_key(leg.family) == 'zhipu'
-    policy = RoutePolicy(off_families=('zhipu',))
-    assert policy.skip_reason(leg, 'review') is None  # D-5743: only free Big Pickle is lifted.
-    assert policy.skip_reason(replace(leg, id='other-glm'), 'review') == 'off_family'
-    assert policy.skip_reason(leg, 'implement') == 'off_family'
+    assert RoutePolicy(off_families=('zhipu',)).skip_reason(leg, 'review') == 'off_family'
     plan = plan_spawn(CARD, role='review', legs=(leg,), catalog_rows=(),
                       writer_families=('zhipu',), policy=RoutePolicy(),
                       leg_reader=lambda *a, **k: {'state': 'ok', 'evidence': None})

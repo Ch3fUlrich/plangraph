@@ -176,20 +176,6 @@ READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'i
                                    if leg.roles == ('implement',) else None))
                        if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
 
-# D-5743: review-only additions must not widen keeper readiness or writer roles.
-# Unknown privacy is not a training-policy claim; sourced values belong to slice 3.
-_free_review = _replace(next(leg for leg in DEFAULT_LEGS if leg.id == "opencode-big-pickle"),
-                        trains_on_data=None)
-DEFAULT_LEGS = tuple(candidate for leg in DEFAULT_LEGS for candidate in (
-    (_replace(_free_review, id="opencode-mimo-v2.6-flash-free",
-              model="opencode/mimo-v2.6-flash-free", family="mimo", roles=("review",)),
-     leg,
-     _replace(_free_review, id="opencode-go-longcat-2.5-free",
-              model="opencode-go/longcat-2.5-free", family="longcat", roles=("review",)),
-     _replace(_free_review, id="console-openrouter-free",
-              model="console-openrouter/openrouter/free", family="openrouter", roles=("review",)))
-    if leg.id == _free_review.id else (leg,)))
-
 # D-5206/D-5212 change writer priority, not the registered fallback roles.
 WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol-xhigh",  # D-5206: effort-qualified default, then agy fallback

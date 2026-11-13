@@ -110,7 +110,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     ``overflow`` marks a context-overflow failure: the window class grows by one.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
-    from .route_policy import implement_family_excluded
+    from .route_policy import implement_family_excluded, private_paths
     effective_role = role if role is not None else card.get("role")
     exclude_fams = set(exclude_families)
     legs = tuple(READINESS_LEGS if effective_role is None and legs is DEFAULT_LEGS else legs)
@@ -132,7 +132,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
         window_class = WINDOW_CLASSES[idx + 1]
         reasons.append(f"overflow: window class upgraded to {window_class}")
 
-    no_train = bool(_NO_TRAIN_TAGS.intersection(tags))
+    no_train = bool(_NO_TRAIN_TAGS.intersection(tags)) or private_paths(card)
     if effective_role == 'review' and not _fits(effective, window_class):
         window_class = pick_window_class(effective, floor=window_class)
         reasons.append(f'request limit: window class upgraded to {window_class}')

@@ -60,10 +60,7 @@ def test_implement_family_exclusion_over_all_catalog_rows():
         candidate = dataclasses.replace(template, id="catalog:" + model, model=model,
                                         family=row["family"], claude_family=False)
         route = route_card(CARD, legs=(candidate, fallback), role="implement")
-        # D-5743 adds LongCat for review only; its unknown writer family stays fenced.
-        assert (candidate in route.legs) == (row["family"] not in ("claude", "longcat")), model
-        if row["family"] == "longcat":
-            assert "excluded 1 legs: excluded_family" in route.reasons
+        assert (candidate in route.legs) == (row["family"] != "claude"), model
 
 
 @pytest.mark.parametrize("alias", ["claude", "anthropic", "fable", "opus", "sonnet", "haiku"])

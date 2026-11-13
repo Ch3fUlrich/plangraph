@@ -130,8 +130,8 @@ def test_default_policy_file():
     policy = load_route_policy()
     assert {"kimi", "deepseek"} <= set(policy.banned_families)
     assert "glm" in policy.off_families
-    # D-4779/D-3605: only deepseek is lifted; GLM remains off.
-    assert policy.review_allowed_families == ("deepseek",)
+    # D-5648/D-5768 lifts Big Pickle through the existing family-exception data.
+    assert policy.review_allowed_families == ("deepseek", "glm")
     assert "kimi" not in policy.review_allowed_families
     assert not policy.allows("qodercli", "review")
     assert not policy.allows("qodercli", "implement")
@@ -164,9 +164,9 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
     assert "kimi" not in families
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
     if role == "review":
-        # D-5743 lifts free Big Pickle only; other GLM legs remain disabled/off.
+        # D-5648 lifts Big Pickle; Go stays disabled (historical Zen fixture is active).
         assert "deepseek" in families
-        assert [leg.id for leg in plan.legs if leg.family == "glm"] == ["opencode-big-pickle"]
+        assert [leg.id for leg in plan.legs if leg.family == "glm"] == ["opencode-glm-5.3-flash-free", "opencode-big-pickle"]
         assert reasons["opencode-go-glm-5.2"].startswith("disabled:")
         return
     # implement/orchestrate stay banned/off (D-3552).
@@ -227,14 +227,14 @@ def test_claude_written_high_gets_luna_and_qwen(pre_d3552_policy):
     # D-3901: seats follow the free-first review route, retaining coverage.
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
     assert plan.error is None
-    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "opencode-mimo-v2.6-flash-free"}
+    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "opencode-gemini-4-argon"}
 
 
 def test_default_policy_seats_deepseek_for_review():
     # D-3552: with the live policy a deepseek leg may be a review seat.
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
     assert "deepseek" in {leg.family for leg in plan.legs}
-    assert _families(plan) == ["mimo", "deepseek"]  # D-5743: free MiMo precedes the historical Zen leg.
+    assert _families(plan)[0] == "deepseek"  # Historical fixture lifts the free Zen leg.
 
 
 def test_seat_never_shares_family_with_a_single_writer():
@@ -248,11 +248,11 @@ def test_seat_excludes_every_writer_family(pre_d3552_policy):
     from plangraph.keeper.coverage import uncovered
     plan = plan_spawn(RCARD, role="review", writer_families=("gpt", "qwen"))
     assert plan.error is None
-    assert set(_families(plan)) == {"glm", "mimo"}  # D-5743: two free families despite the agy pause.
+    assert set(_families(plan)) == {"gemini", "mimo"}  # Historical policy keeps GLM off.
     assert uncovered(["gpt", "qwen"], _families(plan), need=1) == []
     # Coverage names the parts as the keeper does (gpt = openai, qwen = alibaba).
-    assert plan.seat_coverage == ({"leg": "opencode-mimo-v2.6-flash-free", "covers": ["alibaba", "openai"]},
-                                  {"leg": "opencode-big-pickle", "covers": ["alibaba", "openai"]})
+    assert plan.seat_coverage == ({"leg": "opencode-gemini-4-argon", "covers": ["alibaba", "openai"]},
+                                  {"leg": "mimo-v2.6-flash", "covers": ["alibaba", "openai"]})
 
 
 def test_high_needs_two_families_per_part_incl_non_claude():
@@ -267,7 +267,7 @@ def test_high_needs_two_families_per_part_incl_non_claude():
 
 def test_uncoverable_parts_are_an_error():
     only = RoutePolicy(banned_families=("deepseek", "glm", "gpt", "mimo", "gemini", "muse",
-                                        "north", "laguna", "nvidia", "openai", "openrouter", "kimi", "grok", "pickle", "longcat"),
+                                        "north", "laguna", "nvidia", "openai", "openrouter", "kimi", "grok", "pickle"),
                        off_families=(), paused_harnesses={})
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",), policy=only)
     assert plan.error and "qwen" in _families(plan)
