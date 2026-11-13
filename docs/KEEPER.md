@@ -281,7 +281,7 @@ for `forgejo:` values), bind, and `default_lease` (7200), `lease_warn_s` (900), 
 ## CLI `pg`
 `pg ready [--project P] [--all] [-n 10]`, `show KEY`, `claim KEY [--lease 2h]`, `delegate KEY WORKER`, `heartbeat KEY`, `release KEY`,
 `evidence KEY --kind K --commit SHA | --run ID | --task N | --decision D-NNN`, `submit KEY`, `verdict KEY --pass|--changes "why"`,
-`waive KEY D-NNN`, `cancel KEY`, `priority KEY N`, `define …` (refuses `missing_why_how` unless the description has `Why:` and `How:`; `pg check` warns on open items without), `blocked`, `waves`, `critical`, `percent`, `alerts`, `digest`, `snapshot`, `whoami`,
+`waive KEY D-NNN`, `cancel KEY`, `priority KEY N`, `define …` (all new items, including decisions, require non-blank `Why:` and `How:` sections; missing sections report `missing_why_how`. MCP create and CLI define defer decision checks to storage, including `apply_ops`, after duplicate-key, conflict and locked refusals; legacy imports and existing-item edits remain exempt. `pg check` warns on open items without), `blocked`, `waves`, `critical`, `percent`, `alerts`, `digest`, `snapshot`, `whoami`,
 `render --out F [--cdn]`, `audit-meta [--project P] [--stale-days N] [--skeleton DIR]`; admin (local, on the keeper host): `pg admin init|add-principal|revoke|verify|import DIR|export DIR`.
 Env `PG_URL`, `PG_TOKEN_FILE` (path of a mode-600 file; never pass a token on argv). Default output = the smallest useful text; `--json` for full.
 Exit codes: 0 ok, 2 refused (stderr `code: msg`), 3 unreachable (CLI then reads the local `plan.snapshot.json` read-only for read verbs and says so).
