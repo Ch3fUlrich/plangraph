@@ -125,6 +125,34 @@ def test_new_decision_storage_refuses_missing_sections(w, path, description, mis
     assert w.conn.execute("SELECT COUNT(*) FROM events WHERE key IS NOT NULL").fetchone()[0] == 0
 
 
+@pytest.mark.parametrize("path", ["single", "batch_list"])
+@pytest.mark.parametrize("state, code", [
+    ("open", "conflict"), ("cancelled", "locked"),
+    ("duplicate", "validation"), ("new", "missing_why_how")])
+def test_decision_creation_preserves_conflict_and_lock_precedence(w, path, state, code):
+    w.store.import_items(w.p("router"), [
+        defn("D", kind="decision"), defn("G", ["D"], kind="goal")])
+    if state == "cancelled":
+        w.store.cancel(w.p("router"), "demo:D", "drop")
+    before = w.store._all_items()
+    events = w.conn.execute("SELECT COUNT(*) FROM events WHERE key IS NOT NULL").fetchone()[0]
+    items = [defn("NEW", kind="decision")]
+    if state == "duplicate":
+        items *= 2
+    elif state != "new":
+        items.append(defn("D", kind="decision"))
+    with pytest.raises(Refused) as exc:
+        if path == "single":
+            w.store.create_items(w.p("router"), items)
+        else:
+            w.store.apply_ops(w.p("router"), [{"op": "create", "item": items}])
+    assert exc.value.code == code
+    if code == "conflict":
+        assert exc.value.msg.endswith("demo:D already exists")
+    assert w.store._all_items() == before
+    assert w.conn.execute("SELECT COUNT(*) FROM events WHERE key IS NOT NULL").fetchone()[0] == events
+
+
 @pytest.mark.parametrize("path", ["single", "batch", "batch_list"])
 @pytest.mark.parametrize("description", [
     "Why: useful\nHow: build", "Why:\nuseful\nHow:\nbuild"])

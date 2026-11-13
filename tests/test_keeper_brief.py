@@ -219,13 +219,7 @@ def test_mcp_show_without_brief_is_unchanged(live):
     assert "reviews" in reply["result"]["content"][0]["text"]
 
 
-def test_mcp_create_reports_the_warning(live, monkeypatch):
-    # A server warning still passes through MCP with fully valid definitions.
-    store = live[0].store
-    create = store.create_items
-    def warned(*args):
-        return dict(create(*args), warnings=[brief_mod.BRIEF_WARNING])
-    monkeypatch.setattr(store, "create_items", warned)
+def test_mcp_create_reports_the_warning(live):
     reply = mcp.handle(
         {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
          "params": {"name": "create", "arguments": {"items": [
@@ -236,8 +230,13 @@ def test_mcp_create_reports_the_warning(live, monkeypatch):
                   description="Why: Test creation.\nHow: Create a decision.")]}}},
         _client(live, "router"))
     assert reply["result"]["isError"] is False
-    assert "description missing: brief will be empty" in \
-        reply["result"]["content"][0]["text"]
+    assert "warnings" not in json.loads(reply["result"]["content"][0]["text"])
+    # MCP create cannot warn; test real emission through its direct HTTP client.
+    text, is_error = _client(live, "router").call(
+        "POST", "create_items", {"items": [defn("W2", kind="goal")]})
+    assert is_error is False
+    assert json.loads(text)["created"] == ["demo:W2"]
+    assert json.loads(text)["warnings"] == [brief_mod.BRIEF_WARNING]
 
 
 # ------------------------------------------------------------------ stats
