@@ -76,3 +76,33 @@ def resolve_target(target, *, chosen=None):
         admit_leg(leg)
         target = leg.model
     return target, leg
+
+
+def admit_daily_budget(leg=None, *, model=None, dry_run=False):
+    """Every paid launch/retry asks the Rust gate; unavailable evidence refuses."""
+    if dry_run:
+        return
+    from .resolver import get_catalog_models
+    from plangraph.planner.review_order import catalog_tiers, payment_tier
+    tiers = set()
+    rows = get_catalog_models()
+    if leg is not None and not isinstance(leg, Mapping):
+        projected, = catalog_tiers((leg,), rows)
+        tiers.update((payment_tier(leg, 'review'), payment_tier(projected, 'review')))
+    elif isinstance(leg, Mapping):
+        tiers.add(leg.get('tier'))
+    target = model or (leg.get('model') if isinstance(leg, Mapping) else getattr(leg, 'model', None))
+    for row in rows:
+        if target == row.get('id') or target in (row.get('combos') or []):
+            tiers.add(row.get('tier'))
+    if 'paid' not in tiers and tiers.intersection({'trial', 'free', 'subscription'}):
+        return
+    import subprocess
+    try:
+        result = subprocess.run([os.environ.get('PLANGRAPH_BIN') or 'plangraph',
+                                 'cost-gate', 'admit'], timeout=30,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        raise SpawnRefused('daily cost gate unavailable; paid launch refused') from None
+    if result.returncode != 0:
+        raise SpawnRefused('daily cost gate refused paid launch')

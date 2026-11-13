@@ -45,7 +45,6 @@ IMPLEMENT_HEADER = ("You run as the opencode build agent: git commit is allowed 
                     "AutoOS leaf-agent profiles do not apply to you.")
 _keeper_unconfigured_last_warned = None
 
-
 from .env_redact import first_reason, redact, redact_output, _redact_prompt
 from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, refusal_record, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
@@ -54,10 +53,8 @@ from . import proc_kill
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
 from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry, mismatch_flag, witness_native  # re-export: tests import and patch these on runner
 
-
 def _is_nt() -> bool:
     return os.name == "nt"
-
 
 def _resolve_launch(
     exe: str,
@@ -92,11 +89,9 @@ def _resolve_launch(
 
     return exe, None
 
-
 def is_terminal(status):
     """Only known final run states are terminal; unknown states remain visible."""
     return status in ('completed', 'failed', 'cancelled', 'killed', 'dry_run', 'succeeded', 'timeout', 'refused', 'skipped')
-
 
 @dataclass
 class JobInfo:
@@ -129,14 +124,12 @@ class JobInfo:
     def to_dict(self) -> dict[str, Any]:
         return mismatch_flag(asdict(self))
 
-
 #: Every tool key the opencode 2.1.0 config schema knows ('*' exists only in
 #: the engine's internal Permission.Ruleset actions): a review child must have
 #: all of them denied (D-2905 (1)).
 _DENIED_TOOLS = ('bash', 'doom_loop', 'edit', 'external_directory', 'glob', 'grep',
                  'list', 'lsp', 'question', 'read', 'skill', 'task', 'todowrite',
                  'webfetch', 'websearch')
-
 
 def _opencode_managed_dir(env: Mapping) -> Path:
     """opencode's system (managed) config dir as the child will resolve it.
@@ -158,7 +151,6 @@ _REVIEW_OPENCODE_ENV_ALLOW = ('OPENCODE_CONFIG_CONTENT', 'OPENCODE_CONFIG',
                               'OPENCODE_CONFIG_DIR', 'OPENCODE_DISABLE_PROJECT_CONFIG',
                               'OPENCODE_DISABLE_CLAUDE_CODE', 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS',
                               'OPENCODE_DISABLE_AUTOUPDATE', 'OPENCODE_API_KEY')
-
 
 def _opencode_tools_denied(config_json, env) -> bool:
     """True only when the child's final config AND env prove every tool denied.
@@ -215,10 +207,8 @@ def _opencode_tools_denied(config_json, env) -> bool:
     except (OSError, ValueError):
         return False
 
-
 class NonceCapacity(RuntimeError):
     """All nonce slots belong to live runs."""
-
 
 class SpawnerRunner:
     """Async process runner for Plangraph agent tasks."""
@@ -322,7 +312,9 @@ class SpawnerRunner:
                 from plangraph.routing_errors import SpawnRefused
                 raise SpawnRefused('client disagrees with leg harness: ' + leg.id)
             client = leg.harness
+        from .target import admit_daily_budget
         validate_model(model_or_combo)
+        await asyncio.to_thread(admit_daily_budget, leg, model=model_or_combo, dry_run=dry_run)
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
             prompt = IMPLEMENT_HEADER + "\n\n" + prompt
         # REMOVE-AT-R10: capture the final prompt before command construction.
@@ -878,7 +870,6 @@ class SpawnerRunner:
         """Cancel a running job."""
         from .cancel_job import cancel_job
         return await cancel_job(self, job_id)
-
 
 def spawn_service(*args, **kwargs):
     """Shared hardened dispatch for the public CLI and MCP entry points."""

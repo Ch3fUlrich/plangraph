@@ -669,3 +669,12 @@ Rust source-filter tests and pytest's real `configured_hosts` checks consume
 `tests/fixtures/doctor_sources.json`, binding both validators and probe limits
 to the same accepted/rejected cases. Rust embeds JSON, never Python source or
 an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
+
+### Daily paid budget
+
+Paid harness launches and review retries call the Rust `plangraph cost-gate admit`
+before spawning. The direct runner and Rust launch-spec adapter enforce the same
+boundary. Paid catalog overrides and unknown billing evidence also require it;
+missing or failed execution refuses the launch. Private configuration and gateway
+export requirements are in [daily spend admission](cost-gate.md). Dry runs do not
+launch and remain available without private budget configuration.

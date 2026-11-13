@@ -50,3 +50,9 @@ The embedded manifest installs its Linux service/timer idempotently, pointing at
 the current binary with systemd path quoting. Platform-qualified entries are
 skipped on other systems. `plangraph taildrop-sort --dry-run` checks the intended
 operation without fetching files or creating state; activation remains cutover.
+
+## Daily cost gate
+
+`docs/cost-gate.md` specifies private config, complete call-log exports, exact
+arithmetic, fail-closed paid admission, migration and the 24-hour overlap guard.
+No budget or gateway credential is installed by the public setup manifest.

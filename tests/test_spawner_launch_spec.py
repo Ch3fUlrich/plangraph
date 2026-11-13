@@ -7,7 +7,6 @@ import pytest
 
 from plangraph.spawner import launch_spec as spec
 
-
 @pytest.fixture
 def request_data(tmp_path, monkeypatch):
     from dataclasses import replace
@@ -32,13 +31,11 @@ def request_data(tmp_path, monkeypatch):
                 dry_run=False, leg={'id': 'qodercli-qwen3.8-flash'}, prompt='do work',
                 card={}, cwd=str(tmp_path), state=str(tmp_path / 'state'))
 
-
 def invoke(req):
     out, err = io.StringIO(), io.StringIO()
     raw = json.dumps(req).encode() if not isinstance(req, bytes) else req
     code = spec.main(io.BytesIO(raw), out, err)
     return code, out.getvalue(), err.getvalue()
-
 
 @pytest.mark.parametrize('key', ['run_id', 'job_id', 'role', 'dry_run', 'leg', 'prompt', 'card', 'cwd', 'state'])
 @pytest.mark.parametrize('mode', ['missing', 'type'])
@@ -49,23 +46,19 @@ def test_keys(request_data, key, mode):
         request_data[key] = None
     assert invoke(request_data) == (1, '', f'launch-spec failed: invalid request ({key})\n')
 
-
 @pytest.mark.parametrize('key,value', [('extra', 1), ('run_id', 'run-ABC'), ('job_id', '!'),
     ('role', 'fix'), ('dry_run', 1), ('leg', {'id': ''}), ('cwd', '.'), ('state', '.')])
 def test_values(request_data, key, value):
     request_data[key] = value
     assert invoke(request_data) == (1, '', f'launch-spec failed: invalid request ({key})\n')
 
-
 @pytest.mark.parametrize('raw', [b'?', b'[]', b'\xff', b'{} {}', b' ' * (16 * 1024 * 1024 + 1)])
 def test_json(raw):
     assert invoke(raw) == (1, '', 'launch-spec failed: invalid request (json)\n')
 
-
 def test_unknown(request_data):
     request_data['leg'] = {'id': 'unknown'}
     assert invoke(request_data) == (2, '', 'unknown_leg: unknown leg id\n')
-
 
 @pytest.mark.parametrize('role', ['implement', 'review'])
 @pytest.mark.parametrize('explicit', [False, True])
@@ -91,7 +84,6 @@ def test_tools(request_data, role, tmp_path, explicit):
     assert ('End every commit message' in prompt) == (role == 'implement')
     assert result['events'][-2]['event'] == 'admitted_by_render'
 
-
 def test_opencode(request_data):
     request_data.update(role='review', leg={'id': 'opencode-glm-5.3-flash-free'})
     code, out, err = invoke(request_data)
@@ -104,13 +96,11 @@ def test_opencode(request_data):
     prefix = request_data['state'] + '/launch/' + request_data['run_id'] + '/'
     assert all(result['env'][key].startswith(prefix) for key in ('HOME', 'XDG_CONFIG_HOME'))
 
-
 def test_agy_stream_spec(request_data):
     request_data.update(leg={'id': 'agy-gemini-3.8-flash'}, prompt='é\n' + 'x' * (300 * 1024))
     result = spec.build(request_data)
     assert request_data['prompt'] not in result['argv']
     assert json.loads(result['stdin'])['message']['content'] == result['prompt'] == request_data['prompt']
-
 
 @pytest.mark.parametrize('leg_id', ['agy-gemini-3.8-flash', 'qodercli-qwen3.8-flash', 'opencode-glm-5.3-flash-free'])
 @pytest.mark.parametrize('dry_run', [False, True])
@@ -139,14 +129,12 @@ def test_real_producer_prompt_stays_out_of_env(request_data, monkeypatch, leg_id
     payload = json.loads(result['stdin'])['message']['content'] if leg_id.startswith('agy-') else result['stdin']
     assert payload == result['prompt'] == prompt
 
-
 @pytest.mark.parametrize('harness,leg', [('agy', 'agy-gemini-3.8-flash'), ('qodercli', 'qodercli-qwen3.8-flash')])
 @pytest.mark.parametrize('tail', [[], ['-p'], ['-p', 'private task']])
 def test_transport_refusal_is_named(request_data, monkeypatch, harness, leg, tail):
     request_data['leg'] = {'id': leg}
     monkeypatch.setattr(spec.runner, 'build_command', lambda **kw: [harness, *tail])
     assert invoke(request_data) == (2, '', 'stdin_prompt_flag_missing: expected -p with an empty value\n')
-
 
 def test_dry(request_data, monkeypatch):
     monkeypatch.setattr(spec, 'host_skip_reason_async', lambda *a, **kw: pytest.fail('host check'))
@@ -397,3 +385,16 @@ def test_refusal_limit(request_data, monkeypatch):
     monkeypatch.setattr(spec, 'host_skip_reason_async', unavailable)
     code, out, err = invoke(request_data)
     assert code == 2 and out == '' and len(err) == 301 and err.count('\n') == 1
+
+
+def test_catalog_paid_override_is_refused_before_service(request_data, monkeypatch):
+    import subprocess
+    request_data['leg'] = {'id': 'agy-gemini-3.8-flash'}
+    monkeypatch.setattr('plangraph.spawner.resolver.get_catalog_models', lambda:
+        [{'id':'agy/gemini-3.8-flash','tier':'paid'}])
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: type('Result', (), {'returncode':1})())
+    monkeypatch.setattr(spec, 'SpawnService', lambda **kw: pytest.fail('must refuse before service'))
+    code, output, error = invoke(request_data)
+    assert code == 2
+    assert output == ''
+    assert error == 'cost_gate: daily cost gate refused paid launch\n'

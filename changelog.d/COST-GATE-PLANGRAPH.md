@@ -1,0 +1,1 @@
+- Compute daily paid USD admission in Rust from private limits and complete gateway exports with exact arithmetic; enforce it at service, runner and Rust launch-adapter boundaries, including retries, and add copy-once state migration plus a 24-hour overlap guard.

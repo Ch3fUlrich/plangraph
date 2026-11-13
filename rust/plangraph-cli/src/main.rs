@@ -31,6 +31,10 @@ fn run() -> i32 {
         println!("environment checked {} keys", effective.len());
         return 0;
     }
+    // Startup is single-threaded; all command-specific threads start below.
+    for (key, value) in effective {
+        std::env::set_var(key, value);
+    }
     if args.first().is_some_and(|a| a == "unit-breaker") {
         return plangraph_cli::breaker::cli(&home, &args[1..]);
     }
@@ -53,6 +57,9 @@ fn run() -> i32 {
     }
     if args.first().is_some_and(|a| a == "taildrop-sort") {
         return plangraph_cli::taildrop::cli(&home, &args[1..]);
+    }
+    if args.first().is_some_and(|a| a == "cost-gate") {
+        return plangraph_cli::cost::cli(&home, &args[1..]);
     }
     let mode = match args
         .iter()

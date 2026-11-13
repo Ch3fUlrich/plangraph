@@ -8,6 +8,12 @@ from plangraph.planner.routing import SpawnRefused
 from plangraph.spawner.service import SpawnService
 
 
+@pytest.fixture(autouse=True)
+def budget_independent_paid_order_tests(monkeypatch):
+    # This file exercises paid-last routing; admission has its own launch tests.
+    monkeypatch.setattr('plangraph.spawner.target.admit_daily_budget', lambda *a, **kw: None)
+
+
 def use_table(monkeypatch, table):
     import plangraph.planner.routing as routing
     original = routing.plan_spawn

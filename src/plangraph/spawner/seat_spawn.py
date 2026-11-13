@@ -219,6 +219,8 @@ class SeatSpawnMixin:
         if record.get('cwd') is not None:
             options.setdefault('cwd', record['cwd'])
         async def launch(prompt_record, **kwargs):
+            from .target import admit_daily_budget
+            await asyncio.to_thread(admit_daily_budget, chosen, dry_run=kwargs.get('dry_run', False))
             job = await self.runner.spawn(prompt_record=prompt_record, **kwargs)
             self._running_records[job.job_id] = record
             process = self.runner._processes.get(job.job_id)
