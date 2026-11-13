@@ -32,22 +32,53 @@ def test_transport_repost_preserves_subprocess_import_order(run):
     code = """import sys
 sys.path.insert(0, sys.argv[1] + '/src')
 import plangraph.spawner.notify
-sys.path.remove(sys.argv[1] + '/src')
 sys.path.insert(0, sys.argv[1] + '/tools')
 import seat_verdict as sv
+sys.path.remove(sys.argv[1] + '/src')
 sv.send = lambda *a: (200, 'recorded')
 before = sys.path[:]
+assert sys.argv[1] + '/src' not in before
 assert sv.main(sys.argv[2:]) == 0
 assert sys.path == before
 """
     result = subprocess.run([sys.executable, "-I", "-c", code, str(Path(__file__).resolve().parents[1]), *argv], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
 
-def test_transport_repost_token_read_refusal_preserves_retry(run):
+def test_transport_repost_token_read_refusal_preserves_retry(run, capsys):
     argv, seat, calls = run
+    record = json.loads((seat / "record.json").read_text())
+    assert record["given_writer_families"] == ["deepseek"]
+    assert sv.model_family(record["chosen_leg"]["model"]) == "xiaomi"
     before = (seat / "verdict.json").read_bytes()
     (Path(argv[argv.index("--token-dir") + 1]) / "reviewer-xiaomi.token").unlink()
     assert sv.main(argv) == sv.EXIT_IO and calls == []
+    assert (seat / "verdict.json").read_bytes() == before and not (seat / "verdict.delivered").exists()
+    assert "seat_verdict: repost refused: poster exit 1" in capsys.readouterr().err
+
+@pytest.mark.parametrize("failure", ["missing-url", "empty-url", "dry-run"])
+def test_transport_repost_requires_url_without_dry_run(run, monkeypatch, capsys, failure):
+    argv, seat, calls = run
+    monkeypatch.delenv("PG_URL", raising=False)
+    if failure == "missing-url":
+        index = argv.index("--url")
+        del argv[index:index + 2]
+    elif failure == "empty-url":
+        argv[argv.index("--url") + 1] = ""
+    else:
+        argv.append("--dry-run")
+    before = (seat / "verdict.json").read_bytes()
+    with pytest.raises(SystemExit) as exc: sv.main(argv)
+    assert exc.value.code == 2 and "requires --url" in capsys.readouterr().err
+    assert calls == [] and (seat / "verdict.json").read_bytes() == before
+    assert not (seat / "verdict.json.lock").exists() and not (seat / "verdict.delivered").exists()
+
+def test_transport_repost_evidence_json_refusal_explains_cause(run, capsys):
+    argv, seat, calls = run
+    (seat / "evidence.json").write_text("{}")
+    before = (seat / "verdict.json").read_bytes()
+    assert sv.main(argv) == 1 and calls == []
+    error = capsys.readouterr().err
+    assert "evidence.json exists" in error and "dry-run" not in error
     assert (seat / "verdict.json").read_bytes() == before and not (seat / "verdict.delivered").exists()
 
 @pytest.mark.parametrize("failure", ["argv", "exit", "reason"])
@@ -57,12 +88,13 @@ def test_transport_repost_invalid_argv_preserves_journal_before_apply(run, failu
     if failure == "reason": journal.write_text('{"status":"retry","attempts":1,"reason":"other"}')
     before = journal.read_bytes()
     def poster(_):
+        sb._SEND_STATE.get()["started"] = False
         calls.append(True)
         raise SystemExit(2)
     args = SimpleNamespace(backfill_apply=True, url="unused", token_dir=seat)
     assert sb.apply_backfill(args, {"key": "demo:A", "writer_families": ["deepseek"]},
         {"seat_dir": seat, "head_sha": "-head" if failure == "argv" else HEAD_SHA}, poster, row,
         retry_reason="keeper verdict transport not configured") == 1
-    assert journal.read_bytes() == (b'{"status": "sending", "attempts": 1}\n' if failure == "exit" else before)
+    assert journal.read_bytes() == before
     assert calls == ([True] if failure == "exit" else [])
     if failure == "reason": assert "journal is not a transport-only retry" in row["reasons"]

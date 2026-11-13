@@ -254,8 +254,8 @@ def main(argv=None):
     if args.key is None:
         ap.error("the following arguments are required: --key")
     if args.repost_transport:
-        if args.seat_dir is None or args.token_dir is None or args.writer_family is not None:
-            ap.error("repost requires --seat-dir and --token-dir, without --writer-family")
+        if not args.url or args.seat_dir is None or args.token_dir is None or args.writer_family is not None or args.dry_run:
+            ap.error("repost requires --url, --seat-dir and --token-dir, without --writer-family or --dry-run")
         return repost_transport(args, main)
     if any(v is None for v in (args.key, args.seat_dir, args.writer_family, args.token_dir)):
         ap.error("single-record mode requires --key, --seat-dir, --writer-family, --token-dir")

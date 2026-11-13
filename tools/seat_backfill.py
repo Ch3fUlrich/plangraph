@@ -88,6 +88,7 @@ def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
                     atomic_write_private(journal, previous_text)
             if type(rc) is not int or rc < 0: raise ValueError("invalid verifier exit")
             row["verifier_exit"] = rc
+            if rc: row["reasons"].append(f"poster exit {rc}")
             phase = "verdict outcome write"
             if retry_reason is None or state.get("started") is not False:
                 _verdict_outcome(directory, "delivered" if rc == 0 else "skipped", "backfill verifier exit " + str(rc))
@@ -109,7 +110,10 @@ def repost_transport(args, poster):
     """Recheck a record through the verifier under the shared outbox lock."""
     row = {"reasons": []}
     try:
-        if (args.seat_dir / "evidence.json").exists() or args.dry_run: raise ValueError("record seat without --dry-run required")
+        if (args.seat_dir / "evidence.json").exists():
+            print("seat_verdict: repost refused: evidence.json exists; record-only seat required", file=sys.stderr)
+            return 1
+        if args.dry_run: raise ValueError("record seat without --dry-run required")
         record = json.loads((args.seat_dir / "record.json").read_text("utf-8"))
         args.backfill_apply = True
         apply_backfill(args, {"key": args.key, "writer_families": record.get("given_writer_families")},
