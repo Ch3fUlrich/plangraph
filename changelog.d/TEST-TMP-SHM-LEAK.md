@@ -1,0 +1,1 @@
+- Test temporary directories now include worker owner PIDs and sweep dead owners before worker allocation, preserving live, self-owned and legacy directories; pytest retains only the most recent failed run's temporary paths (TEST-TMP-SHM-LEAK).
