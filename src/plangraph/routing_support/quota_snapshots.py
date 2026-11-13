@@ -11,8 +11,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .clients import effective_gateway_base_url
 from .host_keys import _gateway_key
@@ -22,8 +24,7 @@ from .omniroute_state import _default_fetch
 MIN_PCT_ENV = 'PLANGRAPH_QUOTA_MIN_REMAINING_PCT'
 #: omniroute model aliases (cx-gpt..., gc/grok...) to the provider whose pool serves them.
 ALIASES = {'cx': 'codex', 'cc': 'claude', 'gc': 'grok-cli', 'gh': 'github'}
-#: Management route over the quota_snapshots table; it carries no reset time, so a
-#: reset-less exhausted row holds its leg for HOLD_S from the observation.
+#: The management route may omit resets; prefer QUOTA_SNAPSHOT_DB when available.
 URL_PATH = '/api/usage/utilization?range=7d&aggregateBy=connection'
 HOLD_S = 1800.0
 CACHE_S = 60.0
@@ -81,8 +82,20 @@ def pool_down_until(rows, provider, now, *, min_pct=1.0):
 
 
 def fetch_snapshot_rows(env=None, *, fetch=None):
-    """Snapshot rows from the gateway management API; LookupError when unreadable."""
+    """Read-only snapshot DB or management API; LookupError when unreadable."""
     source = os.environ if env is None else env
+    if source.get('QUOTA_SNAPSHOT_DB'):
+        try:
+            db = sqlite3.connect(Path(source['QUOTA_SNAPSHOT_DB']).resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
+            try:
+                cursor = db.execute('SELECT provider, connection_id, window_key, remaining_percentage, '
+                                    'is_exhausted, next_reset_at, created_at FROM quota_snapshots')
+                columns = [column[0] for column in cursor.description]
+                return [dict(zip(columns, row)) for row in cursor]
+            finally:
+                db.close()
+        except Exception:
+            raise LookupError('quota snapshots unreadable') from None
     base = (effective_gateway_base_url(source) or '').rstrip('/')
     base = base[:-3] if base.endswith('/v1') else base
     try:
@@ -99,7 +112,9 @@ def fetch_snapshot_rows(env=None, *, fetch=None):
         raise LookupError('quota snapshots unreadable') from None
     if status != 200 or not isinstance(rows, list):
         raise LookupError('quota snapshots unreadable')
-    return rows
+    observed = datetime.fromtimestamp(time.time(), timezone.utc).isoformat()
+    return [dict(row, created_at=observed) if isinstance(row, dict) and
+            _get(row, 'created_at', 'createdAt', 'timestamp') is None else row for row in rows]
 
 
 def _min_pct():

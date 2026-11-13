@@ -1,6 +1,7 @@
 """Quota refusals (omniroute, agy, opencode-go) book the leg down and end the run at once."""
 import asyncio
 import sys
+import sqlite3
 import time
 from types import SimpleNamespace
 
@@ -86,6 +87,44 @@ SOL = 'omniroute/cx-gpt-6.1-sol-xhigh'
 OK = {'state': 'ok', 'evidence': None}
 
 
+def test_read_only_snapshot_source_preserves_reset(tmp_path):
+    path = tmp_path / 'snapshots.sqlite'
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE quota_snapshots (provider, connection_id, window_key, '
+                   'remaining_percentage, is_exhausted, next_reset_at, created_at)')
+        db.execute('INSERT INTO quota_snapshots VALUES (?,?,?,?,?,?,?)',
+                   ('codex', 'a1', 'weekly', 0, 1, '2026-11-19T00:00:00Z', '2026-11-13T00:00:00Z'))
+    def no_http(*args):
+        raise AssertionError('local snapshot needs no gateway request or credentials')
+    rows = fetch_snapshot_rows({'QUOTA_SNAPSHOT_DB': str(path)}, fetch=no_http)
+    now = quota_snapshots._ts('2026-11-13T10:00:00Z')
+    reset = quota_snapshots._ts('2026-11-19T00:00:00Z')
+    gate = QuotaGate(lambda: rows)
+    assert gate.apply(SOL, OK, now)['evidence']['reset_at'] == reset
+    assert gate.apply(SOL, OK, reset + 1) == OK
+
+
+def test_missing_or_corrupt_snapshot_db_never_blocks_or_creates_file(tmp_path):
+    path = tmp_path / 'snapshot.sqlite'
+    source = lambda: fetch_snapshot_rows({'QUOTA_SNAPSHOT_DB': str(path)})
+    assert QuotaGate(source).apply(SOL, OK) == OK
+    assert not path.exists()
+    path.write_text('not a database')
+    assert QuotaGate(source).apply(SOL, OK) == OK
+
+
+def test_api_reset_and_resetless_observation_holds(monkeypatch):
+    monkeypatch.setattr(quota_snapshots, 'effective_gateway_base_url', lambda env: 'http://gw/v1')
+    monkeypatch.setattr(quota_snapshots, '_gateway_key', lambda env: 'k')
+    monkeypatch.setattr(quota_snapshots.time, 'time', lambda: 1000.0)
+    for extra, until in [('', 2800.0), (', "next_reset_at": "1970-01-01T02:00:00Z"', 7200.0)]:
+        def fetch(*args):
+            return 200, ('{"data":[{"provider":"codex:a1","remainingPct":0' + extra + '}]}').encode()
+        gate = QuotaGate(lambda: fetch_snapshot_rows({}, fetch=fetch))
+        assert gate.apply(SOL, OK, 1001)['evidence']['reset_at'] == until
+        assert gate.apply(SOL, OK, until + 1) == OK
+
+
 def _row(pct, reset, account='a1', window='7d', provider='codex', **extra):
     return dict(provider=provider, connection_id=account, window_key=window, remaining_percentage=pct,
                 is_exhausted=int(pct <= 0), next_reset_at=reset, created_at='2026-11-13 10:00:00', **extra)
@@ -138,7 +177,9 @@ def test_snapshot_fetch_is_read_only_json_and_unreadable_is_a_lookup_error(monke
     def fetch(url, headers, timeout):
         seen.append((url, headers))
         return 200, b'{"data": [{"provider": "codex:a1", "remainingPct": 0}]}'
-    assert fetch_snapshot_rows({}, fetch=fetch) == [{'provider': 'codex:a1', 'remainingPct': 0}]
+    rows = fetch_snapshot_rows({}, fetch=fetch)
+    assert rows[0]['provider'] == 'codex:a1' and rows[0]['remainingPct'] == 0
+    assert quota_snapshots._ts(rows[0]['created_at']) is not None
     assert seen[0][0].startswith('http://gw/api/usage/utilization?') and seen[0][1] == {'Authorization': 'Bearer k'}
     for bad in (lambda u, h, t: (500, b'{}'), lambda u, h, t: (200, b'nope'), lambda u, h, t: (_ for _ in ()).throw(OSError())):
         with pytest.raises(LookupError):
