@@ -163,6 +163,9 @@ def main():
 
 
 def push_main():
+    cargo_bin = Path.home() / '.cargo/bin'
+    if cargo_bin.is_dir():
+        os.environ['PATH'] = str(cargo_bin) + os.pathsep + os.environ.get('PATH', '')
     refs = [rec.split(maxsplit=3) for rec in sys.stdin.read().splitlines()]
     if not refs:
         return 0

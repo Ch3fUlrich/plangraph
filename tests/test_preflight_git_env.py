@@ -93,3 +93,41 @@ def test_missing_git_environment_discovery_refuses_tests(repo, monkeypatch, caps
     assert "FAIL tests " in capsys.readouterr().out
     assert not any(Path(command[1]).name == "affected_tests.py"
                    for command, _, _ in calls)
+
+
+def test_preflight_restores_user_cargo_path(repo, monkeypatch):
+    cargo_bin = repo / '.cargo/bin'
+    cargo_bin.mkdir(parents=True)
+    monkeypatch.setenv('PATH', '/usr/bin')
+    calls = fake_runner(monkeypatch)
+    assert preflight.main(['--base', 'HEAD', '--fast'], repo) == 0
+    assert calls[0][2]['PATH'].split(os.pathsep)[0] == str(cargo_bin)
+
+
+def test_hook_restores_user_cargo_path(repo, monkeypatch):
+    import io
+    import runpy
+    cargo_bin = repo / '.cargo/bin'
+    cargo_bin.mkdir(parents=True)
+    monkeypatch.setenv('PATH', '/usr/bin')
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(''))
+    hook = runpy.run_path(str(Path(preflight.__file__).with_name('hooks') / 'pre-push'))
+    assert hook['push_main']() == 0
+    assert os.environ['PATH'].split(os.pathsep)[0] == str(cargo_bin)
+
+
+def test_missing_cargo_stops_selected_placement_tests(repo, monkeypatch, capsys):
+    from test_affected_tests import selector
+    from types import SimpleNamespace
+    test = repo / 'tests/test_placement_example.py'
+    test.parent.mkdir()
+    test.write_text('def test_example(): pass\n')
+    monkeypatch.setenv('PATH', str(repo / 'empty-bin'))
+    module = selector()
+    calls = []
+    monkeypatch.setattr(module.subprocess, 'run', lambda *a, **k: calls.append(a) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(sys, 'argv', ['affected_tests', '--base', 'HEAD', '--changed',
+                                   'tests/test_placement_example.py', '--run'])
+    assert module.main(root=repo) == 1
+    assert not calls
+    assert capsys.readouterr().err.splitlines() == ['CARGO FAIL: cargo is required for selected placement tests']

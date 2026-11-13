@@ -69,7 +69,7 @@ def first_error(output):
     return (marked or lines or ["no output"])[0]
 
 
-def rust_commands(root, base, head):
+def rust_commands(root, base, head, env=None):
     try:
         changed = subprocess.check_output(
             ["git", "diff", "--name-only", "--no-renames", f"{base}...{head}"],
@@ -80,8 +80,9 @@ def rust_commands(root, base, head):
     changed = [p for p in changed if p.startswith("rust/")]
     if not changed:
         raise SkipFamily("no rust changes")
-    if not shutil.which("cargo"):
-        raise FailFamily("missing required tool: cargo")
+    available = shutil.which("cargo") if env is None else shutil.which("cargo", path=env.get('PATH', ''))
+    if not available:
+        raise FailFamily("CARGO FAIL: cargo is required for Rust checks")
     manifests = {}
     for manifest in (root / "rust").rglob("Cargo.toml"):
         if "target" in manifest.parts:
@@ -123,6 +124,9 @@ def main(argv=None, root=None):
     policy_bases = dict(FILESIZE_REQUIRE_BASE=args.base, NEWCODE_BASE=args.base,
                         CHANGELOG_BASE=args.base)
     env = dict(os.environ, CARGO_BUILD_JOBS="4")
+    cargo_bin = Path.home() / '.cargo/bin'
+    if cargo_bin.is_dir():
+        env['PATH'] = str(cargo_bin) + os.pathsep + env.get('PATH', '')
     # Nested test repositories own their revision history, not this checkout's base.
     for key in policy_bases:
         env.pop(key, None)
@@ -163,7 +167,7 @@ def main(argv=None, root=None):
         elif not stopped:
             try:
                 if commands is None:
-                    commands = rust_commands(root, args.base, args.head)
+                    commands = rust_commands(root, args.base, args.head, env)
                 family_env = policy_env if family == "policy" else env
                 if family == "tests" and commands:
                     family_env = test_environment(root, env)
@@ -196,7 +200,7 @@ def main(argv=None, root=None):
                 print(f"{family}: SKIP: {exc}", flush=True)
             except FailFamily as exc:
                 status = "FAIL"
-                print(f"{family}: FAIL: {exc}", flush=True)
+                print(str(exc) if str(exc).startswith("CARGO FAIL:") else f"{family}: FAIL: {exc}", flush=True)
             except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
                 status = "FAIL"
             if status in {"FAIL", "INFRA"}:

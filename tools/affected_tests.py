@@ -7,6 +7,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import time
 
@@ -215,6 +216,12 @@ def main(root=None):
         print("no pg-affected tests")
         return 0
     if args.run and plan["tests"]:
+        placement = any('placement' in Path(path).name or
+                        (root / path).is_dir() and any((root / path).rglob('*placement*.py'))
+                        for path in plan['tests'])
+        if placement and not shutil.which('cargo'):
+            print('CARGO FAIL: cargo is required for selected placement tests', file=sys.stderr)
+            return 1
         start = time.monotonic()
         parallel = (["-n", args.workers, "--dist", "loadgroup"]
                     if importlib.util.find_spec("xdist") is not None else [])
