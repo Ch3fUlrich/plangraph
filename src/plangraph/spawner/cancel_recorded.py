@@ -47,8 +47,9 @@ async def register_execute(service, record, execute, queued):
             if expired['status'] == 'failed':
                 service._save(expired)
                 return
-            if execute: record.update(status='running', started=time.time())
-            record.pop('reason', None)
+            if execute:
+                record.update(status='running', started=time.time())
+                record.pop('reason', None)
             service._save(record)
             if execute is None: return
             task = service.tasks[record['run_id']] = asyncio.create_task(execute())

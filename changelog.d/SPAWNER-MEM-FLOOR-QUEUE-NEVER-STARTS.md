@@ -1,2 +1,3 @@
 - Refuse unplaceable memory-floor spawns immediately with measured RAM evidence; explicitly opted-in memory waits retry on timer/run exit, expire after a configurable 15-minute bound, and cancel successfully before launch.
 - Preserve queued launch identity and terminal outcomes under cancellation races, bound lock contention without blocking the loop, keep expiry reads read-only, and save overflow refusals in caller state with accurate reasons.
+- Require explicit caller state for standalone overflow, pass it before the local CLI verb without forwarding it remotely, and retain the queued reason when planning fails before execution.

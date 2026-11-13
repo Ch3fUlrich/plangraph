@@ -185,6 +185,7 @@ def test_queue_preserves_identity_through_real_dispatch(host, monkeypatch, dispa
         await asyncio.wait_for(service.tasks[record['run_id']], 10)
         final = service.result(record['run_id'])
         assert service.runner.calls and final['status'] != 'queued' and final['ended'] is not None
+        assert final.get('reason') != 'memory_recovery'
         assert final['queued_until'] == record['queued_until']
         assert len(service.ps()['runs']) == 1
         assert not service._queued
@@ -275,3 +276,84 @@ def test_queue_lock_contention_is_bounded_and_yields(host):
     finally:
         release.set()
         thread.join()
+
+
+def overflow_args(host):
+    root = host.config.parent
+    card, prompt = root / 'card.json', root / 'prompt.txt'
+    card.write_text('{"task":"test"}')
+    prompt.write_text('Implement this change.')
+    return ['spawn', '--repo', str(root), '--card', str(card), '--prompt', str(prompt)]
+
+
+@pytest.mark.parametrize('orchestration', [False, True])
+def test_overflow_local_cli_preserves_caller_state(host, monkeypatch, capsys, orchestration):
+    state = host.config.parent / 'caller-state'
+    host.memory[0] = 9000
+    monkeypatch.setattr(overflow, 'placement_policy', lambda *a: ('invented-local', orchestration))
+    monkeypatch.setattr(cli, 'SpawnService', SpawnService)
+    async def spawn(service, **options):
+        assert service.state == state
+        assert options['card'] == {'task': 'test'} and options['prompt'] == 'Implement this change.'
+        record = dict(run_id='run-local', status='dry_run', exit_code=0, ended=1001)
+        service._save(record)
+        return record
+    monkeypatch.setattr(SpawnService, 'spawn', spawn)
+    assert overflow.main(overflow_args(host) + ['--state', str(state), '--dry-run', '--leg', 'invented']) == 0
+    record = json.loads(capsys.readouterr().out)
+    assert SpawnService(state=state).result(record['run_id']) == record
+    host.remote.assert_not_called()
+
+
+def test_overflow_requires_caller_state(host, monkeypatch, capsys):
+    default = host.config.parent / 'default-state'
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(default))
+    monkeypatch.setattr(cli, 'SpawnService', SpawnService)
+    with pytest.raises(SystemExit) as exc:
+        overflow.main(overflow_args(host))
+    assert exc.value.code == 2 and '--state' in capsys.readouterr().err
+    assert not SpawnService(state=default).ps()['runs']
+
+
+def test_overflow_refusal_visible_in_caller_state(host, monkeypatch, capsys):
+    state, default = host.config.parent / 'caller-state', host.config.parent / 'default-state'
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(default))
+    monkeypatch.setattr(cli, 'SpawnService', SpawnService)
+    assert overflow.main(overflow_args(host) + ['--state', str(state)]) == 2
+    record = json.loads(capsys.readouterr().out)
+    assert record['reason'] == 'host_memory_floor'
+    assert cli.main(['--state', str(state), 'ps']) == 0
+    assert json.loads(capsys.readouterr().out)['runs'] == [record]
+    assert cli.main(['--state', str(state), 'result', record['run_id']]) == 2
+    assert json.loads(capsys.readouterr().out) == record
+    assert not SpawnService(state=default).ps()['runs']
+
+
+def test_overflow_remote_does_not_forward_local_state(host, monkeypatch, capsys):
+    host.config.write_text(json.dumps({'public_repos': [str(host.config.parent)], 'hosts': {'other': {}}}))
+    monkeypatch.setattr(overflow, 'ready_records', lambda *a: {'other': dict(
+        ssh='fake', ok=True, fresh=True, live_runs=0, mem_available_mb=7000, role_mb=2048, floor_mb=3000)})
+    host.remote.configure_mock(side_effect=None, return_value=dict(run_id='run-remote', status='running'))
+    args = overflow_args(host) + ['--state', str(host.service.state), '--role', 'review']
+    assert overflow.main(args) == 0
+    assert host.remote.call_args.args[-1] == ['--role', 'review']
+    assert json.loads(capsys.readouterr().out)['host'] == 'other'
+
+
+def test_queue_planning_failure_preserves_reason(host, monkeypatch):
+    from registry_route_util import CARD
+    from plangraph.planner.routing import SpawnPlan
+    service = dispatch_service(host, monkeypatch, True)
+    plan = SpawnPlan((), ({'leg': 'invented', 'reason': 'not_served_on_host'},), 'test', (), ())
+    monkeypatch.setattr(service, '_route', lambda *a, **kw: plan)
+    async def exercise():
+        host.config.write_text('{"queue_memory_wait":true}')
+        record = await service.spawn(card=CARD, prompt='review', role='review', writer_families=['gpt'])
+        host.memory[0] = 9000
+        await asyncio.wait_for(service.tasks[record['run_id']], 10)
+        final = service.result(record['run_id'])
+        assert final['status'] == 'failed' and final['exit_code'] == 1
+        assert final['reason'] == record['reason'] == 'memory_recovery'
+        assert final['error'] == 'not_served_on_host' and final['ended'] is not None
+        assert not service.runner.calls and len(service.ps()['runs']) == 1
+    asyncio.run(exercise())

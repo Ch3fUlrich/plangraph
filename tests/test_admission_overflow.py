@@ -72,9 +72,6 @@ def test_failures_refuse_with_safe_reasons(setup, failure, reason):
     assert remote.call_count == 2
 
 
-def test_failures_queue_with_safe_reasons(setup):
-    """Historical entry point; refusal cases are named by the parametrized test."""
-    test_failures_refuse_with_safe_reasons(setup, overflow.RemoteRefusal('remote copy failed'), 'remote copy failed')
 def test_private_card_never_copies(setup):
     service, _, remote = setup
     result = service.admit_spawn({}, card={'diff_ref': {'repo': '/private'}})
@@ -394,7 +391,7 @@ def test_orchestration_cli_remote_first(orchestration, monkeypatch, capsys, cli_
         card, prompt = path.parent / 'card.json', path.parent / 'prompt.txt'
         card.write_text('{"task":"test"}')
         prompt.write_text('task')
-        args = ['spawn', '--repo', str(path.parent), '--card', str(card), '--prompt', str(prompt)]
+        args = ['spawn', '--state', str(service.state), '--repo', str(path.parent), '--card', str(card), '--prompt', str(prompt)]
     assert (overflow.main if entry == 'overflow' else cli.main)(args) == 0
     assert json.loads(capsys.readouterr().out)['placement']['host'] == 'host-b'
     remote.assert_called_once()

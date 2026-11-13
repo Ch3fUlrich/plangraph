@@ -88,7 +88,7 @@ def inputs(tmp_path, monkeypatch):
     from plangraph.spawner.service import SpawnService
     service = SpawnService(state=tmp_path / 'state')
     monkeypatch.setattr(o.cli, 'SpawnService', Mock(return_value=service))
-    return tmp_path, config, ['spawn', '--repo', str(tmp_path), '--card', str(card), '--prompt', str(prompt)]
+    return tmp_path, config, ['spawn', '--state', str(service.state), '--repo', str(tmp_path), '--card', str(card), '--prompt', str(prompt)]
 
 
 @pytest.mark.parametrize('config', [{}, {'public_repos': []}])
@@ -102,11 +102,11 @@ def test_private_never_copies(inputs, monkeypatch, capsys, config):
 
 def test_local_cli_identical(inputs, monkeypatch):
     root, path, args = inputs
-    monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
+    monkeypatch.setattr(o, 'local_resources', lambda state: (0, 6000))
     calls = []
     monkeypatch.setattr(o.cli, 'main', lambda argv: calls.append(argv) or 3)
     assert o.main(args + ['--leg', 'invented-leg']) == 3
-    assert calls == [['spawn', '--card', '@' + str(root / 'card.json'), 'a prompt', '--leg', 'invented-leg']]
+    assert calls == [['--state', str(root / 'state'), 'spawn', '--card', '@' + str(root / 'card.json'), 'a prompt', '--leg', 'invented-leg']]
 
 
 def test_retry_and_queue_reasons(inputs, monkeypatch, capsys):
@@ -162,7 +162,7 @@ def test_local_before_card_parsing(inputs, monkeypatch, card):
         (root / 'card.json').unlink()
     else:
         (root / 'card.json').write_text(card)
-    monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
+    monkeypatch.setattr(o, 'local_resources', lambda state: (0, 6000))
     monkeypatch.setattr(o, 'ready_records', lambda config: pytest.fail('local readiness read'))
     monkeypatch.setattr(o.cli, 'main', lambda argv: 3)
     assert o.main(args) == 3
@@ -251,7 +251,7 @@ local_resources_real = o.local_resources
 
 def test_local_real_cli_card_and_prompt(inputs, monkeypatch, capsys):
     root, _, args = inputs
-    monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
+    monkeypatch.setattr(o, 'local_resources', lambda state: (0, 6000))
     calls = []
 
     async def spawn(**payload):
@@ -316,7 +316,7 @@ def test_malformed_host_config(inputs, monkeypatch, capsys, hosts, code):
 def test_local_limits_coerce_or_default(inputs, monkeypatch, key, value):
     _, path, args = inputs
     path.write_text(json.dumps({key: value}))
-    monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
+    monkeypatch.setattr(o, 'local_resources', lambda state: (0, 6000))
     monkeypatch.setattr(o.cli, 'main', lambda argv: 3)
     assert o.main(args) == 3
 

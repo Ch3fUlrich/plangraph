@@ -318,9 +318,9 @@ def main(argv=None):
     parser.add_argument('--card', required=True)
     parser.add_argument('--prompt', required=True)
     parser.add_argument('--role', default='implement')
-    parser.add_argument('--state')
+    parser.add_argument('--state', required=True, help='invoking spawn state directory (local only)')
     args, options = parser.parse_known_args(argv)
-    if args.state is not None: options.extend(['--state', args.state])
+    local = ['--state', args.state, 'spawn', '--card', '@' + args.card]
     if args.role != 'implement':
         options.extend(['--role', args.role])
     try:
@@ -330,12 +330,11 @@ def main(argv=None):
         except (OSError, ValueError):
             config = {}
         if placement_policy(registry_caps(), config)[1]:
-            return cli.main(['spawn', '--card', '@' + args.card,
-                             Path(args.prompt).read_text(), *options])
+            return cli.main([*local, Path(args.prompt).read_text(), *options])
         role_mb, floor_mb = local_limits(registry_caps(), args.role)
-        _, memory = local_resources(args.state) if args.state is not None else local_resources()
+        _, memory = local_resources(args.state)
         if decide(memory, role_mb, floor_mb, {}, False).reason == 'local room':
-            return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
+            return cli.main([*local, Path(args.prompt).read_text(), *options])
         public = str(Path(args.repo).resolve()) in [str(Path(p).expanduser().resolve())
                                                   for p in config.get('public_repos', [])]
         card = json.loads(Path(args.card).read_text())

@@ -215,16 +215,16 @@ allowlist still come from `overflow-hosts.json`; legacy run/floor caps and local
 limit overrides are ignored except the orchestration thresholds below. Missing registry or
 malformed caps exclude that host from overflow. Local admission instead uses
 conservative defaults of floor 3000 MB and role 2048 MB, with a logged reason.
-No eligible placement means immediate `host_memory_floor` refusal (exit 2), recording `mem_available_mb`, `floor_mb`, `role_mb` and the same measured numbers in the CLI error.
+No eligible placement means immediate `host_memory_floor` refusal (exit 2), recording `mem_available_mb`, `floor_mb`, `role_mb` and the same measured numbers in the CLI error. Standalone `python -m plangraph.spawner.overflow spawn` requires `--state` from the invoking spawn; local launches and refusal records use it, never remote launches.
 Explicit overflow config `queue_memory_wait: true` opts single runs into supervised `memory_recovery` waits: timer (≤5s) and run-exit ticks, `queue_bound_s` (default 900), durable `queued_until`, then `queue_timeout`; queued/`queue_claimed` cancel exits 0, reads only compute expiry, and the owner persists it; `queue_start_failed` retains launch error text and `queue_interrupted` records supervisor interruption; seats never wait.
 The independent OOM guard (D-5057/D-5075) remains unchanged.
 
 Default CLI and MCP spawns try healthy SSH overflow hosts when local RAM
 admission refuses, only for repositories in the `public_repos` allowlist.
 Private or unknown repositories refuse without copying. Failed targets are
-excluded for that spawn; when none can accept, `overflow_reason` lists safe
-refusal details. Without overflow config, admitted local runs have no annotation;
-below-floor runs refuse immediately. Dry runs do not overflow.
+excluded for that spawn; when none can accept, a refusal record lists safe
+refusal reasons. Without overflow config, admitted local runs have no annotation;
+below-floor runs refuse with `host_memory_floor` and `overflow_reason`. Dry runs do not overflow.
 Local benchmark databases cannot be forwarded. CLI/MCP use public `admit_spawn` once in the shared wrapper, not the CLI parent; the service persists admission/remote records.
 Per-host `orchestration_only: true` in `hosts.json` (or the local overflow hosts entry; default false)
 makes implement/review/research remote-first: rank MemAvailable minus floor, then config order; no run-count caps.
