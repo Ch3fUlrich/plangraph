@@ -3,18 +3,21 @@
     "id": "structured-memory-1",
     "prompt": "My project bridge returns no project rules for this repository. Should I rebuild the graph before recalling this repository's decisions?",
     "must": ["OMNIGRAPH_GRAPH_ID", "decision-keyed", "exactly one row"],
-    "must_not": ["Yes, rebuild", "project data belongs in memory"]
+    "must_not": ["Yes, rebuild", "Yes, project data belongs in memory"],
+    "note": "must and must_not are plain substring phrase checks; a must_not phrase names one specific wrong phrasing"
   },
   {
     "id": "structured-memory-2",
     "prompt": "I need to replace a node and its edges. Can I send one GraphQL mutation containing a delete and an insert, then trust affectedNodes as proof?",
     "must": ["Read the schema first", "insert/update-only OR delete-only", "commits_list"],
-    "must_not": ["affectedNodes is sufficient proof", "Yes, a single mutation can mix delete and insert"]
+    "must_not": ["Yes, affectedNodes is sufficient proof", "Yes, a single mutation can mix delete and insert"],
+    "note": "must and must_not are plain substring phrase checks; a must_not phrase names one specific wrong phrasing"
   },
   {
     "id": "structured-memory-3",
     "prompt": "I merge-loaded an accepted Decision with a revised rationale on Omnigraph 0.13. Can I assume semantic search still covers it and run the old dedup rebuild if it does not?",
     "must": ["Supersede, don't overwrite", "nearest()", "0.8.x-only"],
-    "must_not": ["merge preserves the embedding", "Yes, run the 0.8.x dedup rebuild"]
+    "must_not": ["Yes, the embedding is preserved", "Yes, run the 0.8.x dedup rebuild"],
+    "note": "must and must_not are plain substring phrase checks; a must_not phrase names one specific wrong phrasing"
   }
 ]

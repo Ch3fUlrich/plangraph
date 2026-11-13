@@ -297,11 +297,11 @@ store. Those backups are the real insurance — keep them working.
 
 ## Checklist
 
-- [ ] Recalled project + global memory before editing.
+- [ ] Recalled project memory before editing.
 - [ ] Honored `Rule (must)` nodes as hard constraints.
 - [ ] Persisted new durable decisions/rules/conventions as typed nodes.
 - [ ] Used a branch, stable slugs, and `supersedes` for changed decisions.
 
 ## Evals
 
-`must` and `must_not` are plain substring phrase checks; a `must_not` phrase names one specific wrong phrasing, and a judge is needed for more.
+`must` and `must_not` are plain substring phrase checks; a `must_not` phrase names one specific wrong phrasing, and broader checks need a judge runner, which this repository does not have.
