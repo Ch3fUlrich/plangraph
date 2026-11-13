@@ -24,6 +24,10 @@ struct Row {
     #[serde(default)]
     input_parts: Vec<String>,
     expected: Option<Text>,
+    // D-5694: pin engine differences; slice B owns production alignment.
+    rust_expected: Option<Text>,
+    rust_known_gap: Option<String>,
+    rust_accepted_by: Option<String>,
     source: Option<Text>,
     output: Option<Text>,
 }
@@ -38,13 +42,28 @@ fn redact_shared_parity_table() {
     let failures: Vec<_> = rows
         .iter()
         .filter_map(|row| {
+            if let Some(snapshot) = row.rust_expected.as_ref().map(Text::joined) {
+                if ["V1", "V2", "B8"]
+                    .iter()
+                    .any(|part| snapshot.contains(part))
+                {
+                    assert_eq!(
+                        row.rust_known_gap.as_deref(),
+                        Some("plangraph:REDACT-RUST-NAME-SCOPE-ALIGN")
+                    );
+                    assert_eq!(row.rust_accepted_by.as_deref(), Some("D-5703"));
+                }
+            }
             let input = row
                 .input
                 .clone()
                 .unwrap_or_else(|| row.input_parts.concat());
             for (expected, actual) in [
                 (
-                    row.output.as_ref().or(row.expected.as_ref()),
+                    row.rust_expected
+                        .as_ref()
+                        .or(row.output.as_ref())
+                        .or(row.expected.as_ref()),
                     redact(&input),
                 ),
                 (row.source.as_ref(), redact_source(&input)),

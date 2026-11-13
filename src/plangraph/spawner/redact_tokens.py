@@ -52,13 +52,21 @@ def join_shielded_assignments(text, assignment):
 
 
 def redact_wrapped(text):
+    out, copied = [], 0
+    for start, end in _wrapped_spans(text):
+        out.extend((text[copied:start], '[REDACTED]'))
+        copied = end
+    return ''.join((*out, text[copied:]))
+
+
+def _wrapped_spans(text):
     """Consume contiguous bodies across LF/CRLF, exactly like redact_wrapped.rs.
 
     Before the floor a continuation may end mid-line. After it, only whole
     allowed-byte lines join; full contiguous runs are consumed before testing
     floors or the 4096-byte continuation budget (not a per-run truncation).
     """
-    out, copied = [], 0
+    copied = 0
     for match in _PREFIX.finditer(text):
         if match.start() < copied:
             continue
@@ -89,9 +97,8 @@ def redact_wrapped(text):
                 break
             end, wrapped = next_start, True
         if wrapped and count >= spec.floor:
-            out.extend((text[copied:match.start()], '[REDACTED]'))
+            yield match.start(), end
             copied = end
-    return ''.join((*out, text[copied:]))
 
 
 def _redact_pem(text):
@@ -197,6 +204,8 @@ def redact_wide_assignments(text, assignment, *, json_scalar=False):
     """OLD wins; plain values consume to CR/LF, exact JSON keys mask one scalar."""
     old_matches = iter(assignment.finditer(text))
     old = next(old_matches, None)
+    wrapped = iter(_wrapped_spans(text))
+    span = next(wrapped, None)
     out, copied = [], 0
     headers = _name_headers(text, json_scalar)
     while True:
@@ -220,6 +229,10 @@ def redact_wide_assignments(text, assignment, *, json_scalar=False):
         clean = scalar and (boundary == len(text) or text[boundary] in ',}]\r\n')
         value_end = scalar.end() if clean else _LINE_REMAINDER.match(text, end).end()
         if value_end > end or json_scalar:
+            # Keep every continuation the pre-A1 wrapped scanner would mask.
+            while not json_scalar and span is not None and span[0] < value_end:
+                value_end = _LINE_REMAINDER.match(text, max(value_end, span[1])).end()
+                span = next(wrapped, None)
             out.extend((text[copied:end], '"[REDACTED]"' if json_scalar else '[REDACTED]'))
             copied = value_end
             while old is not None and old.start() < copied:

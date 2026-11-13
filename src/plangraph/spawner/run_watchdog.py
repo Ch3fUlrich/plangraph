@@ -9,7 +9,8 @@ import subprocess
 import time
 
 from .run_cpu import cpu_seconds, proc_scan  # noqa: F401  re-exported for callers and tests
-from .run_watchdog_limits import thresholds  # noqa: F401  re-exported for callers and tests
+from .prompt_input import checkout_env
+from .run_watchdog_limits import leg_limits, thresholds  # noqa: F401  re-exported for callers and tests
 from .run_refusal import REFUSAL_MAX_FRAMES, REFUSAL_MAX_LINES, REFUSAL_WINDOW_S, RefusalGate  # noqa: F401  re-exported for callers and tests
 
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)')
@@ -60,6 +61,10 @@ class Watchdog:
         first_edit_s); once edited, or when the edit signal is unavailable, or for non-writers,
         max_s ends the run. Hard caps (including PLANGRAPH_SPAWN_RUN_TIMEOUT and the default
         review cap) are wall clocks, never extended. The opt-in first-edit stall is separate."""
+        if self.limits['max_s'] is None:
+            return float('inf')
+        if 'deadline' in self.limits:
+            return max(0, min(self.limits['max_s'], self.limits['deadline'] - self.start))
         if self.limits.get('hard_max'):
             return self.limits['max_s']
         return self.limits['max_s'] + (self.limits['first_edit_s']
@@ -137,7 +142,7 @@ def edit_signature(cwd):
             if entries > 100000:
                 break
         head = subprocess.run(['git', '-C', str(cwd), 'rev-parse', 'HEAD'],
-                              capture_output=True, timeout=10, check=False)
+                              capture_output=True, timeout=10, check=False, env=checkout_env())
         return (count, newest, size), head.stdout if head.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
         return None

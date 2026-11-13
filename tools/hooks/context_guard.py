@@ -1,24 +1,12 @@
 """context_guard: a Claude Code PostToolUse hook that flags context-window cap.
 
-The hook reads the hook JSON off stdin (`transcript_path`, `session_id`, `cwd`)
-and reports how full the model's context window is by summing the three fields
-that occupy it — `input_tokens` plus both cache buckets — of the *last usable*
-assistant usage record near the end of the transcript (a record with non-numeric
-usage is stepped past). When that fill crosses
-the handoff threshold it prints one `additionalContext` line telling the agent
-to write its handoff and run `ready`; past the hard threshold it says stop. It
-also drops a per-session state file so the same fill is not re-announced.
-
-The transcript can be tens of megabytes, so only the tail is read: seek to
-`size - TAIL_BYTES`, drop the first partial line, and scan the bounded tail from
-the end for the last assistant+usage record. Files are opened through
-`Path.open` and read in bounded chunks, never iterated whole.
-
-Everything is stdlib-only and portable (Linux + Windows) via `pathlib`. The hook
-mode is deliberately fail-silent — a broken transcript, bad stdin or an
-unwritable state dir exits 0 with no output, because a PostToolUse hook must
-never break the agent that called it. The `ready` and `status` sub-commands are
-the exception: those report errors on stderr and exit non-zero.
+Reads hook JSON from stdin and sums input tokens plus both cache buckets in
+the last usable assistant usage record in a bounded tail; non-numeric records
+are stepped past. context_compaction incrementally scans transcript identity
+and compaction boundaries. Fleet compaction requires handoff even below cap.
+Stdlib-only and portable; hook mode fails silently, while ready reports errors.
+Ready v2 validates a handoff/card pair and persists their hashes before kicking
+the watchdog. fill_from_usage and resolve_thresholds are public shared helpers.
 
 Thresholds come from the environment: `AUTOOS_CTX_HANDOFF` (default 270000) and
 `AUTOOS_CTX_HARD` (default 300000); a non-integer or empty value falls back,
@@ -36,8 +24,11 @@ the shared `hook_common` helper (extraction, plangraph #299).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 import traceback
@@ -85,6 +76,25 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def fill_from_usage(usage) -> int | None:
+    """Input + both cache buckets; missing fields are zero, non-integers invalid."""
+    if not isinstance(usage, dict):
+        return None
+    total = 0
+    for field in _USAGE_FIELDS:
+        value = usage.get(field, 0)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        total += value
+    return total
+
+
+def resolve_thresholds(handoff=None, hard=None) -> tuple[int, int]:
+    """Explicit values, else environment, else defaults (hook mode clamps hard)."""
+    return (handoff if handoff is not None else _env_int("AUTOOS_CTX_HANDOFF", DEFAULT_HANDOFF),
+            hard if hard is not None else _env_int("AUTOOS_CTX_HARD", DEFAULT_HARD))
+
+
 def _tail_ctx(line):
     """The context fill of one tail line, `_SKIP`, or None (a non-numeric usage).
 
@@ -107,24 +117,11 @@ def _tail_ctx(line):
         return _SKIP
     if any(usage.get(field) == '[REDACTED]' for field in _USAGE_FIELDS):
         return _UNKNOWN
-    total = 0
-    for field in _USAGE_FIELDS:
-        value = usage.get(field, 0)
-        if isinstance(value, bool) or not isinstance(value, int):
-            return None
-        total += value
-    return total
+    return fill_from_usage(usage)
 
 
 def context_tokens(path) -> int | None:
-    """The context fill of the last usable assistant usage record in the transcript tail.
-
-    Reads only the last `TAIL_BYTES`; the byte offset there is mid-line, so the
-    first split element is dropped as a partial line (but never when the whole
-    file fit inside the tail). Returns the summed fill, or None when the file is
-    missing/unreadable or when no assistant record with all-numeric usage is in
-    the tail (a non-numeric record is stepped past, not the last word).
-    """
+    """Last usable fill in TAIL_BYTES; drop the initial partial line after seeking."""
     p = Path(path)
     try:
         size = p.stat().st_size
@@ -208,14 +205,8 @@ def emit_line(level: str, ctx: int, threshold: int) -> str:
 
 
 def run_hook() -> int:
-    """The PostToolUse path: read stdin, compute the fill, maybe announce.
-
-    Any failure — bad stdin, missing fields, a missing or garbled transcript, an
-    unwritable state dir — exits 0 with no output; set AUTOOS_CTX_DEBUG to get
-    the swallowed traceback on stderr instead. The state file is written only
-    after the line is printed, so a failed run is re-announced next time rather
-    than lost.
-    """
+    """Fail-silent PostToolUse; print before persisting so failed writes re-announce."""
+    scanned = None
     try:
         payload = json.loads(read_stdin_text())
         if not isinstance(payload, dict):
@@ -231,55 +222,133 @@ def run_hook() -> int:
         ctx = context_tokens(transcript_path)
         if ctx is None:
             return 0
-        handoff = _env_int("AUTOOS_CTX_HANDOFF", DEFAULT_HANDOFF)
-        hard = _env_int("AUTOOS_CTX_HARD", DEFAULT_HARD)
+        handoff, hard = resolve_thresholds()
         hard = max(hard, handoff)  # a garbled pair must never hide or misreport the hard cap
         if ctx is _UNKNOWN:
             ctx = hard  # Safety surrogate, not a measured context count.
-        if ctx < handoff:
+        try:
+            from context_compaction import scan
+        except Exception:
+            scan = None
+            if os.environ.get("AUTOOS_CTX_DEBUG"):
+                print("context_guard: context_compaction unavailable; continuing without scan", file=sys.stderr)
+        # Independent cursor survives clearing below-threshold announce state.
+        scan_path = state_dir().with_name("ctx-guard-scan") / ("%s.scan" % session_id)
+        try:
+            previous = json.loads(read_text_capped(scan_path))
+        except (OSError, ValueError):
+            previous = None
+        try:
+            scanned = scan(transcript_path, previous) if scan else None
+        except Exception:
+            if os.environ.get("AUTOOS_CTX_DEBUG"):
+                print("context_guard: context_compaction unavailable; continuing without scan", file=sys.stderr)
+        stored = read_state(session_id) or {}
+        scan_state = scanned or {}
+        boundary = scan_state.get("boundary") if scan_state.get("fleet") else None
+        compact = bool(boundary)
+        if ctx < handoff and not compact:
             clear_state(session_id)  # back under the line (compaction): the next climb is announced afresh
             return 0
         level = "hard" if ctx >= hard else "handoff"
         threshold = hard if level == "hard" else handoff
-        if not should_emit(session_id, ctx, level):
+        if not (compact and boundary != stored.get("compaction")) and not should_emit(session_id, ctx, level):
             return 0
         line = emit_line(level, ctx, threshold)
+        if compact:
+            line = line.replace(" >= %dk" % (threshold // 1000),
+                                " (compaction; handoff required)", 1)
         out = {"hookSpecificOutput": {"hookEventName": "PostToolUse",
                                       "additionalContext": line}}
         print(json.dumps(out))
         write_state(session_id, {
             "session_id": session_id, "cwd": cwd, "ctx": ctx,
             "ts": time.time(), "level": level,
+            "compaction": boundary,
         })
     except Exception:
         if os.environ.get("AUTOOS_CTX_DEBUG"):
             traceback.print_exc(file=sys.stderr)
         return 0
+    finally:
+        if scanned is not None:
+            try:
+                scan_path.parent.mkdir(parents=True, exist_ok=True)
+                _write_json(scan_path, scanned)
+            except Exception:
+                if os.environ.get("AUTOOS_CTX_DEBUG"):
+                    traceback.print_exc(file=sys.stderr)
     return 0
 
 
 def cmd_ready(args) -> int:
-    """`ready <handoff-path>`: mark a session recycled, keyed by session id.
-
-    The session id comes from `CLAUDE_CODE_SESSION_ID`; a missing id or path is
-    a loud error (exit 2), unlike the fail-silent hook.
-    """
-    if not args:
+    """Validate ready <handoff-path> [--reason cap|router|operator|planned], then mark v2."""
+    if not args or args[0].startswith("--"):
         print("context_guard: ready needs <handoff-path>", file=sys.stderr)
+        return 2
+    if len(args) >= 2 and args[1] == "--reason" and (
+            len(args) == 2 or args[2].startswith("--")):
+        print("context_guard: --reason needs a value", file=sys.stderr)
+        return 2
+    reason = args[2] if len(args) == 3 and args[1] == "--reason" else "cap"
+    if len(args) not in (1, 3) or (len(args) == 3 and args[1] != "--reason"):
+        print("context_guard: ready needs <handoff-path>", file=sys.stderr)
+        return 2
+    if reason not in ("cap", "router", "operator", "planned"):
+        print("context_guard: invalid ready reason: %s" % reason, file=sys.stderr)
         return 2
     session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
     if not safe_id(session_id):
         print("context_guard: ready needs a valid CLAUDE_CODE_SESSION_ID", file=sys.stderr)
         return 2
-    marker = {"session_id": session_id, "handoff": args[0],
-              "ts": time.time(), "cwd": os.getcwd()}
     try:
+        handoff = Path(args[0])
+        card = handoff.with_suffix(".card.md")
+        for label, path in (("handoff", handoff), ("card", card)):
+            if not path.is_file():
+                raise OSError("%s file missing: %s" % (label, path))
+        raw_handoff, raw_card = handoff.read_bytes(), card.read_bytes()
+        command = os.environ.get("AUTOOS_HANDOFF_CHECK") or "handoff-check"
+        checker = shutil.which(command, path=os.environ.get("PATH", ""))
+        if checker is None:
+            raise OSError("handoff-check not found on PATH: %s" % command)
+        result = subprocess.run([checker, str(card)], capture_output=True, text=True, timeout=10)
+        if result.returncode:
+            print("context_guard: handoff-check refused ready (exit %s):\n%s%s"
+                  % (result.returncode, result.stdout, result.stderr), file=sys.stderr)
+            return 2
+        if handoff.read_bytes() != raw_handoff or card.read_bytes() != raw_card:
+            raise OSError("handoff or card changed during ready; rerun ready")
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        print("context_guard: ready validation failed: %s" % exc, file=sys.stderr)
+        return 2
+    try:
+        marker = {"v": 2, "session_id": session_id, "handoff": args[0],
+                  "card": str(card), "handoff_sha256": hashlib.sha256(raw_handoff).hexdigest(),
+                  "card_sha256": hashlib.sha256(raw_card).hexdigest(),
+                  "session_name": None, "role": None, "launched_at": None,
+                  "ctx_tokens": None, "reason": reason, "agents": None,
+                  "ts": time.time(), "cwd": os.getcwd()}
         directory = state_dir()
         directory.mkdir(parents=True, exist_ok=True)
-        _write_json(directory / ("%s.ready.json" % session_id), marker)
+        destination = directory / ("%s.ready.json" % session_id)
+        _write_json(destination, marker)
+        try:
+            if handoff.read_bytes() != raw_handoff or card.read_bytes() != raw_card:
+                raise OSError("handoff or card changed during marker write; rerun ready")
+        except OSError:
+            destination.unlink(missing_ok=True)
+            raise
     except OSError as exc:
         print("context_guard: cannot write ready marker: %s" % exc, file=sys.stderr)
         return 2
+    if os.environ.get("AUTOOS_READY_KICK") != "0":
+        try:
+            subprocess.run(["systemctl", "--user", "start", "--no-block", "ctx-watchdog.service"],
+                           capture_output=True, timeout=5, check=True)
+        except (OSError, subprocess.SubprocessError) as exc:
+            detail = " ".join(str(exc).splitlines())
+            print("context_guard: ready kick failed; timer is the backstop: %s" % detail, file=sys.stderr)
     return 0
 
 

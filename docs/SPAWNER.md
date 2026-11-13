@@ -40,13 +40,15 @@ P is skipped entirely if either shield character already occurs in the text.
 Then main's order runs: full assignments, wrapped prefixed tokens, URL userinfo,
 token catalog and JWT. P protects only OLD matched names; the unchanged joins can still eat wider names.
 Source mode (`redact_source`) skips P and both assignment stages; its order is unchanged.
-Python masks wider plain assignments and exact `os.environ` subscript assignments through the physical line end (CR/LF only), before P; OLD behavior and both joins are unchanged.
+Python masks wider plain assignments and exact `os.environ` subscript assignments through the physical line end (CR/LF only), before P. D-5703 extends those masks through any intersecting wrapped span that pre-A1 main already masked, including its final physical line; OLD behavior and both joins are unchanged. A1 masks the value before a join can eat the wider name (a1-J03); slice C still owns name preservation.
 Python's PEM and numeric helpers live in `redact_tokens`; their behavior and stage order are unchanged.
 Python alone masks one same-line JSON scalar following an exact wider credential name enclosed in double quotes, then horizontal blanks, a colon and horizontal blanks; the name and quotes stay. A bad first byte, empty value, malformed scalar or suffix other than space/tab then comma/closer/physical line end masks from the value start through CR/LF/end, preserving CRLF; source mode skips this final pass.
 At any line nesting depth, only exact `"tokens"` objects with all direct members integer-valued (or empty) remain readable; nested-object members, other types, other keys and parse doubts fail closed (D-5756).
 JSON-tail limit-loss: a wider plain assignment hides the rest of its line, including later limit evidence inside JSON strings or dict-style text. Structured 429/402 JSON readers can lose limit evidence after scrubbing; dict-style lines are not read even raw, while raw streaming refusal detection and raw step accounting still run before scrubbing.
 A2b owns OLD-header/overlap/shared-quote, split-parts and extra comma/closer-tail validation gaps; slice C owns next-line/name and backslash continuation gaps; slice B owns Rust alignment. Inherited losses are never restored; comma alone succeeds, even before a closer.
 Masked usage is unknown: governor aborts before upload/decision, Sessions lists null count/percent until a later numeric record, the context guard emits HARD-CAP using a safety surrogate (not a measurement), and the usage report returns no-result code 3 without partial totals. Other missing-data policies stay unchanged.
+Under D-5703, fixture-known readable credential portions are compared against local git-loaded pre-A1 e7964367 modules and tagged with their owner, not endorsed as correct. A2 owns below-floor wrapped assignment continuation a1-J04 (5); slice C owns remaining join gaps; Rust-readable expectations belong to slice B `plangraph:REDACT-RUST-NAME-SCOPE-ALIGN`. The old Python assignment rule already consumes the stray closing bracket in `API_KEY=[REDACTED]]`.
+D-5751 pins both historical modules to full commit `e7964367542646ea603a1fc84f67f7036b298bcb` and checks helper identity plus an A1-only behavior difference, preventing absolute imports from silently using the current scanner. The LF/CRLF-before-separator rows and wrapped U+E000/U+E001/indexed-marker rows are equally readable before and after A1, so their fixture rows retain slice C ownership; no production or Rust change is warranted. Mask-growth tests preserve literal placeholders and reject ambiguous alignments. Both Python modules' work is counted, with a separate child CPU limit covering C-regex blank-run work.
 Secrecy-safe over-masks remain unchanged: mismatched or half quotes around wider names, Unicode line and paragraph separators counted as blanks, and a comparison sign after a subscript name.
 The catalog covers OpenAI, GitHub, Slack, AWS and Google prefixes; wrapped bodies
 share its alphabets/floors and bounded 4096-byte LF/CRLF joins.
@@ -259,12 +261,24 @@ python -m plangraph.spawner.cli result run-ID
 ```
 Cards may also be inline JSON; `spawn --prompt-file FILE` replaces the prompt argument for prompts over the argv limit; it reads UTF-8, strips a BOM, and a bad file exits 2 with a `prompt_file_*` or `prompt_input_*` refusal. `card.context` (`path:start-end` slices, at most 64) is inlined as a CONTEXT PACK for inline-only legs (cap `PLANGRAPH_CONTEXT_PACK_MAX_CHARS`, default 60000; built once per spawn, each slice file read once and passed through `redact`; a secret-looking name, a `.git` part or an untracked file is skipped with a `context_path_refused` warning; with entries, no git work tree, a symlink loop or too many entries refuse the spawn (without entries a failed listing only adds `big_file_scan_skipped`); a range past the end of the file adds `context_range_past_eof`) and a brief naming a 400+ line file without a slice adds a `big_file_unsliced` warning (D-3622, D-3649). `--state PATH` precedes the verb; otherwise
 `PLANGRAPH_SPAWN_STATE` or the XDG plangraph state directory is used.
+`spawn --cwd PATH` or card `cwd` selects an absolute existing Git checkout;
+relative, missing, non-checkout and conflicting flag/card paths are refused.
+Without either, the caller's cwd is unchanged. The selected path is recorded in
+`record.cwd` and passed to the runner; `completion.head_sha` is that checkout's
+HEAD at completion, not at launch. `seat_verdict --head` must still match it.
+Explicit cwd takes precedence over `diff_ref.repo` for placement; explicit-cwd runs stay local regardless of the public allowlist (below-floor runs queue). SSH overflow is only eligible without explicit cwd and requires every checkout/diff repository to pass the public allowlist; a supplied `diff_ref` without `repo` is refused. Run worktrees retain `selected_cwd` for fresh attempts and fixer continuations even after the parent's attempt is pruned; legacy records recover the service's default checkout. Cwd must be a checkout root with a committed HEAD and is stored as its resolved absolute path. Validation runs once off the async loop; checkout Git operations ignore repository redirects, injected config parameters and alternate object directories.
 `--dry-run` plans without a child. Spawn returns a `wait_cmd`:
 `plangraph-spawn wait RUN_ID --timeout SECONDS` (omit timeout to block indefinitely).
 Never use `pgrep -f` wait loops, including in writer/seat briefs: they can match
 the waiting shell itself. Wait reads atomic run records, not process names;
 its timeout stops waiting, not the writer.
-`--no-fallthrough` disables automatic advancement after a captured provider stop.
+`--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg.
+Review/seat routes record each failed, limited or not-served attempt with its reason
+and try the next leg in the same run, failing only after route exhaustion. Ordinary
+failure diagnostics do not book cooldowns, mark legs down or emit LEG_REFUSED; only
+recognized availability/quota evidence does. Review `usage_limit:`/`credit_limit:` labels book only when their payload is recognized quota evidence (for example `error: usage limit reached`/`error: credits exhausted`); a label plus `task diagnostic` does not book. Writer
+generic failures keep their stop rule; cancellation, safety refusals and watchdog
+terminals still stop immediately. Safety refusal attempts precede provider-stop classification without overwriting distinct terminal reasons; specific unavailable diagnostics outrank generic provider stops. Provider-stop responses pass through spawner redaction before being added to attempts, including safety refusals. OOM wrapper marker lines (including prefixed telemetry) are not failure reasons.
 Plain stdout, including text saying 429, is never provider evidence.
 
 ### Opt-in per-attempt worktrees (RUN-WORKTREE slice 1)
@@ -313,10 +327,10 @@ it does not close items or bypass the keeper's authorization checks.
 it receives recipient as its final argument and event JSON on stdin. Consumers
 must deduplicate by event_id: external delivery is at-least-once across crashes.
 Failed hooks are logged and retried on re-save; local inbox replay is idempotent.
-`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds each child execution in seconds; unset gives a 25-minute review cap, while empty means no review cap;
+`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds execution in seconds; reviews share one run deadline across all legs and prompt preparation (writers retain per-child limits); unset gives a 25-minute review cap, while empty means no review-specific cap (the ordinary 90-minute maximum still applies); internal `max_s: null` limits have no deadline;
 expiry kills its process tree and records rc 124 with FAILED completion.
 Terminal stall/timeout records preserve their outcome and events even without a watchdog event (`watchdog: null`). A provider stop leaves the harness status and exit code unchanged (completed with exit 0 stays completed), adding `provider_stop` only when no reason exists and the stopped leg's own coverage slot names a seat group, preserving it in the attempt and unfilled-slot error while leaving completed non-seat reasons unset and tolerating empty, absent or non-dict coverage entries.
-The detached supervisor must survive the child; killing the supervisor itself
+Mixed seat/non-seat coverage never resolves a seat to an unrelated chosen leg. The detached supervisor must survive the child; killing the supervisor itself
 requires a future recovery service. This interim event contract carries over to
 the later Temporal implementation (also covers FLEET-STATUS-HOOK).
 Writing run roles (implement/fix) guard shared .git/config against in-place mutations (e.g. core.autocrlf), restoring original bytes and failing the run if changed. The spawner kills only the process tree it started: the root is proven ours at spawn (direct child, own group; or Job Object member), a snapshot of its descendants is taken before any signal, and a kill is verified (up to 10 s). Survivors fail the run with reason `kill_incomplete` (event `kill_incomplete`, `survivors` pids): no fall-through leg, no second writer. Runs use argv exec only (no shell wrapper), enforced by a static guard test.
