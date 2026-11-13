@@ -55,12 +55,15 @@ READ_MULTIPLIER_OTHER = 0.1
 CONTEXT_OVER_200K = 200_000
 
 
+class MaskedUsageError(OSError): """A masked usage count cannot safely enter accounting or a decision."""
+
+
 def _as_int(v) -> int:
     """Best-effort int coercion used while reading token fields."""
+    if v == '[REDACTED]': raise MaskedUsageError('masked usage is unknown')
     try:
         return int(v or 0)
-    except (TypeError, ValueError):
-        return 0
+    except (TypeError, ValueError): return 0
 
 
 def parse_ts(s) -> dt.datetime | None:
@@ -143,10 +146,8 @@ def _scan_usage(
             rel = os.path.relpath(path, projects_dir).replace(os.sep, "/")
             parts = rel.split("/")
             subagent = "/subagents/" in rel
-            if subagent:
-                session = parts[1] if len(parts) > 1 else os.path.splitext(os.path.basename(path))[0]
-            else:
-                session = os.path.splitext(parts[1])[0] if len(parts) > 1 else os.path.splitext(os.path.basename(path))[0]
+            session_name = parts[1] if len(parts) > 1 else os.path.basename(path)
+            session = session_name if subagent and len(parts) > 1 else os.path.splitext(session_name)[0]
             try:
                 with open(path, "r", encoding="utf-8", errors="replace") as f:
                     for line_number, line in enumerate(f, 1):
@@ -156,9 +157,7 @@ def _scan_usage(
                             d = json.loads(line)
                         except Exception:
                             continue
-                        if not isinstance(d, dict):
-                            continue
-                        if d.get("type") != "assistant":
+                        if not isinstance(d, dict) or d.get("type") != "assistant":
                             continue
                         msg = d.get("message")
                         if not isinstance(msg, dict):
@@ -198,6 +197,7 @@ def _scan_usage(
                             "cache_read": cache_read,
                             "cache_write": cache_write,
                         })
+            except MaskedUsageError: raise
             except Exception:
                 continue
     # Directory enumeration order must not choose the ctx report's first call.

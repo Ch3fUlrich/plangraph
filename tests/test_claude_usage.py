@@ -318,3 +318,14 @@ def test_mtime_skips_old_files_including_subagents(tree, capsys, monkeypatch):
     monkeypatch.setattr(Path, "open", opened)
     assert run(tree, capsys, "roles", "--since", "2026-11-06")["result"]["unnamed"]["requests"] == 1
     assert run(tree, capsys, "pace", "--day", "2026-11-06")["result"]["weighted"] == 70
+
+
+@pytest.mark.parametrize("field", usage.FIELDS)
+@pytest.mark.parametrize("prior", [False, True])
+def test_a2a_masked_usage_no_partial_total(tree, capsys, field, prior):
+    row = assistant()
+    row["message"]["usage"] = dict.fromkeys(usage.FIELDS, 0)
+    row["message"]["usage"][field] = "[REDACTED]"
+    write(tree / "s.jsonl", ([assistant("old", read=0, output=73)] if prior else []) + [row])
+    result = run(tree, capsys, "daily", code=3)
+    assert result["status"] == "no result" and "result" not in result

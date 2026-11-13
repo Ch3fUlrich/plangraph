@@ -261,6 +261,9 @@ class _AgentsMixin:
                 continue
             usage = msg.get("usage")
             if isinstance(usage, dict):
+                if any(usage.get(key) == '[REDACTED]' for key in USAGE_KEYS):
+                    total = None
+                    continue
                 # Only non-negative ints count (r10): NaN, Infinity, negative
                 # and fractional values must never reach context_tokens (a
                 # NaN is also not valid JSON for MCP callers). A line whose

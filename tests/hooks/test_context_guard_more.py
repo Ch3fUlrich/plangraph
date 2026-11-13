@@ -52,6 +52,19 @@ class Thresholds(MoreCase):
 
 
 class Records(MoreCase):
+    def test_a2a_masked_context_is_unknown_not_stale_and_recovers(self):
+        guard = load_module("context_guard")
+        for field in guard._USAGE_FIELDS:
+            with self.subTest(field=field):
+                bad = json.dumps(dict(type="assistant", message=dict(usage={field: "[REDACTED]"})))
+                self.write(usage_line(read=123), bad)
+                self.assertIs(guard.context_tokens(self.transcript), guard._UNKNOWN)
+                self.assertIn("HARD-CAP ctx=100k >= 100k", self.text(self.hook(
+                    AUTOOS_CTX_HANDOFF="100000", AUTOOS_CTX_HARD="50000")))
+                self.write(usage_line(read=123), bad, usage_line(read=123))
+                self.assertEqual(guard.context_tokens(self.transcript), 123)
+                self.assertEqual(self.hook().stdout, "")
+
     def test_a_newer_unusable_record_is_stepped_past_to_an_older_usable_one(self):
         garbled = {"type": "assistant", "message": {"usage": {"input_tokens": "x"}}}
         self.write(usage_line(read=280000), json.dumps(garbled),

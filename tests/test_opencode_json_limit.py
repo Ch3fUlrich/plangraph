@@ -111,9 +111,9 @@ def test_a1_scrubbed_reader_boundary(status, reason, suffix, retained, monkeypat
     assert (book.call_count, notify.call_count) == ((2, 2) if retained else (0, 0))
 
 
-def test_a1_scrubbed_usage_counters_survive():
+def test_a2a_scrubbed_usage_counters_are_masked():
     from pathlib import Path
     from plangraph.spawner.env_redact import redact_output
     rows = json.loads((Path(__file__).parent / 'fixtures/redact_name_scope.json').read_text())
     raw = ''.join(next(r for r in rows if r['id'] == 'a1-N21')['input_parts'])
-    assert json.loads(redact_output(raw))['usage'] == {'input_'+'tokens': 12, 'output_'+'tokens': 34}
+    assert json.loads(redact_output(raw))['usage'] == dict.fromkeys(['input_'+'tokens', 'output_'+'tokens'], '[REDACTED]')

@@ -1,1 +1,4 @@
 - Move Python redaction helpers into `redact_tokens` without changing behavior.
+- Python masks one JSON scalar after an exact wider credential key; malformed or missing values and bad suffixes fail closed through the physical line end, without changing source mode.
+- At any line nesting depth, exact `"tokens"` objects with only direct integer members (or empty) stay readable; nested-object members fail closed (D-5756).
+- Masked usage remains unknown in governor, Sessions, context guard and usage reports; A2b overlap/lookahead, slice C joins/names and slice B Rust alignment remain separate.

@@ -1,4 +1,5 @@
 """Rust worker-core's shared prefixed-token and wrapped-body policy."""
+import json
 import re
 import unicodedata
 from typing import NamedTuple
@@ -123,6 +124,29 @@ def _is_numeric(value):
 
 _NAME_KEYWORD = re.compile(r'token|secret|password|passwd|api_?key|access_?key|private_?key|credential')
 _LINE_REMAINDER = re.compile(r'[^\r\n]*')
+_JSON_SCALAR = re.compile(r'"(?:[^"\\\x00-\x1F]|\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4}))*"'
+                          r'|true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?')
+_JSON_BLANKS = re.compile(r'[ \t]*')
+_INTEGER_OBJECT = object()
+_COUNTERS = json.JSONDecoder(object_pairs_hook=lambda pairs: _INTEGER_OBJECT if
+    len({key for key, _ in pairs}) == len(pairs) and
+    all(type(value) is int for _, value in pairs) else None)
+
+
+def _counter_end(text, start, end):
+    """Only exact tokens objects with direct integer members survive; doubt fails closed."""
+    if not text.startswith('{', end) or not re.match(r'"tokens"\s*:', text[start:end]):
+        return None
+    try:
+        value, stop = _COUNTERS.raw_decode(text, end)
+    except (ValueError, RecursionError):
+        return None
+    boundary = _JSON_BLANKS.match(text, stop).end()
+    if (value is _INTEGER_OBJECT and text.find('\r', end, stop) < 0
+            and text.find('\n', end, stop) < 0
+            and (boundary == len(text) or text[boundary] in ',}]\r\n')):
+        return stop
+    return None
 
 
 def _wide(char):
@@ -134,7 +158,7 @@ def _horizontal(char):
     return char.isspace() and char not in '\r\n'
 
 
-def _name_headers(text):
+def _name_headers(text, json_scalar=False):
     """Discover maximal WIDE runs once; failed headers consume maximal H too."""
     index, size = 0, len(text)
     while index < size:
@@ -160,29 +184,43 @@ def _name_headers(text):
             index += 1
         separator = text[index:index + 1]
         excluded = not subscript and opening == closing == '"' and separator == ':'
-        if excluded or separator not in (('=',) if subscript else ('=', ':')):
+        if excluded != json_scalar or separator not in (('=',) if subscript else ('=', ':')):
             continue
         index += 1
         while index < size and _horizontal(text[index]):
             index += 1
-        yield header_start, index
+        resume = yield header_start, index
+        index = max(index, resume or 0)
 
 
-def redact_wide_assignments(text, assignment):
-    """Python NEW-only stage: OLD headers/values win; NEW consumes to CR/LF."""
+def redact_wide_assignments(text, assignment, *, json_scalar=False):
+    """OLD wins; plain values consume to CR/LF, exact JSON keys mask one scalar."""
     old_matches = iter(assignment.finditer(text))
     old = next(old_matches, None)
     out, copied = [], 0
-    for start, end in _name_headers(text):
+    headers = _name_headers(text, json_scalar)
+    while True:
+        try:
+            start, end = headers.send(copied or None)
+        except StopIteration:
+            break
         if start < copied:
             continue
         while old is not None and old.end() <= start:
             old = next(old_matches, None)
         if old is not None and old.start() < end:
             continue  # OLD value containment or intersecting half-open headers.
-        value_end = _LINE_REMAINDER.match(text, end).end()
-        if value_end > end:
-            out.extend((text[copied:end], '[REDACTED]'))
+        counter_end = _counter_end(text, start, end) if json_scalar else None
+        if counter_end is not None:
+            out.append(text[copied:counter_end])
+            copied = counter_end
+            continue
+        scalar = _JSON_SCALAR.match(text, end) if json_scalar else None
+        boundary = _JSON_BLANKS.match(text, scalar.end()).end() if scalar else end
+        clean = scalar and (boundary == len(text) or text[boundary] in ',}]\r\n')
+        value_end = scalar.end() if clean else _LINE_REMAINDER.match(text, end).end()
+        if value_end > end or json_scalar:
+            out.extend((text[copied:end], '"[REDACTED]"' if json_scalar else '[REDACTED]'))
             copied = value_end
             while old is not None and old.start() < copied:
                 old = next(old_matches, None)

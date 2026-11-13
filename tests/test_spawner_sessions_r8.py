@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import pytest
 
 from sessions_support import UUID1, FakeRun, go, make
 from sessions_support import site  # noqa: F401
@@ -213,3 +214,19 @@ def test_stop_record_flag_session_id_refuses_before_any_subprocess(site):
     assert run.calls == []  # no poll, no argv
     rec = json.loads((sess / "alpha.json").read_text())
     assert rec["state"] == "running" and rec["session_id"] == "--help"
+
+
+@pytest.mark.parametrize("field", [p + "tokens" for p in ("input_", "cache_read_input_", "cache_creation_input_")])
+def test_a2a_masked_context_unknown_and_recovers(site, field):
+    s = make(site, FakeRun(stdout="session " + UUID1))
+    go(site, s)
+    tdir = site.home / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(site.proj))
+    tdir.mkdir(parents=True)
+    good = json.dumps(dict(type="assistant", message=dict(usage={"input_"+"tokens": 123}))) + "\n"
+    bad = json.dumps(dict(type="assistant", message=dict(usage={field: "[REDACTED]"}))) + "\n"
+    path = tdir / f"{UUID1}.jsonl"
+    path.write_text(good + bad)
+    row = s.list()["sessions"][0]
+    assert row["context_tokens"] is row["context_pct"] is None
+    path.write_text(good + bad + good)
+    assert s.list()["sessions"][0]["context_tokens"] == 123

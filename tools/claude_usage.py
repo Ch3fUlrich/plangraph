@@ -106,6 +106,8 @@ def read_projects(root, patterns, stats, start):
                         mid = message["id"]
                         key = (sid, mid)
                         usage = message["usage"]
+                        if any(usage.get(field) == '[REDACTED]' for field in FIELDS):
+                            raise OSError('masked usage is unknown')
                         counts = [float(usage.get(field, 0)) for field in FIELDS]
                         if any(n < 0 or not math.isfinite(n) for n in counts):
                             raise ValueError()

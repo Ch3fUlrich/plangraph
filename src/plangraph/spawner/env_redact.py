@@ -63,7 +63,8 @@ def _redact(value, *, source):
             # Greedily consume through the last @ within the quoted/space boundary.
             value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',
                            r'\1[REDACTED]\2', value)
-            return JWT.sub('[REDACTED]', TOKENS.sub('[REDACTED]', value))
+            value = JWT.sub('[REDACTED]', TOKENS.sub('[REDACTED]', value))
+            return value if source else redact_wide_assignments(value, _ASSIGNMENT, json_scalar=True)
         return value
     except Exception:
         return '[autoos:redaction failed; output withheld]\n'

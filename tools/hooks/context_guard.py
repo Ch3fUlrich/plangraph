@@ -66,6 +66,7 @@ REEMIT_DELTA = 10000
 
 # Sentinel for a tail line that is not the assistant+usage record we want.
 _SKIP = object()
+_UNKNOWN = object()  # A mask is unknown, not a reason to reuse stale usage.
 
 
 # A session id becomes a file name: checked by hook_common.safe_id (shared).
@@ -104,6 +105,8 @@ def _tail_ctx(line):
     usage = message.get("usage") if isinstance(message, dict) else None
     if not isinstance(usage, dict):
         return _SKIP
+    if any(usage.get(field) == '[REDACTED]' for field in _USAGE_FIELDS):
+        return _UNKNOWN
     total = 0
     for field in _USAGE_FIELDS:
         value = usage.get(field, 0)
@@ -231,6 +234,8 @@ def run_hook() -> int:
         handoff = _env_int("AUTOOS_CTX_HANDOFF", DEFAULT_HANDOFF)
         hard = _env_int("AUTOOS_CTX_HARD", DEFAULT_HARD)
         hard = max(hard, handoff)  # a garbled pair must never hide or misreport the hard cap
+        if ctx is _UNKNOWN:
+            ctx = hard  # Safety surrogate, not a measured context count.
         if ctx < handoff:
             clear_state(session_id)  # back under the line (compaction): the next climb is announced afresh
             return 0
