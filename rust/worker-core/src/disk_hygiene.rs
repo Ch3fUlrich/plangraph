@@ -141,6 +141,24 @@ fn removable(repo: &Path, branch: &str) -> io::Result<bool> {
         .any(|s| s == format!("refs/remotes/origin/{short}")))
 }
 
+fn has_ignored_non_cache(path: &Path) -> io::Result<bool> {
+    // NUL delimiters preserve filenames containing whitespace or newlines.
+    let ignored = git(
+        path,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+        ],
+    )?;
+    Ok(ignored
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .any(|s| !s.starts_with("target/") && !s.starts_with("node_modules/")))
+}
+
 /// Caller refreshes origin with fetch --prune before applying this snapshot.
 pub fn sweep(
     repo: &Path,
@@ -200,6 +218,12 @@ pub fn sweep(
                 .push(format!("{}: dirty or tracked cache", path.display()));
             continue;
         }
+        if has_ignored_non_cache(&path)? {
+            report
+                .skipped
+                .push(format!("{}: ignored non-cache files", path.display()));
+            continue;
+        }
         let (_, newest) = scan(&path)?;
         if now.duration_since(newest).unwrap_or_default() <= Duration::from_secs(86400) {
             continue;
@@ -250,6 +274,12 @@ pub fn sweep(
                 .trim()
                 .is_empty()
             {
+                if has_ignored_non_cache(&path)? {
+                    report
+                        .skipped
+                        .push(format!("{}: ignored non-cache files", path.display()));
+                    continue;
+                }
                 if apply {
                     let bytes = scan(&path)?.0;
                     git(

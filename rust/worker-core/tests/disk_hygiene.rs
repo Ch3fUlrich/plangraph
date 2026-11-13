@@ -79,6 +79,48 @@ fn pinned_dirty_and_live_survive_real_cleanup() {
     println!("cleanup freed_bytes={}", report.freed_bytes);
 }
 #[test]
+fn ignored_non_cache_files_preserve_the_entire_tree() {
+    let (_tmp, repo, root) = fixture();
+    fs::write(
+        repo.join(".git/info/exclude"),
+        ".env\nscratch/\ntarget-backup/\n",
+    )
+    .unwrap();
+    let files = [
+        "clean/.env",
+        "pinned/scratch/notes private",
+        "live/target-backup/cache",
+    ];
+    for file in files {
+        let path = root.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "valuable").unwrap();
+    }
+    for apply in [false, true] {
+        let report = sweep(
+            &repo,
+            &root,
+            &Guards::default(),
+            SystemTime::now() + Duration::from_secs(90000),
+            85.0,
+            apply,
+        )
+        .unwrap();
+        assert!(report.actions.is_empty());
+        assert_eq!(report.freed_bytes, 0);
+        for file in files {
+            assert_eq!(fs::read_to_string(root.join(file)).unwrap(), "valuable");
+        }
+        for tree in ["clean", "pinned", "live"] {
+            assert!(root.join(tree).join("target/cache").exists());
+            assert!(report
+                .skipped
+                .iter()
+                .any(|reason| { reason.contains(tree) && reason.contains("ignored non-cache") }));
+        }
+    }
+}
+#[test]
 fn dry_run_and_recent_worktrees_preserve_everything() {
     let (_tmp, repo, root) = fixture();
     let report = sweep(
