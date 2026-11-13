@@ -210,6 +210,9 @@ class SpawnService(SeatSpawnMixin):
         from plangraph.planner.legs import spawnable_legs
         if not card:
             raise ParameterRefused('spawn by card; card required')
+        if not dry_run:
+            from .round_cap import check_round_cap
+            check_round_cap(self, card, role)
         if seats:
             return await self._spawn_seats(card=card, prompt=prompt, role=role,
                 writer_families=writer_families, review_of=review_of, model=model, leg=leg,

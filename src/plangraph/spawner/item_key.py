@@ -18,6 +18,9 @@ def annotate_item(record, card, *, inherit=False):
         record.setdefault('warnings', []).append('invalid item_key; stored as null')
         value = None
     record['item_key'] = value
+    from .round_cap import round_ref
+    if (ref := round_ref(card)) is not None:
+        record['round_ref'] = ref
     if value is None and record.get('role') in ('review', 'judge'):
         event = dict(event='seat_item_missing', level='warning')
         if event not in record.setdefault('events', []):

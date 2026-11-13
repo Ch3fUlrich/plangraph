@@ -1,0 +1,1 @@
+- **ROUND-CAP-AUTO-REPLAN:** The spawner refuses a 4th implement spawn per item and PR with `round_cap` and returns a `replan_required` payload (D-5813).

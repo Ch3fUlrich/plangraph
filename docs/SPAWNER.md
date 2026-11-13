@@ -1,5 +1,9 @@
 # Plangraph Spawner & Model Routing Architecture
 
+### ROUND-CAP
+
+An `implement` spawn is refused with reason `round_cap` once the same `item_key` (and PR or branch, card `pr`/`pr_number`/`branch`, stored as `round_ref`) has 3 earlier implement runs (D-5813, rule 3.35); refused, dry-run and continuation records do not count. The refusal message is JSON with `replan_required`: item, PR, rounds, findings source, `replan_leg` (first leg the route table gives role `research`; fixed fallback order sol, hydrogen, sonnet high only if the route fails) and a replan card template. Review and other roles are never capped.
+
 ### QUOTA-PAUSE-GATE
 
 The usage owner creates `quota-pause` in the spawner state directory at usage
