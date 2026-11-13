@@ -48,14 +48,10 @@ def base_fresh(repo, *, default=None, fetch=True, timeout=60) -> dict:
     """Compare the run cwd's HEAD with origin's default branch, fetching by default."""
     return _check(repo, default, fetch, timeout)
 async def admit_base(service, record, card, *, launch=False):
-    """Admit the reviewed diff initially, then the actual worktree before launch."""
+    """Check the worker checkout initially and again immediately before launch."""
     card = card or {}
-    review = record.get('role') in ('review', 'judge')
-    diff = card.get('diff_ref') if review else None
     repo = record.get('cwd') or getattr(service.runner, 'default_cwd', None) or os.getcwd()
-    result = (dict(ok=True, origin_sha=None, base_sha=None) if review and diff is None and not record.get('run_worktree') else
-        await asyncio.to_thread(_check, diff.get('repo') or repo, ref=diff.get('head', ''))
-        if diff is not None and not record.get('run_worktree') else await asyncio.to_thread(base_fresh, repo))
+    result = await asyncio.to_thread(base_fresh, repo)
     decision = card.get('base_decision')
     waived = (isinstance(decision, str) and re.fullmatch(r'D-[0-9]+', decision) is not None
               and result.get('behind') is not None and result['behind'] > 0

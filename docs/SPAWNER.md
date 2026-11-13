@@ -677,3 +677,5 @@ Rust source-filter tests and pytest's real `configured_hosts` checks consume
 `tests/fixtures/doctor_sources.json`, binding both validators and probe limits
 to the same accepted/rejected cases. Rust embeds JSON, never Python source or
 an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
+
+Freshness admission checks every worker checkout HEAD, including review/judge and pinned document runs; a fresh diff head cannot waive a stale worker checkout.

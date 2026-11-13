@@ -231,3 +231,25 @@ def test_admission_wait_returns_refreshed_record_for_empty_seats(dispatch, monke
     monkeypatch.setattr(service, 'spawn', lambda **kwargs: asyncio.sleep(0, dict(run_id='run-x', status='running', seats=[])))
     monkeypatch.setattr(service, 'result', lambda run_id: dict(run_id=run_id, status='failed', reason='base_stale: behind=1'))
     assert asyncio.run(admitted_spawn(service, {}))['status'] == 'failed'
+
+
+@pytest.mark.parametrize('role', ['review', 'judge'])
+@pytest.mark.parametrize('diff', [False, True])
+@pytest.mark.parametrize('launch', [False, True])
+def test_review_checks_worker_checkout_even_with_fresh_diff(tmp_path, monkeypatch, role, diff, launch):
+    from types import SimpleNamespace
+    from plangraph.spawner import base_fresh
+    calls, saved = [], []
+    worker, reviewed = str(tmp_path / 'worker'), str(tmp_path / 'reviewed')
+    def check(repo, default=None, fetch=True, timeout=60, ref='HEAD'):
+        calls.append((repo, ref, fetch))
+        stale = repo == worker and ref == 'HEAD'
+        return dict(ok=not stale, reason='base_stale: behind=1' if stale else None,
+                    origin_sha='b' * 40, base_sha='a' * 40, behind=int(stale))
+    monkeypatch.setattr(base_fresh, '_check', check)
+    service = SimpleNamespace(runner=SimpleNamespace(default_cwd=worker), _save=saved.append)
+    card = {'diff_ref': dict(repo=reviewed, head='fresh-diff')} if diff else {}
+    record = dict(role=role, cwd=worker)
+    assert not asyncio.run(base_fresh.admit_base(service, record, card, launch=launch))
+    assert record['reason'] == 'base_stale: behind=1'
+    assert calls == [(worker, 'HEAD', True)] and saved == [record]
