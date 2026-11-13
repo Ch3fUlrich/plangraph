@@ -84,9 +84,13 @@ Cards tagged `auth` or `secrets` require two non-Anthropic seat families,
 even if their item has standard tier; an Anthropic seat cannot replace either.
 Stored card tags must be a JSON list of strings from the card schema's exact
 lowercase vocabulary (`auth`, `secrets`, `money`, `migration`, `public-contract`,
-`live-step`). NULL, malformed JSON, non-lists and invalid entries (including
-case/whitespace variants) refuse `validation: card_risk_tags_invalid`, never
-skip the seat gate. A missing card retains the ordinary tier-based gate.
+`live-step`). Family validation and the ordinary tier minimum run first:
+too few families refuse `coverage: insufficient_seat_families` before tags
+are read. Once that minimum passes, NULL, malformed JSON, non-lists and
+invalid entries (including case/whitespace variants) refuse
+`validation: card_risk_tags_invalid` before the auth/secrets seat minimum,
+writer exclusion and recorded-run backing checks. Invalid tags never skip
+the seat gate. A missing card retains the ordinary tier-based gate.
 Checks repeat inside the write lock; changed proof-bearing item/head refuses
 `conflict`, while lease touches do not.
 

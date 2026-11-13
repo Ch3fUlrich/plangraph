@@ -1,5 +1,4 @@
 """D-852 hermetic regressions for the router GO close (D-5504/D-5506)."""
-from contextlib import contextmanager
 from itertools import count
 from types import SimpleNamespace
 
@@ -15,6 +14,36 @@ from plangraph.keeper.evidence_decisions import DecisionsAdapter
 KEY = "demo:A"
 HEAD = "abcdef0123456789" * 2 + "abcdef01"
 MERGE = "1" * 40
+
+
+class _ConnectionProxy:
+    """Override one SQL seam without narrowing the connection interface."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def execute(self, sql, *args, **kwargs):
+        return self._conn.execute(sql, *args, **kwargs)
+
+
+def _at_write_lock(w, monkeypatch, change):
+    """Inject only after the actual database lock, not a Store helper name."""
+    entered = []
+
+    class LockedConnection(_ConnectionProxy):
+        def execute(self, sql, *args, **kwargs):
+            cursor = super().execute(sql, *args, **kwargs)
+            if sql == "BEGIN IMMEDIATE":
+                assert self.in_transaction, "the write transaction must hold the lock"
+                entered.append(sql)
+                change()
+            return cursor
+
+    monkeypatch.setattr(w.store, "conn", LockedConnection(w.conn))
+    return entered
 
 
 class MergedGit:
@@ -254,16 +283,13 @@ def test_no_seat_waiver_reduces_the_high_tier_gate(w):
 
 
 def test_proofs_are_rechecked_inside_the_write_lock(w, monkeypatch):
-    original = w.store._write
-
-    @contextmanager
     def swapped():
         w.decision_path.write_text("| D-5504 | demo | GO 12345678 |\n", encoding="utf-8")
-        with original():
-            yield
 
-    monkeypatch.setattr(w.store, "_write", swapped)
+    entered = _at_write_lock(w, monkeypatch, swapped)
     _refused(w, "evidence_unverified", "go_row_head_mismatch")
+    assert entered == ["BEGIN IMMEDIATE"]
+    assert not w.conn.in_transaction
 
 
 @pytest.fixture

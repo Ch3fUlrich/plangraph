@@ -1,12 +1,12 @@
 """Hermetic D-5558 follow-up: real GO authority clauses and D-5529 seats."""
-from contextlib import contextmanager
 import socket
 import subprocess
 from types import SimpleNamespace
 
 import pytest
 
-from test_keeper_close_merged import HEAD, KEY, _close, _refused, unseated_w, w
+from test_keeper_close_merged import (HEAD, KEY, _at_write_lock, _close,
+                                      _ConnectionProxy, _refused, unseated_w, w)
 from plangraph.keeper import auth
 
 
@@ -212,31 +212,43 @@ def test_invalid_card_risk_tags_are_named_audited_refusals(w, raw):
     _refused(w, "validation", "card_risk_tags_invalid")
 
 
+@pytest.mark.parametrize("key,families,code,reason", [
+    (KEY, [], "coverage", "insufficient_seat_families"),
+    ("demo:H", ["google"], "coverage", "insufficient_seat_families"),
+    ("demo:H", ["google", "deepseek"], "validation", "card_risk_tags_invalid")])
+def test_invalid_card_tags_follow_tier_seat_minimum(w, key, families, code, reason):
+    w.store.put_card(w.p("router"), key, {"outcome": "fixture", "risk_tags": []})
+    w.conn.execute("UPDATE cards SET risk_tags='null' WHERE key=?", (key,))
+    _refused(w, code, reason, key=key, families=families)
+
+
 @pytest.mark.parametrize("raw,code,reason", [
     ('["auth"]', "coverage", "insufficient_non_anthropic_seat_families"),
     ("null", "validation", "card_risk_tags_invalid")])
 def test_card_risk_tags_are_rechecked_inside_write_lock(w, monkeypatch, raw, code, reason):
     w.store.put_card(w.p("router"), KEY, {"outcome": "fixture", "risk_tags": []})
-    original = w.store._write
 
-    @contextmanager
     def swapped():
+        assert w.conn.in_transaction, "inject the changed tags only after the write lock"
         w.conn.execute("UPDATE cards SET risk_tags=? WHERE key=?", (raw, KEY))
-        with original():
-            yield
 
-    monkeypatch.setattr(w.store, "_write", swapped)
+    entered = _at_write_lock(w, monkeypatch, swapped)
     _refused(w, code, reason)
+    assert entered == ["BEGIN IMMEDIATE"]
+    assert not w.conn.in_transaction
 
 
 def test_null_card_risk_tags_are_named_audited_refusal(w, monkeypatch):
     # SQL normally forbids NULL; an adapter returning it must still fail closed.
-    def execute(sql, *args):
-        if sql.startswith("SELECT risk_tags FROM cards"):
-            return SimpleNamespace(fetchone=lambda: {"risk_tags": None})
-        return w.conn.execute(sql, *args)
+    class NullTagsConnection(_ConnectionProxy):
+        def execute(self, sql, *args, **kwargs):
+            if sql.startswith("SELECT risk_tags FROM cards"):
+                return SimpleNamespace(fetchone=lambda: {"risk_tags": None})
+            return super().execute(sql, *args, **kwargs)
 
-    monkeypatch.setattr(w.store, "conn", SimpleNamespace(execute=execute))
+    monkeypatch.setattr(w.store, "conn", NullTagsConnection(w.conn))
+    assert w.store.conn.row_factory is w.conn.row_factory
+    w.store.conn.commit()
     _refused(w, "validation", "card_risk_tags_invalid")
 
 
