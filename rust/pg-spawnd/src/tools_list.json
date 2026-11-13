@@ -453,5 +453,76 @@
    "type": "object"
   },
   "name": "plangraph_agent_result"
+ },
+ {
+  "description": "Long-lived Codex package launch (Rust spawner)",
+  "inputSchema": {
+   "properties": {
+    "base_ref": {
+     "type": "string"
+    },
+    "branch": {
+     "type": "string"
+    },
+    "card": {
+     "type": "object"
+    },
+    "effort": {
+     "default": "medium",
+     "type": "string"
+    },
+    "extra_text": {
+     "type": "string"
+    },
+    "host": {
+     "type": "string"
+    },
+    "keys": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "model": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "host",
+    "base_ref",
+    "branch",
+    "keys"
+   ],
+   "type": "object"
+  },
+  "name": "plangraph_package_launch"
+ },
+ {
+  "description": "Long-lived Codex package send (Rust spawner)",
+  "inputSchema": {
+   "properties": {
+    "run": {
+     "type": "string"
+    },
+    "text": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "run",
+    "text"
+   ],
+   "type": "object"
+  },
+  "name": "plangraph_package_send"
+ },
+ {
+  "description": "Long-lived Codex package list (Rust spawner)",
+  "inputSchema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "plangraph_package_list"
  }
 ]

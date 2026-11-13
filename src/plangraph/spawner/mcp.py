@@ -154,6 +154,21 @@ for _tool in TOOLS_METADATA:
             'require_bench': {'type': 'boolean'}, 'bench_db': {'type': 'string'}})
 
 
+# Package lifecycle is Rust-owned; this module only registers and forwards MCP calls.
+for _name, _properties, _required in (
+    ('launch', {'host': {'type': 'string'}, 'base_ref': {'type': 'string'},
+                'branch': {'type': 'string'}, 'keys': {'type': 'array', 'items': {'type': 'string'}},
+                'extra_text': {'type': 'string'}, 'model': {'type': 'string'},
+                'effort': {'type': 'string', 'default': 'medium'}, 'card': {'type': 'object'}},
+               ['host', 'base_ref', 'branch', 'keys']),
+    ('send', {'run': {'type': 'string'}, 'text': {'type': 'string'}}, ['run', 'text']),
+    ('list', {}, ()),
+):
+    TOOLS_METADATA.append({'name': 'plangraph_package_' + _name,
+        'description': 'Long-lived Codex package ' + _name + ' (Rust spawner)',
+        'inputSchema': {'type': 'object', 'properties': _properties, 'required': list(_required)}})
+
+
 class MCPSpawnerServer:
     """Server implementing the Model Context Protocol (MCP) JSON-RPC standard."""
 
@@ -175,9 +190,29 @@ class MCPSpawnerServer:
     async def _session_tool(self, name, arguments):
         return await dispatch_session_tool(self, name, arguments)
 
+    async def _package_tool(self, name, arguments):
+        import os
+        process = await asyncio.create_subprocess_exec(
+            os.environ.get('PG_SPAWND_BIN', 'pg-spawnd'), 'package-call',
+            '--state', str(self.service.state), '--tool', name,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE)
+        try:
+            stdout, _ = await asyncio.wait_for(
+                process.communicate(json.dumps(arguments).encode()), timeout=3700)
+        except BaseException:
+            process.kill()
+            await process.wait()
+            raise
+        if process.returncode:
+            raise ParameterRefused('Rust package tool failed')
+        return json.loads(stdout)
+
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Execute tool and return structured payload."""
         self._source_guard.check(name, arguments)
+        if isinstance(name, str) and name.startswith('plangraph_package_'):
+            return await self._package_tool(name, arguments)
         if isinstance(name, str) and name.startswith('plangraph_session_'):
             return await self._session_tool(name, arguments)
         if name == 'plangraph_agent_probe':
@@ -196,7 +231,10 @@ class MCPSpawnerServer:
             return self.service.route(arguments['card'], arguments.get('role', 'implement'),
                 arguments.get('writer_families', ()), arguments.get('review_of'), **options).to_dict()
         if name == 'plangraph_agent_ps':
-            return ps_reply(await asyncio.to_thread(remote_ps.list_runs, self.service.ps()['runs']))
+            runs = await asyncio.to_thread(remote_ps.list_runs, self.service.ps()['runs'])
+            packages = (await self._package_tool('plangraph_package_list', {})
+                        if (self.service.state / 'package-runs').is_dir() else {'runs': []})
+            return ps_reply([*runs, *packages['runs']])
         if name == 'plangraph_agent_result' or (name == 'plangraph_agent_status' and 'run_id' in arguments):
             return self.service.result(arguments['run_id'])
         if name == 'plangraph_agent_cancel' and 'run_id' in arguments:

@@ -146,6 +146,7 @@ pub(crate) fn spawn(
     {
         return Err(ToolError::Internal("route adapter returned no leg".into()));
     }
+    crate::package::admit_leg_effort(args, leg)?;
     match runs.spawn(state, args, host, role.clone(), plan.clone()) {
         Err(error) => {
             let named = ["prompt_too_large", "stdin_prompt_flag_missing"];

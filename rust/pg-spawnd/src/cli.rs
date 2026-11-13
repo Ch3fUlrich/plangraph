@@ -126,6 +126,9 @@ pub(crate) fn execute(
     }
     let verb = first;
     let rest: Vec<String> = args.collect();
+    if verb.as_deref() == Some("package-call") {
+        return crate::package::cli(rest, out);
+    }
     if verb.as_deref() == Some("agents-view") {
         return crate::agent_view::execute(rest, out);
     }

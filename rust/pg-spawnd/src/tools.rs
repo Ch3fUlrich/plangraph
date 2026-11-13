@@ -78,6 +78,14 @@ pub(crate) fn dispatch(
     runs: Option<&crate::runs::Runs>,
 ) -> Result<CallToolResult, McpError> {
     let name = request.name.as_ref();
+    if name.starts_with("plangraph_package_") {
+        let payload =
+            crate::package::handle(state, name, &request.arguments.clone().unwrap_or_default())
+                .map_err(crate::errors::ToolError::into_error_data)?;
+        return Ok(CallToolResult::success(vec![ContentBlock::text(
+            payload.to_string(),
+        )]));
+    }
     if matches!(
         name,
         "plangraph_agent_cancel" | "plangraph_agent_steer" | "plangraph_agent_status"
@@ -143,7 +151,11 @@ pub(crate) fn dispatch(
         let payload = (|| {
             use serde_json::json;
             match name {
-                "plangraph_agent_ps" => Ok(json!({"runs": crate::records::list_runs(state)})),
+                "plangraph_agent_ps" => {
+                    let mut runs = crate::records::list_runs(state);
+                    runs.extend(crate::package::list(state));
+                    Ok(json!({"runs": runs}))
+                }
                 "plangraph_agent_result" => crate::records::read_record(state, required("run_id")?),
                 "plangraph_agent_status" if args.contains_key("run_id") => {
                     crate::records::read_record(state, required("run_id")?)
@@ -326,7 +338,7 @@ mod tests {
         let listed = list_tools().tools;
         let fixture: serde_json::Value = serde_json::from_str(TOOLS_JSON).expect("fixture");
         assert_eq!(serde_json::to_value(&listed).expect("tools"), fixture);
-        assert_eq!(listed.len(), 15);
+        assert_eq!(listed.len(), 18);
     }
 
     #[test]
