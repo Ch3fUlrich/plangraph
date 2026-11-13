@@ -25,10 +25,17 @@ def _repo(tmp_path, extra=None):
 
 
 @pytest.mark.parametrize("path", ["changelog.d/FRAG.md", "CHANGELOG.md", "notes/readme.md",
-                                  "notes/ideas.txt", "docs/x.md"])
+                                  "docs/x.md", "changelog.d/README.md"])
 def test_docs_and_changelog_fragments_select_no_tests(tmp_path, path):
     _repo(tmp_path)
     assert selector().select_tests(tmp_path, [path])["tests"] == []
+
+
+@pytest.mark.parametrize("path", ["notes/ideas.txt", "changelog.d/tool.py", "changelog.d/x.toml"])
+def test_text_assets_and_non_fragments_are_not_skipped_as_docs(tmp_path, path):
+    smoke = "tests/test_affected_tests.py"
+    _repo(tmp_path, {smoke: "", path: "x"})
+    assert selector().select_tests(tmp_path, [path])["tests"] == [smoke]
 
 
 def test_unmapped_code_selects_bounded_smoke_not_full_suite(tmp_path):

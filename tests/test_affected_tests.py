@@ -113,7 +113,7 @@ def test_tracked_non_python_src_asset_falls_back_to_full_suite(tmp_path):
     """A tracked src/*.sql change runs no Python AST, yet production code reads it."""
     _asset_repo(tmp_path)
     plan = selector().select_tests(tmp_path, ["src/pkg/asset.sql"])
-    assert plan["tests"] != ["tests"]
+    assert plan["tests"] == []  # smoke contract: no test names src/pkg, none is the selector's own
 
 
 def test_tracked_non_python_src_asset_maps_to_tests_naming_it(tmp_path):
@@ -152,7 +152,7 @@ def test_tracked_deploy_unnamed_falls_back_to_full_suite(tmp_path):
         "deploy/x.service": "[Service]\nExecStart=/bin/true",
     })
     plan = selector().select_tests(tmp_path, ["deploy/x.service"])
-    assert plan["tests"] != ["tests"]
+    assert plan["tests"] == []  # top-level dir is too broad to name tests; smoke is empty here
 
 
 def test_docs_and_status_markdown_skipped_when_changed(tmp_path):
