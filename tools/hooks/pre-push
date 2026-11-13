@@ -22,6 +22,7 @@ import difflib
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PYTHON = sys.executable
@@ -140,7 +141,7 @@ def scan_blob(rel, local_sha, cfg, find_shapes, hits, baselines=()):
 
 
 def file_size_gate():
-    """tools/check_file_size.py on the pushing checkout: 0 clean, 1 refuse."""
+    """Measure the isolated pushed checkout: 0 clean, 1 refuse."""
     r = subprocess.run([PYTHON, str(FILE_SIZE)], capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         sys.stderr.write(r.stdout + r.stderr)
@@ -227,13 +228,46 @@ def push_main():
         return 0
     PYTHON = python_interpreter(Path(git_out("rev-parse", "--show-toplevel")))
     print(f"pre-push Python: {PYTHON}", flush=True)
+    root = Path.cwd()
+    # Even HEAD may have staged/worktree edits. Every ref gets its own immutable
+    # checkout so policy files and tests agree with the tree being pushed.
+    original_env = dict(os.environ)
+    for rec in refs:
+        with tempfile.TemporaryDirectory(prefix="pre-push-") as directory:
+            checkout = Path(directory) / "tree"
+            result = git("worktree", "add", "--detach", str(checkout), rec[1])
+            if result.returncode:
+                print("pre-push: pushed-tree checkout failed: push refused", file=sys.stderr)
+                return 1
+            try:
+                for key in list(os.environ):
+                    if key.upper().startswith('GIT_'):
+                        os.environ.pop(key)
+                os.chdir(checkout)
+                code = pushed_tree_checks([rec])
+                if code:
+                    return code
+            finally:
+                os.chdir(root)
+                os.environ.clear()
+                os.environ.update(original_env)
+                git("worktree", "remove", "--force", str(checkout))
+    return 0
+
+
+def pushed_tree_checks(refs):
     if file_size_gate():
         return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None
     remote = sys.argv[1] if len(sys.argv) > 1 else "origin"
     private = git_out("config", "--local", "--bool", f"remote.{remote}.plangraph-private") == "true"
-    rules_files = [str(SPLIT / name) for name in BASE_RULES if (SPLIT / name).is_file()]
+    snapshot_rules = Path(git_out("rev-parse", "--show-toplevel")) / "tools/split"
+    # Policy data belongs to the pushed tree too. Installed rules remain the
+    # fallback for repositories which do not carry plangraph's policy files.
+    rules_files = [str(snapshot_rules / name if (snapshot_rules / name).is_file() else SPLIT / name)
+                   for name in BASE_RULES
+                   if (snapshot_rules / name).is_file() or (SPLIT / name).is_file()]
     if os.environ.get("PLANGRAPH_SCRUB_RULES"):
         rules_files.append(os.environ["PLANGRAPH_SCRUB_RULES"])
     try:
@@ -293,7 +327,9 @@ def push_main():
             if os.environ.get("PREFLIGHT_FAST") == "1":
                 command.append("--fast")
             # Per-check deadlines govern, including the possible INFRA retry.
-            result = subprocess.run(command)
+            # The snapshot has no venv of its own. Keep the interpreter selected
+            # from the pushing checkout for all preflight children as well.
+            result = subprocess.run(command, env=dict(os.environ, PREFLIGHT_PYTHON=PYTHON))
             if result.returncode:
                 return result.returncode
     elif os.environ.get("PREFLIGHT_SKIP") == "1":

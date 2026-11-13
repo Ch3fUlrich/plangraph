@@ -1,0 +1,1 @@
+- Run pre-push file-size, scrub policy data and tests against an isolated checkout of each pushed tree.
