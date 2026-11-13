@@ -35,7 +35,7 @@ EXPECTED = {
     },
     "check_fails": {
         "status": "completed", "outcome": "failed", "exits": ["check_fail", "check_fail"],
-        "states": ["running", "failed"],
+        "states": ["running", "running", "failed"],
     },
     "cancel": {
         "status": "completed", "outcome": "parked", "exits": [], "states": ["running", "parked"],
@@ -66,7 +66,7 @@ EXPECTED = {
     # through the report activity, not into an attempt result. Known gap, projector view
     # differs from keeper view; fixing it is a projector (HIGH) change out of scope here.
     "gate_blocks": {
-        "status": "completed", "outcome": "done", "exits": ["ok", "ok"], "states": ["running"],
+        "status": "completed", "outcome": "done", "exits": ["ok", "ok"], "states": ["running", "running"],
         "attempt": {"harness": "shell", "model": "some/model", "combo": "leg-1", "class_": "128k"},
     },
 }

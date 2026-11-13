@@ -1,0 +1,1 @@
+- RT-P1-PROJECTOR-RUN-IDS: project Temporal workflow/run/card-attempt identities into keeper ownership before worker verbs, fence delayed stale runs on SQLite/Postgres, and recognize the Rust `observe` activity with projected-fixture and source-name drift coverage.

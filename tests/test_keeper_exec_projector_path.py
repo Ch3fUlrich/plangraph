@@ -73,7 +73,7 @@ def test_needs_input_timer_preserves_projected_state_and_worker_cas(w, verb):
     before_timer = {"events": full["events"][:-1]}
     projection = project_history(before_timer, workflow_id="card:" + key, run_id="run")
     assert projector.apply_run(projection, run_ord=0).states_written == 2
-    assert snapshot(w, key)[:4] == ("needs_input", None, None, None)
+    assert snapshot(w, key)[:4] == ("needs_input", "card:" + key, "run", 1)
     projection = project_history(full, workflow_id="card:" + key, run_id="run")
     assert [s.state for s in projection.states] == ["running", "needs_input"]
     assert projector.apply_run(projection, run_ord=0).states_written == 0
@@ -82,7 +82,6 @@ def test_needs_input_timer_preserves_projected_state_and_worker_cas(w, verb):
         worker_call(w, key, verb, "running")
     assert exc.value.code == "exec_stale_state"
     assert snapshot(w, key) == before
-    seed_exec_owner(w, key, ("card:" + key, "run", 1))
     worker_call(w, key, verb, before[0])
     assert snapshot(w, key)[:4] == (
         "needs_input" if verb == "ask_question" else "parked", "card:" + key, "run", 1)
@@ -101,8 +100,7 @@ def test_projector_waiting_refuses_delayed_same_run_park(w, expected):
                               workflow_id="card:" + key, run_id="run")
     assert projector.apply_run(running, run_ord=0).states_written == 1
     assert snapshot(w, key)[0] == "running"
-    # First run-carrying worker fact claims ownership; projector does not yet forward run ids.
-    seed_exec_owner(w, key, ("card:" + key, "run", 1))
+    # The projector already owns this run before its first worker fact.
     w.store.worker_alarm(w.p("workerA"), {
         "card": key, "reason": "retry", "workflow_id": "card:" + key,
         "run_id": "run", "attempt": 1})
@@ -176,12 +174,13 @@ def test_delayed_blind_park_without_owner_start(w, owned, exit_class):
     key, = seed(w, [("A", [])])
     projector = Projector(w.store, w.p("system"), now=w.clock)
     full = history(exit_class)
+    initial_run = "previous-run" if owned == "cleared" else "run"
     running = project_history({"events": full["events"][:3]},
-                              workflow_id="card:" + key, run_id="run")
+                              workflow_id="card:" + key, run_id=initial_run)
     projector.apply_run(running, run_ord=0)
     identity = {"workflow_id": "card:" + key, "run_id": "run", "attempt": 1}
     if owned:
-        seed_exec_owner(w, key, ("card:" + key, "run", 1))
+        seed_exec_owner(w, key, ("card:" + key, initial_run, 1))
     if owned == "cleared":
         with w.store._write():
             w.store._exec_clear(w.conn, key, w.p("router"), w.clock())

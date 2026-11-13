@@ -7,7 +7,7 @@
 //! heartbeats and cancellation. The mapping helpers are factored out as plain
 //! `pub(crate)` functions so they can be tested without a Temporal server.
 
-use crate::attempt::{AttemptInput, AttemptResult, LegSpec};
+use crate::attempt::{AttemptResult, LegSpec};
 use crate::harness::HarnessRegistry;
 use crate::keeper::{Alarm, AttemptReport, Claim, ExecId, Fence, Keeper, KeeperError};
 use crate::mergelock::{self, MergeOutcome};
@@ -1194,7 +1194,7 @@ impl CardActivities {
     pub async fn attempt(
         self: Arc<Self>,
         ctx: ActivityContext,
-        input: AttemptInput,
+        input: crate::card_input::ProjectorInput,
     ) -> Result<AttemptResult, ActivityError> {
         let heartbeat = self.deps.cfg.heartbeat;
         let deps = self.deps.clone();

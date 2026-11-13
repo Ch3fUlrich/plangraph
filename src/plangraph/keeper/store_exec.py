@@ -9,6 +9,27 @@ from .errors import Refused
 class ExecMixin:
     """Transactional exec ownership and retired-run fencing."""
 
+    def _exec_project(self, conn, item, run, principal, now):
+        """Install the watermark-ordered history owner in the state transaction."""
+        from .store_cards import _exec_parts, _load_list
+        self._require_role(principal, "system")
+        wf, run_id, attempt = _exec_parts(item["key"], run)
+        same = (wf, run_id) == (item["exec_workflow_id"], item["exec_run_id"])
+        retired = _load_list(item["exec_retired_runs"])
+        if any((r.get("workflow_id"), r.get("run_id")) == (wf, run_id) for r in retired):
+            raise Refused("exec_stale", "projected run has been retired")
+        if same and attempt <= item["exec_attempt"]:
+            return
+        if not same and item["exec_run_id"] is not None:
+            self._exec_clear(conn, item["key"], principal, now)
+        holder = item["exec_principal"] if same else (item["delegate"] or item["claimed_by"])
+        conn.execute("UPDATE items SET exec_workflow_id=?, exec_run_id=?, exec_attempt=?,"
+                     " exec_principal=?, updated_at=? WHERE key=?",
+                     (wf, run_id, attempt, holder, self._iso(now), item["key"]))
+        self._append(principal, item["key"], "exec_owner_changed",
+                     {"action": "advance" if same else "record", "workflow_id": wf,
+                      "run_id": run_id, "attempt": attempt}, now)
+
     def _exec_clear(self, conn, key, principal, now):
         """Free the exec owner inside the caller's keeper transaction.
 

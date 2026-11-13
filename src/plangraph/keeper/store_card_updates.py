@@ -110,6 +110,19 @@ class CardUpdatesMixin:
                 "meter": reading}
 
     # ---------------------------------------------------------------- state
+    def project_state(self, principal, key, state, reason, *, run):
+        """System-only history projection; worker verbs cannot choose the owner."""
+        def apply(now):
+            self._require_role(principal, "system")
+            identity = _exec_parts(key, run)
+            if state not in SETTABLE_STATES:
+                raise Refused("validation", "projection target must be a settable state")
+            return self._apply_state(principal, key, state,
+                _text("reason", reason or "", cap=500, key=key), now,
+                lambda project: self._may_write_for(principal, project),
+                run=identity, projected=True)
+        return self._run(principal, "set_state", key, apply)
+
     def set_state(self, principal, key, state, reason="", run=None, new_run=False,
                   hand_back=False):
         # Only ``hand_back=True`` hands the card back: on a changing move to
@@ -156,7 +169,7 @@ class CardUpdatesMixin:
 
     def _apply_state(self, principal, key, state, why, now, scope,
                      guard=None, release_claim=False, run=None, new_run=False,
-                     hand_back=False):
+                     hand_back=False, projected=False):
         """Move *key* to *state*; *scope(project)* does the authorisation check.
 
         Idempotent: re-applying the state the item already has changes nothing.
@@ -189,10 +202,18 @@ class CardUpdatesMixin:
             if guard is not None:
                 guard(item)
             was = item["state"]
+            if projected:
+                if (item["exec_run_id"] == run[1] and was != state
+                        and not (was in ("waiting", "needs_input") and state == "running")
+                        and not _forward(was, state) and was != "claimed"):
+                    raise Refused("bad_transition", f"{key}: {was} -> {state} is not forward")
+                self._exec_project(self.conn, item, run, principal, now)
+                if was == "claimed":
+                    return {"key": key, "state": was, "changed": False}
             if was not in SETTABLE_STATES and not (release_claim and was == "claimed"):
                 raise Refused("bad_state", f"{key} is {was}; set_state moves only"
                               f" {list(SETTABLE_STATES)}")
-            if run is not None:
+            if run is not None and not projected:
                 wf, run_id, attempt_no = _exec_parts(key, run)
                 if _forward(was, state):
                     self._exec_check(self.conn, key, wf, run_id, attempt_no,
@@ -201,7 +222,7 @@ class CardUpdatesMixin:
                 else:
                     raise Refused("bad_transition",
                                   f"{key}: {was} -> {state} is not a forward move")
-            elif (item["exec_run_id"] is not None and was != state
+            elif (not projected and item["exec_run_id"] is not None and was != state
                   and not hand_back and not release_claim
                   and not (was in ("waiting", "needs_input") and state == "running")
                   and not _forward(was, state)):

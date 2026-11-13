@@ -1,6 +1,6 @@
 """Idempotent apply of projected runs into the keeper (docs/projector.md, "Idempotent apply").
 
-Keeper rows are written only through ``Store.record_attempt`` / ``Store.set_state`` with a
+Keeper rows are written only through ``Store.record_attempt`` / ``Store.project_state`` with a
 ``system`` principal.  The ``projector_*`` ledger and watermark tables are plain SQL on the
 store's connection, each write inside the store's own write transaction.  ``record_attempt``
 opens its own transaction, so the attempt row and its ledger row cannot share one: a crash
@@ -144,23 +144,25 @@ class Projector:
             return False
         if (run_ord, rec.event_id) <= mark:
             result.states_stale += 1
-        elif state not in SETTABLE_STATES:
+        elif state not in SETTABLE_STATES and state != "claimed":
             result.states_skipped_state += 1
         else:
             try:
-                out = self.store.set_state(self.principal, rec.plan_key, rec.state,
-                                           (rec.reason or "")[:_REASON_CAP])
+                out = self.store.project_state(self.principal, rec.plan_key, rec.state,
+                    (rec.reason or "")[:_REASON_CAP], run=(wf, run, rec.attempt))
             except Refused as exc:
                 # ``bad_state``/``locked``: the item moved under us.
                 # ``bad_transition`` (RT-P1 sq5 fix 3): a late projection whose
                 # back move the state machine refuses on an OWNED card -- the
                 # card keeps the state its own run left it in, so the stale
                 # event is skipped rather than fatal (and still marked).
-                if exc.code not in ("bad_state", "locked", "bad_transition"):
+                if exc.code not in ("bad_state", "locked", "bad_transition", "exec_stale"):
                     raise
                 result.states_skipped_state += 1
             else:
-                if out["changed"]:
+                if state == "claimed":
+                    result.states_skipped_state += 1
+                elif out["changed"]:
                     result.states_written += 1
                 else:
                     result.states_existing += 1

@@ -18,14 +18,14 @@ Language: Python (`temporalio` SDK, optional import; the keeper never imports it
 
 ### Rust worker conformance (rust/worker)
 
-* The contract stays v1; the WORKER maps, the projector is unchanged. Why: the worker's internal outcomes (`merged`, `parked`,
+* The outcome contract stays v1; the WORKER maps. Why: the worker's internal outcomes (`merged`, `parked`,
   `quarantined`, `planner`, `cancelled`) are richer than the projector's `done | parked | failed`; mapping in one pure function
-  (`workflow::finish` in `rust/worker/src/workflow.rs`) is the smallest change and keeps the projector free of worker
+  (`workflow::finish` in `rust/worker/src/workflow.rs`) keeps the projector free of worker
   vocabulary. Map: `merged` -> `done`; `parked` -> `parked`; `planner` -> `parked`; `cancelled` -> `parked` (the projector
   never sets `cancelled`, that is the keeper verb); `quarantined` -> `failed`. The specific word travels in the extra result
   field `detail` (ignored by the projector).
-* Activity type name is exactly `attempt` (activity name override; the other activities are
-  `CardActivities::tick|probe|merge|report|park|complete|alarm|janitor|gate|ask_question|record_question_timeout`). `attempt` is scheduled with `maximum_attempts=1`.
+* Activity type names `attempt` and `observe` are explicit overrides; the other activities are
+  `CardActivities::tick|probe|merge|report|park|complete|alarm|janitor|gate|ask_question|record_question_timeout`. `attempt` is scheduled with `maximum_attempts=1`.
 * Attempt result carries `exit_class` (always one of `EXIT_CLASSES`; worker `ExitClass` serialises to the same snake_case
   names) plus `harness` (harness name), `model` (leg model), `combo` (leg id), `class` (context window class `128k|256k|1m`),
   `started_at`/`ended_at` (ISO 8601 UTC, millisecond, `Z`). `tokens_in`/`tokens_out`/`cost`/`log_ref` are omitted until the
@@ -74,7 +74,7 @@ Payloads are `{"metadata": {"encoding": b64 "json/plain"}, "data": b64}`; decode
 
 The projector never sets `done` or `cancelled` (not in `SETTABLE_STATES`).
 
-Refinements: a StateRec is emitted only when its state differs from the previously emitted state of the same run (no
+Refinements: a StateRec is emitted only when its state or card attempt differs from the previously emitted record of the same run (no
 `waiting, waiting`). A TimerStarted never overrides `needs_input` (the answer wait carries a timer). StateRec event ids: the
 ActivityTaskScheduled id for `running`; the attempt's closing event id for `needs_input`/`waiting`; the TimerStarted id; the
 workflow-end event id. Attempt fields not in the result fall back to the event times of ActivityTaskStarted (started_at) and
@@ -98,7 +98,7 @@ Module contracts (so writers can work in parallel):
 `project_history(history, *, workflow_id, run_id) -> RunProjection` with frozen dataclasses `AttemptRec(workflow_id, run_id,
 activity_id, attempt, scheduled_event_id, closed_event_id, plan_key, exit_class, harness, model, combo, class_, started_at,
 ended_at, tokens_in, tokens_out, cost)`, `StateRec(workflow_id, run_id, event_id, plan_key, state, reason)`,
-`RunProjection(workflow_id, run_id, plan_key, status, start_time, last_event_id, attempts, states)`. Attempts are ordered by
+`RunProjection(workflow_id, run_id, plan_key, status, start_time, last_event_id, attempts, states)`. StateRec also carries the card attempt (default 1). Attempts are ordered by
 scheduled_event_id; states by event_id. Deterministic: same history -> equal output.
 
 ## Idempotent apply (`apply.py`)
@@ -112,7 +112,7 @@ Tables (migration 3, `ddl.py`, PG and SQLite variants, created only through the 
   workflow_id `*` is the global watermark (`event_id` unused, `updated_at` = completion of the last full scan). The UI shows it: `GET /v1/projector_watermark` (read-only, same auth gate as `GET /v1/questions`) returns `{global, workflows, open_alarms}` (`open_alarms` is `null` for project-restricted callers: the count is not project-scoped; an unreadable table is `503 {"error": "unavailable"}`, never a 200 body) and the inbox page prints one line from it.
 * `projector_alarms(id, kind, workflow_id, key, detail, raised_at, cleared_at)`; open = `cleared_at IS NULL`.
 
-Writes go through the keeper `Store` (`record_attempt`, `set_state`) with a `system` principal, never raw SQL on keeper tables.
+Writes go through the keeper `Store` (`record_attempt`, system-only `project_state`), never raw SQL on keeper tables. State writes carry `(workflow_id, run_id, attempt)` from history; the Rust scheduled input carries the same identity behind `projector-run-ids-v1` for replay compatibility. The card attempt is input `attempt`/`n` (legacy fallback: scheduled-attempt ordinal), never the activity retry count. Claim state is preserved while ownership is recorded, so a stale worker arriving before the live worker gets `exec_stale`. Newer projected runs retire prior owners; old watermark events and retired runs cannot reacquire ownership.
 * Attempt `n` = next number for the key in history order, taken from `projector_applied` order; row fields `workflow_id`,
   `run_id`, `log_ref = "temporal:<activity_id>:<attempt>"`. Crash window (attempt row written, applied row not): on `Refused
   conflict` for that n, if the existing row has the same workflow_id/run_id/log_ref, just insert the applied row.
