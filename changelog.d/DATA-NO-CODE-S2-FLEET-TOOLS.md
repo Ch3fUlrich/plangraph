@@ -3,3 +3,4 @@
 - Port question-count with the existing queue summary format and counting rules.
 - Port resume-digest and carried transcript replay, pin 123 Python executions, compare active keeper claims with whoami, and preserve complete keeper wrapper JSON.
 - Port go-row-gate with 220 recorded receipt cases, shared GO token parsing and absolute wrapper lookup.
+- Port merge-part retries, ordered refusal codes and evidence handoff; add wrapper and hermetic origin/main integration tests.

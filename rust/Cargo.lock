@@ -2130,6 +2130,7 @@ name = "pg-fleet"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "pg-worker-core",
  "regex",
  "serde",
  "serde_json",

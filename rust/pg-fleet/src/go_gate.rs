@@ -203,9 +203,9 @@ pub fn main(args: &[String]) -> i32 {
                     .to_string_lossy()
                     .into_owned()
             });
-        if !crate::process::run("git", &["-C", &repo, "fetch", "-q", "origin", "main"], 120)
-            .is_ok_and(|o| o.code == 0)
-        {
+        let fetched =
+            crate::process::run("git", &["-C", &repo, "fetch", "-q", "origin", "main"], 120);
+        if !fetched.is_ok_and(|o| o.code == 0) {
             print!("{}", stop("fetch of origin/main failed").1);
             return 5;
         }

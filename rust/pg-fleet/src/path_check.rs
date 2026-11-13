@@ -7,11 +7,15 @@ pub fn find(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     dirs.iter()
         .flat_map(|p| {
             #[cfg(windows)]
-            let names = vec![
-                p.join(format!("{name}.exe")),
-                p.join(format!("{name}.cmd")),
-                p.join(name),
-            ];
+            let names = if Path::new(name).extension().is_some() {
+                vec![p.join(name)]
+            } else {
+                vec![
+                    p.join(format!("{name}.exe")),
+                    p.join(format!("{name}.cmd")),
+                    p.join(format!("{name}.bat")),
+                ]
+            };
             #[cfg(not(windows))]
             let names = vec![p.join(name)];
             names
