@@ -93,6 +93,16 @@ def test_new_json_scalar_never_exposes_numeric_or_literal_credentials(scalar):
     assert redact(text) == '"db_password": "[REDACTED]"'
 
 
+@pytest.mark.parametrize('parts,forbidden', [
+    (['{"db_', 'password": ', '1234 ', '5678}'], ('1234', '5678')),
+    (['"auth_', 'token": ', '12 ', '34,"next":1}'], ('12 34', ' 34,')),
+])
+def test_new_json_scalar_spaced_tail_never_exposes_value(parts, forbidden):
+    result = redact(''.join(parts))
+    for piece in forbidden:
+        assert piece not in result
+
+
 @pytest.mark.parametrize('sep', ['=', ': '])
 def test_new_assignment_never_exposes_synthetic_value(sep):
     value = 'hunter' + '2value'

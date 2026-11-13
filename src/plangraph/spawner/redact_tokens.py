@@ -56,7 +56,7 @@ _ASSIGNMENT = re.compile(
     r'''"[^\S\r\n]*:[^\S\r\n]*)|(?:["'])?\b''' + _NEW_NAME +
     r'''(?:["'])?[^\S\r\n]*(?:(?P<equals>=)|:)[^\S\r\n]*)'''
     r'(?(old)(?:' + _OLD_VALUE + r')|(?:(?(json)(?P<scalar>'
-    r'-?\d[\d.eE+-]*|(?-i:true|false|null))(?=[,}\]\s]|$)|(?!))|'
+    r'-?\d[\d.eE+-]*|(?-i:true|false|null))(?=[ \t]*(?:[,}\]]|\r|\n|$))|(?!))|'
     + _NEW_VALUE + r'))')
 
 

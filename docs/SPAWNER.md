@@ -50,9 +50,10 @@ backslash-newline continues a value. Complete quoted values and placeholders
 consume only a glued tail, and Python keeps complete value quotes (D-5279 R3).
 One additional D-5279 R3 exception applies only to NEW double-quoted JSON-style
 keys with a colon: a bare number (`-?\d[\d.eE+-]*`), `true`, `false` or `null`,
-ending at a comma, closing brace, closing bracket, whitespace or line end, is
-replaced by the JSON string `"[REDACTED]"`. It is never left readable, even for
-numeric credentials. Later fields and usage-limit error status remain parseable;
+followed by optional spaces or tabs and then a comma, closing brace, closing
+bracket, line end or end of text, is replaced by the JSON string `"[REDACTED]"`.
+It is never left readable, even for numeric credentials.
+Later fields and usage-limit error status remain parseable;
 each following assignment is still scrubbed. String values keep their quotes;
 container values keep Rust's shape, which can cut JSON structure. OLD keys do not
 get this exception. Differences use explicit `expected` and `rust_expected` shared

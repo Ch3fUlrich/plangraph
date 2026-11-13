@@ -151,5 +151,7 @@
   {"id": "py-name-scope-json-equals-not-colon", "input_parts": ["\"auth_", "token\"=12,\"next\":1}"], "expected": "\"auth_token\"=[REDACTED]}"},
   {"id": "py-name-scope-json-single-quoted-key", "input_parts": ["'auth_", "token':12,\"next\":1}"], "expected": "'auth_token':[REDACTED]}"},
   {"id": "py-name-scope-json-scalar-tail", "input_parts": ["\"auth_", "token\":123abc,\"next\":1}"], "expected": "\"auth_token\":[REDACTED]}"},
-  {"id": "py-name-scope-json-literal-tail", "input_parts": ["\"auth_", "token\":trueabc,\"next\":1}"], "expected": "\"auth_token\":[REDACTED]}"}
+  {"id": "py-name-scope-json-literal-tail", "input_parts": ["\"auth_", "token\":trueabc,\"next\":1}"], "expected": "\"auth_token\":[REDACTED]}"},
+  {"id": "py-name-scope-d-5589-json-scalar-spaced-tail-number", "input_parts": ["{\"db_", "password\": ", "1234 ", "5678}"], "expected": "{\"db_password\": [REDACTED]}"},
+  {"id": "py-name-scope-d-5589-json-scalar-spaced-tail-pair", "input_parts": ["\"auth_", "token\": ", "12 ", "34,\"next\":1}"], "expected": "\"auth_token\": [REDACTED]}"}
 ]
