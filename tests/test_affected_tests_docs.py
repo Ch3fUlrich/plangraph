@@ -50,3 +50,19 @@ def test_unmapped_code_selects_bounded_smoke_not_full_suite(tmp_path):
 def test_suite_config_and_shared_fixtures_still_run_full_suite(tmp_path, path):
     _repo(tmp_path)
     assert selector().select_tests(tmp_path, [path])["tests"] == ["tests"]
+
+
+@pytest.mark.parametrize('asset', ['tests/shared.py', 'tests/fixtures/capture.json'])
+def test_local_shared_asset_selects_its_consumers(tmp_path, asset):
+    _repo(tmp_path, {asset: '', 'tests/test_consumer.py':
+                    'import shared\n# capture.json', 'tests/test_unrelated.py': ''})
+    assert selector().select_tests(tmp_path, [asset], local=True)['tests'] == ['tests/test_consumer.py']
+
+
+def test_local_run_refuses_full_suite_fallback(tmp_path, monkeypatch, capsys):
+    module = selector()
+    _repo(tmp_path)
+    monkeypatch.setattr('sys.argv', ['affected', '--base', 'HEAD', '--run', '--local', '--changed', 'pyproject.toml'])
+    monkeypatch.setattr(module.subprocess, 'run', lambda *a, **kw: pytest.fail('full suite launched'))
+    assert module.main(tmp_path) == 2
+    assert 'full suite' in capsys.readouterr().err
