@@ -1,0 +1,167 @@
+2026-11-13T22:08:35+00:00 A2-1 plangraph:LE-CTX-HOOK-SKIP-SIDECHAIN DONE de2c8a9e +84_passed_8_subtests failing-first observed_sidechain_handoff_then_fixed; merge/CI/review pending_no_push
+2026-11-13T22:09:26+00:00 A2-2 plangraph:LE-GATEWAY-BASEURL DONE 2eaf7013 +2_passed failing-first route_missing_base_and_key_reproduced; existing_Python_boundary_fix; merge/CI/review pending_no_push
+2026-11-13T22:10:38+00:00 A2-3 plangraph:LE-PROMPTONLY-NO-DIFF DONE 566a075e +3_passed failing-first missing_diff_and_false_verdict_reproduced; merge/CI/review pending_no_push
+2026-11-13T22:13:56+00:00 A2-4 plangraph:LE-REVIEW-LEG-PROBE-SCHEDULED DONE ded3170a +2_python_1_rust_passed failing-first review_probe_missing_then_fixed; Rust_scheduler_existing_probe_fix; other repo: host timer activation; merge/CI/review pending_no_push
+2026-11-13T22:15:16+00:00 A2-5 plangraph:LE-SPAWN-NO-FAMILY-FALLTHROUGH DONE e062f430 +3_passed failing-first down_openai_launched_gemini_reproduced; merge/CI/review pending_no_push
+2026-11-13T22:16:45+00:00 A2-6 plangraph:LE-BG-NO-RC DONE 90e8f23a +33_passed failing-first required_RC_config_then_bridge_gate; other repo: fleet-launch and terminal-tab launcher enable requirement and interactive path; merge/CI/review pending_no_push
+2026-11-13T22:19:19+00:00 A2-7 plangraph:LE-MCP-RULE-PARENS DONE f8b72e5e +2_rust_62_python_passed failing-first Rust_rule_accepted_bad_MCP_then_fixed; other repo: external host-sync invoke installed lint; merge/CI/review pending_no_push
+2026-11-13T22:22:05+00:00 A2-8 plangraph:LE-RC-DROP-WATCH DONE 7695152e +2_rust_passed failing-first missing_bridge_produced_zero_notices_then_fixed; other repo: activate Linux/Windows timers in host config; merge/CI/review pending_no_push
+2026-11-13T22:25:11+00:00 A2-9 plangraph:LE-RUN-NEVER-LAUNCHED-ALERT DONE b8d90a8c +2_watchdog_9_record_rust_passed failing-first expired_run_no_notice_reproduced; other repo: activate scheduled run-watch in host config; merge/CI/review pending_no_push
+2026-11-13T22:27:33+00:00 A2-10 plangraph:LE-RUN-RECORD-PID-RECONCILE DONE 3688ac93 +3_python_1_rust_passed failing-first running_snapshot_ignored_dead_pid_reproduced; preserve_read_only_views; merge/CI/review pending_no_push
+2026-11-13T22:28:25+00:00 A2-11 plangraph:AO-LITELLM-LOCAL-RETIRE SKIPPED 5b7dede5 +inventory_no_local_proxy_or_container_launcher; gateway_key_file_prerequisite_A2-2 failing-first docs_only_no_test; other repo: seven-day traffic evidence, container key migration and smoke, Linux/Windows retirement, proxy removal, OpenHands comments, rollback execution, two seats plus judge
+2026-11-13T23:02:38+00:00 VERIFY plangraph:D-5852 REFUTED 414fc487 +Rust_tests_clippy_Windows_check_policies_public_scrub -24_preexisting_failures failing-first unchanged_base_reproduced_25; one_stale_mutation_fixture_repaired; final_targeted_284_passed
+
+DONE means the repository gate is implemented and tested; external acceptance remains below.
+The requested base was fetched again and remains 95a9ac3423dec2bb7c6a6ca7f8d173ecbba868b5.
+No push or remote mutation was performed. The supplied PACKAGE-A2.md remains untracked.
+
+commits (implementation):
+de2c8a9e Skip sidechain transcripts in context guard
+2eaf7013 Refuse gateway legs without effective connection configuration
+566a075e Require inline diffs and void empty prompt-only reviews
+ded3170a Schedule answer probes and reserve MiMo review output capacity
+e062f430 Keep implement routing inside the requested writer family
+90e8f23a Refuse RC-required launches without a bridge within the bound
+f8b72e5e Lint MCP permission rules before CI and fleet rollout
+7695152e Watch required Remote Control bridges and notify once per drop
+b8d90a8c Alert and mark accepted runs that never launch a leg
+3688ac93 Reconcile every running record read against its process identity
+5b7dede5 Record local proxy retirement prerequisites and external ownership
+24ea6dd5 Integrate lesson gates at service and evidence boundaries
+414fc487 Use a monotonic RC deadline and align gate mechanics fixtures
+
+test:
+Affected Python code, 526 files, pytest -q -n 4: "27 failed, 13555 passed, 407 skipped, 12 subtests passed in 341.59s (0:05:41)".
+That run included the 25 reproduced base failures and two final fixture mismatches.
+Follow-up affected session/routing/evidence/guard tests: "284 passed in 5.79s". Both new mismatches and the stale base mutation fixture pass; 24 unrelated base failures remain.
+cargo test -p pg-spawnd -p pg-hook -- --test-threads=1: all affected targets passed; main daemon summary "test result: ok. 323 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 13.03s".
+cargo test -p pg-worker-core --lib run::record_tests: "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1109 filtered out; finished in 0.04s".
+cargo clippy -p pg-spawnd -p pg-hook --all-targets -- -D warnings: passed.
+cargo check -p pg-spawnd -p pg-hook --all-targets --target x86_64-pc-windows-gnu: passed. Native Windows execution was not performed.
+File-size, changelog/docs-map, new-code language, cargo fmt and git diff checks passed.
+Committed public-pattern scrub: "scrub_check: 0 hit(s) in 0 file(s)"; private-word rules were inactive.
+
+files:
+.github/workflows/tests.yml
+CONTRIBUTING.md
+STATUS-package-a2.txt
+changelog.d: AO-LITELLM-LOCAL-RETIRE.md
+changelog.d: LE-BG-NO-RC-2.md
+changelog.d: LE-BG-NO-RC-3.md
+changelog.d: LE-BG-NO-RC.md
+changelog.d: LE-CTX-HOOK-SKIP-SIDECHAIN.md
+changelog.d: LE-GATEWAY-BASEURL-2.md
+changelog.d: LE-GATEWAY-BASEURL.md
+changelog.d: LE-MCP-RULE-PARENS.md
+changelog.d: LE-PROMPTONLY-NO-DIFF-2.md
+changelog.d: LE-PROMPTONLY-NO-DIFF.md
+changelog.d: LE-RC-DROP-WATCH.md
+changelog.d: LE-REVIEW-LEG-PROBE-SCHEDULED-2.md
+changelog.d: LE-REVIEW-LEG-PROBE-SCHEDULED-3.md
+changelog.d: LE-REVIEW-LEG-PROBE-SCHEDULED.md
+changelog.d: LE-RUN-NEVER-LAUNCHED-ALERT.md
+changelog.d: LE-RUN-RECORD-PID-RECONCILE-2.md
+changelog.d: LE-RUN-RECORD-PID-RECONCILE.md
+changelog.d: LE-SPAWN-NO-FAMILY-FALLTHROUGH-2.md
+changelog.d: LE-SPAWN-NO-FAMILY-FALLTHROUGH-3.md
+changelog.d: LE-SPAWN-NO-FAMILY-FALLTHROUGH.md
+deploy/systemd/README.md
+deploy/systemd/plangraph-rc-watch.service
+deploy/systemd/plangraph-rc-watch.timer
+deploy/systemd/plangraph-review-probe.service
+deploy/systemd/plangraph-review-probe.timer
+deploy/systemd/plangraph-run-watch.service
+deploy/systemd/plangraph-run-watch.timer
+deploy/watchdog/rc-watch.xml
+deploy/watchdog/run-watch.xml
+docs/SPAWNER.md
+docs/fleet-sync.md
+docs/lean-review-harness.md
+docs/lesson-gates-verification.md
+docs/lesson-gates.md
+docs/local-gateway-retirement.md
+docs/routing.md
+docs/rust-hooks.md
+docs/spawner-leg-state.md
+rust/Cargo.lock
+rust/pg-hook/src/bin/pg-settings-lint.rs
+rust/pg-hook/src/lib.rs
+rust/pg-hook/src/settings_lint.rs
+rust/pg-hook/tests/settings_lint.rs
+rust/pg-spawnd/Cargo.toml
+rust/pg-spawnd/src/cli.rs
+rust/pg-spawnd/src/gateway_health.rs
+rust/pg-spawnd/src/main.rs
+rust/pg-spawnd/src/no_leg_watch.rs
+rust/pg-spawnd/src/rc_watch.rs
+rust/pg-spawnd/src/record_status.rs
+rust/pg-spawnd/src/records.rs
+rust/pg-spawnd/src/review_artifacts.rs
+rust/pg-spawnd/src/review_artifacts_tests.rs
+rust/pg-spawnd/src/review_probe.rs
+rust/pg-spawnd/src/tools.rs
+rust/pg-spawnd/src/tools_list.json
+rust/pg-spawnd/tests/serve_cli.rs
+rust/worker-core/src/run/record.rs
+src/plangraph/fleet_sync/advance.py
+src/plangraph/planner/routing.py
+src/plangraph/routing_support/clients.py
+src/plangraph/routing_support/host_keys.py
+src/plangraph/routing_support/leg_state.py
+src/plangraph/routing_support/leg_state_flag.py
+src/plangraph/spawner/cli.py
+src/plangraph/spawner/inline_diff.py
+src/plangraph/spawner/launch_spec.py
+src/plangraph/spawner/leg_probe.py
+src/plangraph/spawner/mcp.py
+src/plangraph/spawner/opencode_answer.py
+src/plangraph/spawner/runner.py
+src/plangraph/spawner/seat_artifact.py
+src/plangraph/spawner/seat_spawn.py
+src/plangraph/spawner/service.py
+src/plangraph/spawner/sessions.py
+src/plangraph/spawner/sessions_agents.py
+src/plangraph/spawner/sessions_config.py
+src/plangraph/spawner/stall_probe.py
+src/plangraph/spawner/stall_watchdog.py
+tests/conftest.py
+tests/hooks/test_context_guard.py
+tests/test_claude_stream_render.py
+tests/test_fleet_sync_advance.py
+tests/test_gateway_admission.py
+tests/test_leg_liveness.py
+tests/test_leg_state_flip.py
+tests/test_record_pid_reconcile.py
+tests/test_review_probe.py
+tests/test_route_claude_effort_legs.py
+tests/test_route_free_first.py
+tests/test_route_implement_policy.py
+tests/test_run_prompt_record.py
+tests/test_run_prompt_record_seams.py
+tests/test_seat_artifact.py
+tests/test_session_remote_control.py
+tests/test_spawn_cli.py
+tests/test_spawn_win_render.py
+tests/test_spawner_launch_spec.py
+tests/test_spawner_leg_state.py
+tests/test_spawner_model_refusal.py
+tests/test_spawner_review_tools_inline.py
+tests/test_spawner_review_tools_inline_launch_boundary.py
+tests/test_w31c_regressions.py
+tests/test_w4_regressions.py
+tests/test_writer_family_admission.py
+tools/ci_select.py
+tools/hooks/context_guard.py
+tools/seat_record.py
+tools/seat_verdict.py
+
+not done:
+A2-11 other repo: live seven-day traffic observation, container launcher key migration and smoke, Linux/Windows service retirement, proxy/mirror removal, OpenHands comments, rollback execution, two independent seats and judge.
+A2-6 other repo: fleet-launch and workstation terminal-tab launcher integration and requirement activation.
+A2-4/A2-7/A2-8/A2-9 other repo: deploy binaries, invoke external host-sync lint, and activate the supplied timer/task definitions in host configuration.
+All items: merging, remote CI and independent review acceptance are pending under the explicit no-push order.
+24 reproduced base failures remain; see docs/lesson-gates-verification.md. The listed stale_entry mutation fixture has been repaired.
+
+refusals: none from approval tools or repository hooks; expected gate refusals were exercised in temporary fixtures.
+ALL DONE refers to processing the repository package; skipped external work and acceptance gaps remain explicit above.
+ALL DONE
