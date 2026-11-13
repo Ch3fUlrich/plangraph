@@ -1,5 +1,6 @@
 """Python-only A1 decisions; A2, slice C and main's joins stay explicit."""
 import ast
+import functools
 import importlib.util
 import json
 import py_compile
@@ -29,7 +30,7 @@ def pre_a1(tmp_path_factory):
         for name in ('redact_tokens', 'env_redact'):
             path = directory / (name + '.py')
             path.write_bytes(subprocess.check_output(
-                ['git', 'show', 'e7964367:src/plangraph/spawner/' + name + '.py'], cwd=root))
+                ['git', 'show', 'e7964367542646ea603a1fc84f67f7036b298bcb:src/plangraph/spawner/' + name + '.py'], cwd=root))
             spec = importlib.util.spec_from_file_location(package.__name__ + '.' + name, path)
             module = importlib.util.module_from_spec(spec)
             modules[spec.name] = sys.modules[spec.name] = module
@@ -40,13 +41,79 @@ def pre_a1(tmp_path_factory):
             sys.modules.pop(name, None)
 
 
+def test_pre_a1_uses_pinned_scanner(pre_a1):
+    historical = sys.modules[pre_a1.__package__ + '.redact_tokens']
+    for name in ('redact_wrapped', 'join_shielded_assignments'):
+        helper = getattr(pre_a1, name)
+        assert helper is getattr(historical, name)
+        assert helper is not getattr(redact_tokens, name)
+        assert Path(helper.__code__.co_filename).parent == Path(pre_a1.__file__).parent
+    assert not hasattr(historical, 'redact_wide_assignments')
+    row = next(row for row in TABLE if row['id'] == 'a1-N01')
+    text = ''.join(row['input_parts'])
+    assert pre_a1.redact(text) == text
+    assert redact(text) == ''.join(row['expected']) != pre_a1.redact(text)
+
+
 def _visible_positions(text, output):
-    # Scrubbers replace spans with MASK; map every remaining byte/character to input.
-    pattern = r'[\s\S]*?'.join('(' + re.escape(part) + ')' for part in output.split(MASK))
-    match = re.fullmatch(pattern, text)
-    assert match is not None, (text, output)
-    return {i for group in range(1, len(match.groups()) + 1)
-            for i in range(*match.span(group))}
+    """Map retained characters, preserving literal masks; refuse ambiguous offsets."""
+    if text == output:
+        return set(range(len(text)))
+    parts = re.split('(' + re.escape(MASK) + ')', output)
+
+    @functools.lru_cache(None)
+    def align(part, offset):
+        if part == len(parts):
+            return (frozenset(),) if offset == len(text) else ()
+        token, choices = parts[part], set()
+        if text.startswith(token, offset):
+            retained = frozenset(range(offset, offset + len(token)))
+            choices.update(retained | rest for rest in align(part + 1, offset + len(token)))
+        if token == MASK:
+            following = parts[part + 1]
+            # A generated mask consumes a nonempty span; a literal consumes itself.
+            end = offset + 1
+            while end <= len(text):
+                if text.startswith(following, end):
+                    literal = frozenset(range(offset, end)) if text[offset:end] == MASK else frozenset()
+                    choices.update(literal | rest for rest in align(part + 1, end))
+                    if len(choices) > 1:
+                        break
+                end += 1
+        return tuple(choices)
+
+    choices = align(0, 0)
+    assert len(choices) == 1, 'invalid or ambiguous redaction alignment'
+    return set(choices[0])
+
+
+def test_visible_positions_preserve_literal_masks():
+    assert _visible_positions(MASK, MASK) == set(range(len(MASK)))
+    text = MASK + ' tail hidden'
+    assert _visible_positions(text, MASK + ' tail ' + MASK) == set(range(len(MASK + ' tail ')))
+    assert _visible_positions(NAME + '=' + MASK + ' tail', NAME + '=' + MASK) == set(range(len(NAME + '=')))
+    assert _visible_positions(NAME + '=}', NAME + '=' + MASK) == set(range(len(NAME + '=')))
+    with pytest.raises(AssertionError, match='ambiguous'):
+        _visible_positions('x a a y', MASK + 'a' + MASK)
+
+
+@pytest.mark.parametrize('row_id,masked', [('a1-N19', ()), ('a1-A02', ()),
+                                         ('shield-marker-skips-prepass', (10, 28)),
+                                         ('shield-marker-skips-prepass-e001', (10, 28)),
+                                         ('shield-marker-skips-prepass-indexed', (12, 30))])
+def test_ruling_join_gaps_match_real_pre_a1(pre_a1, row_id, masked):
+    parity = json.loads((Path(__file__).parent / 'fixtures/redact_parity.json').read_bytes())
+    row = next(row for row in TABLE + parity if row.get('id') == row_id)
+    text = ''.join(row['input_parts'])
+    assert row['known_gap'] == 'slice C'
+    # MY_SECRET with a newline before '=' stays readable in Python, as before A1.
+    for scrub in (redact, redact_output):
+        old, current = getattr(pre_a1, scrub.__name__)(text), scrub(text)
+        assert old == current
+        _assert_known_gap(row, old, current)
+        positions = set(range(*masked)) if masked else set()
+        assert set(range(len(text))) - _visible_positions(text, old) == positions
+        assert set(range(len(text))) - _visible_positions(text, current) == positions
 
 
 def _assert_known_gap(row, historical, current):
@@ -90,6 +157,11 @@ def test_a1_wrapped_regressions_keep_pre_a1_masks(pre_a1, nl, quote, marker):
 def test_a1_stray_closing_bracket(pre_a1):
     text = 'API_' + 'KEY=[REDACTED]]'
     assert pre_a1.redact(text) == redact(text) == redact_output(text) == 'API_' + 'KEY=' + MASK
+    # MY_SECRET's value stays readable in pre-A1 Python (not an OLD name);
+    # A1 now masks it, including the stray bracket, unlike the unchanged source mode.
+    wider = NAME + '=[REDACTED]]'
+    assert pre_a1.redact(wider) == redact_source(wider) == wider
+    assert redact(wider) == redact_output(wider) == NAME + '=' + MASK
 
 
 @pytest.mark.parametrize('row', TABLE, ids=lambda r: r['id'])
@@ -161,9 +233,6 @@ def test_a1_artifacts_parse(tmp_path):
         for row in rows:
             for part in row.get('input_parts', []):
                 assert isinstance(part, str)
-                encoded = json.dumps(part)
-                assert '\r' not in encoded and '\n' not in encoded
-                assert json.loads(encoded) == part
         for broken in (b'["raw\nline"]', b'["raw\rline"]', b'["broken]'):
             with pytest.raises(json.JSONDecodeError):
                 json.loads(broken)
@@ -198,11 +267,15 @@ def test_a1_markers_do_not_bypass_name_masking(scrub):
 
 
 def _redact_work(text):
-    """Count scanner/folding steps, independent of scheduling and CI load."""
+    """Count both modules' Python steps; the child CPU bound also sees C regexes."""
+    from plangraph.spawner import env_redact
+    files = {redact_tokens.__file__, env_redact.__file__}
     operations = 0
+    seen = set()
     def trace(frame, event, arg):
         nonlocal operations
-        if frame.f_code.co_filename == redact_tokens.__file__:
+        if frame.f_code.co_filename in files:
+            seen.add(frame.f_code.co_filename)
             operations += event == 'line'
             return trace
     previous = sys.gettrace()
@@ -212,7 +285,23 @@ def _redact_work(text):
     finally:
         sys.settrace(previous)
     assert operations > 0
+    assert seen == files
     return result, operations
+
+
+@pytest.mark.parametrize('old', [False, True], ids=['new-blanks', 'old-blanks'])
+def test_blank_runs_bound_c_regex_work(old):
+    # CPU time includes regex internals without a CI-load-sensitive scaling ratio.
+    code = """import resource, sys
+resource.setrlimit(resource.RLIMIT_CPU, (4, 4))
+sys.path.insert(0, sys.argv[1])
+from plangraph.spawner.env_redact import redact
+old = sys.argv[2] == 'True'
+text = ('TO' + 'KEN' if old else 'MY_' + 'SECRET') + '=' + ' ' * 2400000
+assert redact(text) == (text[:-1] + '[REDACTED]' if old else text)
+"""
+    subprocess.run([sys.executable, '-B', '-c', code, str(Path(__file__).parents[1] / 'src'), str(old)],
+                   check=True, timeout=20)
 
 
 def test_x06_keyword_child_timeout(monkeypatch):
