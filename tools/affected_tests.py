@@ -217,6 +217,9 @@ def main(root=None):
         print("no pg-affected tests")
         return 0
     if args.run and plan["tests"]:
+        if importlib.util.find_spec("pytest") is None:
+            print(f"FAIL pytest-missing: {sys.executable}; install with {sys.executable} -m pip install -e .[test]", file=sys.stderr)
+            return 1
         placement = any('placement' in Path(path).name or
                         (root / path).is_dir() and any((root / path).rglob('*placement*.py'))
                         for path in plan['tests'])

@@ -16,12 +16,14 @@ Install: git config core.hooksPath tools/hooks (see CONTRIBUTING.md).
 from __future__ import annotations
 
 import os
+import shutil
 import difflib
 import re
 import subprocess
 import sys
 from pathlib import Path
 
+PYTHON = sys.executable
 TOOLS = Path(__file__).resolve().parent.parent
 SPLIT = TOOLS / "split"
 FILE_SIZE = TOOLS / "check_file_size.py"
@@ -138,7 +140,7 @@ def scan_blob(rel, local_sha, cfg, find_shapes, hits, baselines=()):
 
 def file_size_gate():
     """tools/check_file_size.py on the pushing checkout: 0 clean, 1 refuse."""
-    r = subprocess.run([sys.executable, str(FILE_SIZE)], capture_output=True, text=True, timeout=60)
+    r = subprocess.run([PYTHON, str(FILE_SIZE)], capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         sys.stderr.write(r.stdout + r.stderr)
         print("pre-push: file-size gate failed: push refused (split the file, "
@@ -152,7 +154,7 @@ def changelog_docs_warn(base, head):
     if not CHANGELOG_DOCS.is_file():
         return
     r = subprocess.run(
-        [sys.executable, str(CHANGELOG_DOCS), "--base", base, "--head", head, "--warn-only"],
+        [PYTHON, str(CHANGELOG_DOCS), "--base", base, "--head", head, "--warn-only"],
         capture_output=True,
         text=True,
         timeout=60,
@@ -161,6 +163,17 @@ def changelog_docs_warn(base, head):
         sys.stderr.write(r.stdout)
     if r.stderr:
         sys.stderr.write(r.stderr)
+
+
+def python_interpreter(root):
+    """Prefer this checkout's venv, then PREFLIGHT_PYTHON, then PATH python3."""
+    root = Path(root)
+    for relative in ('.venv/bin/python', '.venv/Scripts/python.exe'):
+        candidate = root / relative
+        if candidate.is_file():
+            return str(candidate.absolute())
+    configured = os.environ.get('PREFLIGHT_PYTHON')
+    return str(Path(configured).expanduser().absolute()) if configured else shutil.which('python3') or 'python3'
 
 
 def main():
@@ -172,6 +185,7 @@ def main():
 
 
 def push_main():
+    global PYTHON
     cargo_bin = Path.home() / '.cargo/bin'
     if cargo_bin.is_dir():
         os.environ['PATH'] = str(cargo_bin) + os.pathsep + os.environ.get('PATH', '')
@@ -210,6 +224,8 @@ def push_main():
     refs = [rec for rec in refs if not is_zero(rec[1])]
     if not refs:
         return 0
+    PYTHON = python_interpreter(Path(git_out("rev-parse", "--show-toplevel")))
+    print(f"pre-push Python: {PYTHON}", flush=True)
     if file_size_gate():
         return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
@@ -270,7 +286,7 @@ def push_main():
     preflight = root / "tools/preflight.py"
     if os.environ.get("PREFLIGHT_SKIP") != "1" and preflight.is_file():
         for _, local_sha, _, remote_sha in refs:
-            command = [sys.executable, str(preflight),
+            command = [PYTHON, str(preflight),
                        "--base", affected_base_commit(remote_sha, local_sha),
                        "--scrub-base", base_commit(remote_sha, local_sha), "--head", local_sha]
             if os.environ.get("PREFLIGHT_FAST") == "1":

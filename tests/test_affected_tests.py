@@ -422,3 +422,16 @@ def test_ci_pr_uses_affected_and_nightly_keeps_full():
 
     # PyYAML's YAML 1.1 loader treats the GitHub key `on` as boolean True.
     assert workflow.get("on", workflow.get(True))["schedule"]
+
+
+def test_missing_pytest_has_named_fix(tmp_path, monkeypatch, capsys):
+    import sys
+    sel = selector()
+    monkeypatch.setattr(sel, 'select_tests', lambda *a, **k: {'tests': ['tests/test_x.py']})
+    monkeypatch.setattr(sel.importlib.util, 'find_spec', lambda name: None)
+    monkeypatch.setattr(sel.subprocess, 'run', lambda *a, **k: pytest.fail('pytest process started'))
+    monkeypatch.setattr(sys, 'argv', ['affected_tests.py', '--base', 'HEAD', '--changed', 'src/x.py', '--run'])
+    assert sel.main(root=tmp_path) == 1
+    out = capsys.readouterr()
+    assert out.err.count('FAIL pytest-missing:') == 1
+    assert '-m pip install' in out.err

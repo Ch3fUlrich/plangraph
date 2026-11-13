@@ -83,9 +83,21 @@ def rust_commands(root, base, head, env=None):
     available = shutil.which("cargo") if env is None else shutil.which("cargo", path=env.get('PATH', ''))
     if not available:
         raise FailFamily("CARGO FAIL: cargo is required for Rust checks")
+    workspace_file = root / 'rust/Cargo.toml'
+    workspace = tomllib.loads(workspace_file.read_text()).get('workspace') if workspace_file.is_file() else None
+    members = None
+    if workspace is not None:
+        members = {path.resolve() for pattern in workspace.get('members', [])
+                   for path in (root / 'rust').glob(pattern)
+                   if not any(path.relative_to(root / 'rust').match(excluded)
+                              for excluded in workspace.get('exclude', []))}
+        if 'package' in tomllib.loads(workspace_file.read_text()):
+            members.add(workspace_file.parent.resolve())
     manifests = {}
     for manifest in (root / "rust").rglob("Cargo.toml"):
         if "target" in manifest.parts:
+            continue
+        if members is not None and manifest.parent.resolve() not in members:
             continue
         data = tomllib.loads(manifest.read_text())
         if "package" in data:
@@ -110,6 +122,17 @@ def test_environment(root, env):
             and not key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
 
 
+def python_interpreter(root):
+    """Prefer this checkout's venv, then PREFLIGHT_PYTHON, then PATH python3."""
+    root = Path(root)
+    for relative in ('.venv/bin/python', '.venv/Scripts/python.exe'):
+        candidate = root / relative
+        if candidate.is_file():
+            return str(candidate.absolute())
+    configured = os.environ.get('PREFLIGHT_PYTHON')
+    return str(Path(configured).expanduser().absolute()) if configured else shutil.which('python3') or 'python3'
+
+
 def main(argv=None, root=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="origin/main")
@@ -121,6 +144,8 @@ def main(argv=None, root=None):
     mode.add_argument("--fail-fast", action="store_true")
     args = parser.parse_args(argv)
     root = Path(root or Path(__file__).resolve().parent.parent)
+    interpreter = python_interpreter(root)
+    print(f"preflight Python: {interpreter}", flush=True)
     tools = Path(os.environ.get("PREFLIGHT_TOOLS_DIR", Path(__file__).resolve().parent))
     policy_bases = dict(FILESIZE_REQUIRE_BASE=args.base, NEWCODE_BASE=args.base,
                         CHANGELOG_BASE=args.base)
@@ -134,7 +159,7 @@ def main(argv=None, root=None):
     policy_env = dict(env, **policy_bases)
 
     def python(name, *extra):
-        return [sys.executable, str(tools / name), *extra]
+        return [interpreter, str(tools / name), *extra]
 
     scrub = python("split/scrub_check.py", ".", "--base", args.scrub_base or args.base, "--head", args.head,
                    "--rules", str(tools / "split/manifest.toml"),
