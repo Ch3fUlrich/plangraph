@@ -1,4 +1,5 @@
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 
@@ -10,7 +11,12 @@ SPEC.loader.exec_module(proof)
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path, monkeypatch):
+    # A pre-push hook exports GIT_DIR; without this the fixture's init/config
+    # would target the enclosing real repository (D-5825).
+    for key in [k for k in os.environ if k.startswith("GIT_") and k != "GIT_CONFIG_GLOBAL"]:
+        monkeypatch.delenv(key)
+
     def git(*args):
         return subprocess.check_output(["git", "-C", str(tmp_path), *args], stderr=subprocess.STDOUT).decode().strip()
     git("init")
@@ -194,3 +200,17 @@ def test_renamed_test_file(repo, tmp_path, capsys, assertion, code):
     output = capsys.readouterr().out
     assert "test_renamed.py::test_value" in output
     assert "n/a" not in output
+
+
+@pytest.fixture
+def enclosing(tmp_path_factory, monkeypatch):
+    git_dir = tmp_path_factory.mktemp("enclosing") / "real.git"
+    subprocess.check_call(["git", "init", "-q", "--bare", str(git_dir)])
+    monkeypatch.setenv("GIT_DIR", str(git_dir))
+    return git_dir
+
+
+def test_fixture_identity_never_reaches_enclosing_repo(enclosing, repo):
+    probe = subprocess.run(["git", "config", "--file", str(enclosing / "config"), "--get", "user.name"],
+                           capture_output=True, text=True)
+    assert probe.stdout.strip() == "" and probe.returncode == 1
