@@ -30,6 +30,8 @@ pub mod fleet_router_hysteresis;
 pub mod fleet_router_signals;
 pub mod fleet_seat_probe;
 pub mod fleet_seat_supply;
+pub mod fleet_series;
+pub mod fleet_collect;
 pub mod fleet_stale_pair_alert;
 pub mod fleet_stale_pair_delivery;
 pub mod fleet_window_catalog;
