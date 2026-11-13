@@ -6,8 +6,9 @@ from types import SimpleNamespace
 from plangraph.planner.route_policy import RoutePolicy
 
 
+@pytest.mark.parametrize('writer_family', ['openai', None])
 @pytest.mark.parametrize('allow,expected', [(False, []), (True, ['gemini'])])
-def test_down_writer_family_never_silently_changes(tmp_path, monkeypatch, allow, expected):
+def test_down_writer_family_never_silently_changes(tmp_path, monkeypatch, allow, expected, writer_family):
     monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path))
     monkeypatch.setenv('OMNIROUTE_BASE_URL', 'https://gateway.example.invalid/v1')
@@ -15,7 +16,11 @@ def test_down_writer_family_never_silently_changes(tmp_path, monkeypatch, allow,
     legs = [l for l in DEFAULT_LEGS if l.id in ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash')]
     def state(model, **kw):
         return {'state': 'down' if 'sol' in model else 'ok', 'evidence': None}
-    card = {'estimate_tokens': 100, 'writer_family': 'openai', 'allow_family_fallthrough': allow}
+    card = {'estimate_tokens': 100, 'allow_family_fallthrough': allow}
+    if writer_family is not None:
+        card['writer_family'] = writer_family
+    if writer_family is None:
+        assert 'writer_family' not in card
     plan = service_plan(SimpleNamespace(leg_reader=state), card=card, role='implement', legs=legs, catalog_rows=[],
                       policy=RoutePolicy())
     assert [leg.family for leg in plan.legs] == expected

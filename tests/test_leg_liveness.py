@@ -65,7 +65,7 @@ def test_commit_probe_and_timeout(monkeypatch, success):
         leg_state.record_probe_fail(key(leg), 'timeout', 'leg-probe')  # second consecutive failure
         assert leg_state.leg_status(key(leg))['state'] == 'down'
         from plangraph.planner.routing import plan_spawn
-        plan = plan_spawn({'estimate_tokens': 1000, 'allow_family_fallthrough': True}, role='implement', legs=(leg,), catalog_rows=())
+        plan = plan_spawn({'estimate_tokens': 1000}, role='implement', legs=(leg,), catalog_rows=())
         assert not plan.legs
         assert plan.skipped[0]['reason'] == 'down'
 
