@@ -54,8 +54,8 @@ class Leg:
     model: str
     family: str
     windows: tuple[str, ...]
-    max_request_tokens: int
-    trains_on_data: bool
+    max_request_tokens: int | None
+    trains_on_data: bool | None
     claude_family: bool = False
     note: str = ""
     roles: tuple[str, ...] = ("orchestrate",)
@@ -194,7 +194,7 @@ LEAD_WRITER = WRITER_ORDER[0]
 EXPLICIT_LEGS: tuple[Leg, ...] = (
     *(Leg(f"agy-claude-{m}-5-5-{e}", "subscription", "agy", f"claude-{m}-5-5-{e}",
           "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
-          roles=("review", "implement"), note="operator 2026-11-09: Antigravity quota")
+          roles=("review", "implement"), effort=e, note="operator 2026-11-09: Antigravity quota")
       for m in ("sonnet", "opus") for e in ("low", "medium", "high")),
     *(Leg(f"agy-gemini-3.8-flash-{e}", "subscription", "agy", f"gemini-3.8-flash-{e}",
           "gemini", ("128k", "256k", "1m"), 900000, False, roles=("review",))
@@ -217,6 +217,20 @@ READINESS_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
     leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)
+
+# Order-only declarations: unknown capabilities stay disabled and role-less.
+# JSON overrides still require all capability fields, even for declarations.
+EXPLICIT_LEGS += tuple(
+    Leg(id, 'subscription', harness, model, family, (), None, None,
+        claude_family=family == 'claude', roles=(), effort=effort,
+        disabled='D-5696: capability evidence required')
+    for id, harness, model, family, effort in (
+        ('agy-gemini-4-hydrogen-high', 'agy', 'gemini-4-hydrogen-high', 'gemini', 'high'),
+        ('agy-gemini-4-hydrogen-medium', 'agy', 'gemini-4-hydrogen-medium', 'gemini', 'medium'),
+        ('cx-gpt-6.1-terra-medium', 'opencode', 'omniroute/cx-gpt-6.1-terra-medium', 'gpt', 'medium'),
+        ('cx-gpt-6.1-terra-xhigh', 'opencode', 'omniroute/cx-gpt-6.1-terra-xhigh', 'gpt', 'xhigh'),
+        ('muse-ember-max', 'opencode', 'omniroute/muse-ember-max', 'muse', 'max'),
+        ('claude-fable-5.2-high', 'claude', 'claude-fable-5-2', 'claude', 'high')))
 
 
 def spawnable_legs() -> tuple[Leg, ...]:
