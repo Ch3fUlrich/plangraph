@@ -13,7 +13,7 @@ from plangraph.spawner.cli import main
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 CARD = {"estimate_tokens": 20000, "risk_tags": [],
         "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
-WRITERS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "openrouter-free",
+WRITERS = ["cx-gpt-6.1-sol-medium", "agy-gemini-3.8-flash", "openrouter-free",
            "opencode-big-pickle", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
            "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
 LIVE = [leg for leg in WRITERS if leg != "agy-gemini-3.8-flash"]  # D-5696: fenced on the live route
@@ -21,7 +21,15 @@ LIVE = [leg for leg in WRITERS if leg != "agy-gemini-3.8-flash"]  # D-5696: fenc
 
 @pytest.fixture(autouse=True)
 def isolated_catalog(monkeypatch, tmp_path):
+    monkeypatch.setattr('plangraph.spawner.seat_spawn.admit', lambda *a, **k: None)
+    # Routing tests use a fake fresh checkout; never inspect the real .git.
+    monkeypatch.setattr('plangraph.spawner.base_fresh._check', lambda *a, **k:
+                       dict(ok=True, origin_sha='a' * 40, base_sha='a' * 40, behind=0, reason=None))
     from plangraph.routing_support import resolver, catalog_db
+    async def admit(*args, **kwargs):
+        return True
+    monkeypatch.setattr('plangraph.spawner.service.admit_base', admit)
+    monkeypatch.setattr('plangraph.spawner.service.SpawnService._annotate_spawn', lambda *a, **k: None)
     monkeypatch.setattr(resolver, "get_catalog_models", lambda: [])
     monkeypatch.setattr(catalog_db, "DEFAULT_DB_PATH", tmp_path / "absent.db")
     monkeypatch.setenv("PLANGRAPH_CATALOG_DB", str(tmp_path / "absent.db"))
@@ -33,7 +41,7 @@ def isolated_catalog(monkeypatch, tmp_path):
 def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card, state):
     from plangraph.spawner.service import SpawnService
     def reader(model, **kwargs):
-        return {"state": state if model == "omniroute/cx-gpt-6.1-sol-xhigh" else "available", "evidence": None}
+        return {"state": state if model == "omniroute/cx-gpt-6.1-sol-medium" else "available", "evidence": None}
     service = SpawnService(state=tmp_path, leg_reader=reader)
     plan = service.route(card, role="implement")
     expected = LIVE if state == "available" else LIVE[1:]
@@ -45,7 +53,7 @@ def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card,
                for leg in plan.legs)
     record = asyncio.run(service.spawn(card=card, prompt="Implement public code", dry_run=True))
     assert record["chosen_leg"]["id"] == expected[0]
-    assert record["chosen_leg"]["effort"] == ("xhigh" if state == "available" else None)
+    assert record["chosen_leg"]["effort"] == ("medium" if state == "available" else None)
     assert not (tmp_path / "spawn-overrides.jsonl").exists()
 
 
@@ -177,7 +185,7 @@ def test_default_writer_refusal_falls_through_to_agy(tmp_path, refusal):
     runner.spawn = spawn
     service = SpawnService(runner, state=tmp_path)
     record = asyncio.run(service.spawn(card=CARD, prompt="Implement public code", wait_seconds=None))
-    assert calls == [("omniroute/cx-gpt-6.1-sol-xhigh", "opencode"), ("openrouter/free", "opencode")]
+    assert calls == [("omniroute/cx-gpt-6.1-sol-medium", "opencode"), ("openrouter/free", "opencode")]
     assert record["status"] == "completed"
     assert record["chosen_leg"]["id"] == "openrouter-free"
     assert record["chosen_leg"]["effort"] is None

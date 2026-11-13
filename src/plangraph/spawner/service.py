@@ -291,6 +291,8 @@ class SpawnService(SeatSpawnMixin):
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
         if plan.error or not plan.first_leg:
             raise SpawnRefused(plan.error or 'no eligible leg')
+        from .target import admit_effort
+        admit_effort(plan.first_leg.model, card, plan.first_leg.effort)
         plan = replace(plan, legs=witness_gate_legs(card, role, plan.legs), placement=_placement or plan.placement)  # before run artifacts
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
@@ -306,6 +308,7 @@ class SpawnService(SeatSpawnMixin):
                 limits, live_log = prepare_run(self, record, card)
                 launched = False
                 for chosen in plan.legs:
+                    admit_effort(chosen.model, card, chosen.effort)
                     if (watchdog := leg_limits(record, limits)) is None: self._save(record); break
                     from .inline_diff import InlineDiffError
                     try:

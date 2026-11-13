@@ -76,3 +76,13 @@ def resolve_target(target, *, chosen=None):
         admit_leg(leg)
         target = leg.model
     return target, leg
+
+
+def admit_effort(model, card, effort=None):
+    """D-5840: elevated reasoning requires a card field and operator decision."""
+    effort = effort or next((e for e in ('xhigh', 'high', 'max')
+                             if model.endswith('-' + e)), None)
+    if effort in ('high', 'xhigh', 'max') and not (
+            card.get('effort') == effort and
+            re.fullmatch(r'D-[0-9]+', str(card.get('effort_decision', '')))):
+        raise SpawnRefused('higher effort requires explicit card effort and D-id (effort_decision)')

@@ -110,7 +110,7 @@ DEFAULT_LEGS = (
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
-    Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-high",
+    Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-medium",
         "gemini", ("128k", "256k", "1m"), 900000, False, roles=("implement", "review")),
     Leg("opencode-big-pickle", "free", "opencode", "opencode/big-pickle",
         "glm", ("128k",), 100000, True, roles=("implement", "review")),
@@ -123,7 +123,7 @@ DEFAULT_LEGS = (
     _replace(_legacy["agy-sonnet-5.5"], roles=("orchestrate", "review")),
     Leg("agy-claude-opus", "subscription", "agy", "claude-opus-4-6-thinking",
         "claude", ("128k", "256k"), 180000, False, claude_family=True, roles=("review",)),
-    Leg("agy-opus-5.5", "subscription", "agy", "claude-opus-5-5-high",
+    Leg("agy-opus-5.5", "subscription", "agy", "claude-opus-5-5-medium",
         "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
         roles=("review",)),
     Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-v4.1-flash",
@@ -169,6 +169,10 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
+# D-5840: reviewer reasoning defaults to medium, including plain model seats.
+DEFAULT_LEGS = tuple(_replace(leg, effort='medium') if 'review' in leg.roles
+                     and leg.effort is None else leg for leg in DEFAULT_LEGS)
+
 # Preserve role-neutral keeper admission before applying implement-only policy.
 READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
                                disabled=leg.disabled or (
@@ -178,14 +182,14 @@ READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'i
 
 # D-5206/D-5212 change writer priority, not the registered fallback roles.
 WRITER_ORDER: tuple[str, ...] = (
-    "cx-gpt-6.1-sol-xhigh",  # D-5206: effort-qualified default, then agy fallback
+    "cx-gpt-6.1-sol-medium",  # D-5840: medium default, then agy fallback
     "agy-gemini-3.8-flash",
 )
 LEAD_WRITER = WRITER_ORDER[0]
 
 #: Operator 2026-11-09: Claude 5.5 seats and effort variants, spawnable by an
 #: explicit ``--leg`` pick (or the model override) only.  They are NOT in
-#: DEFAULT_LEGS, except Sol xhigh promoted below (D-5206); Claude is never an
+#: DEFAULT_LEGS, except Sol medium promoted below (D-5840); Claude is never an
 #: automatic writer; ``SpawnService.route``
 #: appends them as ``explicit_only`` skips, ``plan_spawn`` does not.  Model ids are what ``agy models`` and OmniRoute
 #: /v1/models served that day (agy serves no Sonnet xhigh, cx no -ultra).  Claude
@@ -209,11 +213,11 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
 )
 # Promote the existing effort leg; retain plain Sol as an active explicit-only pick.
 _plain_sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
-_sol_xhigh = next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER)
-DEFAULT_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in DEFAULT_LEGS)
+_sol_medium = next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER)
+DEFAULT_LEGS = tuple(_sol_medium if leg.id == _plain_sol.id else leg for leg in DEFAULT_LEGS)
 EXPLICIT_LEGS = (_plain_sol, *(leg for leg in EXPLICIT_LEGS if leg.id != LEAD_WRITER))
 # Keeper readiness keeps its existing admission, but uses the current routed id.
-READINESS_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in READINESS_LEGS)
+READINESS_LEGS = tuple(_sol_medium if leg.id == _plain_sol.id else leg for leg in READINESS_LEGS)
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
     leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)

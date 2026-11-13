@@ -20,7 +20,7 @@ FREE = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "ope
 DISABLED_FREE = {"opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free"}
 # D-4196: both retained Zen rows stay permanently disabled as on main.
 ACTIVE_FREE = ["openrouter-free"]
-SUBS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]
+SUBS = ["cx-gpt-6.1-sol-medium", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]
 WRITERS = [*SUBS[:2], "openrouter-free", "opencode-big-pickle", "agy-gemini-4-argon",
            "mimo-v2.6-flash", "mimo-v2.6-pro", "omniroute-deepseek-flash",
            "omniroute-muse-spark", "deepseek"]
@@ -29,6 +29,10 @@ LIVE_WRITERS = [i for i in WRITERS if i != "agy-gemini-3.8-flash"]  # D-5696: le
 
 @pytest.fixture(autouse=True)
 def isolated_catalog(monkeypatch, tmp_path):
+    monkeypatch.setattr('plangraph.spawner.seat_spawn.admit', lambda *a, **k: None)
+    # Routing tests use a fake fresh checkout; never inspect the real .git.
+    monkeypatch.setattr('plangraph.spawner.base_fresh._check', lambda *a, **k:
+                       dict(ok=True, origin_sha='a' * 40, base_sha='a' * 40, behind=0, reason=None))
     from plangraph.routing_support import resolver
     monkeypatch.setattr(resolver, "get_catalog_models", lambda: [])
     monkeypatch.setenv("PLANGRAPH_CATALOG_DB", str(tmp_path / "absent.db"))
@@ -159,8 +163,8 @@ def test_cli_route_implement_gpt_first_no_claude_writer(tmp_path, capsys):
 def test_route_and_refusal(tmp_path, capsys):
     assert main(['--state', str(tmp_path), 'route', '--card', '{"estimate_tokens":1000}', '--role', 'implement', '--json']) == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.1-sol-xhigh'
-    assert plan['first_leg']['effort'] == 'xhigh'
+    assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.1-sol-medium'
+    assert plan['first_leg']['effort'] == 'medium'
     assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates', 'placement'}
     assert plan['placement'] == {'host': None, 'reason': 'placement_not_evaluated', 'free_mb': None}
     assert main(['--state', str(tmp_path), 'spawn', 'task']) == 2
@@ -223,7 +227,7 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
 def test_route_sol_unavailable_keeps_tier_writer_order():
     # D-3745: an ineligible lead does not change the fallback ordering.
     def reader(model, **kwargs):
-        return {"state": "down" if model == "omniroute/cx-gpt-6.1-sol-xhigh" else "available", "evidence": None}
+        return {"state": "down" if model == "omniroute/cx-gpt-6.1-sol-medium" else "available", "evidence": None}
     plan = plan_spawn(CARD, role="implement", leg_reader=reader)
     assert [leg.id for leg in plan.legs] == WRITERS[1:]
     assert {s["leg"]: s["reason"] for s in plan.skipped}[SUBS[0]] == "down"
