@@ -29,14 +29,15 @@ fn restored_card_preserves_attempt_answers_and_wait_baseline() {
             .env("PG_TEST_ALLOW_UNJAILED", "1");
         for (key, _) in std::env::vars_os() {
             let name = key.to_string_lossy();
-            if matches!(name.as_ref(), "GIT_DIR" | "GIT_WORK_TREE" | "GIT_INDEX_FILE")
-                || name.starts_with("GIT_CONFIG")
+            if matches!(
+                name.as_ref(),
+                "GIT_DIR" | "GIT_WORK_TREE" | "GIT_INDEX_FILE"
+            ) || name.starts_with("GIT_CONFIG")
             {
                 child.env_remove(key);
             }
         }
-        let status = child.status()
-            .unwrap();
+        let status = child.status().unwrap();
         assert!(status.success());
         return;
     }
