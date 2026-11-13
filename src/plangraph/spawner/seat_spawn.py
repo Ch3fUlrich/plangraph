@@ -15,13 +15,11 @@ from pathlib import Path
 
 from .seat_artifact import reserve_seat_families, seat_reasons, sync_seat, sync_seat_group
 
-
 def resources(service):
     from .overflow import available_memory_mb
     return 0, available_memory_mb()
 
-
-def admit(service, options, *, card=None, preview=False):
+def admit(service, options, *, card=None, preview=False, defer_queue=False):
     """Enforce RAM admission even without an overflow configuration."""
     if options.get('dry_run'):
         return None
@@ -81,10 +79,14 @@ def admit(service, options, *, card=None, preview=False):
             if decision.host is None and decision.reason in ('local_fallback_no_remote', 'local_benchmark_database'):
                 return None
         if decision.host is None:
-            record = {'run_id': 'run-' + uuid.uuid4().hex,
-                      'status': 'refused' if remote_first else 'queued',
-                      'reason': decision.reason, 'overflow_reason': decision.reason,
-                      'exit_code': 2 if remote_first else 5}
+            record = dict(run_id='run-' + uuid.uuid4().hex, status='refused', role=role,
+                          reason='host_memory_floor', overflow_reason=decision.reason, exit_code=2, ended=time.time(),
+                          mem_available_mb=memory, floor_mb=floor, role_mb=role_mb,
+                          error=f'host_memory_floor: MemAvailable {memory} MB, floor {floor} MB, role {role_mb} MB; {decision.reason}')
+            if not overflow.memory_refusal(memory, role_mb, floor): record.update(reason=decision.reason, error=decision.reason)
+            elif not remote_first and config.get('queue_memory_wait') is True and not options.get('seats') and not (card or {}).get('findings'):
+                from .cancel_recorded import enqueue_memory
+                enqueue_memory(service, record, options, card, config, defer=defer_queue)
             break
         name = decision.host
         try:
@@ -106,16 +108,13 @@ def admit(service, options, *, card=None, preview=False):
         record.update(host=placement['host'], placement=placement)
     return record
 
-
 # These children expose skill tools, but no repository/shell tools (D-4681).
 INLINE_DIFF_HARNESSES = frozenset({'opencode'})
-
 
 def _needs_inline_diff(leg, card):
     return (getattr(leg, 'tool_mode', 'tools') == 'inline-only'
             or (getattr(leg, 'harness', None) in INLINE_DIFF_HARNESSES
                 and card.get('diff_ref') is not None))
-
 
 def annotate_review_warning(record):
     from plangraph.planner.legs import REVIEW_UNFIT_SEATS
@@ -126,7 +125,6 @@ def annotate_review_warning(record):
         if warning not in record.setdefault('warnings', []):
             record['warnings'].append(warning)
 
-
 def _refuse_oversized_diff(exc, leg):
     from .context_pack import PromptBoundError
     if exc.chars is not None:
@@ -134,16 +132,15 @@ def _refuse_oversized_diff(exc, leg):
             f'prompt_too_large: inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
             f'max_request_tokens {leg.max_request_tokens}') from None
 
-
 class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``_save``, ``save_refusal`` and ``state`` from the service."""
 
     _seat_reasons = staticmethod(seat_reasons)
     _sync_seat = staticmethod(sync_seat)
 
-    def admit_spawn(self, options, *, card=None):
+    def admit_spawn(self, options, *, card=None, defer_queue=False):
         """Check admission and persist any queued or remote run through the service."""
-        record = admit(self, options, card=card)
+        record = admit(self, options, card=card, defer_queue=defer_queue)
         if record is not None:
             self._save(record)
         return record
@@ -163,8 +160,11 @@ class SeatSpawnMixin:
             from plangraph.planner.routing import SpawnRefused
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
-            admitted = await asyncio.to_thread(self.admit_spawn, options, card=card)
+            admitted = await asyncio.to_thread(self.admit_spawn, options, card=card, defer_queue=True)
             if admitted is not None:
+                if admitted.get("status") == "queued":
+                    from .cancel_recorded import start_memory_queue
+                    start_memory_queue(self, admitted, options, card)
                 return admitted
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief

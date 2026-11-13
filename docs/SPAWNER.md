@@ -221,10 +221,10 @@ The independent OOM guard (D-5057/D-5075) remains unchanged.
 
 Default CLI and MCP spawns try healthy SSH overflow hosts when local RAM
 admission refuses, only for repositories in the `public_repos` allowlist.
-Private or unknown repositories queue without copying. Failed targets are
-excluded for that spawn; when none can accept, a queued record lists safe
+Private or unknown repositories refuse without copying. Failed targets are
+excluded for that spawn; when none can accept, a `host_memory_floor` refusal records measured RAM and safe
 refusal reasons. Without overflow config, admitted local runs have no annotation;
-below-floor runs queue with matching `reason` and `overflow_reason`. Dry runs do not overflow.
+below-floor runs refuse immediately (exit 2). Opt-in `queue_memory_wait: true` waits on ≤5s timers and run exits until recorded `queued_until` (`queue_bound_s`, default 900), then `queue_timeout`; transient reads/writes retry, planning failures retain `queue_reason`, and findings/seats never wait. Dry runs do not overflow.
 Local benchmark databases cannot be forwarded. CLI/MCP use public `admit_spawn` once in the shared wrapper, not the CLI parent; the service persists queued/remote records.
 Per-host `orchestration_only: true` in `hosts.json` (or the local overflow hosts entry; default false)
 makes implement/review/research remote-first: rank MemAvailable minus floor, then config order; no run-count caps.
@@ -277,6 +277,23 @@ recognized availability/quota evidence does. Review `usage_limit:`/`credit_limit
 generic failures keep their stop rule; cancellation, safety refusals and watchdog
 terminals still stop immediately. Safety refusal attempts precede provider-stop classification without overwriting distinct terminal reasons; specific unavailable diagnostics outrank generic provider stops. Provider-stop responses pass through spawner redaction before being added to attempts, including safety refusals. OOM wrapper marker lines (including prefixed telemetry) are not failure reasons.
 Plain stdout, including text saying 429, is never provider evidence.
+
+### SHA-named run-tree primitive (SPAWNER-RUN-TREE-S1)
+
+`git_guard.run_tree(state, repo)` attempts to fetch `origin/main`, then selects
+its verified commit SHA and uses the detached tree at `<state>/trees/<sha>`.
+If fetching fails or times out, it uses the verified tracking ref, not cache
+directory mtimes. It creates the tree when its directory is missing, including
+when Git still has a stale registration for that path, even if locked (double `--force`).
+
+POSIX reaping keeps the selected tree, trees named by nonterminal run records
+or records with survivors, trees with held creation locks or context leases, directories
+modified within seven days, and dirty trees. A missing/invalid `tree_sha` on a
+nonterminal or survivor record, or corrupt/unreadable records, disables reaping
+for that call. Only older, clean, unpinned trees with available locks and leases
+are removed. Windows selection does no reaping. Supervisor integration and
+run-record stamping are outside this primitive's slice.
+Terminal means `runner.is_terminal`; `needs_input` and `orphaned` keep their trees.
 
 ### Opt-in per-attempt worktrees (RUN-WORKTREE slice 1)
 
@@ -338,7 +355,7 @@ audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
 The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md](spawner-seats.md) (D-3198).
 
 CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
-A probe with its harness binary missing reports `host-not-ready` and books no leg event. Probe timeouts must be finite and strictly positive; TTL remains nonnegative (zero disables automatic probes). Invalid settings refuse before probe state writes, and CLI parameter refusals are JSON `ParameterRefused` with exit 2. Timeout errors name `--timeout` for an explicit CLI argument, `timeout_s` for a direct probe argument, or `PLANGRAPH_LEG_PROBE_TIMEOUT_S` for the environment. CLI and MCP probe refusal handlers catch only parameter-validation errors, not internal `ValueError`s. Spawn-call exceptions report probe infrastructure failure and never book leg liveness.
+A probe with its harness binary missing reports `host-not-ready` and books no leg event. Probe timeouts must be finite and strictly positive; TTL remains nonnegative (zero disables ordinary automatic probes, not snapshot-error recovery). Invalid settings refuse before probe state writes, and CLI parameter refusals are JSON `ParameterRefused` with exit 2. Timeout errors name `--timeout` for an explicit CLI argument, `timeout_s` for a direct probe argument, or `PLANGRAPH_LEG_PROBE_TIMEOUT_S` for the environment. CLI and MCP probe refusal handlers catch only parameter-validation errors, not internal `ValueError`s. Spawn-call exceptions report probe infrastructure failure and never book leg liveness. `src/plangraph/spawner/leg_probe.py:before_launch` retries snapshot read errors once, then probes before admitting/skipping; failed-probe reasons retain the probe's own cause; only an empty or `unknown` reason is recorded as `leg_probe_failed` (`host_not_ready` for a missing host binary), never as `unknown` (run-e99aae2287e541b48886d0f04e46c37e). See [snapshot recovery](spawner-leg-state.md#snapshot-read-errors-slice-1).
 Probe and quota bookkeeping key a leg by its model string: only a bare model of an agy leg gets the `agy/` prefix, a provider-qualified model is its own key, and legacy record rows without a harness keep their model-only key.
 Failed probes retain a scrubbed, single-line excerpt of the last 400 stderr
 characters in their result, output line and leg-state event. A `running` record
@@ -646,9 +663,15 @@ Cross-host ps: see [site configuration and transport](spawner-ps.md); [host read
 
 Run readers persist expired `queued`/`queue_claimed` records as failed `queue_timeout` at `queued_until`, even without an owner, rechecking under the record lock.
 Legacy bounds use `started` (default 0) plus `queue_bound_s` (default 900 seconds). Invalid bounds and unexpired/terminal records stay untouched; dry-run never writes. Expired queues no longer suppress finished-child or idle-claim findings.
-The SSH ps endpoint serializes only running and queued records; terminal history does not consume the 1 MiB transport budget.
-Malformed terminal fields do not hide live runs; malformed live or oversized replies name the queried host as unknown rather than silently omitting it.
+The SSH ps endpoint serializes only running and queued records. Terminal history
+does not consume the 1 MiB transport budget; malformed terminal fields do not
+hide live runs. Malformed live replies and oversized replies name the queried
+host as unknown rather than silently omitting it.
 Rust source-filter tests and pytest's real `configured_hosts` checks consume
 `tests/fixtures/doctor_sources.json`, binding both validators and probe limits
 to the same accepted/rejected cases. Rust embeds JSON, never Python source or
 an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
+
+Memory queue admission runs blocking probes off the event loop and starts its waiter
+only after the queued record is persisted. Dispatch and process monitoring live in
+`dispatch_service.py` and `runner_monitor.py`; `runner.py` retains their public entry points.
