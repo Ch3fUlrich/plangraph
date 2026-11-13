@@ -22,7 +22,7 @@ def _seed(state, n, item=ITEM, pr='7', **extra):
         d = state / 'runs' / f'run-{item.split(":")[1].lower().replace("-", "")}{pr}{i}'
         d.mkdir(parents=True)
         (d / 'record.json').write_text(json.dumps(dict(
-            dict(run_id=d.name, role='implement', item_key=item, round_ref=pr, status='completed', started=i),
+            dict(run_id=d.name, role='implement', item_key=item, round_ref=pr, status='completed', writer_launched=True, started=i),
             **extra)))
 
 
@@ -138,3 +138,92 @@ def test_public_spawn_refuses_before_remote_admission(tmp_path, monkeypatch):
     monkeypatch.setattr('plangraph.spawner.seat_spawn.admit', admit)
     with pytest.raises(RoundCapRefused):
         asyncio.run(_svc(tmp_path).spawn(card=_card(), prompt='x'))
+
+
+def test_environment_item_identity_cannot_bypass_round_cap(tmp_path, monkeypatch):
+    _seed(tmp_path, 3)
+    monkeypatch.setenv('PLANGRAPH_SPAWN_ITEM', ITEM)
+    with pytest.raises(RoundCapRefused):
+        check_round_cap(_svc(tmp_path), {'pr': '7'}, 'implement')
+
+
+def test_prelaunch_provider_exhaustion_does_not_consume_rounds(tmp_path):
+    _seed(tmp_path, 3, status='limited', writer_launched=False, attempts=[])
+    check_round_cap(_svc(tmp_path), _card(), 'implement')
+
+
+def test_concurrent_launches_cannot_take_the_same_final_round(tmp_path):
+    from plangraph.planner.legs import DEFAULT_LEGS
+    import os
+    _seed(tmp_path, 2)
+    chosen = next(l for l in DEFAULT_LEGS if 'implement' in l.roles)
+    calls = []
+    async def go():
+        async def one(index):
+            ident = f'job-{index}'
+            runner = SimpleNamespace(default_cwd=str(tmp_path), _processes={}, _tasks={}, jobs={})
+            async def spawn(**kwargs):
+                calls.append(ident)
+                await asyncio.sleep(.03)
+                runner._processes[ident] = SimpleNamespace(pid=os.getpid())
+                return SimpleNamespace(job_id=ident, status='completed', exit_code=0, events=[], survivors=[])
+            runner.spawn = spawn
+            service = SpawnService(runner, state=tmp_path)
+            record = dict(run_id='run-' + f'{index:032x}', role='implement', item_key=ITEM,
+                          round_ref='7', started=0, status='running', attempts=[])
+            return await service._launch_leg(record, chosen, role='implement', prompt_record=None)
+        return await asyncio.gather(one(0), one(1), return_exceptions=True)
+    result = asyncio.run(go())
+    assert len(calls) == 1 and sum(isinstance(r, RoundCapRefused) for r in result) == 1
+    assert sum(not isinstance(r, BaseException) for r in result) == 1, result
+
+
+def _reserve_worker(state, start, finish, results):
+    import os
+    from pathlib import Path
+    from plangraph.spawner.round_cap import reserve_round, finish_round
+    start.wait()
+    record = dict(run_id=f'run-child-{os.getpid()}', item_key=ITEM, round_ref='7')
+    token = reserve_round(SimpleNamespace(state=Path(state)), record)
+    results.put(token is not False)
+    finish.wait(15)
+    if token is not False:
+        finish_round(token, False)
+
+
+def test_round_capacity_is_atomic_between_processes(tmp_path):
+    import multiprocessing
+    _seed(tmp_path, 2)
+    ctx = multiprocessing.get_context('spawn')
+    start, finish, results = ctx.Barrier(2), ctx.Event(), ctx.Queue()
+    children = [ctx.Process(target=_reserve_worker, args=(str(tmp_path), start, finish, results)) for _ in range(2)]
+    try:
+        for child in children:
+            child.start()
+        assert sorted(results.get(timeout=20) for _ in children) == [False, True]
+    finally:
+        finish.set()
+        for child in children:
+            child.join(20)
+            if child.is_alive():
+                child.terminate()
+                child.join()
+        results.close()
+    assert all(child.exitcode == 0 for child in children)
+
+
+def test_failed_spawn_releases_unlaunched_capacity(tmp_path):
+    from plangraph.spawner.round_cap import spawn_round
+    _seed(tmp_path, 2)
+    calls = []
+    async def fail(**kwargs):
+        calls.append(1)
+        raise ValueError('failed before process creation')
+    service = SimpleNamespace(state=tmp_path, runner=SimpleNamespace(spawn=fail))
+    async def go():
+        for index in range(2):
+            record = dict(run_id=f'run-fail-{index}', role='implement', item_key=ITEM, round_ref='7')
+            with pytest.raises(ValueError, match='before process'):
+                await spawn_round(service, record, _card(), prompt_record=None)
+    asyncio.run(go())
+    assert len(calls) == 2

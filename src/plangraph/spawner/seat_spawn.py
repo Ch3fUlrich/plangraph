@@ -13,6 +13,7 @@ import time
 import uuid
 from pathlib import Path
 
+from . import round_cap
 from .seat_artifact import reserve_seat_families, seat_reasons, sync_seat, sync_seat_group
 
 
@@ -160,9 +161,8 @@ class SeatSpawnMixin:
             if cwd is not None:
                 options['cwd'] = bound.arguments['cwd'] = cwd
             from .prompt_guard import admit_prompt
-            from .round_cap import enforce_round_cap
             from plangraph.planner.routing import SpawnRefused
-            await enforce_round_cap(self, card, options.get('role', 'implement'), dry_run=options.get('dry_run'))
+            await round_cap.enforce_round_cap(self, card, options.get('role', 'implement'), dry_run=options.get('dry_run'))
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
             admitted = await asyncio.to_thread(self.admit_spawn, options, card=card)
@@ -216,12 +216,12 @@ class SeatSpawnMixin:
         except asyncio.TimeoutError:
             raise InlineDiffError('review prompt packaging deadline exceeded') from None
 
-    async def _launch_leg(self, record, chosen, *, routed=False, **options):
+    async def _launch_leg(self, record, chosen, *, routed=False, round_card=None, **options):
         """One normal launch, at most one capped review retry; never recurse or reroute."""
         if record.get('cwd') is not None:
             options.setdefault('cwd', record['cwd'])
         async def launch(prompt_record, **kwargs):
-            job = await self.runner.spawn(prompt_record=prompt_record, **kwargs)
+            job = await round_cap.spawn_round(self, record, round_card, prompt_record=prompt_record, **kwargs)
             self._running_records[job.job_id] = record
             process = self.runner._processes.get(job.job_id)
             owned = getattr(self.runner, '_owned', {}).get(job.job_id, {})

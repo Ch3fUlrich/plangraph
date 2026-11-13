@@ -19,7 +19,7 @@ def _seed(state):
         d = state / 'runs' / f'run-seed{i}'
         d.mkdir(parents=True)
         (d / 'record.json').write_text(json.dumps(dict(
-            run_id=d.name, role='implement', item_key=ITEM, round_ref='7', status='completed', started=i)))
+            run_id=d.name, role='implement', item_key=ITEM, round_ref='7', status='completed', writer_launched=True, started=i)))
 
 
 @pytest.fixture
@@ -74,6 +74,19 @@ def test_second_refusal_requests_no_second_replan(tmp_path, calls):
     _cap(service)
     assert _cap(service)['replan']['status'] == 'requested'
     assert len(calls) == 1
+
+
+def test_outbox_failure_retries_delivery_without_reposting_keeper_alarm(tmp_path, calls, monkeypatch):
+    from plangraph.spawner import stall_watchdog
+    service = _service(tmp_path)
+    deliver = stall_watchdog.deliver_event
+    monkeypatch.setattr(stall_watchdog, 'deliver_event', lambda *a, **kw: (_ for _ in ()).throw(OSError('outbox')))
+    assert _cap(service)['replan']['status'] == 'failed'
+    assert json.loads(marker_path(service, ITEM, '7').read_text())['keeper_sent'] is True
+    monkeypatch.setattr(stall_watchdog, 'deliver_event', deliver)
+    assert _cap(service)['replan']['status'] == 'requested'
+    assert len(calls) == 1
+    assert len(list((tmp_path / 'watchdog/outbox').glob('*.json'))) == 1
 
 
 def test_no_planning_leg_still_requests_l1_help(tmp_path, calls):

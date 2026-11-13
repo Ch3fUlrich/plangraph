@@ -2,7 +2,7 @@
 
 ### ROUND-CAP
 
-An `implement` spawn is refused with reason `round_cap` once the same `item_key` and PR or branch (card `pr`/`pr_number`/`branch`, stored as `round_ref`) has 3 earlier implement runs (D-5813, rule 3.35). Rounds are counted per exact (item, ref): a run stored without a ref counts only for a card that names no ref. Refused, dry-run and continuation records do not count; review and other roles are never capped. The check runs in the public `spawn` entry before overflow admission and again in `_spawn`.
+An `implement` spawn is refused with reason `round_cap` once the same `item_key` and PR or branch (card `pr`/`pr_number`/`branch`, stored as `round_ref`) has 3 earlier launched implement runs (D-5813, rule 3.35). Rounds are counted per exact (item, ref): a run stored without a ref counts only for a card that names no ref. Refused, dry-run and continuation records do not count; review and other roles are never capped. The check runs in the public `spawn` entry before overflow admission and again in `_spawn`.
 
 The refusal message is JSON with `replan_required`: item, PR, rounds, the open `findings` (verbatim card findings), `replan_leg` and `replan_leg_order` (the route table's legs for role `research`), `replan_route_error` (the routing refusal, when no planning leg is available; any other routing error surfaces) and `replan` (status, run id).
 
@@ -676,4 +676,4 @@ host as unknown rather than silently omitting it.
 Rust source-filter tests and pytest's real `configured_hosts` checks consume
 `tests/fixtures/doctor_sources.json`, binding both validators and probe limits
 to the same accepted/rejected cases. Rust embeds JSON, never Python source or
-an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
+an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks. Item identity uses the same resolver as run annotation, including the environment fallback. A process-safe reservation at the launch seam covers routed and direct writers; prelaunch exhaustion does not spend rounds. Keeper and routing-outbox receipts persist independently and retries retain their request id. Unconfirmed reservations retain capacity across supervisor crashes.

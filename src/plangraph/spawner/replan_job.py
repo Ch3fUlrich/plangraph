@@ -5,7 +5,7 @@ slice definitions belong to the L1 that consumes the alarm and routing request.
 """
 
 
-def request_replan(service, payload, request_id, path):
+def request_replan(service, payload, request_id, path, record, save):
     from plangraph.keeper.cli_verbs import Session
     from .stall_watchdog import deliver_event
 
@@ -21,10 +21,16 @@ def request_replan(service, payload, request_id, path):
         if field in card:
             body[field] = card[field]
     try:
-        Session().call('POST', 'alarms', body=body)
+        if not record.get('keeper_sent'):
+            Session().call('POST', 'alarms', body=body)
+            record['keeper_sent'] = True
+            save()
     finally:
         # The durable local outbox carries the complete findings even when the keeper is down.
-        deliver_event(service.state, dict(
-            rule='round-cap-replan', kind='alert', recipient='routing', item_key=payload['item'],
-            run_id=request_id, text=' '.join(reason.split()), replan_required=payload,
-            request_path=str(path)))
+        if not record.get('outbox_sent'):
+            deliver_event(service.state, dict(
+                rule='round-cap-replan', kind='alert', recipient='routing', item_key=payload['item'],
+                run_id=request_id, text=' '.join(reason.split()), replan_required=payload,
+                request_path=str(path)))
+            record['outbox_sent'] = True
+            save()

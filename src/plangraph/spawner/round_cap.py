@@ -1,12 +1,20 @@
 """Round cap (D-5813, rule 3.35): no 4th implement spawn per item and PR; replan instead."""
 import hashlib
 import json
-import os
 import time
 import uuid
 from pathlib import Path
 
 from plangraph.routing_errors import SpawnRefused
+
+def writer_started(run):
+    """Positive launch evidence; a limited admission record alone spends no round."""
+    if 'writer_launched' in run:
+        return run['writer_launched'] is True
+    return bool(run.get('pid') or (run.get('job_id') and run.get('status') != 'limited') or any(
+        isinstance(a, dict) and a.get('status') in ('running', 'completed', 'failed', 'stalled', 'timeout',
+        'timed_out', 'cancelled', 'terminated_after_answer') for a in (run.get('attempts') or ())))
+
 
 MAX_ROUNDS = 3
 STALE_REPLAN_S = 3600
@@ -36,7 +44,7 @@ def prior_rounds(runs, item, ref):
     return sum(1 for r in runs
                if r.get('role') == 'implement' and r.get('item_key') == item
                and r.get('status') not in ('refused', 'dry_run')
-               and not r.get('continuation')
+               and not r.get('continuation') and writer_started(r)
                and r.get('round_ref') == ref)
 
 
@@ -62,14 +70,17 @@ def replan_route(service, replan_card):
     return plan, None
 
 
-def round_cap_payload(service, card, role):
+def round_cap_payload(service, card, role, *, rounds=None):
     """(payload, route plan) once the item/PR has used its rounds, else None."""
-    item = card.get('item_key') or card.get('item') if isinstance(card, dict) else None
+    from .item_key import annotate_item
+    identity = {}
+    annotate_item(identity, card)
+    item = identity['item_key']
     if role != 'implement' or not item:
         return None
     from .stall_watchdog import read_runs
     ref = round_ref(card)
-    done = prior_rounds(read_runs(service.state), item, ref)
+    done = prior_rounds(read_runs(service.state), item, ref) if rounds is None else rounds
     if done < MAX_ROUNDS:
         return None
     findings = finding_texts(card)
@@ -111,37 +122,82 @@ def marker_path(service, item, ref):
 
 
 def start_replan(service, payload, plan):
-    """Save the complete request and raise a keeper alarm for an L1; never launch work."""
+    """Persist independent keeper/outbox receipts; retries retain their request identity."""
     from .private_io import atomic_write_private
     from .replan_job import request_replan
+    from .notify import inbox_lock
     path = marker_path(service, payload['item'], payload['pr'])
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    record = dict(item=payload['item'], ref=payload['pr'], rounds=payload['rounds'],
-                  request=payload, status='running', run_id='replan-' + uuid.uuid4().hex, started=time.time())
-    for _ in range(2):
+    with inbox_lock(path):
+        record = json.loads(path.read_text()) if path.exists() else dict(
+            item=payload['item'], ref=payload['pr'], rounds=payload['rounds'], request=payload,
+            status='new', run_id='replan-' + uuid.uuid4().hex)
+        if record['status'] == 'requested' or (record['status'] == 'running' and
+                time.time() - record.get('started', 0) <= STALE_REPLAN_S):
+            return dict(status=record['status'], run_id=record['run_id'], started=False)
+        record.update(status='running', started=time.time())
+        save = lambda: atomic_write_private(path, json.dumps(record))
+        save()
         try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            try:
-                prior = json.loads(path.read_text(encoding='utf-8'))
-            except (OSError, ValueError):
-                prior = dict(status='running', started=path.stat().st_mtime)
-            if prior.get('status') == 'failed' or (prior.get('status') == 'running' and
-                    time.time() - prior.get('started', 0) > STALE_REPLAN_S):
-                path.unlink(missing_ok=True)
-                continue
-            return dict(status=prior.get('status'), run_id=prior.get('run_id'),
-                        reason=prior.get('reason'), started=False)
-        os.close(fd)
-        break
-    else:
-        return dict(status='pending', started=False)
-    atomic_write_private(path, json.dumps(record))
+            request_replan(service, record['request'], record['run_id'], path, record, save)
+            record.update(status='requested', reason=None)
+        except Exception as exc:
+            record.update(status='failed', reason=type(exc).__name__)
+        save()
+        return dict(status=record['status'], run_id=record['run_id'], reason=record.get('reason'), started=False)
+
+
+def reserve_round(service, record):
+    """Atomically reserve the final launch capacity across independent supervisors."""
+    from .notify import inbox_lock
+    from .private_io import atomic_write_private
+    from .stall_watchdog import read_runs
+    item, ref, run_id = record['item_key'], record.get('round_ref'), record['run_id']
+    path = Path(service.state) / 'rounds' / marker_path(service, item, ref).name
+    with inbox_lock(path):
+        entries = json.loads(path.read_text()) if path.exists() else {}
+        launched = {r['run_id'] for r in read_runs(service.state) if prior_rounds([r], item, ref)}
+        if run_id in launched:
+            return None
+        if run_id not in entries and len(launched | entries.keys()) >= MAX_ROUNDS:
+            return False
+        entries.setdefault(run_id, dict(launched=False))
+        atomic_write_private(path, json.dumps(entries))
+    return path, run_id
+
+
+def finish_round(token, launched):
+    from .notify import inbox_lock
+    from .private_io import atomic_write_private
+    if token is None:
+        return
+    path, run_id = token
+    with inbox_lock(path):
+        entries = json.loads(path.read_text())
+        if launched:
+            entries[run_id]['launched'] = True
+        elif not entries[run_id]['launched']:
+            del entries[run_id]
+        atomic_write_private(path, json.dumps(entries))
+
+
+async def spawn_round(service, record, card, *, prompt_record, **options):
+    """Launch seam: reserve before spawn, retain only positive process evidence."""
+    import asyncio
+    if (record.get('role') != 'implement' or not record.get('item_key') or
+            record.get('continuation') or options.get('dry_run')):
+        return await service.runner.spawn(prompt_record=prompt_record, **options)
+    token = await asyncio.to_thread(reserve_round, service, record)
+    if token is False:
+        card = dict(card or {}, item_key=record['item_key'], pr=record.get('round_ref'))
+        payload, plan = round_cap_payload(service, card, 'implement', rounds=MAX_ROUNDS)
+        payload['replan'] = await asyncio.to_thread(start_replan, service, payload, plan)
+        raise RoundCapRefused(payload)
+    record.setdefault('writer_launched', False)
     try:
-        request_replan(service, payload, record['run_id'], path)
-        record['status'] = 'requested'
-    except Exception as exc:
-        # Persist the full request even if the keeper is unavailable; retry on the next refusal.
-        record.update(status='failed', reason=type(exc).__name__)
-    atomic_write_private(path, json.dumps(record))
-    return dict(status=record['status'], run_id=record['run_id'], reason=record.get('reason'), started=False)
+        job = await service.runner.spawn(prompt_record=prompt_record, **options)
+        if (service.runner._processes.get(job.job_id) is not None or
+                getattr(service.runner, '_owned', {}).get(job.job_id, {}).get('pid')):
+            record['writer_launched'] = True
+        return job
+    finally:
+        await asyncio.shield(asyncio.to_thread(finish_round, token, record['writer_launched']))

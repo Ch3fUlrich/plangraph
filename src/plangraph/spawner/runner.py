@@ -1099,7 +1099,7 @@ def spawn_service(*args, **kwargs):
                             self._save(record); return
                         job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
                             role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
-                            prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
+                            round_card=card, prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                         if record.get('reason') == 'reasoning_output_limit':
                             return
                         if job.survivors:   # kill_incomplete: terminal, no fall-through leg, no second writer
