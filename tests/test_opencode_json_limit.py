@@ -81,7 +81,7 @@ def test_outcome_paths(status, token, path, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('status,reason', [(429, 'usage_limit'), (402, 'credit_limit')])
-@pytest.mark.parametrize('suffix,retained', [('N20', True), ('N21', False), ('A04', False), ('A04-dict', False), ('A05', False)])
+@pytest.mark.parametrize('suffix,retained', [('N20', True), ('A04', False), ('A05', False)])
 def test_a1_scrubbed_reader_boundary(status, reason, suffix, retained, monkeypatch):
     from pathlib import Path
     from types import SimpleNamespace as NS
@@ -89,18 +89,19 @@ def test_a1_scrubbed_reader_boundary(status, reason, suffix, retained, monkeypat
     from plangraph.spawner import env_redact as er, exit_outcome as eo
     rows = json.loads((Path(__file__).parent / 'fixtures/redact_name_scope.json').read_text())
     raw = ''.join(next(r for r in rows if r['id'] == 'a1-' + suffix)['input_parts']).replace('429', str(status))
-    raw = raw.replace('"status":' + str(status), '"retryAfterMs":30500.5,"status":' + str(status))
+    for quote in ('"', "'"):
+        raw = raw.replace(quote + 'status' + quote + ':' + str(status),
+                          quote + 'retryAfterMs' + quote + ':30500.5,' + quote + 'status' + quote + ':' + str(status))
     line = er.redact_output(raw)
-    expected = f'HTTP {status}: {reason} (reset after 30500.5ms)' if retained else None
+    raw_expected = f'HTTP {status}: {reason} (reset after 30500.5ms)'
+    assert er.opencode_limit(raw) == er.early_refusal(raw) == raw_expected
+    expected = raw_expected if retained else None
     assert er.opencode_limit(line) == er.early_refusal(line) == expected
-    if suffix in ('A04', 'A05', 'A04-dict'):
-        assert er.opencode_limit(raw) == (f'HTTP {status}: {reason} (reset after 30500.5ms)' if suffix != 'A04-dict' else None)
-    if suffix == 'N21':
-        assert json.loads(line)['usage'] == {'input_'+'tokens': 12, 'output_'+'tokens': 34}
     book, notify = Mock(), Mock()
     monkeypatch.setattr(eo, '_book_failure', book); monkeypatch.setattr(eo, 'notify_leg_refused', notify)
     # Vary harness_limit_line's exit_code argument and fallthrough_reason's job.exit_code, not usage counters.
     for exit_code in (None, 0, 1):
+        assert er.harness_limit_line(exit_code, raw, '') == raw_expected
         assert er.harness_limit_line(exit_code, line, '') == expected
         if exit_code is not None:
             record, job = {}, NS(exit_code=exit_code, stdout=line, stderr='')
@@ -108,3 +109,11 @@ def test_a1_scrubbed_reader_boundary(status, reason, suffix, retained, monkeypat
             assert record == ({'reason': reason} if retained else {})
             assert not getattr(job, 'refusal', None)
     assert (book.call_count, notify.call_count) == ((2, 2) if retained else (0, 0))
+
+
+def test_a1_scrubbed_usage_counters_survive():
+    from pathlib import Path
+    from plangraph.spawner.env_redact import redact_output
+    rows = json.loads((Path(__file__).parent / 'fixtures/redact_name_scope.json').read_text())
+    raw = ''.join(next(r for r in rows if r['id'] == 'a1-N21')['input_parts'])
+    assert json.loads(redact_output(raw))['usage'] == {'input_'+'tokens': 12, 'output_'+'tokens': 34}

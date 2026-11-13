@@ -59,6 +59,7 @@ def test_x04_old_overlap_and_inner_suppression():
     old = 'TO' + 'KEN'
     assert redact('e\u0301' + 'API_' + 'KEY="V1"tail') == 'e\u0301' + 'API_' + 'KEY="' + MASK + '"tail'
     assert redact(old + '="V1" ' + NAME + '=V2') == old + '="' + MASK + '" ' + NAME + '=' + MASK
+    # known gap for A2 (b) old label swallowed
     assert redact(NAME + '=V1 ' + old + '="V2"tail') == NAME + '=' + MASK
     assert redact(old + '=V1 ' + NAME + '=V2') == old + '=' + MASK
     assert redact(old + '\n=\n' + NAME + '=V1') == old + '\n=\n' + MASK
@@ -77,15 +78,16 @@ def test_x06_keyword_child_timeout():
 
 
 @pytest.mark.parametrize('kind', ['masked-lines', 'runs', 'failed-headers', 'new-blanks', 'old-blanks'])
-def test_x06_linear_doubling(kind):
+def test_x07_linear_scaling(kind):
     timings = []
-    for size in (1, 2):
-        text = {'masked-lines': (NAME + '=' + MASK + '\n') * (5000 * size), 'runs': 'x' * (100000 * size),
-                'failed-headers': (NAME + ' ? ') * (100000 * size // (len(NAME) + 3)),
-                'new-blanks': NAME + '=' + ' ' * (20000 * size), 'old-blanks': 'TO'+'KEN=' + ' ' * (20000 * size)}[kind]
+    # Large 1x workloads avoid millisecond noise; 4x separates linear (4) from quadratic (16).
+    for size in (1, 4):
+        text = {'masked-lines': (NAME + '=' + MASK + '\n') * (50000 * size), 'runs': 'x' * (1000000 * size),
+                'failed-headers': (NAME + ' ? ') * (1000000 * size // (len(NAME) + 3)),
+                'new-blanks': NAME + '=' + ' ' * (600000 * size), 'old-blanks': 'TO'+'KEN=' + ' ' * (600000 * size)}[kind]
         expected = text[:-1] + MASK if kind == 'old-blanks' else text
         samples = []
         for _ in range(7):
             start = time.perf_counter(); assert redact(text) == expected; samples.append(time.perf_counter() - start)
         timings.append(statistics.median(samples))
-    assert timings[1] < timings[0] * 3.5
+    assert timings[1] < timings[0] * 7
