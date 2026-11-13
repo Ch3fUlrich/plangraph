@@ -28,15 +28,15 @@ def _gaps():
     return set(re.findall(r"\bR-[a-z]+-\d+\b", section))
 
 
-def test_table_has_67_unique_ids():
+def test_table_has_74_unique_ids():
     ids = [row[0] for row in _rows()]
-    assert len(ids) == 67
-    assert len(set(ids)) == 67
+    assert len(ids) == 74
+    assert len(set(ids)) == 74
 
 
 def test_disposition_counts():
     counts = Counter(row[1] for row in _rows())
-    assert counts == {"delete": 28, "code": 22, "card": 17}
+    assert counts == {"delete": 28, "code": 22, "card": 24}
 
 
 def test_every_row_has_a_why():
