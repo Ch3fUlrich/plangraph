@@ -7,8 +7,7 @@ use std::{
 
 const MODE: &str = "PG_DIFF_PRODUCER_MODE";
 const CONTROL: &str = "PG_DIFF_PRODUCER_CONTROL";
-// Setup/watchdog bounds allow scheduling delays; they are not assertions about
-// how quickly the 30 ms production deadline must run on a loaded runner.
+// Setup/watchdog bounds are separate from the collector's elapsed-time assertions.
 const WATCHDOG: Duration = Duration::from_secs(30);
 const PRODUCER_WATCHDOG: Duration = Duration::from_secs(120);
 
@@ -155,7 +154,7 @@ fn producer_panic_before_connect_fails_setup_instead_of_hanging() {
     );
 }
 
-fn producer(mode: &str) -> (std::path::PathBuf, Child, TcpStream) {
+pub(super) fn producer(mode: &str) -> (std::path::PathBuf, Child, TcpStream) {
     producer_with_timeout(mode, WATCHDOG)
 }
 
@@ -242,25 +241,26 @@ pub(super) fn oversized_exited_child_does_not_kill_group() {
 
 #[test]
 fn oversized_hung_producer_is_a_bounded_timeout_not_too_large() {
-    deadline_ends_wait("hung", 1);
+    assert!(deadline_ends_wait("hung", 1) < Duration::from_millis(500));
 }
 
 #[test]
 fn eof_and_reader_join_do_not_extend_child_deadline() {
-    deadline_ends_wait("closed", 4096);
+    assert!(deadline_ends_wait("closed", 4096) < Duration::from_millis(500));
     deadline_ends_wait_with_clock("closed", 4096, true);
 }
 
-pub(super) fn deadline_ends_wait(mode: &str, cap: usize) {
-    deadline_ends_wait_with_clock(mode, cap, false);
+pub(super) fn deadline_ends_wait(mode: &str, cap: usize) -> Duration {
+    deadline_ends_wait_with_clock(mode, cap, false)
 }
 
-fn deadline_ends_wait_with_clock(mode: &str, cap: usize, logical_clock: bool) {
+fn deadline_ends_wait_with_clock(mode: &str, cap: usize, logical_clock: bool) -> Duration {
     let (root, child, mut control) = producer(mode);
     #[cfg(unix)]
     let pid = child.id() as i32;
     let (tx, rx) = mpsc::channel();
     let collector = std::thread::spawn(move || {
+        let started = Instant::now();
         let (result, clock) = if logical_clock {
             use std::cell::Cell;
             // Keep the virtual deadline at this real instant, so a regression
@@ -289,12 +289,12 @@ fn deadline_ends_wait_with_clock(mode: &str, cap: usize, logical_clock: bool) {
         } else {
             (collect_diff(child, cap, Duration::from_millis(30)), None)
         };
-        tx.send((result, clock)).unwrap();
+        tx.send((result, clock, started.elapsed())).unwrap();
     });
     // No release is sent until after the result. The producer cannot finish
     // normally (its read watchdog is 4x our failure watchdog), so only the
     // collector's deadline can end this wait, regardless of scheduler latency.
-    let (result, clock) = rx.recv_timeout(WATCHDOG).unwrap();
+    let (result, clock, elapsed) = rx.recv_timeout(WATCHDOG).unwrap();
     assert_eq!(result, Err(InlineDiffError::Git));
     collector.join().unwrap();
     #[cfg(unix)]
@@ -312,7 +312,7 @@ fn deadline_ends_wait_with_clock(mode: &str, cap: usize, logical_clock: bool) {
         assert_eq!(&done, b"done");
         assert_eq!(std::fs::read(root.join("drained")).unwrap(), b"done\n");
         std::fs::remove_dir_all(root).unwrap();
-        return;
+        return elapsed;
     }
     let mut byte = [0];
     match control.read(&mut byte) {
@@ -326,4 +326,5 @@ fn deadline_ends_wait_with_clock(mode: &str, cap: usize, logical_clock: bool) {
         assert!(reads >= 3, "EOF must reach the child-exit deadline check");
         assert!(!slept, "EOF added a wait after the original child deadline");
     }
+    elapsed
 }

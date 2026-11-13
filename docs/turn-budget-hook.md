@@ -271,18 +271,26 @@ The watchdog subprocess suite is Unix-only because its delivery fixtures use
 
 ### Race-regression evidence and remaining limit
 
-Round 3 removes prompt-Git elapsed-time assertions: the native producer cannot
-complete until the parent releases its control channel after collection returns.
-The hung/closed-stdout cases require the Git timeout error, a terminated producer,
-and no drain marker; the escaped-stdout case releases its holder only after the
-result. Accept is nonblocking with a deadline, and every control socket has read
-and write timeouts. Both deadline tests fail with an unbounded child wait inserted
-before cleanup; the drain test fails with draining disabled. The status test still
-rejects an in-place-write mutation. Injecting a kill error fails the reaping test
-with error propagation and passes with unconditional wait; a missing connection
-fails by external timeout before the bounded accept fix. No retry wrapper or test
-ignore is used. Both crate manifests explicitly identify the existing windows-sys
-features used by these paths; Windows test-target compilation checks their uses.
+Prompt-Git retains elapsed-time bounds on collection itself, excluding producer
+setup and cleanup handshakes: the escaped-stdout case must return in less than
+500 ms and the owned-group case in less than 3 s. Hung and closed-stdout cases
+also require less than 500 ms. The separate 30 s watchdog does not replace these
+assertions. The native producer cannot complete until the parent releases its
+control channel after collection returns. Hung/closed cases require the Git
+timeout error, a terminated producer and no drain marker; the escaped case
+releases its holder only after the result. The deterministic clock test still
+rejects extra EOF grace. Accept is nonblocking with a deadline, and every control
+socket has read and write timeouts. The drain test rejects disabled draining;
+the status test rejects in-place writes. Collection captures errors before
+unconditional termination/reaping, including missing stdout, the initial poll,
+the deadline-loop poll and repeated cleanup-poll failure. Real-child fault tests
+assert exact poll counts, termination and ECHILD before test cleanup. Kill errors
+still cannot bypass the final wait. No retry wrapper or test ignore is used.
+Both crate manifests identify the existing windows-sys features used by these
+paths; Windows test-target compilation checks their uses, not native execution.
+Mutation checks confirm that returning a collection error before cleanup fails
+the poll-error regression, and inserting a four-second collection delay fails
+both restored kept-test bounds as well as the hung-producer bound.
 
 The no-delete-sharing publication finding remains open in
 `windows_write.rs:replace_status`: supporting an indefinitely retained incompatible
@@ -303,6 +311,10 @@ tests/test_split_make_public.py --run`: these are the fragment/docs, Rust-input
 and public-diff contracts relevant to this Rust-only lane, not the Python suite.
 
 ### Windows workstation acceptance (not executed on the Linux builder)
+
+The HIGH acceptance finding remains open as an L1 live step: complete 20 native
+workstation runs and the `rust-windows` job for the exact lane head, recording
+their run IDs and log paths. This build-only fix round supplies neither proof.
 
 Capture the native 20-run proof under an explicit run label; keep its log outside
 the repository and attach its path and run label to the workstation evidence:

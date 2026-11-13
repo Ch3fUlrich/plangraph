@@ -57,38 +57,76 @@ fn collect_diff(
 
 // Clock/sleep injection proves the EOF bound without scheduler-dependent timing.
 fn collect_diff_with_clock(
-    mut child: std::process::Child,
+    child: std::process::Child,
     cap: usize,
     timeout: Duration,
     now: impl Fn() -> Instant,
     sleep: impl Fn(Duration),
 ) -> Result<Vec<u8>, InlineDiffError> {
+    collect_diff_with_poll(
+        child,
+        cap,
+        timeout,
+        now,
+        sleep,
+        std::process::Child::try_wait,
+    )
+}
+
+fn collect_diff_with_poll(
+    mut child: std::process::Child,
+    cap: usize,
+    timeout: Duration,
+    now: impl Fn() -> Instant,
+    sleep: impl Fn(Duration),
+    mut poll: impl FnMut(&mut std::process::Child) -> std::io::Result<Option<std::process::ExitStatus>>,
+) -> Result<Vec<u8>, InlineDiffError> {
     let deadline = now() + timeout;
-    let mut stdout = child.stdout.take().ok_or(InlineDiffError::Git)?;
-    let (tx, rx) = mpsc::sync_channel(1);
-    let reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let result = stdout
-            .by_ref()
-            .take(cap.saturating_add(1) as u64)
-            .read_to_end(&mut bytes);
-        // Git for Windows may be a wrapper. Drain without retaining more bytes
-        // so its actual Git child can exit before the checkout is removed.
-        let result = result.and_then(|_| std::io::copy(&mut stdout, &mut std::io::sink()));
-        drop(stdout);
-        let _ = tx.send(result.map(|_| bytes));
-    });
-    let result = rx.recv_timeout(deadline.saturating_duration_since(now()));
-    let mut exited = child.try_wait().map_err(|_| InlineDiffError::Git)?;
-    let completed = result.is_ok()
-        && wait_before_deadline(deadline, now, sleep, || {
-            exited = child.try_wait()?;
-            Ok(exited.is_some() && reader.is_finished())
-        })
-        .map_err(|_| InlineDiffError::Git)?;
+    let mut exited = None;
+    // Capture every collection error before cleanup, including missing stdout
+    // and either try_wait observation. Child's Drop does not kill or reap it.
+    let collected = (|| {
+        let mut stdout = child.stdout.take().ok_or(InlineDiffError::Git)?;
+        let (tx, rx) = mpsc::sync_channel(1);
+        let reader = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let result = stdout
+                .by_ref()
+                .take(cap.saturating_add(1) as u64)
+                .read_to_end(&mut bytes);
+            // Git for Windows may be a wrapper. Drain without retaining more bytes
+            // so its actual Git child can exit before the checkout is removed.
+            let result = result.and_then(|_| std::io::copy(&mut stdout, &mut std::io::sink()));
+            drop(stdout);
+            let _ = tx.send(result.map(|_| bytes));
+        });
+        let result = rx.recv_timeout(deadline.saturating_duration_since(now()));
+        exited = poll(&mut child).map_err(|_| InlineDiffError::Git)?;
+        let completed = result.is_ok()
+            && wait_before_deadline(deadline, now, sleep, || {
+                exited = poll(&mut child)?;
+                Ok(exited.is_some() && reader.is_finished())
+            })
+            .map_err(|_| InlineDiffError::Git)?;
+        // An escaped descendant may still hold stdout. Detach on failure; do
+        // not wait for its EOF or grant another grace period after the deadline.
+        if !completed {
+            return Err(InlineDiffError::Git);
+        }
+        // is_finished makes this join nonblocking within the original budget.
+        reader.join().map_err(|_| InlineDiffError::Git)?;
+        let bytes = result
+            .map_err(|_| InlineDiffError::Git)?
+            .map_err(|_| InlineDiffError::Git)?;
+        if bytes.len() > cap {
+            return Err(InlineDiffError::TooLarge);
+        }
+        Ok(bytes)
+    })();
     let status = reap_after_kill(&mut child, |child| {
         // This group was created by this invocation; never signal a registry process.
-        if exited.is_none() && child.try_wait()?.is_none() {
+        // A failed cleanup poll is not evidence of exit: still terminate before wait.
+        if exited.is_none() && !matches!(poll(child), Ok(Some(_))) {
             #[cfg(unix)]
             unsafe {
                 libc::kill(-(child.id() as i32), libc::SIGKILL);
@@ -98,20 +136,7 @@ fn collect_diff_with_clock(
         Ok(())
     })
     .map_err(|_| InlineDiffError::Git)?;
-    // A descendant outside our owned group may still hold stdout. Never wait
-    // for its EOF on failure; the detached reader exits when that holder closes.
-    if !completed {
-        return Err(InlineDiffError::Git);
-    }
-    // is_finished above makes this a nonblocking join, within the same budget
-    // used for pipe draining and child exit, not an additional grace period.
-    reader.join().map_err(|_| InlineDiffError::Git)?;
-    let bytes = result
-        .map_err(|_| InlineDiffError::Git)?
-        .map_err(|_| InlineDiffError::Git)?;
-    if bytes.len() > cap {
-        return Err(InlineDiffError::TooLarge);
-    }
+    let bytes = collected?;
     if !status.success() {
         return Err(InlineDiffError::Git);
     }

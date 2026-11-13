@@ -213,7 +213,7 @@ fn check_external_diff_textconv_hooks_not_run(root: &Path) {
 #[cfg(unix)]
 #[test]
 fn timeout_owned_git_reaped() {
-    race::deadline_ends_wait("group", 1024);
+    assert!(race::deadline_ends_wait("group", 1024) < Duration::from_secs(3));
 }
 #[cfg(unix)]
 #[test]
@@ -322,7 +322,7 @@ fn non_utf8_0x9d_lossy_no_run_death() {
 #[cfg(unix)]
 #[test]
 fn timeout_escaped_stdout_holder_bounded() {
-    race::deadline_ends_wait("escaped", 1024);
+    assert!(race::deadline_ends_wait("escaped", 1024) < Duration::from_millis(500));
 }
 
 #[test]
