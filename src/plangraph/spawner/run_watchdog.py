@@ -11,7 +11,7 @@ import time
 from .run_cpu import cpu_seconds, proc_scan  # noqa: F401  re-exported for callers and tests
 from .prompt_input import checkout_env
 from .run_watchdog_limits import leg_limits, thresholds  # noqa: F401  re-exported for callers and tests
-from .gateway_witness import QUOTA_POLL_EVERY_S, QUOTA_POLL_IDLE_S, gateway_leg, poll_quota
+from .gateway_witness import QuotaWatch
 from .run_refusal import REFUSAL_MAX_FRAMES, REFUSAL_MAX_LINES, REFUSAL_WINDOW_S, RefusalGate  # noqa: F401  re-exported for callers and tests
 
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)')
@@ -329,16 +329,14 @@ async def collect(runner, job_id, proc):
     task = asyncio.create_task(output())
     refusal_wait = asyncio.ensure_future(refused.wait())
     waiters = [task, refusal_wait]
-    gateway_idle_check, last_poll = gateway_leg(getattr(job, 'model_or_combo', None), env), 0.0
+    quota = QuotaWatch(job, env)
     ticker = asyncio.ensure_future(gate.run())
     try:
         while not task.done():
             # Deadlines stay accurate even with the default 120s sample interval.
-            delay = min(limits['interval'], max(.001, job.start_time + w.budget() - time.time()))
+            delay = quota.delay(min(limits['interval'], max(.001, job.start_time + w.budget() - time.time())))
             if limits.get('hard_first_edit') and w.writer and not w.edited and w.edit_baseline_known and w.edit is not None:
                 delay = min(delay, max(.001, job.start_time + limits['first_edit_s'] - time.time()))
-            if gateway_idle_check:
-                delay = min(delay, QUOTA_POLL_EVERY_S)
             if w.writer and w.edit is None:
                 delay = min(delay, EDIT_RETRY_S)   # Q7: keep retrying a lost baseline
             done, _ = await asyncio.wait(waiters, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
@@ -366,17 +364,9 @@ async def collect(runner, job_id, proc):
                 break
             if task in done:
                 break
-            now = time.time()
-            if (gateway_idle_check and not refused.is_set() and now - last_poll >= QUOTA_POLL_EVERY_S
-                    and now - max(job.last_activity_ts or 0, job.start_time) >= QUOTA_POLL_IDLE_S):
-                # A quota refusal the harness never printed: read it from the gateway call log now,
-                # so the leg is booked down and the run falls through instead of stalling.
-                last_poll = now
-                line = await asyncio.to_thread(poll_quota, job_id, job, env)
-                if line:
-                    job.refusal = scrub(line)
-                    refused.set()
-                    continue
+            line = quota.check(job_id, job, env, refused) and await quota.poll(job_id, job, env)
+            if line:   # a refusal the harness never printed, read from the gateway call log
+                job.refusal = scrub(line); refused.set(); continue
             edit = (await asyncio.to_thread(edit_signature, job.cwd or runner.default_cwd)
                     if w.writer else None)
             now = time.time()

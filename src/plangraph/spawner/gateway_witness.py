@@ -258,12 +258,35 @@ def quota_refusal(rows, tag):
 
 def poll_quota(job_id, job, env, *, fetch=None):
     """Quota refusal text for a running gateway leg, or None; never raises."""
-    if not gateway_leg(job.model_or_combo, env):
+    if not gateway_leg(getattr(job, 'model_or_combo', None), env):
         return None
     try:
         return quota_refusal((fetch or fetch_rows)(session_tag(job_id), env), session_tag(job_id))
     except Exception:
         return None
+
+
+class QuotaWatch:
+    """Throttled call-log check for a gateway leg that has gone silent (used by the run watchdog)."""
+
+    def __init__(self, job, env):
+        self.on = gateway_leg(getattr(job, 'model_or_combo', None), env)
+        self.last = 0.0
+
+    def delay(self, delay):
+        return min(delay, QUOTA_POLL_EVERY_S) if self.on else delay
+
+    def check(self, job_id, job, env, refused):
+        now = time.time()
+        due = (self.on and not refused.is_set() and now - self.last >= QUOTA_POLL_EVERY_S
+               and now - max(job.last_activity_ts or 0, job.start_time) >= QUOTA_POLL_IDLE_S)
+        if due:
+            self.last = now
+        return due
+
+    async def poll(self, job_id, job, env):
+        import asyncio
+        return await asyncio.to_thread(poll_quota, job_id, job, env)
 
 
 def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):

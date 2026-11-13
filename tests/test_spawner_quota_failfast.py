@@ -61,9 +61,9 @@ def test_call_log_error_summary_is_quota_evidence():
 
 
 def test_silent_gateway_leg_ends_on_logged_quota_refusal_without_waiting_for_stall(tmp_path, monkeypatch):
-    monkeypatch.setattr('plangraph.spawner.run_watchdog.QUOTA_POLL_IDLE_S', 0)
-    monkeypatch.setattr('plangraph.spawner.run_watchdog.QUOTA_POLL_EVERY_S', .05)
-    monkeypatch.setattr('plangraph.spawner.run_watchdog.poll_quota', lambda *a, **k: THRESHOLD)
+    monkeypatch.setattr('plangraph.spawner.gateway_witness.QUOTA_POLL_IDLE_S', 0)
+    monkeypatch.setattr('plangraph.spawner.gateway_witness.QUOTA_POLL_EVERY_S', .05)
+    monkeypatch.setattr('plangraph.spawner.gateway_witness.poll_quota', lambda *a, **k: THRESHOLD)
     async def run():
         runner, job = _job(tmp_path, {'stall_min': 10, 'first_edit_min': 20, 'max_min': 30})
         job.model_or_combo = 'omniroute/gpt-6.1-sol'
