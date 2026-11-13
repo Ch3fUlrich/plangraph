@@ -224,7 +224,7 @@ admission refuses, only for repositories in the `public_repos` allowlist.
 Private or unknown repositories refuse without copying. Failed targets are
 excluded for that spawn; when none can accept, a `host_memory_floor` refusal records measured RAM and safe
 refusal reasons. Without overflow config, admitted local runs have no annotation;
-below-floor runs refuse immediately (exit 2). Opt-in `queue_memory_wait: true` waits on â‰¤5s timers and run exits until recorded `queued_until` (`queue_bound_s`, default 900), then `queue_timeout`; transient reads/writes retry, planning failures retain `queue_reason`, and findings/seats never wait. Dry runs do not overflow.
+below-floor runs refuse immediately (exit 2). Opt-in `queue_memory_wait: true` waits on ≤5s timers and run exits until recorded `queued_until` (`queue_bound_s`, default 900), then `queue_timeout`; transient reads/writes retry, planning failures retain `queue_reason`, and findings/seats never wait. Dry runs do not overflow.
 Local benchmark databases cannot be forwarded. CLI/MCP use public `admit_spawn` once in the shared wrapper, not the CLI parent; the service persists queued/remote records.
 Per-host `orchestration_only: true` in `hosts.json` (or the local overflow hosts entry; default false)
 makes implement/review/research remote-first: rank MemAvailable minus floor, then config order; no run-count caps.
@@ -565,9 +565,9 @@ Every candidate model $M$ must satisfy three hard gates:
 
 | Role | Trajectory Factor $\tau_{\text{role}}$ | Rationale |
 |---|---|---|
-| `implement` / `worker` | **1.5Ã—** | Multi-turn edit-test-debug loops generate significant cumulative context. |
-| `driver` / `orchestrate` | **1.3Ã—** | Task dispatch and supervision generate moderate multi-turn context. |
-| `review` / `reviewer` | **1.1Ã—** | Reviews read diffs and files with bounded conversation depth. |
+| `implement` / `worker` | **1.5×** | Multi-turn edit-test-debug loops generate significant cumulative context. |
+| `driver` / `orchestrate` | **1.3×** | Task dispatch and supervision generate moderate multi-turn context. |
+| `review` / `reviewer` | **1.1×** | Reviews read diffs and files with bounded conversation depth. |
 
 *Example*: At 70,000 tokens, Haiku (`price_cliff = 100000`) is rejected for workers ($70\text{k} \times 1.5 = 105\text{k} > 100\text{k}$) while safely admitted for reviewers ($70\text{k} \times 1.1 = 77\text{k} \le 100\text{k}$).
 
@@ -589,7 +589,7 @@ By decoupling $I_{\text{target}} > I_{\min}$, the intelligence ramp rewards mode
 
 | Risk Band | Min Floor $I_{\min}$ | Target Ramp $I_{\text{target}}$ | Cost Weight $\gamma_{\text{cost}}$ | Excess Weight $\beta_{\text{excess}}$ | Tie Equivalence $\epsilon$ | Reviewers |
 |---|---|---|---|---|---|---|
-| `low` | 37.5 | 41.0 | 15.0 | 0.2 | 0.5 | 0â€“1 |
+| `low` | 37.5 | 41.0 | 15.0 | 0.2 | 0.5 | 0–1 |
 | `normal` | 44.0 | 47.0 | 10.0 | 0.4 | 0.5 | 1 |
 | `high` | 46.0 | 50.0 | 4.0 | 0.6 | 0.3 | 2 |
 | `critical` | 50.0 | 54.0 | 4.0 | 0.6 | 0.3 | 2 |
@@ -644,7 +644,7 @@ Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can
 - Risk monotonicity uses `envelope_intelligence` as a best-effort envelope: candidates are filtered to intelligence at or above the best lower-band pick; when that leaves none, resolution falls back to the floor rules, so the envelope cannot be met in every case.
 - Tie-breaking uses an epsilon band with absolute utility thresholds of 0.5 and 0.3 utility points.
 - Stability is measured by tools/spawner_sensitivity.py over several seeds (key `stability_seeds` in docs/spawner-sensitivity.json); high/critical beta_excess 0.6 and critical gamma_cost 4.0 keep the intelligence +-1 pick flip rate <= 0.10 on every listed seed; the flips that remain at critical are the cost of the hard risk-monotone envelope (critical's intelligence floor is the best lower-band pick, a hard filter), and the strict monotone guarantee (1e-9) is kept.
-- The committed sensitivity artifact is `docs/spawner-sensitivity.json`. Regenerate it with `python3 tools/spawner_sensitivity.py --out docs/spawner-sensitivity.json --catalogs 200`. Flip-rate numbers are read from that file; do not invent numbers â€” see the file.
+- The committed sensitivity artifact is `docs/spawner-sensitivity.json`. Regenerate it with `python3 tools/spawner_sensitivity.py --out docs/spawner-sensitivity.json --catalogs 200`. Flip-rate numbers are read from that file; do not invent numbers — see the file.
 - The `cost_per_task_usd` field is the catalogued price in USD per task. Utility subtracts `cost_per_task_usd * gamma_cost` in utility points.
 - Absolute cost scale matters on purpose: a 10x price change may reorder near-ties inside the epsilon band because cost is real money. Outside the band the order follows utility at any cost scale (proved by `test_order_follows_utility_outside_epsilon_band_any_cost_scale`).
 - Speed-scale invariance (`test_speed_scale_invariance`) holds because speed is only a relative tie-break inside the band.
