@@ -34,6 +34,14 @@ def ids(legs):
 @pytest.mark.parametrize('role', ('implement', 'review'))
 @pytest.mark.parametrize('entry', ('raw', 'catalog-paid', 'catalog-free'))
 def test_subscription_boundary_survives_ranking(muse_legs, role, entry):
+    """Retain the original name and coverage with the explicit prefix exception."""
+    test_subscription_boundary_promotes_free_writer_prefix_only_for_implement(muse_legs, role, entry)
+
+
+@pytest.mark.parametrize('role', ('implement', 'review'))
+@pytest.mark.parametrize('entry', ('raw', 'catalog-paid', 'catalog-free'))
+def test_subscription_boundary_promotes_free_writer_prefix_only_for_implement(muse_legs, role, entry):
+    """Implement promotes the free writer-prefix Gemini; review keeps its slot."""
     legs = muse_legs
     if entry != 'raw':
         legs = review_order.catalog_tiers(legs, ({'id': AMBER_MODEL,
@@ -53,6 +61,14 @@ def test_subscription_boundary_survives_ranking(muse_legs, role, entry):
 @pytest.mark.parametrize('role', ('implement', 'review'))
 @pytest.mark.parametrize('tier', ('trial', 'free'))
 def test_payment_order_preserves_nonprefix_free_slots(muse_legs, role, tier):
+    """Retain the original name while explicitly covering both trial and free."""
+    test_trial_or_free_slot_keeps_position_unless_writer_prefix_leg(muse_legs, role, tier)
+
+
+@pytest.mark.parametrize('role', ('implement', 'review'))
+@pytest.mark.parametrize('tier', ('trial', 'free'))
+def test_trial_or_free_slot_keeps_position_unless_writer_prefix_leg(muse_legs, role, tier):
+    """Trial or free slots stay fixed unless the leg is in the writer prefix."""
     sol, gemini, sub, mimo, pool, amber, deepseek = muse_legs
     front = replace(gemini, id='ordinary-front', tier=tier)
     middle = replace(gemini, id='ordinary-middle', tier='free' if tier == 'trial' else 'trial')
@@ -69,27 +85,68 @@ def test_payment_order_preserves_nonprefix_free_slots(muse_legs, role, tier):
 @pytest.mark.parametrize('role', ('implement', 'review'))
 @pytest.mark.parametrize('repriced', (False, True))
 def test_implement_prefix_cannot_cross_subscription_boundary(muse_legs, role, repriced):
+    """Historical name retained: only the tail after the prefix has a barrier."""
     sol, gemini, sub, mimo, pool, amber, deepseek = muse_legs
     if repriced:
         sol, gemini = (replace(leg, tier='paid') for leg in (sol, gemini))
     legs = (deepseek, amber, sub, sol, gemini)
     result = review_order.payment_order(legs, role)
-    costs = [review_order.payment_tier(leg, role) for leg in result
+    if role == 'implement':
+        assert result == (sol, gemini, sub, amber, deepseek)
+    tail = result[2:] if role == 'implement' else result
+    costs = [review_order.payment_tier(leg, role) for leg in tail
              if review_order.payment_tier(leg, role) in ('subscription', 'paid')]
     assert costs == sorted(costs, key=('subscription', 'paid').index)
     assert ids(result).index(AMBER_ID) < ids(result).index(deepseek.id)
 
 
+@pytest.mark.parametrize('sol_tier', ('trial', 'free', 'subscription', 'paid'))
+@pytest.mark.parametrize('gemini_tier', ('trial', 'free', 'subscription', 'paid'))
+def test_trial_free_or_repriced_writer_prefix_moves_to_front(muse_legs, sol_tier, gemini_tier):
+    sol, gemini, sub, mimo, pool, amber, deepseek = muse_legs
+    legs = review_order.catalog_tiers((deepseek, amber, sub, gemini, sol), (
+        {'id': sol.model, 'tier': sol_tier},
+        {'provider_id': gemini.harness, 'upstream_id': gemini.model, 'tier': gemini_tier}))
+    assert (legs[-1].tier, legs[-2].tier) == (sol_tier, gemini_tier)
+    result = review_order.payment_order(legs, 'implement')
+    assert ids(result) == (sol.id, gemini.id, sub.id, AMBER_ID, deepseek.id)
+    assert review_order.payment_order(result, 'implement') == result
+
+
+@pytest.mark.parametrize('role', ('implement', 'review'))
+def test_nondesignated_paid_leg_never_precedes_subscription_class_leg(muse_legs, role):
+    sol, gemini, sub, mimo, pool, amber, deepseek = muse_legs
+    other = replace(pool, tier='paid')
+    sol, gemini = (replace(leg, tier='paid') for leg in (sol, gemini))
+    result = review_order.payment_order((other, gemini, deepseek, sub, amber, sol, mimo), role)
+    tail = result[2:] if role == 'implement' else result
+    assert tail[:2] == (sub, mimo)
+    assert tail.index(other) > tail.index(sub)
+    assert tail.index(other) > tail.index(mimo)
+
+
 @pytest.mark.parametrize('role', ('implement', 'review'))
 @pytest.mark.parametrize('tier', ('missing', None, 'unknown'))
-@pytest.mark.parametrize('id', ('legacy', 'cx-gpt-6.1-sol-xhigh'))
+@pytest.mark.parametrize('id', ('legacy', 'cx-gpt-6.1-sol-xhigh', None, 'missing'))
 def test_tierless_and_unknown_legs_stay_in_place(muse_legs, role, tier, id):
-    legacy = SimpleNamespace(id=id, **({} if tier == 'missing' else {'tier': tier}))
+    legacy = SimpleNamespace(**({} if id == 'missing' else {'id': id}),
+                             **({} if tier == 'missing' else {'tier': tier}))
     sub, amber, deepseek = muse_legs[3], *muse_legs[-2:]
     assert review_order.payment_tier(legacy, role) is None
     result = review_order.payment_order((deepseek, legacy, sub, amber), role)
     assert result == (sub, legacy, amber, deepseek)
     assert result[1] is legacy
+
+
+@pytest.mark.parametrize('role', ('implement', 'review'))
+@pytest.mark.parametrize('tier', ('trial', 'free', 'subscription', 'paid'))
+def test_idless_legs_keep_trial_free_slots_and_payment_boundary(muse_legs, role, tier):
+    legacy = SimpleNamespace(tier=tier)
+    sub, amber, deepseek = muse_legs[3], *muse_legs[-2:]
+    expected = ((legacy, sub, amber, deepseek) if tier == 'subscription' else
+                (sub, amber, deepseek, legacy) if tier == 'paid' else
+                (sub, legacy, amber, deepseek))
+    assert review_order.payment_order((deepseek, legacy, sub, amber), role) == expected
 
 
 @pytest.mark.parametrize('role', ('implement', 'review'))
@@ -105,7 +162,7 @@ def test_tierless_amber_has_a_defined_payment_class(muse_legs, role, tier):
 def test_paid_precedence_uses_exact_amber_identity(muse_legs, role):
     amber, deepseek = muse_legs[-2:]
     renamed = replace(amber, id='renamed', tier='paid')
-    exact = replace(amber, harness='agy', model='fixture/other', tier='free')
+    exact = replace(amber, harness='agy', model=muse_legs[1].model, tier='free')
     assert review_order.payment_tier(exact, role) == 'paid'
     assert review_order.payment_tier(replace(amber, id='renamed'), role) == 'subscription'
     assert review_order.payment_order((deepseek, renamed), role) == (deepseek, renamed)
@@ -115,7 +172,7 @@ def test_paid_precedence_uses_exact_amber_identity(muse_legs, role):
 @pytest.mark.parametrize('role', ('implement', 'review'))
 def test_subscription_walk_without_amber(muse_legs, role):
     deepseek, sub, mimo = muse_legs[-1], muse_legs[2], muse_legs[3]
-    other = replace(deepseek, id='other-paid', model='fixture/other', family='gpt')
+    other = replace(deepseek, id='other-paid', model=muse_legs[0].model, family='gpt')
     assert review_order.payment_order((deepseek, sub, other, mimo), role) == (
         sub, mimo, deepseek, other)
 
@@ -123,7 +180,7 @@ def test_subscription_walk_without_amber(muse_legs, role):
 @pytest.mark.parametrize('role', ('implement', 'review'))
 def test_paid_amber_precedes_deepseek(muse_legs, role):
     sub, amber, deepseek = muse_legs[3], *muse_legs[-2:]
-    other = replace(deepseek, id='other-paid', model='fixture/other', family='gpt')
+    other = replace(deepseek, id='other-paid', model=muse_legs[0].model, family='gpt')
     assert review_order.payment_order((deepseek, other, amber, sub), role) == (
         sub, amber, deepseek, other)
 
