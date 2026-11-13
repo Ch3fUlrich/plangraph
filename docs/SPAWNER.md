@@ -707,3 +707,5 @@ writer-family binding, Remote Control checks, and run-status watchdogs.
 RC startup waits use a monotonic deadline; the lesson-gate reference covers the bound.
 
 `wait()` gives a `pid_gone` status snapshot 0.5 seconds for the supervisor to persist its final outcome; caller timeouts still apply.
+
+The no-leg timer skips `queued` and `queue_claimed` runs; their queue watchdog owns the queue deadline.

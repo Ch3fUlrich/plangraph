@@ -8,10 +8,7 @@ fn expire(record: &mut Value, now: f64, bound: f64) -> Option<Value> {
         || !bound.is_finite()
         || bound <= 0.0
         || now < started + bound
-        || !matches!(
-            record["status"].as_str(),
-            Some("running" | "queued" | "queue_claimed")
-        )
+        || record["status"].as_str() != Some("running")
         || record["pid"].as_u64().is_some_and(|p| p > 0)
         || record["launched_leg"].is_object()
         || record["attempts"].as_array().is_some_and(|attempts| {
@@ -88,6 +85,18 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn std::io::Write) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn queue_watchdog_owns_waiting_runs() {
+        for status in ["queued", "queue_claimed"] {
+            for deadline in [900, 1800] {
+                let mut run = json!({"status":status,"started":1,"queued_until":deadline});
+                let before = run.clone();
+                assert!(expire(&mut run, 701.0, 600.0).is_none());
+                assert!(expire(&mut run, 2000.0, 600.0).is_none());
+                assert_eq!(run, before);
+            }
+        }
+    }
     #[test]
     fn timer_persists_state_and_does_not_repeat_consumed_notice() {
         let root = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
