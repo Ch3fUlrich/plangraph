@@ -40,6 +40,22 @@ plan, saved `chosen_leg`, and attempt rows; omitted or explicit `null` effort
 stays `null`. All other validated leg fields are retained too. The per-run
 renderer declares cx effort models; see [SPAWNER.md](SPAWNER.md#card-driven-routing-core).
 
+## Opt-in order core (D-5696/D-5706)
+
+`payment_order(..., order_class="standard"|"high"|"complex")` selects catalog
+positions after registered role filtering; it never grants roles or capabilities.
+Implement has only Sol xhigh, Hydrogen high and non-Claude-Code Sonnet high.
+Review excludes writer families, requires diff <100k for Haiku, and needs opposing
+eligible cheaper verdicts for Ember. MiMo and both DeepSeek review legs register
+medium effort; Haiku registers xhigh. Non-table registrations are dropped; table
+identities with legacy models are refused. Six unknown-capability declarations
+are explicit-only, permanently disabled and role-less; JSON overrides may not
+omit windows, max_request_tokens or trains_on_data even when disabled.
+Live default activation and admission migration belong to LIVE-FENCE, not this core.
+No benchmark evidence is invented: the frozen pending contract still names null
+effort for these five legs and rejects their corrected effort identities. Resolving
+that evidence debt requires authoritative benchmark rows, not a larger waiver.
+
 ## Replan-0438 CI reconciliation
 
 All existing test names and #763 checks remain. The lane diff was searched for

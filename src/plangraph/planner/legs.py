@@ -54,8 +54,8 @@ class Leg:
     model: str
     family: str
     windows: tuple[str, ...]
-    max_request_tokens: int
-    trains_on_data: bool
+    max_request_tokens: int | None
+    trains_on_data: bool | None
     claude_family: bool = False
     note: str = ""
     roles: tuple[str, ...] = ("orchestrate",)
@@ -116,10 +116,10 @@ DEFAULT_LEGS = (
         "glm", ("128k",), 100000, True, roles=("implement", "review")),
     Leg("agy-gpt-oss-120b", "subscription", "agy", "gpt-oss-120b-medium",
         "openai", ("128k",), 100000, False, roles=("review",)),
-    _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),
+    _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only", effort="medium"),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False,
-        roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
+        roles=("implement", "review", "orchestrate"), tool_mode="inline-only", effort="medium"),
     _replace(_legacy["agy-sonnet-5.5"], roles=("orchestrate", "review")),
     Leg("agy-claude-opus", "subscription", "agy", "claude-opus-4-6-thinking",
         "claude", ("128k", "256k"), 180000, False, claude_family=True, roles=("review",)),
@@ -127,7 +127,7 @@ DEFAULT_LEGS = (
         "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
         roles=("review",)),
     Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-flash",
-        "deepseek", ("128k",), 100000, False, roles=("implement", "review", "orchestrate")),
+        "deepseek", ("128k",), 100000, False, roles=("implement", "review", "orchestrate"), effort="medium"),
     Leg("omniroute-muse-spark", "subscription", "opencode",
         "omniroute/muse-spark-1.3-contributor", "muse", ("128k",), 100000, False,
         roles=("implement", "review", "orchestrate")),
@@ -156,7 +156,7 @@ DEFAULT_LEGS = (
         note="D-4280: explicit audited selection; scrubbed or public material only"),
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
-        False, roles=("review",)),
+        False, roles=("review",), effort="medium"),
     Leg("omniroute-gemini-3.8-flash", "subscription", "opencode",
         "omniroute/gemini-3.8-flash", "gemini", ("128k",), 100000, True,
         roles=("review",),
@@ -165,7 +165,7 @@ DEFAULT_LEGS = (
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
-        tool_mode="prompt-only",
+        tool_mode="prompt-only", effort="xhigh",
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
@@ -194,7 +194,7 @@ LEAD_WRITER = WRITER_ORDER[0]
 EXPLICIT_LEGS: tuple[Leg, ...] = (
     *(Leg(f"agy-claude-{m}-5-5-{e}", "subscription", "agy", f"claude-{m}-5-5-{e}",
           "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
-          roles=("review", "implement"), note="operator 2026-11-09: Antigravity quota")
+          roles=("review", "implement"), effort=e, note="operator 2026-11-09: Antigravity quota")
       for m in ("sonnet", "opus") for e in ("low", "medium", "high")),
     *(Leg(f"agy-gemini-3.8-flash-{e}", "subscription", "agy", f"gemini-3.8-flash-{e}",
           "gemini", ("128k", "256k", "1m"), 900000, False, roles=("review",))
@@ -217,6 +217,20 @@ READINESS_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
     leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)
+
+# Order-only declarations: unknown capabilities stay disabled and role-less.
+# JSON overrides still require all capability fields, even for declarations.
+EXPLICIT_LEGS += tuple(
+    Leg(id, 'subscription', harness, model, family, (), None, None,
+        claude_family=family == 'claude', roles=(), effort=effort,
+        disabled='D-5696: capability evidence required')
+    for id, harness, model, family, effort in (
+        ('agy-gemini-4-hydrogen-high', 'agy', 'gemini-4-hydrogen-high', 'gemini', 'high'),
+        ('agy-gemini-4-hydrogen-medium', 'agy', 'gemini-4-hydrogen-medium', 'gemini', 'medium'),
+        ('cx-gpt-6.1-terra-medium', 'opencode', 'omniroute/cx-gpt-6.1-terra-medium', 'gpt', 'medium'),
+        ('cx-gpt-6.1-terra-xhigh', 'opencode', 'omniroute/cx-gpt-6.1-terra-xhigh', 'gpt', 'xhigh'),
+        ('muse-ember-max', 'opencode', 'omniroute/muse-ember-max', 'muse', 'max'),
+        ('claude-fable-5.2-high', 'claude', 'claude-fable-5-2', 'claude', 'high')))
 
 
 def spawnable_legs() -> tuple[Leg, ...]:
