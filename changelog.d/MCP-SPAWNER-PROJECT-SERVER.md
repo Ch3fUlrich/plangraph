@@ -1,0 +1,1 @@
+- Declare and enable the project-local plangraph-spawner stdio MCP server alongside unchanged Omnigraph, loading the gateway log token at launch without storing secrets.

@@ -8,6 +8,14 @@
         "OMNIGRAPH_TOKEN": "${OMNIGRAPH_TOKEN}",
         "OMNIGRAPH_GRAPH_ID": "plangraph"
       }
+    },
+    "plangraph-spawner": {
+      "type": "stdio",
+      "command": "sh",
+      "args": ["-c", "k=\"$HOME/.config/plangraph/omniroute-mgmt.key\"; [ -r \"$k\" ] || echo \"plangraph spawner: gateway log key unreadable: $k\" >&2; export PLANGRAPH_GATEWAY_LOG_TOKEN=\"$(cat \"$k\" 2>/dev/null)\"; exec python3 -m plangraph.spawner.mcp"],
+      "env": {
+        "PYTHONPATH": "src"
+      }
     }
   }
 }
