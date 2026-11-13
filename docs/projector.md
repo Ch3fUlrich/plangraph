@@ -25,12 +25,13 @@ Language: Python (`temporalio` SDK, optional import; the keeper never imports it
   never sets `cancelled`, that is the keeper verb); `quarantined` -> `failed`. The specific word travels in the extra result
   field `detail` (ignored by the projector).
 * Activity type name is exactly `attempt` (activity name override; the other activities are
-  `CardActivities::tick|probe|merge|report|park|complete|alarm|janitor|gate|ask_question|record_question_timeout`). `attempt` is scheduled with `maximum_attempts=1`.
+  `observe` and `CardActivities::tick|probe|merge|report|park|complete|alarm|janitor|gate|ask_question|record_question_timeout`). `attempt` is scheduled with `maximum_attempts=1`.
 * Attempt result carries `exit_class` (always one of `EXIT_CLASSES`; worker `ExitClass` serialises to the same snake_case
   names) plus `harness` (harness name), `model` (leg model), `combo` (leg id), `class` (context window class `128k|256k|1m`),
   `started_at`/`ended_at` (ISO 8601 UTC, millisecond, `Z`). `tokens_in`/`tokens_out`/`cost`/`log_ref` are omitted until the
   harness reports them (the projector treats absent as NULL).
 * Plan key: the starter sets memo `plan_key`, or uses workflow id `card:<key>` (the worker's e2e uses the id form).
+* Patch `projector-run-ids-v1` adds `workflow_id`, `run_id` and `attempt` to scheduled attempt inputs; replay without the patch preserves legacy JSON.
 * A signal-cancelled attempt: the workflow returns `parked` right after the cancel request, so the cancelled activity may not
   close inside the history and then yields no AttemptRec (see Refinements).
 * Fixtures and the CI test: `rust/worker/tests/fixtures/projector/*.json` are `temporal workflow show --output json` captures
@@ -134,7 +135,7 @@ Writes go through the keeper `Store` (`record_attempt`, `set_state`) with a `sys
   no open workflow, grace 15 min), `watermark_stale` (global watermark older than 30 min while workflows are open). Alarms
   dedupe on (kind, workflow_id, key) while open and clear themselves when the condition is gone.
   A sixth kind, `unknown_shape`, is raised by `apply` (not by the reconcile pass, which never clears it): an activity type
-  outside `KNOWN_ACTIVITY_TYPES` (`attempt` and `CardActivities::tick|probe|merge|report|park|complete|alarm|janitor|ask_question|record_question_timeout`), an
+  outside `KNOWN_ACTIVITY_TYPES` (`attempt`, `observe` and `CardActivities::tick|probe|merge|report|park|complete|alarm|janitor|ask_question|record_question_timeout`), an
   attempt result payload that is not a JSON object, or a completed attempt with a void result (no `exit_class`). One open row
   per (workflow_id, run_id, activity_id): `key = <run_id>:<activity_id>`, so repeated applies are no-ops. Kind is free text, no
   migration. A completed result that is a JSON object without `exit_class` keeps the documented default `ok` and raises

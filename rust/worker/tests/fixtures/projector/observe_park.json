@@ -1,0 +1,10 @@
+{"events":[
+  {"eventId":"1","eventType":"EVENT_TYPE_WORKFLOW_EXECUTION_STARTED","workflowExecutionStartedEventAttributes":{"workflowType":{"name":"Card"}}},
+  {"eventId":"2","eventType":"EVENT_TYPE_ACTIVITY_TASK_SCHEDULED","activityTaskScheduledEventAttributes":{"activityId":"attempt-1","activityType":{"name":"attempt"},"input":{"payloads":[{"metadata":{"encoding":"anNvbi9wbGFpbg=="},"data":"eyJuIjozfQ=="}]}}},
+  {"eventId":"3","eventType":"EVENT_TYPE_ACTIVITY_TASK_COMPLETED","activityTaskCompletedEventAttributes":{"scheduledEventId":"2","result":{"payloads":[{"metadata":{"encoding":"anNvbi9wbGFpbg=="},"data_json":{"exit_class":"needs_input"}}]}}},
+  {"eventId":"4","eventType":"EVENT_TYPE_ACTIVITY_TASK_SCHEDULED","activityTaskScheduledEventAttributes":{"activityId":"question","activityType":{"name":"CardActivities::ask_question"}}},
+  {"eventId":"5","eventType":"EVENT_TYPE_ACTIVITY_TASK_SCHEDULED","activityTaskScheduledEventAttributes":{"activityId":"observe","activityType":{"name":"observe"}}},
+  {"eventId":"6","eventType":"EVENT_TYPE_ACTIVITY_TASK_COMPLETED","activityTaskCompletedEventAttributes":{"scheduledEventId":"5","result":{"payloads":[{"metadata":{"encoding":"anNvbi9wbGFpbg=="},"data_json":"needs_input"}]}}},
+  {"eventId":"7","eventType":"EVENT_TYPE_ACTIVITY_TASK_SCHEDULED","activityTaskScheduledEventAttributes":{"activityId":"park","activityType":{"name":"CardActivities::park"}}},
+  {"eventId":"8","eventType":"EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED","workflowExecutionCompletedEventAttributes":{"result":{"payloads":[{"metadata":{"encoding":"anNvbi9wbGFpbg=="},"data_json":{"outcome":"parked"}}]}}}
+]}

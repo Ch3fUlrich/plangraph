@@ -298,7 +298,7 @@ impl Card {
                 class: context_class_name(context).to_string(),
                 answers: answers.clone(),
             };
-
+            let attempt_input = crate::card_input::projector_input(ctx, attempt_input);
             let result: AttemptResult = match ctx
                 .execute_activity(CardActivities::attempt, attempt_input, opts)
                 .await
