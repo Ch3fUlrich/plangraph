@@ -103,6 +103,14 @@ Seat records bind manual `tools/seat_verdict.py --key` posting to their recorded
 The `evidence.json` path applies the same refusal to every supplied `item_key` or `key`, including explicit nulls and conflicting aliases; evidence without either identity field retains the legacy manual path. Reviewer tokens belong to the seat's model family, not the `--writer-family` being reviewed.
 When evidence and a record coexist, the record's `item_key` remains binding even if evidence omits or replaces it; an unreadable or malformed companion record is refused. The record identity check also runs independently of evidence derivation on the record-only path. `--key` is required for all manual invocations, including legacy records; omitting it exits 2 before seat/token reads or network I/O.
 
+Record-derived finish evidence uses a nonempty string from `record.finish_reason`
+first, then `completion.finish_reason`, then the last `opencode_step_finish` in
+`events[]`. Only recorded values count: an absent or unusable reason on that last
+finish event stays unset, never falling back to an earlier event. Malformed event
+entries and non-list event collections do not raise. PASS still requires `stop`
+or `end_turn` and `TEST_GAMING: no`; the hermetic posting regressions live in
+`tests/test_seat_record_finish.py` (D-5624).
+
 Historical seat discovery uses `python3 tools/seat_verdict.py --snapshot plan.snapshot.json --records-dir RECORDS` (equivalently, `--backfill-dry-run`). It is local and read-only by default; `--format json` emits structured outcomes, and `--pr-cache CACHE` supplies evidenced-commit-to-PR mappings without network access. Keeper writes require `--backfill-apply --url URL --token-dir TOKENS`; only apply may enable network PR lookup with `--pr-lookup-gh`. Backfill retains the existing verdict parser, exact-head binding, independent reviewer family and PASS safety gates. It shares the spawner's locked `verdict.json` / `verdict.delivered` outbox, so completed or ambiguous sends are never blindly replayed, including when the forward path already handled the record. A nonzero verifier result is terminal for automatic backfill replay; reconcile an ambiguous delivery before any operator-authorized retry. See [the historical backfill diagnosis](docs/seat-verdict-backfill-diagnosis.md) for the original observations; Slice A has since supplied the forward completion bridge.
 
 Batch orchestration and guarded outbox delivery live in `tools/seat_backfill.py`,
