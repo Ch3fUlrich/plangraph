@@ -261,7 +261,7 @@ relative, missing, non-checkout and conflicting flag/card paths are refused.
 Without either, the caller's cwd is unchanged. The selected path is recorded in
 `record.cwd` and passed to the runner; `completion.head_sha` is that checkout's
 HEAD at completion, not at launch. `seat_verdict --head` must still match it.
-Explicit cwd takes precedence over `diff_ref.repo` for placement; overflow maps card/flag cwd to the host repo, and run worktrees use the selected repo. Cwd must be a checkout root with a committed HEAD; validation ignores Git repository redirects and runs off the async loop.
+Explicit cwd takes precedence over `diff_ref.repo` for placement; explicit-cwd runs never overflow to a different checkout (below-floor runs queue). SSH overflow requires both the selected repo and any `diff_ref.repo` to pass the public allowlist. Run worktrees retain `selected_cwd` for fresh attempts and fixer continuations even after the parent's attempt is pruned. Cwd must be a checkout root with a committed HEAD; validation and watchdog HEAD lookup ignore Git repository redirects, and validation runs off the async loop.
 `--dry-run` plans without a child. Spawn returns a `wait_cmd`:
 `plangraph-spawn wait RUN_ID --timeout SECONDS` (omit timeout to block indefinitely).
 Never use `pgrep -f` wait loops, including in writer/seat briefs: they can match

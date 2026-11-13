@@ -154,6 +154,7 @@ class SpawnService(SeatSpawnMixin):
             return
         child = dict(run_id='run-' + uuid.uuid4().hex, parent_run_id=record['run_id'],
                      continuation=1, role='implement', cwd=None if record.get('run_worktree') else record['cwd'],
+                     selected_cwd=record.get('selected_cwd', record['cwd']),
                      chosen_leg=record['chosen_leg'], started=time.time(), ended=None,
                      status='running', exit_code=None, gaps=gaps)
         record['continuation_run_id'] = child['run_id']
@@ -162,7 +163,7 @@ class SpawnService(SeatSpawnMixin):
         self._save(child)
         try:
             chosen = child['chosen_leg']
-            worktree = await prepare_worktree(self, child, {'lane_branch': (record.get('run_worktree') or {}).get('branch')}, bool(record.get('run_worktree')), continuation=True, repo=record['cwd'])
+            worktree = await prepare_worktree(self, child, {'lane_branch': (record.get('run_worktree') or {}).get('branch')}, bool(record.get('run_worktree')), continuation=True, repo=child['selected_cwd'])
             job = await self.runner.spawn(prompt=render_fixer_brief([{'text': g} for g in gaps]),
                 model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=worktree.get('cwd', child['cwd']), wake_variant='fixer',  # REMOVE-AT-R10
                 prompt_record=(self._path(child['run_id']).with_name('prompt.txt'), child, self._save))  # REMOVE-AT-R10

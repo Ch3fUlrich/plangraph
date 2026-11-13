@@ -46,7 +46,7 @@ def admit(service, options, *, card=None, preview=False):
     repo = Path(options.get('cwd') or (card or {}).get('cwd') or
                 ((card or {}).get('diff_ref') or {}).get('repo') or
                 getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
-    public = str(repo) in [str(Path(p).expanduser().resolve()) for p in config.get('public_repos', [])]
+    public = overflow.repos_public(config, repo, (card or {}).get('diff_ref'))
     benchmark_local = remote_first and options.get('benchmark') is not None
     if benchmark_local:
         public = False  # A local-only database makes every remote ineligible.

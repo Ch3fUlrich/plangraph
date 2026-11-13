@@ -236,8 +236,18 @@ def local_health_refusal(config, memory):
     return None
 
 
+def repos_public(config, repo, diff=None):
+    """Every repository contributing checkout or diff context must be public."""
+    allowed = {Path(p).expanduser().resolve() for p in config.get('public_repos', [])}
+    return all(Path(p).expanduser().resolve() in allowed
+               for p in [repo, *([diff['repo']] if diff else [])])
+
+
 def remote_spawn(name, host, card, prompt, options):
     """Use private staging, quote every remote argument, never echo SSH stderr."""
+    options = list(options)
+    if 'cwd' in card or any(v == '--cwd' or v.startswith('--cwd=') for v in options):
+        raise RemoteRefusal('explicit cwd cannot overflow to another checkout')
     alias = host['ssh']
     def ssh(command):
         return subprocess.run(['ssh', '--', alias, command], capture_output=True, text=True,
@@ -252,16 +262,6 @@ def remote_spawn(name, host, card, prompt, options):
     try:
         with tempfile.TemporaryDirectory() as local:
             rewritten = json.loads(json.dumps(card))
-            options = list(options)
-            if 'cwd' in rewritten or '--cwd' in options or any(v.startswith('--cwd=') for v in options):
-                rewritten['cwd'] = host['repo']
-                for index, option in enumerate(options):
-                    if option == '--cwd':
-                        options[index + 1] = host['repo']
-                    elif option.startswith('--cwd='):
-                        options[index] = '--cwd=' + host['repo']
-                if not any(v == '--cwd' or v.startswith('--cwd=') for v in options):
-                    options.extend(['--cwd', host['repo']])
             diff = rewritten.get('diff_ref')
             if diff:
                 diff['repo'] = host['repo']
@@ -342,8 +342,8 @@ def main(argv=None):
         from .prompt_input import resolve_cwd
         cwd = resolve_cwd(args.cwd, card)
         repo = Path(cwd or args.repo).resolve()
-        public = str(repo) in [str(Path(p).expanduser().resolve()) for p in config.get('public_repos', [])]
         diff = card.get('diff_ref')
+        public = repos_public(config, repo, diff)
         if not cwd and diff and Path(diff['repo']).resolve() != repo:
             public = False
         prompt = Path(args.prompt).read_text()

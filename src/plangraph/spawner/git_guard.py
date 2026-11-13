@@ -115,7 +115,8 @@ async def prepare_worktree(service, record, card, enabled, *, continuation=False
         return {}
     import asyncio
     from plangraph.settings import _policy_data
-    repo = repo or record.get('cwd') or getattr(service.runner, 'default_cwd', None) or os.getcwd()
+    repo = repo or record.get('selected_cwd') or record.get('cwd') or getattr(service.runner, 'default_cwd', None) or os.getcwd()
+    record.setdefault('selected_cwd', str(repo))
     config = _policy_data(repo) or {}
     root = config.get('worktree_root') or service.state / 'worktrees'
     previous = record.get('run_worktree')

@@ -5,9 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import shlex
 import threading
-from types import SimpleNamespace
 
 import pytest
 
@@ -230,31 +228,20 @@ def test_overflow_keeps_explicit_cwd(checkouts, tmp_path, monkeypatch, source, d
     monkeypatch.setattr(overflow, 'ready_records', lambda *a: {'remote': dict(
         ssh='remote', ok=True, fresh=True, live_runs=0,
         mem_available_mb=100000, role_mb=2048, floor_mb=3000)})
-    staged, commands = [], []
-    def transport(argv, **kwargs):
-        output = '/invented-stage'
-        if argv[0] == 'scp':
-            staged.append(json.loads(Path(argv[2]).read_text()))
-        elif 'plangraph.spawner.cli' in argv[-1]:
-            commands.append(shlex.split(argv[-1]))
-            markers = [v for v in commands[-1] if v.startswith('PLANGRAPH_RECEIPT_')]
-            output = '\n'.join([markers[0], '{"run_id":"run-remote","status":"running"}', markers[1]])
-        return SimpleNamespace(returncode=0, stdout=output)
-    monkeypatch.setattr(overflow.subprocess, 'run', transport)
+    monkeypatch.setattr(overflow.subprocess, 'run', lambda *a, **kw: pytest.fail('explicit cwd left host'))
     service = spawn_service(SpawnerRunner(default_cwd=str(caller)), state=tmp_path / 'state')
     card = {'cwd': str(reviewed)} if source in ('card', 'both') else {}
     if different_diff:
         card['diff_ref'] = dict(repo=str(caller), base='abc', head='def')
     original = json.loads(json.dumps(card))
     if source == 'equals':
-        result = overflow.remote_spawn('remote', host, card, 'Review', ['--cwd=' + str(reviewed)])
+        with pytest.raises(overflow.RemoteRefusal, match='explicit cwd'):
+            overflow.remote_spawn('remote', host, card, 'Review', ['--cwd=' + str(reviewed)])
     else:
         result = service.admit_spawn({'cwd': str(reviewed)} if source != 'card' else {}, card=card)
-        assert result['overflow_remote']
-    command = commands[0]
-    forwarded = (command[command.index('--cwd') + 1] if '--cwd' in command else
-                 next(v.removeprefix('--cwd=') for v in command if v.startswith('--cwd=')))
-    assert forwarded == staged[0]['cwd'] == host['repo']
+        assert result['status'] == 'queued' and result['exit_code'] == 5
+        assert not result.get('overflow_remote')
+        assert service.result(result['run_id']) == result
     assert card == original
 
 
@@ -282,6 +269,15 @@ def test_completion_ignores_git_redirects(checkouts, monkeypatch):
     monkeypatch.setenv('GIT_WORK_TREE', str(caller))
     event = notify.completion_event(dict(run_id='run-test', status='completed', exit_code=0), reviewed)
     assert event['head_sha'] == expected
+
+
+def test_watchdog_head_ignores_git_redirects(checkouts, monkeypatch):
+    from plangraph.spawner.run_watchdog import edit_signature
+    caller, reviewed = checkouts
+    expected = git(reviewed, 'rev-parse', 'HEAD').encode()
+    monkeypatch.setenv('GIT_DIR', str(caller / '.git'))
+    monkeypatch.setenv('GIT_WORK_TREE', str(caller))
+    assert edit_signature(reviewed)[1].strip() == expected
 
 
 def test_worktree_git_ignores_redirects(checkouts, tmp_path, monkeypatch):
@@ -328,10 +324,13 @@ def test_run_worktree_uses_selected_checkout(service, checkouts, capsys, monkeyp
         return JobInfo('fixer', 'completed', kwargs['prompt'], 'test', exit_code=0)
     monkeypatch.setattr(service.runner, 'spawn', spawn)
     record['role'] = 'implement'
+    git(reviewed, 'worktree', 'remove', record['cwd'])
+    assert not Path(record['cwd']).exists()
     asyncio.run(service._continue_writer(record, 'Remaining gaps: finish the test'))
     child = service.result(record['continuation_run_id'])
     assert child['status'] == 'completed', child.get('error')
     assert child['cwd'] != record['cwd']
+    assert record['selected_cwd'] == child['selected_cwd'] == str(reviewed)
     assert child['run_worktree']['base_sha'] == record['completion']['head_sha']
 
 
