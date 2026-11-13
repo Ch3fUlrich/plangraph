@@ -20,10 +20,27 @@ TIER_RUNG: dict[str, int] = {
     "paid": 4,
 }
 
-# Trimmed D-5696 order-core identities; shared with every live admission fence.
+# D-5696/D-5706 opt-in order inputs, not live admission or capability evidence.
 LEGACY_ROUTE_REPLACEMENTS = {
     'gemini-3.8-flash': 'gemini-4-hydrogen', 'gpt-6-luna': 'gpt-6.1-terra',
 }
+OPERATOR_ROUTE_ORDERS = {
+    'implement': ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high', 'agy-claude-sonnet-5-5-high'),
+    'review': {
+        'standard': ('mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash',
+                     'claude-haiku-5.5', 'muse-ember-max', 'omniroute-deepseek-flash'),
+        'high': ('cx-gpt-6.1-sol-medium', 'cx-gpt-6.1-terra-medium', 'agy-gemini-4-hydrogen-medium',
+                 'mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash',
+                 'claude-haiku-5.5', 'muse-ember-max', 'omniroute-deepseek-flash'),
+        'complex': ('cx-gpt-6.1-sol-xhigh', 'cx-gpt-6.1-terra-xhigh', 'agy-gemini-4-hydrogen-high',
+                    'mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash',
+                    'claude-haiku-5.5', 'muse-ember-max', 'omniroute-deepseek-flash'),
+    },
+    'planning': ('claude-fable-5.2-high',),
+}
+OPERATOR_REVIEW_CHEAP_LEGS = ('mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash',
+                             'mimo-v2.6-flash', 'claude-haiku-5.5')
+IMPLEMENT_SONNET_REFUSAL = 'D-5712: claude_code_subscription_forbidden_for_implement'
 
 SEED_QUOTA_POOLS: list[dict[str, Any]] = [
     {
