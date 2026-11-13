@@ -109,13 +109,23 @@ def create(root, repo, lane_branch, continuation=False, *, finished_dependencies
         return dict(path=str(path), branch=lane_branch, base_sha=base)
 
 
+def selected_checkout(service, record):
+    """Recover the pre-worktree default for legacy attempt records, even if pruned."""
+    cwd = record.get('cwd')
+    attempt = (record.get('run_worktree') or {}).get('path')
+    if cwd and attempt and Path(cwd).resolve() == Path(attempt).resolve():
+        cwd = None
+    return record.setdefault('selected_cwd', str(
+        cwd or getattr(service.runner, 'default_cwd', None) or os.getcwd()))
+
+
 async def prepare_worktree(service, record, card, enabled, *, continuation=False, repo=None):
     """Persist creation evidence before launch; off/dry-run callers do no Git I/O."""
     if not enabled:
         return {}
     import asyncio
     from plangraph.settings import _policy_data
-    repo = repo or record.get('selected_cwd') or record.get('cwd') or getattr(service.runner, 'default_cwd', None) or os.getcwd()
+    repo = repo or selected_checkout(service, record)
     record.setdefault('selected_cwd', str(repo))
     config = _policy_data(repo) or {}
     root = config.get('worktree_root') or service.state / 'worktrees'
@@ -146,7 +156,7 @@ DANGEROUS = re.compile(
 
 def _list(path):
     result = subprocess.run(['git', 'config', '--file', str(path), '--no-includes',
-                             '--list', '-z'], capture_output=True, check=True)
+                             '--list', '-z'], capture_output=True, check=True, env=checkout_env())
     values = {}
     for item in result.stdout.decode('utf-8', errors='surrogateescape').split('\0'):
         if item:
@@ -197,12 +207,12 @@ def check_guard(guard, job):
     for key in offending:
         try:
             result = subprocess.run(['git', 'config', '--file', str(path), '--unset-all', key],
-                                    capture_output=True)
+                                    capture_output=True, env=checkout_env())
             if result.returncode not in (0, 5):
                 raise ValueError('unset failed')
             for value in baseline.get(key, []):
                 subprocess.run(['git', 'config', '--file', str(path), '--add', key, value],
-                               capture_output=True, check=True)
+                               capture_output=True, check=True, env=checkout_env())
         except (OSError, ValueError, subprocess.SubprocessError):
             job.events.append({'event': 'git_config_warning',
                                'reason': 'config_unset_failed', 'keys': [key]})

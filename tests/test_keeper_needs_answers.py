@@ -103,7 +103,8 @@ def w(tmp_path):
     world = World(tmp_path)
     world.store.create_items(world.p("router"), [
         defn("Q", kind="question", operator=None, project="demo"),
-        defn("Q2", kind="decision", operator=None, project="demo"),
+        defn("Q2", kind="decision", operator=None, project="demo",
+             description="Why: choose\nHow: answer"),
         defn("T", kind="operator_task", operator=None, project="demo"),
         defn("L"), defn("OTHER", project="other"),
         defn("WORK", ["Q"]),

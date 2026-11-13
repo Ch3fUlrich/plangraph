@@ -56,7 +56,7 @@ def admit(service, options, *, card=None, preview=False):
                 if name != local and overflow.host_config(registry, name).get('id') != local}
     health = overflow.local_health_refusal(config, memory) if remote_first else None
     flags = []
-    for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope', 'cwd'):
+    for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope'):
         if options.get(key) is not None:
             flags.extend(('--' + key.replace('_', '-'), str(options[key])))
     for family in options.get('writer_families', ()):
@@ -88,6 +88,8 @@ def admit(service, options, *, card=None, preview=False):
             break
         name = decision.host
         try:
+            if options.get('cwd') is not None or 'cwd' in (card or {}):
+                raise overflow.RemoteRefusal('explicit cwd cannot overflow to another checkout')
             result = overflow.remote_spawn(name, config['hosts'][name], card or {},
                                            options.get('prompt', ''), flags)
             refusal = 'remote spawn failed'

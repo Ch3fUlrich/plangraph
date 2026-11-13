@@ -16,6 +16,7 @@ from typing import NamedTuple
 
 from plangraph.keeper.credential_guard import mask
 from plangraph.fleet_sync.genconfig import config_dir
+from plangraph.routing_errors import ParameterRefused
 
 from . import cli
 from .private_io import atomic_write_private
@@ -238,9 +239,11 @@ def local_health_refusal(config, memory):
 
 def repos_public(config, repo, diff=None):
     """Every repository contributing checkout or diff context must be public."""
+    if diff is not None and not diff.get('repo'):
+        raise ParameterRefused('diff_ref requires repo')
     allowed = {Path(p).expanduser().resolve() for p in config.get('public_repos', [])}
     return all(Path(p).expanduser().resolve() in allowed
-               for p in [repo, *([diff['repo']] if diff else [])])
+               for p in [repo, *([diff.get('repo')] if diff is not None else [])])
 
 
 def remote_spawn(name, host, card, prompt, options):
@@ -344,7 +347,7 @@ def main(argv=None):
         repo = Path(cwd or args.repo).resolve()
         diff = card.get('diff_ref')
         public = repos_public(config, repo, diff)
-        if not cwd and diff and Path(diff['repo']).resolve() != repo:
+        if not cwd and diff and Path(diff.get('repo')).resolve() != repo:
             public = False
         prompt = Path(args.prompt).read_text()
         records = ready_records(config, args.role)

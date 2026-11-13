@@ -3,7 +3,7 @@ from __future__ import annotations
 from .env_redact import first_reason
 from .gateway_witness import witness_order, witness_gate_legs
 from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
-from .git_guard import prepare_worktree, writer_launch
+from .git_guard import prepare_worktree, selected_checkout, writer_launch
 from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
 from dataclasses import asdict, replace
@@ -154,7 +154,7 @@ class SpawnService(SeatSpawnMixin):
             return
         child = dict(run_id='run-' + uuid.uuid4().hex, parent_run_id=record['run_id'],
                      continuation=1, role='implement', cwd=None if record.get('run_worktree') else record['cwd'],
-                     selected_cwd=record.get('selected_cwd', record['cwd']),
+                     selected_cwd=selected_checkout(self, record),
                      chosen_leg=record['chosen_leg'], started=time.time(), ended=None,
                      status='running', exit_code=None, gaps=gaps)
         record['continuation_run_id'] = child['run_id']

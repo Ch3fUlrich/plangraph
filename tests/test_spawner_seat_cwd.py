@@ -12,20 +12,20 @@ import pytest
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import SpawnPlan
 from plangraph.spawner import cli, mcp, notify, resolver, seat_spawn
+from plangraph.spawner.prompt_input import checkout_env
 from plangraph.spawner.runner import JobInfo, SpawnerRunner, spawn_service
+from _spawner_git_redirect import git_redirect  # noqa: F401 shared redirect fixture
 
 
 def git(repo, *args):
     return subprocess.check_output(['git', '-C', str(repo), *args], text=True,
-                                   stderr=subprocess.DEVNULL).strip()
+                                   stderr=subprocess.DEVNULL, env=checkout_env()).strip()
 
 
 @pytest.fixture
 def checkouts(tmp_path, monkeypatch):
     monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
     monkeypatch.setenv('GIT_CONFIG_GLOBAL', os.devnull)
-    for name in ('GIT_CONFIG_PARAMETERS', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'):
-        monkeypatch.delenv(name, raising=False)
     for kind in ('AUTHOR', 'COMMITTER'):
         monkeypatch.setenv(f'GIT_{kind}_NAME', 'Test')
         monkeypatch.setenv(f'GIT_{kind}_EMAIL', 'test@example.invalid')
@@ -229,6 +229,8 @@ def test_overflow_keeps_explicit_cwd(checkouts, tmp_path, monkeypatch, source, d
         ssh='remote', ok=True, fresh=True, live_runs=0,
         mem_available_mb=100000, role_mb=2048, floor_mb=3000)})
     monkeypatch.setattr(overflow.subprocess, 'run', lambda *a, **kw: pytest.fail('explicit cwd left host'))
+    if source != 'equals':
+        monkeypatch.setattr(overflow, 'remote_spawn', lambda *a: pytest.fail('explicit cwd offered remotely'))
     service = spawn_service(SpawnerRunner(default_cwd=str(caller)), state=tmp_path / 'state')
     card = {'cwd': str(reviewed)} if source in ('card', 'both') else {}
     if different_diff:
@@ -245,24 +247,16 @@ def test_overflow_keeps_explicit_cwd(checkouts, tmp_path, monkeypatch, source, d
     assert card == original
 
 
-@pytest.mark.parametrize('redirect', ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'])
-def test_cwd_validation_ignores_git_redirects(checkouts, tmp_path, monkeypatch, redirect):
+def test_cwd_validation_ignores_git_redirects(checkouts, tmp_path, monkeypatch, git_redirect):
     from plangraph.spawner.prompt_input import resolve_cwd
     from plangraph.routing_errors import ParameterRefused
     caller, reviewed = checkouts
-    monkeypatch.setenv(redirect, str(caller if redirect == 'GIT_WORK_TREE' else caller / '.git'))
-    output = subprocess.check_output
-    def checked(*args, **kwargs):
-        clean = redirect not in kwargs.get('env', os.environ)
-        assert clean
-        return output(*args, **kwargs)
-    monkeypatch.setattr(subprocess, 'check_output', checked)
     assert resolve_cwd(str(reviewed), {}) == str(reviewed)
     with pytest.raises(ParameterRefused, match='git checkout'):
         resolve_cwd(str(tmp_path), {})
 
 
-def test_completion_ignores_git_redirects(checkouts, monkeypatch):
+def test_completion_ignores_git_redirects(checkouts, monkeypatch, git_redirect):
     caller, reviewed = checkouts
     expected = git(reviewed, 'rev-parse', 'HEAD')
     monkeypatch.setenv('GIT_DIR', str(caller / '.git'))
@@ -271,7 +265,7 @@ def test_completion_ignores_git_redirects(checkouts, monkeypatch):
     assert event['head_sha'] == expected
 
 
-def test_watchdog_head_ignores_git_redirects(checkouts, monkeypatch):
+def test_watchdog_head_ignores_git_redirects(checkouts, monkeypatch, git_redirect):
     from plangraph.spawner.run_watchdog import edit_signature
     caller, reviewed = checkouts
     expected = git(reviewed, 'rev-parse', 'HEAD').encode()
@@ -280,7 +274,7 @@ def test_watchdog_head_ignores_git_redirects(checkouts, monkeypatch):
     assert edit_signature(reviewed)[1].strip() == expected
 
 
-def test_worktree_git_ignores_redirects(checkouts, tmp_path, monkeypatch):
+def test_worktree_git_ignores_redirects(checkouts, tmp_path, monkeypatch, git_redirect):
     from plangraph.spawner import git_guard
     caller, reviewed = checkouts
     git(reviewed, 'branch', '-M', 'main')
@@ -305,7 +299,8 @@ def test_cwd_validation_off_event_loop(service, checkouts, monkeypatch):
 
 
 @pytest.mark.parametrize('source', ['flag', 'card'])
-def test_run_worktree_uses_selected_checkout(service, checkouts, capsys, monkeypatch, source):
+@pytest.mark.parametrize('legacy', [False, True])
+def test_run_worktree_uses_selected_checkout(service, checkouts, capsys, monkeypatch, source, legacy):
     caller, reviewed = checkouts
     git(reviewed, 'branch', '-M', 'main')
     git(reviewed, 'remote', 'add', 'origin', str(reviewed))
@@ -326,6 +321,9 @@ def test_run_worktree_uses_selected_checkout(service, checkouts, capsys, monkeyp
     record['role'] = 'implement'
     git(reviewed, 'worktree', 'remove', record['cwd'])
     assert not Path(record['cwd']).exists()
+    if legacy:
+        record.pop('selected_cwd')
+        service.runner.default_cwd = str(reviewed)  # The pre-upgrade service's checkout.
     asyncio.run(service._continue_writer(record, 'Remaining gaps: finish the test'))
     child = service.result(record['continuation_run_id'])
     assert child['status'] == 'completed', child.get('error')
@@ -334,10 +332,31 @@ def test_run_worktree_uses_selected_checkout(service, checkouts, capsys, monkeyp
     assert child['run_worktree']['base_sha'] == record['completion']['head_sha']
 
 
-def test_cli_top_level_spacing():
-    source = Path(cli.__file__).read_text()
-    assert '\n\n\ndef _drain_chunks' in source
-    assert "\n\n\nif __name__ == '__main__':" in source
+@pytest.mark.parametrize('dry_run', [False, True])
+@pytest.mark.parametrize('source', ['flag', 'card', 'both'])
+@pytest.mark.parametrize('spelling', ['symlink', 'parent', 'trailing'])
+def test_cli_top_level_spacing(service, checkouts, tmp_path, monkeypatch, capsys, dry_run, source, spelling):
+    """Guard CLI behavior rather than source formatting (legacy test name)."""
+    reviewed = checkouts[1]
+    alias = tmp_path / 'alias'
+    alias.symlink_to(reviewed, target_is_directory=True)
+    value = {'symlink': str(alias), 'parent': str(reviewed / '..' / reviewed.name),
+             'trailing': str(reviewed) + '/'}[spelling]
+    validations, output = [], subprocess.check_output
+    def checked(command, **kwargs):
+        if '--show-toplevel' in command:
+            validations.append(command)
+        return output(command, **kwargs)
+    monkeypatch.setattr(subprocess, 'check_output', checked)
+    card = dict(estimate_tokens=1000, diff_ref=dict(repo=str(reviewed),
+        base=git(reviewed, 'rev-parse', 'HEAD~1'), head=git(reviewed, 'rev-parse', 'HEAD')),
+        **({'cwd': value} if source != 'flag' else {}))
+    assert cli.main(['spawn', 'Review', '--role', 'review', '--writer-family', 'gpt',
+        '--card', json.dumps(card), *(['--cwd', value] if source != 'card' else []),
+        *(['--dry-run'] if dry_run else [])]) == 0
+    record = json.loads(capsys.readouterr().out)
+    assert record['cwd'] == str(reviewed) and len(validations) == 1
+    assert dry_run or service.launch_cwds == [str(reviewed)]
 
 
 def test_admission_off_event_loop(service, checkouts, monkeypatch):

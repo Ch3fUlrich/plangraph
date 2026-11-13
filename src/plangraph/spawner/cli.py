@@ -191,9 +191,9 @@ def main(argv=None):
                 exc = SpawnRefused('spawn by card; card required')
                 service.save_refusal(exc, args.role)
                 raise exc
-            from .prompt_input import resolve_prompt, resolve_cwd
+            from .prompt_input import resolve_prompt
             try:
-                prompt, cwd = resolve_prompt(args.prompt, args.prompt_file), resolve_cwd(args.cwd, args.card)
+                prompt = resolve_prompt(args.prompt, args.prompt_file)
                 from .prompt_guard import admit_prompt
                 if args.role == 'implement': admit_prompt(prompt, SpawnRefused)
             except SpawnRefused as exc:
@@ -201,7 +201,7 @@ def main(argv=None):
                 raise
             payload = dict(card=args.card, prompt=prompt, role=args.role, writer_families=args.writer_family,
                 review_of=args.review_of, model=args.model, review_scope=args.review_scope,
-                run_worktree=args.run_worktree, cwd=cwd, leg=args.leg, override_reason=args.override_reason,
+                run_worktree=args.run_worktree, cwd=args.cwd, leg=args.leg, override_reason=args.override_reason,
                 dry_run=args.dry_run, no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
             from plangraph.settings import admit_review_scope
             try:

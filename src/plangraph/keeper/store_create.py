@@ -13,6 +13,7 @@ import json
 import re
 
 from .auth import validate_family
+from .brief import creation_error
 from .errors import Refused
 from .credential_guard import guard
 from .item_fixes import check_fix_limit
@@ -200,9 +201,10 @@ class CreateMixin:
             if existing is not None:
                 self._assert_unlocked(existing)
                 raise Refused("conflict", f"{definition['key']} already exists")
-        # ``under``: resolve and authorise every gate before anything is
-        # written.  A gate must already exist -- a key created earlier in this
-        # very batch does not exist yet and is refused as not_found.
+        if not legacy and (error := creation_error(
+                [d for d in defs if d["kind"] == "decision"])):
+            raise Refused(*error.split(": ", 1))
+        # Resolve/authorise existing gates before writing; batch peers are not_found.
         attach = []
         for definition in defs:
             gate = self._under_gate(principal, definition)
@@ -210,9 +212,7 @@ class CreateMixin:
                 attach.append((definition, gate))
         before = self._all_items()
         check_fix_limit(before + defs, set(keys))
-        # Validate the graph the writes would leave behind: every gate gains the
-        # new item as a dependency, so cycles and reachability are caught here,
-        # before a single row is inserted.
+        # Validate cycles/reachability with gate -> new edges before inserting.
         candidate = [dict(item) for item in before] + defs
         affected = set(keys)
         if attach:
