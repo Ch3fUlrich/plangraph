@@ -1,1 +1,0 @@
-2026-11-14T00:00:00Z D2-0 SPAWNER-DEFAULT-EFFORT-MEDIUM DONE pending +47/-15 tests="31 passed, 1 deselected in 0.49s" failing-first="2 failed: wrong lead and missing admission" choice="medium defaults; higher effort needs card.effort + effort_decision D-id; live route unavailable (no configured SSH or spawner connector)"
