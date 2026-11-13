@@ -22,8 +22,8 @@ def host(tmp_path, monkeypatch):
     fake.parent.mkdir()
     fake.write_text(FAKE_OPENCODE)
     fake.chmod(0o755)
-    (tmp_path / 'opencode.jsonc').write_text('{"providers": {"omniroute": {"env": ["PLANGRAPH_OMNIROUTE_KEY"], "models": {}}}}')
-    monkeypatch.setenv('AUTOOS_ROOT', str(tmp_path))
+    (tmp_path / 'providers.json').write_text('{"providers": {"omniroute": {"env": ["PLANGRAPH_OMNIROUTE_KEY"], "models": {}}}}')
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(tmp_path / 'providers.json'))
     monkeypatch.setenv('PATH', f"{fake.parent}{os.pathsep}{os.environ['PATH']}")
     resolver.served_models.cache_clear()
     yield {'OMNIROUTE_BASE_URL': 'http://127.0.0.1:9/v1'}

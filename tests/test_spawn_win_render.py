@@ -83,15 +83,15 @@ def test_render_unresolved_base_url_fails_closed(tmp_path, monkeypatch):
 
 
 def test_render_linux_root_fixture_parity(tmp_path, monkeypatch):
-    """(c) AutoOS-root fixture + no env gives provider blocks equal to today's overlay (I7)."""
+    """(c) Providers-file fixture + no env gives provider blocks equal to today's overlay (I7)."""
     fake_root = tmp_path / "fake-autoos"
     fake_root.mkdir()
-    (fake_root / "opencode.jsonc").write_text(json.dumps({"providers": {"mimo": {
+    (fake_root / "providers.json").write_text(json.dumps({"providers": {"mimo": {
         "package": "@opencode/ai/providers/openai-compatible", "name": "MiMo direct gateway legs",
-        "env": ["PLANGRAPH_OMNIROUTE_KEY"], "settings": {"baseURL": "http://gateway.invalid/v1"},
+        "env": ["PLANGRAPH_OMNIROUTE_KEY"], "settings": {"baseURL": "http://127.0.0.1:9/v1"},
         "models": {m.split("/", 1)[1]: {"modelID": m} for m in ACCEPTED_MIMO_IDS},
     }}}))
-    monkeypatch.setenv("AUTOOS_ROOT", str(fake_root))
+    monkeypatch.setenv("PLANGRAPH_PROVIDERS_FILE", str(fake_root / "providers.json"))
 
     child_env = build_child_env()
     overlaid_env = overlay_env(dict(child_env))
@@ -150,6 +150,7 @@ def test_render_never_imports_host_keys_or_opens_api_keys(tmp_path, monkeypatch)
     assert reason is None
     render_mod = sys.modules["plangraph.routing_support.opencode_render"]
     assert "host_keys" not in render_mod.__dict__
+    # Meaningful pin (I2): the module source names none of the key entry points.
     import inspect
     source = inspect.getsource(render_mod)
     assert "host_keys" not in source
@@ -220,26 +221,25 @@ def test_add_host_keys_receives_needs_gateway_for_mimo_without_root(tmp_path, mo
 
 @pytest.mark.parametrize('source', ['parent', 'file'])
 def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch, capsys, caplog, source):
-    """Parent/file keys reach the child; echoed stdout/stderr sentinels are scrubbed."""
+    """(i) Router D-2801 (a): parent PLANGRAPH_OMNIROUTE_KEY reaches child env without leaking.
+
+    The child prints the sentinel to stdout and stderr so redact_env_values is
+    proven to scrub it from the recorded tails, not merely absent by luck.
+    """
     sentinel = "SENTINEL-PARENT-ENV-KEY-999"
-    monkeypatch.setenv('HOME', str(tmp_path))
-    if source == 'parent':
-        monkeypatch.setenv("PLANGRAPH_OMNIROUTE_KEY", sentinel)
-    else:
-        key_file = tmp_path / 'client.key'
-        key_file.write_text(sentinel + '\r\n'); key_file.chmod(0o600)
+    if source == 'file':
+        key_file = tmp_path / 'client.key'; key_file.write_text(sentinel + '\r\n'); key_file.chmod(0o600)
         monkeypatch.setenv('PLANGRAPH_OMNIROUTE_KEY_FILE', str(key_file))
+    else: monkeypatch.setenv("PLANGRAPH_OMNIROUTE_KEY", sentinel)
     monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:20128/v1")
     monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path / "absent-root"))
 
     from plangraph.spawner import resolver
-
     async def no_skip(row, *, env=None):
         return None
 
     monkeypatch.setattr(resolver, "host_skip_reason_async", no_skip)
     captured_env = {}
-
     async def fake_factory(exe, *args, **kwargs):
         captured_env.update(kwargs.get("env") or {})
         proc = AsyncMock()
@@ -248,10 +248,8 @@ def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch, c
         proc.returncode = 0
         proc.pid = FAKE_PID
         return proc
-
     runner = SpawnerRunner(process_factory=fake_factory)
     service = spawn_service(runner, tmp_path)
-
     async def run():
         record = await service.spawn(
             card={"estimate_tokens": 1000},
@@ -261,10 +259,10 @@ def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch, c
             wait_seconds=None,
         )
         job = list(runner.jobs.values())[-1]
-        assert captured_env.get("PLANGRAPH_OMNIROUTE_KEY") == sentinel
-        assert sentinel not in captured_env.get("OPENCODE_CONFIG_CONTENT", "")
+        assert captured_env.get("PLANGRAPH_OMNIROUTE_KEY") == sentinel and sentinel not in captured_env.get("OPENCODE_CONFIG_CONTENT", "")
         assert sentinel not in " ".join(job.command)
         assert sentinel not in json.dumps(record)
+        # The tail keys exist and the sentinel was printed, then scrubbed.
         assert "stdout_tail" in record and "stderr_tail" in record
         assert "[autoos:redacted]" in record["stdout_tail"]
         assert "[autoos:redacted]" in record["stderr_tail"]
@@ -277,7 +275,6 @@ def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch, c
             assert sentinel not in record_file.read_text()
         captured = capsys.readouterr()
         assert sentinel not in captured.out + captured.err + caplog.text
-
     asyncio.run(run())
 
 
@@ -285,16 +282,16 @@ def test_root_base_url_normalized_in_fallback(tmp_path, monkeypatch):
     """LOW: the /v1 rule applies to a root-supplied baseURL like to an override."""
     fake_root = tmp_path / "fake-autoos"
     fake_root.mkdir()
-    (fake_root / "opencode.jsonc").write_text(json.dumps({"providers": {"mimo": {
+    (fake_root / "providers.json").write_text(json.dumps({"providers": {"mimo": {
         "package": "@opencode/ai/providers/openai-compatible",
-        "env": ["PLANGRAPH_OMNIROUTE_KEY"], "settings": {"baseURL": "http://root.invalid"},
+        "env": ["PLANGRAPH_OMNIROUTE_KEY"], "settings": {"baseURL": "http://root:9"},
         "models": {m.split("/", 1)[1]: {"modelID": m} for m in ACCEPTED_MIMO_IDS},
     }}}))
-    monkeypatch.setenv("AUTOOS_ROOT", str(fake_root))
+    monkeypatch.setenv("PLANGRAPH_PROVIDERS_FILE", str(fake_root / "providers.json"))
     env = overlay_env(build_child_env())
     assert render_gateway_providers(env, "mimo/mimo-v2.6-pro") is None
     cfg = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-    assert cfg["providers"]["mimo"]["settings"]["baseURL"] == "http://root.invalid/v1"
+    assert cfg["providers"]["mimo"]["settings"]["baseURL"] == "http://root:9/v1"
 
 
 def test_render_null_env_treated_as_absent():
@@ -310,10 +307,12 @@ def test_render_null_env_treated_as_absent():
     reason = render_gateway_providers(env, "mimo/mimo-v2.6-pro")
     assert reason is None
     cfg = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+    # Gateway providers with a non-list env get the gateway key name filled in.
     assert cfg["providers"]["mimo"]["env"] == ["PLANGRAPH_OMNIROUTE_KEY"]
     assert cfg["providers"]["omniroute"]["env"] == ["PLANGRAPH_OMNIROUTE_KEY"]
     assert cfg["providers"]["mimo"]["settings"]["baseURL"] == "http://gw:20128/v1"
     assert cfg["providers"]["omniroute"]["settings"]["baseURL"] == "http://gw:20128/v1"
+    # A non-gateway provider is left untouched.
     assert cfg["providers"]["custom"]["env"] == 7
 
 
@@ -360,18 +359,21 @@ def test_add_host_keys_not_called_on_refusal(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('missing', ['url', 'key'])
 def test_unresolved_refusal_falls_through_to_next_leg(tmp_path, monkeypatch, missing):
-    """Real dispatch falls through a missing URL/key to the next mocked process."""
+    """F4: no-URL refusal maps to not_served_on_host and falls through (I6).
+
+    End to end through the real service path (spawn_service dispatch loop,
+    real runner.spawn, mocked process factory): leg 1 is gateway-keyed with
+    no base URL anywhere, leg 2 launches and completes.
+    """
     monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path / "absent-root"))
-    expected = REFUSAL_UNRESOLVED
+    expected = REFUSAL_UNRESOLVED if missing == 'url' else 'gateway_key_absent'
     if missing == 'key':
         monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'https://gateway.invalid/v1')
         monkeypatch.setenv('PLANGRAPH_OMNIROUTE_KEY_FILE', str(tmp_path / 'absent.key'))
-        expected = 'gateway_key_absent'
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.routing import SpawnPlan
     from plangraph.spawner import resolver
     from plangraph.spawner.service import SpawnService
-
     async def no_skip(row, *, env=None):
         return None
 
@@ -382,9 +384,7 @@ def test_unresolved_refusal_falls_through_to_next_leg(tmp_path, monkeypatch, mis
     plan = SpawnPlan(legs=(mimo_leg, agy_leg), skipped=(), p_source="test",
                      review_seats=(), reasons=())
 
-    def route(self, *args, **kwargs):
-        return plan
-
+    def route(self, *args, **kwargs): return plan
     monkeypatch.setattr(SpawnService, "_route", route)
     launched = []
 

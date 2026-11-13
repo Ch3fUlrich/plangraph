@@ -135,8 +135,20 @@ pub fn read_alerts(state_dir: &Path, now: u64) -> Vec<String> {
     lines.into_values().collect()
 }
 
-/// Only recognised polling produces a refusal; accounting/IO failures are silent.
+/// Only recognised polling produces a refusal; accounting/IO failures go to stderr.
 pub fn handle(payload: &Value, config: &Config, now: u64) -> Option<String> {
+    handle_with_diagnostics(payload, config, now, |error| {
+        eprintln!("turn-budget-hook: status update failed: {error}");
+    })
+}
+
+/// Preserve fail-open library policy while letting the binary signal IO failure.
+pub fn handle_with_diagnostics(
+    payload: &Value,
+    config: &Config,
+    now: u64,
+    mut report: impl FnMut(&dyn std::error::Error),
+) -> Option<String> {
     let event = payload["hook_event_name"].as_str().unwrap_or("");
     if !matches!(
         event,
@@ -148,12 +160,19 @@ pub fn handle(payload: &Value, config: &Config, now: u64) -> Option<String> {
         .then(|| payload["tool_input"]["command"].as_str())
         .flatten();
     let static_poll = event == "PreToolUse" && command.is_some_and(poll::sleep_poll);
+    let mut run_update = |id| match update(payload, config, id, command, now, &mut report) {
+        Ok(denied) => denied,
+        Err(error) => {
+            report(error.as_ref());
+            None
+        }
+    };
     if static_poll {
         // A denied attempt is still a model response. Count it when possible,
         // but never let malformed metadata/state turn a known poll into allow.
         if let Some(id) = payload["session_id"].as_str().filter(|s| safe_name(s)) {
             if !config.state_dir.as_os_str().is_empty() {
-                let _ = update(payload, config, id, command, now);
+                run_update(id);
             }
         }
         return Some(poll::refusal());
@@ -162,7 +181,7 @@ pub fn handle(payload: &Value, config: &Config, now: u64) -> Option<String> {
     if config.state_dir.as_os_str().is_empty() {
         return None;
     }
-    update(payload, config, id, command, now).ok().flatten()
+    run_update(id)
 }
 
 fn update(
@@ -171,6 +190,7 @@ fn update(
     id: &str,
     command: Option<&str>,
     now: u64,
+    report: &mut impl FnMut(&dyn std::error::Error),
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     let dir = config.state_dir.join("status");
     fs::create_dir_all(&dir)?;
@@ -292,8 +312,8 @@ fn update(
     // This invocation returns its denial even if persistence fails. Later calls
     // can only consult the previously persisted history, not this failed update.
     let written = storage::atomic_write(&path, &serde_json::to_vec(&document)?);
-    if !denied {
-        written?;
+    if let Err(error) = written {
+        report(&error);
     }
     Ok(denied.then(|| {
         if local_read {

@@ -322,12 +322,19 @@ def test_cli_writer_family_equal_to_seat_family_refused(tmp_path, capsys):
     assert "covers no listed writer" in capsys.readouterr().err
 
 
-def test_head_option_matches_record_head_sha(tmp_path, capsys):
+@pytest.mark.parametrize('other_sha', ['e' * 40, '0' * 40])
+def test_head_option_matches_record_head_sha(tmp_path, capsys, monkeypatch, other_sha):
     argv = record_dir(tmp_path, "p", live_log=REVIEW)
     assert sv.main(argv + ["--head", HEAD_SHA]) == 0
     capsys.readouterr()
     assert sv.main(argv + ["--head", "e" * 40]) == 2
     assert "head_sha" in capsys.readouterr().err
+    monkeypatch.setattr(sv, 'send', lambda *a: pytest.fail('foreign head must not post'))
+    argv.remove('--dry-run')
+    assert sv.main(argv + ['--head', other_sha]) == sv.EXIT_REFUSED
+    output = capsys.readouterr()
+    assert output.out == ''
+    assert 'does not match --head' in output.err
 
 
 # D-3564 slice B: --head is required for record seats and only for them.

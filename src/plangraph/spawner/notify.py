@@ -233,10 +233,12 @@ def _deliver_verdict(directory, record, keeper):
 
 def completion_event(record, cwd):
     from .runner import redact
+    from .prompt_input import checkout_env
     try:
         head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cwd,
-                                       text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL).strip()
-    except (OSError, subprocess.CalledProcessError):
+                                       text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL,
+                                       env=checkout_env(), timeout=10).strip()
+    except (OSError, subprocess.SubprocessError):
         head = None
     rc = record.get('exit_code')
     return redact(dict(event_id=record['run_id'] + ':completion', run_id=record['run_id'],

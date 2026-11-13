@@ -1,5 +1,12 @@
 # OpenCode gateway provider URLs
 
+The spawner reads its provider block from plangraph's shipped
+`configuration/opencode/providers.json`, not an external checkout. A non-empty
+`PLANGRAPH_PROVIDERS_FILE` overrides that file with an operator-selected file
+(JSON or JSONC). To refresh it, copy the `providers` block of the operator's
+gateway config into a `{"providers": {...}}` file, omitting unrelated providers;
+credentials must remain environment-variable references, never secret values.
+
 The per-run overlay and renderer route both `mimo` and `omniroute` through
 the configured gateway. The renderer first honours a valid child OmniRoute
 provider URL already present in `OPENCODE_CONFIG_CONTENT`, including a

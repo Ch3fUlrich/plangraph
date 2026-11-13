@@ -9,9 +9,9 @@ from plangraph.spawner import resolver
 
 def test_root_overlay(tmp_path, monkeypatch):
     from plangraph.spawner.opencode_overlay import overlay_env
-    monkeypatch.setenv('AUTOOS_ROOT', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(tmp_path / 'providers.json'))
     monkeypatch.setenv('PLANGRAPH_OMNIROUTE_KEY', 'private-fixture-value')
-    (tmp_path / 'opencode.jsonc').write_text('''{
+    (tmp_path / 'providers.json').write_text('''{
 // comment
 "providers": {"omniroute": {"env": ["PLANGRAPH_OMNIROUTE_KEY"], "settings": {"a": 1,},},},
 }''')
@@ -26,14 +26,14 @@ def test_root_overlay(tmp_path, monkeypatch):
 def test_absent_overlay(tmp_path, monkeypatch):
     from plangraph.spawner.opencode_overlay import overlay_env
     from plangraph.spawner.opencode_overlay import OVERLAY_ROOT_MISSING
-    monkeypatch.setenv('AUTOOS_ROOT', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(tmp_path / 'providers.json'))
     # A missing root adds only the marker naming the missing file (SPAWN-OVERLAY-ROOT-MISSING).
     assert overlay_env({'PATH': 'fixture'}) == {
-        'PATH': 'fixture', OVERLAY_ROOT_MISSING: str(tmp_path / 'opencode.jsonc')}
+        'PATH': 'fixture', OVERLAY_ROOT_MISSING: str(tmp_path / 'providers.json')}
 
 
 def test_probe_admission(monkeypatch):
-    # Pin a present (empty) root config so the reason does not depend on the host's AUTOOS_ROOT.
+    # Pin a present (empty) providers file so the reason does not depend on host config.
     from plangraph.routing_support import opencode_overlay
     monkeypatch.setattr(opencode_overlay, '_load_root_providers', lambda: ({}, None))
     row = {'id': 'omniroute/cx', 'harness': 'opencode'}

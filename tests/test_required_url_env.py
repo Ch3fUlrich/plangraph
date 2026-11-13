@@ -45,13 +45,13 @@ def test_opencode_gateway_without_url_has_named_refusal(monkeypatch, tmp_path, m
     for name in (g.GATEWAY_ENV_VAR, "OMNIROUTE_BASE_URL", "PLANGRAPH_GATEWAY_URL",
                  "AUTOOS_OMNIROUTE_URL", "OPENCODE_CONFIG_CONTENT"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path))
+    monkeypatch.setenv("PLANGRAPH_PROVIDERS_FILE", str(tmp_path / "providers.json"))
     placeholder = "{env:" + g.GATEWAY_ENV_VAR + "}"
     providers = {name: {"env": ["PLANGRAPH_OMNIROUTE_KEY"],
                         "settings": {"baseURL": placeholder}}
                  for name in ("mimo", "omniroute")}
     if has_root:
-        (tmp_path / "opencode.jsonc").write_text(json.dumps({"providers": providers}))
+        (tmp_path / "providers.json").write_text(json.dumps({"providers": providers}))
     else:
         monkeypatch.setenv("OPENCODE_CONFIG_CONTENT", json.dumps({"providers": providers}))
     env = overlay_env(build_child_env())
