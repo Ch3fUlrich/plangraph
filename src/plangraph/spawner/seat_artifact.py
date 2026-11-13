@@ -9,7 +9,7 @@ from .private_io import atomic_write_private
 
 def publish(directory, record, job):
     """Publish evidence last; never recover evidence from combined run tails."""
-    if record.get('role') != 'review' or record.get('ended') is None:
+    if record.get('role') != 'review' or record.get('ended') is None or record.get('review_writer'):
         return
     if job is None or record.get('job_id') not in (None, job.job_id):
         return  # retries without the owning final job cannot invalidate evidence

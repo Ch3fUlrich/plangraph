@@ -120,6 +120,18 @@ class KeeperSink:
         with urllib.request.build_opener(_NoRedirectHandler()).open(request, timeout=10) as response:
             return json.load(response)
 
+    def decisions(self, ids):
+        """Full linked authority rows, not guessed keeper item keys."""
+        if not ids:
+            return []
+        from plangraph.keeper.config import load_config
+        from plangraph.keeper.evidence_decisions import DecisionsAdapter
+        config = load_config(os.environ['PG_CONFIG'])
+        rows = DecisionsAdapter(config.decisions_file, from_origin=True)._rows_strict()
+        if any(key not in rows for key in ids):
+            raise ValueError('linked decision rows unavailable')
+        return [row for key in ids for row in rows[key]]
+
 
 def deliver_verdict(directory, record, keeper):
     """Never let optional verdict delivery interrupt completion persistence."""
@@ -205,6 +217,17 @@ def _deliver_verdict(directory, record, keeper):
                 raise ValueError('malformed item evidence')
             heads = [row.get('ref', {}).get('commit') for row in rows
                      if row.get('verified') and row.get('kind') == 'commit+ci']
+            if record.get('review_writer'):
+                from .service import SpawnService
+                source = SpawnService(state=directory.parent.parent).result(record['review_writer'])
+                if (source.get('item_key') != key or source.get('status') != 'completed'
+                        or source.get('review_auto_status') != 'running'
+                        or source.get('review_head') != head
+                        or (source.get('completion') or {}).get('head_sha') != head
+                        or source.get('review_checks') != dict(head_sha=head, green=True)):
+                    outcome('skipped', 'superseded or unverified automatic review')
+                    return
+                heads = [head]  # Pre-merge authority is the automatic writer's current exact-SHA CI proof.
             if item.get('key') != key or evidence['head_sha'] not in heads:
                 outcome('skipped', 'missing or ambiguous item evidenced head')
                 return
@@ -238,6 +261,8 @@ def completion_event(record, cwd):
                                        text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL).strip()
     except (OSError, subprocess.CalledProcessError):
         head = None
+    if record.get('review_writer'):
+        head = (record.get('diff_ref') or {}).get('head')
     rc = record.get('exit_code')
     return redact(dict(event_id=record['run_id'] + ':completion', run_id=record['run_id'],
         idempotency_key=record['run_id'] + ':' + record['status'],

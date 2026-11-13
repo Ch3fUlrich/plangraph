@@ -88,9 +88,8 @@ def _supervise():
             return record['exit_code']
         print(json.dumps(record), flush=True)
         sys.stdout.close()
-        for run in record.get('seats') or [record]:
-            if run['run_id'] in service.tasks:
-                await service.tasks[run['run_id']]
+        while pending := [task for task in service.tasks.values() if not task.done()]:
+            await asyncio.gather(*pending)
         return 0
     return asyncio.run(run())
 

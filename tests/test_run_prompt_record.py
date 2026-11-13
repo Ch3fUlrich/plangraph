@@ -40,6 +40,7 @@ def test_run_call_sites_require_prompt_record(root=None):
         ('mcp.py', 'call_tool', "self.service.spawn(card=arguments.get('card'), prompt=arguments['prompt'], role=arguments.get('role', 'implement'), model=arguments.get('model_or_combo'), override_reason=arguments.get('override_reason'), review_of=arguments.get('review_of'), writer_families=arguments.get('writer_families', ()), review_scope=arguments.get('review_scope'), seats=arguments.get('seats', False), dry_run=arguments.get('dry_run', False), wait_seconds=arguments.get('wait_seconds', 0), no_fallthrough=arguments.get('no_fallthrough', False), **options)"): 'Service entry point creates the run record.',
         ('cli.py', 'run', 'service.spawn(**payload, wait_seconds=0)'): 'Service entry point creates the run record.',
         ('cli.py', 'main', 'service.spawn(**payload, wait_seconds=None)'): 'Service entry point creates the run record.',
+        ('review_auto.py', 'reviews', "service.spawn(card=card, prompt=prompt, role='review', writer_families=writers, _plan=replace(plan, legs=(leg,), review_seats=(leg,), error=None), no_fallthrough=True)"): 'Service entry point creates the review prompt/run record, as for CLI spawn.',
     }
     check_run_call_sites(root, Counter({site: 1 for site in allow}))
 

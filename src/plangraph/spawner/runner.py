@@ -932,6 +932,8 @@ def spawn_service(*args, **kwargs):
             if changed:
                 super()._save(record)
             if terminal:
+                from .review_auto import terminal as review_terminal
+                review_terminal(self, record)
                 from .notify import deliver_verdict; deliver_verdict(self._path(record['run_id']).parent, record, self.keeper_sink)
                 for recipient, sink in (('parent', self.completion_sink), ('keeper', self.keeper_sink)):
                     marker = self._path(record['run_id']).parent / (recipient + '.delivered')

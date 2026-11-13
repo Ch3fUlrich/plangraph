@@ -1,5 +1,24 @@
 # Plangraph Spawner & Model Routing Architecture
 
+### Interim automatic reviews (REVIEW-AUTO-SPAWN slice 1)
+
+Terminal successful implementation records with an item and completion SHA queue
+reviews without session calls. Existing records have no check-result field: the
+driver queries CI for that exact remote SHA and records `review_checks`; missing,
+pending, skipped-only or failed checks withhold review. Keeper item lookup supplies
+the current tier and done criteria; `PG_CONFIG` supplies the origin-backed linked
+decision authority rows (missing rows block closed). One existing route call
+supplies all legs; standard needs one independent family, high two. Failed/empty
+seats consume the next leg, CHANGES stops with `review_findings`, and `review_runs`
+records every seat. A changed completion head cancels live seats before a single
+fix-delta seat. Posting reuses the locked `seat_verdict.main()` outbox, bound to the
+writer's checked review head rather than the review process's checkout HEAD.
+Automatic seats retain record-only evidence so a response artifact cannot shadow
+the existing record-derived poster.
+Missing keeper/reviewer transport or uncertain cancellation blocks closed with
+`review_auto_status=blocked`. Temporal card workflow and live proof remain outside
+this slice; the supervisor owns and awaits the interim driver.
+
 ### QUOTA-PAUSE-GATE
 
 The usage owner creates `quota-pause` in the spawner state directory at usage

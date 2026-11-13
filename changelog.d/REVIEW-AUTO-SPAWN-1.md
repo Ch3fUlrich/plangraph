@@ -1,0 +1,1 @@
+- Automatically drive interim reviews from terminal writer records using one existing route, exact-head green CI checks, current keeper criteria/decisions, bounded seat replacement, CHANGES findings and moved-head cancellation/fix deltas. Reuse the keeper verdict outbox without session spawning; Temporal workflow and live proof remain separate.

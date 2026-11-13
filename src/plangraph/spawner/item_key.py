@@ -9,6 +9,10 @@ def valid_item(value):
 
 
 def annotate_item(record, card, *, inherit=False):
+    if isinstance(card, dict) and card.get('diff_ref'):
+        record['diff_ref'] = card['diff_ref']
+    if isinstance(card, dict) and card.get('review_writer'):
+        record['review_writer'] = card['review_writer']
     value = card.get('item_key') if isinstance(card, dict) else None
     if value is None or value == '':
         value = card.get('item') if isinstance(card, dict) else None
