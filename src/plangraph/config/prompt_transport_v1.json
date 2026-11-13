@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "reasons": {
+    "P": "prompt_too_large",
+    "C": "launch_capacity_exceeded",
+    "A": "stdin_prompt_argv_conflict",
+    "U": "stdin_prompt_mode_unsupported",
+    "F": "stdin_prompt_flag_missing",
+    "M": "stdin_prompt_metadata_invalid",
+    "E": "stdin_prompt_env_conflict",
+    "X": "stdin_prompt_carrier_mismatch",
+    "S": "stdin_delivery_failed"
+  },
+  "capacity": {
+    "posix_string_bytes": 65536, "posix_arg_max_cap_bytes": 131072,
+    "posix_reserve_bytes": 32768, "posix_fallback_aggregate_bytes": 98304,
+    "windows_native_units": 32000, "windows_batch_units": 8000,
+    "windows_environment_units": 32767
+  },
+  "metadata": {"version": 1, "model_utf8_bytes": 256, "title_ascii_bytes": 22,
+    "title_pattern": "^plangraph-job-[0-9a-f]{8}$", "title_digest": "sha256"},
+  "status": {"version": 1, "nonce_bytes": 16, "record_bytes": 4096, "phase": "pre_exec"},
+  "grammar": {"value_forms": ["separate", "equals"], "repetitions": "validate-each", "terminator": "--"},
+  "flags": {
+    "--model": {"arity": 1, "metadata": "model"}, "--title": {"arity": 1, "metadata": "title"},
+    "--format": {"arity": 1}, "--input-format": {"arity": 1}, "--output-format": {"arity": 1},
+    "--port": {"arity": 1}, "--agent": {"arity": 1}, "--standalone": {"arity": 0},
+    "--verbose": {"arity": 0}, "--dangerously-skip-permissions": {"arity": 0},
+    "--permission-mode": {"arity": 1}, "--setting-sources": {"arity": 1},
+    "--allowedTools": {"arity": 1}, "--disallowedTools": {"arity": 1}, "--tools": {"arity": 1},
+    "--strict-mcp-config": {"arity": 0}, "--mcp-config": {"arity": 1}, "--disable-slash-commands": {"arity": 0}
+  },
+  "modes": [
+    {"harness": "opencode", "aliases": [], "prefix": ["run"], "stdin": "text", "evidence": "contract-only",
+     "required_flags": ["--standalone"], "flags": ["--standalone", "--model", "--title", "--format", "--port", "--agent"], "fixed_values": {"--format": ["json"]}},
+    {"harness": "claude", "aliases": [], "prefix": [], "stdin": "text", "evidence": "contract-only",
+     "prompt": {"flag": "-p", "arity": 0}, "forbidden_flags": ["--bg"],
+     "flags": ["--model", "--output-format", "--verbose", "--permission-mode", "--setting-sources", "--allowedTools", "--disallowedTools", "--tools", "--strict-mcp-config", "--mcp-config", "--disable-slash-commands"], "fixed_values": {"--output-format": ["stream-json"]}},
+    {"harness": "agy", "aliases": [], "prefix": [], "stdin": "ndjson", "evidence": "contract-only",
+     "prompt": {"flag": "-p", "arity": 1, "value": ""}, "flags": ["--model", "--dangerously-skip-permissions", "--input-format", "--output-format"],
+     "required_values": {"--input-format": "stream-json", "--output-format": "stream-json"}, "event": {"event": "user", "role": "user", "count": 1, "eof": true}},
+    {"harness": "qodercli", "aliases": ["qoder"], "prefix": [], "stdin": "text", "evidence": "contract-only",
+     "prompt": {"flag": "-p", "arity": 1, "value": ""}, "flags": ["--model", "--input-format"], "required_values": {"--input-format": "text"}},
+    {"harness": "codex", "aliases": [], "prefix": ["exec"], "stdin": "text", "evidence": "contract-only",
+     "operands": ["-"], "flags": ["--model"]},
+    {"harness": "gemini", "aliases": [], "prefix": [], "stdin": "text", "evidence": "contract-only",
+     "prompt": {"flag": "-p", "arity": 1, "value": ""}, "flags": ["--model"]},
+    {"harness": "qwen", "aliases": [], "prefix": [], "stdin": "text", "evidence": "contract-only",
+     "prompt": {"flag": "-p", "arity": 1, "value": ""}, "flags": ["--model"]}
+  ]
+}
