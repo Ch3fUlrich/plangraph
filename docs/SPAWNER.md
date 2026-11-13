@@ -711,3 +711,5 @@ RC startup waits use a monotonic deadline; the lesson-gate reference covers the 
 The no-leg timer skips `queued` and `queue_claimed` runs; their queue watchdog owns the queue deadline.
 
 An RC-required session without a bridge retains its running state and session ID, with `rc_missing=true`, while launch reports `RC-MISSING`.
+
+Review liveness probes normalize `OK` answers and retain the shared two-failure booking rule.

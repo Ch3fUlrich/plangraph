@@ -8,7 +8,7 @@ from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.routing_support.leg_state import LegStateStore
 
 
-@pytest.mark.parametrize('answer,ok', [('', False), ('OK', True)])
+@pytest.mark.parametrize('answer,ok', [('', False), ('not OK', False), ('OK', True), ('ok.', True), ('**OK.**', True), ('```\nOK!\n```', True)])
 def test_review_probe_books_answer_failure(tmp_path, monkeypatch, answer, ok):
     monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path))
@@ -31,7 +31,11 @@ def test_review_probe_books_answer_failure(tmp_path, monkeypatch, answer, ok):
     assert calls[0]['prompt'] == 'Reply with exactly OK.'
     assert calls[0]['role'] == 'review'
     assert calls[0]['reasoning_cap'] is True
-    assert (state.leg_status(leg.model)['state'] == 'down') is (not ok)
+    assert state.leg_status(leg.model)['state'] == ('ok' if ok else 'reprobe')
+    if not ok:
+        second = asyncio.run(leg_probe.probe(Runner(), leg, store=state, role='review'))
+        assert second['ok'] is False
+        assert state.leg_status(leg.model)['state'] == 'down'
     from plangraph.planner.routing import plan_spawn
     from plangraph.planner.route_policy import RoutePolicy
     monkeypatch.setenv('OMNIROUTE_BASE_URL', 'https://gateway.example.invalid/v1')

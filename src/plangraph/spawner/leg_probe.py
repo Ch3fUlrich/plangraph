@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import shutil
+import string
 from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
@@ -266,7 +267,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role='implement'):
             except (OSError, subprocess.CalledProcessError):
                 ok, reason, infra = False, 'probe infra: git', True
             else:
-                ok = (job.exit_code == 0 and job.stdout.strip() == 'OK') if role == 'review' else changed and 'ok.txt' in files
+                ok = (job.exit_code == 0 and job.stdout.strip(string.punctuation + string.whitespace).casefold() == 'ok') if role == 'review' else changed and 'ok.txt' in files
                 reason = '' if ok else f'exit {job.exit_code}' if job.exit_code else 'no OK answer' if role == 'review' else 'no commit'
         # Tripwire (D-3465): the writer must never touch the caller's repo.
         caller_after = await asyncio.to_thread(caller_heads)

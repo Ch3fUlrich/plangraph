@@ -4,7 +4,7 @@ Gateway routes and explicit launches refuse with `gateway not configured` before
 
 Prompt-only review legs always receive the card diff inline, including explicit document-mode overrides. A missing diff refuses the launch. Completed prompt-only records whose dispatched `prompt.txt` lacks patch data have `verdict_status=void` and `verdict_void_reason=prompt_only_no_diff`; no review evidence is published.
 
-`pg-spawnd review-probe` schedules tiny OK-answer probes for every active review route leg, including booked-down legs for recovery. It uses the isolated probe bridge and shared admission store. A failed review answer books the leg down immediately. MiMo review launches and probes disable thinking from their first request (`reasoning_cap=0` in the run record). Missing management credentials produce one routing-outbox notice per outage.
+`pg-spawnd review-probe` schedules tiny OK-answer probes for every active review route leg, including booked-down legs for recovery. It uses the isolated probe bridge and shared admission store. Two consecutive failed review answers book the shared model down; case and surrounding punctuation or Markdown are normalized. MiMo review launches and probes disable thinking from their first request (`reasoning_cap=0` in the run record). Missing management credentials produce one routing-outbox notice per outage.
 
 Implement cards bind the requested `writer_family` (default: the first writer
 family in operator order) before availability checks. Only boolean
@@ -16,13 +16,13 @@ Session launcher configuration accepts `require_remote_control: true`. Required
 launches and relaunches poll their own agent row for a nonempty
 `bridgeSessionId`, bounded by the resolve budget (maximum sixty seconds). A
 missing bridge returns `RC-MISSING`, retains the session id for cleanup, and
-stores state `rc_missing`. This applies to the Linux and Windows session APIs.
+keeps state `running` with `rc_missing=true`. This applies to the Linux and Windows session APIs.
 The external fleet/terminal launchers must enable this policy and retain their
 interactive `--remote-control NAME` workstation launch path.
 
 `pg-spawnd rc-watch` compares RC-required live session records against a bounded `claude agents --json` query. Each missing bridge produces one durable notice to the recorded parent (or routing). Episode state survives timer restarts and rearms only when the bridge reconnects. Failed queries produce an error instead of treating unknown state as a disconnection.
 
-`pg-spawnd run-watch` marks accepted running/queued runs `stalled_no_leg` when no PID, launched-leg record, or running/completed attempt exists within ten minutes (`PLANGRAPH_NO_LEG_TIMEOUT_S`). It writes one durable parent/routing notice and preserves the terminal state across ticks. A job id alone is queued bookkeeping and does not prove a harness launched.
+`pg-spawnd run-watch` marks accepted running runs `stalled_no_leg` when no PID, launched-leg record, or running/completed attempt exists within ten minutes (`PLANGRAPH_NO_LEG_TIMEOUT_S`). It writes one durable parent/routing notice and preserves the terminal state across ticks. Queued and queue-claimed runs stay with their queue watchdog. A job id alone does not prove a harness launched.
 
 Every run status/result/list read reconciles running records against the recorded
 PID and start identity, and observes `live.log` age when available. A proven
