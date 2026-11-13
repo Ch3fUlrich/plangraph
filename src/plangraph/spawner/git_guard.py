@@ -64,8 +64,9 @@ def run_worktree_lock(root):
 
 @contextmanager
 def run_tree(state, repo=None):
-    """Select fetched main without moving live trees; lease until records take over."""
+    """Select fetched main without moving live trees; lease until context exit."""
     from contextlib import ExitStack
+    from .runner import is_terminal
     import json
     state = Path(state).resolve()
     repo = Path(repo or os.environ.get('PLANGRAPH_SPAWNER_REPO') or
@@ -98,7 +99,7 @@ def run_tree(state, repo=None):
                 raise RuntimeError('run_tree_invalid')
             if not path.exists():
                 # Reuse only this missing registration; never prune other trees.
-                git('worktree', 'add', '--detach', '--force', path, sha)
+                git('worktree', 'add', '--detach', '--force', '--force', path, sha)
             if not (path / '.git').is_file():
                 raise RuntimeError('run_tree_invalid')
             if git('-C', path, 'rev-parse', '--verify', 'HEAD^{commit}') != sha:
@@ -113,10 +114,7 @@ def run_tree(state, repo=None):
         try:
             for record in (state / 'runs').glob('*/record.json'):
                 row = json.loads(record.read_text(encoding='utf-8'))
-                terminal = ('completed', 'failed', 'cancelled', 'killed', 'succeeded',
-                    'skipped', 'stalled', 'timeout', 'timed_out', 'refused', 'limited',
-                    'dry_run', 'needs_input', 'orphaned', 'terminated_after_answer')
-                if row.get('survivors') or row.get('status') not in terminal:
+                if row.get('survivors') or not is_terminal(row.get('status')):
                     identity = row.get('tree_sha')
                     if not isinstance(identity, str) or not re.fullmatch(
                             r'(?:[0-9a-f]{40}|[0-9a-f]{64})', identity):

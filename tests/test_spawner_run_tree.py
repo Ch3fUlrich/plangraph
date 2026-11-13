@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import threading
 
@@ -19,9 +20,11 @@ def git(repo, *args):
 
 @pytest.fixture
 def trees(tmp_path, monkeypatch):
+    for name in tuple(os.environ):
+        if name.startswith('GIT_'):
+            monkeypatch.delenv(name)
     monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
     monkeypatch.setenv('GIT_CONFIG_GLOBAL', os.devnull)
-    monkeypatch.delenv('GIT_CONFIG_PARAMETERS', raising=False)
     origin, repo, state = (tmp_path / name for name in ('origin', 'clone', 'state'))
     origin.mkdir()
     git(origin, 'init', '-b', 'main')
@@ -30,6 +33,13 @@ def trees(tmp_path, monkeypatch):
     git(origin, 'commit', '-m', 'tree A')
     git(tmp_path, 'clone', str(origin), str(repo))
     return origin, repo, state
+
+
+@pytest.fixture
+def cached_tree(trees):
+    with git_guard.run_tree(trees[2], trees[1]) as tree:
+        assert git(trees[1], 'rev-parse', 'HEAD') == git(trees[0], 'rev-parse', 'HEAD')
+        return *trees, tree
 
 
 def advance(origin, version='B'):
@@ -45,13 +55,15 @@ def save_record(state, **row):
     return record
 
 
-def test_live_run_keeps_a_new_run_selects_b(trees):
-    origin, repo, state = trees
-    caller = git(repo, 'rev-parse', 'HEAD')
-    with git_guard.run_tree(state, repo) as a:
-        pass
-    path = Path(a['tree_path'])
+def age(path):
     os.utime(path, (1, 1))
+    return Path(path)
+
+
+def test_live_run_keeps_a_new_run_selects_b(cached_tree):
+    origin, repo, state, a = cached_tree
+    caller = git(repo, 'rev-parse', 'HEAD')
+    path = age(a['tree_path'])
     save_record(state, status='running', tree_sha=a['tree_sha'], ended=2)
     main = advance(origin)
     with git_guard.run_tree(state, repo) as b:
@@ -66,15 +78,16 @@ def test_live_run_keeps_a_new_run_selects_b(trees):
         assert git(repo, 'rev-parse', 'HEAD') == caller
 
 
-@pytest.mark.parametrize('registered', [False, True])
+@pytest.mark.parametrize('registered', [False, True, 'locked'], ids=['removed', 'unlocked', 'locked'])
 @pytest.mark.parametrize('offline', [False, True])
-def test_missing_cached_directory_is_created_before_use(trees, registered, offline):
-    _, repo, state = trees
-    with git_guard.run_tree(state, repo) as previous:
-        pass
+def test_missing_cached_directory_is_created_before_use(cached_tree, registered, offline):
+    _, repo, state, previous = cached_tree
     path = Path(previous['tree_path'])
     if registered:
-        path.rename(state / 'removed-tree')  # Leave Git's stale registration behind.
+        if registered == 'locked':
+            git(repo, 'worktree', 'lock', path)
+        shutil.rmtree(path)  # Delete only this temporary tree, retaining registration.
+        assert str(path) in git(repo, 'worktree', 'list', '--porcelain')
     else:
         git(repo, 'worktree', 'remove', str(path))
     assert not path.exists()
@@ -89,10 +102,8 @@ def test_missing_cached_directory_is_created_before_use(trees, registered, offli
 
 
 @pytest.mark.parametrize('failure', ['error', 'timeout'])
-def test_fetch_failure_prefers_verified_origin_main_over_newest_cache(trees, monkeypatch, failure):
-    origin, repo, state = trees
-    with git_guard.run_tree(state, repo) as a:
-        pass
+def test_fetch_failure_prefers_verified_origin_main_over_newest_cache(cached_tree, monkeypatch, failure):
+    origin, repo, state, a = cached_tree
     main = advance(origin)
     with git_guard.run_tree(state, repo):
         pass
@@ -117,6 +128,7 @@ def test_fetch_failure_prefers_verified_origin_main_over_newest_cache(trees, mon
 
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX cleanup leases')
 @pytest.mark.parametrize('row', [dict(status='running'), dict(status='running', tree_sha=None),
+    dict(status='needs_input'), dict(status='orphaned'),
     dict(status='pending', ended=2), dict(status='failed', survivors=[123]), {}])
 def test_unidentified_nonterminal_record_protects_every_tree(trees, row):
     origin, repo, state = trees
@@ -124,8 +136,7 @@ def test_unidentified_nonterminal_record_protects_every_tree(trees, row):
     save_record(state, **row)
     for version in ('B', 'C'):
         with git_guard.run_tree(state, repo) as tree:
-            paths.append(Path(tree['tree_path']))
-        os.utime(paths[-1], (1, 1))
+            paths.append(age(tree['tree_path']))
         advance(origin, version)
     with git_guard.run_tree(state, repo):
         assert all(path.is_dir() for path in paths)
@@ -135,20 +146,23 @@ def test_unidentified_nonterminal_record_protects_every_tree(trees, row):
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX cleanup leases')
-def test_cleanup_protects_live_records_and_startup_leases(trees):
+@pytest.mark.parametrize('status', ['running', 'needs_input', 'orphaned', 'limited',
+    'stalled', 'timed_out', 'terminated_after_answer', 'completed', 'failed', 'cancelled',
+    'killed', 'dry_run', 'succeeded', 'timeout', 'refused', 'skipped'])
+def test_cleanup_protects_live_records_and_startup_leases(trees, status):
+    from plangraph.spawner.runner import is_terminal
     origin, repo, state = trees
     with git_guard.run_tree(state, repo) as a:
-        path = Path(a['tree_path'])
-        os.utime(path, (1, 1))
+        path = age(a['tree_path'])
         advance(origin)
         with git_guard.run_tree(state, repo) as b:
             assert path.is_dir()  # A has no durable record yet, but holds its lease.
-    b_path = Path(b['tree_path'])
-    os.utime(b_path, (1, 1))
-    save_record(state, status='running', tree_sha=a['tree_sha'])
+    b_path = age(b['tree_path'])
+    save_record(state, status=status, tree_sha=a['tree_sha'])
     advance(origin, 'C')
     with git_guard.run_tree(state, repo):
-        assert path.is_dir() and not b_path.exists()
+        assert path.is_dir() is not is_terminal(status)
+        assert not b_path.exists()
     save_record(state, status='completed', tree_sha=a['tree_sha'])
     with git_guard.run_tree(state, repo):
         assert not path.exists()
@@ -156,23 +170,26 @@ def test_cleanup_protects_live_records_and_startup_leases(trees):
 
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX cleanup leases')
 @pytest.mark.parametrize('unreadable', [False, True])
-def test_corrupt_records_withhold_cleanup_but_not_selection(trees, monkeypatch, unreadable):
-    origin, repo, state = trees
-    with git_guard.run_tree(state, repo) as a:
-        pass
-    path = Path(a['tree_path'])
-    os.utime(path, (1, 1))
+def test_corrupt_records_withhold_cleanup_but_not_selection(cached_tree, monkeypatch, unreadable):
+    origin, repo, state, a = cached_tree
+    path = age(a['tree_path'])
     main = advance(origin)
     record = save_record(state, status='running')
     record.write_text('{')
     read = Path.read_text
     def fail_read(current, *args, **kwargs):
-        if current == record and unreadable:
+        if current == record.resolve() and unreadable:
             raise PermissionError('cannot read record')
         return read(current, *args, **kwargs)
     monkeypatch.setattr(Path, 'read_text', fail_read)
     with git_guard.run_tree(state, repo) as b:
         assert b['tree_sha'] == main and path.is_dir()
+
+
+def test_run_tree_changelog_entry():
+    root = Path(__file__).resolve().parents[1]
+    entries = [root / 'CHANGELOG.md', *root.glob('changelog.d/*.md')]
+    assert any('SPAWNER-RUN-TREE-S1-TREE-PER-SHA' in p.read_text(encoding='utf-8') for p in entries)
 
 
 def test_parallel_creation_is_idempotent(trees):
@@ -184,8 +201,7 @@ def test_parallel_creation_is_idempotent(trees):
             return tree
     with ThreadPoolExecutor(2) as pool:
         results = list(pool.map(select, range(2)))
-    assert results[0] == results[1]
-    assert git(repo, 'worktree', 'list', '--porcelain').count('worktree ') == 2
+    assert results[0] == results[1] and git(repo, 'worktree', 'list', '--porcelain').count('worktree ') == 2
 
 
 def test_slow_creation_does_not_hold_a_host_wide_lock(trees, monkeypatch):
@@ -215,10 +231,8 @@ def test_slow_creation_does_not_hold_a_host_wide_lock(trees, monkeypatch):
         assert first.result()['tree_sha'] == first_sha
 
 
-def test_existing_directory_must_have_the_selected_head(trees):
-    origin, repo, state = trees
-    with git_guard.run_tree(state, repo) as a:
-        pass
+def test_existing_directory_must_have_the_selected_head(cached_tree):
+    origin, repo, state, a = cached_tree
     main = advance(origin)
     git(repo, 'fetch', 'origin')
     git(a['tree_path'], 'checkout', '--detach', main)
@@ -230,12 +244,10 @@ def test_existing_directory_must_have_the_selected_head(trees):
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX cleanup leases')
-def test_cleanup_keeps_dirty_and_young_trees(trees):
-    origin, repo, state = trees
-    with git_guard.run_tree(state, repo) as a:
-        pass
+def test_cleanup_keeps_dirty_and_young_trees(cached_tree):
+    origin, repo, state, a = cached_tree
     (Path(a['tree_path']) / 'untracked').touch()
-    os.utime(a['tree_path'], (1, 1))
+    age(a['tree_path'])
     advance(origin)
     with git_guard.run_tree(state, repo) as b:
         pass
@@ -244,13 +256,11 @@ def test_cleanup_keeps_dirty_and_young_trees(trees):
         assert Path(a['tree_path']).is_dir() and Path(b['tree_path']).is_dir()
 
 
-def test_windows_selection_disables_reaping_without_importing_fcntl(trees, monkeypatch):
+def test_windows_selection_disables_reaping_without_importing_fcntl(cached_tree, monkeypatch):
     import builtins
     from types import SimpleNamespace
-    origin, repo, state = trees
-    with git_guard.run_tree(state, repo) as a:
-        pass
-    os.utime(a['tree_path'], (1, 1))
+    origin, repo, state, a = cached_tree
+    age(a['tree_path'])
     main = advance(origin)
     calls = []
     monkeypatch.setitem(__import__('sys').modules, 'msvcrt', SimpleNamespace(
@@ -264,8 +274,7 @@ def test_windows_selection_disables_reaping_without_importing_fcntl(trees, monke
     monkeypatch.setattr(git_guard, 'os', SimpleNamespace(
         name='nt', environ=os.environ, utime=os.utime, fstat=os.fstat))
     with git_guard.run_tree(state, repo) as tree:
-        assert tree['tree_sha'] == main
-        assert Path(tree['tree_path']).is_dir() and Path(a['tree_path']).is_dir()
+        assert tree['tree_sha'] == main and Path(tree['tree_path']).is_dir() and Path(a['tree_path']).is_dir()
     assert calls == [1, 0, 1, 0]
 
 

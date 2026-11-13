@@ -284,15 +284,16 @@ Plain stdout, including text saying 429, is never provider evidence.
 its verified commit SHA and uses the detached tree at `<state>/trees/<sha>`.
 If fetching fails or times out, it uses the verified tracking ref, not cache
 directory mtimes. It creates the tree when its directory is missing, including
-when Git still has a stale registration for that path.
+when Git still has a stale registration for that path, even if locked (double `--force`).
 
 POSIX reaping keeps the selected tree, trees named by nonterminal run records
-or records with survivors, trees with held creation locks or leases, directories
+or records with survivors, trees with held creation locks or context leases, directories
 modified within seven days, and dirty trees. A missing/invalid `tree_sha` on a
 nonterminal or survivor record, or corrupt/unreadable records, disables reaping
 for that call. Only older, clean, unpinned trees with available locks and leases
 are removed. Windows selection does no reaping. Supervisor integration and
 run-record stamping are outside this primitive's slice.
+Terminal means `runner.is_terminal`; `needs_input` and `orphaned` keep their trees.
 
 ### Opt-in per-attempt worktrees (RUN-WORKTREE slice 1)
 
