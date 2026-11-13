@@ -283,12 +283,14 @@ def test_snapshot_retry_recovers_without_probe(snapshot_attempt, monkeypatch):
 def test_snapshot_failed_probe_reason_scrubs_paths_and_secrets(snapshot_attempt, monkeypatch):
     from plangraph.spawner import leg_probe
     case = snapshot_attempt
-    secret = '/'.join(('synthetic-snapshot', 'credential'))
-    home_path = str(Path.home() / 'private' / 'snapshot.json')
+    secret = '-'.join(('synthetic-snapshot', 'credential'))
+    bearer = '-'.join(('synthetic-bearer', 'credential'))
+    home_path = str(Path.home() / 'private snapshot' / 'snapshot.json')
+    spaced_path = '/'.join(('', 'fixture', 'private snapshot', 'snapshot.json'))
     monkeypatch.setenv('SNAPSHOT_SECRET', secret)
 
     def snapshot():
-        raise PermissionError(f'snapshot locked: {home_path}; Bearer {secret}')
+        raise PermissionError(f'snapshot locked: {secret}; Bearer {bearer} ; {home_path}; "{spaced_path}"')
 
     async def probe(*a, **k):
         return dict(ok=False, reason='timeout')
@@ -298,6 +300,10 @@ def test_snapshot_failed_probe_reason_scrubs_paths_and_secrets(snapshot_attempt,
     reason = asyncio.run(leg_probe.before_launch(case.svc.runner, case.legs[0], 'review', False))
     assert 'PermissionError: snapshot locked:' in reason
     assert secret not in reason and home_path not in reason
+    assert bearer not in reason and spaced_path not in reason
+    assert 'private snapshot' not in reason and 'snapshot.json' not in reason
+    assert '[autoos:redacted]' in reason and 'Bearer [REDACTED]' in reason
+    assert reason.endswith('Bearer [REDACTED] ; [home][path]; "[path]"; probe: timeout')
 
 
 @pytest.mark.parametrize('serving_index', [0, 1])
@@ -305,6 +311,8 @@ def test_snapshot_seat_uses_witnessed_non_writer_before_opus(snapshot_attempt, m
     from plangraph.planner.routing import SpawnPlan
     from plangraph.spawner import leg_probe
     case = snapshot_attempt
+    assert [case.reader.leg_status(leg_probe.key(leg)).get('reason', 'ok') for leg in case.legs] == [
+        'unknown', 'unknown', 'ok']
     serving = case.legs[serving_index]
     spawn = case.svc.runner.spawn
 
@@ -330,6 +338,8 @@ def test_snapshot_seat_uses_witnessed_non_writer_before_opus(snapshot_attempt, m
     assert run['status'] == 'completed', run.get('error')
     assert run['chosen_leg']['id'] == serving.id
     assert run['served_model'] == serving.model and run['served_family'] != 'gpt'
+    assert [a['leg']['id'] for a in run['attempts'] if a.get('leg') and
+            a.get('skip_reason') != 'earlier_leg_succeeded'] == [leg.id for leg in case.legs[:serving_index + 1]]
     assert case.probes == [leg.id for leg in case.legs[:serving_index + 1]]
     assert all(c['model_or_combo'] != case.legs[2].model for c in case.svc.runner.calls)
     saved = case.svc.result(run['run_id'])

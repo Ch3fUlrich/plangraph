@@ -375,13 +375,13 @@ class LegAdapter:
             return dict(state='unavailable', evidence=None)
         now = self.clock()
         if self._at is None or now - self._at >= self.ttl_s:
+            from .leg_state_flag import read_snapshot
             try:
-                from .leg_state_flag import read_snapshot
                 self._states, self._served = read_snapshot(self)
                 self._snapshot_error = None
                 self._error = None if self._states else 'unreachable'
             except Exception as exc:
-                self._error, self._snapshot_error = 'unknown', exc
+                self._error, self._snapshot_error = 'unknown', (type(exc).__name__, str(exc))
             self._at = now
         state = self._error
         if not state:

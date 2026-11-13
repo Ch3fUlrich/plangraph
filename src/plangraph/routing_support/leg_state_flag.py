@@ -1,6 +1,7 @@
 """Process-wide adapter and declared-state fallback for service plans."""
 from dataclasses import replace
 from functools import lru_cache
+import logging
 import os
 from pathlib import Path
 import re
@@ -17,18 +18,29 @@ def read_snapshot(reader):
         try:
             return reader.provider.snapshot(), {reader.identity(mid) for mid in (
                 reader.models() if callable(reader.models) else reader.models)}
-        except Exception:
+        except Exception as exc:
             if attempt:
                 raise
+            logging.getLogger(__name__).warning(
+                'Leg state snapshot read failed (%s); retrying once', type(exc).__name__)
 
 
 def snapshot_detail(reader, scrub):
     """Scrub secrets before removing locations, so paths cannot split a secret."""
     error = getattr(reader, '_snapshot_error', None)
-    detail = f'{type(error).__name__}: {error}' if error else 'SnapshotError: detail unavailable'
+    detail = ': '.join(error) if error else 'SnapshotError: detail unavailable'
     detail = scrub(detail)
     detail = detail.replace(str(Path.home()), '[home]')
-    return re.sub(r'''(?:[A-Za-z]:[\\/]|/|~[/\\])[^\s'";,]+''', '[path]', detail)
+    return re.sub(r'''(?:[A-Za-z]:[\\/]|/|~[/\\])[^\r\n'";,]+''', '[path]', detail)
+
+
+def snapshot_admission(reader, model, scrub, **scope):
+    """Only failed snapshots are recoverable through liveness evidence."""
+    status = reader.leg_status(model, **scope)
+    reason = status.get('reason') or status['state']
+    if reason.strip().lower() == 'unknown' or reason.startswith('leg_state_snapshot_error'):
+        return 'leg_state_snapshot_error: ' + ' '.join(snapshot_detail(reader, scrub).split())
+    return reason if status['state'] != 'ok' else None
 
 
 @lru_cache(maxsize=1)

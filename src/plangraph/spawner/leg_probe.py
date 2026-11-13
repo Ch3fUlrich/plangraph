@@ -332,26 +332,26 @@ async def before_launch(runner, leg, role, dry_run):
         root = Path(path).parent
     if quota_paused(root, role, leg):
         return 'quota pause'
-    def admission():
-        if adapter:
-            status = adapter.leg_status(key(leg), account=getattr(leg, 'account', None),
-                                        combo=getattr(leg, 'combo', None))
-            reason = status.get('reason') or status['state']
-            if reason.strip().lower() == 'unknown' or reason.startswith('leg_state_snapshot_error'):
-                from .env_redact import redact_output, redact_env_values
-                from plangraph.routing_support.leg_state_flag import snapshot_detail
-                detail = snapshot_detail(adapter, lambda text: redact_output(redact_env_values(text, os.environ)))
-                return 'leg_state_snapshot_error: ' + ' '.join(detail.split())
-            return reason if status['state'] != 'ok' else None
+    scope = dict(account=getattr(leg, 'account', None), combo=getattr(leg, 'combo', None))
+    def admission(provider_only=False, checked=False):
+        status = {} if checked else state.leg_status(key(leg), **{k: v for k, v in scope.items() if v is not None})
+        if status.get('state') == 'limited':
+            return 'limited until ' + reset_iso((status.get('evidence') or {}).get('reset_at'))
+        if adapter and not provider_only:
+            from .env_redact import redact_output, redact_env_values
+            from plangraph.routing_support.leg_state_flag import snapshot_admission
+            return snapshot_admission(adapter, key(leg), lambda text: redact_output(redact_env_values(text, os.environ)), **scope)
         return None
-    status = state.leg_status(key(leg))  # D-3685: provider limits still win.
-    if status.get('state') == 'limited':
-        return 'limited until ' + reset_iso((status.get('evidence') or {}).get('reset_at'))
-    skip = None
-    ts = state.last_probe_ts(key(leg)) if ttl and role in ('implement', 'fix') else None
-    if not ttl or role not in ('implement', 'fix') or (ts is not None and time.time() - ts < ttl):
-        skip = admission()
-        if not (skip or '').startswith('leg_state_snapshot_error:'): return skip
+    if limit := admission(provider_only=True):
+        return limit
+    ts = state.last_probe_ts(key(leg)) if ttl else None
+    fresh = ts is not None and 0 <= time.time() - ts < ttl
+    if not ttl or role not in ('implement', 'fix') or fresh:
+        skip = admission(checked=True)
+        if not (skip or '').startswith('leg_state_snapshot_error:'):
+            return skip
+        if fresh:
+            return None  # A recent provider success also recovers snapshot errors.
     pending = _INFLIGHT.get(key(leg))
     if pending is None:
         pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state))
@@ -360,11 +360,11 @@ async def before_launch(runner, leg, role, dry_run):
     reason = result.get('reason')
     if not reason or reason.strip().lower() == 'unknown':
         reason = 'host_not_ready' if result.get('state') == 'host-not-ready' else 'leg_probe_failed'
-    skip = skip or admission()
+    skip = admission()  # Re-read even after snapshot failure: new limits still win.
     if (skip or '').startswith('leg_state_snapshot_error:'):
         return None if result['ok'] or result.get('state') == 'probe_failed_leg_serving' else skip + '; probe: ' + reason
-    if result.get('state') == 'host-not-ready':
-        return reason
+    if skip or result.get('state') == 'host-not-ready':
+        return skip or reason
     return skip if result['ok'] or result.get('infra') or result.get('state') == 'probe_failed_leg_serving' else 'down: ' + reason
 
 

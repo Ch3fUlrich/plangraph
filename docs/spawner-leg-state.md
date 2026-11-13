@@ -66,9 +66,17 @@ Before a normal writer dispatch, stale or missing probe evidence triggers a
 probe; failure skips that leg and tries the next. Dry runs never probe. Reviews
 probe only after a snapshot error: provider/discovery reads retry once before
 caching the error, then the existing single-flight probe admits a serving leg.
+Refresh failures are cached for the adapter TTL (60 seconds by default), with
+one type-only warning for the first failed read and detached type/message detail
+for the final failure; a successful refresh clears that detail.
 A failed probe includes `leg_state_snapshot_error`, scrubbed exception type/message
 and probe reason; infrastructure failure alone is not serving evidence. Known
-provider limits still win. `PLANGRAPH_LEG_PROBE_TTL_S` defaults to 1800 seconds;
+provider limits still win, including scoped limits booked while a probe runs:
+dispatch rechecks local limits and adapter admission after each probe. A pass or
+serving result overrides only a snapshot-error reason, never `limited`, quota,
+`not_listed`, `unavailable` or other non-snapshot admission reasons. Fresh successful
+probe/provider evidence also recovers a snapshot error without another probe,
+including reviews, until `PLANGRAPH_LEG_PROBE_TTL_S` expires (default 1800 seconds);
 0 disables ordinary automatic probes, not snapshot-error recovery or explicit probes.
 
 A `running` record on the same model/harness wins over a failed probe when its
