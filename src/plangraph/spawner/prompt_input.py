@@ -35,7 +35,8 @@ def resolve_cwd(cwd, card):
         try:
             inside, root, head = subprocess.check_output(['git', '-C', value, 'rev-parse',
                 '--is-inside-work-tree', '--show-toplevel', '--verify', 'HEAD^{commit}'],
-                text=True, stderr=subprocess.DEVNULL, timeout=10, env=checkout_env()).strip().splitlines()
+                text=True, encoding='utf-8', errors='replace', stderr=subprocess.DEVNULL,
+                timeout=10, env=checkout_env()).strip().splitlines()
         except (OSError, ValueError, subprocess.SubprocessError):
             raise ParameterRefused('cwd must name a git checkout with a committed HEAD') from None
         if inside != 'true' or Path(root).resolve() != Path(value).resolve() or not head:
