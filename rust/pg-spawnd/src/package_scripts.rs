@@ -35,6 +35,9 @@ git merge --ff-only --no-edit origin/main
 git merge-base --is-ancestor origin/main {base}
 test -n "$(git config user.name)"
 git config user.email | LC_ALL=C grep -Eq '^([0-9]+\+)?[A-Za-z0-9._-]+@users\.noreply\.github\.com$'
+for ident in GIT_AUTHOR_IDENT GIT_COMMITTER_IDENT; do
+ git var "$ident" | sed -n 's/.*<\([^>]*\)>.*/\1/p' | LC_ALL=C grep -Eq '^([0-9]+\+)?[A-Za-z0-9._-]+@users\.noreply\.github\.com$'
+done
 mkdir -p {root}
 git worktree add -b {branch} {work} {base}
 printf '%s' {text} > {package}
@@ -97,6 +100,9 @@ Git merge --ff-only --no-edit origin/main
 Git merge-base --is-ancestor origin/main {base}
 if (!(Git config user.name)) {{ throw 'git identity missing' }}
 if ((Git config user.email) -cnotmatch '^([0-9]+\+)?[A-Za-z0-9._-]+@users\.noreply\.github\.com$') {{ throw 'git identity refused' }}
+foreach ($ident in @('GIT_AUTHOR_IDENT','GIT_COMMITTER_IDENT')) {{
+ if ((Git var $ident) -cnotmatch '<([0-9]+\+)?[A-Za-z0-9._-]+@users\.noreply\.github\.com>') {{ throw 'effective git identity refused' }}
+}}
 New-Item -ItemType Directory -Force -Path {root} | Out-Null
 Git worktree add -b {branch} {work} {base}
 [IO.File]::WriteAllText({package}, {text})

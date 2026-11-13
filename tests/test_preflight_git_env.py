@@ -42,7 +42,7 @@ def test_nested_fixture_keeps_its_installed_hook(repo, monkeypatch, refuse):
     nested = repo / "independent-checkout"
     subprocess.run(["git", "init", "-q", str(nested)], check=True)
     subprocess.run(["git", "-c", "user.name=Test", "-c",
-                    "user.email=test@example.invalid", "commit", "-q",
+                    "user.email=123+fixture@users.noreply.github.com", "commit", "-q",
                     "--allow-empty", "-m", "fixture"], cwd=nested, check=True)
     nested_remote = repo / "nested.git"
     subprocess.run(["git", "init", "-q", "--bare", str(nested_remote)], check=True)

@@ -18,7 +18,7 @@ def test_missing_preflight_main(tmp_path, skip):
     (tools / "check_file_size.py").write_text("raise SystemExit(0)\n")
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     subprocess.run(["git", "-c", "user.name=Test", "-c",
-                    "user.email=test@example.invalid", "commit", "-qm", "initial",
+                    "user.email=123+fixture@users.noreply.github.com", "commit", "-qm", "initial",
                     "--allow-empty"], cwd=tmp_path, check=True)
     head = subprocess.check_output(["git", "rev-parse", "HEAD"],
                                    cwd=tmp_path, text=True).strip()

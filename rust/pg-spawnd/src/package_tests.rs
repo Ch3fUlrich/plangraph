@@ -103,7 +103,7 @@ fn package_linux_script_runs_against_command_fakes() {
     let bin = state.join("bin");
     std::fs::create_dir(&bin).unwrap();
     for (name,script) in [
-        ("git", "#!/bin/sh\ncase \"$*\" in\n'symbolic-ref --short HEAD') echo main;;\n'config user.name') echo Test;;\n'config user.email') echo '123+writer@users.noreply.github.com';;\n'worktree add -b '*) mkdir -p \"$5\";;\nesac\n"),
+        ("git", "#!/bin/sh\ncase \"$*\" in\n'symbolic-ref --short HEAD') echo main;;\n'config user.name') echo Test;;\n'config user.email') echo '123+writer@users.noreply.github.com';;\n'var GIT_'*) echo 'Fixture <123+writer@users.noreply.github.com> 1 +0000';;\n'worktree add -b '*) mkdir -p \"$5\";;\nesac\n"),
         ("herdr", "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$PKG_CALLS\"\ncase \"$*\" in 'workspace create '*) echo pane-1;; esac\n"),
         ("sleep", "#!/bin/sh\nexit 0\n")
     ] {
@@ -147,13 +147,18 @@ fn package_linux_script_runs_against_command_fakes() {
 
 #[test]
 fn package_all_stale_claims_return_reasons_without_remote_work() {
-    let state=temp(); let mut fake=Fake::default();
-    let args=json!({"host":"fixture","base_ref":"origin/main","branch":"phase/test","keys":["p:STALE","p:STALE"]});
-    let result=launch(&state,args.as_object().unwrap(),&host(false),&mut fake).unwrap_or_else(|_|panic!("refusal list"));
-    assert_eq!(result["status"],"refused");
-    assert_eq!(result["refused"],json!([{"key":"p:STALE","reason":"already merged"}]));
+    let state = temp();
+    let mut fake = Fake::default();
+    let args = json!({"host":"fixture","base_ref":"origin/main","branch":"phase/test","keys":["p:STALE","p:STALE"]});
+    let result = launch(&state, args.as_object().unwrap(), &host(false), &mut fake)
+        .unwrap_or_else(|_| panic!("refusal list"));
+    assert_eq!(result["status"], "refused");
+    assert_eq!(
+        result["refused"],
+        json!([{"key":"p:STALE","reason":"already merged"}])
+    );
     assert!(result.get("package_text").is_none());
-    assert_eq!(fake.calls,vec![("claim".into(),"p:STALE".into())]);
+    assert_eq!(fake.calls, vec![("claim".into(), "p:STALE".into())]);
     assert!(list(&state).is_empty());
     std::fs::remove_dir_all(state).unwrap();
 }

@@ -60,7 +60,7 @@ fn classify(run: &Value, sample: &Value, now: f64, stall_seconds: f64) -> Value 
         "mtime_delta":delta("log_mtime"),"commits":sample["commits"],"idle_seconds":idle,"last_progress":progress,
         "snapshot":sample,"probed_at":now,"load":sample["load"],"ram_available_mb":sample["ram_available_mb"],"disk_free_mb":sample["disk_free_mb"]})
 }
-fn unhex(value: &Value) -> Result<String, ToolError> {
+pub(crate) fn unhex(value: &Value) -> Result<String, ToolError> {
     let s = value
         .as_str()
         .ok_or_else(|| parameter("invalid probe hex field"))?;

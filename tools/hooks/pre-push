@@ -139,6 +139,25 @@ def scan_blob(rel, local_sha, cfg, find_shapes, hits, baselines=()):
                 hits.append(sc.Hit(rel, n, rule))
 
 
+def identity_gate(base, head):
+    """Refuse guessed author and committer identities in newly pushed commits."""
+    allowed = re.compile(r'(?:[0-9]+\+)?[A-Za-z0-9._\[\]-]+@users\.noreply\.github\.com')
+    span = f'{base}..{head}' if git_out('cat-file', '-t', base) == 'commit' else head
+    result = git('log', '--format=%H%x00%ae%x00%ce', span)
+    if result.returncode:
+        print('pre-push: cannot inspect commit identity: push refused', file=sys.stderr)
+        return 1
+    for line in result.stdout.decode('utf-8', 'replace').splitlines():
+        fields = line.split('\0')
+        if len(fields) != 3:
+            return 1
+        for role, email in zip(('author', 'committer'), fields[1:]):
+            if not allowed.fullmatch(email):
+                print(f'pre-push: {fields[0][:12]} {role} email outside noreply allowlist: push refused', file=sys.stderr)
+                return 1
+    return 0
+
+
 def file_size_gate():
     """tools/check_file_size.py on the pushing checkout: 0 clean, 1 refuse."""
     r = subprocess.run([PYTHON, str(FILE_SIZE)], capture_output=True, text=True, timeout=60)
@@ -271,6 +290,8 @@ def push_main():
     for rec in refs:
         _, local_sha, _, remote_sha = rec
         base = base_commit(remote_sha, local_sha)
+        if identity_gate(affected_base_commit(remote_sha, local_sha), local_sha):
+            return 1
         baselines = main_baselines(local_sha)
         changelog_docs_warn(base, local_sha)
         for line in git_out("diff", "--no-renames", "--name-status", base, local_sha).splitlines():

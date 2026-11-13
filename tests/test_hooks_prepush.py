@@ -74,7 +74,7 @@ def commit_file(repo, rel, text):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text)
     git(repo, "add", "-A")
-    git(repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+    git(repo, "-c", "user.name=t", "-c", "user.email=123+fixture@users.noreply.github.com",
         "commit", "-qm", "change")
     return git(repo, "rev-parse", "HEAD").strip()
 
@@ -87,7 +87,7 @@ def commit_symlink(repo, rel, target):
     p.parent.mkdir(parents=True, exist_ok=True)
     os.symlink(target, p)
     git(repo, "add", "-A")
-    git(repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+    git(repo, "-c", "user.name=t", "-c", "user.email=123+fixture@users.noreply.github.com",
         "commit", "-qm", "relink")
     return git(repo, "rev-parse", "HEAD").strip()
 
@@ -118,7 +118,7 @@ def repo(tmp_path):
     r.mkdir()
     git(r, "init", "-q", "-b", "main")
     git(r, "config", "user.name", "t")
-    git(r, "config", "user.email", "t@example.invalid")
+    git(r, "config", "user.email", "123+fixture@users.noreply.github.com")
     base = commit_file(r, "app/clean.py", "x = 1\n")
     return r, base
 
@@ -398,3 +398,31 @@ def test_prepush_checks_the_pushed_sha_not_head(repo):
     out = res.stdout + res.stderr
     assert res.returncode == 0, out
     assert "1 path(s)" in out and "changelog no" in out
+
+
+@pytest.mark.parametrize('role', ['author', 'committer'])
+def test_identity_gate_refuses_guessed_email(repo, monkeypatch, capsys, role):
+    import runpy
+    r, base = repo
+    valid = '123+fixture@users.noreply.github.com'
+    guessed = 'writer@' + 'fixture.invalid'
+    monkeypatch.chdir(r)
+    for prefix in ('GIT_AUTHOR', 'GIT_COMMITTER'):
+        monkeypatch.setenv(prefix + '_NAME', 'Fixture')
+        monkeypatch.setenv(prefix + '_EMAIL', guessed if prefix.lower().endswith(role) else valid)
+    git(r, 'commit', '--allow-empty', '-qm', 'identity fixture')
+    head = git(r, 'rev-parse', 'HEAD').strip()
+    hook = runpy.run_path(str(HOOK))
+    assert hook['identity_gate'](base, head) == 1
+    assert role in capsys.readouterr().err
+
+
+def test_identity_gate_accepts_noreply_email(repo, monkeypatch):
+    import runpy
+    r, base = repo
+    monkeypatch.chdir(r)
+    for prefix in ('GIT_AUTHOR', 'GIT_COMMITTER'):
+        monkeypatch.setenv(prefix + '_NAME', 'Fixture')
+        monkeypatch.setenv(prefix + '_EMAIL', '123+fixture@users.noreply.github.com')
+    git(r, 'commit', '--allow-empty', '-qm', 'identity fixture')
+    assert runpy.run_path(str(HOOK))['identity_gate'](base, git(r, 'rev-parse', 'HEAD').strip()) == 0

@@ -28,7 +28,7 @@ def repo(tmp_path, monkeypatch):
     r.mkdir()
     git(r, "init", "-qb", "main")
     git(r, "config", "user.name", "fixture")
-    git(r, "config", "user.email", "fixture@example.invalid")
+    git(r, "config", "user.email", "123+fixture@users.noreply.github.com")
     for rel in ("tools/hooks/pre-push", "tools/split/scrub_check.py",
                 "tools/check_file_size.py"):
         dest = r / rel

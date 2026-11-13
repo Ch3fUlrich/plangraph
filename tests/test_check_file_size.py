@@ -43,7 +43,7 @@ class RepoFixture(unittest.TestCase):
         self.git("init", "-q")
         # CI runners carry no git identity: a fixture commit must carry its own.
         self.git("config", "user.name", "file-size tests")
-        self.git("config", "user.email", "filesize@example.invalid")
+        self.git("config", "user.email", "123+fixture@users.noreply.github.com")
 
     def git(self, *args):
         return subprocess.run(["git"] + list(args), cwd=str(self.repo),
