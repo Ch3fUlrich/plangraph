@@ -1,0 +1,20 @@
+[
+  {
+    "id": "structured-memory-1",
+    "prompt": "My project bridge returns no project rules and only two global Preferences. Should I rebuild the graph before recalling this repository's decisions?",
+    "must": ["OMNIGRAPH_GRAPH_ID", "decision-keyed", "exactly one row"],
+    "must_not": ["rebuild the empty graph", "write project data to memory"]
+  },
+  {
+    "id": "structured-memory-2",
+    "prompt": "I need to replace a node and its edges. Can I send one GraphQL mutation containing a delete and an insert, then trust affectedNodes as proof?",
+    "must": ["Read the schema first", "insert/update-only OR delete-only", "commits_list"],
+    "must_not": ["use a GraphQL mutation wrapper", "affectedNodes proves durability"]
+  },
+  {
+    "id": "structured-memory-3",
+    "prompt": "I merge-loaded an accepted Decision with a revised rationale on Omnigraph 0.13. Can I assume semantic search still covers it and run the old dedup rebuild if it does not?",
+    "must": ["Supersede, don't overwrite", "nearest()", "0.8.x-only"],
+    "must_not": ["merge preserves the embedding", "run the 0.8.x store wipe on 0.13"]
+  }
+]
