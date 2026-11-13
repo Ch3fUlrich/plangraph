@@ -1,0 +1,20 @@
+{
+  "run-29c2b8e5c20c474b921d475182d22464": [
+    {
+      "leg": "agy-sonnet-5.5",
+      "status": "failed",
+      "skip_reason": "harness_limit: error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 145h52m0s.",
+      "reason": "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 145h52m0s.",
+      "reset_at": null
+    }
+  ],
+  "run-726ed4a8c28b4aa888d64bddf8c73c46": [
+    {
+      "leg": "agy-sonnet-5.5",
+      "status": "failed",
+      "skip_reason": "harness_limit: error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 145h52m13s.",
+      "reason": "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 145h52m13s.",
+      "reset_at": null
+    }
+  ]
+}

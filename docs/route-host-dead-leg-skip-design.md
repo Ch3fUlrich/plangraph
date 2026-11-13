@@ -1,128 +1,198 @@
 # Host dead legs before spawn
 
 Plan: `plangraph:ROUTE-HOST-DEAD-LEG-SKIP-BEFORE-SPAWN`; replan-0449.
-D-5714, D-5722 and rule 1h. Round one is design and recorded evidence only.
-No runtime fix or host configuration change is claimed here; the design-doc search found `docs/rl29-reconcile-design.md` beside this file.
+D-5714, D-5722, D-5736 and rule 1h. Round two is design and recorded fixtures only.
+No runtime fix or host configuration change is claimed. No lane change belongs under `src/`.
+Ignore `docs/rl29-reconcile-design.md` for this item; it governs crash reconciliation, not routing.
+It is neither superseded nor merged into this contract.
 
 ## Current code map
 
-- Route entry: `src/plangraph/spawner/service.py:SpawnService._route`.
-  It calls `src/plangraph/routing_support/leg_state_flag.py:service_plan`.
+- Route: `src/plangraph/spawner/service.py:SpawnService._route` calls
+  `src/plangraph/routing_support/leg_state_flag.py:service_plan`.
   `src/plangraph/planner/routing.py:plan_spawn` builds legs, skips and seats.
-  `src/plangraph/planner/routing.py:route_card` applies admission and review order.
-  `src/plangraph/planner/review_order.py:review_key` supplies the ordering key.
-- Host admission: `src/plangraph/routing_support/resolver.py:host_skip_reason`.
-  `served_models` discovers standalone models; `plan_for_launch` writes host skips.
-  `src/plangraph/routing_support/served_fresh.py:served_fresh` confirms absence.
-  `src/plangraph/routing_support/leg_state.py:LegAdapter.leg_status` joins discovery and provider state.
-  Native harness admission currently checks the executable, not model selection.
-- Bookings: `src/plangraph/routing_support/leg_state.py:LegStateStore._connect` creates `leg_events`.
+  `routing.py:route_card` and `src/plangraph/planner/review_order.py:review_key` order reviews.
+- Host: `src/plangraph/routing_support/resolver.py:host_skip_reason`, `plan_for_launch`,
+  `served_models` and `src/plangraph/routing_support/served_fresh.py:served_fresh` handle discovery.
+  `src/plangraph/routing_support/leg_state.py:LegAdapter.leg_status` joins snapshot and provider state.
+  Native admission currently checks the executable, not model selection.
+- Bookings: `leg_state.py:LegStateStore._connect` creates `leg_events`.
   `_default_store` selects `$XDG_STATE_HOME/plangraph/leg-state.sqlite`.
-  `record_provider_response` and `record_harness_limit` write `reset_at`, `ts` and scope.
-  `_reset` caps resets at 24 hours. `leg_status` expires evidence after six hours.
-  `src/plangraph/spawner/exit_outcome.py:_book_failure` writes harness bookings.
-  `src/plangraph/spawner/runner.py:SpawnerRunner.provider_response` writes trusted HTTP evidence.
+  `record_provider_response`, `record_harness_limit` and `_reset` store capped resets.
+  `leg_status` currently expires evidence at six hours and can accept a newer probe pass.
   `src/plangraph/spawner/leg_probe.py:before_launch` checks bookings before probes.
-- Plan audit: `src/plangraph/planner/routing.py:plan_spawn` fills `SpawnPlan.skipped`.
-  `src/plangraph/planner/routing.py:SpawnPlan.to_dict` serializes that audit.
-  `src/plangraph/routing_support/resolver.py:plan_for_launch` appends `reason` and `skip_reason`.
-- Attempts: `src/plangraph/spawner/service.py:SpawnService._spawn.execute` appends actual results.
-  `src/plangraph/spawner/runner.py:spawn_service.DispatchService._spawn.execute` also appends pre-launch skips.
-  `src/plangraph/spawner/service.py:SpawnService._save` synthesizes unlaunched rows at run end.
-  Both synthesis paths must stop doing that for this design's skips.
+  `src/plangraph/spawner/exit_outcome.py:_book_failure` books harness limits.
+  `src/plangraph/spawner/runner.py:SpawnerRunner.provider_response` accepts trusted HTTP evidence.
+- Audit: `routing.py:SpawnPlan.to_dict` serializes `plan_spawn` skips.
+  `resolver.py:plan_for_launch` appends canonical `reason` and `skip_reason`.
+- Attempts: `service.py:SpawnService._spawn.execute` appends results.
+  `runner.py:spawn_service.DispatchService._spawn.execute` also appends pre-launch skips.
+  `service.py:SpawnService._save` synthesizes unlaunched rows. Both synthesis paths must change.
 
-## (a) Host and deadline admission
+## (a) Host, booking and deadline admission
 
-Filter on the executing host, after placement, before prompt packaging or child spawn.
-Apply the same filter to routed reviews, seat plans and explicit selections.
-An explicit selection refuses if blocked. It cannot override a booking.
-Offline route and dry-run calls do not probe or write host health.
-Use one run deadline: `record.started + thresholds(card, role='review')['max_s']`.
-After PR 808, reuse `run_watchdog_limits.py:leg_limits` (re-exported by run_watchdog) and its unchanged deadline; max_s=None has no deadline-based skip, but active bookings still block launch.
-Drop confirmed host absences with `not_served_on_host: model_not_listed`.
-Drop a fresh active quota booking ending at or beyond the deadline with `quota_dead_past_deadline`.
-Put leg id, reason, skip_reason and bounded evidence in `plan.skipped`; keep reset_at and deadline numeric, without provider text.
-Write no attempt row for these decisions, including during final save or reroute.
-Only a real launch gets an attempt, including the launch that discovers failure. Recheck before each launch; deduplicate skips by leg and reason.
-Filter review seats too, then recompute family coverage using existing seat rules.
-Do not change the relative order of survivors. No survivors means a recorded refusal or exhaustion, not a dummy attempt.
+Filter per leg on the executing host after placement, before prompt packaging and child spawn.
+Use the same admission for routed reviews, seats and explicit selections; pins cannot override it.
+Offline route and dry-run calls neither probe nor write health.
+Resolve the deadline once at run creation: before PR 808 use
+`record.started + run_watchdog_limits.thresholds(card, role=role)['max_s']`;
+after PR 808 use its `leg_limits` deadline unchanged. Never recompute it at reroute.
+An unlimited `max_s=None` disables only the deadline comparison, not booking admission.
+Confirmed absence gets `not_served_on_host: model_not_listed`.
+An active booking ending at or beyond a finite deadline gets `quota_dead_past_deadline`.
+An active booking ending earlier, or with no run deadline, gets `quota_limited_until_reset`.
+Both reasons block only that booked leg and scope, never other eligible legs or the whole run.
+Bookings take precedence over served status, rendered admission and all probe results (D-3685).
+Add `LegStateStore.active_booking`; query unexpired limits independently of newest-event status.
+Keep exact provider account/combo scope, existing leg-wide harness scope and `agy/` normalization.
+An explicit reset books until `min(provider_reset, observed_at + 24 h)`, not six hours.
+Persist whether a reset was capped/absent in `leg_events`; migrate old uncertain rows as requiring revalidation.
+The six-hour evidence TTL never clears an active booking; change booking readers accordingly.
+An absent reset books ten minutes; an explicitly elapsed reset books nothing.
+A genuine reset releases its booking at reset. A truncated or absent reset needs revalidation at expiry.
+Revalidation means a trusted adapter quota-status response or operator-authorized clearance
+for the same scope, observed after expiry; a liveness probe, snapshot or serving hint cannot clear it.
+Until revalidated, an expired uncertain booking becomes `leg_state_snapshot_error`, not launchable.
+This ends the capped booking without inventing a 146-hour booking or spending a routing attempt.
+Never probe an active booking, renew it by reads, sleep, or poll for reset.
+Reconsider a genuinely reset or revalidated leg only at an existing reroute/admission boundary.
+Store leg id, canonical reason, skip_reason, numeric reset_at/deadline and bounded evidence in `plan.skipped`.
+No pre-launch rejection creates an attempt, including final save, reroute or seat synthesis.
+Only a real launch creates an attempt, including a new failure discovered after admission.
+Recheck before every launch; deduplicate skips by leg and reason.
+Preserve survivor order and recompute seat-family coverage with existing rules.
+No survivors means recorded refusal/exhaustion, never a dummy attempt.
 
-D-3685 bookings are never overridden by a probe, snapshot or serving-log hint.
-Read active bookings independently of the newest probe event, with exact account/combo scope.
-Keep the existing leg-wide harness scope and `agy/` key normalization.
-Add `LegStateStore.active_booking`; do not trust a latest-event `ok` as booking clearance.
-Today `leg_state.py:235-241` can return ok after a later probe pass.
-The new admission query must still find the older unexpired booking.
-Use the capped reset and six-hour evidence expiry; do not park a leg for the reported 146 hours.
-At expiry require fresh authority. Do not silently extend evidence or renew it by probing.
-A reset before the deadline is not quota-dead for the whole run.
-While it remains booked, use `quota_limited_until_reset` in the plan and launch nothing.
-Reconsider it on an existing reroute after reset; do not add sleeping or polling.
-An absent reset uses the existing ten-minute booking window, never an invented long reset.
+## (b) Gateway evidence in the launching process
 
-## (b) Bounded gateway refusal
+A gateway-backed leg with no valid effective base URL is not served on that executing host.
+Use `not_served_on_host: gateway_base_url_unresolved`; do not turn missing configuration into unknown.
+Resolve and check inside `SpawnerRunner.spawn`, in the process that launches the child.
+Use its final child environment/config after overlays, key loading, rendering and isolation.
+Freeze that launch configuration; a changed environment/config requires admission again.
+Never substitute an interactive shell, remote parent, or differently configured discovery process.
+Add `resolver.py:gateway_reachable(env, deadline)` for this launcher-side check, not an ambient-env check.
+It resolves the rendered effective URL first and returns unresolved before any connection if absent.
+Connect with the child's proxy/network settings, bounded by one second and remaining run time.
+Only the connector's OS `ECONNREFUSED` yields `not_served_on_host: gateway_connection_refused`.
+Timeout, DNS failure or unverifiable network-context parity is unknown; skip with `gateway_check_unknown`.
+Define `SpawnerRunner.gateway_transport_response` as an in-process connector callback only.
+Bind it to host/config digest and a private object capability, following `provider_response` token checks.
+Never export that capability to a child. Exit-one output never calls this callback.
+No child prose parsing or unspecified authenticated telemetry is required to learn refusal.
+Add private `host_gateway_health` in the existing leg-state database, keyed by host/config digest.
+Store reason, observed_at and expires_at, never an endpoint, key or environment value.
+A refusal mark blocks every leg using that gateway on that host for 300 seconds.
+Direct/native legs and other hosts/configurations are unaffected; skipped legs never renew a mark.
+Expiry requires a new bounded connector check before launch, not a paid child attempt.
+A configuration change invalidates the old mark but still requires admission.
+A newer successful connector check clears refusal; discovery alone cannot clear it.
+Missing URLs are checked on every admission; a 300-second expiry never makes them launchable.
+Unreadable health storage is unknown and fail-closed under (d), with a bounded diagnostic.
 
-Only trusted ECONNREFUSED evidence creates a mark: `resolver.py:gateway_reachable` makes a parent-side connection check bounded to one second and remaining run time; `SpawnerRunner.gateway_transport_response` also accepts authenticated adapter telemetry. Timeout or DNS failure stays unknown.
-Exit code 1, prompt text and model-authored output alone are insufficient.
-Add a private `host_gateway_health` table to the existing leg-state SQLite database.
-Key it by canonical executing host and a digest of the effective gateway configuration.
-Store reason `gateway_connection_refused`, observed_at and expires_at; no endpoint or key.
-The mark lasts 300 seconds from the observation. Reads and skipped legs never renew it.
-All legs using that same gateway get `not_served_on_host: gateway_connection_refused`.
-Direct/native legs and other hosts or gateway digests are unaffected.
-Expiry or a changed configuration makes the mark inapplicable.
-A newer authenticated transport success clears it early; cached discovery does not.
-Unreadable health storage is unknown, not proof of absence. Surface a bounded diagnostic.
+## (c) MiMo on dell: D-5736
 
-## (c) MiMo on dell
-
+D-5736 establishes that dell's spawner lacked the gateway base-URL environment variable.
+This is a launcher configuration failure, not evidence that a correctly configured gateway was unreachable.
 `src/plangraph/routing_support/opencode_overlay.py:overlay_env` reads `$AUTOOS_ROOT/opencode.jsonc`.
-`src/plangraph/routing_support/opencode_render.py:render_gateway_providers` renders `OPENCODE_CONFIG_CONTENT`.
-Address precedence is `providers.omniroute.settings.baseURL`, `OMNIROUTE_BASE_URL`,
-`PLANGRAPH_GATEWAY_URL`, then transitional `AUTOOS_OMNIROUTE_URL`; a valid provider baseURL is the final fallback.
-`src/plangraph/routing_support/host_keys.py`
-function `add_host_keys` supplies the named gateway credential privately.
-dell needs an authenticated gateway reachable from its child network, not merely valid rendered config.
-No address or credential value belongs in this repository. This round changes none.
-Without that connectivity, dell's host health marks both gateway MiMo legs not served for the bounded window.
-`resolver.py:admitted_by_render` currently bypasses model listing for MiMo; it must not bypass host health.
+`src/plangraph/routing_support/opencode_render.py:render_gateway_providers` renders child configuration.
+Keep its address precedence: `providers.omniroute.settings.baseURL`, `OMNIROUTE_BASE_URL`,
+`PLANGRAPH_GATEWAY_URL`, transitional `AUTOOS_OMNIROUTE_URL`, then a valid active-provider baseURL.
+`src/plangraph/routing_support/host_keys.py` function `add_host_keys`
+privately supplies the named gateway credential.
+The environment variable must reach the executing spawner, not just its shell or controller.
+For the recurrence with no effective URL, list both gateway MiMo legs not served with `gateway_base_url_unresolved`.
+If the resolved gateway refuses, list them not served with `gateway_connection_refused` under (b).
+`resolver.py:admitted_by_render` must not bypass either rule or fail-closed unknown admission.
+After configuration repair, MiMo still needs successful launch-context admission before answering.
+This round changes no host setting and records no address, credential or site string.
 
-## (d) Served legs stay eligible
+## (d) Eligibility and unknown state
 
-A leg needs valid registration, the requested role, policy/risk/context admission and its host executable.
-It needs confirmed model support or the accepted rendered-provider path, and no active quota or gateway mark.
-Such a leg is never skipped by this filter, including when snapshot telemetry is missing or stale.
-A failed discovery is unknown, not an empty served list. Preserve PR 812's recovery distinction.
-Do not turn snapshot_error, generic exit 1 or an invalid-model error into a fleet-wide quota booking.
-Confirmed native invalid-model selection is host/model absence, not provider exhaustion; use a separate `host_model_health` table keyed by host/model/config digest, expiring after 300 seconds or config change.
+A served leg stays eligible only with registration, role, policy/risk/context approval, executable,
+confirmed model support or valid rendered admission, and no blocking booking or host-health decision.
+A leg meeting all those conditions is never skipped, even when unrelated snapshot telemetry is absent.
+Missing/stale telemetry may be replaced by independent authoritative evidence for every required check.
+Otherwise an unknown leg is skipped with `leg_state_snapshot_error`; it is never optimistically launched.
+Discovery failure is unknown, not an empty served list or a permanent host absence.
+Preserve PR 812 snapshot recovery/scrub semantics; no unknown state creates a fleet-wide quota booking.
+Confirmed native invalid-model selection creates host/model absence, not provider exhaustion.
+Add `host_model_health` keyed by host/model/config digest, including executable/model-settings identity.
+Use `not_served_on_host: native_model_invalid` until configuration changes or an authoritative model-list check clears it.
+Do not expire configuration-caused invalid-model marks after 300 seconds; elapsed time cannot permit another failed attempt.
+Generic exit 1 alone proves neither gateway refusal nor native model absence.
 
-## (e)-(f) Test-first slices and merge ownership
+## (e) Test-first slices
 
-Each later slice includes its tests and docs and stays at most 400 changed lines.
-Keep every existing test name and assertion. Add separate booking-admission tests.
-Round one adds only `test_route_host_dead_leg_attempts_fixture_shape` and the fixture below.
-1. Booking authority, <=350 lines: add `leg_state.py:LegStateStore.active_booking`; use it in `leg_probe.py:before_launch` and `routing.py:plan_spawn`.
-   Add `tests/test_route_host_booking.py`: `test_probe_pass_cannot_override_booking`, `test_quota_deadline_boundary`, `test_quota_scope_and_expiry`, `test_booked_leg_never_probed`.
-   Wait for PR 812 before editing its `before_launch` admission hunk. Keep snapshot retry and scrub handling.
-2. Host filter, <=350 lines: change `resolver.py:plan_for_launch`, `host_skip_reason`, `host_skip_reason_async`; thread host/deadline through existing async wrappers.
-   Add `tests/test_route_host_admission.py`: `test_not_served_removed_before_spawn`, `test_served_leg_never_skipped`, `test_discovery_failure_is_unknown`, `test_native_invalid_model_is_host_scoped`.
-   Wait for PR 812's `LegAdapter.leg_status` merge before consuming snapshot states. Wait for PR 813's resolver/MiMo changes; retain its new identities.
-3. Gateway health, <=400 lines: add `leg_state.py:LegStateStore.record_gateway_refusal`, `gateway_status`, `clear_gateway_refusal` and table setup in `_connect`; consult health in `resolver.py:host_skip_reason`.
-   Change `exit_outcome.py:fallthrough_reason`, `runner.py:SpawnerRunner.spawn`; add `resolver.py:gateway_reachable` and private-token-authenticated `SpawnerRunner.gateway_transport_response`, not output prose parsing. Native health belongs in slice 2: `LegStateStore.record_host_model_absence`, `host_model_status`.
-   Add `tests/test_route_host_gateway.py`: `test_gateway_refusal_shared_only_on_host`, `test_gateway_mark_expires_without_renewal`, `test_gateway_success_and_config_change`, `test_exit_one_does_not_mark_gateway`, `test_mimo_render_cannot_bypass_health`.
-   Wait for PR 808's failure-classification hunk. Keep its terminal safety stops and ordinary-failure fallthrough.
-4. Dispatch/audit, <=400 lines: change `service.py:SpawnService._route`, `_spawn`, `_save`; change `runner.py:spawn_service.DispatchService._spawn` and `seat_spawn.py:SeatSpawnMixin._spawn_seats`.
-   Reuse existing functions; shrink/extract existing responsibilities if a file would exceed its file-size cap.
-   Add `tests/test_route_host_dead_leg_skip.py`: `test_recorded_dead_legs_leave_no_attempts`, `test_final_save_does_not_synthesize_dead_attempts`, `test_reroute_keeps_skip_audit`, `test_no_survivors_launch_nothing`, `test_seats_recompute_coverage`, `test_explicit_leg_cannot_bypass_host_filter`.
-   Wait for PR 808's attempt-loop and remaining-deadline hunks in service.py and runner.py; add admission before its launch, not a competing loop.
-   Wait for PR 813's `planner/legs.py`, `routing.py:plan_spawn` order/benchmark hunks; test survivor order without restoring old Argon review roles.
+Budgets include tests/docs and all listed functions. Measure added + deleted lines against each slice base.
+Split an over-budget slice before commit; do not omit native-health work to claim the 350-line budget.
+Retain all existing test names/assertions. This round tests evidence, not runtime admission.
+1. Booking authority, <=350 lines: `leg_state.py:LegStateStore.active_booking`, `_connect`, `_reset`,
+   `record_provider_response`, `record_harness_limit`, `leg_status`; `leg_probe.py:before_launch`, `routing.py:plan_spawn`.
+   `tests/test_route_host_booking.py`: `test_probe_pass_cannot_override_booking`, `test_quota_deadline_boundary`,
+   `test_quota_scope_and_expiry`, `test_booked_leg_never_probed`, `test_six_hour_ttl_cannot_clear_booking`,
+   `test_capped_reset_requires_authoritative_revalidation`, `test_booking_blocks_only_its_leg`.
+   First red-on-main test: `test_probe_pass_cannot_override_booking`; newer probe passes currently hide bookings.
+2. Host filter/native health, <=350 lines: `resolver.py:plan_for_launch`, `host_skip_reason`,
+   `host_skip_reason_async` and existing async wrappers; `leg_state.py:LegStateStore._connect`,
+   `record_host_model_absence`, `host_model_status` own the native table and configuration-scoped clearing.
+   `tests/test_route_host_admission.py`: `test_not_served_removed_before_spawn`, `test_served_leg_never_skipped`,
+   `test_discovery_failure_is_unknown`, `test_unknown_leg_is_skipped_without_attempt`,
+   `test_native_invalid_model_is_host_scoped`, `test_native_invalid_model_does_not_expire_by_time`.
+3. Gateway health, <=400 lines: `leg_state.py:LegStateStore._connect`, `record_gateway_refusal`,
+   `gateway_status`, `clear_gateway_refusal`; `resolver.py:host_skip_reason`, `gateway_reachable`;
+   `runner.py:SpawnerRunner.spawn`, `gateway_transport_response`; `exit_outcome.py:fallthrough_reason`.
+   `tests/test_route_host_gateway.py`: `test_gateway_refusal_shared_only_on_host`,
+   `test_gateway_mark_expires_without_renewal`, `test_gateway_success_and_config_change`,
+   `test_exit_one_does_not_mark_gateway`, `test_mimo_render_cannot_bypass_health`,
+   `test_missing_gateway_url_in_spawner_env_skips_before_spawn`, `test_parent_env_cannot_admit_child`.
+4. Dispatch/audit and live verification, <=400 lines: `service.py:SpawnService._route`, `_spawn`, `_save`;
+   `runner.py:spawn_service.DispatchService._spawn`; `seat_spawn.py:SeatSpawnMixin._spawn_seats`.
+   `tests/test_route_host_dead_leg_skip.py`: `test_recorded_dead_legs_leave_no_attempts`,
+   `test_final_save_does_not_synthesize_dead_attempts`, `test_reroute_keeps_skip_audit`,
+   `test_no_survivors_launch_nothing`, `test_seats_recompute_coverage`, `test_explicit_leg_cannot_bypass_host_filter`.
+   The recorded replay must first fail on main's pre-launch/synthesized attempt rows and assert named plan reasons.
+   Replay all five recorded plans; inject separately labelled quota/host authority, never infer it from null fields.
+Reuse/extract existing responsibilities; never grow a file beyond its file-size ratchet.
+
+## (f) Merge ownership
+
+The original brief (`run-c76c4cd5bda7486da2942ddb93fbe5ec`) assigns (e) to functions/tests/slices and (f) to merge dependencies.
+They are separate requirements; this document keeps separate sections rather than merging their meaning.
+Slice 1 waits for PR 812's `before_launch` hunk; slice 2 waits for its `LegAdapter.leg_status` snapshot hunk.
+Slices 2/3 wait for PR 813 resolver/MiMo identities; retain them and snapshot recovery/scrub handling.
+Slices 3/4 wait for PR 808 failure classification, attempt loop and remaining-deadline hunks in service/runner.
+Insert admission before that loop's launch; preserve terminal safety stops and ordinary-failure fallthrough.
+Slice 4 waits for PR 813 `planner/legs.py` and `routing.py:plan_spawn` ordering/benchmark hunks.
+Test survivor order without restoring old Argon roles. Merge main into the lane; never rebase.
 
 ## Recorded evidence boundary
 
-`tests/fixtures/route_host_dead_leg_attempts.json` projects all 26 attempt rows from each of the five requested runs.
-It preserves order and only leg id, status, skip_reason and reason. Missing reason fields become null.
-Four runs fail on Argon; the fifth already skips it as limited. All five eventually complete on Haiku.
-The supplied evidence used PR 808. Main stops on an ordinary failed leg without its fallthrough change.
-The fixture's MiMo rows say only harness exit code 1. They do not prove ECONNREFUSED or a gateway address.
-Connection refusal and the roughly 146-hour agy quota are supplied context, not invented fixture fields.
-Future tests inject trusted transport and quota evidence separately. This round's shape test asserts no runtime fix.
+`tests/fixtures/route_host_dead_leg_attempts.json` preserves the five runs' 26 ordered rows each.
+Keep raw status/skip_reason/reason, including failure text in skip_reason and absent reason as null.
+Do not relabel these historical rows as prospective named admission reasons.
+The fixture test pins those failure fields; later replay tests assert canonical reasons in the new plan.
+All five runs finish on Haiku with PR 808; MiMo's exit-one rows alone prove no transport cause.
+The host search of `~/.local/state/plangraph/runs/*/record.json` found recorded agy 429 quota responses.
+`tests/fixtures/route_host_dead_leg_quota.json` adds two agy-sonnet-5.5 responses from
+`run-29c2b8e5c20c474b921d475182d22464` and `run-726ed4a8c28b4aa888d64bddf8c73c46`.
+Project leg id/status/skip_reason from attempts and reason from `stderr_tail`'s structured `AGY_ERROR.short_error`.
+Their code is 429 and their resets are 145h52m0s/145h52m13s; no absolute reset_at was recorded, so keep null.
+Their `provider_response` fields are null; this is recorded adapter stderr, not authenticated HTTP callback evidence.
+The first fixture cannot alone prove quota-dead admission. Its replay uses the supplemental recorded quota text.
+Any numeric reset_at, clock, deadline and trusted booking injected for replay are constructed, not recorded facts.
+Never change raw evidence to manufacture a reason or a timestamp. No prompt/stdout/endpoint/key/home path is retained.
+
+## Verification and completion ownership
+
+Slice 4 owns the item's live acceptance, after slices 1-3 land: one unpinned dell review must reach a serving leg
+with zero failed attempts; MiMo must answer or appear as not served with its named reason. Record the run id in its PR body.
+The evidence-only shape/projection tests may pass on main; they do not satisfy the item's red-first runtime test.
+Each slice runs touched test files and `python3 tools/affected_tests.py --base origin/main --run -n 2`.
+If selection falls back to the whole suite, use `--within` for the lane's test files; never run the whole suite.
+Before every lane push run `python3 tools/check_new_code_lang.py`, `python3 tools/check_changelog_docs.py`,
+`CHANGELOG_BASE=origin/main python3 tools/check_changelog_docs.py`,
+`FILESIZE_REQUIRE_BASE=origin/main python3 tools/check_file_size.py`, and
+`timeout 300 python3 tools/ci_commit_gate.py check --base origin/main --head HEAD` on the committed head.
+Completion requires authorized merge with CI green on the merge commit, plus the replay and live evidence.
+D-5526: this seat only pushes the lane fast-forward; it never merges, marks ready, pushes main or changes PR state.
