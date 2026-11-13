@@ -45,8 +45,10 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
 
 - One commit per task; trailers `Plan-Item:`, `Writer:`, and `Changelog: skip (...)`
   when the commit adds no fragment.
-- A test that fails without the fix. Targeted tests only. `tools/preflight.py`
-  on the commit range before each commit.
+- A test that fails without the fix. Affected tests only, using
+  `tools/affected_tests.py --base <base> --head <head> --files-only --run`.
+  Pre-push enforces this with a four-minute budget; no `PREFLIGHT_SKIP` bypass.
+  GitHub CI runs the full suite.
 - New code is Rust. Fixes inside existing Python stay Python until the port.
   No file above 800 lines.
 - Blocked, or failing after two attempts: revert, write one sentence, next task.

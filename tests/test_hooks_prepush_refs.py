@@ -216,6 +216,7 @@ def test_sha256_new_branch_and_delete(tmp_path):
     git(tmp_path, "init", "--object-format=sha256", str(r))
     git(r, "config", "user.name", "t")
     git(r, "config", "user.email", "123+fixture@users.noreply.github.com")
+    commit_file(r, "tools/affected_tests.py", "raise SystemExit(0)\n")
     head = commit_file(r, "clean.txt", "clean\n")
     zero = "0" * len(head)
     res = run_hook(r, [push_line("feature", head, zero)])

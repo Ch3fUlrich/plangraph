@@ -1,16 +1,12 @@
 # Contributing
 
-Run `python3 tools/preflight.py --base origin/main --head HEAD` before pushing:
-it blocks on scrub, CI policy (including commit trailers), changed-crate Rust checks,
-and affected tests, in that order. Each family ends with a timed PASS/FAIL/SKIP/INFRA
-summary; failed checks with HTTP 5xx output in any family (including policy) are
-inferred as INFRA and retried once; persistent INFRA exits 3, other failures exit 1.
-Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
-affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
-Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
-to skip affected tests. The existing pre-push hook runs preflight too; set
-`PREFLIGHT_FAST=1` for its fast mode or `PREFLIGHT_SKIP=1` to bypass only that hook
-invocation (not the existing scrub/ref/file-size gates or direct CLI runs). Private
+Before pushing, run `python3 tools/affected_tests.py --base origin/main --head HEAD --files-only --run`.
+The pre-push hook runs this selector automatically with a shared 240-second test
+budget, after ref safety, pushed-tree size policy, commit identity and scrub gates.
+It always selects explicit affected files; it never invokes the full suite or
+`tools/preflight.py`. `PREFLIGHT_SKIP` and `PREFLIGHT_FAST` do not bypass it.
+GitHub CI runs full verification. The standalone preflight command remains an
+explicit diagnostic tool, with its own per-family policy and timeouts. Private
 scrub words come from `PLANGRAPH_SCRUB_WORDS` or `~/.config/plangraph/scrub-words.txt`;
 when neither is present, public rules still run but scrub reports SKIP with a reason.
 `PREFLIGHT_TOOLS_DIR` overrides tool paths for tests.

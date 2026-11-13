@@ -97,18 +97,13 @@ def run_hook(repo, lines, env_extra=None):
     env["HOME"] = str(Path(repo).parent / "home")
     env.pop("PLANGRAPH_SCRUB_WORDS", None)
     env.pop("PLANGRAPH_SCRUB_RULES", None)
-    env["PREFLIGHT_SKIP"] = "1"  # Scrub/changelog fixtures, not preflight.
     env.update(env_extra or {})
     stdin = "".join(l + "\n" for l in lines)
     command = [sys.executable, str(HOOK), "origin", "https://example.invalid/r.git"]
     result = subprocess.run(command,
                           cwd=str(repo), input=stdin, capture_output=True, text=True,
                           env=env, timeout=120)
-    if result.returncode == 0:
-        notice = "pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)"
-        assert result.stderr.splitlines().count(notice) == 1
-    else:
-        assert "tools/preflight.py missing" not in result.stderr
+    assert "preflight skipped" not in result.stderr
     return result
 
 
@@ -119,6 +114,7 @@ def repo(tmp_path):
     git(r, "init", "-q", "-b", "main")
     git(r, "config", "user.name", "t")
     git(r, "config", "user.email", "123+fixture@users.noreply.github.com")
+    commit_file(r, "tools/affected_tests.py", "raise SystemExit(0)\n")
     base = commit_file(r, "app/clean.py", "x = 1\n")
     return r, base
 
@@ -442,3 +438,31 @@ def test_pushed_tree_cap_overrides_older_hook_checkout(repo, tmp_path):
         input=push_line('phase/fixture', head, base) + '\n', capture_output=True, text=True,
         env={**os.environ, 'PREFLIGHT_SKIP': '1', 'HOME': str(tmp_path / 'home')})
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_phase_skip_cannot_bypass_affected_gate(repo):
+    r, base = repo
+    head = commit_file(r, 'tools/affected_tests.py',
+        "from pathlib import Path\nPath('.affected-ran').write_text('yes')\n")
+    result = run_hook(r, [push_line('phase/fixture', head, base)], {'PREFLIGHT_SKIP': '1'})
+    assert result.returncode == 0, result.stderr
+    assert (r / '.affected-ran').is_file()
+
+
+def test_affected_gate_is_file_only_and_time_bounded(tmp_path, monkeypatch):
+    import runpy
+    from types import SimpleNamespace
+    tools = tmp_path / 'tools'
+    tools.mkdir()
+    (tools / 'affected_tests.py').touch()
+    monkeypatch.setenv('PREFLIGHT_SKIP', '1')
+    calls = []
+    monkeypatch.setattr(subprocess, 'run', lambda command, **kw:
+                        calls.append((command, kw)) or SimpleNamespace(returncode=0))
+    hook = runpy.run_path(str(HOOK))
+    assert hook['affected_gate'](tmp_path, 'base', 'head') == 0
+    command, options = calls[0]
+    assert '--files-only' in command and '--run' in command
+    assert Path(command[1]).name == 'affected_tests.py'
+    assert options['timeout'] <= 240
+    assert 'preflight.py' not in ' '.join(command)

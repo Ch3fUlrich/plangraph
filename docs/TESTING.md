@@ -4,7 +4,7 @@ Install `requirements-ci.txt` in a virtual environment (includes pytest-xdist),
 activate it, then use the same command for writers, L2 and PR CI:
 
 ```sh
-python3 tools/affected_tests.py --base origin/main --run
+python3 tools/affected_tests.py --base origin/main --files-only --run
 ```
 
 Build-L1: use that line in PR CI; this change intentionally does not edit workflows.
@@ -18,7 +18,9 @@ Selection follows transitive AST imports in src/ and tests/ (including relative
 imports and package initializers), plus test references to filenames for subprocess
 consumers. Changed tests select themselves. Conftest/shared test helpers, config,
 workflows, deleted/unmapped files, parse failures and source files without mapped
-tests select the full suite. This is deliberate over-selection, not an allow-list.
+tests may select the full suite in CI mode. Local `--files-only` selection instead
+uses explicit bounded test files and refuses when it cannot determine them; the
+pre-push hook always uses that mode with a 240-second budget and no skip bypass.
 AST cannot establish arbitrary runtime/plugin/file-system dependencies: when changing
 such behavior, request full verification rather than treating selection as coverage.
 

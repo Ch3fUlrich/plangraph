@@ -1,0 +1,1 @@
+Pre-push invokes only the explicit affected-test selector, with a shared 240-second budget and the repository virtual environment. PREFLIGHT_SKIP and PREFLIGHT_FAST no longer bypass local affected checks; full verification stays in GitHub CI.

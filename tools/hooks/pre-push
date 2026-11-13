@@ -22,6 +22,7 @@ import difflib
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 PYTHON = sys.executable
@@ -196,6 +197,20 @@ def python_interpreter(root):
     return str(Path(configured).expanduser().absolute()) if configured else shutil.which('python3') or 'python3'
 
 
+def affected_gate(root, base, head, timeout=240):
+    """Local pushes select explicit affected files; the full suite belongs to CI."""
+    selector = Path(root) / 'tools/affected_tests.py'
+    if not selector.is_file():
+        print('pre-push: tools/affected_tests.py missing: push refused', file=sys.stderr)
+        return 1
+    if timeout <= 0:
+        print('pre-push: affected-test budget exhausted: push refused', file=sys.stderr)
+        return 1
+    command = [PYTHON, str(selector), '--root', str(root), '--base', base,
+               '--head', head, '--files-only', '--run', '--workers', '2']
+    return subprocess.run(command, cwd=root, timeout=min(timeout, 240)).returncode
+
+
 def main():
     try:
         return push_main()
@@ -305,24 +320,12 @@ def push_main():
               "(rule ids above; matched values are never shown)", file=sys.stderr)
         return 1
     root = Path(git_out("rev-parse", "--show-toplevel"))
-    preflight = root / "tools/preflight.py"
-    if os.environ.get("PREFLIGHT_SKIP") != "1" and preflight.is_file():
-        for _, local_sha, _, remote_sha in refs:
-            command = [PYTHON, str(preflight),
-                       "--base", affected_base_commit(remote_sha, local_sha),
-                       "--scrub-base", base_commit(remote_sha, local_sha), "--head", local_sha]
-            if os.environ.get("PREFLIGHT_FAST") == "1":
-                command.append("--fast")
-            # Per-check deadlines govern, including the possible INFRA retry.
-            result = subprocess.run(command)
-            if result.returncode:
-                return result.returncode
-    elif os.environ.get("PREFLIGHT_SKIP") == "1":
-        print("pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)",
-              file=sys.stderr)
-    elif any(rec[2] == "refs/heads/main" for rec in refs):
-        print("pre-push: tools/preflight.py missing: push refused", file=sys.stderr)
-        return 1
+    deadline = time.monotonic() + 240
+    for _, local_sha, _, remote_sha in refs:
+        result = affected_gate(root, affected_base_commit(remote_sha, local_sha),
+                               local_sha, deadline - time.monotonic())
+        if result:
+            return result
     return 0
 
 

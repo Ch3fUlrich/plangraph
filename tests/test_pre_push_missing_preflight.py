@@ -1,4 +1,4 @@
-"""Missing checkout preflight must not silently bypass main's push gate."""
+"""Missing affected-test selector must refuse pushes even with a legacy skip flag."""
 import os
 from pathlib import Path
 import shutil
@@ -32,7 +32,6 @@ def test_missing_preflight_main(tmp_path, skip):
         [sys.executable, str(tools / "hooks/pre-push")], cwd=tmp_path,
         env=env, input=f"refs/heads/main {head} refs/heads/main {head}\n",
         capture_output=True, text=True)
-    assert result.returncode == (0 if skip else 1)
-    reason = ("pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)"
-              if skip else "pre-push: tools/preflight.py missing: push refused")
+    assert result.returncode == 1
+    reason = "pre-push: tools/affected_tests.py missing: push refused"
     assert result.stderr.splitlines().count(reason) == 1

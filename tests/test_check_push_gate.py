@@ -35,6 +35,7 @@ def repo(tmp_path, monkeypatch):
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / rel, dest)
     shutil.copy2(ROOT / ".filesize-baseline", r / ".filesize-baseline")
+    (r / "tools/affected_tests.py").write_text("raise SystemExit(0)\n")
     commit(r)
     git(r, "remote", "add", "origin", "https://example.invalid/fixture/public")
     return r
@@ -163,9 +164,7 @@ def test_installed_real_push(repo, tmp_path, monkeypatch, shape):
     if shape != "id":
         assert "scrub hit" in result.stderr
     else:
-        assert result.stderr.splitlines().count(
-            "pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)"
-        ) == 1
+        assert "preflight skipped" not in result.stderr
 
 
 @pytest.mark.parametrize("value", [None, "", ", ,"])

@@ -334,6 +334,8 @@ class GateHookTests(RepoFixture):
     checker on the pushing checkout and refuses the push on a violation."""
 
     def push(self):
+        self.write("tools/affected_tests.py", "raise SystemExit(0)\n")
+        self.git("add", "tools/affected_tests.py")
         self.git("commit", "-q", "-m", "fixture")
         head = self.git("rev-parse", "HEAD").stdout.strip()
         line = "refs/heads/lane %s refs/heads/lane %s\n" % (head, ZERO)
