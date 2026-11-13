@@ -71,26 +71,17 @@ def test_env_refusal(env, monkeypatch, capsys, name, kind):
 ])
 def test_malformed_values(env, monkeypatch, capsys, name, value):
     monkeypatch.setenv(name, value)
-    assert f"REFUSE {name} " in run(capsys, "preflight")[1]
+    code, output = run(capsys, "preflight")
+    assert code == 2
+    assert f"REFUSE {name} " in output
 def test_non_utf8_allowlist(env, capsys):
     Path(os.environ["PG_CARD_ALLOWLIST"]).write_bytes(bytes([255]))
-    assert "REFUSE PG_CARD_ALLOWLIST" in run(capsys, "preflight")[1]
+    code, output = run(capsys, "preflight")
+    assert code == 2
+    assert "REFUSE PG_CARD_ALLOWLIST" in output
 def test_name_parity():
-    sources = [ROOT / "rust/worker/src/bin/worker.rs",
-               ROOT / "rust/worker-core/src/config.rs"]
-    if not all(p.exists() for p in sources):
-        pytest.skip("Rust worker sources absent")
-    worker = "\n".join(p.read_text() for p in sources)
-    # These names are delegated or pilot-only, not literals in the entrypoint.
-    delegated = {
-        "PG_JAIL_BIN": "rust/worker/src/harness.rs",
-        "PG_BUILD_ID": "rust/worker/src/buildid.rs",
-        "PG_CARD_ALLOWLIST": "tools/pilot_preflight.py",
-        "PLANGRAPH_TEMPORAL_HTTP": "src/plangraph/inbox/temporal_signal.py",
-    }
-    for name in pilot.REQUIRED_ENV:
-        text = (ROOT / delegated[name]).read_text() if name in delegated else worker
-        assert name in text, name
+    from test_pilot_preflight_findings import assert_name_parity
+    assert_name_parity()
 def test_nonempty_repo(env, capsys):
     assert run(capsys, "setup-repo", str(env))[0] == 2
 def test_inside_checkout(env, capsys):
@@ -183,7 +174,8 @@ def test_setup_refusals(env, capsys, kind):
     if kind == "symlink":
         repo.symlink_to(ROOT, target_is_directory=True)
     elif kind == "dotdot":
-        repo = ROOT / "unused" / ".." / "forbidden"
+        (env / 'sibling').mkdir()
+        repo = env / 'sibling' / '..' / 'forbidden'
     elif kind == "file":
         repo.touch()
     else:
@@ -193,6 +185,9 @@ def test_setup_refusals(env, capsys, kind):
         else:
             allow.symlink_to(env / "absent")
     assert run(capsys, "setup-repo", str(repo))[0] == 2
+    if kind == 'dotdot':
+        assert not (env / 'forbidden').exists()
+        assert not (env / 'forbidden.cards.allow').exists()
 @pytest.mark.parametrize("error", [OSError, RuntimeError])
 @pytest.mark.parametrize("action", ["preflight", "setup-repo", "verify"])
 def test_redacted_exceptions(env, monkeypatch, capsys, action, error):
@@ -350,11 +345,13 @@ def test_auth_config_sources(env, monkeypatch, capsys, source, setting):
 def test_child_home_cleanup(env, mutation):
     target = env
     (target / 'marker').touch()
-    code = 'import os; home = os.environ["HOME"]; '
+    code = 'import os; home = os.environ["HOME"]; print(home, flush=True); '
     code += ('os.chmod(home, 0o555); ' if mutation == 'chmod' else 'os.rmdir(home); ')
     if mutation == 'symlink':
         code += f'os.symlink({str(target)!r}, home); '
-    assert pilot.command([sys.executable, '-c', code + 'exit(7)']).returncode == 7
+    result = pilot.command([sys.executable, '-c', code + 'exit(7)'])
+    assert result.returncode == 7
+    assert not os.path.lexists(os.fsdecode(result.stdout).strip())
     assert (target / 'marker').exists()
 
 @pytest.mark.parametrize('fs,expected', [('overlay', False), ('9p', False),

@@ -70,7 +70,19 @@ def http_url(value):
 
 def absolute_file(value):
     path = Path(value)
-    return bool(value) and path.is_absolute() and path.is_file()
+    try:
+        return bool(value) and path.is_absolute() and stat.S_ISREG(path.lstat().st_mode)
+    except OSError:
+        return False
+
+
+def read_regular_file(value, mode=None):
+    fd = os.open(value, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, encoding="utf-8") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or (mode is not None and stat.S_IMODE(info.st_mode) != mode):
+            raise ValueError("invalid file")
+        return stream.read()
 
 
 def card_keys(text):
@@ -86,10 +98,12 @@ def card_keys(text):
 def credential_valid():
     token = os.environ.get("PG_TOKEN_FILE")
     if token is not None:
-        path = Path(token)
-        if not absolute_file(token) or stat.S_IMODE(path.stat().st_mode) != 0o600:
+        try:
+            if not absolute_file(token):
+                return False
+            credential = read_regular_file(token, 0o600).strip()
+        except (OSError, ValueError):
             return False
-        credential = path.read_text(encoding="utf-8").strip()
     else:
         credential = os.environ.get("PG_KEEPER_TOKEN", "")
     return bool(credential) and not any(c.isspace() or ord(c) < 32 for c in credential)
@@ -108,7 +122,7 @@ def preflight():
                 valid = valid and os.access(value, os.X_OK)
             if valid and name == "PG_CARD_ALLOWLIST":
                 try:
-                    card_keys(Path(value).read_text(encoding="utf-8"))
+                    card_keys(read_regular_file(value))
                 except (OSError, ValueError):
                     valid = False
         elif name == "PG_HARNESS_VERSIONS":
@@ -127,6 +141,8 @@ def preflight():
 
 
 def setup_repo(directory):
+    if '..' in Path(directory).parts:
+        return emit("setup-repo", False, "directory contains parent traversal")
     repo = Path(directory).resolve()
     allow = repo.parent / (repo.name + ".cards.allow")
     if repo.is_relative_to(CHECKOUT):
@@ -135,22 +151,26 @@ def setup_repo(directory):
         return emit("setup-repo", False, "directory must be absent or empty")
     if allow.exists() or allow.is_symlink():
         return emit("setup-repo", False, "allowlist already exists")
-    repo.mkdir(parents=True, exist_ok=True)
+    repo.parent.mkdir(parents=True, exist_ok=True)
     # Empty HOME and explicit config operands isolate Git without extra env keys.
     def git(*args):
         result = command(["git", "-c", "user.name=Pilot", "-c",
                           "user.email=pilot@localhost", "-c",
                           "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
-                          *args], cwd=repo, timeout=30)
+                          *args], cwd=staged, timeout=30)
         if result.returncode:
             raise ValueError("git failed")
 
-    git("init", "-b", "main", "--template=")
-    script = repo / "check.sh"
-    script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    script.chmod(0o755)
-    git("add", "--", "check.sh")
-    git("commit", "-m", "Initialize isolated pilot")
+    with tempfile.TemporaryDirectory(prefix=".pilot-repo-", dir=repo.parent) as temp:
+        staged = Path(temp) / "repo"
+        staged.mkdir()
+        git("init", "-b", "main", "--template=")
+        script = staged / "check.sh"
+        script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        script.chmod(0o755)
+        git("add", "--", "check.sh")
+        git("commit", "-m", "Initialize isolated pilot")
+        staged.rename(repo)
     with allow.open("x", encoding="utf-8") as stream:
         stream.write("\n".join(card_keys("pilot:PILOT-1\npilot:PILOT-2\n")) + "\n")
     # Paths are explicit CLI operands, never environment values.
@@ -163,14 +183,18 @@ def persistent(path, mountinfo=None):
     if path.is_relative_to(Path("/tmp").resolve()) or not path.is_file() or not os.access(path, os.W_OK):
         return False
     # Longest matching Linux mount wins, including bind-mounted tmpfs paths.
-    mounts = []
+    best, filesystem = -1, None
     for line in (Path("/proc/self/mountinfo").read_text()
                  if mountinfo is None else mountinfo).splitlines():
         left, right = line.split(" - ", 1)
         mount = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), left.split()[4])
-        if path.is_relative_to(Path(mount)):
-            mounts.append((len(mount), right.split()[0]))
-    return bool(mounts) and max(mounts)[1] in {
+        try:
+            mount = Path(mount).resolve()
+        except (OSError, RuntimeError):
+            return False
+        if path.is_relative_to(mount) and len(mount.parts) >= best:
+            best, filesystem = len(mount.parts), right.split()[0]
+    return filesystem in {
         "ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs"}
 
 
@@ -201,7 +225,7 @@ def verify(args):
         if not absolute_file(allow):
             return False
         repo = Path(args.repo).resolve()
-        card_keys(Path(allow).read_text(encoding="utf-8"))
+        card_keys(read_regular_file(allow))
         home = os.environ.get("HOME") or str(Path.home())
         git_env = {key: value for key, value in os.environ.items()
                    if key in {"GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM",
@@ -218,7 +242,8 @@ def verify(args):
     check("auth", auth, "token mode checked; no credential helper or remote")
     # rust/pg-jail/src/main.rs:19-33 accepts --rw/--ro/--deny-read/--proc-self/--,
     # not --help. Do not execute a pretend help probe (or a jailed command).
-    check("jail", lambda: absolute_file(args.jail_bin) and os.access(args.jail_bin, os.X_OK),
+    check("jail", lambda: args.jail_bin == os.environ.get("PG_JAIL_BIN")
+          and absolute_file(args.jail_bin) and os.access(args.jail_bin, os.X_OK),
           "regular executable; CLI has no help probe")
 
     def versions():

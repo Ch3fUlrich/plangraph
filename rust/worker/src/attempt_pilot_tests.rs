@@ -8,10 +8,25 @@ fn random_body() -> String {
 }
 
 fn excludes_secret_fragments(body: &str, secret: &str, floor: usize) -> bool {
-    assert!(floor <= secret.len(), "family floor exceeds fixture length");
-    !body.contains(secret)
-        && (1..=secret.len() - floor).all(|start| !body.contains(&secret[start..]))
-        && (floor..secret.len()).all(|end| !body.contains(&secret[..end]))
+    assert!(floor > 0 && floor <= secret.len(), "family floor exceeds fixture length");
+    secret.as_bytes().windows(floor).all(|window| {
+        !body.as_bytes().windows(floor).any(|candidate| candidate == window)
+    })
+}
+
+#[test]
+fn pilot_leak_oracle_rejects_every_interior_window() {
+    let secret = ["ghp_", &random_body()].concat();
+    let floor = pg_worker_core::GITHUB_TOKEN_BODY_FLOOR;
+    for start in 0..=secret.len() - floor {
+        for end in start + floor..=secret.len() {
+            let leaked = &secret[start..end];
+            assert!(!excludes_secret_fragments(leaked, &secret, floor));
+        }
+    }
+    assert!(excludes_secret_fragments("[REDACTED]", &secret, floor));
+    let short = &secret[5..5 + floor - 1];
+    assert!(excludes_secret_fragments(short, &secret, floor));
 }
 
 #[test]
@@ -49,6 +64,13 @@ fn pilot_complete_token_redacts_repeated_suffix_line() {
 fn pilot_leak_guard_explains_oversized_floor() {
     let short = ["gh", "p_", "abc"].concat();
     assert_eq!(crate::output_redact::history_text(&short), short);
+    assert!(short.len() < pg_worker_core::GITHUB_TOKEN_BODY_FLOOR);
+    let oversized = std::panic::catch_unwind(|| {
+        excludes_secret_fragments("[REDACTED]", &short, short.len() + 1)
+    }).expect_err("an oversized oracle floor must fail");
+    let message = oversized.downcast_ref::<&str>().copied()
+        .or_else(|| oversized.downcast_ref::<String>().map(String::as_str));
+    assert_eq!(message, Some("family floor exceeds fixture length"));
 }
 #[test]
 fn pilot_activity_owner_and_empty_claim() {

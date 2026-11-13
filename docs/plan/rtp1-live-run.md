@@ -75,9 +75,13 @@ Run `python3 tools/pilot_preflight.py preflight` on the pilot host before starti
 An unset or empty `PLANGRAPH_TEMPORAL_HTTP` is a refusal: the stub leg must not
 merge until the keeper has this setting. All required worker settings above,
 plus `PG_CARD_ALLOWLIST` (absolute existing UTF-8 file), must be present.
+Token, allowlist and jail operands must be regular files, not symlinks; token
+mode is checked on the same no-follow file descriptor used to read its bytes.
 Use `python3 tools/pilot_preflight.py setup-repo /persistent/pilot-a` to create
 an isolated main-branch repository with only `check.sh`, no remote, and a sibling
 `pilot-a.cards.allow` containing exactly `pilot:PILOT-1` and `pilot:PILOT-2`.
+Parent traversal (`..`) is refused. Git initialization is staged in a private
+sibling directory so a failed init/add/commit leaves the destination retryable.
 The allowlist requires 1–20 `pilot:PILOT-<digits>` keys, one per line; blank
 lines and `#` comments are allowed. Preflight and verify enforce the same parser.
 Set `PG_CARD_ALLOWLIST` to that sibling path; never use production cards.
@@ -90,6 +94,9 @@ Preflight accepts this same file-only credential mode. Binding the allowlist to
 the documented repository sibling is operator-enforced: verify validates its
 absolute path and pilot-key content, not its filename or repository association.
 Persistence permits only ext2/3/4, xfs, btrfs, zfs and f2fs mounts, never `/tmp`.
+Mount points are resolved before matching; at equal depth the last mountinfo
+entry wins. Unresolvable mount points refuse verification. The `--jail-bin`
+operand must exactly match `PG_JAIL_BIN`; a missing environment value refuses.
 After a failed check, all later checks print `SKIP` and do not execute.
 Non-auth children receive only PATH, LANG, HOME and TERM, with a private writable
 HOME, timeouts and no credentials. Auth Git probes use the operator's real HOME

@@ -1261,7 +1261,7 @@ mod tests {
         }
     }
 
-    /// The `.git` rule prevents redirecting a healthy worktree via a symlink.
+    /// Git follows the symlink and every other check passes: a test that runs without the symlink rule fails here.
     #[test]
     fn verify_refuses_a_worktree_whose_dot_git_is_a_symlink() {
         let (r, base) = repo();

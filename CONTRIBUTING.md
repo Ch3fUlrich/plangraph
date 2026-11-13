@@ -27,6 +27,8 @@ plangraph is public; the plans it tracks usually are not. Keep that difference c
 
 Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so there is no
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
+Pilot preflight safety vectors live in `tests/test_pilot_preflight.py` and
+`tests/test_pilot_preflight_findings.py`; run both without a live keeper or server.
 The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
 with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
 The D-5504/D-5506 `mcp_tools.py` exception only splits schema data out of the full Python MCP transport; it also retires with MCP-RUST.
