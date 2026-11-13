@@ -4,6 +4,9 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{ffi::OsStr, fs};
 
+#[path = "sync/refusals.rs"]
+mod refusals;
+
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 struct Fixture {
@@ -324,7 +327,7 @@ fn symbolic_ref_errors_are_not_detached() {
 #[test]
 fn default_ref_errors_do_not_guess_main() {
     let f = Fixture::new();
-    f.alert_command("fetch-failed", 1, f.git_shim(
+    f.alert_command("probe-failed", 1, f.git_shim(
         "if [ \"$5\" = symbolic-ref ] && [ \"$7\" = refs/remotes/origin/HEAD ]; then exit 128; fi"
     ));
 }
