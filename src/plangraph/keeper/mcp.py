@@ -23,6 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from .brief import creation_error
+from .mcp_tools import TOOLS, _tool
 
 __all__ = ["serve", "handle", "HttpKeeper", "main", "TOOLS", "PROTOCOL_VERSION"]
 
@@ -32,111 +33,6 @@ SERVER_VERSION = "0.1"
 TIMEOUT = 10
 
 
-def _tool(name, description, props=None, required=()):
-    schema = {"type": "object", "properties": props or {}}
-    if required:
-        schema["required"] = list(required)
-    return {"name": name, "description": description, "inputSchema": schema}
-
-
-#: Terse on purpose: tools/list is paid for on every session.
-TOOLS = (
-    _tool("requeue", "Router: revive a parked card and retire its exec run.",
-          {"key": {"type": "string"}, "reason": {"type": "string"}}, ("key",)),
-    _tool("ready", "Open items whose deps are done, with D-ids + STALE flag (stale last); mine=your items, agent=no operator steps. Run show before work.",
-          {"project": {"type": "string"}, "n": {"type": "integer"}, "owner": {"type": "string"},
-           "mine": {"type": "boolean"}, "agent": {"type": "boolean"}}),
-    _tool("show", "ALWAYS read before work, never start from a title: desc, done, deps/dependents + why, evidence, D-ids, last activity, merged commits, open lanes, STALE. brief=true short.",
-          {"key": {"type": "string"}, "brief": {"type": "boolean"}}, ("key",)),
-    _tool("claim", "Claim a ready item after show; refuses merged/superseded/premise-outdated items; force_stale=<reason> overrides (audited).",
-          {"key": {"type": "string"}, "lease_s": {"type": "integer"}, "force_stale": {"type": "string"}}, ("key",)),
-    _tool("delegate", "Hand a claimed item to a worker principal.",
-          {"key": {"type": "string"}, "worker": {"type": "string"}},
-          ("key", "worker")),
-    _tool("heartbeat", "Extend a lease at the given epoch.",
-          {"key": {"type": "string"}, "epoch": {"type": "integer"}},
-          ("key", "epoch")),
-    _tool("release", "Return a claimed item to open.",
-          {"key": {"type": "string"}, "epoch": {"type": "integer"}},
-          ("key", "epoch")),
-    _tool("evidence", "Attach evidence {kind, ref} to a claimed item.",
-          {"key": {"type": "string"}, "epoch": {"type": "integer"},
-           "kind": {"type": "string"}, "ref": {"type": "object"}},
-          ("key", "epoch", "kind", "ref")),
-    _tool("submit", "Submit claimed work for review.",
-          {"key": {"type": "string"}, "epoch": {"type": "integer"}},
-          ("key", "epoch")),
-    _tool("verdict", "Reviewer passes or requests changes.",
-          {"key": {"type": "string"}, "ok": {"type": "boolean"},
-           "reason": {"type": "string"}}, ("key", "ok")),
-    _tool("waive_second_family", "Router: waive the second-family rule (verified decision).",
-          {"key": {"type": "string"}, "decision_id": {"type": "string"}},
-          ("key", "decision_id")),
-    _tool("withdraw_review", "Router: take a decision-closable item out of review (decision names it in Closes:).",
-          {"key": {"type": "string"}, "decision_id": {"type": "string"}},
-          ("key", "decision_id")),
-    _tool("reopen", "Router: take an in_review item back to its claimant at epoch+1 (reason + recorded decision; never closes).",
-          {"key": {"type": "string"}, "decision_id": {"type": "string"},
-           "reason": {"type": "string"}}, ("key", "decision_id", "reason")),
-    _tool("set_kind", "Router: turn an open lane into a question or operator_task (waits on the operator).",
-          {"key": {"type": "string"},
-           "kind": {"type": "string", "enum": ["question", "operator_task"]}},
-          ("key", "kind")),
-    _tool("close_on_decision", "Router: close a tier-none item on a verified decision + hashed batch file.",
-          {"key": {"type": "string"}, "batch_ref": {"type": "string"}},
-          ("key", "batch_ref")),
-    _tool("answer", "Router: answer a question/decision item (verified decision names it in Closes:) and close it.",
-          {"key": {"type": "string"}, "text": {"type": "string"},
-           "decision_id": {"type": "string"}}, ("key", "text", "decision_id")),
-    _tool("set_legacy_state", "Router: move an open legacy item to claimed/in_review.",
-          {"key": {"type": "string"}, "state": {"type": "string"},
-           "note": {"type": "string"}}, ("key", "state")),
-    _tool("apply_ops", "Router: apply a list of BATCH.md ops atomically (one transaction).",
-          {"ops": {"type": "array", "items": {"type": "object"}},
-           "batch_ref": {"type": "string"},
-           "base_seq": {"type": "integer"},
-           "dry_run": {"type": "boolean"}}, ("ops",)),
-    _tool("cancel", "Cancel an active item.",
-          {"key": {"type": "string"}, "reason": {"type": "string"}}, ("key",)),
-    _tool("priority", "Set router-owned priority.",
-          {"key": {"type": "string"}, "n": {"type": "integer"}},
-          ("key", "n")),
-    _tool("blocked", "Active items with unmet dependencies.",
-          {"project": {"type": "string"}}),
-    _tool("waves", "Layered schedule of non-terminal items."),
-    _tool("critical_path", "Longest remaining path by estimate.",
-          {"project": {"type": "string"}}),
-    _tool("percent", "Percent complete.",
-          {"by": {"type": "string"}, "project": {"type": "string"}}),
-    _tool("needs_you", "Items waiting on the operator (operator flag or question/decision/operator_task), most-blocking first.",
-          {"project": {"type": "string"}}),
-    _tool("answers", "Answered question/decision items, newest first, with superseded_by when corrected.",
-          {"project": {"type": "string"}}),
-    _tool("audit_meta", "Router/l1: items missing description/estimate/done criteria/owner, plus claims quiet for stale_days days.",
-          {"project": {"type": "string"}, "stale_days": {"type": "integer"}}),
-    _tool("alerts", "Leases, overdue reviews, findings, refusals.",
-          {"project": {"type": "string"}}),
-    _tool("digest", "Per-project counts and recent done (router)."),
-    _tool("whoami", "The authenticated principal."),
-    _tool("create", "Create items: l1 in own project only, router anywhere.",
-          {"items": {"type": "array", "items": {"type": "object"}}},
-          ("items",)),
-    _tool("edit", "Edit an open item: l1 own project only, router anywhere; locked once done/cancelled.",
-          {"key": {"type": "string"}, "fields": {"type": "object"}},
-          ("key", "fields")),
-    _tool("mint_run_token", "Router/l1: mint a run-bound token (writer|reviewer) for a claimed/in_review item; shown once.",
-          {"key": {"type": "string"}, "role": {"type": "string"},
-           "run_id": {"type": "string"}}, ("key", "role", "run_id")),
-    _tool("record_run", "Spawner: record which models ran on a claimed item.",
-          {"key": {"type": "string"}, "run": {"type": "object"}},
-          ("key", "run")),
-    _tool("fleet_msg_send", "Bus: signed write {to, text}; queued in the spool if the peer is down.",
-          {"to": {"type": "string"}, "text": {"type": "string"}},
-          ("to", "text")),
-    _tool("fleet_msg_read", "Bus: message rows for this host; since is a sequence or a timestamp.",
-          {"since": {"type": "string"}}),
-)
-
 #: name -> (HTTP method, /v1/<verb>).  All other args pass through.
 _ROUTES = {
     "ready": ("GET", "ready"), "show": ("GET", "show"),
@@ -145,6 +41,7 @@ _ROUTES = {
     "evidence": ("POST", "add_evidence"), "submit": ("POST", "submit"),
     "verdict": ("POST", "verdict"), "cancel": ("POST", "cancel"),
     "waive_second_family": ("POST", "waive_second_family"),
+    "close_merged": ("POST", "close_merged"),
     "close_on_decision": ("POST", "close_on_decision"),
     "withdraw_review": ("POST", "withdraw_review"),
     "reopen": ("POST", "reopen"),
@@ -274,7 +171,9 @@ def _call_tool(mid, params, client):
                 or any(not isinstance(entry, dict) for entry in items)):
             return _tool_error(
                 mid, "validation: items must be a list of objects (<= 50)")
-        if error := creation_error(items):
+        # The store checks decisions after duplicate/conflict/lock refusals.
+        if error := creation_error(
+                [item for item in items if item.get("kind") != "decision"]):
             return _tool_error(mid, error)
     elif name == "edit":
         if (not isinstance(args.get("key"), str) or not args.get("key")

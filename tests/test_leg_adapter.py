@@ -10,11 +10,15 @@ from plangraph.routing_support import leg_state, resolver, host_keys
 
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch):
+    from plangraph.spawner import leg_probe
     def deny(*a, **kw):
         pytest.fail('external access forbidden')
     monkeypatch.setattr(socket.socket, 'connect', deny)
     monkeypatch.setattr(subprocess, 'run', deny)
     monkeypatch.setattr(host_keys, '_keys_path', deny)
+    monkeypatch.setattr(leg_probe, '_INFLIGHT', {})
+    yield
+    assert leg_probe._INFLIGHT == {}
 
 
 def adapter(tmp_path, *, available=True, served=('opencode-go/sample',), enabled=True):
@@ -43,15 +47,29 @@ def test_authority(tmp_path, available, expected):
 def test_not_listed_and_failure(tmp_path):
     reader, _ = adapter(tmp_path, served=())
     assert reader('opencode-go/sample')['reason'] == 'not_listed'
-    reader.models = lambda: (_ for _ in ()).throw(RuntimeError())
+    reader.models = lambda: (_ for _ in ()).throw(RuntimeError('discovery read failed'))
     reader._at = None
-    assert reader('opencode-go/sample')['reason'] == 'unknown'
+    assert reader('opencode-go/sample')['reason'] == 'leg_state_snapshot_error: RuntimeError: discovery read failed'
 
 
 def test_off_no_reads(tmp_path):
     reader, calls = adapter(tmp_path, enabled=False)
     assert reader('opencode-go/sample') == dict(state='ok', evidence=None)
     assert calls == []
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('state', ['ok', 'limited', 'down', 'off', 'reprobe'])
+def test_legacy_availability_preserves_state_policy(enabled, state):
+    def reader(model, **scope):
+        assert model == 'opencode-go/sample'
+        assert scope == dict(account='sample', combo='worker')
+        return dict(state=state, evidence=None)
+
+    reader.enabled = enabled
+    row = dict(id='opencode-go/sample', available=1, active=True)
+    expected = state == 'ok' if enabled else state != 'limited'
+    assert resolver.is_model_available(row, reader, account='sample', combo='worker') is expected
 
 
 def test_removed_first(tmp_path):
@@ -95,7 +113,13 @@ def test_catalog_policy_is_not_mutated(tmp_path):
               if resolver.is_model_available(m, reader)]
     # New review seats extend the catalog, never reorder the existing entries.
     expected = MAIN_ORDER.copy()
+    expected[expected.index('omniroute/cx-gpt-6.1-sol')] = 'omniroute/cx-gpt-6.1-sol-xhigh'
+    expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'gemini-4-argon-high')
+    expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'opencode/big-pickle')
     expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'gpt-oss-120b-medium')
+    expected[expected.index('opencode-go/glm-5.2'):expected.index('opencode-go/glm-5.2')] = [
+        'claude-opus-4-6-thinking', 'claude-opus-5-5-high', 'omniroute/deepseek-flash',
+        'omniroute/muse-spark-1.3-contributor', 'claude-opus-5-5-medium', 'opencode/gemini-4-argon']
     expected.insert(expected.index('omniroute/deepseek-direct-flash'), 'omniroute/gc/grok-4.7')
     expected.insert(expected.index('omniroute/deepseek-direct-flash'),
                     'console-meta/muse-spark-1.3-contributor')
@@ -161,10 +185,208 @@ def test_enabled_probe_recovery(tmp_path, monkeypatch):
     runner = SimpleNamespace(leg_reader=reader)
     probes = []
     async def recover(*args, **kwargs):
+        assert calls == [1]  # admission checks the unavailable snapshot before probing
         probes.append(1)
         reader.provider.snapshot = lambda: calls.append(1) or {'opencode-go': SimpleNamespace(available=True, stale=False)}
         return dict(ok=True)
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
     monkeypatch.setattr(leg_probe, 'probe', recover)
     assert asyncio.run(leg_probe.before_launch(runner, leg, 'implement', False)) is None
-    assert probes == calls == [1]
+    assert probes == [1] and calls == [1, 1]
+
+
+@pytest.mark.parametrize('initial_read_error', [False, True])
+def test_probe_success_admits_after_snapshot_reread_error(tmp_path, monkeypatch, caplog,
+                                                         initial_read_error):
+    import asyncio
+    from plangraph.spawner import leg_probe
+    reader, _ = adapter(tmp_path, available=False)
+    leg = SimpleNamespace(model='opencode-go/sample', harness='opencode')
+    runner = SimpleNamespace(leg_reader=reader)
+    events = []
+
+    def broken_snapshot():
+        events.append('read error')
+        raise OSError('snapshot unavailable')
+
+    def initial_snapshot():
+        events.append('read')
+        return {'opencode-go': SimpleNamespace(available=False, stale=False)}
+
+    reader.provider.snapshot = broken_snapshot if initial_read_error else initial_snapshot
+
+    async def probe(actual_runner, actual_leg, **kwargs):
+        assert actual_runner is runner and actual_leg is leg
+        assert kwargs['store'] is reader.store
+        events.append('probe')
+        reader.store.record_probe_pass(leg.model, 'test')
+        reader.provider.snapshot = broken_snapshot
+        return dict(ok=True)
+
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    assert asyncio.run(leg_probe.before_launch(runner, leg, 'implement', False)) is None
+    assert events == (['read error', 'read error', 'probe'] if initial_read_error else
+                      ['read', 'probe', 'read error', 'read error'])
+    assert reader.store.last_probe_ts(leg.model) is not None
+    assert 'leg_state_snapshot_error: OSError: snapshot unavailable' in caplog.text
+
+
+@pytest.mark.parametrize('error', [OSError('snapshot missing'), ValueError('partial snapshot'),
+                                  RuntimeError('refresh rejected')])
+def test_snapshot_refresh_keeps_error(tmp_path, error):
+    reader, _ = adapter(tmp_path)
+    assert reader('opencode-go/sample')['state'] == 'ok'
+    previous = reader._states
+
+    def snapshot():
+        raise error
+
+    reader.provider.snapshot = snapshot
+    reader.clock = lambda: 61
+    assert reader('opencode-go/sample') == dict(
+        state='limited', evidence=None,
+        reason=f'leg_state_snapshot_error: {type(error).__name__}: {error}')
+    assert reader._states is previous  # stale health cannot mask a failed read
+
+
+@pytest.fixture
+def snapshot_failure(tmp_path):
+    reader, _ = adapter(tmp_path)
+    events = []
+
+    def snapshot():
+        events.append('read')
+        raise OSError('snapshot unavailable')
+
+    reader.provider.snapshot = snapshot
+    leg = SimpleNamespace(model='opencode-go/sample', harness='opencode')
+    return SimpleNamespace(reader=reader, runner=SimpleNamespace(leg_reader=reader),
+                           leg=leg, events=events)
+
+
+@pytest.mark.parametrize('role,ttl,fresh', [('review', '0', False),
+    ('implement', '0', False), ('fix', '1800', False), ('implement', '1800', True)])
+@pytest.mark.parametrize('probe_ok,probe_reason,infra', [(False, 'timeout', False),
+    (True, '', False), (False, 'probe infra: git', True)])
+def test_snapshot_error_retries_then_probes(snapshot_failure, monkeypatch, role, ttl, fresh,
+                                           probe_ok, probe_reason, infra):
+    import asyncio
+    from plangraph.spawner import leg_probe
+    case = snapshot_failure
+    if fresh:
+        case.reader.store.record_probe_pass(case.leg.model, 'test', now=100)
+        monkeypatch.setattr(leg_probe.time, 'time', lambda: 101)
+
+    async def probe(runner, leg, **kwargs):
+        assert runner is case.runner and leg is case.leg
+        assert kwargs['store'] is case.reader.store
+        assert case.events == ['read', 'read']  # retry precedes any probe/verdict
+        case.events.append('probe')
+        return dict(ok=probe_ok, reason=probe_reason, infra=infra)
+
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', ttl)
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    reason = asyncio.run(leg_probe.before_launch(case.runner, case.leg, role, False))
+    assert case.events == ['read', 'read', 'probe']
+    assert reason == (None if probe_ok else
+        'leg_state_snapshot_error: OSError: snapshot unavailable; probe: ' + probe_reason)
+    assert case.reader.store.last_probe_ts(case.leg.model) == (100 if fresh else None)
+    # The same role/TTL/freshness inputs still control ordinary healthy admission.
+    case.reader._at = None
+    case.reader.provider.snapshot = lambda: {
+        'opencode-go': SimpleNamespace(available=True, stale=False)}
+    ordinary = []
+
+    async def healthy_probe(*args, **kwargs):
+        ordinary.append('probe')
+        return dict(ok=True)
+
+    monkeypatch.setattr(leg_probe, 'probe', healthy_probe)
+    assert asyncio.run(leg_probe.before_launch(case.runner, case.leg, role, False)) is None
+    assert ordinary == (['probe'] if role in ('implement', 'fix') and ttl != '0' and not fresh else [])
+
+
+def test_snapshot_retry_recovers_without_probe(snapshot_failure, monkeypatch):
+    import asyncio
+    from plangraph.spawner import leg_probe
+    case = snapshot_failure
+    failed_read = case.reader.provider.snapshot
+
+    def snapshot():
+        if not case.events:
+            return failed_read()
+        case.events.append('read')
+        return {'opencode-go': SimpleNamespace(available=True, stale=False)}
+
+    async def probe(*args, **kwargs):
+        pytest.fail('a recovered review snapshot needs no probe')
+
+    monkeypatch.setattr(case.reader.provider, 'snapshot', snapshot)
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    assert asyncio.run(leg_probe.before_launch(case.runner, case.leg, 'review', False)) is None
+    assert case.events == ['read', 'read']
+
+
+def test_snapshot_probe_success_cannot_clear_new_provider_limit(snapshot_failure, monkeypatch):
+    import asyncio
+    from plangraph.spawner import leg_probe
+    case = snapshot_failure
+    monkeypatch.setattr(leg_probe.time, 'time', lambda: 100)
+
+    async def probe(*args, **kwargs):
+        assert case.events == ['read', 'read']
+        case.events.append('probe')
+        case.reader.store.record_harness_limit(case.leg.model, 'error: quota reached',
+                                                'test', now=100, down_s=60)
+        return dict(ok=True)
+
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    assert asyncio.run(leg_probe.before_launch(case.runner, case.leg, 'review', False)) == \
+        'limited until 1970-01-01T00:02:40+00:00'
+    assert case.events == ['read', 'read', 'probe']
+
+
+def test_snapshot_probe_sharing_is_loop_hermetic(snapshot_failure, monkeypatch):
+    import asyncio
+    from plangraph.spawner import leg_probe
+    case = snapshot_failure
+
+    async def run():
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def probe(*args, **kwargs):
+            case.events.append('probe')
+            started.set()
+            await release.wait()
+            return dict(ok=True)
+
+        monkeypatch.setattr(leg_probe, 'probe', probe)
+        launches = [asyncio.create_task(leg_probe.before_launch(
+            case.runner, case.leg, 'review', False)) for _ in range(3)]
+        await asyncio.wait_for(started.wait(), 1)
+        assert len(leg_probe._INFLIGHT) == 1
+        release.set()
+        assert await asyncio.gather(*launches) == [None] * 3
+        assert leg_probe._INFLIGHT == {}
+
+    for _ in range(2):  # a new event loop cannot inherit a previous loop's task
+        case.reader._at = None
+        case.events.clear()
+        asyncio.run(run())
+        assert case.events.count('probe') == 1
+
+
+@pytest.mark.parametrize('probe_reason', ['', None, 'unknown', ' Unknown '])
+def test_snapshot_error_probe_without_reason_is_named_not_unknown(snapshot_failure, monkeypatch, probe_reason):
+    import asyncio
+    from plangraph.spawner import leg_probe
+
+    async def probe(runner, leg, **kwargs):
+        return dict(ok=False, reason=probe_reason, infra=False)
+
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '0')
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    case = snapshot_failure
+    reason = asyncio.run(leg_probe.before_launch(case.runner, case.leg, 'review', False))
+    assert reason == 'leg_state_snapshot_error: OSError: snapshot unavailable; probe: leg_probe_failed'

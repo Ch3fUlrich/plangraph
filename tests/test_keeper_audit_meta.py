@@ -76,7 +76,7 @@ def w(tmp_path):
     _create(world, [("OQ", {"kind": "question", "estimate_h": None,
                             "done_criteria": None}),
                     ("OD", {"kind": "decision", "estimate_h": None,
-                            "done_criteria": None}),
+                             "done_criteria": None, "description": "Why: choose\nHow: answer"}),
                     ("OO", {"kind": "operator_task", "estimate_h": None,
                             "done_criteria": None})])
     # everything missing, but DONE: never reported

@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 from pathlib import Path
 
 import pytest
@@ -222,25 +223,33 @@ def test_fleet_sync_ssh_paths_are_remote(fleet, monkeypatch):
     assert seen[0]['repo'] == repo
 
 
-def test_fleet_sync_windows_transport_exact_argv(fleet, monkeypatch):
+@pytest.mark.parametrize('ssh_target', [None, 'remote-user@worker.example.invalid'])
+@pytest.mark.parametrize('system', ['linux', 'windows'])
+def test_fleet_sync_windows_transport_exact_argv(fleet, monkeypatch, ssh_target, system):
     import base64
     import inspect
     import subprocess
 
     from plangraph.fleet_sync import advance as module
     host = fleet[0]['hosts'][0]
-    host['os'] = 'windows'
-    config = {'repo': host['repos']['plangraph'], 'sha': 'a' * 40, 'windows': True}
+    if ssh_target:
+        host['ssh_target'] = ssh_target
+    host['os'] = system
+    config = {'repo': host['repos']['plangraph'], 'sha': 'a' * 40, 'windows': system == 'windows'}
     code = inspect.getsource(worker) + '\nimport json; print(json.dumps(worker(json.loads(' + repr(json.dumps(config)) + '))))'
     encoded = base64.b64encode(code.encode()).decode('ascii')
-    remote = subprocess.list2cmdline([
+    quote = subprocess.list2cmdline if system == 'windows' else shlex.join
+    remote = quote([
         'python3', '-c', f"import base64;exec(base64.b64decode('{encoded}'))"])
 
+    calls = []
     def check_output(argv, **kwargs):
+        calls.append(argv)
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
-                        '--', 'host-a', remote]
+                        '--', ssh_target or 'host-a', remote]
         assert '\n' not in argv[-1] and '\r' not in argv[-1]
         return '{"ok": true, "events": []}'
 
     monkeypatch.setattr(module.subprocess, 'check_output', check_output)
     assert module.transport(host, config)['ok']
+    assert len(calls) == 1

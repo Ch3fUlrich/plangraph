@@ -9,7 +9,12 @@ from sessions_support import UUID1, UUID2, UUID3, SHORT, MODEL, EFFORT, MODE, PR
 from sessions_support import site  # noqa: F401
 
 
-def test_argv_linux_is_list_no_shell(site):
+def test_argv_linux_is_list_no_shell(site, monkeypatch):
+    carriers = ('PROMPT', 'PROMPT_TEXT', 'PLANGRAPH_TASK_PROMPT', 'prompt_suffix')
+    for name in carriers:
+        monkeypatch.setenv(name, PROMPT)
+    monkeypatch.setenv('SHELL_PROMPT_THEME', 'minimal')
+    monkeypatch.setenv('CLIENT_PROMPT_TEMPLATE_FILE', 'template.txt')
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
     res = go(site, s)
@@ -18,12 +23,16 @@ def test_argv_linux_is_list_no_shell(site):
     assert argv == ["claude", "--bg", "--strict-mcp-config", "--mcp-config", str(site.mcp.resolve()),
                     "--settings", '{"enabledPlugins":{"superpowers@superpowers-marketplace":false}}',
                     "--remote-control", "alpha", "-n", "alpha", "--model", MODEL, "--effort", EFFORT,
-                    "--permission-mode", MODE, PROMPT]
+                    "--permission-mode", MODE, '']
+    assert kw['input'] == PROMPT
     assert all(isinstance(a, str) for a in argv)
     assert kw.get("shell") in (None, False)
     assert kw["cwd"] == str(site.proj.resolve())
     assert kw["env"]["FLEET_SESSION_NAME"] == "alpha"
     assert kw["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "400000"
+    assert not set(carriers).intersection(kw['env'])
+    assert kw['env']['SHELL_PROMPT_THEME'] == 'minimal'
+    assert kw['env']['CLIENT_PROMPT_TEMPLATE_FILE'] == 'template.txt'
     # style_text is appended via --append-system-prompt when configured
     cfg2 = site.tmp_path / "sessions2.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_text": "be terse"}))
@@ -33,7 +42,7 @@ def test_argv_linux_is_list_no_shell(site):
     go(site, s2)
     # the old-id gate polls agents first (round 4): pick the launch argv
     argv2 = run2.launch_calls()[0]
-    assert argv2[-3:] == ["--append-system-prompt", "be terse", PROMPT]
+    assert argv2[-3:] == ["--append-system-prompt", "be terse", '']
 
 
 def test_id_from_full_uuid(site):

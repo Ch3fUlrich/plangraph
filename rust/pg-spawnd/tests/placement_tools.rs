@@ -18,7 +18,7 @@ impl Fixture {
         std::fs::write(&script, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'/argv\nprintf '%s' '{}'\nprintf '%s\\n' '{}' >&2\nexit {}\n",state.path().display(),output,stderr,code)).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let launch = state.path().join("launch");
-        std::fs::write(&launch, format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' '{{\"argv\":[\"/bin/true\"],\"cwd\":\"{}\",\"env\":{{\"PROMPT\":\"fixture prompt\"}},\"prompt\":\"fixture prompt\",\"stdin\":null}}'\n", std::env::current_dir().unwrap().display())).unwrap();
+        std::fs::write(&launch, format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' '{{\"argv\":[\"/bin/true\"],\"cwd\":\"{}\",\"env\":{{}},\"prompt\":\"fixture prompt\",\"stdin\":\"fixture prompt\"}}'\n", std::env::current_dir().unwrap().display())).unwrap();
         std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o755)).unwrap();
         let socket = state.path().join("socket");
         let child = std::process::Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
@@ -314,7 +314,7 @@ fn spawn_dry_run_and_no_launch() {
         row["cwd"],
         std::env::current_dir().unwrap().to_string_lossy().as_ref()
     );
-    let tail = "[dry-run] Planned command: /bin/true";
+    let tail = "[dry-run] Planned command: /bin/true [stdin: 14 bytes]";
     assert_eq!(row["stdout_tail"], tail);
     assert_eq!(
         row["attempts"],

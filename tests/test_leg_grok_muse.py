@@ -1,4 +1,4 @@
-"""Manual-only Grok and D-4280 Muse contributor seats."""
+"""Manual-only Grok and D-5113 automatically admitted Muse contributor seats."""
 import asyncio
 import json
 import sys
@@ -6,6 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.route_policy import RoutePolicy
@@ -96,12 +98,17 @@ def test_listing_accepts_nested_ids_not_non_ids(monkeypatch):
 
 @pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
 def test_muse_never_automatic_even_if_lifted(role):
-    legs = tuple(replace(BY_ID[mid], roles=(role,)) for mid in MUSE)
+    """Historical name retained: D-5113 admits Muse automatically unless policy bans it."""
+    legs = tuple(replace(BY_ID[mid], roles=(role,)) for mid in (*MUSE, 'omniroute-muse-spark'))
     policy = RoutePolicy(review_allowed_families=("muse",))
     for leg in legs:
-        assert policy.skip_reason(leg, role) == "off_family"
-    plan = plan_spawn(CARD, role=role, writer_families=("gpt",))
-    assert not any(l.family == "muse" for l in (*plan.legs, *plan.review_seats))
+        assert policy.skip_reason(leg, role) is None
+    plan = plan_spawn(CARD, role=role, writer_families=("gpt",), legs=legs, policy=policy,
+                      catalog_rows=())
+    assert set(plan.legs) == set(legs)
+    denied = plan_spawn(CARD, role=role, writer_families=("gpt",), legs=legs,
+                        policy=RoutePolicy(banned_families=("muse",)), catalog_rows=())
+    assert not denied.legs
 
 
 @pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
@@ -165,7 +172,7 @@ def test_grok_render_is_scoped_and_preserves_host_refusals(monkeypatch, hermetic
     other = dict(harness="opencode", model="omniroute/unregistered-model")
     assert host_skip_reason(other, env=env, probe=lambda _: {row["model"]}).startswith("not_served_on_host")
     untouched = {"PLANGRAPH_GATEWAY_URL": gateway}
-    assert render_gateway_providers(untouched, BY_ID["cx-gpt-6.1-sol"].model) is None
+    assert render_gateway_providers(untouched, "omniroute/cx-gpt-6.1-sol") is None
     assert "omniroute" not in json.loads(untouched["OPENCODE_CONFIG_CONTENT"])["providers"]
 
 

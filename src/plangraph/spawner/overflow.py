@@ -1,4 +1,4 @@
-"""Default local admission with opt-in public-repository SSH overflow."""
+"""RAM-based local admission and opt-in public-repository SSH placement."""
 from __future__ import annotations
 
 import argparse
@@ -16,6 +16,7 @@ from typing import NamedTuple
 
 from plangraph.keeper.credential_guard import mask
 from plangraph.fleet_sync.genconfig import config_dir
+from plangraph.routing_errors import ParameterRefused
 
 from . import cli
 from .private_io import atomic_write_private
@@ -53,8 +54,8 @@ def registry_caps():
         return {'hosts': [], 'self': None}
 
 
-def host_caps(registry, name, role='implement'):
-    for host in registry['hosts']:
+def host_config(registry, name):
+    for host in registry.get('hosts', []):
         if not isinstance(host, dict):
             continue
         aliases = host.get('aliases')
@@ -62,6 +63,23 @@ def host_caps(registry, name, role='implement'):
         if not isinstance(name, str) or not any(
                 isinstance(alias, str) and alias.lower() == name.lower() for alias in names):
             continue
+        return host
+    return {}
+
+
+def placement_policy(registry, config):
+    name = os.environ.get('PLANGRAPH_HOST_NAME') or registry.get('self')
+    host = host_config(registry, name)
+    name = host.get('id') or name
+    hosts = config.get('hosts', {})
+    local = hosts.get(name, {}) if isinstance(hosts, dict) else {}
+    return name, (host.get('orchestration_only') is True or
+                  isinstance(local, dict) and local.get('orchestration_only') is True)
+
+
+def host_caps(registry, name, role='implement'):
+    host = host_config(registry, name)
+    if host:
         caps = host.get('caps')
         warmup = host.get('warmup')
         ramp = warmup.get('ramp_mb') if isinstance(warmup, dict) else None
@@ -69,7 +87,6 @@ def host_caps(registry, name, role='implement'):
                 and caps['mem_floor_mb'] >= 0 and isinstance(ramp, dict) and ramp
                 and all(type(value) is int and value > 0 for value in ramp.values())):
             return ramp.get(role, max(ramp.values())), caps['mem_floor_mb']
-        break
     logging.warning('host %r: missing or malformed registry caps; not an overflow target', name)
     return None
 
@@ -92,29 +109,19 @@ def memory_refusal(free_mb, reservation_mb, floor_mb):
     return f'memory: free {free_mb} MB, floor {floor_mb} MB, role {reservation_mb} MB'
 
 
-def admit_local(role):
-    reservation_mb, floor_mb = local_limits(registry_caps(), role)
-    free_mb = available_memory_mb()
-    return memory_refusal(free_mb, reservation_mb, floor_mb)
-
-
-def require_local_memory(service, role):
-    reason = admit_local(role)
-    if reason:
-        exc = cli.SpawnRefused(reason)
-        service.save_refusal(exc, role)
-        raise exc
-
-
-def decide(local_live, local_mem_mb, role_mb, floor_mb, ready_records, public):
+def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
+            remote_first=False, local_refusal=None, host_order=()):
     """Select from config-enriched readiness records; age is computed on read."""
-    local_reason = memory_refusal(local_mem_mb, role_mb, floor_mb)
-    if not local_reason:
+    local_reason = local_refusal or memory_refusal(local_mem_mb, role_mb, floor_mb)
+    if not local_reason and not remote_first:
         return Decision(None, 'local room')
     if not public:
+        if remote_first:
+            return Decision(None, local_reason or 'local_fallback_no_remote')
         return Decision(None, local_reason + '; queue: repo is not public (absent or unknown allowlist)')
     candidates, refused = [], []
-    for name, row in sorted(ready_records.items()):
+    records = ready_records.items() if remote_first else sorted(ready_records.items())
+    for index, (name, row) in enumerate(records):
         reason = row.get('refusal')
         if not reason:
             if not row.get('ssh'):
@@ -134,9 +141,13 @@ def decide(local_live, local_mem_mb, role_mb, floor_mb, ready_records, public):
         if reason:
             refused.append(f'{name}: {reason}')
         else:
-            candidates.append((-(row['mem_available_mb'] - row['floor_mb']), name))
+            if remote_first:
+                index = host_order.index(name) if name in host_order else len(host_order)
+            candidates.append((-(row['mem_available_mb'] - row['floor_mb']), index, name))
     if candidates:
-        return Decision(min(candidates)[1], local_reason)
+        return Decision(min(candidates)[2], 'remote_most_free_ram' if remote_first else local_reason)
+    if remote_first:
+        return Decision(None, local_reason or 'local_fallback_no_remote')
     return Decision(None, local_reason + '; queue: ' + ('; '.join(refused) or 'no overflow hosts configured'))
 
 
@@ -201,8 +212,45 @@ def available_memory_mb():
     return memory
 
 
+def swap_used_pct():
+    try:
+        values = {line.split(':')[0]: int(line.split()[1])
+                  for line in Path('/proc/meminfo').read_text().splitlines()
+                  if line.startswith(('SwapTotal:', 'SwapFree:'))}
+        total, free = values['SwapTotal'], values['SwapFree']
+    except (KeyError, IndexError, ValueError) as exc:
+        raise ValueError('swap readings missing or malformed') from exc
+    if not 0 <= free <= total:
+        raise ValueError('invalid swap readings')
+    return 100 * (total - free) / total if total else 0
+
+
+def local_health_refusal(config, memory):
+    if memory < config.get('local_min_available_mb', 4096):
+        return 'local_min_available_mb'
+    try:
+        swap = swap_used_pct()
+    except (OSError, ValueError):
+        return 'local_swap_unavailable'
+    if swap > config.get('local_max_swap_used_pct', 90):
+        return 'local_max_swap_used_pct'
+    return None
+
+
+def repos_public(config, repo, diff=None):
+    """Every repository contributing checkout or diff context must be public."""
+    if diff is not None and not diff.get('repo'):
+        raise ParameterRefused('diff_ref requires repo')
+    allowed = {Path(p).expanduser().resolve() for p in config.get('public_repos', [])}
+    return all(Path(p).expanduser().resolve() in allowed
+               for p in [repo, *([diff.get('repo')] if diff is not None else [])])
+
+
 def remote_spawn(name, host, card, prompt, options):
     """Use private staging, quote every remote argument, never echo SSH stderr."""
+    options = list(options)
+    if 'cwd' in card or any(v == '--cwd' or v.startswith('--cwd=') for v in options):
+        raise RemoteRefusal('explicit cwd cannot overflow to another checkout')
     alias = host['ssh']
     def ssh(command):
         return subprocess.run(['ssh', '--', alias, command], capture_output=True, text=True,
@@ -235,10 +283,8 @@ def remote_spawn(name, host, card, prompt, options):
             for ref in ('base', 'head'):
                 commands.append(shlex.join(['git', 'fetch', 'origin', '--', diff[ref]]))
         command = ['python3', '-m', 'plangraph.spawner.cli', 'spawn', '--card',
-                   '@' + directory + '/card.json']
-        # A sentinel prevents command substitution from stripping trailing newlines.
-        commands.append('prompt=$(cat ' + q(directory + '/prompt.txt') + ' && printf .)')
-        spawn = shlex.join(command) + ' "${prompt%.}" ' + shlex.join(options)
+                   '@' + directory + '/card.json', '--prompt-file', directory + '/prompt.txt']
+        spawn = shlex.join(command + options)
         nonce = secrets.token_hex(16)
         begin, end = (f'PLANGRAPH_RECEIPT_{nonce}_{suffix}' for suffix in ('BEGIN', 'END'))
         commands.append("printf '%s\\n' " + q(begin))
@@ -276,7 +322,10 @@ def main(argv=None):
     parser.add_argument('--card', required=True)
     parser.add_argument('--prompt', required=True)
     parser.add_argument('--role', default='implement')
+    parser.add_argument('--cwd')
     args, options = parser.parse_known_args(argv)
+    if args.cwd is not None:
+        options.extend(['--cwd', args.cwd])
     if args.role != 'implement':
         options.extend(['--role', args.role])
     try:
@@ -285,21 +334,26 @@ def main(argv=None):
             config = json.loads(path.read_text())
         except (OSError, ValueError):
             config = {}
+        if placement_policy(registry_caps(), config)[1]:
+            return cli.main(['spawn', '--card', '@' + args.card,
+                             Path(args.prompt).read_text(), *options])
         role_mb, floor_mb = local_limits(registry_caps(), args.role)
-        live, memory = local_resources()
-        if decide(live, memory, role_mb, floor_mb, {}, False).reason == 'local room':
+        _, memory = local_resources()
+        if decide(memory, role_mb, floor_mb, {}, False).reason == 'local room':
             return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
-        public = str(Path(args.repo).resolve()) in [str(Path(p).expanduser().resolve())
-                                                  for p in config.get('public_repos', [])]
         card = json.loads(Path(args.card).read_text())
+        from .prompt_input import resolve_cwd
+        cwd = resolve_cwd(args.cwd, card)
+        repo = Path(cwd or args.repo).resolve()
         diff = card.get('diff_ref')
-        if diff and Path(diff['repo']).resolve() != Path(args.repo).resolve():
+        public = repos_public(config, repo, diff)
+        if not cwd and diff and Path(diff.get('repo')).resolve() != repo:
             public = False
         prompt = Path(args.prompt).read_text()
-        records = ready_records(config) if args.role == 'implement' else ready_records(config, args.role)
+        records = ready_records(config, args.role)
         attempts = 0
         while True:
-            decision = decide(live, memory, role_mb, floor_mb, records, public)
+            decision = decide(memory, role_mb, floor_mb, records, public)
             if decision.host is None:
                 print(json.dumps({'overflow_reason': decision.reason}))
                 return 5

@@ -579,7 +579,7 @@ class SemaphoreTaskVerifier:
 # --------------------------------------------------------------------------- #
 
 class DecisionVerifier:
-    """``| D-NNN |`` appears in the configured DECISIONS.md."""
+    """``| D-NNN |`` appears in the configured log on freshly fetched origin/main."""
 
     kind = "decision"
 
@@ -674,7 +674,7 @@ def default_context(config: Any, *, now: float | None = None) -> Context:
         ci=CIAdapter(_cfg(config, "ci", {}) or {}, forgejo=forgejo),
         runs=RunRecordAdapter(_cfg(config, "runs_dir")),
         semaphore=SemaphoreAdapter(),
-        decisions=DecisionsAdapter(_cfg(config, "decisions_file")),
+        decisions=DecisionsAdapter(_cfg(config, "decisions_file"), from_origin=True),
         spawner_records=SpawnerRecordAdapter(_cfg(config, "spawner_records_dir")),
         now=time.time() if now is None else float(now),
         claim_time=as_epoch(_cfg(config, "claim_time")),

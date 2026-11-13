@@ -14,6 +14,8 @@ pub(super) fn validate_fields(value: &serde_json::Value) -> Result<(), HostsErro
                 "class",
                 "aliases",
                 "transport",
+                "ssh_target",
+                "env",
                 "os",
                 "state_dir",
                 "caps",

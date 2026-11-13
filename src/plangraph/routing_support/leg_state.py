@@ -16,15 +16,13 @@ from email.utils import parsedate_to_datetime
 
 REPROBE_MINUTES = 10
 
-#: D-3685: a booked reset never parks a leg for days: every reset is capped at
-#: now + 24 h, so the leg is checked once after the cap and re-booked if the
-#: provider still reports it limited.
+#: D-3685: cap booked resets at 24 h; readers expire evidence after six hours.
 RESET_CAP_S = 86400
+#: Failure evidence expires independently of its booked provider reset.
+EVIDENCE_TTL_S = 6 * 60 * 60
 
-#: Probe/harness evidence is leg-level: a probe session cannot attribute its
-#: outcome to a card's account/combo. Rows written without those dimensions
-#: stay visible to every reader of the leg, while provider responses keep the
-#: exact-tuple scope ("omitted dimensions are not wildcards").
+#: Probe/harness evidence is leg-level; provider responses keep exact-tuple scope
+#: (omitted account/combo dimensions are not wildcards for provider responses).
 _SCOPE = "((account IS ? AND combo IS ?) OR (account IS NULL AND combo IS NULL AND source != 'provider-response'))"
 
 
@@ -48,12 +46,12 @@ class LegStateError(ValueError):
     """Not a provider limit response."""
 
 
-def _redact(body):
+def _redact(body, limit=300):
     body = re.sub(r"(?i)\bBearer\s+[^\s\"',;]+", "[REDACTED]", body)
     body = re.sub(r"(?i)\bsk-[\w-]+", "[REDACTED]", body)
     body = re.sub(r"(?i)(?:api[_-]?key|access[_-]?token|authorization)\s*[\"']?\s*[:=]\s*[\"']?[^\s\"',;}]+", "[REDACTED]", body)
     body = re.sub(r"\b[A-Za-z0-9_+/=-]{32,}\b", "[REDACTED]", body)
-    return body[:300]
+    return body[:limit]
 
 
 #: D-3685: cooldown units by full word, so the match is longest-first with a
@@ -175,16 +173,16 @@ class LegStateStore:
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, 200, "", None, None, time.time() if now is None else now, caller, "provider-probe"))
 
-    def record_probe_fail(self, leg, reason, caller, now=None, down_s=None, account=None, combo=None):
+    def record_probe_fail(self, leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt=''):
         if not leg or not caller or not reason:
             raise LegStateError('requires leg, reason and caller')
         now = time.time() if now is None else now
-        # _down_seconds is capped at RESET_CAP_S (D-3685): the booked down
-        # window never parks a leg past the 24 h reset cap.
-        down_s = _down_seconds(down_s)
+        down_s = None if serving else _down_seconds(down_s)  # capped at RESET_CAP_S
         with self._connect() as db:
             db.execute('INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)',
-                       (leg, account, combo, 503, _redact(reason), down_s, now + down_s, now, caller, 'liveness-probe'))
+                       (leg, account, combo, 503, _redact(reason) + (': ' + _redact(stderr_excerpt, 400) if stderr_excerpt else ''), down_s,
+                        None if serving else now + down_s, now, caller,
+                        'probe_failed_leg_serving' if serving else 'liveness-probe'))
 
     def last_probe_ts(self, leg):
         """Successful probe evidence only: a failed probe is not fresh evidence."""
@@ -202,15 +200,14 @@ class LegStateStore:
             return None
         try:
             with sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True) as db:
-                return db.execute("SELECT max(ts) FROM leg_events WHERE leg_key=? AND source IN ('liveness-probe','provider-probe')", (leg,)).fetchone()[0]
+                return db.execute("SELECT max(ts) FROM leg_events WHERE leg_key=? AND source IN ('liveness-probe','provider-probe','probe_failed_leg_serving')", (leg,)).fetchone()[0]
         except sqlite3.Error:
             return None
 
     def record_harness_limit(self, leg, line, caller, now=None, account=None, combo=None, down_s=None):
         if not leg or not caller or not line.strip():
             raise LegStateError('requires leg, quota line and caller')
-        # An explicitly elapsed cooldown is not missing reset information:
-        # neither the fallback booking nor a reset-less limit row is valid.
+        # An elapsed cooldown permits neither a fallback booking nor a reset-less limit.
         if _elapsed_cooldown({}, line):
             return
         now = time.time() if now is None else now
@@ -226,38 +223,41 @@ class LegStateStore:
 
     def leg_status(self, leg, now=None, account=None, combo=None):
         now = time.time() if now is None else now
-        if not self.path.exists():
+        if not self.path.exists() or self.path.stat().st_size == 0:
             return {"state": "ok", "evidence": None}
-        if self.path.stat().st_size == 0:
-            return {"state": "ok", "evidence": None}
-        # Read-only: querying state never creates a database or mutates expiry.
-        try:
+        try:  # Read-only: no database creation or expiry mutation.
             with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
                 db.row_factory = sqlite3.Row
                 rows = db.execute(
                     "SELECT * FROM leg_events WHERE leg_key=? AND " + _SCOPE + " AND ts<=? ORDER BY ts DESC,id DESC",
                     (leg, account, combo, now))
-                row = rows.fetchone()
+                rows = list(rows)
+                # Serving evidence supersedes older probe failures, NEVER provider limits.
+                serving = next((i for i, r in enumerate(rows) if r['source'] == 'probe_failed_leg_serving'), len(rows))
+                rows = iter(r for i, r in enumerate(rows) if r['source'] != 'probe_failed_leg_serving'
+                            and (r['source'] != 'liveness-probe' or i < serving))
+                row = next(rows, None)
                 if row is None or row["status"] == 200:
                     return {"state": "ok", "evidence": None}
                 evidence = {k: row[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                 evidence["event_id"] = row["id"]
+                if now >= row['ts'] + EVIDENCE_TTL_S:
+                    return {'state': 'reprobe', 'evidence': evidence}
                 if row['source'] == 'liveness-probe':
-                    # Two consecutive probe failures before down (M11): one
-                    # failure is a reprobe hint, never proof the leg is gone.
+                    # Two consecutive failures book down; serving evidence breaks the streak.
                     streak = 1
                     behind = None
                     for older in rows:
                         if older['source'] == 'liveness-probe' and older['status'] == 503:
-                            streak += 1
+                            # A live predecessor must exist when this failure books
+                            # the streak; its later expiry cannot unbook that down window.
+                            streak += int(row['ts'] < min(older['ts'] + EVIDENCE_TTL_S, older['reset_at'] or older['ts']))
                         else:
                             behind = older
                             break
-                    # D-3685: a newer probe failure never hides a limit row
-                    # whose reset is still ahead. Skip the leading probe-fail
-                    # rows; if the next row is such a limit, it is the evidence.
+                    # Probe failures never hide an older provider limit with a future reset (D-3685).
                     if (behind is not None and behind['source'] in ('harness-stderr', 'provider-response')
-                            and behind['reset_at'] is not None and now < behind['reset_at']):
+                            and behind['reset_at'] is not None and now < min(behind['reset_at'], behind['ts'] + EVIDENCE_TTL_S)):
                         evidence = {k: behind[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                         evidence["event_id"] = behind["id"]
                         return {"state": "limited", "evidence": evidence}
@@ -278,7 +278,7 @@ class LegStateStore:
         try:
             with sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True) as db:
                 db.row_factory = sqlite3.Row
-                row = db.execute("SELECT source, body_excerpt, ts FROM leg_events WHERE leg_key=? AND source IN ('liveness-probe','provider-probe') ORDER BY ts DESC,id DESC LIMIT 1", (leg,)).fetchone()
+                row = db.execute("SELECT source, body_excerpt, ts FROM leg_events WHERE leg_key=? AND source IN ('liveness-probe','provider-probe','probe_failed_leg_serving') ORDER BY ts DESC,id DESC LIMIT 1", (leg,)).fetchone()
         except sqlite3.Error:
             return None
         if row is None:
@@ -307,8 +307,8 @@ def leg_status(leg, now=None, account=None, combo=None):
     return _default_store().leg_status(leg, now, account, combo)
 
 
-def record_probe_fail(leg, reason, caller, now=None, down_s=None, account=None, combo=None):
-    return _default_store().record_probe_fail(leg, reason, caller, now, down_s, account, combo)
+def record_probe_fail(leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt=''):
+    return _default_store().record_probe_fail(leg, reason, caller, now, down_s, account, combo, serving=serving, stderr_excerpt=stderr_excerpt)
 
 
 def last_probe_ts(leg):
@@ -380,8 +380,8 @@ class LegAdapter:
                 served = {self.identity(mid) for mid in (self.models() if callable(self.models) else self.models)}
                 self._states, self._served = states, served
                 self._error = None if states else 'unreachable'
-            except Exception:
-                self._error = 'unknown'
+            except Exception as exc:
+                self._error = f'leg_state_snapshot_error: {type(exc).__name__}: {_redact(str(exc))}'
             self._at = now
         state = self._error
         if not state:
