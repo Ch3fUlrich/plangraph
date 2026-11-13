@@ -119,6 +119,7 @@ with compatibility re-exports at `seat_record.backfill` and
 `seat_verdict.apply_backfill`. Record parsing/discovery remain in `seat_record`;
 `seat_verdict.main()` remains the only keeper poster. The helper's path-specific
 Python exception covers this responsibility-only split of existing code.
+Explicit transport-only retries require `--repost-transport --url URL` without `--dry-run`; see the [backfill diagnosis](docs/seat-verdict-backfill-diagnosis.md).
 
 Backfill rejects pinned or explicitly overridden seats, incomplete/nonzero-exit records, writer-family seats, and records without a strict verdict. Family independence uses the same witnessed evidence model as the poster. Any eligible CHANGES takes precedence over ACCEPT in every discovery order; replay never falls through from a terminal or ambiguous CHANGES to another accepting seat. Apply JSON separates eligibility from `delivery` (`delivered`, `failed`, or `skipped`) and includes `verifier_exit` after a send. Corrupt journals and busy shared outbox locks skip with reasons without blocking other items. PR subprocesses have a 30-second timeout; lock acquisition is nonblocking. Exact completion-head equality remains required; backfill does not permit a different head via card ancestry.
 
