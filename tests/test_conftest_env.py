@@ -48,3 +48,30 @@ def test_strict_routing_child_stat_errors(tmp_path, monkeypatch, child, damage):
             roots._scan_routing_tree(tmp_path, True)
     finally:
         tmp_path.chmod(0o700)
+
+
+def test_session_git_configuration_is_isolated():
+    assert os.environ.get('GIT_CONFIG_NOSYSTEM') == '1'
+    path = Path(os.environ['GIT_CONFIG_GLOBAL'])
+    assert path.name == 'global.gitconfig' and path.is_file()
+
+
+@pytest.mark.parametrize('worktree', [False, True])
+def test_git_config_guard_detects_change_at_teardown(tmp_path, worktree):
+    import conftest
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    if worktree:
+        metadata = tmp_path / 'metadata'
+        gitdir = metadata / 'worktrees/lane'
+        gitdir.mkdir(parents=True)
+        (repo / '.git').write_text('gitdir: ' + str(gitdir) + '\n')
+        (gitdir / 'commondir').write_text('../..\n')
+    else:
+        metadata = repo / '.git'
+        metadata.mkdir()
+    config = metadata / 'config'
+    config.write_text('[core]\n bare = false\n')
+    with pytest.raises(AssertionError, match='repository .git/config changed during pytest session'):
+        with conftest.git_config_guard(repo):
+            config.write_text('[core]\n bare = true\n')

@@ -318,3 +318,5 @@ Test fixtures set a Git discovery ceiling at their temporary root; settings disc
 Operator D-5847 restores the Rust-only new-code gate: Python and shell exceptions are per-file, including `src/plangraph/spawner/base_fresh.py` already in flight before D-5847; recursive Python test exceptions remain.
 
 New stacked branches select affected tests from the nearest remote merge-base, while scrub starts at `origin/main` (the whole tip when main is unknown); the hook passes a separate `--scrub-base` to preflight.
+
+Pytest uses a session-owned temporary global Git config and disables system Git config; session teardown detects shared or worktree repository config changes without invoking Git on the real checkout.

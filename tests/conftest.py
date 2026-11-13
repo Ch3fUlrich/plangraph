@@ -15,6 +15,7 @@ import shutil
 import sys
 import tempfile
 import threading
+from contextlib import contextmanager
 import pytest
 from pathlib import Path
 from pgtest_shm import _sweep_dead_pgtest_dirs
@@ -95,6 +96,41 @@ def no_leaked_keeper_threads(request, no_leaked_keeper_fixture_threads):
     no_leaked_keeper_fixture_threads(request.node)
     with thread_scope(request):
         yield
+
+
+@contextmanager
+def git_config_guard(root):
+    """Watch shared/worktree config bytes without invoking Git on the checkout."""
+    def snapshot():
+        entry = Path(root) / '.git'
+        metadata = entry
+        if entry.is_file():
+            metadata = (Path(root) / entry.read_text().removeprefix('gitdir:').strip()).resolve()
+        common = metadata
+        if (metadata / 'commondir').is_file():
+            common = (metadata / (metadata / 'commondir').read_text().strip()).resolve()
+        return tuple((str(path), path.read_bytes() if path.exists() else None)
+                     for path in (common / 'config', metadata / 'config.worktree'))
+    before = snapshot()
+    try:
+        yield
+    finally:
+        if snapshot() != before:
+            raise AssertionError('repository .git/config changed during pytest session')
+
+
+@pytest.fixture(scope='session', autouse=True)
+def isolated_git_session(tmp_path_factory):
+    config = tmp_path_factory.mktemp('git-session') / 'global.gitconfig'
+    config.touch(mode=0o600)
+    patch = pytest.MonkeyPatch()
+    patch.setenv('GIT_CONFIG_GLOBAL', str(config))
+    patch.setenv('GIT_CONFIG_NOSYSTEM', '1')
+    try:
+        with git_config_guard(Path(__file__).resolve().parents[1]):
+            yield
+    finally:
+        patch.undo()
 
 
 @pytest.fixture(scope="session", autouse=True)
