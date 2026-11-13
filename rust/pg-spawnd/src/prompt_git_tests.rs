@@ -2,6 +2,9 @@ use super::*;
 fn git(root: &Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
         .current_dir(root)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_WORK_TREE")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", root.join("absent"))
         .args(args)
@@ -57,6 +60,9 @@ fn real_temp_git_commits_exact_diff() {
     };
     let expected = std::process::Command::new("git")
         .current_dir(&root)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_WORK_TREE")
         .args(["diff", "--binary", &diff.base_sha, &diff.head_sha])
         .output()
         .unwrap();
