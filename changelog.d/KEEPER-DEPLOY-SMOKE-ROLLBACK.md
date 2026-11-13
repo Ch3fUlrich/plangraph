@@ -1,0 +1,1 @@
+- Keeper deploy tool `tools/keeper_deploy.py`: live smoke within 60 s after restart (health, probe claim+release, close_merged route); a failed smoke restores the previous drop-in set, restarts and exits non-zero.
