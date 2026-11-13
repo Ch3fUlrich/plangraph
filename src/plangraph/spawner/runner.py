@@ -700,14 +700,20 @@ class SpawnerRunner:
                                                         or self.jobs[job_id].survivors
                                                         or getattr(self.jobs[job_id], 'refusal', None)) else proc.returncode
             job = self.jobs[job_id]
-            for line in stderr_text.splitlines():
+            kept = []
+            for line in stderr_text.splitlines(keepends=True):
                 try:
                     envelope = json.loads(line)
                 except (ValueError, TypeError):
+                    kept.append(line)
                     continue
-                if not isinstance(envelope, dict) or set(envelope) != {'autoos_provider_response'}:
+                if isinstance(envelope, dict) and set(envelope) == {'plangraph_oom'}:
+                    # Telemetry lives in events only; it never becomes stderr content.
                     from .proc_kill import record_oom_envelope
                     record_oom_envelope(job.events, envelope)
+                    continue
+                kept.append(line)
+                if not isinstance(envelope, dict) or set(envelope) != {'autoos_provider_response'}:
                     continue
                 response = envelope['autoos_provider_response']
                 if not isinstance(response, dict) or response.get('nonce') != self._nonces.get(job_id) or not self._nonces.get(job_id):
@@ -722,6 +728,7 @@ class SpawnerRunner:
                         and all(isinstance(k, str) and isinstance(v, str) for k, v in response['headers'].items())):
                     self.provider_response(job_id, **response, source='stderr_envelope',
                                            nonce=self._nonces[job_id])
+            stderr_text = ''.join(kept)
             from .env_redact import redact_env_values
             env = self._child_envs.get(job_id, os.environ)
             from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer, record_steps
