@@ -1,43 +1,5 @@
 use super::*;
-// Repository-local variables a git hook exports; left set they point every
-// fixture git call at the pushing repository instead of the temp repo.
-const GIT_LOCAL_ENV: &[&str] = &[
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_COMMON_DIR",
-    "GIT_PREFIX",
-    "GIT_NAMESPACE",
-    "GIT_CEILING_DIRECTORIES",
-    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
-    "GIT_QUARANTINE_PATH",
-    "GIT_CONFIG",
-    "GIT_CONFIG_PARAMETERS",
-    "GIT_CONFIG_COUNT",
-    "GIT_IMPLICIT_WORK_TREE",
-    "GIT_GRAFT_FILE",
-    "GIT_INDEX_VERSION",
-    "GIT_NO_REPLACE_OBJECTS",
-    "GIT_REPLACE_REF_BASE",
-    "GIT_PUSH_OPTION_COUNT",
-    "GIT_SHALLOW_FILE",
-];
-fn isolated_git(root: &Path) -> std::process::Command {
-    let mut cmd = std::process::Command::new("git");
-    cmd.current_dir(root)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", root.join("absent"))
-        .env("GIT_AUTHOR_NAME", "Fixture")
-        .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
-        .env("GIT_COMMITTER_NAME", "Fixture")
-        .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid");
-    for key in GIT_LOCAL_ENV {
-        cmd.env_remove(key);
-    }
-    cmd
-}
+use pg_worker_core::git_test_support::command as isolated_git;
 fn git(root: &Path, args: &[&str]) -> String {
     let output = isolated_git(root).args(args).output().unwrap();
     assert!(output.status.success(), "git fixture failed");

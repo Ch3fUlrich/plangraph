@@ -3,14 +3,7 @@ use std::collections::BTreeMap;
 use tempfile::TempDir;
 
 fn git(root: &Path, args: &[&str]) -> String {
-    let out = git_command(root)
-        .env("HOME", root)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", root.join("absent-config"))
-        .env("GIT_AUTHOR_NAME", "tester")
-        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
-        .env("GIT_COMMITTER_NAME", "tester")
-        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+    let out = crate::git_test_support::command(root)
         .args(args)
         .output()
         .unwrap();
