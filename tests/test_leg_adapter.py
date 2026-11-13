@@ -196,7 +196,7 @@ def test_enabled_probe_recovery(tmp_path, monkeypatch):
 
 @pytest.fixture
 def snapshot_attempt(tmp_path, monkeypatch):
-    """Seat 2 attempt shape from run-e99aae2287e541b48886d0f04e46c37e; no live record."""
+    """Synthetic reported seat-2 candidate order, not recorded attempts or errors."""
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.spawner import leg_probe
     from plangraph.spawner.runner import spawn_service
@@ -205,7 +205,7 @@ def snapshot_attempt(tmp_path, monkeypatch):
     legs = tuple(next(l for l in DEFAULT_LEGS if l.id == name) for name in
                  ('agy-gemini-3.8-flash', 'agy-sonnet-5.5', 'agy-opus-5.5'))
     reads, probes = [], []
-    error = RuntimeError('snapshot changed during concurrent writer')
+    error = RuntimeError('synthetic snapshot refresh failure')
 
     def snapshot():
         reads.append(1)
@@ -221,13 +221,13 @@ def snapshot_attempt(tmp_path, monkeypatch):
     monkeypatch.setattr(SpawnService, '_leg_prompt', lambda *a, **k: 'review')
     monkeypatch.setattr('plangraph.spawner.notify.completion_event', lambda *a: {})
 
-    return SimpleNamespace(svc=svc, reader=reader, legs=legs, reads=reads, probes=probes)
+    return SimpleNamespace(svc=svc, reader=reader, store=store, legs=legs, reads=reads, probes=probes)
 
 
 @pytest.mark.parametrize('error', [FileNotFoundError('snapshot missing'),
                                   sqlite3.OperationalError('database is locked'),
                                   json.JSONDecodeError('partial snapshot', '', 0),
-                                  RuntimeError('snapshot changed during concurrent writer')])
+                                  RuntimeError('synthetic snapshot refresh failure')])
 @pytest.mark.parametrize('probe_ok,probe_state,infra', [(False, None, False), (True, None, False),
     (False, 'probe_failed_leg_serving', False), (False, 'host-not-ready', True)])
 @pytest.mark.parametrize('role,ttl', [('review', '0'), ('implement', '0'), ('implement', '1800')])
@@ -235,13 +235,14 @@ def snapshot_attempt(tmp_path, monkeypatch):
 def test_snapshot_error_retries_then_probes(snapshot_attempt, monkeypatch, error, probe_ok, probe_state, infra, role, ttl, declared_fallback):
     from plangraph.spawner import leg_probe
     case = snapshot_attempt
+    assert case.reader.store is case.store
 
     def snapshot():
         case.reads.append(1)
         raise error
 
     async def probe(*a, **k):
-        assert k['store'] is case.reader.store
+        assert k['store'] is case.store
         case.probes.append(case.legs[0].id)
         return dict(ok=probe_ok, reason='timeout', state=probe_state, infra=infra)
 
@@ -347,4 +348,4 @@ def test_snapshot_seat_uses_witnessed_non_writer_before_opus(snapshot_attempt, m
     if serving_index:
         skipped = run['attempts'][0]
         assert skipped['status'] == 'skipped'
-        assert 'RuntimeError: snapshot changed during concurrent writer' in skipped['skip_reason']
+        assert 'RuntimeError: synthetic snapshot refresh failure' in skipped['skip_reason']

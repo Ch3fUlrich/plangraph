@@ -36,7 +36,7 @@ def snapshot_detail(reader, scrub):
 
 def snapshot_admission(reader, model, scrub, **scope):
     """Only failed snapshots are recoverable through liveness evidence."""
-    status = reader.leg_status(model, **scope)
+    status = reader.leg_status(model, **{k: v for k, v in scope.items() if v is not None})
     reason = status.get('reason') or status['state']
     if reason.strip().lower() == 'unknown' or reason.startswith('leg_state_snapshot_error'):
         return 'leg_state_snapshot_error: ' + ' '.join(snapshot_detail(reader, scrub).split())

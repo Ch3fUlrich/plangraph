@@ -50,14 +50,16 @@ def test_catalog_is_exactly_rust_specs():
     assert rows and list(SPECS) == [(p, b, int(f), e == 'true') for p, b, f, e in rows]
 
 
-def test_prefixed_line_before_my_secret_retains_main_assignment_scope():
+def test_wider_name_masks_value_with_main_join_behavior():
     value = 'hunter' + '2value'
     standalone = 'MY_' + 'SECRET: ' + value
-    # Main's Python assignment regex does not match MY_SECRET, even standalone.
-    assert redact(standalone) == standalone
+    # Python now masks this wider name before the joins. The unchanged joins
+    # can still eat its name; slice C owns that defect.
+    assert redact(standalone) == 'MY_' + 'SECRET: [REDACTED]'
     for nl in ('\n', '\r\n'):
         text = 'x ' + 'gh' + 'p_' + 'A9' * 7 + nl + standalone
-        assert redact(text) == 'x [REDACTED]: ' + value
+        assert redact(text) == 'x [REDACTED]: [REDACTED]'
+        assert value not in redact(text)
 
 
 def main_order(text):

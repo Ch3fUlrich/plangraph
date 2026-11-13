@@ -71,8 +71,9 @@ one type-only warning for the first failed read and detached type/message detail
 for the final failure; a successful refresh clears that detail.
 A failed probe includes `leg_state_snapshot_error`, scrubbed exception type/message
 and probe reason; infrastructure failure alone is not serving evidence. Known
-provider limits still win, including scoped limits booked while a probe runs:
-dispatch rechecks local limits and adapter admission after each probe. A pass or
+provider limits still win: dispatch retains D-3685's unscoped booking read even
+for scoped legs, also checks their exact scope, and rechecks both plus adapter
+admission after each probe. Absent scope values are omitted for both readers. A pass or
 serving result overrides only a snapshot-error reason, never `limited`, quota,
 `not_listed`, `unavailable` or other non-snapshot admission reasons. Fresh successful
 probe/provider evidence also recovers a snapshot error without another probe,

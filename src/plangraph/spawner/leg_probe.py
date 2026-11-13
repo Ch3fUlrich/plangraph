@@ -332,11 +332,11 @@ async def before_launch(runner, leg, role, dry_run):
         root = Path(path).parent
     if quota_paused(root, role, leg):
         return 'quota pause'
-    scope = dict(account=getattr(leg, 'account', None), combo=getattr(leg, 'combo', None))
+    scope = {k: v for k in ('account', 'combo') if (v := getattr(leg, k, None)) is not None}
     def admission(provider_only=False, checked=False):
-        status = {} if checked else state.leg_status(key(leg), **{k: v for k, v in scope.items() if v is not None})
-        if status.get('state') == 'limited':
-            return 'limited until ' + reset_iso((status.get('evidence') or {}).get('reset_at'))
+        for lookup in (() if checked else ({}, scope) if scope else ({},)):  # D-3685: unscoped first.
+            if (status := state.leg_status(key(leg), **lookup)).get('state') == 'limited':
+                return 'limited until ' + reset_iso((status.get('evidence') or {}).get('reset_at'))
         if adapter and not provider_only:
             from .env_redact import redact_output, redact_env_values
             from plangraph.routing_support.leg_state_flag import snapshot_admission

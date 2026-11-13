@@ -2,7 +2,7 @@
 import asyncio
 import builtins
 import logging
-from types import SimpleNamespace
+from types import FunctionType, SimpleNamespace
 
 import pytest
 
@@ -52,19 +52,58 @@ def test_post_probe_admission_is_rechecked(case, monkeypatch, outcome, reason, i
 
 
 @pytest.mark.parametrize('outcome', ['ok', 'serving', 'failed', 'infra'])
-def test_provider_limit_booked_during_probe_wins(case, monkeypatch, outcome):
+@pytest.mark.parametrize('booking', [{}, dict(account='account', combo='combo')])
+def test_provider_limit_booked_during_probe_wins(case, monkeypatch, outcome, booking):
     async def probe(*args, **kwargs):
         case.store.record_provider_response(case.leg.model, 429, 'rate limited',
                                             {'retry-after': '60'}, 'fixture',
-                                            account='account', combo='combo')
+                                            **booking)
         return dict(ok=outcome == 'ok', reason='timeout', infra=outcome == 'infra',
                     state='probe_failed_leg_serving' if outcome == 'serving' else None)
 
     monkeypatch.setattr(leg_probe, 'probe', probe)
     reason = asyncio.run(leg_probe.before_launch(case.runner, case.leg, 'review', False))
     assert reason.startswith('limited until ')
-    assert case.store.leg_status(case.leg.model, account='account', combo='combo')['state'] == 'limited'
+    assert case.store.leg_status(case.leg.model, **booking)['state'] == 'limited'
     assert case.reads == [1, 1]
+
+
+@pytest.mark.parametrize('scope', [dict(account='account'), dict(combo='combo'),
+                                  dict(account='account', combo='combo')])
+@pytest.mark.parametrize('scoped_booking', [False, True])
+@pytest.mark.parametrize('role,ttl', [('review', '0'), ('implement', '1800')])
+def test_booked_limit_skips_scoped_leg_without_snapshot_or_probe(case, monkeypatch, scope, scoped_booking, role, ttl):
+    case.leg.account, case.leg.combo = scope.get('account'), scope.get('combo')
+    booking = scope if scoped_booking else {}
+    case.store.record_provider_response(case.leg.model, 429, 'rate limited',
+                                        {'retry-after': '60'}, 'fixture', **booking)
+    reset = case.store.leg_status(case.leg.model, **booking)['evidence']['reset_at']
+
+    async def probe(*args, **kwargs):
+        pytest.fail('a booked limit must skip without a probe')
+
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', ttl)
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    assert asyncio.run(leg_probe.before_launch(case.runner, case.leg, role, False)) == (
+        'limited until ' + leg_probe.reset_iso(reset))
+    assert case.reads == []
+    assert case.store.last_probe_attempt_ts(case.leg.model) is None
+
+
+@pytest.mark.parametrize('account,combo', [(None, None), ('account', None),
+                                          (None, 'combo'), ('account', 'combo')])
+def test_snapshot_admission_filters_absent_scope(account, combo):
+    calls = []
+
+    def status(model, **scope):
+        calls.append((model, scope))
+        return dict(state='ok')
+
+    reader = SimpleNamespace(leg_status=status)
+    assert leg_state_flag.snapshot_admission(reader, 'snapshot/sample', lambda text: text,
+                                             account=account, combo=combo) is None
+    assert calls == [('snapshot/sample', {k: v for k, v in dict(account=account, combo=combo).items()
+                                         if v is not None})]
 
 
 @pytest.mark.parametrize('role', ['implement', 'fix', 'review'])
@@ -112,7 +151,7 @@ def test_snapshot_recovery_rechecks_changed_reason(case, monkeypatch):
     assert calls == ['probe']
 
 
-def test_snapshot_helper_import_failure_is_not_snapshot_evidence(case, monkeypatch):
+def test_snapshot_helper_import_failure_is_not_snapshot_evidence(case):
     original = builtins.__import__
 
     def importing(name, *args, **kwargs):
@@ -120,9 +159,12 @@ def test_snapshot_helper_import_failure_is_not_snapshot_evidence(case, monkeypat
             raise ImportError('snapshot helper unavailable')
         return original(name, *args, **kwargs)
 
-    monkeypatch.setattr(builtins, '__import__', importing)
+    read = leg_state.LegAdapter.leg_status
+    isolated_read = FunctionType(read.__code__, dict(read.__globals__,
+        __builtins__=dict(vars(builtins), __import__=importing)))
     with pytest.raises(ImportError, match='snapshot helper unavailable'):
-        case.reader.leg_status(case.leg.model)
+        isolated_read(case.reader, case.leg.model)
+    assert builtins.__import__ is original
     assert case.reads == [] and case.reader._at is None
 
 
