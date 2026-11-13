@@ -174,9 +174,19 @@ impl RunRecord {
         self.set("status", json!(to.as_str()));
         if to.is_terminal() {
             self.set("ended", json!(now));
-            let delta = self.path.parent().and_then(Path::parent).and_then(Path::parent)
-                .and_then(|state| crate::fleet_series::run_delta(&state.join("fleet"),
-                    self.get("host")?.as_str()?, self.get("started")?.as_f64()?, now));
+            let delta = self
+                .path
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::parent)
+                .and_then(|state| {
+                    crate::fleet_series::run_delta(
+                        &state.join("fleet"),
+                        self.get("host")?.as_str()?,
+                        self.get("started")?.as_f64()?,
+                        now,
+                    )
+                });
             self.set("oom_kill_delta", json!(delta));
         }
         if to == Orphaned {

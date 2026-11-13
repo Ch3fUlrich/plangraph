@@ -153,8 +153,8 @@ pub fn remote(host: &str, destination: &str) -> io::Result<Sample> {
     {
         return Err(io::Error::other("invalid host route"));
     }
-    let output = Command::new("ssh")
-        .args([
+    let output = crate::host_command::output(
+        Command::new("ssh").args([
             "-o",
             "BatchMode=yes",
             "-o",
@@ -164,12 +164,10 @@ pub fn remote(host: &str, destination: &str) -> io::Result<Sample> {
             "probe",
             "--host",
             host,
-        ])
-        .output()?;
-    if !output.status.success() {
-        return Err(io::Error::other("host probe failed"));
-    }
-    let row: Sample = serde_json::from_slice(&output.stdout).map_err(io::Error::other)?;
+        ]),
+        std::time::Duration::from_secs(15),
+    )?;
+    let row: Sample = serde_json::from_slice(&output).map_err(io::Error::other)?;
     if row.host != host {
         return Err(io::Error::other("host probe identity mismatch"));
     }
