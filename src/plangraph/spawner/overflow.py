@@ -252,6 +252,16 @@ def remote_spawn(name, host, card, prompt, options):
     try:
         with tempfile.TemporaryDirectory() as local:
             rewritten = json.loads(json.dumps(card))
+            options = list(options)
+            if 'cwd' in rewritten or '--cwd' in options or any(v.startswith('--cwd=') for v in options):
+                rewritten['cwd'] = host['repo']
+                for index, option in enumerate(options):
+                    if option == '--cwd':
+                        options[index + 1] = host['repo']
+                    elif option.startswith('--cwd='):
+                        options[index] = '--cwd=' + host['repo']
+                if not any(v == '--cwd' or v.startswith('--cwd=') for v in options):
+                    options.extend(['--cwd', host['repo']])
             diff = rewritten.get('diff_ref')
             if diff:
                 diff['repo'] = host['repo']
@@ -309,7 +319,10 @@ def main(argv=None):
     parser.add_argument('--card', required=True)
     parser.add_argument('--prompt', required=True)
     parser.add_argument('--role', default='implement')
+    parser.add_argument('--cwd')
     args, options = parser.parse_known_args(argv)
+    if args.cwd is not None:
+        options.extend(['--cwd', args.cwd])
     if args.role != 'implement':
         options.extend(['--role', args.role])
     try:
@@ -325,11 +338,13 @@ def main(argv=None):
         _, memory = local_resources()
         if decide(memory, role_mb, floor_mb, {}, False).reason == 'local room':
             return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
-        public = str(Path(args.repo).resolve()) in [str(Path(p).expanduser().resolve())
-                                                  for p in config.get('public_repos', [])]
         card = json.loads(Path(args.card).read_text())
+        from .prompt_input import resolve_cwd
+        cwd = resolve_cwd(args.cwd, card)
+        repo = Path(cwd or args.repo).resolve()
+        public = str(repo) in [str(Path(p).expanduser().resolve()) for p in config.get('public_repos', [])]
         diff = card.get('diff_ref')
-        if diff and Path(diff['repo']).resolve() != Path(args.repo).resolve():
+        if not cwd and diff and Path(diff['repo']).resolve() != repo:
             public = False
         prompt = Path(args.prompt).read_text()
         records = ready_records(config, args.role)

@@ -22,6 +22,7 @@ import time
 import uuid
 
 from plangraph.routing_errors import SpawnRefused
+from .prompt_input import checkout_env
 
 
 class RunWorktreeDependencyNotMerged(SpawnRefused):
@@ -71,7 +72,7 @@ def create(root, repo, lane_branch, continuation=False, *, finished_dependencies
     def git(*args, check=True, failure='run_worktree_create_failed'):
         try:
             return subprocess.run(['git', '-C', str(repo), *args], check=check,
-                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, env=checkout_env())
         except subprocess.TimeoutExpired:
             raise SpawnRefused('run_worktree_fetch_timeout' if args[0] == 'fetch'
                                else 'run_worktree_git_timeout') from None
@@ -108,13 +109,13 @@ def create(root, repo, lane_branch, continuation=False, *, finished_dependencies
         return dict(path=str(path), branch=lane_branch, base_sha=base)
 
 
-async def prepare_worktree(service, record, card, enabled, *, continuation=False):
+async def prepare_worktree(service, record, card, enabled, *, continuation=False, repo=None):
     """Persist creation evidence before launch; off/dry-run callers do no Git I/O."""
     if not enabled:
         return {}
     import asyncio
     from plangraph.settings import _policy_data
-    repo = getattr(service.runner, 'default_cwd', None) or os.getcwd()
+    repo = repo or record.get('cwd') or getattr(service.runner, 'default_cwd', None) or os.getcwd()
     config = _policy_data(repo) or {}
     root = config.get('worktree_root') or service.state / 'worktrees'
     previous = record.get('run_worktree')
@@ -158,7 +159,7 @@ def init_guard(work_dir):
         return None
     try:
         result = subprocess.run(['git', '-C', str(work_dir), 'rev-parse', '--git-common-dir'],
-                                capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, env=checkout_env())
         path = (Path(work_dir) / result.stdout.strip()).resolve() / 'config'
         baseline = None
         # Close before git opens it, including on Windows.

@@ -162,7 +162,7 @@ class SpawnService(SeatSpawnMixin):
         self._save(child)
         try:
             chosen = child['chosen_leg']
-            worktree = await prepare_worktree(self, child, {'lane_branch': (record.get('run_worktree') or {}).get('branch')}, bool(record.get('run_worktree')), continuation=True)
+            worktree = await prepare_worktree(self, child, {'lane_branch': (record.get('run_worktree') or {}).get('branch')}, bool(record.get('run_worktree')), continuation=True, repo=record['cwd'])
             job = await self.runner.spawn(prompt=render_fixer_brief([{'text': g} for g in gaps]),
                 model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=worktree.get('cwd', child['cwd']), wake_variant='fixer',  # REMOVE-AT-R10
                 prompt_record=(self._path(child['run_id']).with_name('prompt.txt'), child, self._save))  # REMOVE-AT-R10

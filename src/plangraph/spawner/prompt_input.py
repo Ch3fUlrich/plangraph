@@ -1,9 +1,16 @@
 """Resolve caller-owned spawn inputs without copying them to disk."""
 from pathlib import Path
+import os
 import subprocess
 
 from plangraph.planner.routing import SpawnRefused
 from plangraph.routing_errors import ParameterRefused
+
+
+def checkout_env():
+    """Keep Git bound to the requested checkout, not a hook's repository."""
+    return {k: v for k, v in os.environ.items() if k not in (
+        'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY')}
 
 
 def resolve_cwd(cwd, card):
@@ -18,12 +25,13 @@ def resolve_cwd(cwd, card):
         if not Path(value).is_dir():
             raise ParameterRefused('cwd must name an existing directory')
         try:
-            inside = subprocess.check_output(['git', '-C', value, 'rev-parse', '--is-inside-work-tree'],
-                text=True, stderr=subprocess.DEVNULL, timeout=10).strip()
-        except (OSError, subprocess.SubprocessError):
-            inside = ''
-        if inside != 'true':
-            raise ParameterRefused('cwd must name a git checkout (not a bare repository)')
+            inside, root, head = subprocess.check_output(['git', '-C', value, 'rev-parse',
+                '--is-inside-work-tree', '--show-toplevel', '--verify', 'HEAD^{commit}'],
+                text=True, stderr=subprocess.DEVNULL, timeout=10, env=checkout_env()).strip().splitlines()
+        except (OSError, ValueError, subprocess.SubprocessError):
+            raise ParameterRefused('cwd must name a git checkout with a committed HEAD') from None
+        if inside != 'true' or Path(root).resolve() != Path(value).resolve() or not head:
+            raise ParameterRefused('cwd must name a git checkout root with a committed HEAD')
     if cwd is not None and card_cwd is not None and Path(cwd).resolve() != Path(card_cwd).resolve():
         raise ParameterRefused('--cwd and card cwd disagree')
     return cwd if cwd is not None else card_cwd

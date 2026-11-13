@@ -1,1 +1,2 @@
 - Add validated spawn `--cwd` and card `cwd` checkout selection so review completion records bind to that checkout's HEAD; foreign verdict `--head` values remain refused.
+- Fix explicit checkout overflow translation and placement precedence, selected-repo run worktrees, and checkout-root/HEAD validation isolated from inherited Git redirects and the async loop.

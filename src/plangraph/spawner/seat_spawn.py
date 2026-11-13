@@ -43,7 +43,8 @@ def admit(service, options, *, card=None, preview=False):
     _, memory = resources(service)
     if not remote_first and not overflow.memory_refusal(memory, role_mb, floor):
         return None
-    repo = Path(((card or {}).get('diff_ref') or {}).get('repo') or options.get('cwd') or
+    repo = Path(options.get('cwd') or (card or {}).get('cwd') or
+                ((card or {}).get('diff_ref') or {}).get('repo') or
                 getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
     public = str(repo) in [str(Path(p).expanduser().resolve()) for p in config.get('public_repos', [])]
     benchmark_local = remote_first and options.get('benchmark') is not None
@@ -153,14 +154,14 @@ class SeatSpawnMixin:
             options = dict(bound.arguments)
             card = options.get('card')
             from .prompt_input import resolve_cwd
-            cwd = resolve_cwd(options.get('cwd'), card)
+            cwd = await asyncio.to_thread(resolve_cwd, options.get('cwd'), card)
             if cwd is not None:
                 options['cwd'] = bound.arguments['cwd'] = cwd
             from .prompt_guard import admit_prompt
             from plangraph.planner.routing import SpawnRefused
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
-            admitted = self.admit_spawn(options, card=card)
+            admitted = await asyncio.to_thread(self.admit_spawn, options, card=card)
             if admitted is not None:
                 return admitted
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':

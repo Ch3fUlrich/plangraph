@@ -5,13 +5,16 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shlex
+import threading
+from types import SimpleNamespace
 
 import pytest
 
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import SpawnPlan
 from plangraph.spawner import cli, mcp, notify, resolver, seat_spawn
-from plangraph.spawner.runner import SpawnerRunner, spawn_service
+from plangraph.spawner.runner import JobInfo, SpawnerRunner, spawn_service
 
 
 def git(repo, *args):
@@ -23,7 +26,7 @@ def git(repo, *args):
 def checkouts(tmp_path, monkeypatch):
     monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
     monkeypatch.setenv('GIT_CONFIG_GLOBAL', os.devnull)
-    for name in ('GIT_CONFIG_PARAMETERS', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE'):
+    for name in ('GIT_CONFIG_PARAMETERS', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'):
         monkeypatch.delenv(name, raising=False)
     for kind in ('AUTHOR', 'COMMITTER'):
         monkeypatch.setenv(f'GIT_{kind}_NAME', 'Test')
@@ -160,15 +163,19 @@ def test_spawn_completion_uses_selected_checkout(service, checkouts, capsys, too
 
 
 @pytest.mark.parametrize('source', ['flag', 'card', 'mcp'])
-@pytest.mark.parametrize('bad', ['relative', 'missing', 'non-git', 'file', 'bare'])
-def test_invalid_cwd_refused(service, tmp_path, capsys, source, bad):
-    path = tmp_path / bad
+@pytest.mark.parametrize('bad', ['relative', 'missing', 'non-git', 'file', 'bare', 'nested', 'unborn'])
+def test_invalid_cwd_refused(service, tmp_path, checkouts, capsys, source, bad):
+    path = (checkouts[1] if bad == 'nested' else tmp_path) / bad
     if bad == 'non-git':
         path.mkdir()
     elif bad == 'file':
         path.write_text('not a directory')
     elif bad == 'bare':
         git(tmp_path, 'init', '--bare', '-q', str(path))
+    elif bad in ('nested', 'unborn'):
+        path.mkdir()
+        if bad == 'unborn':
+            git(path, 'init', '-q', '--template=')
     value = 'relative' if bad == 'relative' else str(path)
     card = {'estimate_tokens': 1000, **({'cwd': value} if source != 'flag' else {})}
     if source == 'mcp':
@@ -209,20 +216,152 @@ def test_card_cwd_requires_path_string(value):
         resolve_cwd(None, {'cwd': value})
 
 
-def test_overflow_keeps_explicit_cwd(checkouts, tmp_path, monkeypatch):
-    from unittest.mock import Mock
+@pytest.mark.parametrize('source', ['flag', 'card', 'both', 'equals'])
+@pytest.mark.parametrize('different_diff', [False, True])
+def test_overflow_keeps_explicit_cwd(checkouts, tmp_path, monkeypatch, source, different_diff):
     from plangraph.spawner import overflow
     caller, reviewed = checkouts
+    host = dict(ssh='invented', repo='/invented checkout', spawner_src='/invented/src')
     config = tmp_path / 'overflow.json'
-    config.write_text(json.dumps({'public_repos': [str(reviewed)], 'hosts': {'remote': {}}}))
+    config.write_text(json.dumps({'public_repos': [str(reviewed)], 'hosts': {'remote': host}}))
     monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
     monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 0))
     monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
     monkeypatch.setattr(overflow, 'ready_records', lambda *a: {'remote': dict(
         ssh='remote', ok=True, fresh=True, live_runs=0,
         mem_available_mb=100000, role_mb=2048, floor_mb=3000)})
-    remote = Mock(return_value={'run_id': 'run-remote', 'status': 'running'})
-    monkeypatch.setattr(overflow, 'remote_spawn', remote)
+    staged, commands = [], []
+    def transport(argv, **kwargs):
+        output = '/invented-stage'
+        if argv[0] == 'scp':
+            staged.append(json.loads(Path(argv[2]).read_text()))
+        elif 'plangraph.spawner.cli' in argv[-1]:
+            commands.append(shlex.split(argv[-1]))
+            markers = [v for v in commands[-1] if v.startswith('PLANGRAPH_RECEIPT_')]
+            output = '\n'.join([markers[0], '{"run_id":"run-remote","status":"running"}', markers[1]])
+        return SimpleNamespace(returncode=0, stdout=output)
+    monkeypatch.setattr(overflow.subprocess, 'run', transport)
     service = spawn_service(SpawnerRunner(default_cwd=str(caller)), state=tmp_path / 'state')
-    assert service.admit_spawn({'cwd': str(reviewed)}, card={})['overflow_remote']
-    assert remote.call_args.args[-1] == ['--cwd', str(reviewed)]
+    card = {'cwd': str(reviewed)} if source in ('card', 'both') else {}
+    if different_diff:
+        card['diff_ref'] = dict(repo=str(caller), base='abc', head='def')
+    original = json.loads(json.dumps(card))
+    if source == 'equals':
+        result = overflow.remote_spawn('remote', host, card, 'Review', ['--cwd=' + str(reviewed)])
+    else:
+        result = service.admit_spawn({'cwd': str(reviewed)} if source != 'card' else {}, card=card)
+        assert result['overflow_remote']
+    command = commands[0]
+    forwarded = (command[command.index('--cwd') + 1] if '--cwd' in command else
+                 next(v.removeprefix('--cwd=') for v in command if v.startswith('--cwd=')))
+    assert forwarded == staged[0]['cwd'] == host['repo']
+    assert card == original
+
+
+@pytest.mark.parametrize('redirect', ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'])
+def test_cwd_validation_ignores_git_redirects(checkouts, tmp_path, monkeypatch, redirect):
+    from plangraph.spawner.prompt_input import resolve_cwd
+    from plangraph.routing_errors import ParameterRefused
+    caller, reviewed = checkouts
+    monkeypatch.setenv(redirect, str(caller if redirect == 'GIT_WORK_TREE' else caller / '.git'))
+    output = subprocess.check_output
+    def checked(*args, **kwargs):
+        clean = redirect not in kwargs.get('env', os.environ)
+        assert clean
+        return output(*args, **kwargs)
+    monkeypatch.setattr(subprocess, 'check_output', checked)
+    assert resolve_cwd(str(reviewed), {}) == str(reviewed)
+    with pytest.raises(ParameterRefused, match='git checkout'):
+        resolve_cwd(str(tmp_path), {})
+
+
+def test_completion_ignores_git_redirects(checkouts, monkeypatch):
+    caller, reviewed = checkouts
+    expected = git(reviewed, 'rev-parse', 'HEAD')
+    monkeypatch.setenv('GIT_DIR', str(caller / '.git'))
+    monkeypatch.setenv('GIT_WORK_TREE', str(caller))
+    event = notify.completion_event(dict(run_id='run-test', status='completed', exit_code=0), reviewed)
+    assert event['head_sha'] == expected
+
+
+def test_worktree_git_ignores_redirects(checkouts, tmp_path, monkeypatch):
+    from plangraph.spawner import git_guard
+    caller, reviewed = checkouts
+    git(reviewed, 'branch', '-M', 'main')
+    git(reviewed, 'remote', 'add', 'origin', str(reviewed))
+    expected = git(reviewed, 'rev-parse', 'HEAD')
+    monkeypatch.setenv('GIT_DIR', str(caller / '.git'))
+    assert git_guard.init_guard(reviewed)[0] == reviewed / '.git' / 'config'
+    metadata = git_guard.create(tmp_path / 'worktrees', reviewed, 'lane/redirect')
+    assert metadata['base_sha'] == expected
+
+
+def test_cwd_validation_off_event_loop(service, checkouts, monkeypatch):
+    from plangraph.spawner import prompt_input
+    resolve = prompt_input.resolve_cwd
+    loop_thread = threading.get_ident()
+    def checked(*args):
+        assert threading.get_ident() != loop_thread
+        return resolve(*args)
+    monkeypatch.setattr(prompt_input, 'resolve_cwd', checked)
+    asyncio.run(service.spawn(card={'estimate_tokens': 1000}, cwd=str(checkouts[1]),
+        prompt='Review', role='review', writer_families=['gpt'], dry_run=True))
+
+
+@pytest.mark.parametrize('source', ['flag', 'card'])
+def test_run_worktree_uses_selected_checkout(service, checkouts, capsys, monkeypatch, source):
+    caller, reviewed = checkouts
+    git(reviewed, 'branch', '-M', 'main')
+    git(reviewed, 'remote', 'add', 'origin', str(reviewed))
+    card = {'estimate_tokens': 1000, 'diff_ref': dict(repo=str(reviewed),
+        base=git(reviewed, 'rev-parse', 'HEAD~1'), head=git(reviewed, 'rev-parse', 'HEAD')),
+        **({'cwd': str(reviewed)} if source == 'card' else {})}
+    assert cli.main(['spawn', 'Review', '--role', 'review', '--writer-family', 'gpt',
+        '--card', json.dumps(card), '--run-worktree',
+        *(['--cwd', str(reviewed)] if source == 'flag' else [])]) == 0
+    record = json.loads(capsys.readouterr().out)
+    assert record['status'] == 'completed', record.get('error')
+    assert service.launch_cwds == [record['cwd']] != [str(caller)]
+    assert git(record['cwd'], 'rev-parse', '--git-common-dir') == str(reviewed / '.git')
+    assert record['completion']['head_sha'] == git(reviewed, 'rev-parse', 'HEAD')
+    async def spawn(**kwargs):
+        return JobInfo('fixer', 'completed', kwargs['prompt'], 'test', exit_code=0)
+    monkeypatch.setattr(service.runner, 'spawn', spawn)
+    record['role'] = 'implement'
+    asyncio.run(service._continue_writer(record, 'Remaining gaps: finish the test'))
+    child = service.result(record['continuation_run_id'])
+    assert child['status'] == 'completed', child.get('error')
+    assert child['cwd'] != record['cwd']
+    assert child['run_worktree']['base_sha'] == record['completion']['head_sha']
+
+
+def test_cli_top_level_spacing():
+    source = Path(cli.__file__).read_text()
+    assert '\n\n\ndef _drain_chunks' in source
+    assert "\n\n\nif __name__ == '__main__':" in source
+
+
+def test_admission_off_event_loop(service, checkouts, monkeypatch):
+    loop_thread = threading.get_ident()
+    def checked(*args, **kwargs):
+        assert threading.get_ident() != loop_thread
+    monkeypatch.setattr(service, 'admit_spawn', checked)
+    asyncio.run(service.spawn(card={'estimate_tokens': 1000}, cwd=str(checkouts[1]),
+        prompt='Review', role='review', writer_families=['gpt'], dry_run=True))
+
+
+@pytest.mark.parametrize('source', ['flag', 'card'])
+def test_legacy_overflow_classifies_explicit_cwd(checkouts, tmp_path, monkeypatch, capsys, source):
+    from plangraph.spawner import overflow
+    caller, reviewed = checkouts
+    config, card, prompt = [tmp_path / name for name in ('overflow.json', 'card.json', 'prompt.txt')]
+    config.write_text(json.dumps({'public_repos': [str(caller)], 'hosts': {}}))
+    card.write_text(json.dumps({'cwd': str(reviewed)} if source == 'card' else {}))
+    prompt.write_text('Review')
+    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
+    monkeypatch.setattr(overflow, 'local_resources', lambda: (0, 0))
+    monkeypatch.setattr(overflow, 'ready_records', lambda *a: {})
+    assert overflow.main(['spawn', '--repo', str(caller), '--card', str(card), '--prompt', str(prompt),
+        *(['--cwd', str(reviewed)] if source == 'flag' else [])]) == 5
+    assert 'repo is not public' in capsys.readouterr().out
