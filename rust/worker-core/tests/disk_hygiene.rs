@@ -121,6 +121,27 @@ fn ignored_non_cache_files_preserve_the_entire_tree() {
     }
 }
 #[test]
+fn vanished_worktree_is_reported_and_other_trees_are_cleaned() {
+    let (_tmp, repo, root) = fixture();
+    // Leave Git's registration behind to model a tree disappearing after listing.
+    fs::remove_dir_all(root.join("pinned")).unwrap();
+    let report = sweep(
+        &repo,
+        &root,
+        &Guards::default(),
+        SystemTime::now() + Duration::from_secs(90000),
+        85.0,
+        true,
+    )
+    .unwrap();
+    assert!(report
+        .skipped
+        .iter()
+        .any(|reason| { reason.contains("pinned") && reason.contains("filesystem unavailable") }));
+    assert!(!root.join("clean").exists());
+    assert!(root.join("dirty/untracked").exists());
+}
+#[test]
 fn dry_run_and_recent_worktrees_preserve_everything() {
     let (_tmp, repo, root) = fixture();
     let report = sweep(

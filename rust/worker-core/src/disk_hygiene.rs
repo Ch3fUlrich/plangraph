@@ -95,6 +95,18 @@ fn scan(path: &Path) -> io::Result<(u64, SystemTime)> {
     }
     Ok((bytes, newest))
 }
+fn available_or_skip<T>(result: io::Result<T>, tree: &Path, report: &mut Report) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            report.skipped.push(format!(
+                "{}: filesystem unavailable: {error}",
+                tree.display()
+            ));
+            None
+        }
+    }
+}
 fn removable(repo: &Path, branch: &str) -> io::Result<bool> {
     let target = git(
         repo,
@@ -184,19 +196,25 @@ pub fn sweep(
         return Ok(report);
     }
     let listing = git(repo, &["worktree", "list", "--porcelain", "-z"])?;
-    for (index, block) in listing.split("\0\0").filter(|s| !s.is_empty()).enumerate() {
+    'trees: for (index, block) in listing.split("\0\0").filter(|s| !s.is_empty()).enumerate() {
         let fields: Vec<_> = block.split('\0').collect();
         let Some(path) = fields.iter().find_map(|s| s.strip_prefix("worktree ")) else {
             continue;
         };
         let original = Path::new(path);
-        let path = original.canonicalize()?;
+        let Some(path) = available_or_skip(original.canonicalize(), original, &mut report) else {
+            continue;
+        };
+        let Some(metadata) = available_or_skip(fs::symlink_metadata(original), &path, &mut report)
+        else {
+            continue;
+        };
         if index == 0
             || path == root
             || !path.starts_with(&root)
             || guards.protects(&path)
             || fields.iter().any(|s| s.starts_with("locked"))
-            || fs::symlink_metadata(original)?.file_type().is_symlink()
+            || metadata.file_type().is_symlink()
         {
             report
                 .skipped
@@ -224,7 +242,9 @@ pub fn sweep(
                 .push(format!("{}: ignored non-cache files", path.display()));
             continue;
         }
-        let (_, newest) = scan(&path)?;
+        let Some((_, newest)) = available_or_skip(scan(&path), &path, &mut report) else {
+            continue;
+        };
         if now.duration_since(newest).unwrap_or_default() <= Duration::from_secs(86400) {
             continue;
         }
@@ -242,8 +262,12 @@ pub fn sweep(
         }
         // Recheck protection, dirtiness and containment immediately before each mutation.
         for cache in caches {
+            let Some(cache_path) = available_or_skip(cache.canonicalize(), &path, &mut report)
+            else {
+                continue 'trees;
+            };
             if guards.protects(&path)
-                || !cache.canonicalize()?.starts_with(&path)
+                || !cache_path.starts_with(&path)
                 || !git(
                     &path,
                     &["status", "--porcelain=v1", "--untracked-files=all"],
@@ -253,7 +277,9 @@ pub fn sweep(
             {
                 continue;
             }
-            let bytes = scan(&cache)?.0;
+            let Some((bytes, _)) = available_or_skip(scan(&cache), &path, &mut report) else {
+                continue 'trees;
+            };
             if apply {
                 fs::remove_dir_all(&cache)?;
                 report.freed_bytes += bytes;
@@ -281,7 +307,10 @@ pub fn sweep(
                     continue;
                 }
                 if apply {
-                    let bytes = scan(&path)?.0;
+                    let Some((bytes, _)) = available_or_skip(scan(&path), &path, &mut report)
+                    else {
+                        continue;
+                    };
                     git(
                         repo,
                         &[
@@ -302,4 +331,31 @@ pub fn sweep(
         }
     }
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanished_scan_is_recorded_as_skipped() {
+        let tree = tempfile::tempdir().unwrap();
+        let file = tree.path().join("vanishing");
+        fs::write(&file, "data").unwrap();
+        fs::remove_file(&file).unwrap();
+        let mut report = Report {
+            disk_pct: 85.0,
+            alarm: true,
+            dry_run: false,
+            freed_bytes: 0,
+            actions: vec![],
+            skipped: vec![],
+        };
+        // Exercise the same error boundary used for recursive and pre-removal scans.
+        assert!(available_or_skip(scan(&file), tree.path(), &mut report).is_none());
+        assert_eq!(report.skipped.len(), 1);
+        assert!(report.skipped[0].contains("filesystem unavailable"));
+        assert!(report.skipped[0].contains(&tree.path().display().to_string()));
+        assert!(report.actions.is_empty());
+    }
 }
