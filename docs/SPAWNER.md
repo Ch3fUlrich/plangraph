@@ -256,7 +256,11 @@ Cards may also be inline JSON; `spawn --prompt-file FILE` replaces the prompt ar
 Never use `pgrep -f` wait loops, including in writer/seat briefs: they can match
 the waiting shell itself. Wait reads atomic run records, not process names;
 its timeout stops waiting, not the writer.
-`--no-fallthrough` disables automatic advancement after a captured provider stop.
+`--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg.
+Review/seat routes record each failed, limited or not-served attempt with its reason
+and try the next leg in the same run, failing only after route exhaustion. Writer
+generic failures keep their stop rule; cancellation, safety refusals and watchdog
+terminals still stop immediately. OOM wrapper marker lines are not failure reasons.
 Plain stdout, including text saying 429, is never provider evidence.
 
 ### Opt-in per-attempt worktrees (RUN-WORKTREE slice 1)
@@ -305,7 +309,7 @@ it does not close items or bypass the keeper's authorization checks.
 it receives recipient as its final argument and event JSON on stdin. Consumers
 must deduplicate by event_id: external delivery is at-least-once across crashes.
 Failed hooks are logged and retried on re-save; local inbox replay is idempotent.
-`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds each child execution in seconds; unset gives a 25-minute review cap, while empty means no review cap;
+`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds execution in seconds; reviews share one run deadline across all legs and prompt preparation (writers retain per-child limits); unset gives a 25-minute review cap, while empty means no review cap;
 expiry kills its process tree and records rc 124 with FAILED completion.
 Terminal stall/timeout records preserve their outcome and events even without a watchdog event (`watchdog: null`). Provider responses label attempt reasons `provider_stop` only for failed/skipped jobs, not successful ones.
 The detached supervisor must survive the child; killing the supervisor itself

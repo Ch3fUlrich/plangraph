@@ -224,7 +224,9 @@ def normalize(text):
 
 
 def first_reason(text):
-    return next((line.strip() for line in normalize(text).splitlines() if line.strip()), '')
+    """First diagnostic, excluding the OOM wrapper's structured telemetry."""
+    return next((line.strip() for line in normalize(text).splitlines()
+                 if line.strip() and not re.match(r'^\s*\{\s*"plangraph_oom"\s*:', line)), '')
 
 
 def opencode_limit(text):

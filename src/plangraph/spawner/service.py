@@ -303,10 +303,11 @@ class SpawnService(SeatSpawnMixin):
         pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
         async def execute():
             try:
-                from .run_watchdog import prepare_run, terminal_record
+                from .run_watchdog import leg_limits, prepare_run, terminal_record
                 limits, live_log = prepare_run(self, record, card)
                 launched = False
                 for chosen in plan.legs:
+                    if leg_limits(record, limits) is None: break
                     from .inline_diff import InlineDiffError
                     try:
                         leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run,
@@ -320,8 +321,9 @@ class SpawnService(SeatSpawnMixin):
                     launched = True
                     leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, record['run_id'])
                     worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
+                    if (watchdog := leg_limits(record, limits)) is None: break
                     job = await self._launch_leg(record, chosen, prompt=leg_prompt, model_or_combo=chosen.model,
-                        role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
+                        role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
                         prompt_record=(self._path(record['run_id']).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                     if record.get('reason') == 'reasoning_output_limit':
                         break
@@ -336,7 +338,7 @@ class SpawnService(SeatSpawnMixin):
                     if unavailable:
                         job.status = 'failed'
                         job.exit_code = job.exit_code or 1
-                    reason = unavailable or (('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}')
+                    reason = ('provider_stop' if stop and job.status in ('failed', 'skipped') else unavailable) or ((first_reason(job.stderr) or f'harness exit code {job.exit_code}')
                         if job.status in ('failed', 'skipped') else None)
                     stop_status = stop.get('status') if isinstance(stop, dict) else None
                     down_token = (unavailable or '').split(':', 1)[0].strip()
@@ -356,12 +358,15 @@ class SpawnService(SeatSpawnMixin):
                         writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                         stdout_tail=record.get('stdout_tail', '') + job.stdout,
                         stderr_tail=record.get('stderr_tail', '') + job.stderr, events=record.get('events', []) + getattr(job, 'events', []))
+                    if role == 'review' and unavailable and not (no_fallthrough or dry_run): record.update(status='running', exit_code=None)
                     self._save(record)
                     if (not stop and not unavailable) or no_fallthrough or dry_run:
                         if not dry_run:
                             await self._continue_writer(record, job.stdout)
                         break
-                if not launched:
+                else:
+                    if role == 'review' and record['status'] == 'running': record.update(status='failed', exit_code=1)
+                if not launched and record.get('status') != 'timed_out':
                     record.update(status='failed', exit_code=1, error='; '.join(
                         a['skip_reason'] for a in record['attempts']) or 'no leg launched')
             except Exception as exc:

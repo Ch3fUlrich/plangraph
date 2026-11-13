@@ -205,7 +205,17 @@ def fallthrough_reason(service, chosen, job, record):
     if reason is not None:
         _book_failure(service, chosen, 'model_unavailable: ' + reason)
         notify_leg_refused(service, record, chosen, reason)
-    return reason
+    stop = getattr(getattr(service, 'runner', None), 'provider_responses', {}).get(getattr(job, 'job_id', None))
+    if (not reason and record.get('role') == 'review' and isinstance(stop, dict)
+            and stop.get('status') in (402, 429) and not getattr(job, 'survivors', ())
+            and job.status in ('completed', 'failed', 'skipped', 'limited')):
+        job.status, job.exit_code = 'failed', job.exit_code or 1
+        return 'provider_stop'
+    # Review/seat failures exhaust the existing route, not the whole run.
+    # Keep generic writer failures terminal and never bypass the guards above.
+    return reason or (failure_reason(job) if record.get('role') == 'review'
+                      and not getattr(job, 'survivors', ())
+                      and job.status in ('failed', 'skipped', 'limited') else None)
 
 
 def release_attempts(service, record):

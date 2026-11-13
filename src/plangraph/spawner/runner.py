@@ -1011,7 +1011,7 @@ def spawn_service(*args, **kwargs):
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
                         seats=False, _plan=None, run_worktree=False, _placement=None):
             from .private_io import SAVE_READ_ATTEMPTS
-            from .run_watchdog import terminal_status, thresholds
+            from .run_watchdog import leg_limits, terminal_status, thresholds
             from .question_bridge import rounds_exhausted
             if rounds_exhausted(self, card, role):
                 from plangraph.routing_errors import SpawnRefused
@@ -1072,6 +1072,7 @@ def spawn_service(*args, **kwargs):
                     live_log = str(self._path(run_id).parent / 'live.log')
                     record['live_log'] = live_log
                     for _ in range(len(plan.legs) + 2):
+                        if leg_limits(record, limits) is None: return
                         chosen = next((l for l in current.legs if l.id not in tried), None)
                         if chosen is None or current.error:
                             break
@@ -1093,8 +1094,9 @@ def spawn_service(*args, **kwargs):
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
                         worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
+                        if (watchdog := leg_limits(record, limits)) is None: return
                         job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
-                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
+                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                         if record.get('reason') == 'reasoning_output_limit':
                             return
@@ -1152,6 +1154,8 @@ def spawn_service(*args, **kwargs):
                             if not dry_run and job.status != 'needs_input':
                                 await self._continue_writer(record, job.stdout)
                             return
+                        if role == 'review': record.update(status='running', exit_code=None)
+                        self._save(record)
                         current = plan if unavailable else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         if hasattr(current, '__dataclass_fields__'):
                             current = restrict(await plan_for_launch_async(replace(current, placement=_placement or current.placement), dry_run=dry_run), tried)

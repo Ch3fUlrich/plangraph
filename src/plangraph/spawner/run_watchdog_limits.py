@@ -1,6 +1,20 @@
 """Validated per-run watchdog limits and role-specific review caps."""
 import math
 import os
+import time
+
+
+def leg_limits(record, limits):
+    """Review fallthroughs share one wall clock, including prompt preparation."""
+    if record.get('role') != 'review':
+        return limits
+    deadline = record['started'] + limits['max_s']
+    remaining = deadline - time.time()
+    if remaining > 0:
+        return dict(limits, deadline=deadline, hard_max=True)
+    record.update(status='timed_out', exit_code=124, reason='timeout')
+    record.setdefault('events', []).append(dict(event='run_timeout'))
+    return None
 
 
 def thresholds(card=None, *, role=None):

@@ -267,7 +267,7 @@ class SeatSpawnMixin:
             job.status = 'cancelled'
             return job
         limits = options.get('watchdog') or {}
-        remaining = record['started'] + limits.get('max_s', 1500) - time.time()
+        remaining = limits.get('deadline', record['started'] + limits.get('max_s', 1500)) - time.time()
         if evidence.get('cap_available') and not record.get('reasoning_retry') and remaining > 30:
             record_attempt(job)
             record['events'].append(dict(event='reasoning_capped_retry', leg=chosen.id,
