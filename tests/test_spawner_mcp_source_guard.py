@@ -78,40 +78,82 @@ def test_unchanged_source_allows_each_real_spawn(tmp_path, monkeypatch):
     assert spawn.await_count == 2 and identity.call_count == 3
 
 
-def test_source_identity_uses_module_tree_not_cwd_or_git_redirect(tmp_path, monkeypatch):
-    source = Path(git_guard.__file__).resolve().parent
-    expected = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv('GIT_DIR', str(tmp_path / 'unrelated.git'))
-    monkeypatch.setenv('GIT_WORK_TREE', str(tmp_path))
-    assert git_guard.current_source_identity() == expected[:12]
+def _git(repo, *args):
+    env = {**os.environ, 'GIT_CEILING_DIRECTORIES': str(repo.parent)}
+    subprocess.run(['git', '-C', str(repo), '-c', 'user.name=t', '-c', 'user.email=t@t', *args],
+                   check=True, capture_output=True, env=env)
 
 
-@pytest.mark.parametrize('git_absent', [False, True])
-def test_source_identity_without_git_hashes_python_tree(tmp_path, monkeypatch, git_absent):
-    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path.parent))
-    if git_absent:
-        monkeypatch.setattr(git_guard.subprocess, 'run', Mock(side_effect=FileNotFoundError))
-    source = tmp_path / 'spawner'
-    source.mkdir()
-    file = source / 'runner.py'
-    file.write_text('old')
-    identity = lambda: git_guard.current_source_identity(source)
-    original = identity()
-    assert len(original) == 12 and int(original, 16) >= 0
-    (source / 'ignored.txt').write_text('not Python')
-    assert identity() == original
-    file.write_text('new')
-    assert identity() != original
-    file.write_text('old')
-    nested = source / 'nested'
-    nested.mkdir()
-    (nested / 'added.py').write_text('extra')
-    assert identity() != original
-    (nested / 'added.py').unlink()
-    assert identity() == original
-    file.rename(source / 'renamed.py')
-    assert identity() != original
+@pytest.fixture
+def tree(tmp_path, monkeypatch):
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path))
+    root = tmp_path / 'repo' / 'plangraph'
+    (root / 'planner').mkdir(parents=True)
+    (root / 'planner' / 'routing.py').write_text('x = 1\n')
+    _git(root.parent, 'init', '-q')
+    _git(root.parent, 'add', '.')
+    _git(root.parent, 'commit', '-q', '-m', 'one')
+    return root
+
+
+def _guarded(tmp_path, tree):
+    return mcp.MCPSpawnerServer(state=tmp_path / 'state',
+                                source_identity=lambda: git_guard.current_source_identity(tree))
+
+
+def _assert_refuses_real_but_not_dry(server, monkeypatch):
+    monkeypatch.setattr(server.service, 'spawn', AsyncMock(return_value={'status': 'running'}))
+    reply = rpc(server, 'spawn', {'prompt': 'task', 'card': {'estimate_tokens': 1}})
+    assert reply['error']['data']['type'] == 'SourceChanged'
+    assert reply['error']['message'].startswith('restart required: ')
+    assert 'result' in rpc(server, 'spawn', {'dry_run': True, 'prompt': 'task', 'card': {'estimate_tokens': 1}})
+    health = asyncio.run(server.call_tool('plangraph_agent_health', {}))
+    assert health['status'] == 'stale' and health['error'].startswith('restart required: ')
+
+
+def test_moved_git_head_refuses_real_run(tmp_path, monkeypatch, tree):
+    server = _guarded(tmp_path, tree)
+    _git(tree.parent, 'commit', '-q', '--allow-empty', '-m', 'two')
+    _assert_refuses_real_but_not_dry(server, monkeypatch)
+
+
+def test_uncommitted_edit_outside_spawner_refuses_real_run(tmp_path, monkeypatch, tree):
+    server = _guarded(tmp_path, tree)
+    (tree / 'planner' / 'routing.py').write_text('x = 22222\n')
+    _assert_refuses_real_but_not_dry(server, monkeypatch)
+
+
+def test_non_git_fallback_covers_files_outside_spawner(tmp_path, monkeypatch):
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path))
+    root = tmp_path / 'plangraph'
+    (root / 'planner').mkdir(parents=True)
+    (root / 'spawner').mkdir()
+    (root / 'planner' / 'routing.py').write_text('x = 1\n')
+    (root / 'spawner' / 'runner.py').write_text('y = 1\n')
+    server = _guarded(tmp_path, root)
+    (root / 'planner' / 'routing.py').write_text('x = 22222\n')
+    _assert_refuses_real_but_not_dry(server, monkeypatch)
+
+
+def test_unreadable_file_and_missing_tree_fail_closed(tmp_path, monkeypatch):
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path))
+    (tmp_path / 'a.py').write_text('x')
+    (tmp_path / 'gone.py').symlink_to(tmp_path / 'missing.py')
+    first, second = (git_guard.current_source_identity(tmp_path) for _ in range(2))
+    assert len(first) == 12 and first != second
+    assert len(git_guard.current_source_identity(tmp_path / 'absent')) == 12
+
+
+@pytest.mark.parametrize('name', ['plangraph_session_launch', 'plangraph_session_relaunch'])
+def test_session_starts_are_guarded_other_tools_are_not(tmp_path, name):
+    identity = Mock(return_value=OLD)
+    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+    identity.return_value = NEW
+    with pytest.raises(git_guard.SourceChanged):
+        server._source_guard.check(name, {})
+    for open_tool in ('plangraph_session_stop', 'plangraph_session_list', 'plangraph_session_mark_ready',
+                      'plangraph_agent_cancel'):
+        server._source_guard.check(open_tool, {})
 
 
 def test_server_import_eagerly_loads_spawn_dependencies(tmp_path):
@@ -124,12 +166,3 @@ def test_server_import_eagerly_loads_spawn_dependencies(tmp_path):
     done = subprocess.run([sys.executable, '-c', script], cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=30)
     assert done.returncode == 0, done.stderr
-
-
-def test_source_identity_hash_skips_unreadable_files(tmp_path, monkeypatch):
-    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path.parent))
-    source = tmp_path / 'spawner'
-    source.mkdir()
-    (source / 'ok.py').write_text('x')
-    (source / 'gone.py').symlink_to(source / 'missing.py')
-    assert len(git_guard.current_source_identity(source)) == 12

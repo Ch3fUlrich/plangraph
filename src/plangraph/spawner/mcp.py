@@ -22,7 +22,7 @@ from typing import Any, Mapping
 from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
 from plangraph.spawner import bench_entry, leg_probe, remote_ps
 from plangraph.spawner.clients import effective_child_base_url
-from plangraph.spawner.git_guard import SourceChanged, SourceGuard
+from plangraph.spawner.git_guard import SourceGuard
 from plangraph.spawner.leg_state import leg_status
 from plangraph.spawner.mcp_limits import encode_reply, ps_reply
 from plangraph.spawner.resolver import (
@@ -177,11 +177,9 @@ class MCPSpawnerServer:
 
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Execute tool and return structured payload."""
+        self._source_guard.check(name, arguments)
         if isinstance(name, str) and name.startswith('plangraph_session_'):
             return await self._session_tool(name, arguments)
-        if name == 'plangraph_agent_spawn' and not arguments.get('dry_run', False):
-            if message := self._source_guard.restart_required():
-                raise SourceChanged(message)
         if name == 'plangraph_agent_probe':
             try:
                 return await leg_probe.probe_many(self.runner, arguments.get('leg', ()),
