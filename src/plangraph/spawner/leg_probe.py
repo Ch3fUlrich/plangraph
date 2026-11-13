@@ -332,7 +332,8 @@ async def before_launch(runner, leg, role, dry_run):
             status = adapter.leg_status(key(leg), account=getattr(leg, 'account', None),
                                         combo=getattr(leg, 'combo', None))
             if status['state'] != 'ok':
-                return status.get('reason', status['state'])
+                reason = status.get('reason') or status['state']
+                return 'leg_state_snapshot_error' if reason.strip().lower() == 'unknown' else reason
         return None
     # D-3685: a leg booked limited is known-unusable until its reset. Skip it
     # before any freshness or probe logic -- every role, TTL 0 included --
@@ -354,9 +355,12 @@ async def before_launch(runner, leg, role, dry_run):
         pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state))
         pending.add_done_callback(lambda _: _INFLIGHT.pop(key(leg), None))
     result = await asyncio.shield(pending)
+    reason = result.get('reason')
+    if not reason or reason.strip().lower() == 'unknown':
+        reason = 'host_not_ready' if result.get('state') == 'host-not-ready' else 'leg_probe_failed'
     if result.get('state') == 'host-not-ready':
-        return result['reason']
-    return admission() if result['ok'] or result.get('infra') or result.get('state') == 'probe_failed_leg_serving' else 'down: ' + result['reason']
+        return reason
+    return admission() if result['ok'] or result.get('infra') or result.get('state') == 'probe_failed_leg_serving' else 'down: ' + reason
 
 
 async def probe_many(runner, legs=(), all_writers=False, timeout=None):
