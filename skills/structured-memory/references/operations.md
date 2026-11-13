@@ -49,7 +49,7 @@ Server: `omnigraph-server` v0.13.0 (migrated from v0.8.1, D-1038) · MCP bridge
    `.mcp.json`, and nothing reports it: the bridge connects, answers, and is simply pointed
    somewhere else. (Measured for omnigraph, and true of omnigraph — it is *not* a general law
    of same-named servers. A duplicate `serena` produces two running processes and no winner;
-   see Wiring in the AutoOS repository's `.agents/skills/mcp-servers-setup/references/serena.md`.) On 2026-07-17 a user-scope `omnigraph` pinned to `graph_id: memory` hid
+   see Wiring in `skills/mcp-servers-setup/references/serena.md`.) On 2026-07-17 a user-scope `omnigraph` pinned to `graph_id: memory` hid
    every repo's own pin. An agent saw `memory`'s contents — *every table rowCount 0 except
    2 `Preference`s* — concluded `sibling-analysis-repo` had been wiped, and started rebuilding it.
    `sibling-analysis-repo` was intact the whole time (135 nodes / 235 edges on both servers); the
@@ -293,5 +293,4 @@ Server: `omnigraph-server` v0.13.0 (migrated from v0.8.1, D-1038) · MCP bridge
 | Push a repo's memory to central | delete its child nodes on `main` → `load --merge` its fresh subset |
 | Bulk clean dups | 0.8.x only: `scripts/dedup-graph.py --image modernrelay/omnigraph-server:v0.8.<patch>` on the server host; on 0.13 use the export/import migration (Server repo `scripts/omnigraph-migrate-013.py`) |
 
-See also: [schema.md](schema.md), `infra/mcp-servers/omnigraph-setup/README.md`,
-`docs/REMOTE-SYNC-TEST-PLAN.md`.
+See also: [schema.md](schema.md), `infra/mcp-servers/omnigraph-setup/README.md`.
