@@ -31,6 +31,28 @@ def _canon_family(name):
         raise ValueError(f"unknown model family {name!r}")
     return family
 
+def _review_text_from_log(live_log: str) -> str:
+    """Lifecycle events select OpenCode mode; otherwise keep plain logs intact."""
+    event_log, texts = False, []
+    for line in live_log.split("\n"):
+        line = line.removesuffix("\r")
+        try:
+            event = json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        if (not isinstance(event, dict)
+                or event.get("type") not in ("step_start", "step_finish", "text", "tool_use")
+                or not isinstance(event.get("part"), dict)):
+            continue
+        event_log |= event["type"] in ("step_start", "step_finish")
+        if event["type"] == "step_start":
+            texts.clear()
+        elif event["type"] == "text":
+            part = event["part"]
+            if isinstance(part.get("text"), str):
+                texts.append(part["text"])
+    return "\n".join(texts) if event_log else live_log
+
 def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None) -> tuple[dict, str]:
     """Return (evidence, review_text) for a record.json-only seat run dir.
 
@@ -48,7 +70,7 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         stat = record_path.stat()
     except OSError as exc:
         raise ValueError(f"record.json unreadable: {type(exc).__name__}") from exc
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise ValueError(f"record.json is not valid JSON: {exc}") from exc
     if not isinstance(record, dict):
         raise ValueError("record.json is not an object")
@@ -82,7 +104,7 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
     except OSError:
         live_log = ""
     if live_log.strip():
-        review_text = live_log
+        review_text = _review_text_from_log(live_log)
     else:
         # F4: stdout_tail accumulates every leg (service.py/runner.py append to
         # it), so it may stand in for live.log only on a single-attempt record.
@@ -175,7 +197,7 @@ def record_index(records_dir):
             except OSError:
                 prompt = ""
             rows[path] = (record, prompt)
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             continue
     return rows
 
