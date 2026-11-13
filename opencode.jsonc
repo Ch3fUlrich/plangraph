@@ -79,7 +79,7 @@
   "providers": {
     "omniroute": {
       "name": "AutoOS OmniRoute gateway",
-      "env": ["AUTOOS_OMNIROUTE_KEY"],
+      "env": ["PLANGRAPH_OMNIROUTE_KEY"],
       "package": "@opencode/ai/providers/openai-compatible",
       "settings": {
         // no built-in default port: opencode substitutes PLANGRAPH_REVIEW_URL (empty if unset)
@@ -89,7 +89,7 @@
     "mimo": {
       "package": "@opencode/ai/providers/openai-compatible",
       "name": "MiMo direct gateway legs (D-2459)",
-      "env": ["AUTOOS_OMNIROUTE_KEY"],
+      "env": ["PLANGRAPH_OMNIROUTE_KEY"],
       "settings": {
         "baseURL": "{env:PLANGRAPH_REVIEW_URL}"
       },

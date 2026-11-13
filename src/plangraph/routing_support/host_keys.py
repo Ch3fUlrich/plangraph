@@ -1,10 +1,7 @@
-"""Hand child runs the host keys the AutoOS spawner gave us (D-2759).
+"""Resolve child credentials at spawn time, never at import.
 
-The provider overlay only copies an env name through when the parent already
-holds its value (``opencode_overlay.overlay_env``), and the plangraph spawner's
-own environment never carries the file-managed keys -- so an opencode child
-(mimo runs, ``opencode/*-free`` models) fails with "Authentication required".
-These helpers resolve the keys from the AutoOS keys file at spawn time.
+The gateway uses a private plangraph client-key file; Zen uses its separate
+flat keys file. Neither resolver logs, prints, or raises credential values.
 
 Contract: every failure -- a missing file, a helper that raises or exits on
 import or at call time, a non-Mapping keys result, a non-str or blank key --
@@ -17,10 +14,13 @@ from __future__ import annotations
 import importlib.util
 import os
 import re
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 
-GATEWAY_KEY_ENV = "AUTOOS_OMNIROUTE_KEY"
+GATEWAY_KEY_ENV = "PLANGRAPH_OMNIROUTE_KEY"
+GATEWAY_KEY_FILE_ENV = "PLANGRAPH_OMNIROUTE_KEY_FILE"
+GATEWAY_KEY_ABSENT = "gateway_key_absent"
 ZEN_KEY_ENV = "OPENCODE_API_KEY"
 
 # "opencode/<id>-free", after stripping any "#variant" suffix: the only shape
@@ -29,9 +29,8 @@ _ZEN_FREE_MODEL = re.compile(r"opencode/.+-free")
 
 
 def _keys_path(env):
-    """<root>/configuration/api-keys.yml under the AutoOS root of `env`."""
-    root = env.get("AUTOOS_ROOT") or os.environ.get("AUTOOS_ROOT") or str(Path.home() / "code/AutoOS")
-    return Path(root) / "configuration" / "api-keys.yml"
+    """Zen's flat config file, independent of the gateway client key."""
+    return Path(env.get("HOME") or Path.home()) / ".config/autoos/api_keys.conf"
 
 
 def _load_helper(root, name):
@@ -55,18 +54,16 @@ def _load_helper(root, name):
 
 
 def _gateway_key(env):
-    """AutoOS gateway client key from the keys file; None when unresolvable."""
+    """Private client key only; all invalid/unreadable sources mean no key."""
     try:
-        keys_path = _keys_path(env)
-        if not keys_path.is_file():
+        override = env.get(GATEWAY_KEY_FILE_ENV) or os.environ.get(GATEWAY_KEY_FILE_ENV)
+        path = Path(override) if override else Path(env.get("HOME") or Path.home()) / ".config/plangraph/omniroute-client.key"
+        mode = path.stat().st_mode
+        if not stat.S_ISREG(mode) or mode & 0o022 or not mode & 0o444:
             return None
-        helper = _load_helper(keys_path.parent.parent, "autoos_gateway_key")
-        resolve = getattr(helper, "resolve_client_key", None)
-        if not callable(resolve):
-            return None
-        key = resolve(dict(env), keys_path)
-        return key if isinstance(key, str) and key.strip() else None
-    except (Exception, SystemExit):  # ANY helper failure is "no key", never a crash
+        key = path.read_text(encoding="utf-8").rstrip("\r\n")
+        return key if key.strip() else None
+    except (Exception, SystemExit):  # never expose file errors or their payloads
         return None
 
 
@@ -76,7 +73,8 @@ def _zen_key(env):
         keys_path = _keys_path(env)
         if not keys_path.is_file():
             return None
-        helper = _load_helper(keys_path.parent.parent, "keys_file")
+        root = env.get("AUTOOS_ROOT") or os.environ.get("AUTOOS_ROOT") or Path.home() / "code/AutoOS"
+        helper = _load_helper(root, "keys_file")
         read_keys = getattr(helper, "read_keys", None)
         if not callable(read_keys):
             return None
@@ -103,7 +101,7 @@ def add_host_keys(env, model, *, needs_gateway):
 
     The gateway key goes in when `needs_gateway` and env has none; the Zen key
     only for an ``opencode/<id>-free`` model and only when env has none. An
-    existing env value always wins. Never raises (H5): a broken env or helper
+    existing env value always wins; absent required keys return gateway_key_absent.
     degrades to "no key", never a supervisor crash or a key in an exception.
     """
     try:
@@ -117,6 +115,11 @@ def add_host_keys(env, model, *, needs_gateway):
                 env[ZEN_KEY_ENV] = key
     except (Exception, SystemExit):
         pass  # H5: never raise, never carry a key value outward
+    try:
+        if needs_gateway and _absent(env, GATEWAY_KEY_ENV):
+            return GATEWAY_KEY_ABSENT
+    except (Exception, SystemExit):
+        return GATEWAY_KEY_ABSENT if needs_gateway else None
 
 
 def redaction_env(base):

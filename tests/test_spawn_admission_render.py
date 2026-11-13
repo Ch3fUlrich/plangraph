@@ -37,7 +37,7 @@ def test_mimo_leg_admitted_when_gateway_url_set(monkeypatch):
 
 def test_async_admission_lists_rendered_config_and_never_leaks_key(monkeypatch, caplog):
     monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:9/v1")
-    monkeypatch.setenv("AUTOOS_OMNIROUTE_KEY", "sk-sentinel-d2868")
+    monkeypatch.setenv("PLANGRAPH_OMNIROUTE_KEY", "sk-sentinel-d2868")
     seen = []
     monkeypatch.setattr(r, "_served_models_real", lambda config, **kw: seen.append(config) or {"omniroute/x"})
     row = {"harness": "opencode", "model": "mimo/mimo-v2.6-pro"}

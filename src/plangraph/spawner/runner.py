@@ -409,17 +409,18 @@ class SpawnerRunner:
             except ValueError:
                 title_at = len(cmd)  # no positional exists on that path
             cmd[title_at:title_at] = ['--title', f'plangraph-{job_id}']
-            from .opencode_overlay import overlay_env
+            from .opencode_overlay import overlay_env, credential_names
             child_env = overlay_env(child_env)
             from plangraph.routing_support.opencode_render import render_gateway_providers
             render_reason = render_gateway_providers(child_env, model_or_combo)
             if render_reason is None:
-                # Overlay only copies an env name through when the parent already
-                # holds it; hand the child the host keys from the AutoOS keys file
-                # so mimo and opencode/*-free runs can authenticate (D-2759).
                 from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
-                add_host_keys(child_env, model_or_combo,
-                    needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
+                try:
+                    provider = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')['providers'].get(model_or_combo.split('/', 1)[0], {})
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    provider = {}
+                render_reason = add_host_keys(child_env, model_or_combo,
+                    needs_gateway=GATEWAY_KEY_ENV in credential_names(provider))
             # D-2921 F1 / D-3236: every role (writers too) runs without the global, project and
             # Claude Code config layers -- a global `instructions` entry made a writer change nothing.
             from .opencode_isolation import close_config_layers, review_credential_reason

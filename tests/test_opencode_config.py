@@ -106,7 +106,7 @@ def test_provider_omniroute():
     assert "omniroute" in providers, "Provider 'omniroute' not found in providers"
     omniroute = providers["omniroute"]
 
-    assert "AUTOOS_OMNIROUTE_KEY" in omniroute.get("env", [])
+    assert "PLANGRAPH_OMNIROUTE_KEY" in omniroute.get("env", [])
     assert omniroute.get("package") == "@opencode/ai/providers/openai-compatible"
     assert omniroute.get("settings", {}).get("baseURL") == "{env:PLANGRAPH_REVIEW_URL}"
 
@@ -121,7 +121,7 @@ def test_provider_mimo():
     assert cfg["providers"]["mimo"] == {
         "package": "@opencode/ai/providers/openai-compatible",
         "name": "MiMo direct gateway legs (D-2459)",
-        "env": ["AUTOOS_OMNIROUTE_KEY"],
+        "env": ["PLANGRAPH_OMNIROUTE_KEY"],
         "settings": {"baseURL": "{env:PLANGRAPH_REVIEW_URL}"},
         "models": {
             flash: {
@@ -174,7 +174,7 @@ def test_mimo_overlay_uses_configured_gateway(monkeypatch, tmp_path, caplog,
     root_config = tmp_path / "opencode.jsonc"
     root_config.write_text(json.dumps(load_config()), encoding="utf-8")
     sentinel = "fixture-gateway-key-do-not-render"
-    monkeypatch.setenv("AUTOOS_OMNIROUTE_KEY", sentinel)
+    monkeypatch.setenv("PLANGRAPH_OMNIROUTE_KEY", sentinel)
     env = overlay_env(build_child_env(config=config))
     overlaid = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]
     assert overlaid["omniroute"]["settings"]["baseURL"] == gateway
@@ -186,8 +186,8 @@ def test_mimo_overlay_uses_configured_gateway(monkeypatch, tmp_path, caplog,
     assert providers["mimo"]["settings"]["baseURL"] == expected
     assert providers["omniroute"]["settings"]["baseURL"] == expected
     assert providers["mimo"]["models"][model.split("/", 1)[1]]["modelID"] == model
-    assert providers["mimo"]["env"] == ["AUTOOS_OMNIROUTE_KEY"]
-    assert env["AUTOOS_OMNIROUTE_KEY"] == sentinel
+    assert providers["mimo"]["env"] == ["PLANGRAPH_OMNIROUTE_KEY"]
+    assert env["PLANGRAPH_OMNIROUTE_KEY"] == sentinel
     if not review_url_set:
         monkeypatch.setattr(review_gateway, "_post", lambda *a: pytest.fail("unexpected review POST"))
         with pytest.raises(review_gateway.MissingGatewayURL, match=review_gateway.GATEWAY_ENV_VAR):

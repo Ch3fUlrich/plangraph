@@ -192,7 +192,7 @@ def test_agy_command_passes_the_served_model():
 def _render(model, models=None):
     """Render as a spawned run does: the root overlay's ``providers`` block, no global layer."""
     from plangraph.routing_support.opencode_render import render_gateway_providers
-    root = {'providers': {'omniroute': {'env': ['AUTOOS_OMNIROUTE_KEY'],
+    root = {'providers': {'omniroute': {'env': ['PLANGRAPH_OMNIROUTE_KEY'],
                                         'models': dict(models or {})}}}
     env = {'OMNIROUTE_BASE_URL': 'http://gateway.invalid',
            'OPENCODE_CONFIG_CONTENT': json.dumps(root)}

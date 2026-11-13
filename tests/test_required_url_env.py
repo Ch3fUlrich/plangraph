@@ -47,7 +47,7 @@ def test_opencode_gateway_without_url_has_named_refusal(monkeypatch, tmp_path, m
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path))
     placeholder = "{env:" + g.GATEWAY_ENV_VAR + "}"
-    providers = {name: {"env": ["AUTOOS_OMNIROUTE_KEY"],
+    providers = {name: {"env": ["PLANGRAPH_OMNIROUTE_KEY"],
                         "settings": {"baseURL": placeholder}}
                  for name in ("mimo", "omniroute")}
     if has_root:

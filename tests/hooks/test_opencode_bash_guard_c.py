@@ -195,8 +195,8 @@ class TestL2ReadOnlyRole(L2RoleChecks, unittest.TestCase):
 
     # ------------------------------------------------------------------
     # AO-L2-LAUNCH merge criterion e (L2-SECRETS, 2026-10-08): the L2 lane's
-    # environment CARRIES `AUTOOS_OMNIROUTE_KEY`, because opencode expands the
-    # rendered config's `{env:AUTOOS_OMNIROUTE_KEY}` inside the child and the lane
+    # environment CARRIES `PLANGRAPH_OMNIROUTE_KEY`, because opencode expands the
+    # rendered config's `{env:PLANGRAPH_OMNIROUTE_KEY}` inside the child and the lane
     # has no other way to its model. Carrying it is only safe while the lane's own
     # shell cannot READ it back: the launcher's allowlist picks which NAMES travel,
     # this gate picks which READS the session may perform, and the key sits in the
@@ -209,15 +209,15 @@ class TestL2ReadOnlyRole(L2RoleChecks, unittest.TestCase):
     def test_l2_shell_cannot_read_the_gateway_key(self):
         for cmd, why in (
                 ("printenv", "environment"),
-                ("printenv AUTOOS_OMNIROUTE_KEY", "environment"),
+                ("printenv PLANGRAPH_OMNIROUTE_KEY", "environment"),
                 ("env", "environment"),
                 ("cat /proc/self/environ", "live process entry"),
                 ("cat /proc/$PPID/environ", "expansion"),
                 ("cat /proc/1234/environ", "live process entry"),
                 ("rg KEY /proc/self/environ", "live process entry"),
-                ("echo $AUTOOS_OMNIROUTE_KEY", "expansion"),
-                ("ls ${AUTOOS_OMNIROUTE_KEY}", "expansion"),
-                ("git log --format=$AUTOOS_OMNIROUTE_KEY", "expansion")):
+                ("echo $PLANGRAPH_OMNIROUTE_KEY", "expansion"),
+                ("ls ${PLANGRAPH_OMNIROUTE_KEY}", "expansion"),
+                ("git log --format=$PLANGRAPH_OMNIROUTE_KEY", "expansion")):
             self._l2_denied(cmd, why)
 
     def test_l2_no_expansion_hides_in_a_glued_option_value(self):
@@ -225,43 +225,43 @@ class TestL2ReadOnlyRole(L2RoleChecks, unittest.TestCase):
         # path-checked a glued short value (`-XVALUE`) only when the head was rg and
         # the option was one of rg's file-opening flags, so every OTHER glued value
         # went unexamined — and a `$` in one is the lane's own environment handed to
-        # a read-only command. `rg -r$AUTOOS_OMNIROUTE_KEY foo README.md` printed the
-        # key as a replacement string; `head -c$AUTOOS_OMNIROUTE_KEY README.md` made
+        # a read-only command. `rg -r$PLANGRAPH_OMNIROUTE_KEY foo README.md` printed the
+        # key as a replacement string; `head -c$PLANGRAPH_OMNIROUTE_KEY README.md` made
         # it a byte count. Neither token is a path, so the path rule never saw them.
         # The rule is now lexical, not per-flag: no `$` survives in an L2 command.
         for cmd in (
-                "rg -r$AUTOOS_OMNIROUTE_KEY foo README.md",
+                "rg -r$PLANGRAPH_OMNIROUTE_KEY foo README.md",
                 "rg -r${OPENCODE_SERVER_PASSWORD} foo README.md",
-                "head -c$AUTOOS_OMNIROUTE_KEY README.md",
-                "tail -n$AUTOOS_OMNIROUTE_KEY README.md",
-                "rg -m$AUTOOS_OMNIROUTE_KEY foo README.md",
-                "git log -G$AUTOOS_OMNIROUTE_KEY",
-                'rg -r"$AUTOOS_OMNIROUTE_KEY" foo README.md',
-                "rg --replace=$AUTOOS_OMNIROUTE_KEY foo README.md",
-                "rg -e$AUTOOS_OMNIROUTE_KEY README.md",
+                "head -c$PLANGRAPH_OMNIROUTE_KEY README.md",
+                "tail -n$PLANGRAPH_OMNIROUTE_KEY README.md",
+                "rg -m$PLANGRAPH_OMNIROUTE_KEY foo README.md",
+                "git log -G$PLANGRAPH_OMNIROUTE_KEY",
+                'rg -r"$PLANGRAPH_OMNIROUTE_KEY" foo README.md',
+                "rg --replace=$PLANGRAPH_OMNIROUTE_KEY foo README.md",
+                "rg -e$PLANGRAPH_OMNIROUTE_KEY README.md",
                 "rg -A$((1)) foo README.md",
                 # fix 11: the quote is not a boundary the guard honours, so a `"`
                 # glued around the value - on a flag or on a plain operand - is the
                 # same read. `cat "README$KEY.md"` puts the key inside a FILE NAME,
                 # which no flag rule ever looks at.
-                'rg -e"$AUTOOS_OMNIROUTE_KEY" README.md',
+                'rg -e"$PLANGRAPH_OMNIROUTE_KEY" README.md',
                 'rg -r"${OPENCODE_SERVER_PASSWORD}" foo README.md',
-                'cat "README$AUTOOS_OMNIROUTE_KEY.md"',
-                'rg foo"$AUTOOS_OMNIROUTE_KEY" README.md',
-                'rg --replace="$(printenv AUTOOS_OMNIROUTE_KEY)" foo README.md',
+                'cat "README$PLANGRAPH_OMNIROUTE_KEY.md"',
+                'rg foo"$PLANGRAPH_OMNIROUTE_KEY" README.md',
+                'rg --replace="$(printenv PLANGRAPH_OMNIROUTE_KEY)" foo README.md',
                 'head -c"$((1+1))" README.md',
-                "git log --format=$AUTOOS_OMNIROUTE_KEY",
-                "git log --grep=${AUTOOS_OMNIROUTE_KEY}"):
+                "git log --format=$PLANGRAPH_OMNIROUTE_KEY",
+                "git log --grep=${PLANGRAPH_OMNIROUTE_KEY}"):
             self._l2_denied(cmd, "expansion")
         # ANSI-C quoting writes the `$` as `\x24`, so the command can carry an
         # expansion with no `$` in the text at all - and the backslash that spells
         # it is what the guard reads first. Both are refused, fail closed.
         for cmd in ("rg $'\\x41' README.md",
-                    "rg -r$'\\x24AUTOOS_OMNIROUTE_KEY' foo README.md"):
+                    "rg -r$'\\x24PLANGRAPH_OMNIROUTE_KEY' foo README.md"):
             self._l2_denied(cmd, "backslash")
         # A backtick is a substitution with no `$` either; the substitution scan
         # runs before any operand rule, whatever flag it rides in on.
-        self._l2_denied("rg -r`printenv AUTOOS_OMNIROUTE_KEY` foo README.md",
+        self._l2_denied("rg -r`printenv PLANGRAPH_OMNIROUTE_KEY` foo README.md",
                         "substitution")
         # `~` is expanded by the same shell, and a leading `~` reaches a home
         # directory outside the checkout whatever flag it is glued to.

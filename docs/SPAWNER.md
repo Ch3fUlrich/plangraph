@@ -1,5 +1,11 @@
 # Plangraph Spawner & Model Routing Architecture
 
+Gateway children use `PLANGRAPH_OMNIROUTE_KEY`, resolved at spawn time from
+`~/.config/plangraph/omniroute-client.key` (client key only, mode `0600`);
+`PLANGRAPH_OMNIROUTE_KEY_FILE` overrides that path. Missing, empty, unreadable
+or writable-by-others files skip the leg with `gateway_key_absent`, without
+logging key values. Zen's separate flat file is `~/.config/autoos/api_keys.conf`.
+
 ### QUOTA-PAUSE-GATE
 
 The usage owner creates `quota-pause` in the spawner state directory at usage

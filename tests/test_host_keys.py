@@ -1,10 +1,10 @@
 """Host key handoff to child runs (plangraph:MODEL-ROUTE-SPAWN, D-2759).
 
-Hermetic: every case points AUTOOS_ROOT at a tmp_path fake root whose
-``tools/`` helpers are stubs returning fake strings. Nothing here reads
-``configuration/api-keys.yml`` or any real key.
+Hermetic: tmp_path roots and file-reader fault injection preserve the legacy
+helper failure cases; test_gateway_client_key covers real client-file bytes.
 """
 import pytest
+from pathlib import Path
 
 from plangraph.routing_support import host_keys
 from plangraph.routing_support.host_keys import (
@@ -30,7 +30,7 @@ def _fake_root(tmp_path):
     (root / 'tools').mkdir(parents=True)
     (root / 'configuration').mkdir()
     # Fake keys file; the stub helpers never read it and no real key exists here.
-    (root / 'configuration' / 'api-keys.yml').write_text('omniroute_server: fake-not-a-key\nzen: fake-not-a-key\n')
+    (root / 'configuration' / 'api_keys.conf').write_text('zen=fake-not-a-key\n')
     (root / 'tools' / 'autoos_gateway_key.py').write_text(GATEWAY_STUB)
     (root / 'tools' / 'keys_file.py').write_text(ZEN_STUB)
     return root
@@ -39,7 +39,27 @@ def _fake_root(tmp_path):
 @pytest.fixture
 def fake_autoos(tmp_path, monkeypatch):
     monkeypatch.setenv('AUTOOS_ROOT', str(_fake_root(tmp_path)))
-    return tmp_path / 'fake-autoos'
+    root = tmp_path / 'fake-autoos'
+    monkeypatch.setattr(host_keys, '_keys_path', lambda env: root / 'configuration/api_keys.conf')
+    path = root / 'tools/autoos_gateway_key.py'
+    path.chmod(0o600)
+    monkeypatch.setenv('PLANGRAPH_OMNIROUTE_KEY_FILE', str(path))
+    read_text = Path.read_text
+    def fault_injected_read(file, *args, **kwargs):
+        if file != path:
+            return read_text(file, *args, **kwargs)
+        # Preserve historical failure cases via read faults, never production imports.
+        module = {}
+        exec(read_text(file), module)
+        return module['resolve_client_key']()
+    monkeypatch.setattr(Path, 'read_text', fault_injected_read)
+    return root
+
+
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.delenv('PLANGRAPH_OMNIROUTE_KEY_FILE', raising=False)
 
 
 def test_gateway_key_for_mimo_needs_gateway_and_no_zen(fake_autoos):
@@ -282,7 +302,8 @@ def test_absent_helper_files_leave_env_unchanged(fake_autoos):
 
 def test_absent_keys_file_means_no_key(fake_autoos):
     # H4: the keys file absent with the helpers present -> no key, env unchanged.
-    (fake_autoos / 'configuration' / 'api-keys.yml').unlink()
+    (fake_autoos / 'configuration' / 'api_keys.conf').unlink()
+    (fake_autoos / 'tools' / 'autoos_gateway_key.py').unlink()
     env = {}
     add_host_keys(env, 'opencode/glm-5.3-flash-free', needs_gateway=True)
     assert env == {}

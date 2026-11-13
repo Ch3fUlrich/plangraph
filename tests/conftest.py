@@ -289,6 +289,11 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
         if re.search(r'(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|BEARER)', name, re.I) or name.upper().startswith(('AUTOOS_', 'OMNIROUTE', 'OPENROUTER', 'MIMO', 'DEEPSEEK',
                                     'ANTHROPIC', 'OPENAI', 'GEMINI', 'QODER')) and name != 'AUTOOS_ROOT':
             monkeypatch.delenv(name)
+    key_file = root / 'fixture-client.key'  # never consult the account's real ~/.config
+    monkeypatch.setenv('HOME', str(root))
+    key_file.write_text('fixture-child-client-key\n')
+    key_file.chmod(0o600)
+    monkeypatch.setenv('PLANGRAPH_OMNIROUTE_KEY_FILE', str(key_file))
     # An inherited OPENCODE_CONFIG_CONTENT is a gateway endpoint source (its
     # providers.mimo/omniroute settings.baseURL defeats the I6 fail-closed
     # path); tests opt into config with monkeypatch.setenv, never inherit it.

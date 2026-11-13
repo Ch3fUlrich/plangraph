@@ -189,6 +189,9 @@ def fallthrough_reason(service, chosen, job, record):
             for e in (*record.get('events', ()), *getattr(job, 'events', ()))):
         return None   # terminal verdicts must stop dispatch, not merely keep their name
     streams = (job.stdout, job.stderr)
+    from plangraph.routing_support.host_keys import GATEWAY_KEY_ABSENT
+    if job.stderr == GATEWAY_KEY_ABSENT:
+        return GATEWAY_KEY_ABSENT  # local credential absence is not provider-health evidence
     if record.get('role') == 'review':
         # A diagnostic label alone is not quota evidence; validate its payload.
         streams = tuple('\n'.join(line.split(':', 1)[1].strip()

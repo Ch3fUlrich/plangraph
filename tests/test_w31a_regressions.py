@@ -82,7 +82,7 @@ def test_attempt_outcome(tmp_path, monkeypatch, rc, text, expected):
 
 def test_env_redaction_before_bounds(tmp_path, monkeypatch):
     secret = 'opaque' '-credential-value'
-    monkeypatch.setenv('AUTOOS_OMNIROUTE_KEY', secret)
+    monkeypatch.setenv('PLANGRAPH_OMNIROUTE_KEY', secret)
     service = spawn_service(state=tmp_path)
     record = dict(run_id='run-test', status='failed', exit_code=0,
                   error=secret + 'x' * 10_000_000,

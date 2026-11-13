@@ -136,7 +136,7 @@ class Client:
     binary: str
     headless: bool = True
     gateway: bool = True
-    auth_env: str = "AUTOOS_OMNIROUTE_KEY"
+    auth_env: str = "PLANGRAPH_OMNIROUTE_KEY"
     notes: str = ""
     direct_cmd_template: Sequence[str] = field(default_factory=tuple)
 
@@ -218,7 +218,7 @@ def build_child_env(
 
     omni_prov = existing_cfg.setdefault("providers", {}).setdefault("omniroute", {})
     omni_prov.setdefault("name", "AutoOS OmniRoute gateway")
-    omni_prov.setdefault("env", ["AUTOOS_OMNIROUTE_KEY"])
+    omni_prov.setdefault("env", ["PLANGRAPH_OMNIROUTE_KEY"])
     omni_prov.setdefault("package", "@opencode/ai/providers/openai-compatible")
     omni_settings = omni_prov.setdefault("settings", {})
     if isinstance(omni_settings, dict) and base_url:

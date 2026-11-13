@@ -25,7 +25,7 @@ If neither deployment config nor a concrete provider URL resolves the active
 gateway provider, rendering returns the same named refusal for MiMo and
 OmniRoute: `not_served_on_host: gateway_base_url_unresolved`. Unresolved
 environment placeholders do not count as URLs; there is no localhost default.
-Credential handling is unchanged: config contains environment references, not
+Config uses `PLANGRAPH_OMNIROUTE_KEY` environment references, not
 credential values, and rendering does not read or log keys. The shared validator
 refuses URL userinfo, queries, fragments (including bare delimiters), and
 non-HTTP(S) schemes; a refusal leaves the caller's config unchanged.

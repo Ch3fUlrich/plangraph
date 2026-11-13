@@ -67,7 +67,7 @@ def test_console_muse_render_and_probe(monkeypatch, hermetic_spawner_host):
     assert host_skip_reason(row, env=env, probe=lambda _: {model}) is None
     assert host_skip_reason(row, env=env, probe=lambda _: set()).startswith("not_served_on_host")
     assert host_skip_reason(row, env={"OPENCODE_CONFIG_CONTENT": json.dumps({
-        "providers": {"console-meta": {"env": ["AUTOOS_OMNIROUTE_KEY"]}}})},
+        "providers": {"console-meta": {"env": ["PLANGRAPH_OMNIROUTE_KEY"]}}})},
         probe=lambda _: {model}).startswith("not_served_on_host")
     other = dict(harness="opencode", model="console-meta/unregistered-model")
     assert host_skip_reason(other, env=env, probe=lambda _: {model}).startswith("not_served_on_host")

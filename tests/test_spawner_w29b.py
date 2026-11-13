@@ -10,16 +10,16 @@ from plangraph.spawner import resolver
 def test_root_overlay(tmp_path, monkeypatch):
     from plangraph.spawner.opencode_overlay import overlay_env
     monkeypatch.setenv('AUTOOS_ROOT', str(tmp_path))
-    monkeypatch.setenv('AUTOOS_OMNIROUTE_KEY', 'private-fixture-value')
+    monkeypatch.setenv('PLANGRAPH_OMNIROUTE_KEY', 'private-fixture-value')
     (tmp_path / 'opencode.jsonc').write_text('''{
 // comment
-"providers": {"omniroute": {"env": ["AUTOOS_OMNIROUTE_KEY"], "settings": {"a": 1,},},},
+"providers": {"omniroute": {"env": ["PLANGRAPH_OMNIROUTE_KEY"], "settings": {"a": 1,},},},
 }''')
     env = overlay_env({'OPENCODE_CONFIG_CONTENT': json.dumps({'other': True, 'providers': {'omniroute': {'settings': {'b': 2}}}})})
     cfg = json.loads(env['OPENCODE_CONFIG_CONTENT'])
     assert cfg['providers']['omniroute']['settings'] == {'a': 1, 'b': 2}
     assert cfg['other'] is True
-    assert env['AUTOOS_OMNIROUTE_KEY'] == 'private-fixture-value'
+    assert env['PLANGRAPH_OMNIROUTE_KEY'] == 'private-fixture-value'
     assert 'private-fixture-value' not in env['OPENCODE_CONFIG_CONTENT']
 
 

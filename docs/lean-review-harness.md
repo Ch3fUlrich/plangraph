@@ -6,7 +6,8 @@ Strict MCP uses packaged empty configuration; slash commands are disabled.
 The Claude fallback review leg defaults to prompt-only. Existing inline-only
 legs retain their meaning. Unknown harness/model pairs default to tools.
 
-Gateway prompt-only reviews launch OpenCode standalone with a one-step agent
+Gateway prompt-only reviews use `PLANGRAPH_OMNIROUTE_KEY` (see [key file](SPAWNER.md))
+and launch OpenCode standalone with a one-step agent
 (tools are removed on its final step), deny-all permissions, and policies
 denying tools, MCP, skills and plugins. `run` is non-interactive and does not
 dispatch slash commands. Non-review commands retain their existing behavior.

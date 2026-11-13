@@ -22,7 +22,7 @@ def host(tmp_path, monkeypatch):
     fake.parent.mkdir()
     fake.write_text(FAKE_OPENCODE)
     fake.chmod(0o755)
-    (tmp_path / 'opencode.jsonc').write_text('{"providers": {"omniroute": {"env": ["AUTOOS_OMNIROUTE_KEY"], "models": {}}}}')
+    (tmp_path / 'opencode.jsonc').write_text('{"providers": {"omniroute": {"env": ["PLANGRAPH_OMNIROUTE_KEY"], "models": {}}}}')
     monkeypatch.setenv('AUTOOS_ROOT', str(tmp_path))
     monkeypatch.setenv('PATH', f"{fake.parent}{os.pathsep}{os.environ['PATH']}")
     resolver.served_models.cache_clear()

@@ -1,0 +1,1 @@
+Gateway children resolve a private plangraph client-key file at spawn time via PLANGRAPH_OMNIROUTE_KEY, skip absent/unsafe files with gateway_key_absent, and no longer use the AutoOS gateway helper or YAML keys file; Zen uses its separate flat config.

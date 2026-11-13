@@ -179,7 +179,7 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     monkeypatch.setattr('plangraph.spawner.gateway_witness.witness', witness)
     monkeypatch.setattr('plangraph.spawner.runner._opencode_served_model', lambda *a: None)
     monkeypatch.delenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', raising=False)
-    monkeypatch.setenv('AUTOOS_OMNIROUTE_KEY', 'test-credential')
+    monkeypatch.setenv('PLANGRAPH_OMNIROUTE_KEY', 'test-credential')
     if scenario == 'already-capped':
         monkeypatch.setenv('OPENCODE_CONFIG_CONTENT', json.dumps({'providers': {'mimo': {
             'package': '@opencode/ai/providers/openai-compatible', 'models': {
