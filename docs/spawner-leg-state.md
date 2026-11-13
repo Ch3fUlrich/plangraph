@@ -66,16 +66,13 @@ Before a normal writer dispatch, stale or missing probe evidence triggers a
 probe; failure skips that leg and tries the next. Dry runs never probe. Reviews
 probe only after a snapshot error: provider/discovery reads retry once before
 caching the error, then the existing single-flight probe admits a serving leg.
-An empty provider snapshot is a failed read, not evidence that a leg is unreachable:
-the HTTP provider contract rejects empty connection lists, and injected providers
-are checked at the same retry boundary. A second empty read goes through snapshot
-admission and a probe, retaining `ValueError: empty provider snapshot` on failure.
-This deliberately changes the generic adapter contract too: a healthy injected
-provider returning `{}` now yields `unknown`, not the former immediate `unreachable`.
-Every provider pays one additional snapshot read and, if both reads are empty and
-no fresh successful evidence exists, a liveness probe for each dispatched candidate
-(including reviews with probe TTL 0). Missing providers in a nonempty snapshot still
-yield `unreachable` without this recovery cost.
+An empty snapshot from the HTTP provider (`OmniRouteState`) is a failed read:
+its contract rejects empty connection lists. A second empty read goes through
+snapshot admission and a probe, retaining `ValueError: empty provider snapshot`
+on failure. Other providers returning `{}` keep the existing adapter behaviour:
+a listed leg yields `unreachable` after one snapshot read, without snapshot-error
+probing, including reviews with probe TTL 0. Missing providers in a nonempty
+snapshot still yield `unreachable` without this recovery cost.
 Refresh failures are cached for the adapter TTL (60 seconds by default), with
 one type-only warning for the first failed read and detached type/message detail
 for the final failure; a successful refresh clears that detail.
@@ -92,6 +89,12 @@ serving result overrides only a snapshot-error reason, never `limited`, quota,
 probe/provider evidence also recovers a snapshot error without another probe,
 including reviews, until `PLANGRAPH_LEG_PROBE_TTL_S` expires (default 1800 seconds);
 0 disables ordinary automatic probes, not snapshot-error recovery or explicit probes.
+
+The cause was found from the attempt shape of run-e99aae2287e541b48886d0f04e46c37e.
+The replay proof is owned by plangraph:SPAWNER-LEG-SNAPSHOT-REPLAY-PROOF.
+Synthetic tests cover snapshot read errors, retry recovery, detailed scrubbed
+failure reasons, infrastructure failures without leg-failure bookings, and
+selection of a witnessed non-writer leg before an unwitnessed Opus leg.
 
 A `running` record on the same model/harness wins over a failed probe when its
 nonempty `live.log` grew within `LIVE_RUN_WRITE_WINDOW_S` (120 seconds).

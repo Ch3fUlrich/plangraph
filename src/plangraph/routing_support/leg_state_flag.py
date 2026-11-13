@@ -14,10 +14,11 @@ def enabled():
 
 def read_snapshot(reader):
     """Retry the provider/discovery boundary once, never cache a partial refresh."""
+    from .omniroute_state import OmniRouteState
     for attempt in range(2):
         try:
             states = reader.provider.snapshot()
-            if not states:
+            if isinstance(reader.provider, OmniRouteState) and not states:
                 raise ValueError('empty provider snapshot')
             return states, {reader.identity(mid) for mid in (
                 reader.models() if callable(reader.models) else reader.models)}

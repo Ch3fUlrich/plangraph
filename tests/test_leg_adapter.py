@@ -104,8 +104,8 @@ def test_stale_and_unreachable(tmp_path):
     assert reader('opencode-go/sample')['reason'] == 'unreachable'
     reader._at = None
     reader.provider.snapshot = lambda: {}
-    assert reader('opencode-go/sample')['reason'] == 'unknown'
-    assert reader._snapshot_error == ('ValueError', 'empty provider snapshot')
+    assert reader('opencode-go/sample')['reason'] == 'unreachable'
+    assert reader._snapshot_error is None
 
 
 def test_catalog_policy_is_not_mutated(tmp_path):

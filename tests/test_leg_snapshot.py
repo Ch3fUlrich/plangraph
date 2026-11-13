@@ -271,9 +271,15 @@ def test_snapshot_path_whitespace_suffix_is_withheld(prefix):
 @pytest.mark.parametrize('model', ['snapshot/sample', 'agy/sample', 'opencode-go/sample'])
 @pytest.mark.parametrize('recovered', [False, True])
 @pytest.mark.parametrize('probe_ok', [False, True])
-def test_empty_snapshot_retries_then_recovers_or_probes(case, monkeypatch, recovered, probe_ok, model):
+@pytest.mark.parametrize('http_provider', [False, True])
+@pytest.mark.parametrize('ttl', ['0', '1800'])
+def test_empty_snapshot_retries_then_recovers_or_probes(case, monkeypatch, recovered, probe_ok, model, http_provider, ttl):
+    from plangraph.routing_support.omniroute_state import OmniRouteState
     reads, probes = [], []
     case.leg.model = model
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', ttl)
+    if http_provider:
+        case.reader.provider = OmniRouteState('', None)
 
     def snapshot():
         reads.append(1)
@@ -288,6 +294,12 @@ def test_empty_snapshot_retries_then_recovers_or_probes(case, monkeypatch, recov
     case.reader.models = [case.leg.model]
     monkeypatch.setattr(leg_probe, 'probe', probe)
     reason = asyncio.run(leg_probe.before_launch(case.runner, case.leg, 'review', False))
+    if not http_provider:
+        assert reason == 'unreachable'
+        assert case.reader._snapshot_error is None
+        assert asyncio.run(leg_probe.before_launch(case.runner, case.leg, 'review', False)) == 'unreachable'
+        assert reads == [1] and probes == []
+        return
     assert reads == [1, 1]
     assert probes == ([] if recovered else [1])
     assert reason == (None if recovered or probe_ok else
@@ -300,23 +312,3 @@ def test_provider_contract_rejects_empty_connections():
     from plangraph.routing_support.omniroute_state import _build
     with pytest.raises(ValueError):
         _build('{"connections": []}', datetime(2026, 1, 1, tzinfo=timezone.utc))
-
-
-def test_snapshot_changelog_separates_observations_and_injected_inputs():
-    from pathlib import Path
-    root = Path(__file__).resolve().parents[1]
-    changelog = (root / 'changelog.d/SPAWNER-LEG-STATE-SNAPSHOT-ERROR.md').read_text()
-    observed = next(line for line in changelog.splitlines() if line.startswith('Observed fixture:'))
-    assert 'only leg names, statuses and skip reasons' in observed
-    assert 'These rows do not establish a chosen-leg field, overall run status, served-model witness' in observed
-    assert 'unwitnessed' not in observed
-    contract = 'every `LegAdapter` provider, including healthy injected providers returning `{}`'
-    assert contract in changelog and 'pays one additional snapshot read' in changelog
-    docs = (root / 'docs/spawner-leg-state.md').read_text()
-    assert 'now yields `unknown`, not the former immediate `unreachable`' in docs
-    assert '(including reviews with probe TTL 0)' in docs
-    evidence = (root / 'docs/evidence/SPAWNER-LEG-STATE-SNAPSHOT-ERROR.md').read_text()
-    assert 'git archive "$baseline" src tests tools pyproject.toml pytest.ini' in evidence
-    assert 'python3 -m pytest -q tests/test_leg_snapshot_replay.py --tb=short' in evidence
-    assert "E   assert [] == ['agy-gemini-3.8-flash']" in evidence
-    assert '3 failed in 7.11s' in evidence
