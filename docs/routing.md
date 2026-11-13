@@ -75,36 +75,112 @@ tier, projected from an explicitly supplied catalog by `catalog_tiers`: free,
 subscription, then pay-as-you-go. Measurements only reorder within one tier;
 review seats consume that route. No second cost-order table was added.
 
-DeepSeek's free OpenCode registration supersedes its D-4196 stop under D-5648;
+DeepSeek's free OpenCode review registration supersedes its D-4196 stop under D-5648;
 the GLM D-4196 stop and all other existing disables remain. LongCat's free Go
 route and Console OpenRouter's free route have independent families. Console
 DeepSeek Flash is a paid direct-API route, not a free subscription benefit.
+The retained `omniroute-deepseek-flash` now uses the harness-served
+`omniroute/deepseek-direct-flash` id (model discovery, 2026-11-13) and the paid tier.
+Console and OmniRoute DeepSeek remain the **same model family**, intentionally:
+separate provider registrations must never masquerade as independent reviewers.
 Big Pickle retains review. Every `gemini-4-argon` row remains registered for its
 other roles; the review-only Go row is retained disabled with its reason.
 
 The existing `routing.py::_NO_TRAIN_TAGS` / `route_card` privacy filter excludes
 training legs for `risk_tags: ["secrets"]` (also auth, money and live-step).
-OpenCode's [model privacy catalog](https://opencode.ai/docs/zen/#privacy) states
+OpenCode's [model privacy catalog](https://opencode.ai/v2/docs/zen#privacy) states
 no prompt training for free DeepSeek and LongCat; Big Pickle may train. The free
 OpenRouter route retains the conservative training flag. No privacy bypass was
-added. `opencode/mimo-v2.6-flash-free` cannot be enabled in this registry-only
-slice: `mimo_policy.py:7-23` permits only the two direct Mimo paths, and clients,
-runner, catalog admission and leg loading share that guard. Changing it requires
-a policy slice; free Mimo may train on prompts when that slice admits it.
-The strict benchmark contract also remains fail-closed:
-`tests/test_benchmark_data_contract.py:218` requires sourced rows for every active
-leg, but has no rows for the re-enabled DeepSeek or these three new routes. Its
-frozen debt ceiling cannot grow. This registry-only slice does not fabricate
-measurements, extend that ceiling, or weaken the contract; benchmark validation
-therefore remains blocked pending separately sourced benchmark evidence.
+added. D-2739 admits exactly `opencode/mimo-v2.6-flash-free` through the shared
+Mimo policy; other unapproved provider/release paths still refuse. Both free
+DeepSeek and free Mimo are review-only, not newly enabled writers. Mimo retains
+`trains_on_data=True`. Its native free path must not inherit the direct Mimo
+gateway renderer, reasoning controls or keyless-listing probe exemption.
 
-Deferred live proof commands (public prompts only; not executed in this slice):
+The unchanged strict benchmark contract passes with exact, sourced identity
+rows in `config/review_benchmarks.json` for all five activated review
+routes and the corrected direct DeepSeek id. Publisher text, source URL and
+collection date are retained. These are **identity-only admission records**:
+capability, speed and task-cost measurements are unknown (`None`), not copied
+from another provider or invented. They never enter the numeric SQLite benchmark
+table or count as measured utility. Two resolved legacy waivers are removed;
+the frozen debt ceiling and its independent fingerprint are unchanged.
+
+### Witnessed public verdicts (D-2739, 2026-11-13)
+
+Executed from a scratch directory, with no repository content attached:
+`opencode run --standalone --format json --model MODEL --title TITLE PROMPT`.
+The public prompt was: “Do not use tools. Review this public Python change:
+def add(a, b): return a + b. It implements addition without other changes.
+Respond with exactly VERDICT: PASS if correct, otherwise VERDICT: FAIL.”
+OpenCode run identities (session IDs), final assistant text and finish reasons:
+The retained public-only event excerpts are `tests/fixtures/review_free_verdicts.json`.
+Session IDs below are displayed as two joined parts (remove the single space),
+preserving the public run identity without misclassifying it as a credential.
+
+| Model | Run/session ID | Final text | Finish |
+| --- | --- | --- | --- |
+| `opencode/deepseek-v4.1-flash-free` | `ses_e2c2431f1ffe ePDkBfAuwMQL4U` | `VERDICT: PASS` | `stop` |
+| `opencode/mimo-v2.6-flash-free` | `ses_e2c2431c1ffe 7nJIHJjF01tvW5` | `VERDICT: PASS` | `stop` |
+| `console-openrouter/openrouter/free` | `ses_e2c243102ffe uxUBbErvJsyaKg` | `VERDICT: PASS` | `stop` |
+
+These are availability/verdict-format smokes, not reviews of this PR or capability
+benchmarks. OpenRouter attempted a rejected `/dev/null` write before its final
+assistant verdict; that tool argument is not counted as the verdict.
+
+The subsequent **isolated spawner** verification failed closed: DeepSeek
+`run-4100ebdb90934f1081e1f90f36a9bd1e` and Mimo
+`run-ff163a6806c2442eac2b39e090f261e7` received HTTP 429 free-usage limits;
+OpenRouter `run-11451f3d508a46829c2e5a5570b3c205` was
+`not_served_on_host` under the child configuration. None is claimed as a passing
+spawner run, and no quota, config isolation or host admission guard was bypassed.
+`plan_spawn` already consumes stored failed-probe evidence; the shared real-launch
+`resolver.plan_for_launch` performs served-model probing before child launch.
+New fixed-input tests exercise both boundaries for every activated review route.
+
+Other optional public smokes (not part of the three witnessed runs above):
 
 ```sh
-opencode run --standalone --format json --model opencode/deepseek-v4.1-flash-free 'Reply OK.'
-opencode run --standalone --format json --model opencode/mimo-v2.6-flash-free 'Reply OK.'
 opencode run --standalone --format json --model opencode/big-pickle 'Reply OK.'
 opencode run --standalone --format json --model opencode-go/longcat-2.5-free 'Reply OK.'
-opencode run --standalone --format json --model console-openrouter/openrouter/free 'Reply OK.'
 opencode run --standalone --format json --model console-deepseek/deepseek-flash 'Reply OK.'
 ```
+
+### D-2739 finding dispositions (seat order, duplicates retained)
+
+| Finding | Disposition and guard |
+| --- | --- |
+| F1 HIGH live proof | Three native runs above retain session IDs, final assistant VERDICT lines and stop frames; isolated-spawner failures are disclosed separately. |
+| F2 HIGH benchmark contract | Exact sourced identity rows cover all activated routes; unchanged contract and frozen fingerprint pass without invented numeric scores. |
+| F3 HIGH OmniRoute model | Retained leg now names served `omniroute/deepseek-direct-flash`, paid; metadata test pins both. |
+| F4 HIGH missing Mimo/policy slice | Free review registration and narrowly scoped shared policy implemented here under D-2739/D-5648. |
+| F5 HIGH missing Mimo/live proof | Review-only free Mimo registration, conservative training flag and native verdict session retained. |
+| F6 HIGH exact free Mimo path | Exact `opencode/mimo-v2.6-flash-free` admitted; other free Mimo releases still refuse. |
+| F7 HIGH OmniRoute model duplicate | Served direct id corrected and tested, registration retained. |
+| F8 HIGH benchmark rows | Re-enabled and new routes have sourced exact keys; independent ceiling unchanged. |
+| F9 LOW mechanics fixture | Complete production table retained; mechanics lift only disables, never training flags or rows. |
+| F10 LOW DEFAULT_LEGS override | Same fix, with exact all-registration order and production privacy assertions. |
+| F11 LOW ambient route_card | Not applicable: `routing.py:104-106` has no policy or reader arguments and performs no ambient reads; explicit table and clock now pinned anyway. |
+| F12 LOW Claude fence | Exception requires both missing diff and a large estimate; all small-estimate seats are fenced, including boundary tests. |
+| F13 LOW dead active branch | Active state depends on explicit Argon parameter case, making both branches reachable. |
+| F14 LOW retained-disabled Argon | Added Go Argon case asserts exact disable reason and empty roles. |
+| F15 LOW W30 imported table | Patch precedes service construction; call-time spawnable table and exact refusal reason asserted. |
+| F16 MED live proof | Native public proof retained; no failed isolated-spawner run is relabelled successful. |
+| F17 MED OmniRoute base verification | Model corrected in production and pinned to discovered served id. |
+| F18 MED Console own family | Invalid as an independence requirement: direct and free DeepSeek are the same family; `seats.py:65-67` must deduplicate them. Regression proves they cannot fill two seats. |
+| F19 MED privacy expands writers | Free DeepSeek and Mimo are review-only; new-writer regression verifies absence even under neutral policy. |
+| F20 MED pre-run probes | Already implemented at `resolver.py:500-520` real-launch boundary; planner consumes stored probe evidence at `routing.py:327-359`. New per-route tests cover both without network I/O in planning. |
+| F21 MED Argon fixture substitution | Restored original Argon case for implement; retained Gemini Flash review case as additional parametrization. |
+| F22 MED fabricated planner table | Complete table/roles/privacy retained and explicit exact expected order extracted into a test-only helper. |
+| F23 MED note-only policy branch | Enabled review-only DeepSeek now exercises actual writer refusal and asserts no override audit; production-disabled GLM refusal retained. |
+| F24 MED tier indices | `legs.py:31` includes trial, so old indices were correct; now additionally assert named free/subscription/paid tiers and two actual seats. |
+| F25 MED W30 construction binding | Patch moved before construction, exact patched registration and refusal checked; GLM case still tests a production disable. |
+
+Validation: the affected selector's changelog/shared-helper fallback was bounded
+with `--within` to 45 lane, routing, policy, benchmark, isolation, renderer and
+completion-evidence test files; every changed test file is included. With two
+workers: `1364 passed in 28.09s`. A broad reverse-import trial was interrupted
+after `668 passed, 4 skipped in 751.52s`; it is not claimed as a green gate.
+The whole suite was not run. Argon transport/witness probes retain their exact
+historical inputs through an explicitly named historical fixture, while separate
+production tests prove the retained Go Argon id and model cannot launch.

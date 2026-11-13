@@ -4,7 +4,8 @@ import re
 
 from plangraph.routing_errors import SpawnRefused
 
-ACCEPTED_MIMO_IDS = ("mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro")
+DIRECT_MIMO_IDS = ("mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro")
+ACCEPTED_MIMO_IDS = (*DIRECT_MIMO_IDS, "opencode/mimo-v2.6-flash-free")  # D-5648
 
 
 class MimoPathError(SpawnRefused):
@@ -18,7 +19,7 @@ def is_mimo_id(model_id: str) -> bool:
 
 
 def check_mimo_path(model_id: str) -> str:
-    """Return unchanged IDs, refusing all but the two approved Mimo IDs."""
+    """Return unchanged IDs, refusing all but the exact approved Mimo paths."""
     if is_mimo_id(model_id) and model_id not in ACCEPTED_MIMO_IDS:
         raise MimoPathError("Mimo requires one of: " + ", ".join(ACCEPTED_MIMO_IDS))
     return model_id

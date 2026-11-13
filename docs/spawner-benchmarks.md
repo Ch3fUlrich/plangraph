@@ -111,6 +111,15 @@ verification that publisher bytes or scores are authentic. Independent source
 collection, review, and any row corrections belong to a later slice; this slice
 does not invent citations, aliases, or evidence for legacy rows.
 
+D-2739 adds publisher identity-only rows for the free review registrations and
+the corrected direct DeepSeek path in `config/review_benchmarks.json`.
+Their source dates record collection, not publication. Unknown capability,
+speed and task-cost metrics remain null. The offline structural/identity contract
+accepts their exact sourced keys; the numeric SQLite seed excludes them rather
+than substituting fabricated zeros or another provider's score. Consequently
+`--require-bench` still refuses these routes until genuine numeric measurements
+are supplied. No frozen ceiling or admission assertion was relaxed.
+
 ### Key Ranking & Guardrail Invariants
 
 - **`mimo/mimo-v2.6-pro` vs `opencode-go/qwen3.8-max`**:

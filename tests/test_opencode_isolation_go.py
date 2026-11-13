@@ -15,6 +15,18 @@ from plangraph.spawner.runner import SpawnerRunner, _opencode_tools_denied
 from fake_pid import FAKE_PID
 
 
+@pytest.fixture
+def historical_go_argon(monkeypatch):
+    """Transport mechanics retain the historical Argon input, not production admission."""
+    from dataclasses import replace
+    from plangraph.planner import legs
+    argon = next(leg for leg in legs.DEFAULT_LEGS if leg.id == 'opencode-go-gemini-4-argon')
+    assert argon.roles == () and argon.disabled.startswith('D-5648:')
+    monkeypatch.setattr(legs, 'DEFAULT_LEGS', tuple(
+        replace(leg, roles=('review',), disabled=None) if leg.id == argon.id else leg
+        for leg in legs.DEFAULT_LEGS))
+
+
 def source_store(path, active=1):
     with sqlite3.connect(path) as db:
         db.execute('CREATE TABLE migration(id TEXT PRIMARY KEY, time_completed INTEGER)')
@@ -31,7 +43,7 @@ def source_store(path, active=1):
                          ids=['active', 'null', 'inactive', 'missing'])
 @pytest.mark.parametrize('model', ['opencode-go/gemini-4-argon', 'opencode-go-gemini-4-argon',
                                    'go-test-combo', 'aliases/go-test-combo'])
-def test_review_provider_only(tmp_path, monkeypatch, caplog, present, active, model):
+def test_review_provider_only(tmp_path, monkeypatch, caplog, present, active, model, historical_go_argon):
     source = tmp_path / 'source.db'
     if present:
         source_store(source, active)
@@ -195,7 +207,8 @@ def test_credential_store_does_not_claim_host_migrations(tmp_path):
 
 
 @pytest.mark.parametrize('target', ['opencode-glm-5.3-flash-free',
-                                   'opencode/glm-5.3-flash-free', 'disabled-combo',
+                                   'opencode/glm-5.3-flash-free',
+                                   'opencode-go-gemini-4-argon', 'opencode-go/gemini-4-argon', 'disabled-combo',
                                    'aliases/disabled-combo'])
 @pytest.mark.parametrize('client', [None, 'opencode'])
 def test_runner_refuses_disabled_resolution(tmp_path, monkeypatch, target, client):
@@ -207,6 +220,7 @@ def test_runner_refuses_disabled_resolution(tmp_path, monkeypatch, target, clien
     runner = SpawnerRunner(default_cwd=str(tmp_path))
     with pytest.raises(SpawnRefused, match='leg disabled'):
         asyncio.run(runner.spawn('test', model_or_combo=target, client=client, dry_run=True))
+    assert not runner.jobs and not runner._tasks
 
 
 def test_disabled_skips_have_evidence():
@@ -256,7 +270,7 @@ def test_disabled_and_fallback_routes():
     plans = [plan_spawn(card, role=role, writer_families=('claude',))
              for role in ('review', 'implement')]
     for leg in DEFAULT_LEGS:
-        if leg.model.startswith('opencode/') and leg.model.endswith('-free'):
+        if leg.id == 'opencode-glm-5.3-flash-free':
             assert leg.disabled == 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'
             for plan in plans:
                 assert leg.id not in [l.id for l in plan.legs]
@@ -264,6 +278,9 @@ def test_disabled_and_fallback_routes():
                     assert any(s['leg'] == leg.id and 'D-4196' in s['reason'] for s in plan.skipped)
                 else:
                     assert not any(s['leg'] == leg.id for s in plan.skipped)
+    for leg_id in ('opencode-deepseek-v4.1-flash-free', 'opencode-mimo-v2.6-flash-free'):
+        assert leg_id in {leg.id for leg in plans[0].legs}
+        assert leg_id not in {leg.id for leg in plans[1].legs}
     assert 'omniroute-gemini-3.8-flash' not in [l.id for l in plans[0].legs]
     assert 'omniroute-gemini-3.8-flash' not in [l.id for l in plans[1].legs]
 

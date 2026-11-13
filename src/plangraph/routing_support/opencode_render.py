@@ -10,7 +10,7 @@ import os
 import urllib.parse
 from typing import Any
 
-from plangraph.mimo_policy import ACCEPTED_MIMO_IDS
+from plangraph.mimo_policy import DIRECT_MIMO_IDS
 
 REFUSAL_UNRESOLVED = (
     "not_served_on_host: gateway_base_url_unresolved "
@@ -71,7 +71,7 @@ def _mimo_template() -> dict[str, Any]:
                 "name": f"Xiaomi MiMo v2.6 {'Pro' if 'pro' in mid else 'Flash'}",
                 "limit": {"context": 1000000, "output": 65536},
             }
-            for mid in ACCEPTED_MIMO_IDS
+            for mid in DIRECT_MIMO_IDS
         },
     }
 
@@ -129,7 +129,7 @@ def render_gateway_providers(
     if provider_prefix not in ("mimo", "omniroute") and not has_gw_key:
         return None
 
-    if "mimo" not in providers and model_clean in ACCEPTED_MIMO_IDS:
+    if "mimo" not in providers and model_clean in DIRECT_MIMO_IDS:
         providers["mimo"] = _mimo_template()
 
     # Step 4: Honour the already-configured child endpoint before env fallbacks.

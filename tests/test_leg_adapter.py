@@ -114,14 +114,16 @@ def test_catalog_policy_is_not_mutated(tmp_path):
     expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'opencode/big-pickle')
     expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'gpt-oss-120b-medium')
     expected[expected.index('opencode-go/glm-5.2'):expected.index('opencode-go/glm-5.2')] = [
-        'claude-opus-4-6-thinking', 'claude-opus-5-5-high', 'omniroute/deepseek-flash',
+        'claude-opus-4-6-thinking', 'claude-opus-5-5-high', 'omniroute/deepseek-direct-flash',
         'omniroute/muse-spark-1.3-contributor', 'claude-opus-5-5-medium', 'opencode/gemini-4-argon']
-    expected.insert(expected.index('omniroute/deepseek-direct-flash'), 'omniroute/gc/grok-4.7')
-    expected.insert(expected.index('omniroute/deepseek-direct-flash'),
-                    'console-meta/muse-spark-1.3-contributor')
-    expected.insert(expected.index('omniroute/deepseek-direct-flash'), 'omniroute/gemini-3.8-flash')
+    # Both retained DeepSeek registrations now share the served id; catalog deduplicates it.
+    expected.pop(len(expected) - 1 - expected[::-1].index('omniroute/deepseek-direct-flash'))
+    expected.extend(['omniroute/gc/grok-4.7', 'console-meta/muse-spark-1.3-contributor',
+                     'omniroute/gemini-3.8-flash'])
+    expected.append(expected.pop(expected.index('claude-haiku-5-5')))
     expected[expected.index('omniroute/cx-gpt-6.1-sol-xhigh'):expected.index('omniroute/cx-gpt-6.1-sol-xhigh')] = [
         'opencode-go/longcat-2.5-free', 'console-openrouter/openrouter/free', 'console-deepseek/deepseek-flash']
+    expected.insert(expected.index('opencode/glm-5.3-flash-free'), 'opencode/mimo-v2.6-flash-free')
     assert first == second == expected
     assert resolver.DEFAULT_FALLBACK_MODELS == before
     assert not calls

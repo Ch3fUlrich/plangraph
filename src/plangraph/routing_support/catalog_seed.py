@@ -802,6 +802,12 @@ SEED_BENCHMARKS: list[dict[str, Any]] = [
     },
 ]
 
+import json
+from importlib.resources import files
+# Publisher identity records: collection dates, not invented capability measurements.
+REVIEW_BENCHMARKS = json.loads(files("plangraph").joinpath("config/review_benchmarks.json").read_text(encoding="utf-8"))
+SEED_BENCHMARKS.extend(REVIEW_BENCHMARKS)
+
 # The 4 Role Routes
 SEED_ROUTES: list[dict[str, Any]] = [
     {

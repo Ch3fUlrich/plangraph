@@ -100,7 +100,7 @@ def test_implement_route_still_skips_banned_and_off(tmp_path):
     from plangraph.spawner.service import SpawnService
     plan = plan_spawn(CARD, role="implement")
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
-    assert reasons['opencode-deepseek-v4.1-flash-free'] == 'banned_family'
+    assert 'opencode-deepseek-v4.1-flash-free' not in reasons  # review-only
     assert reasons['opencode-glm-5.3-flash-free'].startswith('disabled: D-4196')
     assert reasons['omniroute-deepseek-flash'] == 'banned_family'
     assert plan.first_leg.id == 'cx-gpt-6.1-sol-xhigh'

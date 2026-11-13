@@ -105,9 +105,11 @@ def test_read_only_loader(tmp_path, table):
     assert path.read_bytes() == before
 
 
-def test_provider_qualified_rows_reach_legs_and_missing_stays_eligible(tmp_path):
+@pytest.mark.parametrize('measured_id,role', [('agy-gemini-4-argon', 'implement'),
+                                           ('agy-gemini-3.8-flash', 'review')])
+def test_provider_qualified_rows_reach_legs_and_missing_stays_eligible(tmp_path, measured_id, role):
     from plangraph.planner.benchmarks import benchmark_rows_from_db
-    measured = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-3.8-flash')
+    measured = next(l for l in DEFAULT_LEGS if l.id == measured_id)
     missing = next(l for l in DEFAULT_LEGS if l.id == 'opencode-big-pickle')
     path = database(tmp_path / 'bench.db', [f'{measured.harness}/{measured.model}'])
     before = path.read_bytes()
@@ -115,7 +117,7 @@ def test_provider_qualified_rows_reach_legs_and_missing_stays_eligible(tmp_path)
     assert not errors
     assert data[measured.model]['aa_intelligence'] == 45
     p = routing.plan_spawn(
-        {'estimate_tokens': 1000}, role='review', writer_families=('gpt',),
+        {'estimate_tokens': 1000}, role=role, writer_families=('gpt',),
         legs=(measured, missing), benchmark=data,
         leg_reader=lambda *a, **k: {'state': 'ok', 'evidence': None})
     assert {l.id for l in p.legs} == {measured.id, missing.id}

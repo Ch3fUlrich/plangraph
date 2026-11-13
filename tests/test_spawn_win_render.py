@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from plangraph.mimo_policy import ACCEPTED_MIMO_IDS
+from plangraph.mimo_policy import DIRECT_MIMO_IDS
 from plangraph.routing_support import host_keys
 from plangraph.routing_support.clients import build_child_env
 from plangraph.routing_support.opencode_overlay import overlay_env
@@ -50,7 +50,7 @@ def test_render_mimo_template_and_base_url_override(tmp_path, monkeypatch):
     assert mimo["settings"]["baseURL"] == "http://gw:20128/v1"
     assert mimo["env"] == ["AUTOOS_OMNIROUTE_KEY"]
     assert mimo["package"] == "@opencode/ai/providers/openai-compatible"
-    for mid in ACCEPTED_MIMO_IDS:
+    for mid in DIRECT_MIMO_IDS:
         short = mid.split("/", 1)[1]
         assert short in mimo["models"]
         assert mimo["models"][short]["modelID"] == mid
@@ -89,7 +89,7 @@ def test_render_linux_root_fixture_parity(tmp_path, monkeypatch):
     (fake_root / "opencode.jsonc").write_text(json.dumps({"providers": {"mimo": {
         "package": "@opencode/ai/providers/openai-compatible", "name": "MiMo direct gateway legs",
         "env": ["AUTOOS_OMNIROUTE_KEY"], "settings": {"baseURL": "http://127.0.0.1:20128/v1"},
-        "models": {m.split("/", 1)[1]: {"modelID": m} for m in ACCEPTED_MIMO_IDS},
+        "models": {m.split("/", 1)[1]: {"modelID": m} for m in DIRECT_MIMO_IDS},
     }}}))
     monkeypatch.setenv("AUTOOS_ROOT", str(fake_root))
 
@@ -285,7 +285,7 @@ def test_root_base_url_normalized_in_fallback(tmp_path, monkeypatch):
     (fake_root / "opencode.jsonc").write_text(json.dumps({"providers": {"mimo": {
         "package": "@opencode/ai/providers/openai-compatible",
         "env": ["AUTOOS_OMNIROUTE_KEY"], "settings": {"baseURL": "http://root:20128"},
-        "models": {m.split("/", 1)[1]: {"modelID": m} for m in ACCEPTED_MIMO_IDS},
+        "models": {m.split("/", 1)[1]: {"modelID": m} for m in DIRECT_MIMO_IDS},
     }}}))
     monkeypatch.setenv("AUTOOS_ROOT", str(fake_root))
     env = overlay_env(build_child_env())

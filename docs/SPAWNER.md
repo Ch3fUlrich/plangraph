@@ -79,6 +79,13 @@ size refusal leaves the caller's environment unchanged.
 
 ### MiMo seat timeouts and verdict packaging (MIMO-VERDICT-TIMEOUTS)
 
+D-2739 admits the exact native free Mimo review path without widening direct
+gateway behavior. `opencode_answer.cap_reasoning` remains limited to
+`DIRECT_MIMO_IDS`; the free provider never inherits direct-Mimo thinking controls.
+Free Mimo may train on prompts and is review-only, so secrets eligibility and
+writer admission remain fail-closed. See [routing evidence](routing.md#review-cost-tiers-and-retained-registrations-d-5648)
+for the native verdict sessions and the separately recorded isolated-spawner refusals.
+
 For MiMo seats and all other `review` runs, `run_watchdog_limits.thresholds` sets
 `hard_max=True`, including default caps: reviews never wait for a writer's first
 edit and ignore a valid `hard_first_edit` opt-in. Card limits must be positive,

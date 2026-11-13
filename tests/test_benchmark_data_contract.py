@@ -218,6 +218,21 @@ def test_catalog_benchmark_contract(monkeypatch, tmp_path):
     _assert_contract(SEED_BENCHMARKS, SEED_MODELS, spawnable_legs(), pending)
 
 
+@pytest.mark.parametrize('model_id', [
+    'opencode/deepseek-v4.1-flash-free', 'opencode/mimo-v2.6-flash-free',
+    'opencode-go/longcat-2.5-free', 'console-openrouter/openrouter/free',
+    'console-deepseek/deepseek-flash', 'omniroute/deepseek-direct-flash'])
+def test_new_review_rows_have_exact_sourced_identity_without_fabricated_scores(model_id):
+    rows = [row for row in SEED_BENCHMARKS if row['model_id'] == model_id]
+    assert len(rows) == 1
+    _assert_contract(rows, [], [leg for leg in spawnable_legs() if leg.model == model_id])
+    assert rows[0]['effort'] is None
+    assert rows[0]['aa_intelligence'] is None
+    assert rows[0]['verified_tok_per_s'] is None
+    assert rows[0]['cost_per_task_usd'] is None
+    assert 'unmeasured' in rows[0]['benchmark_source']
+
+
 def test_pending_list_cannot_grow():
     anchor = json.loads(FROZEN_CEILING_PATH.read_text(encoding="utf-8"))
     ordered = sorted(FROZEN_PENDING, key=lambda key: (*key[:2], key[2] is not None, key[2] or ""))

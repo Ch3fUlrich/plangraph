@@ -89,7 +89,7 @@ class CatalogDB:
         self._insert_records("catalog_models", SEED_MODELS)
 
         # 5. Benchmarks
-        self._insert_records("catalog_benchmarks", SEED_BENCHMARKS)
+        self._insert_records("catalog_benchmarks", [r for r in SEED_BENCHMARKS if r.get("aa_intelligence") is not None])
 
         # 6. Routes
         self._insert_records("catalog_routes", SEED_ROUTES)

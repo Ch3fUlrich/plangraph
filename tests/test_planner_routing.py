@@ -14,21 +14,11 @@ from plangraph.planner.routing import (RouteError, effective_estimate,
                                        next_after_failure, pick_window_class,
                                         plan_spawn, route_card)
 
-DEFAULT_LEGS = tuple(dataclasses.replace(leg, disabled=None, trains_on_data=True) if leg.id == "opencode-deepseek-v4.1-flash-free" else dataclasses.replace(leg, disabled=None) for leg in DEFAULT_LEGS if leg.id not in {"opencode-go-longcat-2.5-free", "console-openrouter-free", "console-deepseek-flash"})  # fixed mechanics table
+# Lift disables for mechanics; retain all production registrations and privacy flags.
+DEFAULT_LEGS = tuple(dataclasses.replace(leg, disabled=None) for leg in DEFAULT_LEGS)
 route_card = functools.partial(route_card, legs=DEFAULT_LEGS)
 plan_spawn = functools.partial(plan_spawn, catalog_rows=())
-D25_IDS = [
-    "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
-    "openrouter-free", "cx-gpt-6.1-sol-xhigh", "cx-gpt-6-luna",
-    "agy-gemini-3.8-flash", "agy-gemini-4-argon", "opencode-big-pickle", "agy-gpt-oss-120b",
-    "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "agy-claude-opus", "agy-opus-5.5", "omniroute-deepseek-flash", "omniroute-muse-spark", "agy-opus", "opencode-gemini-4-argon",
-    "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
-    "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark", "opencode-go-deepseek-v4-flash", "omniroute-gemini-3.8-flash", "deepseek",
-    "claude-haiku-5.5",  # D-3605 Haiku leg
-]
-#: Route order: tiers ascending, so the subscription Haiku leg precedes paid deepseek.
-ROUTE_IDS = [D25_IDS[i] for i in (0, 1, 2, 3, 6, 8, 18, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17,
-                                19, 20, 21, 22, 23, 24, 25, 26, 28, 27)]
+from _planner_route_expectations import D25_IDS, ROUTE_IDS
 
 
 def card(**kw):
@@ -57,7 +47,7 @@ def test_default_legs_exact_d25_order():
     assert "trial" not in {leg.tier for leg in DEFAULT_LEGS}
     # Independent expected tiers catch mis-tiered entries without routing them.
     by_id = {leg.id: leg for leg in DEFAULT_LEGS}
-    assert [by_id[leg_id].tier for leg_id in ROUTE_IDS] == ["free"] * 7 + ["subscription"] * 21 + ["paid"]
+    assert [by_id[leg_id].tier for leg_id in ROUTE_IDS] == ["free"] * 10 + ["subscription"] * 20 + ["paid"] * 3
     ids_ = [leg.id for leg in DEFAULT_LEGS]
     assert ids_.index("cx-gpt-6.1-sol-xhigh") < ids_.index("agy-gemini-3.8-flash") < ids_.index("mimo-v2.6-flash")
     assert ids_[-2:] == ["deepseek", "claude-haiku-5.5"]  # D-3605 Haiku leg
@@ -168,7 +158,10 @@ def test_risky_tag_removes_trains_on_data_legs_with_reason():
     for tag in ("auth", "secrets", "money", "live-step"):
         r = route_card(card(risk_tags=[tag]))
         assert not any(leg.trains_on_data for leg in r.legs)
-        assert "excluded 6 legs: trains_on_data" in r.reasons
+        assert "excluded 7 legs: trains_on_data" in r.reasons
+        assert {'opencode-deepseek-v4.1-flash-free', 'opencode-go-longcat-2.5-free',
+                'console-deepseek-flash'} <= set(ids(r))
+        assert {'opencode-mimo-v2.6-flash-free', 'console-openrouter-free'}.isdisjoint(ids(r))
     # migration / public-contract keep the free trainers
     r = route_card(card(risk_tags=["migration"]))
     assert any(leg.trains_on_data for leg in r.legs)
@@ -295,7 +288,7 @@ def test_retry_until_budget_then_promote_free_sub_paid_park(route):
     a, leg = next_after_failure(route, [q], "check_fail", 3)
     assert (a, leg.id) == ("promote", "cx-gpt-6.1-sol-xhigh")
     a, leg = next_after_failure(route, [q, leg.id], "check_fail", 3)
-    assert (a, leg.id) == ("promote", "deepseek")
+    assert (a, leg.id) == ("promote", "console-deepseek-flash")
     assert next_after_failure(route, [q, "mimo-v2.6-flash", "deepseek"],
                               "stall", 3) == ("park", None)
     assert next_after_failure(route, [q], "check_fail", 0)[0] == "retry"
@@ -304,7 +297,7 @@ def test_retry_until_budget_then_promote_free_sub_paid_park(route):
 def test_promote_skips_absent_tier():
     r = route_card(card(), legs=tuple(l for l in DEFAULT_LEGS if l.tier != "subscription"))
     a, leg = next_after_failure(r, ["qodercli-qwen3.8-flash"], "timeout", 3)
-    assert (a, leg.id) == ("promote", "deepseek")
+    assert (a, leg.id) == ("promote", "console-deepseek-flash")
 
 
 def test_park_classes(route):
@@ -342,13 +335,13 @@ def test_writer_order_d2683_review_order_unchanged():
     # D-5648: the re-enabled free leg needs no inline diff.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="review", writer_families=("claude",))
-    assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert plan.first_leg.id == "opencode-mimo-v2.6-flash-free"
 
 
 def test_writer_order_d2683_writer_family_exclusion():
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
-    assert plan_rev.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert plan_rev.first_leg.id == "opencode-mimo-v2.6-flash-free"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
     assert plan_imp.first_leg.id == "cx-gpt-6.1-sol-xhigh" and "gemini" not in {l.family for l in plan_imp.legs}
     # F2: writer_families does not exclude implement legs
@@ -381,7 +374,7 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     review = plan_spawn(dict(c, diff_ref={"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}), role="review", writer_families=("gpt",), benchmark=rows, leg_reader=reader)
     assert {s["leg"]: s["reason"] for s in review.skipped}["mimo-v2.6-pro"] == "limited"
     from test_route_free_first import WRITERS, FREE
-    assert [l.id for l in plan.legs] == [*WRITERS[:3], FREE[1], *WRITERS[3:7], *WRITERS[8:]]
+    assert [l.id for l in plan.legs] == [*WRITERS[:2], FREE[1], *WRITERS[2:6], *WRITERS[7:]]
 
 
 def test_no_implement_plan_leg_has_claude_family():
@@ -408,7 +401,7 @@ def test_alternate_limit_lookup_restricted_to_agy_harness(monkeypatch):
 
     c_rev = {"estimate_tokens": 20000, "risk_tags": []}
     plan_rev = plan_spawn(c_rev, role="review", writer_families=("claude",), leg_reader=qoder_mock_reader, catalog_rows=(), legs=tuple(dataclasses.replace(l, disabled=None) if l.family == "qwen" else l for l in DEFAULT_LEGS))
-    assert [l.id for l in plan_rev.legs][:2] == ["qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free"]
+    assert [l.id for l in plan_rev.legs][:3] == ["opencode-mimo-v2.6-flash-free", "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free"]
     assert not any(s["leg"] == "qodercli-qwen3.8-flash" for s in plan_rev.skipped)
 
     # agy-gemini-3.8-flash (model gemini-3.8-flash, harness agy) IS skipped

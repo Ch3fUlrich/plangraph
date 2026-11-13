@@ -13,9 +13,9 @@ from plangraph.spawner.cli import main
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 CARD = {"estimate_tokens": 20000, "risk_tags": [],
         "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
-WRITERS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "opencode-deepseek-v4.1-flash-free", "openrouter-free",
+WRITERS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "openrouter-free",
            "opencode-big-pickle", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
-           "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
+           "omniroute-muse-spark", "omniroute-deepseek-flash", "deepseek"]
 
 
 @pytest.fixture(autouse=True)

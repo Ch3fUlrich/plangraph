@@ -177,7 +177,7 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
                            ("opencode-glm-5.3-flash-free", "off_family")):
         assert policy.skip_reason(by_id[leg_id], role) == reason
         if role == "implement":
-            assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
+            assert "opencode-deepseek-v4.1-flash-free" not in reasons  # review-only
             assert reasons["opencode-glm-5.3-flash-free"] == "off_family"
             assert plan.first_leg.id == 'cx-gpt-6.1-sol-xhigh'
             from plangraph.planner.routing import SpawnRefused
@@ -188,7 +188,11 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
                         card=CARD, leg=leg_id, override_reason="policy regression", dry_run=True))
                 assert not (tmp_path / "spawn-overrides.jsonl").exists()
             else:
-                assert leg_id == 'opencode-deepseek-v4.1-flash-free' and 'D-5648' in by_id[leg_id].note
+                with pytest.raises(SpawnRefused, match=r'writer disabled \(D-3828\): ' + leg_id):
+                    asyncio.run(SpawnService(state=tmp_path).spawn(
+                        card=CARD, leg=leg_id, role='implement',
+                        override_reason="policy regression", dry_run=True))
+                assert not (tmp_path / "spawn-overrides.jsonl").exists()
 
 
 def test_route_skips_paused_harness_per_role():
@@ -230,14 +234,14 @@ def test_claude_written_high_gets_luna_and_qwen(pre_d3552_policy):
     # D-3901: seats follow the free-first review route, retaining coverage.
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
     assert plan.error is None
-    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "opencode-go-longcat-2.5-free"}
+    assert {leg.id for leg in plan.review_seats} == {"opencode-mimo-v2.6-flash-free", "qodercli-qwen3.8-flash"}
 
 
 def test_default_policy_seats_deepseek_for_review():
     # D-3552: with the live policy a deepseek leg may be a review seat.
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
     assert "deepseek" in {leg.family for leg in plan.legs}
-    assert _families(plan)[0] == "deepseek"  # Historical fixture lifts the free Zen leg.
+    assert _families(plan) == ["mimo", "deepseek"]  # Same free tier, Mimo priority retained.
 
 
 def test_seat_never_shares_family_with_a_single_writer():
@@ -251,11 +255,11 @@ def test_seat_excludes_every_writer_family(pre_d3552_policy):
     from plangraph.keeper.coverage import uncovered
     plan = plan_spawn(RCARD, role="review", writer_families=("gpt", "qwen"))
     assert plan.error is None
-    assert set(_families(plan)) == {"longcat", "openrouter"}  # Free independent families survive the agy pause.
+    assert set(_families(plan)) == {"mimo", "longcat"}  # Free independent families survive the agy pause.
     assert uncovered(["gpt", "qwen"], _families(plan), need=1) == []
     # Coverage names the parts as the keeper does (gpt = openai, qwen = alibaba).
-    assert plan.seat_coverage == ({"leg": "opencode-go-longcat-2.5-free", "covers": ["alibaba", "openai"]},
-                                  {"leg": "console-openrouter-free", "covers": ["alibaba", "openai"]})
+    assert plan.seat_coverage == ({"leg": "opencode-mimo-v2.6-flash-free", "covers": ["alibaba", "openai"]},
+                                  {"leg": "opencode-go-longcat-2.5-free", "covers": ["alibaba", "openai"]})
 
 
 def test_high_needs_two_families_per_part_incl_non_claude():

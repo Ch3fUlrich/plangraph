@@ -12,7 +12,8 @@ from plangraph.review.verdict import parse_test_gaming
 from plangraph.spawner import resolver
 from plangraph.spawner.runner import SpawnerRunner, _opencode_served_model
 from fake_pid import FAKE_PID; from go_credential_fake import go_credential  # noqa: E702,F401
-REQUESTED = 'opencode-go/' + 'gemini-4-argon'; pytestmark = pytest.mark.usefixtures('go_credential')
+from test_opencode_isolation_go import historical_go_argon  # noqa: F401
+REQUESTED = 'opencode-go/' + 'gemini-4-argon'; pytestmark = pytest.mark.usefixtures('go_credential', 'historical_go_argon')
 
 
 def _store(home, sessions, assistants):
@@ -59,7 +60,6 @@ def _run_leg(tmp_path, monkeypatch, seed, role='review', exit_code=0, extra_env=
         await runner._tasks[job.job_id]
         return job
     return asyncio.run(run()), ctx
-
 
 def test_one_assistant_model_equal_to_requested_is_witnessed(tmp_path, monkeypatch):
     job, _ = _run_leg(tmp_path, monkeypatch,

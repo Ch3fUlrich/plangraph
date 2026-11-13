@@ -17,7 +17,9 @@ def test_missing_legs_roles_and_probe_evidence(leg_id, store):
         assert leg_active(leg) and 'D-5648' in leg.note
     else:
         assert leg_active(leg)
-    assert set(leg.roles) == ({'implement'} if leg_id == 'agy-gemini-4-argon' else {'review', 'implement'})
+    assert set(leg.roles) == {'agy-gemini-4-argon': {'implement'},
+                            'opencode-deepseek-v4.1-flash-free': {'review'},
+                            'opencode-big-pickle': {'review', 'implement'}}[leg_id]
     store.record_probe_pass(leg.model, 'leg-probe', now=100)
     assert store.last_probe_ts(leg.model) == 100
     assert store.leg_status(leg.model, now=101)['state'] == 'ok'
@@ -105,8 +107,8 @@ def test_registered_pool_seats_exclude_claude_writers():
     plan = plan_spawn({'estimate_tokens': 1000}, role='review', legs=legs,
                       writer_families=('claude',), catalog_rows=(),
                       leg_reader=lambda *a, **k: {'state': 'ok', 'evidence': None})
-    assert [leg.id for leg in plan.legs] == ['omniroute-deepseek-flash', 'omniroute-muse-spark']
-    assert [leg.id for leg in plan.review_seats] == ['omniroute-deepseek-flash', 'omniroute-muse-spark']
+    assert [leg.id for leg in plan.legs] == ['omniroute-muse-spark', 'omniroute-deepseek-flash']
+    assert [leg.id for leg in plan.review_seats] == ['omniroute-muse-spark', 'omniroute-deepseek-flash']
 
 
 @pytest.mark.parametrize('tier', ['free', 'subscription', 'paid'])

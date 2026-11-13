@@ -19,13 +19,18 @@ def assert_review_seat_safety(estimate):
                             writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH), catalog_rows=())
         assert len({leg.family for leg in review.review_seats}) == 2
         assert all(leg.family != "gpt" for leg in review.review_seats)
-        exception = not diff
+        exception = not diff and estimate > 72089
         fenced = review.review_seats[:-1] if exception else review.review_seats
         assert not any(leg.claude_family or leg.family in ("claude", "anthropic") for leg in fenced)
         if estimate > 72089:
             assert [leg.id for leg in review.review_seats] == ["agy-gemini-3.8-flash", "mimo-v2.6-flash" if diff else "agy-sonnet-5.5"]
         else:
-            assert [leg.id for leg in review.review_seats] == ["opencode-deepseek-v4.1-flash-free", "opencode-go-longcat-2.5-free"]
+            assert [leg.id for leg in review.review_seats] == ["opencode-mimo-v2.6-flash-free", "opencode-deepseek-v4.1-flash-free"]
+
+
+@pytest.mark.parametrize('estimate', [1000, 72089, 72090, 100000])
+def test_review_seat_fence_at_window_boundary(estimate):
+    assert_review_seat_safety(estimate)
 
 
 def test_review_same_family_table_order():

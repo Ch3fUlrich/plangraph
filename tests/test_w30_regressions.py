@@ -8,6 +8,7 @@ from plangraph.spawner.runner import spawn_service
 
 import json
 import os
+import re
 import pytest
 
 
@@ -52,6 +53,7 @@ def test_free_zen_legs_are_exactly_the_disabled_set():
     free = {l.id: l.disabled for l in DEFAULT_LEGS if l.model.startswith('opencode/')}
     reason = 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'
     assert free == {'opencode-deepseek-v4.1-flash-free': None,
+                    'opencode-mimo-v2.6-flash-free': None,
                     'opencode-glm-5.3-flash-free': reason,
                     'opencode-big-pickle': None, 'opencode-gemini-4-argon': None}
 
@@ -60,15 +62,17 @@ def test_free_zen_legs_are_exactly_the_disabled_set():
 def test_explicit_disabled_zen_leg_refused(tmp_path, leg_id, monkeypatch):
     leg = next(l for l in DEFAULT_LEGS if l.id == leg_id)  # D-3828: disabled, never removed
     from plangraph.planner.routing import SpawnRefused
-    service = spawn_service(state=tmp_path)
     if leg_id == 'opencode-deepseek-v4.1-flash-free':
         assert leg.disabled is None and 'D-5648' in leg.note
         # Preserve the historical permanent-disable regression after D-5648.
         leg = replace(leg, disabled='D-4196 historical fixture')
         monkeypatch.setattr('plangraph.planner.legs.DEFAULT_LEGS', tuple(
             leg if l.id == leg.id else l for l in DEFAULT_LEGS))
+    from plangraph.planner.legs import spawnable_legs
+    assert next(l for l in spawnable_legs() if l.id == leg.id) == leg
+    service = spawn_service(state=tmp_path)
     assert leg.disabled
-    with pytest.raises(SpawnRefused, match='leg disabled: .*D-4196'):
+    with pytest.raises(SpawnRefused, match='leg disabled: ' + re.escape(leg.id + ': ' + leg.disabled)):
         asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x',
             leg=leg.id, override_reason='disabled leg must not launch', dry_run=True))
     assert not service.runner.jobs

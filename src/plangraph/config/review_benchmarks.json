@@ -1,0 +1,98 @@
+[
+  {
+    "model_id": "opencode/deepseek-v4.1-flash-free",
+    "effort": null,
+    "aa_intelligence": null,
+    "verified_tok_per_s": null,
+    "cost_per_task_usd": null,
+    "benchmark_source": "D-5648 publisher identity only; capability/speed/task cost unmeasured",
+    "updated_at": "2026-11-13T00:00:00Z",
+    "source_url": "https://opencode.ai/v2/docs/zen",
+    "source_date": "2026-11-13",
+    "aliases": ["DeepSeek V4.1 Flash Free"],
+    "source_record": {
+      "title": "Models",
+      "excerpt": "DeepSeek V4.1 Flash Free is free on OpenCode for a limited time. Its provider follows a zero-retention policy and does not use your data for model training."
+    }
+  },
+  {
+    "model_id": "opencode/mimo-v2.6-flash-free",
+    "effort": null,
+    "aa_intelligence": null,
+    "verified_tok_per_s": null,
+    "cost_per_task_usd": null,
+    "benchmark_source": "D-5648 publisher identity only; capability/speed/task cost unmeasured",
+    "updated_at": "2026-11-13T00:00:00Z",
+    "source_url": "https://opencode.ai/v2/docs/zen",
+    "source_date": "2026-11-13",
+    "aliases": ["MiMo-V2.6-Flash Free"],
+    "source_record": {
+      "title": "Models",
+      "excerpt": "MiMo-V2.6-Flash Free is available on OpenCode for a limited time. The team is using this time to collect feedback and improve the model."
+    }
+  },
+  {
+    "model_id": "opencode-go/longcat-2.5-free",
+    "effort": null,
+    "aa_intelligence": null,
+    "verified_tok_per_s": null,
+    "cost_per_task_usd": null,
+    "benchmark_source": "D-5648 publisher identity only; capability/speed/task cost unmeasured",
+    "updated_at": "2026-11-13T00:00:00Z",
+    "source_url": "https://opencode.ai/v2/docs/zen",
+    "source_date": "2026-11-13",
+    "aliases": ["LongCat 2.5 Free"],
+    "source_record": {
+      "title": "Models",
+      "excerpt": "LongCat 2.5 Free is free on OpenCode for a limited time, with a limit of 100 requests per day. Its provider follows a zero-retention policy and does not use your data for model training."
+    }
+  },
+  {
+    "model_id": "console-openrouter/openrouter/free",
+    "effort": null,
+    "aa_intelligence": null,
+    "verified_tok_per_s": null,
+    "cost_per_task_usd": null,
+    "benchmark_source": "D-5648 publisher identity only; capability/speed/task cost unmeasured",
+    "updated_at": "2026-11-13T00:00:00Z",
+    "source_url": "https://openrouter.ai/openrouter/free",
+    "source_date": "2026-11-13",
+    "aliases": ["openrouter/free"],
+    "source_record": {
+      "title": "OpenRouter APIs — Free Models Router (openrouter/free)",
+      "excerpt": "openrouter/free is a router: each request is billed at the price of the model it is routed to, so it has no price of its own."
+    }
+  },
+  {
+    "model_id": "console-deepseek/deepseek-flash",
+    "effort": null,
+    "aa_intelligence": null,
+    "verified_tok_per_s": null,
+    "cost_per_task_usd": null,
+    "benchmark_source": "D-5648 publisher identity only; capability/speed/task cost unmeasured",
+    "updated_at": "2026-11-13T00:00:00Z",
+    "source_url": "https://api-docs.deepseek.com/quick_start/pricing",
+    "source_date": "2026-11-13",
+    "aliases": ["deepseek-flash"],
+    "source_record": {
+      "title": "Models & Pricing",
+      "excerpt": "Use deepseek-flash as the model name. The legacy names deepseek-v4-flash and deepseek-v4-flash-vision-exp are still accepted, but the corresponding models have been retired, their requests are served by the DeepSeek-V4.1-Flash-1017 model and billed at the Flash price."
+    }
+  },
+  {
+    "model_id": "omniroute/deepseek-direct-flash",
+    "effort": null,
+    "aa_intelligence": null,
+    "verified_tok_per_s": null,
+    "cost_per_task_usd": null,
+    "benchmark_source": "D-5648 publisher identity only; capability/speed/task cost unmeasured",
+    "updated_at": "2026-11-13T00:00:00Z",
+    "source_url": "https://api-docs.deepseek.com/quick_start/pricing",
+    "source_date": "2026-11-13",
+    "aliases": ["deepseek-flash"],
+    "source_record": {
+      "title": "Models & Pricing",
+      "excerpt": "Use deepseek-flash as the model name."
+    }
+  }
+]

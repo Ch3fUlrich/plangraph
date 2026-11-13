@@ -1,0 +1,32 @@
+{
+  "date": "2026-11-13",
+  "scope": "public-only availability/verdict-format smoke; not a PR review or capability benchmark",
+  "prompt": "Do not use tools. Review this public Python change: def add(a, b): return a + b. It implements addition without other changes. Respond with exactly VERDICT: PASS if correct, otherwise VERDICT: FAIL.",
+  "runs": [
+    {
+      "model": "opencode/deepseek-v4.1-flash-free",
+      "session_id_parts": ["ses_e2c2431f1ffe", "ePDkBfAuwMQL4U"],
+      "events": [
+        {"type": "text", "timestamp": 1794555763297, "part": {"type": "text", "text": "VERDICT: PASS"}},
+        {"type": "step_finish", "timestamp": 1794555763297, "part": {"type": "step-finish", "reason": "stop", "cost": 0}}
+      ]
+    },
+    {
+      "model": "opencode/mimo-v2.6-flash-free",
+      "session_id_parts": ["ses_e2c2431c1ffe", "7nJIHJjF01tvW5"],
+      "events": [
+        {"type": "text", "timestamp": 1794555765592, "part": {"type": "text", "text": "VERDICT: PASS"}},
+        {"type": "step_finish", "timestamp": 1794555765592, "part": {"type": "step-finish", "reason": "stop", "cost": 0}}
+      ]
+    },
+    {
+      "model": "console-openrouter/openrouter/free",
+      "session_id_parts": ["ses_e2c243102ffe", "uxUBbErvJsyaKg"],
+      "note": "Earlier write tool call to /dev/null was rejected; only final assistant text is counted.",
+      "events": [
+        {"type": "text", "timestamp": 1794555764187, "part": {"type": "text", "text": "VERDICT: PASS"}},
+        {"type": "step_finish", "timestamp": 1794555764191, "part": {"type": "step-finish", "reason": "stop", "cost": 0}}
+      ]
+    }
+  ]
+}

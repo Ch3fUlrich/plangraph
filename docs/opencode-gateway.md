@@ -29,3 +29,9 @@ Credential handling is unchanged: config contains environment references, not
 credential values, and rendering does not read or log keys. The shared validator
 refuses URL userinfo, queries, fragments (including bare delimiters), and
 non-HTTP(S) schemes; a refusal leaves the caller's config unchanged.
+
+D-2739 keeps direct Mimo rendering limited to `mimo/mimo-v2.6-flash` and
+`mimo/mimo-v2.6-pro` (`DIRECT_MIMO_IDS`). The separately admitted free review
+model `opencode/mimo-v2.6-flash-free` uses its native provider; it never receives
+a synthetic Mimo gateway entry or the direct paths' keyless-listing exemption.
+Its actual child config must pass the ordinary served-model probe.

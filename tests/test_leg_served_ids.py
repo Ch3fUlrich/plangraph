@@ -10,6 +10,7 @@ SERVED_OPENCODE_GO_IDS = frozenset({
     "opencode-go/glm-5.2",
     "opencode-go/qwen3.8-max",
     "opencode-go/muse-spark-1.3-contributor",
+    "opencode-go/longcat-2.5-free",  # D-5648: model discovery 2026-11-13
 })
 
 

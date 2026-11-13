@@ -47,8 +47,8 @@ def record_steps(job, stdout, stderr, env):
 
 def cap_reasoning(env, model):
     """MiMo's documented thinking-off control: a zero reasoning budget for this run only."""
-    from .mimo_policy import ACCEPTED_MIMO_IDS
-    if model not in ACCEPTED_MIMO_IDS:
+    from plangraph.mimo_policy import DIRECT_MIMO_IDS
+    if model not in DIRECT_MIMO_IDS:
         return False
     try:
         cfg = json.loads(env['OPENCODE_CONFIG_CONTENT'])
