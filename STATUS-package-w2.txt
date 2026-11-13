@@ -2,11 +2,12 @@ W2-1 DONE: handoff-check parity (50 recorded grammar cases), worklog/secret/CLI 
 W2-2 DONE: fleet-name; 4 parity/integration tests pass on Windows and WSL; clippy clean.
 W2-3 DONE: question-count; affected suite passes on Windows (12 tests) and WSL (13 tests); clippy clean.
 W2-4 DONE: both digest commands; 123 recorded executions match on Windows and WSL; principal/lease and full-JSON wrapper tests pass; clippy clean.
-W2-5 PENDING: go-row-gate.
+W2-5 DONE: go-row-gate; 220 grammar scenarios and CLI/privacy tests pass on Windows and WSL; clippy clean.
 W2-6 PENDING: merge-part and merge_paths.
 W2-7 PENDING: inreview-backfill.
 W2-8 PENDING: work-summary.
 Final checks PENDING. Live cutover excluded; source repository remains read-only.
+
 
 
 

@@ -52,3 +52,4 @@ Its complete output is still pinned in the corpus, including the 120-line cap.
 
 leet-name ROLE combines local and enabled remote session listings, retries one transport failure, and prefers a live session confirmed by the role's launch record during overlap. ROUTING_STATE_DIR and FLEET_HOST_POLICY retain their legacy meanings. Configure local aliases in the host policy when needed.
 `question-count` reads QUESTIONS.md from the operational data directory and preserves the table row, kind, blocking and priority counting rules.
+`go-row-gate` preserves GO-HEAD binding, the PLAN receipt grammar, keeper checks and session restrictions. Without --log it fetches origin/main and reads the decision log from that ref. The parser is pinned by 220 Python executions, plus native failure/privacy checks.
