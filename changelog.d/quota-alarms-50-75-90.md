@@ -1,0 +1,1 @@
+Add subscription quota alarms: a 15-minute user timer reads the gateway quota_snapshots read-only and sends one routing line per 50/75/90 % threshold per window with 6 h burn rate and projected empty time (plangraph:QUOTA-ALARMS-50-75-90).
