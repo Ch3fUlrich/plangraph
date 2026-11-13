@@ -13,6 +13,7 @@ pub mod cpu;
 #[cfg(target_os = "linux")]
 pub mod cpu_linux;
 pub mod diffscan;
+pub mod disk_hygiene;
 pub mod events;
 pub mod exit_class;
 pub mod exports;

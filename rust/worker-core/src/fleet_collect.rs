@@ -85,7 +85,24 @@ pub fn disk_pct(path: &Path) -> Option<f64> {
             .parse()
             .ok()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let (mut available, mut total, mut free) = (0u64, 0u64, 0u64);
+        // SAFETY: the path is nul-terminated and all output pointers are writable.
+        let ok = unsafe {
+            windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut available,
+                &mut total,
+                &mut free,
+            )
+        };
+        (ok != 0 && total > 0)
+            .then(|| 100.0 * (total.saturating_sub(available)) as f64 / total as f64)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
         None

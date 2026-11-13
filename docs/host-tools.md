@@ -63,3 +63,18 @@ It fetches origin and silently fast-forwards only a clean default branch.
 Alerts use exactly `detached`, `other-branch:NAME`, `tracked-changes`, `diverged`, or
 `fetch-failed`; failed probes map to those codes, never a fabricated behind count.
 Add `--sync` to `--check-config` to perform both checks on a worker host.
+
+`pg-disk-hygiene --repo PATH --root WORKTREES --pins PINS.json --dry-run`
+reports disk usage, alarming at 75%, with cleanup candidates at 80%.
+The mandatory pins file is a JSON array of absolute paths exported from md-sync;
+active run records add live checkout protection. Unreadable protection data fails
+closed. Only registered, clean, unlocked worktrees under the explicit root idle
+for over 24 hours qualify. The main checkout and symlinked caches are preserved.
+`--apply` refreshes origin with prune, deletes rebuildable `target/` and
+`node_modules/`, and removes worktrees only for merged or previously tracked,
+now absent origin branches. It never forces removal or blindly prunes worktrees.
+Reports and freed file bytes are logged to `disk-hygiene.ndjson`; the latest
+`disk-hygiene.json` contains `alarm` for the orchestrator heartbeat to read.
+Review a dry run before installing the 30 minute user timer and setting `PG_REPO`,
+`PG_WORKTREES` and `PG_PINS` in `~/.config/plangraph/disk-hygiene.env`.
+Live timer installation and real host cleanup are separate deployment evidence.
