@@ -195,3 +195,18 @@ def test_stale_session_relaunch_cannot_use_unadvertised_dry_run(tmp_path, monkey
     assert reply['error']['message'] == RESTART
     sessions.relaunch.assert_not_called()
     sessions.audit_refusal.assert_not_called()
+
+
+@pytest.mark.parametrize('git_tree', [False, True])
+def test_package_asset_edit_invalidates_source(tmp_path, monkeypatch, git_tree):
+    root = tmp_path / 'package'
+    root.mkdir()
+    asset = root / 'template.toml'
+    asset.write_text('value = 1\n')
+    if git_tree:
+        _git(root, 'init', '-q')
+        _git(root, 'add', '.')
+        _git(root, 'commit', '-q', '-m', 'asset')
+    server = _guarded(tmp_path, root)
+    asset.write_text('value = 222222\n')
+    _assert_refuses_real_but_not_dry(server, monkeypatch)

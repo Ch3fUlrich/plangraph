@@ -49,13 +49,17 @@ def encode_reply(reply):
 
 
 def _fingerprint(root):
-    """Cheap (path, size, mtime_ns) digest of every .py file under ``root``.
+    """Cheap (path, size, mtime_ns) digest of package source and assets.
 
     Any read failure yields a fresh token, so the identity differs on every call
     and real runs are refused (fail closed) instead of ignoring the file."""
     digest = hashlib.sha256()
     try:
-        for path in sorted(root.rglob('*.py')):
+        for path in sorted(root.rglob('*')):
+            if any(part in ('.git', '__pycache__') for part in path.relative_to(root).parts) or path.suffix in ('.pyc', '.pyo'):
+                continue
+            if path.is_dir():
+                continue
             info = path.stat()
             digest.update(f'{path.relative_to(root).as_posix()}\0{info.st_size}\0{info.st_mtime_ns}\0'.encode())
     except OSError:
