@@ -18,6 +18,8 @@ Config size does not grow the command line, including on Windows.
 Every native or legacy harness command uses stdin for task content, and child
 environments discard known inherited or overlaid legacy task-prompt carriers before
 launch-spec serialization, while retaining unrelated prompt-template/theme settings.
+The [v1 registry](prompt-transport-v1.md) stages shared transport/reason data
+and preserves the existing imports; S01 changes no launch behavior.
 
 `tools/judge_prompt.py` assembles offline findings, diff, CI and whole file
 bodies, prioritizing cited files under the byte budget. Its default prompt-only

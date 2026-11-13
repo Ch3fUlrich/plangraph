@@ -1,0 +1,1 @@
+- KEEPER-NO-ROUND-TRIPS slice 4 (D-5658 part C, D-5656): an active decision-backed D-id waiver lets one passing high-tier review close the item with `reviews_passed=1`. Writer-family independence, same-principal refusals, sensitive coverage and waiver tier restrictions remain enforced; unwaived high items still need two verdicts.
