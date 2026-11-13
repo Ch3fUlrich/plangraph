@@ -137,6 +137,8 @@ spawner-inlined diff without tools, and `prompt-only` uses supplied evidence.
 Gateway prompt-only config is file-backed via a portable launcher, never argv.
 New Python files require a reasoned rule 9.14 entry in `tools/new_code_allowlist.txt`.
 
+`python3 tools/repo_sync_check.py [--root DIR ...] [--repo PATH ...] [--dry-run] [--verbose]` fetches direct-child repositories in `~/code` by default (skipping `-worktrees`/`-lanes`); only clean tracked default-branch checkouts fast-forward, without overwriting untracked/ignored files. Alerts preserve checkout/index/local refs; fetch metadata may advance. Dry runs fetch and print `DRY-RUN <repo> behind=<n>` without merging; fetch failures use `behind=0` (unknown). Exit 1 means an alert; output contains only repo labels/counts/reasons, never file paths or contents.
+
 ## File size
 
 A tracked source, test, script or doc file stays at or under 400 lines; over 400, split it

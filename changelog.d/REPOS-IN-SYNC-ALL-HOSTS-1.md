@@ -1,0 +1,1 @@
+- Add the stdlib-only repository sync CLI: bounded origin fetches, safe default-branch fast-forwards, dry runs, and private single-line alerts with hermetic checkout-preservation tests (D-5658 point 5, slice 1).

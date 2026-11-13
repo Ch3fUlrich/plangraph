@@ -27,7 +27,7 @@ Q&A page connects each decision/question to task, phase and project and lets you
 | `src/plangraph/views*.py` | pure views over a snapshot: ready, blocked, critical path, slack, brief |
 | `src/plangraph/keeper/` | the plan-keeper service (SQLite, auth, evidence verifiers; POSIX only — uses `fcntl`) |
 | `src/plangraph/spawner/` | agent spawner & model routing catalog (SQLite WAL, OmniRoute ACP-first, cross-family review, MCP server) |
-| `tools/` | batch apply, markdown sync, plan check, importer |
+| `tools/` | batch apply, markdown sync, plan check, importer, safe repository sync (`repo_sync_check.py`) |
 | `examples/` | fictional plans, a batch, `snapshot.json` |
 | `docs/` | proposal, spec, runbook, UI/UX reviews |
 
