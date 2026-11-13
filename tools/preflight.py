@@ -175,7 +175,7 @@ def main(argv=None, root=None):
         scrubs.append(python("preflight_private_scrub.py", "--base", args.scrub_base or args.base,
                              "--head", args.head, "--words", words))
     tests = python("affected_tests.py", "--base", args.base, "--head", args.head,
-                   "--root", str(root), "--run")
+                   "--root", str(root), "--files-only", "--run")
     if importlib.util.find_spec("xdist") is not None:
         tests += ["--workers", "2"]
     families = [("scrub", scrubs),
@@ -195,6 +195,9 @@ def main(argv=None, root=None):
                 if commands is None:
                     commands = rust_commands(root, args.base, args.head, env)
                 family_env = policy_env if family == "policy" else env
+                if family == 'rust':
+                    family_env = {key: value for key, value in env.items()
+                                  if not key.upper().startswith('GIT_')}
                 if family == "tests" and commands:
                     family_env = test_environment(root, env)
                 failed = []  # policy runs every check and reports all failures

@@ -79,7 +79,20 @@ def smoke_tests(texts, path):
     return set(near) | ({SMOKE_TEST} if SMOKE_TEST in texts else set())
 
 
-def select_tests(root, changed, within=None):
+def local_control_tests(texts, path):
+    """Bounded file checks for suite controls; CI owns exhaustive fixture coverage."""
+    named = {name for name, text in texts.items()
+             if name.startswith('tests/') and Path(name).name.startswith('test_')
+             and not name.startswith('tests/browser/')
+             and (path in text or Path(path).name in text)}
+    near = smoke_tests(texts, path)
+    selected = set(sorted(named | near)[:SMOKE_LIMIT])
+    if SMOKE_TEST in texts:
+        selected.add(SMOKE_TEST)
+    return selected
+
+
+def select_tests(root, changed, within=None, *, files_only=False):
     root = Path(root)
     paths = sorted(p for folder in ("src", "tests") for p in (root / folder).rglob("*.py"))
     modules = {}
@@ -120,6 +133,8 @@ def select_tests(root, changed, within=None):
                     if dep:
                         reverse.setdefault(dep, set()).add(rel)
     except (SyntaxError, UnicodeError, OSError) as exc:
+        if files_only:
+            return {"tests": [], "reason": "graph unreadable: " + str(exc), "error": True}
         return {"tests": filter_within(["tests"], within), "reason": "graph unreadable: " + str(exc)}
     selected = set()
     asset_cache = {}
@@ -134,6 +149,9 @@ def select_tests(root, changed, within=None):
                         or p.name.startswith("requirements")
                         or path.startswith(".github/workflows/"))
         if suite_config:
+            if files_only:
+                selected.update(local_control_tests(texts, path))
+                continue
             return fallback("suite configuration")
         # docs/status trees and root files cannot affect tests; untracked scratch outside the
         # source roots is skipped; tracked files elsewhere map to tests naming them or full suite.
@@ -154,6 +172,9 @@ def select_tests(root, changed, within=None):
             if not revision_asset(root, path, asset_cache):
                 continue
         if p.name == "conftest.py" or (path.startswith("tests/") and not p.name.startswith("test_")):
+            if files_only:
+                selected.update(local_control_tests(texts, path))
+                continue
             return fallback("shared fixture")
         if p.parts[0] in {"src", "tests", "tools"} and path not in texts and p.suffix == ".py":
             selected.update(smoke_tests(texts, path))
@@ -195,6 +216,7 @@ def main(root=None):
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
     parser.add_argument("--maxfail", type=int, default=0)
     parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
     parser.add_argument("-n", "--workers", default="auto")
@@ -211,8 +233,11 @@ def main(root=None):
             if not (root / w).exists():
                 print(f"unknown --within path: {w}", file=sys.stderr)
                 return 2
-    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within)
+    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, files_only=args.files_only)
     print(json.dumps(plan), flush=True)
+    if args.files_only and (plan.get('error') or any(not (root / path).is_file() for path in plan['tests'])):
+        print('FAIL local-selection: cannot determine explicit test files; repair the graph or selection; full collection refused', file=sys.stderr)
+        return 1
     if args.within is not None and not plan["tests"]:
         print("no pg-affected tests")
         return 0

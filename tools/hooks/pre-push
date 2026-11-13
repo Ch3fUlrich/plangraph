@@ -2,7 +2,8 @@
 """Pre-push gate: public scrub (D-1751) + 800-line file size (AO-400LOC, D-3198).
 
 Runs scrub rules over committed blobs in the pushed range, including preflight;
-new branches scrub from origin/main and select affected tests from their nearest remote base.
+new branches scrub from origin/main and select affected test files from their nearest remote base.
+Preflight uses file-only local selection; suite-control smoke checks stay bounded, with full coverage in CI.
 When origin/main is available, identical upstream/base blobs and inherited lines
 are excluded; without it the stricter whole-file scan remains in effect.
 PLANGRAPH_SCRUB_WORDS overrides ~/.config/plangraph/scrub-words.txt; an explicit

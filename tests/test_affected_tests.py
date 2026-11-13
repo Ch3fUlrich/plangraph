@@ -435,3 +435,46 @@ def test_missing_pytest_has_named_fix(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr()
     assert out.err.count('FAIL pytest-missing:') == 1
     assert '-m pip install' in out.err
+
+
+@pytest.mark.parametrize('broad', ['.github/workflows/tests.yml', 'tests/conftest.py', 'tests/helpers.py', 'pyproject.toml'])
+def test_local_selection_keeps_changed_tests_and_reverse_consumers(tmp_path, broad):
+    files = {'src/pkg/core.py': 'VALUE = 1\n',
+             'tests/test_api.py': 'from pkg.core import VALUE\n',
+             'tests/test_written.py': 'def test_written(): pass\n',
+             'tests/test_contract.py': repr(broad) + '\n',
+             'tests/test_unrelated.py': 'def test_unrelated(): pass\n'}
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    module = selector()
+    changed = [broad, 'src/pkg/core.py', 'tests/test_written.py']
+    assert module.select_tests(tmp_path, changed)['tests'] == ['tests']
+    plan = module.select_tests(tmp_path, changed, files_only=True)
+    assert set(plan['tests']) == {'tests/test_api.py', 'tests/test_written.py', 'tests/test_contract.py'}
+    assert all((tmp_path / path).is_file() for path in plan['tests'])
+
+
+def test_local_shared_controls_have_bounded_smoke_coverage(tmp_path):
+    directory = tmp_path / 'tests'
+    directory.mkdir()
+    for index in range(30):
+        (directory / f'test_ref_{index:02}.py').write_text('"tests/conftest.py"\n')
+    (directory / 'test_written.py').write_text('def test_written(): pass\n')
+    module = selector()
+    plan = module.select_tests(tmp_path, ['tests/conftest.py', 'tests/test_written.py'], files_only=True)
+    assert 'tests/test_written.py' in plan['tests']
+    assert len(plan['tests']) <= module.SMOKE_LIMIT + 1
+    assert 'tests' not in plan['tests']
+
+
+def test_local_unreadable_graph_refuses_instead_of_full_collection(tmp_path, monkeypatch, capsys):
+    import sys
+    (tmp_path / 'tests').mkdir()
+    (tmp_path / 'tests/test_broken.py').write_text('def invalid(\n')
+    module = selector()
+    monkeypatch.setattr(module.subprocess, 'run', lambda *a, **k: pytest.fail('unreadable graph launched pytest'))
+    monkeypatch.setattr(sys, 'argv', ['affected_tests.py', '--base', 'HEAD', '--changed', 'tests/test_broken.py', '--files-only', '--run'])
+    assert module.main(root=tmp_path) == 1
+    assert 'local-selection' in capsys.readouterr().err

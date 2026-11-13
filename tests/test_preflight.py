@@ -323,6 +323,7 @@ def test_real_affected_argv(repo, monkeypatch):
     monkeypatch.setattr(preflight, "run", run)
     assert preflight.main(["--base", "HEAD", "--head", "HEAD"], repo) == 0
     assert seen and seen[0][seen[0].index("--head") + 1] == "HEAD"
+    assert "--files-only" in seen[0]
 
 
 def test_timeout_is_failure(monkeypatch, repo):
