@@ -116,8 +116,8 @@ Historical seat discovery uses `python3 tools/seat_verdict.py --snapshot plan.sn
 Batch orchestration and guarded outbox delivery live in `tools/seat_backfill.py`,
 with compatibility re-exports at `seat_record.backfill` and
 `seat_verdict.apply_backfill`. Record parsing/discovery remain in `seat_record`;
-`seat_verdict.main()` remains the only keeper poster. Tool-less tool-call markup refuses with exit 2 (`toolless_tool_markup`) before posting; Claude uses init `tools` from `claude-stream.jsonl` or `live.log`, failing closed when unknown. Plain prose mentioning “invoke” stays valid. The helper's path-specific
-Python exception covers this responsibility-only split of existing code.
+`seat_verdict.main()` remains the only keeper poster. The helper's
+path-specific Python exception covers this responsibility-only split of existing code.
 
 Backfill rejects pinned or explicitly overridden seats, incomplete/nonzero-exit records, writer-family seats, and records without a strict verdict. Family independence uses the same witnessed evidence model as the poster. Any eligible CHANGES takes precedence over ACCEPT in every discovery order; replay never falls through from a terminal or ambiguous CHANGES to another accepting seat. Apply JSON separates eligibility from `delivery` (`delivered`, `failed`, or `skipped`) and includes `verifier_exit` after a send. Corrupt journals and busy shared outbox locks skip with reasons without blocking other items. PR subprocesses have a 30-second timeout; lock acquisition is nonblocking. Exact completion-head equality remains required; backfill does not permit a different head via card ancestry.
 

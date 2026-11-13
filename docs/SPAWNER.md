@@ -369,7 +369,7 @@ Claude 5.5 and effort-variant legs (operator 2026-11-09): `agy-claude-{sonnet,op
 `cx-gpt-6.1-sol-{low,medium,high,xhigh,max}` (implement). The ids are what `agy models` and
 OmniRoute `/v1/models` served that day; agy serves no Sonnet xhigh and cx serves no `-ultra`, so neither is a leg.
 Except Sol xhigh (automatic, D-5206), these and plain Sol live in `EXPLICIT_LEGS`, not
-`DEFAULT_LEGS`: an audited `--leg` or model override spawns them. Prompt-only review/judge file requests require inline material or a `diff_ref` (using `inline_diff`); otherwise even explicit/dry-run assembly refuses `toolless_needs_inline`. Claude never enters
+`DEFAULT_LEGS`: an audited `--leg` or model override spawns them. Prompt-only review/judge file requests require inline material (including plain pasted unified diffs) or a `diff_ref` (using `inline_diff`); otherwise even explicit/dry-run assembly refuses `toolless_needs_inline`. Claude never enters
 automatic implement routes. `SpawnService.route` appends explicit-only legs to
 the plan as `explicit_only` skips, so `route` shows them; `plan_spawn` itself does not list them. A Claude leg is claude-family: the fence refuses
 it for a claude writer, given or via `review_of`; with mixed writers the D-3084 per-part rule

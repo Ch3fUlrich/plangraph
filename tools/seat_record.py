@@ -26,13 +26,13 @@ _TOOL_MARKUP = re.compile(r'<\s*(?:invoke_tool\b|invoke\s+name\s*=|function_call
 
 
 def guard_toolless_reply(run_dir, text, record=None, live_log=''):
-    """Reject fabricated tool transcripts; Claude needs affirmative tool evidence."""
+    """Reject even quoted markup on tool-less/unknown harnesses; Claude needs tool evidence."""
     if not _TOOL_MARKUP.search(text):
         return
     leg = (record or {}).get('chosen_leg')
     leg = leg if isinstance(leg, dict) else {}
     mode, harness = leg.get('tool_mode'), leg.get('harness')
-    toolless = record is None or mode == 'prompt-only' or harness == 'opencode'
+    toolless = not harness or mode in ('prompt-only', 'inline-only')
     if harness == 'claude' and not toolless:
         try:
             stream = (Path(run_dir) / 'claude-stream.jsonl').read_text('utf-8')
@@ -47,8 +47,6 @@ def guard_toolless_reply(run_dir, text, record=None, live_log=''):
             if isinstance(event, dict) and event.get('type') == 'system' and event.get('subtype') == 'init':
                 tools = event.get('tools')
         toolless = not (isinstance(tools, list) and tools and all(isinstance(t, str) and t for t in tools))
-    elif mode == 'inline-only':
-        toolless = True
     if toolless:
         raise ValueError('toolless_tool_markup')
 

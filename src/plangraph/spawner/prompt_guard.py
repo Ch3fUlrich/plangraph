@@ -13,17 +13,24 @@ _INLINE = re.compile(
     r'^\s*(`{3,}|~{3,})[^\n]*\n(.*?)^\s*\1\s*$'
     r'|^=== (?:INLINE [^\n]+|CONTEXT PACK) ===\n(.*?)^=== END [^\n]+ ==='
     r'|^## (?:File: [^\n]+|PR [^\n]+)\n(.*?)(?=^## |\Z)', re.M | re.S)
+_RAW_DIFF = re.compile(
+    r'^diff --git [^\n]+\n(?:(?!diff --git |--- )[^\n]*\n)*'
+    r'^--- (?:a/[^\n]+|/dev/null)\n^\+\+\+ (?:b/[^\n]+|/dev/null)\n'
+    r'^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@[^\n]*\n^[ +\-][^\n]+', re.M)
 
 
 def admit_toolless(prompt, card, role, leg, refuse):
     """Prompt-only file reviews need supplied material; never read files here."""
     if role not in ('review', 'judge') or getattr(leg, 'tool_mode', 'tools') != 'prompt-only':
         return
+    if not isinstance(prompt, str):
+        raise refuse('toolless_prompt_not_string')
     if card.get('diff_ref') is not None:
         return  # seat_spawn uses the existing inline_diff transport.
     if not (_REPO_PATH.search(prompt) or _FILE_REQUEST.search(prompt)):
         return
-    if not any((m[2] or m[3] or m[4] or '').strip() for m in _INLINE.finditer(prompt)):
+    if not (_RAW_DIFF.search(prompt) or any(
+            (m[2] or m[3] or m[4] or '').strip() for m in _INLINE.finditer(prompt))):
         raise refuse('toolless_needs_inline')
 
 
