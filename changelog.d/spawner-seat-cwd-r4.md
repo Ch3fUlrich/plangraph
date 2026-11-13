@@ -1,0 +1,1 @@
+- Harden checkout-bound spawns against injected Git config/object redirects, record missing diff repositories as parameter refusals, validate canonical cwd once, and recover legacy worktree continuations from the service checkout. Explicit checkout runs remain local.

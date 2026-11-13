@@ -117,6 +117,7 @@ def main(argv=None):
         if verb == 'spawn':
             p.add_argument('prompt', nargs='?')
             p.add_argument('--prompt-file')
+            p.add_argument('--cwd', help='absolute path to an existing git checkout')
             p.add_argument('--review-scope', choices=['per-fixer', 'batch'])
             p.add_argument('--model')
             p.add_argument('--leg')
@@ -198,11 +199,10 @@ def main(argv=None):
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise
-            payload = dict(card=args.card, prompt=prompt, role=args.role,
-                writer_families=args.writer_family, review_of=args.review_of, model=args.model,
-                review_scope=args.review_scope, run_worktree=args.run_worktree,
-                leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
-                no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
+            payload = dict(card=args.card, prompt=prompt, role=args.role, writer_families=args.writer_family,
+                review_of=args.review_of, model=args.model, review_scope=args.review_scope,
+                run_worktree=args.run_worktree, cwd=args.cwd, leg=args.leg, override_reason=args.override_reason,
+                dry_run=args.dry_run, no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
             from plangraph.settings import admit_review_scope
             try:
                 admit_review_scope(args.card, args.role, args.review_scope)
