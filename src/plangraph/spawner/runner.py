@@ -701,6 +701,7 @@ class SpawnerRunner:
                                                         or getattr(self.jobs[job_id], 'refusal', None)) else proc.returncode
             job = self.jobs[job_id]
             kept = []
+            from .env_redact import redact_env_values
             for line in stderr_text.splitlines(keepends=True):
                 from .proc_kill import oom_envelope, record_oom_envelope
                 telemetry = oom_envelope(line)
@@ -708,7 +709,6 @@ class SpawnerRunner:
                     record_oom_envelope(job.events, telemetry)
                     extras = {k: v for k, v in telemetry.items() if k != 'plangraph_oom'}
                     if extras:
-                        from .env_redact import redact_env_values
                         job.events.append(dict(event='oom_telemetry_detail', detail=redact_output(
                             redact_env_values(json.dumps(extras), self._child_envs.get(job_id, os.environ)))))
                     continue
@@ -734,7 +734,6 @@ class SpawnerRunner:
                     self.provider_response(job_id, **response, source='stderr_envelope',
                                            nonce=self._nonces[job_id])
             stderr_text = ''.join(kept)
-            from .env_redact import redact_env_values
             env = self._child_envs.get(job_id, os.environ)
             from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer, record_steps
             record_steps(job, stdout_text, stderr_text, env)
@@ -929,7 +928,8 @@ def spawn_service(*args, **kwargs):
                     record[stream + '_tail'] = getattr(job, stream, '')
                 for attempt in record.get('attempts', []):
                     if attempt.get('status') in ('failed', 'skipped') and not attempt.get('skip_reason'):
-                        attempt['skip_reason'] = redact(failure_reason(job))
+                        meta = attempt.get('leg')
+                        attempt['skip_reason'] = redact(failure_reason(job, harness=meta.get('harness') if isinstance(meta, dict) else None))
             terminal = record.get('ended') is not None and record.get('status') != 'running'
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
             if not retry:
@@ -1139,7 +1139,7 @@ def spawn_service(*args, **kwargs):
                             job.status = 'failed'
                             job.exit_code = job.exit_code or 1
                         if job.status in ('failed', 'skipped'):
-                            reason = redact(failure_reason(job, stop))
+                            reason = redact(failure_reason(job, stop, harness=chosen.harness))
                         if unavailable:
                             reason = redact(unavailable)
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,

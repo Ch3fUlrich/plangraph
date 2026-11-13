@@ -9,3 +9,5 @@ Root cause and evidence (Dell 18-de-2053, 2026-11-13):
 - Live isolated Dell review from the exported main tree: `run-853561d6bc3249cc9895d1ab58de5f36`, explicit MiMo Flash, public arithmetic prompt, 30 s wall cap. Result `timed_out`, exit 124, both run and launched-attempt reason `timeout`. All checkout, Git metadata and spawner state stayed under a temporary probe root; no production service or keeper state changed.
 
 Local push checks select affected files against origin/main and refuse full-suite execution (operator package R2). The host-view integration test declares its Rust projection-helper dependency through the shared helper; CI still requires that binary.
+
+Failure classification uses the route harness when command metadata is absent; OpenCode progress stays out of both attempt and final reasons, including persisted attempt diagnostics.

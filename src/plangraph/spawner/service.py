@@ -336,7 +336,7 @@ class SpawnService(SeatSpawnMixin):
                         break
                     unavailable = fallthrough_reason(self, chosen, job, record)
                     if unavailable: job.status, job.exit_code = 'failed', job.exit_code or 1
-                    reason = unavailable or (failure_reason(job, stop)
+                    reason = unavailable or (failure_reason(job, stop, harness=chosen.harness)
                         if job.status in ('failed', 'skipped') else None)
                     if stop and any(isinstance(slot, dict) and slot.get('seat_group')
                             and slot.get('leg') == chosen.id for slot in (plan.seat_coverage or ())):
