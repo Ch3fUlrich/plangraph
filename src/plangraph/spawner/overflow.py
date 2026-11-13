@@ -16,6 +16,7 @@ from typing import NamedTuple
 
 from plangraph.keeper.credential_guard import mask
 from plangraph.fleet_sync.genconfig import config_dir
+from plangraph.routing_errors import ParameterRefused
 
 from . import cli
 from .private_io import atomic_write_private
@@ -236,8 +237,20 @@ def local_health_refusal(config, memory):
     return None
 
 
+def repos_public(config, repo, diff=None):
+    """Every repository contributing checkout or diff context must be public."""
+    if diff is not None and not diff.get('repo'):
+        raise ParameterRefused('diff_ref requires repo')
+    allowed = {Path(p).expanduser().resolve() for p in config.get('public_repos', [])}
+    return all(Path(p).expanduser().resolve() in allowed
+               for p in [repo, *([diff.get('repo')] if diff is not None else [])])
+
+
 def remote_spawn(name, host, card, prompt, options):
     """Use private staging, quote every remote argument, never echo SSH stderr."""
+    options = list(options)
+    if 'cwd' in card or any(v == '--cwd' or v.startswith('--cwd=') for v in options):
+        raise RemoteRefusal('explicit cwd cannot overflow to another checkout')
     alias = host['ssh']
     def ssh(command):
         return subprocess.run(['ssh', '--', alias, command], capture_output=True, text=True,
@@ -309,7 +322,10 @@ def main(argv=None):
     parser.add_argument('--card', required=True)
     parser.add_argument('--prompt', required=True)
     parser.add_argument('--role', default='implement')
+    parser.add_argument('--cwd')
     args, options = parser.parse_known_args(argv)
+    if args.cwd is not None:
+        options.extend(['--cwd', args.cwd])
     if args.role != 'implement':
         options.extend(['--role', args.role])
     try:
@@ -325,11 +341,13 @@ def main(argv=None):
         _, memory = local_resources()
         if decide(memory, role_mb, floor_mb, {}, False).reason == 'local room':
             return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
-        public = str(Path(args.repo).resolve()) in [str(Path(p).expanduser().resolve())
-                                                  for p in config.get('public_repos', [])]
         card = json.loads(Path(args.card).read_text())
+        from .prompt_input import resolve_cwd
+        cwd = resolve_cwd(args.cwd, card)
+        repo = Path(cwd or args.repo).resolve()
         diff = card.get('diff_ref')
-        if diff and Path(diff['repo']).resolve() != Path(args.repo).resolve():
+        public = repos_public(config, repo, diff)
+        if not cwd and diff and Path(diff.get('repo')).resolve() != repo:
             public = False
         prompt = Path(args.prompt).read_text()
         records = ready_records(config, args.role)
