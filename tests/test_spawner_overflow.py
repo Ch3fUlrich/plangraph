@@ -1,6 +1,8 @@
 import json
+import hashlib
 import shlex
 import subprocess
+import sys
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 
@@ -14,15 +16,15 @@ def healthy(**changes):
                 mem_available_mb=6000, role_mb=2048, floor_mb=3000, **changes)
 
 
-@pytest.mark.parametrize('live,mem', [(50, 4000), (0, 2999)])
-def test_best_host(live, mem):
+@pytest.mark.parametrize('mem', [4000, 2999])
+def test_best_host(mem):
     rows = {'birch': healthy(), 'ash': healthy(), 'cedar': healthy()}
     rows['cedar']['live_runs'] = 1
-    assert o.decide(live, mem, 2048, 3000, rows, True).host == 'ash'
+    assert o.decide(mem, 2048, 3000, rows, True).host == 'ash'
 
 
 def test_local_room():
-    assert o.decide(50, 5048, 2048, 3000, {}, False) == (None, 'local room')
+    assert o.decide(5048, 2048, 3000, {}, False) == (None, 'local room')
 
 
 def bracket(command, receipt):
@@ -36,7 +38,7 @@ def bracket(command, receipt):
 def test_refused(field, value, reason):
     row = healthy()
     row[field] = value
-    result = o.decide(4, 3000, 2048, 3000, {'ash': row}, True)
+    result = o.decide(3000, 2048, 3000, {'ash': row}, True)
     assert result.host is None and reason in result.reason
 
 
@@ -44,9 +46,9 @@ def test_refused(field, value, reason):
 def test_negative_readiness_is_malformed(field):
     row = healthy()
     row[field] = -5
-    result = o.decide(4, 3000, 2048, 3000, {'first': row}, True)
+    result = o.decide(3000, 2048, 3000, {'first': row}, True)
     assert result.host is None and 'malformed readiness' in result.reason
-    assert o.decide(4, 3000, 2048, 3000, {'first': row, 'second': healthy()}, True).host == 'second'
+    assert o.decide(3000, 2048, 3000, {'first': row, 'second': healthy()}, True).host == 'second'
 
 
 @pytest.mark.parametrize('stdout,expected', [
@@ -106,7 +108,7 @@ def test_local_cli_identical(inputs, monkeypatch):
 def test_retry_and_queue_reasons(inputs, monkeypatch, capsys):
     root, path, args = inputs
     path.write_text(json.dumps({'public_repos': [str(root)], 'hosts': {'ash': {}, 'birch': {}}}))
-    monkeypatch.setattr(o, 'ready_records', lambda config: {'ash': healthy(), 'birch': healthy()})
+    monkeypatch.setattr(o, 'ready_records', lambda config, role: {'ash': healthy(), 'birch': healthy()})
     calls = []
     def remote(name, *rest):
         calls.append(name)
@@ -131,9 +133,9 @@ def test_readiness_fail_closed(inputs, contents):
                                    checked_at=(datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat()))
     (directory / 'ash.json').write_text(contents)
     records = o.ready_records({'hosts': {'ash': {'ssh': 'invented-alias'}}})
-    assert o.decide(4, 3000, 2048, 3000, records, True).host is None
+    assert o.decide(3000, 2048, 3000, records, True).host is None
     if 'checked_at' in contents:
-        assert 'stale' in o.decide(4, 3000, 2048, 3000, records, True).reason
+        assert 'stale' in o.decide(3000, 2048, 3000, records, True).reason
 
 
 @pytest.mark.parametrize('card', ['{"diff_ref": {}}', '{"diff_ref": {"base": "abc"}}', None])
@@ -160,7 +162,7 @@ def test_remote_env_echo_does_not_retry(inputs, monkeypatch, capsys, receipt):
                 env_file=str(root / 'env'))
     (root / 'env').write_text('echo hi\n')
     path.write_text(json.dumps({'public_repos': [str(root)], 'hosts': {'ash': host, 'birch': host}}))
-    monkeypatch.setattr(o, 'ready_records', lambda config: {'ash': healthy(), 'birch': healthy()})
+    monkeypatch.setattr(o, 'ready_records', lambda config, role: {'ash': healthy(), 'birch': healthy()})
     spawns = []
     def run(argv, **kwargs):
         stdout = '/invented-stage\n'
@@ -196,7 +198,7 @@ def test_remote_receipt_boundary_and_mask(inputs, monkeypatch, capsys, mode):
     root, path, args = inputs
     host = dict(ssh='invented-alias', repo='/invented', spawner_src='/invented/src')
     path.write_text(json.dumps({'public_repos': [str(root)], 'hosts': {'ash': host}}))
-    monkeypatch.setattr(o, 'ready_records', lambda config: {'ash': healthy()})
+    monkeypatch.setattr(o, 'ready_records', lambda config, role: {'ash': healthy()})
     secret = 'invented/' + 'credential123'
     spawns = []
     def run(argv, **kwargs):
@@ -302,29 +304,53 @@ def test_local_limits_coerce_or_default(inputs, monkeypatch, key, value):
     assert o.main(args) == 3
 
 
-@pytest.mark.parametrize('prompt', ['trailing\n', 'trailing\n\n', 'literal $(false) .\n'])
+@pytest.mark.parametrize('prompt', ['trailing\n', 'trailing\n\n', 'literal $(false) .\n', 'x' * (300 * 1024)],
+                         ids=['newline', 'blank-line', 'shell-literal', '300KiB'])
 def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
     stage = tmp_path / 'stage with spaces'
     stage.mkdir()
+    binary_dir = tmp_path / 'bin'
+    binary_dir.mkdir()
+    policy = tmp_path / 'route-policy.json'
+    policy.write_text('{"banned_families": [], "off_families": [], "paused_harnesses": {}}')
+    env = dict(PATH=str(binary_dir), HOME=str(tmp_path), AUTOOS_ROOT=str(tmp_path),
+               XDG_STATE_HOME=str(tmp_path / 'state'), PLANGRAPH_OMNIROUTE_LEG_STATE='0',
+               PLANGRAPH_ROUTE_POLICY=str(policy))
     real_run = subprocess.run
+    source = o.Path(__file__).resolve().parents[1] / 'src'
+    # A source-only interpreter cannot fall back to an ambient site installation.
+    (binary_dir / 'python3').write_text(
+        f'#!{sys.executable} -S\n'
+        'import os, runpy, sys\n'
+        f'assert os.environ["PYTHONPATH"] == {str(source)!r}\n'
+        'import plangraph.spawner.overflow as module\n'
+        f'assert module.__file__ == {str(source / "plangraph/spawner/overflow.py")!r}\n'
+        'assert sys.argv[1:3] == ["-m", "plangraph.spawner.cli"]\n'
+        'sys.argv = sys.argv[2:]\n'
+        'runpy.run_module("plangraph.spawner.cli", run_name="__main__")\n')
+    (binary_dir / 'python3').chmod(0o700)
     received = []
     def run(argv, **kwargs):
         if argv[0] == 'scp':
+            (stage / 'card.json').write_bytes(o.Path(argv[2]).read_bytes())
             (stage / 'prompt.txt').write_bytes(o.Path(argv[3]).read_bytes())
         if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
-            # Execute the actual generated shell, replacing only its spawn command.
-            command = argv[-1].replace('python3 -m plangraph.spawner.cli spawn',
-                                      shlex.join(['python3', '-c',
-                                                  'import sys; print(repr(sys.argv[3]))']))
-            result = real_run(['sh', '-c', command], capture_output=True, text=True)
+            # Only SSH/SCP are faked: the unchanged shell runs the real CLI parser,
+            # prompt-file reader, and dry-run launch path in an isolated environment.
+            result = real_run(['/bin/sh', '-c', argv[-1]], capture_output=True, text=True,
+                              env=env, timeout=30)
             assert result.returncode == 0, result.stderr
-            received.append(result.stdout.splitlines()[1])
-            return SimpleNamespace(returncode=0, stdout=bracket(argv[-1], '{"run_id":"run-r"}'))
+            received.append(json.loads('\n'.join(result.stdout.splitlines()[1:-1])))
+            return result
         return SimpleNamespace(returncode=0, stdout=str(stage) if argv[-1] == 'mktemp -d' else '{}')
     monkeypatch.setattr(o.subprocess, 'run', run)
-    host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src='src')
-    assert o.remote_spawn('invented', host, {}, prompt, []) == {'run_id': 'run-r'}
-    assert received == [repr(prompt)]
+    host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src=str(source))
+    options = ['--role', 'review', '--leg', 'agy-gemini-3.8-flash', '--writer-family', 'gpt',
+               '--override-reason', 'hermetic prompt transport regression', '--dry-run', '--json']
+    record = o.remote_spawn('invented', host, {'estimate_tokens': 1000}, prompt, options)
+    assert received == [record]
+    assert record['status'] == 'dry_run'
+    assert record['prompt_sha256'] == hashlib.sha256(prompt.encode('utf-8')).hexdigest()
 
 
 @pytest.mark.parametrize('receipt', ['unreadable', '{}', '[]', '{"status":"running"}'])
@@ -351,7 +377,7 @@ def test_acknowledged_unknown_never_retries(inputs, monkeypatch, capsys, receipt
         service = SpawnService(state=str(root / 'state'))
         service.runner.default_cwd = str(root)
         monkeypatch.setattr(admission, 'resources', lambda service: (100, 4000))
-        record = admission.admit(service, {}, card={})
+        record = service.admit_spawn({}, card={})
         assert record in service.ps()['runs']
     assert record['status'] == 'unknown' and record['acknowledged_unknown']
     assert record['host'] == 'ash' and len(spawns) == 1

@@ -32,6 +32,10 @@
     },
     "card": {
      "properties": {
+      "cwd": {
+       "description": "absolute path to an existing git checkout",
+       "type": "string"
+      },
       "diff_ref": {
        "description": "review: {repo, base, head}; inlined for inline-only seats",
        "type": "object"
@@ -105,7 +109,8 @@
      "default": "implement",
      "enum": [
       "implement",
-      "review"
+      "review",
+      "research"
      ],
      "type": "string"
     },
@@ -343,6 +348,10 @@
     },
     "card": {
      "properties": {
+      "cwd": {
+       "description": "absolute path to an existing git checkout",
+       "type": "string"
+      },
       "diff_ref": {
        "description": "review: {repo, base, head}; inlined for inline-only seats",
        "type": "object"

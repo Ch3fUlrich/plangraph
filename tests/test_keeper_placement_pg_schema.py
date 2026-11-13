@@ -19,7 +19,7 @@ def pg(monkeypatch):
     name = 't_rules_' + uuid.uuid4().hex[:12]
     full = schema_pg.MIGRATIONS
     try:
-        monkeypatch.setattr(schema_pg, 'MIGRATIONS', full[:-1])
+        monkeypatch.setattr(schema_pg, 'MIGRATIONS', full[:10])
         db_pg.migrate(raw, name)
         monkeypatch.setattr(schema_pg, 'MIGRATIONS', full)
         yield raw, name
@@ -41,11 +41,11 @@ def seed(raw):
 
 
 def test_migration_appends_without_rewriting_prior_steps():
-    assert schema_pg.MIGRATIONS[-1] == schema_pg.Migration(11, 'placement rules', rules.PG)
+    assert schema_pg.MIGRATIONS[10] == schema_pg.Migration(11, 'placement rules', rules.PG)
     # Shipped _V1 from git blob d9942f65, independently pinned, not an alias.
     assert hashlib.sha256(schema_pg.MIGRATIONS[0].sql.encode()).hexdigest() == (
         'd5b853cc2d7780f2c4305f276db14713aa8fd77d3fc76d6bb20aa6ae2c96e7b0')
-    assert [m.version for m in schema_pg.MIGRATIONS] == list(range(1, 12))
+    assert [m.version for m in schema_pg.MIGRATIONS] == list(range(1, 13))
 
 
 def test_pg_sqlite_columns_match(pg):
@@ -88,7 +88,7 @@ def test_keeper_migration_gates_documented():
 
 def test_upgrade_idempotent(pg):
     raw, name = pg
-    assert db_pg.migrate(raw, name) == [11]
+    assert db_pg.migrate(raw, name) == [11, 12]
     assert db_pg.migrate(raw, name) == []
     for table in rules.TABLES:
         assert raw.execute(f'SELECT count(*) FROM {table}').fetchone() == (0,)
@@ -151,7 +151,8 @@ def test_rollback_preserves_rows_and_indexes(pg):
         assert raw.execute(f'SELECT * FROM {table}_retired_v11').fetchall() == before[table]
         assert raw.execute('SELECT to_regclass(%s)',
                            (table + '_pkey_retired_v11',)).fetchone()[0]
-    assert raw.execute('SELECT version FROM schema_migrations ORDER BY version').fetchall() == versions[:-1]
+    assert raw.execute('SELECT version FROM schema_migrations ORDER BY version').fetchall() == [
+        row for row in versions if row != (11,)]
     with pytest.raises(Exception, match='append-only'):
         raw.execute('TRUNCATE placement_rule_audit_retired_v11')
     with pytest.raises(Exception, match='retired_ledger_exists'):
@@ -168,8 +169,8 @@ def test_repeated_retirement_refused(pg):
 def test_failed_migration_atomic(pg, monkeypatch):
     raw, name = pg
     full = schema_pg.MIGRATIONS
-    monkeypatch.setattr(schema_pg, 'MIGRATIONS', full[:-1] + (
-        schema_pg.Migration(11, 'placement rules', rules.PG + '\nSELECT 1/0;'),))
+    monkeypatch.setattr(schema_pg, 'MIGRATIONS', full[:10] + (
+        schema_pg.Migration(11, 'placement rules', rules.PG + '\nSELECT 1/0;'),) + full[11:])
     with pytest.raises(Exception, match='division by zero'):
         db_pg.migrate(raw, name)
     assert raw.execute('SELECT max(version) FROM schema_migrations').fetchone() == (10,)

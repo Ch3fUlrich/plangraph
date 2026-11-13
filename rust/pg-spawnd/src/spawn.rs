@@ -146,7 +146,41 @@ pub(crate) fn spawn(
     {
         return Err(ToolError::Internal("route adapter returned no leg".into()));
     }
-    runs.spawn(state, args, host, role, plan)
+    match runs.spawn(state, args, host, role.clone(), plan.clone()) {
+        Err(error) => {
+            let named = ["prompt_too_large", "stdin_prompt_flag_missing"];
+            let reason = match &error {
+                ToolError::Refused { message, .. } => named
+                    .into_iter()
+                    .find(|name| message.contains(&format!("{name}:"))),
+                _ => None,
+            };
+            let Some(reason) = reason else {
+                return Err(error);
+            };
+            // LaunchAdapter only maps exit 2 to Refused; retain that error's status.
+            let error = error.into_error_data();
+            let mut base = error.data.unwrap_or_else(|| json!({}));
+            base["role"] = role;
+            base["reason"] = json!(reason);
+            base["error"] = json!(error.message);
+            base["stderr_tail"] = base["error"].clone();
+            base["stdout_tail"] = json!("");
+            base["card_hash"] = json!(crate::pyjson::card_hash(&args["card"]));
+            base["plan"] = plan;
+            base["chosen_leg"] = Value::Null;
+            base["writer_family"] = base["plan"]["first_leg"]["family"].clone();
+            base["attempts"] = json!([{
+                "leg":base["plan"]["first_leg"],"status":"failed","skip_reason":reason,
+                "served_model":"unwitnessed","served_family":"unwitnessed",
+                "served_witness_reason":"leg refused before launch",
+                "request_side_model":null,"witness_kind":null,"provider_response":null,
+                "stdout_tail":base["stdout_tail"],"stderr_tail":base["stderr_tail"]
+            }]);
+            save(state, host, base, Status::Failed)
+        }
+        result => result,
+    }
 }
 
 #[cfg(test)]

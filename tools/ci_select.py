@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from fnmatch import fnmatchcase
 import json
 import os
 import subprocess
@@ -25,6 +26,36 @@ KNOWN_PREFIXES: tuple[str, ...] = (
     "tools/",
     "vendor/",
     "rust/",
+)
+
+# D-5294: Rust tests also compile/read repository inputs outside rust/.
+# Keep these before the docs-only shortcut; tests/test_ci_select_rust_inputs.py
+# scans Rust sources and rejects repository reads missing from this list.
+RUST_INPUTS: tuple[str, ...] = (
+    ".docs-map",
+    "docs/schemas/**",
+    "docs/flow-watchdog.md",
+    "docs/placement-rules.md",
+    "docs/rust-hooks.md",
+    "docs/spawner-reliability.md",
+    "docs/workspace-resolver.md",
+    "changelog.d/FLEET-WINDOW-CATALOG.md",
+    "changelog.d/PLACEMENT-RULES-AUDIT.md",
+    "changelog.d/SPAWNER-RL12-B1.md",
+    "deploy/systemd/plangraph-agents-view.service",
+    "deploy/systemd/plangraph-agents-view.timer",
+    "setup/placement-rules.schema.toml",
+    "src/plangraph/web/agents_schema.json",
+    "tests/fixtures/doctor_sources.json",
+    "tests/fixtures/keeper_mcp_replies.json",
+    "tests/fixtures/keeper_mcp_tools.json",
+    "tests/fixtures/redact_parity.json",
+    "tests/fixtures/writer_docs_map.json",
+    "tests/hooks/parity_payloads.json",
+    "tools/check_changelog_docs.py",
+    "tools/new_code_allowlist.txt",
+    "tools/probe_admission_policy_guard.py",
+    "tools/seat_verdict.py",
 )
 
 
@@ -90,6 +121,8 @@ def select(paths: list[str]) -> dict[str, bool]:
     res["full"] = False
 
     for p in norm_paths:
+        if any(fnmatchcase(p, pattern) for pattern in RUST_INPUTS):
+            res["rust"] = True
         if p.startswith("skills/") and p.endswith(".md"):
             # skill pages are guarded by tests/test_skill_*.py
             res["pytest"] = True

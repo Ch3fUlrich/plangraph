@@ -28,6 +28,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
                 "withdraw_review", "reopen", "set_kind", "set_metrics", "requeue",
+               "close_merged",
                # phase_plan is POST transport only; the verb is read-only (planner/phase.py)
                "governor_override", "phase_plan",
                # phase_finish mutates only GitHub, never the store; transport is POST
@@ -38,6 +39,8 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "jev_shadow", "jev_outcome"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 READ_VERBS.add("messages")
+READ_VERBS |= {"host_samples", "host_samples_range"}
+WRITE_VERBS |= {"ingest_host_sample", "mint_host_token", "revoke_host_token"}
 WRITE_VERBS.add("post_message")
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
@@ -60,6 +63,11 @@ RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict", "replay
 
 def run_gate(principal, name):
     """A run token is refused (403) before any body parsing outside its verbs."""
+    from .store_host_samples import HostPrincipal
+    if isinstance(principal, HostPrincipal):
+        if name != 'ingest_host_sample':
+            raise Refused('forbidden', 'host token is ingest-only')
+        return
     from .worker_policy import check
     check(principal, name, transport=True)
     if getattr(principal, "token_id", None) is not None and name not in RUN_VERBS:
@@ -272,6 +280,8 @@ def _worker_claim(store, principal, body, need):
 
 
 ROUTER_VERBS = {"mint_run_token": _mint_run_token,
+                "close_merged": lambda store, principal, body, need: store.close_merged(
+                    principal, body.get("key"), body.get("decision_id"), body.get("families")),
                 "replay": _replay,
                 "withdraw_review": _withdraw_review,
                 "reopen": _reopen,

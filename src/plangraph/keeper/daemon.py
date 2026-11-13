@@ -8,11 +8,13 @@ down cleanly and release the lock.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import sys
 import threading
 from contextlib import suppress
+from pathlib import Path
 
 from . import anchor, api, config as config_mod, db as kdb, outage
 from .errors import KeeperLocked
@@ -56,13 +58,35 @@ def _backup_prune_loop(settings: dict, stop: threading.Event, log=None) -> None:
             break
 
 
+def _host_samples_loop(server, stop):
+    while not stop.is_set():
+        try:
+            with server.lock:
+                server.store.maintain_host_samples()
+        except Exception as exc:
+            print(f"keeper: host samples maintenance failed: {type(exc).__name__}", file=sys.stderr)
+        if stop.wait(60):
+            break
+
+
+def _make_store(conn, cfg):
+    """Build the daemon's store before serving requests or starting loops."""
+    store = Store(conn, ctx=config_mod.verifier_context(cfg),
+                  batch_roots=cfg.batch_roots)
+    store.default_lease = cfg.default_lease
+    store.lease_warn_s = cfg.lease_warn_s
+    store.review_overdue_s = cfg.review_overdue_s
+    return store
+
+
 def run(cfg, *, host=None, port=None, ready=None):
     """Start the server and block until a signal; returns 0 on clean shutdown."""
     lock = kdb.lock_keeper(cfg.db, **cfg.db_options)
     conn = kdb.open_db(cfg.db, **cfg.db_options)
+    server = None
+    cleanup_started = False
     try:
-        store = Store(conn, ctx=config_mod.verifier_context(cfg),
-                      batch_roots=cfg.batch_roots)
+        store = _make_store(conn, cfg)
         server = api.make_server(store, cfg, host=host, port=port)
         # M1: fail() may already have been recorded while the server was being
         # built (bus restore, a hook). Notice it before the writes below can
@@ -89,6 +113,11 @@ def run(cfg, *, host=None, port=None, ready=None):
                                       name="keeper-http")
             thread.start()
         prune_thread = None
+        samples_thread = None
+        if thread is not None and hasattr(conn, 'schema'):
+            samples_thread = threading.Thread(target=_host_samples_loop, args=(server, stop),
+                                              daemon=True, name='keeper-host-samples')
+            samples_thread.start()
         bp = getattr(cfg, "backup_prune", None) or {}
         if thread is not None and bp.get("enabled"):   # opt-in; default off
             prune_thread = threading.Thread(
@@ -110,6 +139,8 @@ def run(cfg, *, host=None, port=None, ready=None):
         finally:
             def _cleanup():
                 stop.set()
+                if samples_thread is not None:
+                    samples_thread.join(timeout=5)
                 bus_stop = getattr(server, "bus_stop", None)
                 bus_thread = getattr(server, "bus_thread", None)
                 # F3: stop and bounded-join the bus registry before the steps
@@ -130,6 +161,7 @@ def run(cfg, *, host=None, port=None, ready=None):
             cleaner = threading.Thread(
                 target=_cleanup, daemon=True, name="keeper-shutdown")
             cleaner.start()
+            cleanup_started = True
             cleaner.join(timeout=SHUTDOWN_TIMEOUT)
             if getattr(server, "fatal_reason", None):
                 if cleaner.is_alive():
@@ -139,6 +171,11 @@ def run(cfg, *, host=None, port=None, ready=None):
                 os._exit(0)
             return 0
     finally:
+        if server is not None and not cleanup_started:
+            with suppress(Exception):
+                server.stop_reaper()
+            with suppress(Exception):
+                server.server_close()
         with suppress(Exception):
             conn.close()
         with suppress(Exception):
@@ -152,6 +189,8 @@ def main(argv=None) -> int:
     parser.add_argument("--host", default=None, help="override the bind host")
     parser.add_argument("--port", type=int, default=None,
                         help="override the bind port")
+    parser.add_argument("--ready-file", type=Path, default=None,
+                        help="write the bound host/port after startup (use --port 0)")
     args = parser.parse_args(argv)
     try:
         cfg = config_mod.load_config(args.config)
@@ -159,7 +198,13 @@ def main(argv=None) -> int:
         print(f"config: {exc}", file=sys.stderr)
         return 1
     try:
-        return run(cfg, host=args.host, port=args.port)
+        def ready(server):
+            if args.ready_file is not None:
+                from .snapshot_io import _atomic_write
+                host, port = server.server_address[:2]
+                _atomic_write(args.ready_file, json.dumps({"host": host, "port": port}).encode())
+
+        return run(cfg, host=args.host, port=args.port, ready=ready)
     except KeeperLocked as exc:
         print(f"keeper locked: {exc}", file=sys.stderr)
         return 1

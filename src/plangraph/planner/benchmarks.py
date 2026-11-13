@@ -60,6 +60,13 @@ def benchmark_rows_from_db(path):
                     result[model]["benchmark_row_count"] += 1
                 else:
                     result[model] = dict(row, benchmark_row_count=1)
+            # Bare harness models use the exact provider-qualified catalog key.
+            # Preserve explicit rows; absent measurements must remain gaps.
+            from .legs import DEFAULT_LEGS
+            for leg in DEFAULT_LEGS:
+                key = leg.model if '/' in leg.model else f'{leg.harness}/{leg.model}'
+                if key in result:
+                    result.setdefault(leg.model, result[key])
             return result, []
         finally:
             conn.close()

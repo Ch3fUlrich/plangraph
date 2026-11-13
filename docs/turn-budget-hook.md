@@ -1,0 +1,385 @@
+# Turn-budget hook (D-5212, D-5252), slice 1
+
+`turn-budget-hook` is a standalone Rust Claude Code command hook. It accepts one
+JSON object on stdin. Allowed calls are silent and exit 0 unless a status update
+fails: that prints the error (including its OS code, when present) and exits 1.
+A recognised polling command still exits 2, even if its update also fails.
+Budgets report usage; exceeding a budget does not itself deny tools.
+
+## Build and optional registration
+
+Build with `cargo build --manifest-path rust/Cargo.toml -p pg-worker-core --bin
+turn-budget-hook --release`. Copy `rust/target/release/turn-budget-hook` into your
+chosen hook directory. Unlike the Python hooks next to `install_hooks.sh`, this
+binary is not shipped by that Python-only copier. No automatic installation or
+settings edits are part of this slice.
+
+For a later operator-approved registration, follow the existing missing-hook
+guard convention: `sh -c 'test -f "$1" || exit 1; exec "$1"' _
+DEST/turn-budget-hook`. Replace `DEST` with the chosen install directory; the
+missing-file case exits 1, never the tool-denial code 2. Register the same command
+for `UserPromptSubmit`, `Notification`, `PreToolUse`, `PostToolUse` and `Stop`.
+Pre/post matchers must include all tools so model responses with non-Bash tools
+are counted; only Bash pre-tool events are candidates for polling refusals.
+
+## State and accounting contract
+
+- State root: `FLEET_STATE_DIR`, else `$HOME/.local/state/fleet`, matching the
+  existing fleet hooks. The library's `Config` and integer `now` are injectable.
+- Session name: `FLEET_SESSION_NAME`, else the matching `session_id` record under
+  `FLEET_LAUNCH_DIR` (default `$HOME/.local/state/routing/launch`); if unresolved,
+  use the safe session ID. Reject unsafe IDs before joining paths.
+- Status: `<state>/status/<session_id>.json`, with counters under `turn_budget`.
+  Existing unrelated top-level keys survive. The status includes `session`,
+  `session_id`, `role`, `wake_calls`, `hour_calls`, recent `calls` timestamps,
+  transcript cursor, seen API message IDs and hashed read-command history.
+  Neither commands nor tool output are stored. A per-session nonblocking lock
+  serializes updates; a temporary file in the same directory is flushed and
+  atomically renamed so readers never see a partial JSON document. A busy lock
+  skips the event rather than holding a tool call open.
+  Replacement retains an existing status file's permissions; new files keep the
+  private tempfile default. The file is synced before rename and, on Unix, the
+  parent status directory is synced after rename for crash durability.
+  On Windows, `windows_write.rs:atomic_write` creates the same-directory temporary
+  file with read/write creation flags and DELETE access; `windows_rename.rs` uses
+  `SetFileInformationByHandle(FileRenameInfoEx)` with REPLACE_IF_EXISTS and
+  POSIX_SEMANTICS. The concurrent-reader test
+  retains a Rust `File::open` reader (which permits `FILE_SHARE_DELETE`) across
+  each update: that handle keeps the old bytes, fresh opens parse complete JSON,
+  and all 30 counter increments are published. This does not guarantee updates
+  against readers opened without `FILE_SHARE_DELETE`: those can cause a sharing
+  violation and a skipped count. The Windows-only storage regression asserts
+  that this failure preserves the old bytes and leaves no temporary entry, not
+  that the update succeeds. There is no truncate/remove fallback or retry loop;
+  filesystems without any supported rename report IO failure without
+  publishing partial state. For rename calls on first publication and replacement,
+  refusal codes 87, 1 and 50 advance through Ex/POSIX -> Ex/REPLACE_IF_EXISTS -> FileRenameInfo/boolean
+  ReplaceIfExists -> MoveFileExW/REPLACE_EXISTING|WRITE_THROUGH. Other errors stop.
+  POSIX is preferred for retained snapshots and fresh opens during replacement;
+  unsupported classes/flags fall back even when a destination exists. Sharing,
+  access and cross-volume errors stop without changing the destination. The
+  held-reader tests retain their original assertions. The per-session lock
+  serializes participating writers. External writers
+  bypassing that lock are outside this protocol. The injected-call tests run on
+  every platform; native Windows execution is still required for OS acceptance.
+  The API buffer length is `offset_of!(FILE_RENAME_INFO, FileName) + name_bytes + 2`,
+  not the padded struct size; FileNameLength excludes NUL, RootDirectory is null,
+  and legacy uses the boolean union member. windows-sys 0.61.2 declares
+  `FILE_RENAME_INFO_0.ReplaceIfExists: bool`; `true` is correct, not integer `1`.
+  Linux tests inspect the production buffer using the real windows-sys field
+  offset, flags/boolean, null root, UTF-16 name, byte length and terminating NUL.
+  Preparation has separate bounded fallbacks, not one combined refusal chain:
+  absolute-path refusal canonicalizes the existing parent; DELETE-create refusal
+  creates an ordinary read/write temp and uses MoveFileExW; write/sync refusal
+  reopens the temp, permission-copy refusal uses the path API, and metadata refusal
+  queries an opened destination. Sync and permission errors on those alternate
+  paths remain fatal. Absolute/canonical-parent, DELETE/plain-create,
+  write-reopen, metadata-open, permission-path and sync-reopen refusals are
+  proven only by injected seams, not native OS refusals. The rename refusal
+  sequence and combined preparation failures are also proven only by injected
+  seams. Those seams skip the refused call and exercise the alternate real IO;
+  on Linux the final publication uses `fs::rename`, not a Windows rename API.
+  The native Windows call site of the historical error 87 remains unidentified.
+  Cross-compilation proves type correctness, not native refusal or OS acceptance.
+  Every unexpected failed call prints `atomic_write step=...`
+  with the original OS error, including recoverable failures; expected absent
+  metadata during first publication is silent. No diagnostic includes a path.
+  Non-POSIX Ex/replace, legacy and MoveFileExW can replace a closed destination,
+  but reject an open destination even when its reader shares DELETE. Those real
+  access failures stop the fallback chain; they are not unsupported-class errors.
+- One model call is one distinct `assistant.message.id` in the session's JSONL
+  transcript. Multiple streamed blocks or tool uses from that response count
+  once. User/tool-result, progress, sidechain and missing-ID records do not count.
+  Hook events are **not** model-call proxies. `Stop` captures text-only responses.
+- Read only newly appended complete transcript records; retry a partial final
+  record on the next event. On truncation/path change replay with message-ID
+  deduplication. Record timestamps determine the rolling hour `(now-3600, now]`;
+  a missing/invalid timestamp uses the injected current time. Future timestamps
+  are excluded from the hour. An hour with no events is recomputed by the reader.
+- A wake begins at `UserPromptSubmit` or `Notification`. First ingest any unseen
+  previous-wake responses, then reset `wake_calls` to zero; preserve hour history.
+  `Stop`, pre/post-tool events, and different read commands do not reset the wake.
+- `ROLE_BUDGETS` starts build/review L1/L2, planner and routing at 6 calls per wake
+  and 60 per hour. Unknown roles use the same fallback. Remove only the final
+  numeric suffix: `build-L1-0429` becomes `build-L1`, not `build`.
+
+Malformed stdin, unreadable/corrupt state, counter failures and missing transcripts
+never deny an ordinary tool. Input is capped at 8 MiB, status at 1 MiB and a
+transcript delta at 8 MiB. These caps, a busy lock, or failed IO may undercount;
+this is a fail-open advisory counter, not billing. Seen IDs are SHA-256 hashes
+retained for the newest 2,048 distinct responses; replay outside that window can
+count again. The newest 256 distinct read fingerprints and at most 16 hashed
+path dependencies per read are retained; an evicted read may pass once again.
+The hour retains at most 8,192 timestamps, so larger bursts undercount the hour
+but continue incrementing the wake counter. Legacy histories below the file cap
+are compacted on the next update, avoiding permanent growth-induced freezes.
+Unrelated top-level fields still consume the shared 1 MiB cap and are never
+discarded to recover space. Historical transcript replay
+without a recorded wake is attributed to the current wake; register at session
+start for precise boundaries. No live counts are provided here.
+An existing status over 1 MiB is preserved byte-for-byte and cannot resume
+accounting until repaired externally; historical read refusals are skipped too.
+An update that would exceed the cap leaves the original file and directory
+entries intact, without a stray temporary file. A denial already determined for
+the current invocation still returns if persistence fails; later invocations
+only have the last successfully persisted history, not an in-memory guarantee.
+The library's existing fail-open convention remains: `handle` returns `None` for
+an ordinary call even after IO failure, but now reports that failure on stderr.
+`handle_with_diagnostics` supplies the same policy with an injectable reporter;
+the binary uses it to select exit 1 (not the tool-denial exit 2). Both static and
+history-based refusals survive persistence failure and report it as well.
+
+## Polling refusal
+
+The Bash pre-tool check recognises foreground `while`/`until` loops containing a
+sleep, and sleep-then-read chains separated by `;`, `&&`, or a newline. Literal
+quoted prose and comments are not executable commands. Simple shell `-c`/`-lc`
+wrappers are examined up to three levels deep. A loop does not become an allowed
+wait merely by setting `run_in_background` or appending `&`.
+Quoted or escaped shell keyword words are not treated as control flow.
+Sleep-free `while`/`until` loops consisting only of recognised snapshots
+and shell no-ops are also refused, as is `watch -n 5 git status` (including
+supported interval/display options). Thus `while git status; do :; done` and
+`while true; do env git status; done` are not loopholes. Mixed work loops such as
+`while build_next; do git status; done` and `for i in 1 2 3; do touch marker;
+git status; done` remain allowed by design rather than blocking ordinary work.
+Self-terminating `for` lists are allowed, including `for f in *.md; do cat $f;
+done`, `for i in 1 2 3; do cat notes.txt; done`, and fixed-list git reads or
+sleep/read iterations. An enclosing `while`/`until` still makes a repeated
+snapshot loop. Common literal `timeout`, `env`, `nice`, `nohup`, and `command`
+wrappers are unwrapped, including nested shell `-c`/`-lc` reads: `timeout 2 git
+status` passes once but shares the underlying snapshot history with `git status`.
+Wrapper parsing supports timeout signal/kill options, env assignments/unsets and
+ignore-environment, nice adjustment and command `-p`; unknown wrapper options
+remain outside this narrow recogniser. Tests pin each of these boundaries.
+
+The first recognised read-only check passes and records a SHA-256 fingerprint of
+its parsed words plus `cwd` per session. Literal path operands are normalised
+before hashing (`./status.json` and `status.json` share history); search patterns
+and option values retain their spelling. Repeating a local check is refused, even
+after other read commands or notifications. A successful non-read Bash command
+grants exactly one retry of each local read, including after builds, scripts,
+in-place editors and no-op commands; the next unchanged read is refused again.
+The local refusal tells the caller to run the work that can change the result,
+then retry once, rather than prescribing a spawner wait for a plain file read.
+A successful
+`PostToolUse` for Edit/Write/NotebookEdit, a recognised mutating Bash command, or
+output redirection also supplies mutation evidence for reads whose observed paths can
+plausibly be affected. File reads depend on their literal path arguments; git
+snapshots depend on paths under their absolute `cwd` workspace, and directory
+listings depend on their named subtrees. Remote gh/spawner checks cannot be
+reset by local writes, but receive a comparison execution after their first
+successful output. Only an identical successful comparison blocks subsequent
+remote reads for 60 seconds from that result; a fresh comparison is then allowed
+even if remote state changes without local writes. Changed remote output keeps
+comparisons reachable. Missing output never proves an identical remote snapshot.
+A pre-tool mutation or failed mutation does not reset a read; a failed read does
+allow its own retry. This is evidence of a relevant mutating operation, not a filesystem diff.
+For example, `touch marker` or `git add unrelated` cannot reenable remote
+`gh pr checks 42`, but grants a bounded local retry for `cat status.json`;
+`touch status.json` also supplies relevant mutation evidence for that file
+read, while `touch marker` or `git add unrelated` in the same workspace can
+reenable `git status` by design because they can affect its worktree/index view.
+Unrelated Edit/Write paths and missing path metadata never grant scoped retries;
+successful non-read Bash commands still grant the bounded local retry even when
+their mutation paths cannot be resolved, including directory-changing compounds.
+Successful read results hash only output fields
+(`stdout`, `stderr`, `output`, `content`, or a string response); a differing
+result also permits one retry for that read alone. Identical output does not.
+Read results only advance history for the currently admitted pre-tool event;
+the next pre-tool event expires all pending admissions, even when a post never
+arrived. Standalone or duplicated posts without a current admission do not
+advance history. This is sequential event matching, not a tool-call nonce:
+out-of-order same-fingerprint results during a newer admission are not
+distinguishable when the payload supplies no matching identity. Paths are platform-native absolute
+paths; the tests use the same fixture contract on Unix and Windows.
+For simple `cp`/`install`, only the destination is mutation evidence; naming the
+observed file as a copy source is not scoped evidence, although successful
+non-read Bash execution still grants the same one-shot local retry.
+
+Recognised reads include ordinary git status/log/show/diff/rev-parse/ls-files,
+gh PR checks/view/list/status, gh run view/list, spawner ps/status/result and
+cat/head/tail/grep/rg/ls/stat/test/ps. Recognised mutations include file operations
+(touch/mkdir/mv/cp/rm/install/tee), git writes, and output redirection. Unsupported
+shell syntax, variable expansion, aliases, heredocs and arbitrary custom checks
+are not a sandbox: they fail open rather than being guessed read-only. The
+existing security-focused `bash_guard.py` remains independent and unchanged.
+Simple variable arguments do not hide an otherwise recognised sleep loop or
+sleep-then-read chain. The loop/sleep scan runs on the original command independently
+of read/scope parsing: substitutions, backticks, redirects, unbalanced quotes and
+variable indirection do not disable recognised polling refusals within the depth limits below. Specifically,
+`while true; do sleep 2; git status $(echo); done` and `sleep 5; git status $(true)`
+are refused, as are snapshot loops with those syntax additions. Repeated ordinary
+`git status $(date)` (or backticks) and `echo "$(cat state)"` still pass because
+unsupported non-loop reads are not guessed read-only or added to history.
+Variable command/subcommand indirection (`tool=git; $tool status`, `$tool status`,
+`git $subcommand`) and dynamic read arguments (`cat "$status"`) also remain
+allowed across calls outside loops; indirect sleep-free loops are refused.
+The raw polling scan starts at depth 0 and examines through depth 3 inclusive;
+substitutions, backticks and shell `-c`/`-lc` bodies share this recursion budget.
+Snapshot-command inspection also stops descending into shell bodies at depth 3.
+Further nesting can pass unclassified: sleep/read inside four nested substitutions,
+or a snapshot loop inside four nested shell bodies, is outside this static scan.
+Tests pin recognition at depth 3 and fail-open behaviour at depth 4.
+A `$`-leading command word counts as a poll check only inside a loop body, including nested substitutions, backticks and shell `-c`/`-lc` bodies within the shared depth limit;
+`sleep 5; $SCRIPT` and `sleep 5; MODE=x $RUNNER` pass as unclassified work.
+Literal assignment prefixes also do not hide snapshot loops. Regression tests
+make these deliberate fail-open parser limits visible rather than claiming a
+shell sandbox or treating ordinary substitutions as polling. Script-file contents
+are not inspected: `bash poll.sh` and `./poll.sh` can contain sleep/poll loops
+outside static detection. A disposable script-file regression explicitly pins
+this known limit; use the documented wait command instead of hiding a loop in a file.
+Fixed-list loops do not hide an inner `watch` or shell-wrapped infinite loop;
+arithmetic `for ((;;))` snapshot loops are refused, not treated as finite lists.
+An adjacent sleep-then-read chain outside the finite loop body is still refused.
+Legacy remote history missing comparison metadata can still reach a comparison
+after upgrade. Missing post events, like missing output, cannot establish an
+identical remote result.
+
+Use `python -m plangraph.spawner.cli wait <run_id> --timeout 3600` with Bash
+`run_in_background=true`: one command that exits, then its completion notification.
+An ordinary command or a single background wait passes. Static sleep-polling
+refusal still works with malformed session metadata or unwritable state. Without
+usable session state, historical repeated-read detection is necessarily skipped.
+A recognised `gh pr checks --watch` also passes as an exiting wait, not a snapshot
+poll. A sleep followed by a mutation and then a read is ordinary work, not a
+sleep-then-check chain. Refused attempts still contribute to model-call counts.
+
+## Watchdog and tests
+
+`alert_line(status, now)` returns `None` at/below both caps, otherwise exactly one
+line: `TURN-BUDGET build-L1 build-L1-0429 wake=7/6 hour=61/60`. The
+`read_alerts(state_dir, now)` function reads only injected status files, skips bad
+files and recomputes the rolling hour. FLOW-WATCHDOG opts into that reader only
+with `PLANGRAPH_TURN_BUDGET_STATE_DIR`; see [Flow watchdog](flow-watchdog.md).
+The alert identity is `(role, session)`, not the live counts: active, queued and
+pending lines refresh in place without adding a new event each tick. Completed
+delivery stays suppressed until recovery. `PLANGRAPH_TURN_BUDGET_NOW` optionally
+injects Unix seconds into this reader for deterministic subprocess tests; absent
+or invalid values use the system clock. Production deployments should leave it
+unset so rolling-hour expiry advances normally.
+Corrupt, unreadable or over-1-MiB pending events are preserved and skipped during refresh
+and acknowledgement; independent queue routing and other alerts still advance.
+Legacy duplicate budget events compact by identity, retaining the oldest event's
+channel acknowledgements even when several identities are interleaved.
+
+Run the four `turn_budget_*` integration suites listed in CONTRIBUTING.md. They
+use disposable state, synthetic transcripts, explicit clocks and cleared child
+environments. They cover stdin/exit contracts, both counters, hour expiry, wake
+resets, message deduplication, partial transcripts, name resolution, status-key
+preservation, malformed inputs, IO failure, polling and opt-in watchdog delivery.
+The stdin contract includes a valid JSON payload over 8 MiB that exits silently
+without creating state. Atomic-write checks assert the exact `.json` and `.lock`
+directory entries (not a tempfile suffix), concurrent readers always parsing
+complete JSON during updates, mode preservation and bounded-history
+recovery; watchdog tests exercise changing counts, delivery and recovery using
+an explicitly injected clock rather than wall time.
+The concurrent-reader test handshakes each of 30 writes while retaining an old
+Rust read handle (delete-sharing on Windows), verifies its snapshot remains
+byte-identical, and checks every fresh observation and the exact final count.
+It uses no sleeps or read retries; an in-place/partial-write mutation fails
+rather than merely losing coverage to scheduling. Channel waits have watchdogs
+so a failed peer cannot hang the handshake.
+Storage tests also cover existing over-cap status and rejected over-cap writes.
+The watchdog subprocess suite is Unix-only because its delivery fixtures use
+`/bin/sh` and `/bin/cat`; opt-out children clear both budget environment variables.
+
+### Race-regression evidence and remaining limit
+
+Prompt-Git retains elapsed-time bounds on collection itself, excluding producer
+setup and cleanup handshakes: the escaped-stdout case must return in less than
+500 ms and the owned-group case in less than 3 s. Hung and closed-stdout cases
+also require less than 500 ms. The separate 30 s watchdog does not replace these
+assertions. The stalled native producer cannot complete until the parent releases
+its control channel after collection returns. Hung/closed cases require the Git
+timeout error, a terminated producer and no drain marker; the escaped case
+releases its holder only after the result. The deterministic clock test still
+rejects extra EOF grace. Accept is nonblocking with a deadline, and every control
+socket has read and write timeouts. The drain test checks the below-cap prefix
+and cleanup; the status test rejects in-place writes. Collection captures errors before
+unconditional termination/reaping, including missing stdout, the initial poll,
+the deadline-loop poll and repeated cleanup-poll failure. Real-child fault tests
+assert exact poll counts, termination and ECHILD before test cleanup. Kill errors
+still cannot bypass the final wait. No retry wrapper or test ignore is used.
+The cap bounds reads to cap+1 bytes: once oversized, collection stops reading,
+terminates/reaps the owned child as needed and returns `TooLarge` without waiting
+for EOF or the full timeout. A continuously writing native producer pins that
+case with a <500 ms bound, termination/reaping and checkout cleanup. The drain
+fixture releases its checkout handle before emitting the over-cap suffix;
+stalled below-cap prefixes still time out as `Git`. Windows descendant cleanup
+is not proven: `child.kill()` targets only the owned child, not its descendants.
+Both crate manifests identify the existing windows-sys features used by these
+paths; Windows test-target compilation checks their uses, not native execution.
+Mutation checks confirm that returning a collection error before cleanup fails
+the poll-error regression, and inserting a four-second collection delay fails
+both restored kept-test bounds as well as the hung-producer bound.
+
+The no-delete-sharing publication finding remains open in
+`windows_write.rs:replace_status`: supporting an indefinitely retained incompatible
+reader needs a different publication/read protocol, not a rename flag or retry.
+The Windows-only preservation regression is cross-compiled here, not executed;
+native Windows runtime acceptance is still required. The successful concurrent
+test is unchanged in strength and establishes only the delete-sharing case.
+This supersedes the round-2 changelog's broader held-reader claim.
+
+Local checks cover the prompt-Git module, the full `turn_budget_hook` test file,
+strict native clippy for both crates, and Windows test-target compilation.
+`affected_tests.py -n 2` requires `--base`; with `--base origin/main` it selects
+the full Python suite because the existing changelog fragment is unmapped. That
+fallback is not executed under this lane's targeted-tests-only constraint.
+This fix round runs the selector with `--base origin/main -n 2 --within
+tests/test_check_changelog_docs.py tests/test_ci_select_rust_inputs.py
+tests/test_split_make_public.py tests/test_turn_budget_fallback_docs.py --run`:
+these are the fragment/docs, Rust-input
+and public-diff contracts relevant to this Rust-only lane, not the Python suite.
+
+### Windows workstation acceptance (not executed on the Linux builder)
+
+The HIGH acceptance finding remains open as an L1 live step: complete 20 native
+workstation runs and the `rust-windows` job for the exact lane head, recording
+their run IDs and log paths. This build-only fix round supplies neither proof.
+
+Capture the native 20-run proof under an explicit run label; keep its log outside
+the repository and attach its path and run label to the workstation evidence:
+
+```powershell
+$run = "win-atomic-" + [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
+$log = Join-Path ([IO.Path]::GetTempPath()) ($run + ".log")
+"run=$run log=$log" | Tee-Object -FilePath $log
+Push-Location rust
+try {
+  1..20 | ForEach-Object {
+    "iteration=$_" | Tee-Object -FilePath $log -Append
+    cargo test -p pg-worker-core --lib turn_budget::storage -- --nocapture 2>&1 |
+      Tee-Object -FilePath $log -Append
+    if ($LASTEXITCODE -ne 0) { throw "storage tests failed" }
+    cargo test -p pg-worker-core --test turn_budget_hook -- --nocapture 2>&1 |
+      Tee-Object -FilePath $log -Append
+    if ($LASTEXITCODE -ne 0) { throw "hook tests failed" }
+  }
+} finally { Pop-Location }
+```
+
+`Absolute`, `CreateDelete`, `Permissions`, `Sync`, `Posix`, `Replace`, `Legacy`
+and `Move` identify the failing call, not just its final fallback. Fault tests use
+the production preparation path, actual files, exact publication bytes, held
+snapshots, copied permissions and exact directory entries; they are not native
+OS acceptance evidence. The previous error-87 workstation call is not known from
+this Linux run, and no Windows run ID or completed proof is claimed here.
+
+Round-4 CI diagnosis (source locations at `cc3aa58f`, all in
+`rust/worker-core/src/turn_budget/windows_write_tests.rs`):
+- `error_87_at_every_prepublication_site_uses_a_real_io_fallback:75` and
+  `combined_error_87_sites_recover_without_skipping_durability_or_permissions:181`
+  injected DELETE-create refusal and reached MoveFileExW with the destination
+  reader still open; non-POSIX replacement returned access denied (5).
+- `each_refused_rename_class_publishes_first_and_existing_documents:98` refused
+  POSIX rename but required non-POSIX replacement of that same held destination.
+- `refused_ex_class_still_reaches_sharing_failure_and_preserves_destination:257`
+  reached legacy rename correctly but expected sharing error 32 instead of its
+  actual access-denied error 5. Only the POSIX path promises the former error.
+The success fixtures now use closed Windows destinations only on non-POSIX
+paths; separate held-reader checks pin their exact failure and preserve both
+snapshots and directory entries. Writable attributes are asserted; source DELETE
+access and Rust's default READ/WRITE/DELETE sharing were not the defects. The
+refusal seam skips the real refused call, not the next API's Windows restrictions.

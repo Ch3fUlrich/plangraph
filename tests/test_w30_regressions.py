@@ -20,9 +20,9 @@ def test_real_binary_unavailable_and_secret(tmp_path, monkeypatch, caplog, expli
     binary.write_text('#!/bin/sh\ncase "$*" in *cx-gpt*) echo "Error: Model unavailable: x $MY_GATEWAY_TOKEN" >&2; exit 1;; esac\necho success\n')
     binary.chmod(0o755)
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
-    monkeypatch.setenv('AUTOOS_ROOT', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(tmp_path / 'providers.json'))
     monkeypatch.setenv('MY_GATEWAY_TOKEN', 'opaque-test-SECRET123')
-    (tmp_path / 'opencode.jsonc').write_text(json.dumps({'providers': {'omniroute': {'env': ['MY_GATEWAY_TOKEN']}}}))
+    (tmp_path / 'providers.json').write_text(json.dumps({'providers': {'omniroute': {'env': ['MY_GATEWAY_TOKEN']}}}))
     service = spawn_service(state=tmp_path / 'state', runner=SpawnerRunner(default_cwd=str(tmp_path)))
     monkeypatch.setattr(service, '_route', lambda *a, **kw: SpawnPlan((first, second), (), 'test', (), ()))
     async def continuation(*a):
@@ -50,8 +50,10 @@ def test_dry_run_never_probes(tmp_path, monkeypatch):
 
 def test_free_zen_legs_are_exactly_the_disabled_set():
     free = {l.id: l.disabled for l in DEFAULT_LEGS if l.model.startswith('opencode/')}
-    assert set(free) == {'opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free'}
-    assert all(free.values())
+    reason = 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'
+    assert free == {'opencode-deepseek-v4.1-flash-free': reason,
+                    'opencode-glm-5.3-flash-free': reason,
+                    'opencode-big-pickle': None, 'opencode-gemini-4-argon': None}
 
 
 @pytest.mark.parametrize('leg_id', ['opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free'])
@@ -59,14 +61,16 @@ def test_explicit_disabled_zen_leg_refused(tmp_path, leg_id):
     leg = next(l for l in DEFAULT_LEGS if l.id == leg_id)  # D-3828: disabled, never removed
     from plangraph.planner.routing import SpawnRefused
     service = spawn_service(state=tmp_path)
-    with pytest.raises(SpawnRefused, match='leg disabled: .*D-4196.*D-3828'):
+    assert leg.disabled
+    with pytest.raises(SpawnRefused, match='leg disabled: .*D-4196'):
         asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x',
             leg=leg.id, override_reason='disabled leg must not launch', dry_run=True))
     assert not service.runner.jobs
+    assert not (tmp_path / 'spawn-overrides.jsonl').exists()
 
 
 def test_real_launch_plan_skips_unserved(monkeypatch):
-    # Pin a present (empty) root config so the reason does not depend on the host's AUTOOS_ROOT.
+    # Pin a present (empty) providers file so the reason does not depend on host config.
     from plangraph.routing_support import opencode_overlay
     monkeypatch.setattr(opencode_overlay, '_load_root_providers', lambda: ({}, None))
     first = replace(DEFAULT_LEGS[0], harness='opencode', model='test/absent')
@@ -79,14 +83,14 @@ def test_real_launch_plan_skips_unserved(monkeypatch):
 
 def test_explicit_leg_unavailable_one_attempt(tmp_path, monkeypatch):
     from plangraph.spawner.runner import SpawnerRunner
-    leg = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol')
+    leg = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-xhigh')
     binary = tmp_path / 'opencode'
     # W33B host admission probes are not child attempts: serve the requested id.
     binary.write_text('#!/bin/sh\nif [ "$1" = models ]; then echo "' + leg.model + '"; exit 0; fi\necho launched >> "' + str(tmp_path / 'launches') + '"\necho "Model unavailable: fixture" >&2\nexit 1\n')
     binary.chmod(0o755)
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
-    monkeypatch.setenv('AUTOOS_ROOT', str(tmp_path))
-    (tmp_path / 'opencode.jsonc').write_text('{"providers":{}}')
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(tmp_path / 'providers.json'))
+    (tmp_path / 'providers.json').write_text('{"providers":{}}')
     monkeypatch.setattr(resolver, 'host_skip_reason', lambda *a, **kw: None)
     service = spawn_service(state=tmp_path, runner=SpawnerRunner(default_cwd=str(tmp_path)))
     result = asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x',
@@ -100,12 +104,12 @@ def test_explicit_leg_unavailable_one_attempt(tmp_path, monkeypatch):
 def test_agy_does_not_receive_overlay(tmp_path, monkeypatch):
     from plangraph.spawner.runner import SpawnerRunner
     binary = tmp_path / 'agy'
-    binary.write_text('#!/bin/sh\nif [ -n "$OPENCODE_CONFIG_CONTENT" ]; then echo overlay-leaked; exit 1; fi\necho clean\n')
+    binary.write_text('#!/bin/sh\nif [ -n "$OPENCODE_CONFIG_CONTENT" ]; then echo overlay-leaked; exit 1; fi\necho \'{"event":"result","result":{"status":"SUCCESS","response":"clean"}}\'\n')
     binary.chmod(0o755)
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.delenv('OPENCODE_CONFIG_CONTENT', raising=False)
-    monkeypatch.setenv('AUTOOS_ROOT', str(tmp_path))
-    (tmp_path / 'opencode.jsonc').write_text('{"providers":{"fixture":{}}}')
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(tmp_path / 'providers.json'))
+    (tmp_path / 'providers.json').write_text('{"providers":{"fixture":{}}}')
     async def run():
         runner = SpawnerRunner(default_cwd=str(tmp_path))
         job = await runner.spawn('x', 'gemini-3.8-flash', client='agy')
