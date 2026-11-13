@@ -18,7 +18,7 @@ Config size does not grow the command line, including on Windows.
 Stdin task transport is allowlisted for OpenCode (including its prompt-only launcher),
 Claude print mode, agy, qodercli, Codex, Gemini and Qwen. Other helpers keep argv
 without prompt stdin; malformed known stdin modes refuse. Duplicate carriers refuse as
-`stdin_prompt_argv_conflict`, never receiving the prompt twice. Child
+`stdin_prompt_argv_conflict`, including short embedded metadata values and nonempty agy/Qoder `-p` values; unsupported operands use `stdin_prompt_command_unknown`. The shared registry and legacy `clients` exports stay aligned. Child
 environments discard known inherited or overlaid legacy task-prompt carriers before
 launch-spec serialization, while retaining unrelated prompt-template/theme settings.
 

@@ -2,10 +2,16 @@
 import atexit
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+# Shared authority, also re-exported by clients for existing callers.
+STDIN_PROMPT_MODES = {'opencode': ('run',), 'claude': ('-p',), 'agy': ('--input-format', 'stream-json'),
+                      'qodercli': ('--input-format', 'text'), 'codex': ('exec', '-'), 'gemini': ('-p',), 'qwen': ('-p',)}
+STDIN_PROMPT_HARNESSES = tuple(STDIN_PROMPT_MODES)
 
 
 def inline_config():
@@ -74,9 +80,11 @@ class PromptTransportError(RuntimeError):
 
 def launch_stdin_payload(cmd, prompt, exe, *, is_nt=False):
     """Feed known stdin modes only; other helpers retain their argv unchanged."""
+    from plangraph.routing_support.claude_seat import REVIEW_DENIED, REVIEW_TOOLS
+    from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
     cmd = cmd[3:] if is_prompt_only_command(cmd) else cmd
-    harnesses = {'opencode', 'claude', 'agy', 'qodercli', 'codex', 'gemini', 'qwen'}
-    if cmd and (cmd[0] not in harnesses or (cmd[0] == 'claude' and '--bg' in cmd)):
+    if cmd and ((cmd[0] not in STDIN_PROMPT_HARNESSES and cmd[0] not in STDIN_PROMPT_MODES)
+                or (cmd[0] == 'claude' and '--bg' in cmd)):
         return None  # No new stdin contract for legacy/argv-only commands.
     unknown = 'stdin_prompt_command_unknown: command mode has no stdin contract'
     if not cmd:
@@ -102,9 +110,26 @@ def launch_stdin_payload(cmd, prompt, exe, *, is_nt=False):
                 inline.append(value)
         else:
             positional.append(arg)
+    expected = ['run'] if harness == 'opencode' else ['exec', '-'] if harness == 'codex' else []
+    known_models = {leg.model for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS) if leg.harness == harness}
+    metadata = [value for flag, values in options.items() if flag in value_flags
+                for value in values if isinstance(value, str)
+                and not (flag in {'--format', '--input-format', '--output-format'}
+                         and value in {'json', 'text', 'stream-json'})
+                # Fixed tool policy is metadata, not an arbitrary task-bearing value.
+                and not (value != prompt and (flag, value) in {
+                    ('--allowedTools', REVIEW_TOOLS), ('--disallowedTools', REVIEW_DENIED)})
+                and not (flag == '--model' and value != prompt and value in known_models)
+                # The fixed prefix of a spawner-generated title is not task content.
+                and not (flag == '--title' and prompt in 'plangraph-job-'
+                         and re.fullmatch(r'plangraph-job-[0-9a-f]{8}', value))]
+    operands = positional[len(expected):] if positional[:len(expected)] == expected else positional
+    if (prompt and any(prompt in value for value in [*operands, *inline, *metadata])) or (
+            harness in ('qodercli', 'agy') and any(isinstance(value, str) and value
+                and value not in value_flags for value in options.get('-p', []))):
+        raise PromptTransportError('stdin_prompt_argv_conflict: prompt already present in argv')
     if harness in ('qodercli', 'agy') and options.get('-p') != ['']:
         raise PromptTransportError('stdin_prompt_flag_missing: expected -p with an empty value')
-    expected = ['run'] if harness == 'opencode' else ['exec', '-'] if harness == 'codex' else []
     mode_ok = {
         'opencode': cmd[1:2] == ['run'],
         'codex': cmd[1:2] == ['exec'] and '-' in positional,
@@ -113,16 +138,10 @@ def launch_stdin_payload(cmd, prompt, exe, *, is_nt=False):
         'qodercli': options.get('--input-format') == ['text'],
         'gemini': options.get('-p') == [''],
         'qwen': options.get('-p') == [''],
-    }[harness]
-    if (not mode_ok or '--bg' in options or (harness not in {'agy', 'qodercli'}
+    }.get(harness, False)
+    if (not mode_ok or positional != expected or '--bg' in options or (harness not in {'agy', 'qodercli'}
             and options.get('--input-format', ['text']) != ['text'])):
         raise PromptTransportError(unknown)
-    metadata = [value for flag, values in options.items() if flag in value_flags
-                and flag not in {'--format', '--input-format', '--output-format'}
-                for value in values if isinstance(value, str)]
-    if (positional != expected or (prompt and any(prompt in value for value in inline))
-            or (prompt and any(value == prompt or (len(prompt) >= 16 and prompt in value) for value in metadata))):
-        raise PromptTransportError('stdin_prompt_argv_conflict: prompt already present in argv')
     if harness == 'agy':
         return (json.dumps({'event': 'user', 'message': {'role': 'user', 'content': prompt}},
                            ensure_ascii=False) + '\n').encode('utf-8')

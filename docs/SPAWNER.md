@@ -54,7 +54,7 @@ Child env construction drops only known legacy task carriers (`PROMPT`, `PROMPT_
 `PROMPT_SUFFIX`, `TASK_PROMPT`, `PLANGRAPH_TASK_PROMPT`, case-insensitive), including
 overlays; unrelated shell/theme/template configuration survives. Rust refuses exact
 prompt carriers and embedded prompts of at least 16 bytes in argv/env, without
-mistaking short incidental substrings for task transport; short embedded secrets are still redacted.
+mistaking short incidental substrings for task transport; known stdin modes also reject short prompts embedded in `--title`/`--model` values. Short embedded secrets are still redacted.
 SSH overflow passes a staged UTF-8 file to the real spawn CLI's `--prompt-file`
 option, preserving trailing newlines without shell command substitution.
 Request-budget refusals keep the launch adapter's exit status in their run record;
@@ -67,7 +67,7 @@ one UTF-8 NDJSON user event on stdin followed by EOF. The last result's
 explicitly, without publishing an unsuccessful response as an answer.
 OpenCode, Claude print mode, Gemini and Qwen read text stdin; Codex uses `exec -`.
 Other helpers retain argv unchanged with no prompt stdin; malformed known modes refuse as
-`stdin_prompt_command_unknown`, duplicate carriers as `stdin_prompt_argv_conflict`. Metadata is not task content.
+`stdin_prompt_command_unknown` (including unsupported extra operands); actual duplicate carriers, even short embedded flag values, use `stdin_prompt_argv_conflict`. Fixed spawner title prefixes/tool policies and registered model IDs are metadata, not task content.
 Review prompts exceeding a known leg budget (three chars/token) record `prompt_too_large`;
 implement/edit bounds remain opt-in via `PLANGRAPH_CONTEXT_STRICT=1`, and absent budgets are safe.
 Only spawner-owned pre-exec errors/events name prompt refusals, never harness stderr echoes.

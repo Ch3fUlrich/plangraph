@@ -16,15 +16,13 @@ from typing import Any
 
 from plangraph.routing_support.claude_seat import claude_access_args
 from plangraph.routing_support.review_mode import (
-    PromptTransportError, launch_stdin_payload, leg_tool_mode, prompt_only_command, review_prompt,
+    STDIN_PROMPT_HARNESSES, STDIN_PROMPT_MODES, PromptTransportError, is_prompt_only_command,
+    launch_stdin_payload, leg_tool_mode, prompt_only_command, review_prompt,
 )
 
 GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
 
 OMNIROUTE_BASE_URL_ENV_VAR = "OMNIROUTE_BASE_URL"
-
-#: Harnesses whose prompts are delivered via stdin instead of argv (I9).
-STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode", "claude", "agy", "qodercli", "codex", "gemini", "qwen")
 
 
 def without_prompt_env(env):

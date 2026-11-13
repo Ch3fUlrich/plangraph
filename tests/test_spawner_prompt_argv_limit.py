@@ -119,6 +119,60 @@ def test_opencode_metadata_is_not_a_short_prompt_carrier(prompt):
     assert launch_stdin_payload(cmd, prompt, cmd[0]) == prompt.encode()
 
 
+@pytest.mark.parametrize('harness', ['opencode', 'claude', 'agy', 'qodercli', 'codex', 'gemini', 'qwen'])
+def test_extra_non_prompt_operand_is_not_duplicate_transport(harness):
+    from plangraph.routing_support.clients import PromptTransportError
+    cmd = build_command('private task', 'fixture/model', client=harness)
+    cmd.append('other operand')
+    with pytest.raises(PromptTransportError, match='^stdin_prompt_command_unknown:'):
+        launch_stdin_payload(cmd, 'private task', harness)
+
+
+@pytest.mark.parametrize('harness', ['opencode', 'claude', 'agy', 'qodercli', 'codex', 'gemini', 'qwen'])
+@pytest.mark.parametrize('flag', ['--title', '--model', '--format', '--output-format', '--input-format'])
+@pytest.mark.parametrize('prompt', ['tiny task', 'x', 'é', 'sk-learn'])
+@pytest.mark.parametrize('inline', [False, True])
+def test_short_metadata_prompt_carriers_refuse(harness, flag, prompt, inline):
+    from plangraph.routing_support.clients import PromptTransportError
+    cmd = build_command(prompt, 'fixture/model', client=harness)
+    value = 'prefix ' + prompt + ' suffix'
+    cmd.extend([flag + '=' + value] if inline else [flag, value])
+    with pytest.raises(PromptTransportError, match='^stdin_prompt_argv_conflict:'):
+        launch_stdin_payload(cmd, prompt, harness)
+
+
+@pytest.mark.parametrize('harness', ['agy', 'qodercli'])
+@pytest.mark.parametrize('inline', [False, True])
+@pytest.mark.parametrize('value', ['private task', 'other text', '-task'])
+def test_nonempty_prompt_flag_is_duplicate_transport(harness, inline, value):
+    from plangraph.routing_support.clients import PromptTransportError
+    cmd = build_command('private task', 'fixture/model', client=harness)
+    at = cmd.index('-p')
+    cmd[at:at + 2] = ['-p=' + value] if inline else ['-p', value]
+    with pytest.raises(PromptTransportError, match='^stdin_prompt_argv_conflict:'):
+        launch_stdin_payload(cmd, 'private task', harness)
+
+
+@pytest.mark.parametrize('registry', ['STDIN_PROMPT_HARNESSES', 'STDIN_PROMPT_MODES'])
+def test_stdin_registry_extension_without_contract_refuses(monkeypatch, registry):
+    from plangraph.routing_support import clients, review_mode
+    value = (*clients.STDIN_PROMPT_HARNESSES, 'new-reader') if registry.endswith('HARNESSES') else {
+        **clients.STDIN_PROMPT_MODES, 'new-reader': ('run',)}
+    monkeypatch.setattr(review_mode, registry, value, raising=False)
+    with pytest.raises(clients.PromptTransportError, match='^stdin_prompt_command_unknown:'):
+        launch_stdin_payload(['new-reader'], 'private task', 'new-reader')
+
+
+def test_clients_preserves_transport_compatibility_exports():
+    from plangraph.routing_support import clients, review_mode
+    assert clients.is_prompt_only_command is review_mode.is_prompt_only_command
+    assert clients.STDIN_PROMPT_HARNESSES is review_mode.STDIN_PROMPT_HARNESSES
+    assert clients.STDIN_PROMPT_MODES is review_mode.STDIN_PROMPT_MODES
+    assert clients.STDIN_PROMPT_MODES == {
+        'opencode': ('run',), 'claude': ('-p',), 'agy': ('--input-format', 'stream-json'),
+        'qodercli': ('--input-format', 'text'), 'codex': ('exec', '-'), 'gemini': ('-p',), 'qwen': ('-p',)}
+
+
 @pytest.mark.parametrize('harness,tail', [
     ('opencode', ['--model', 'run', 'serve']),
     ('claude', ['--model', '-p']),
@@ -138,18 +192,20 @@ def test_stdin_contract_requires_real_mode_arguments(harness, tail):
 @pytest.mark.parametrize('harness', ['opencode', 'claude', 'agy', 'qodercli', 'codex', 'gemini', 'qwen'])
 @pytest.mark.parametrize('tail', [
     ['--model', 'private task payload'], ['--title=prefix private task payload suffix'],
+    ['--prompt', 'private task payload'],
     ['--input-format', 'text'], ['--'],
 ])
 def test_stdin_rejects_hidden_carriers_and_overridden_modes(harness, tail):
     from plangraph.routing_support.clients import PromptTransportError
     prompt = 'private task payload'
     cmd = build_command(prompt, 'fixture/model', client=harness)
-    if tail == ['--input-format', 'text'] and harness != 'agy':
-        tail = ['--prompt', prompt]
+    if tail == ['--input-format', 'text']:
+        tail = ['--input-format', 'text' if harness == 'agy' else 'stream-json']
     if tail == ['--']:
         tail = ['--', prompt]
     cmd.extend(tail)
-    with pytest.raises(PromptTransportError):
+    reason = 'stdin_prompt_command_unknown' if tail[0] == '--input-format' else 'stdin_prompt_argv_conflict'
+    with pytest.raises(PromptTransportError, match='^' + reason + ':'):
         launch_stdin_payload(cmd, prompt, harness)
 
 
@@ -304,10 +360,11 @@ def test_runner_transport_refusal_is_named(tmp_path, monkeypatch, harness, tail,
         assert 'job_id' in record, record
         job = runner.jobs[record['job_id']]
         assert job.status == record['status'] == 'failed'
-        assert 'stdin_prompt_flag_missing:' in job.stderr
-        assert record['reason'] == 'stdin_prompt_flag_missing'
+        reason = 'stdin_prompt_argv_conflict' if tail == ['-p', 'private task'] else 'stdin_prompt_flag_missing'
+        assert reason + ':' in job.stderr
+        assert record['reason'] == reason
         assert record['attempts'][0]['stderr_tail'] == job.stderr
-        assert service.result(record['run_id'])['reason'] == 'stdin_prompt_flag_missing'
+        assert service.result(record['run_id'])['reason'] == reason
     asyncio.run(run())
     factory.assert_not_called()
 

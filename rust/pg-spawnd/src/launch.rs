@@ -26,6 +26,45 @@ pub(crate) struct LaunchSpec {
     pub warnings: Option<Vec<String>>,
     pub events: Option<Vec<serde_json::Map<String, Value>>>,
 }
+pub(crate) fn prompt_carrier(launch: &LaunchSpec, prompt: &str) -> bool {
+    launch
+        .argv
+        .iter()
+        .chain(launch.env.values())
+        .any(|value| value == prompt || (prompt.len() >= 16 && value.contains(prompt)))
+        || stdin_metadata_carrier(&launch.argv, prompt)
+}
+fn stdin_metadata_carrier(argv: &[String], prompt: &str) -> bool {
+    // Only actual stdin modes have task-bearing flag values. Keep incidental
+    // substrings in legacy/non-launch metadata distinct from task transport.
+    let pair = |flag: &str, value: &str| argv.windows(2).any(|w| w == [flag, value]);
+    let binary = argv
+        .first()
+        .and_then(|s| Path::new(s).file_stem())
+        .and_then(|s| s.to_str());
+    let known = match binary {
+        Some("opencode") => argv.get(1).is_some_and(|s| s == "run"),
+        Some("codex") => argv.get(1).is_some_and(|s| s == "exec") && argv.iter().any(|s| s == "-"),
+        Some("agy") => pair("-p", "") && pair("--input-format", "stream-json"),
+        Some("qodercli") => pair("-p", "") && pair("--input-format", "text"),
+        Some("claude") => argv.iter().any(|s| s == "-p") && !argv.iter().any(|s| s == "--bg"),
+        Some("gemini" | "qwen") => pair("-p", ""),
+        _ => false,
+    };
+    known
+        && argv.iter().enumerate().any(|(i, arg)| {
+            let (flag, value) = arg
+                .split_once('=')
+                .unwrap_or((arg, argv.get(i + 1).map(String::as_str).unwrap_or("")));
+            matches!(flag, "--title" | "--model")
+                && value.contains(prompt)
+                && !(flag == "--title"
+                    && "plangraph-job-".contains(prompt)
+                    && value.strip_prefix("plangraph-job-").is_some_and(|id| {
+                        id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit())
+                    }))
+        })
+}
 fn internal(message: &str) -> ToolError {
     ToolError::Internal(message.into())
 }

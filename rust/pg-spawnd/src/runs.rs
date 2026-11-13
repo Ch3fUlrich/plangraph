@@ -196,8 +196,7 @@ pub(crate) fn store_prompt(
     let missing = || internal("launch prompt missing");
     let raw = launch.prompt.as_ref().ok_or_else(missing)?;
     // Short substrings of flags/model names are not evidence of a task carrier.
-    let mut carriers = launch.argv.iter().chain(launch.env.values());
-    let exposed = carriers.any(|s| s == raw || (raw.len() >= 16 && s.contains(raw)));
+    let exposed = crate::launch::prompt_carrier(launch, raw);
     if !raw.is_empty() && exposed {
         return Err(internal("launch prompt must not be in argv or env"));
     }
