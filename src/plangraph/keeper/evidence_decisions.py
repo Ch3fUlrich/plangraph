@@ -65,15 +65,20 @@ class DecisionsOriginUnreadable(OSError):
 
 
 def _global_credential_entries() -> list[tuple[str, str]]:
-    """The caller's global ``credential.*`` entries, read with the normal env.
+    """The caller's global credential helpers, read without following includes.
 
     Only these keys cross into the isolated fetch env; values are never logged.
     """
     try:
         proc = subprocess.Popen(
-            ["git", "config", "--global", "--null", "--get-regexp", r"^credential\."],
+            ["git", "config", "--global", "--no-includes", "--null", "--get-regexp", r"^credential\..*helper$"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        out, _ = proc.communicate(timeout=10)
+        try:
+            out, _ = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            return []
     except (OSError, subprocess.SubprocessError):
         return []
     if proc.returncode != 0:
@@ -81,7 +86,7 @@ def _global_credential_entries() -> list[tuple[str, str]]:
     entries = []
     for record in out.decode("utf-8", "replace").split("\0"):
         key, sep, value = record.partition("\n")
-        if key and sep:
+        if sep and key.startswith('credential.') and key.endswith('.helper'):
             entries.append((key, value))
     return entries
 
@@ -89,7 +94,7 @@ def _global_credential_entries() -> list[tuple[str, str]]:
 def _origin_git_env() -> dict[str, str]:
     """Ignore caller repository/config overrides; retain transport safety guards.
 
-    The caller's global credential entries are re-injected via GIT_CONFIG_COUNT so a
+    The caller's global credential helpers are re-injected via GIT_CONFIG_COUNT so a
     private https origin can still authenticate.
     """
     env = {name: value for name, value in os.environ.items()

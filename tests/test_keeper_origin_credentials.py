@@ -5,6 +5,7 @@ import subprocess
 
 def test_origin_env_carries_global_credentials_and_drops_other_overrides(tmp_path, monkeypatch):
     from plangraph.keeper import evidence_decisions as ed
+    monkeypatch.chdir(tmp_path)
 
     for name in [n for n in os.environ if n.startswith("GIT_")]:
         monkeypatch.delenv(name)
@@ -19,8 +20,7 @@ def test_origin_env_carries_global_credentials_and_drops_other_overrides(tmp_pat
     env = ed._origin_git_env()
     count = int(env["GIT_CONFIG_COUNT"])
     pairs = {env[f"GIT_CONFIG_KEY_{i}"]: env[f"GIT_CONFIG_VALUE_{i}"] for i in range(count)}
-    assert pairs == {"credential.helper": "store --file=/nonexistent/creds",
-                     "credential.https://github.com.username": "someone"}
+    assert pairs == {"credential.helper": "store --file=/nonexistent/creds"}
     assert env["GIT_CONFIG_GLOBAL"] == os.devnull and env["GIT_CONFIG_NOSYSTEM"] == "1"
     assert "GIT_DIR" not in env and env["GIT_TERMINAL_PROMPT"] == "0"
     # git itself sees the helper but not the unrelated url rewrite
@@ -31,6 +31,7 @@ def test_origin_env_carries_global_credentials_and_drops_other_overrides(tmp_pat
 
 def test_origin_env_without_global_credentials_adds_no_config_entries(tmp_path, monkeypatch):
     from plangraph.keeper import evidence_decisions as ed
+    monkeypatch.chdir(tmp_path)
 
     for name in [n for n in os.environ if n.startswith("GIT_")]:
         monkeypatch.delenv(name)

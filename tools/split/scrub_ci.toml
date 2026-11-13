@@ -871,3 +871,9 @@ path = "configuration/opencode/plugins/bash-guard/index.mjs"
 rule = "credential-shape"
 value_sha256 = "fc27ccfa93f112c61779d5d8e15c2a47633c1a27a17cc66b5021e490d76d347a"
 why = "AutoOS bash-guard plugin comment naming a guarded path (byte copy @f806c42b, D-4844)"
+
+[[scrub.allow_value]]
+path = "tools/new_code_allowlist.txt"
+rule = "credential-shape"
+value_sha256 = "0f7d6be5ab4c4c6654d99fedabc4276692dce33098c3c2d32fc5bb0775cacbde"
+why = "required D-5847 in-flight test filename; the matched value is a repository path"
