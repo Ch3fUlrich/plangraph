@@ -58,6 +58,8 @@ fn bare_or_wrong_identity_has_one_alert_and_exit_one() {
     for (key, value) in [
         ("core.bare", "true"),
         ("user.name", "Fixture"),
+        ("user.name", ""),
+        ("user.name", " Allowed "),
         ("user.email", "wrong@example.invalid"),
     ] {
         let tmp = fixture();

@@ -49,9 +49,19 @@ pub fn check(repo: &Path, policy: &Policy) -> Vec<String> {
         Err(_) => differences.push("core.bare=unreadable".into()),
     }
     for (key, allowed) in [("user.name", &policy.names), ("user.email", &policy.emails)] {
-        match text(repo, &["config", "--local", "--get-all", key]) {
+        let values = git(repo, &["config", "--local", "--null", "--get-all", key])
+            .stdout(Stdio::piped())
+            .output()
+            .map_err(|_| None)
+            .and_then(|out| {
+                if !out.status.success() {
+                    return Err(out.status.code());
+                }
+                String::from_utf8(out.stdout).map_err(|_| None)
+            });
+        match values {
             Ok(values) => {
-                for value in values.lines() {
+                for value in values.split_terminator('\0') {
                     if !allowed.iter().any(|a| a == value) {
                         differences.push(format!("{key}={value:?}"));
                     }
