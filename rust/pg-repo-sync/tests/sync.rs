@@ -110,6 +110,36 @@ impl Fixture {
             .unwrap()
     }
 
+    #[cfg(unix)]
+    fn git_shim(&self, script: &str) -> Command {
+        use std::os::unix::fs::PermissionsExt;
+        let real = self
+            .command("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .unwrap();
+        assert!(real.status.success());
+        let bin = self.base.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let shim = bin.join("git");
+        fs::write(
+            &shim,
+            format!("#!/bin/sh\n{script}\nexec \"$PG_TEST_GIT\" \"$@\"\n"),
+        )
+        .unwrap();
+        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut paths = vec![bin];
+        paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+        let real = String::from_utf8(real.stdout).unwrap();
+        let mut command = self.command(env!("CARGO_BIN_EXE_pg-repo-sync"));
+        command
+            .arg("--repo")
+            .arg(&self.repo)
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .env("PG_TEST_GIT", real.trim());
+        command
+    }
+
     fn snapshot(&self) -> (Vec<u8>, Vec<u8>, BTreeMap<PathBuf, Vec<u8>>) {
         fn visit(dir: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
             for entry in fs::read_dir(dir).unwrap() {
@@ -134,8 +164,14 @@ impl Fixture {
     }
 
     fn alert(&self, reason: &str, behind: u64) {
+        let mut command = self.command(env!("CARGO_BIN_EXE_pg-repo-sync"));
+        command.arg("--repo").arg(&self.repo);
+        self.alert_command(reason, behind, command);
+    }
+
+    fn alert_command(&self, reason: &str, behind: u64, mut command: Command) {
         let before = self.snapshot();
-        let out = self.run();
+        let out = command.output().unwrap();
         assert_eq!(out.status.code(), Some(1), "{out:?}");
         assert_eq!(
             out.stdout,
@@ -253,4 +289,109 @@ fn discovery_environment_isolation_and_verbose_deduplication() {
     assert!(out.status.success(), "{out:?}");
     assert_eq!(out.stdout, b"OK repo\n");
     assert!(out.stderr.is_empty());
+}
+
+#[test]
+fn untracked_and_ignored_collisions_are_not_divergence() {
+    for ignored in [false, true] {
+        let f = Fixture::new();
+        f.commit(&f.seed, "incoming", "remote contents");
+        f.git(&f.seed, &["push", "origin", "main"]);
+        fs::write(f.repo.join("incoming"), "private contents").unwrap();
+        if ignored {
+            fs::write(f.repo.join(".git/info/exclude"), "incoming\n").unwrap();
+        }
+        f.alert("ff-failed", 2);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn symbolic_ref_errors_are_not_detached() {
+    let f = Fixture::new();
+    for code in [2, 128] {
+        f.alert_command(
+            "branch-check-failed",
+            1,
+            f.git_shim(&format!(
+                "if [ \"$5\" = symbolic-ref ] && [ \"$8\" = HEAD ]; then exit {code}; fi"
+            )),
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn default_ref_errors_do_not_guess_main() {
+    let f = Fixture::new();
+    f.alert_command("fetch-failed", 1, f.git_shim(
+        "if [ \"$5\" = symbolic-ref ] && [ \"$7\" = refs/remotes/origin/HEAD ]; then exit 128; fi"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn merge_base_errors_are_not_divergence() {
+    let f = Fixture::new();
+    f.alert_command(
+        "ancestry-check-failed",
+        1,
+        f.git_shim("if [ \"$5\" = merge-base ]; then exit 128; fi"),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_skips_symlinked_repositories() {
+    let mut f = Fixture::new();
+    let outside = f.base.join("outside");
+    fs::rename(&f.repo, &outside).unwrap();
+    std::os::unix::fs::symlink(&outside, &f.repo).unwrap();
+    f.repo = outside;
+    let before = f.snapshot();
+    for explicit_root in [false, true] {
+        let mut command = f.command(env!("CARGO_BIN_EXE_pg-repo-sync"));
+        if explicit_root {
+            command.arg("--root").arg(f.base.join("code"));
+        }
+        let out = command.output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert!(out.stdout.is_empty() && out.stderr.is_empty(), "{out:?}");
+        assert_eq!(f.snapshot(), before);
+        assert!(!f.repo.join(".git/FETCH_HEAD").exists());
+    }
+    f.fast_forwarded(f.run());
+}
+
+#[cfg(unix)]
+#[test]
+fn fetch_timeout_kills_remote_helper_process_group() {
+    use std::time::{Duration, Instant};
+    let f = Fixture::new();
+    let pid_file = f.base.join("remote-helper.pid");
+    let mut command =
+        f.git_shim("if [ \"$5\" = fetch ]; then sleep 120 & echo $! > \"$PG_TEST_PID\"; wait; fi");
+    command.env("PG_TEST_PID", &pid_file);
+    let started = Instant::now();
+    f.alert_command("fetch-failed", 0, command);
+    assert!(started.elapsed() < Duration::from_secs(70));
+    let pid = fs::read_to_string(pid_file).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let running = loop {
+        let out = f
+            .command("ps")
+            .args(["-o", "stat=", "-p", pid.trim()])
+            .output()
+            .unwrap();
+        assert!(out.stderr.is_empty(), "{out:?}");
+        let state = String::from_utf8(out.stdout).unwrap();
+        let running =
+            out.status.success() && !state.trim().is_empty() && !state.trim().starts_with('Z');
+        if !running || Instant::now() >= deadline {
+            break running;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let _ = f.command("kill").args(["-KILL", pid.trim()]).output();
+    assert!(!running, "remote helper survived the fetch timeout");
 }

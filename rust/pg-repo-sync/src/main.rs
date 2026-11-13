@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
@@ -26,17 +28,25 @@ fn git(repo: &Path, args: &[&str]) -> Command {
     command
 }
 
-fn text(repo: &Path, args: &[&str]) -> Option<String> {
-    let output = git(repo, args).stdout(Stdio::piped()).output().ok()?;
+fn text(repo: &Path, args: &[&str]) -> Result<String, Option<i32>> {
+    let output = git(repo, args)
+        .stdout(Stdio::piped())
+        .output()
+        .map_err(|_| None)?;
     if !output.status.success() {
-        return None;
+        return Err(output.status.code());
     }
-    Some(String::from_utf8(output.stdout).ok()?.trim().to_owned())
+    String::from_utf8(output.stdout)
+        .map(|s| s.trim().to_owned())
+        .map_err(|_| None)
 }
 
 fn fetch(repo: &Path) -> bool {
     let started = Instant::now();
-    let Ok(mut child) = git(repo, &["fetch", "-q", "origin"]).spawn() else {
+    let mut command = git(repo, &["fetch", "-q", "origin"]);
+    #[cfg(unix)]
+    command.process_group(0);
+    let Ok(mut child) = command.spawn() else {
         return false;
     };
     loop {
@@ -46,6 +56,15 @@ fn fetch(repo: &Path) -> bool {
                 thread::sleep(Duration::from_millis(50));
             }
             _ => {
+                #[cfg(unix)]
+                unsafe {
+                    unsafe extern "C" {
+                        fn kill(pid: i32, signal: i32) -> i32;
+                    }
+                    // The unreaped child leads its own group; include remote helpers.
+                    kill(-(child.id() as i32), 9); // SIGKILL
+                }
+                #[cfg(not(unix))]
                 let _ = child.kill();
                 let _ = child.wait();
                 return false;
@@ -56,22 +75,27 @@ fn fetch(repo: &Path) -> bool {
 
 fn sync(repo: &Path) -> (u64, Option<String>) {
     let fetched = repo.join(".git").exists() && fetch(repo);
-    let default = text(
+    let default = match text(
         repo,
         &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
-    )
-    .and_then(|s| s.strip_prefix("refs/remotes/origin/").map(str::to_owned))
-    .unwrap_or_else(|| "main".to_owned());
-    let target = format!("refs/remotes/origin/{default}");
+    ) {
+        Ok(s) => s.strip_prefix("refs/remotes/origin/").map(str::to_owned),
+        Err(Some(1)) => Some("main".to_owned()),
+        _ => None,
+    };
+    let name = default.as_deref().unwrap_or("main");
+    let target = format!("refs/remotes/origin/{name}");
     let count = text(repo, &["rev-list", "--count", &format!("HEAD..{target}")])
+        .ok()
         .and_then(|s| s.parse::<u64>().ok());
     let behind = count.unwrap_or(0);
-    let reason = if !fetched || count.is_none() {
+    let branch = text(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    let reason = if !fetched || default.is_none() || count.is_none() {
         "fetch-failed".to_owned()
     } else if behind == 0 {
         return (0, None);
-    } else if let Some(branch) = text(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]) {
-        if branch != default {
+    } else if let Ok(branch) = branch.as_ref() {
+        if branch != name {
             format!("other-branch:{branch}")
         } else if text(
             repo,
@@ -82,31 +106,43 @@ fn sync(repo: &Path) -> (u64, Option<String>) {
                 "--ignore-submodules=untracked",
             ],
         )
+        .ok()
         .is_none_or(|s| !s.is_empty())
         {
             "tracked-changes".to_owned()
-        } else if !git(repo, &["merge-base", "--is-ancestor", "HEAD", &target])
-            .status()
-            .is_ok_and(|s| s.success())
-            || !git(
-                repo,
-                &[
-                    "merge",
-                    "--ff-only",
-                    "--no-autostash",
-                    "--no-overwrite-ignore",
-                    &target,
-                ],
-            )
-            .status()
-            .is_ok_and(|s| s.success())
-        {
-            "diverged".to_owned()
         } else {
-            return (behind, None);
+            match git(repo, &["merge-base", "--is-ancestor", "HEAD", &target])
+                .status()
+                .ok()
+                .and_then(|s| s.code())
+            {
+                Some(1) => "diverged".to_owned(),
+                Some(0) => {
+                    if git(
+                        repo,
+                        &[
+                            "merge",
+                            "--ff-only",
+                            "--no-autostash",
+                            "--no-overwrite-ignore",
+                            &target,
+                        ],
+                    )
+                    .status()
+                    .is_ok_and(|s| s.success())
+                    {
+                        return (behind, None);
+                    } else {
+                        "ff-failed".to_owned()
+                    }
+                }
+                _ => "ancestry-check-failed".to_owned(),
+            }
         }
-    } else {
+    } else if branch == Err(Some(1)) {
         "detached".to_owned()
+    } else {
+        "branch-check-failed".to_owned()
     };
     (behind, Some(reason))
 }
@@ -131,7 +167,7 @@ fn run() -> Result<bool, &'static str> {
         for entry in fs::read_dir(root).map_err(|_| "repository discovery failed")? {
             let path = entry.map_err(|_| "repository discovery failed")?.path();
             let name = path.file_name().unwrap_or_default().to_string_lossy();
-            if path.is_dir()
+            if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_dir())
                 && path.join(".git").exists()
                 && !name.ends_with("-worktrees")
                 && !name.ends_with("-lanes")

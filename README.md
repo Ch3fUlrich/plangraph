@@ -28,7 +28,7 @@ Q&A page connects each decision/question to task, phase and project and lets you
 | `src/plangraph/keeper/` | the plan-keeper service (SQLite, auth, evidence verifiers; POSIX only — uses `fcntl`) |
 | `src/plangraph/spawner/` | agent spawner & model routing catalog (SQLite WAL, OmniRoute ACP-first, cross-family review, MCP server) |
 | `tools/` | batch apply, markdown sync, plan check, importer |
-| `rust/pg-repo-sync/` | std-only `pg-repo-sync [--root DIR]... [--repo PATH]... [--verbose]`: defaults to direct repos in `$HOME/code` (excluding `-worktrees`/`-lanes`), fetches origin with a 60 s timeout, fast-forwards only clean tracked files on the default branch (untracked files do not block); alerts without discarding changes (exit 1; otherwise 0) |
+| `rust/pg-repo-sync/` | std-only `pg-repo-sync [--root DIR]... [--repo PATH]... [--verbose]`: defaults to direct non-symlink repos in `$HOME/code` (excluding `-worktrees`/`-lanes`), fetches origin with a 60 s timeout (kills the process group on Unix), fast-forwards only clean tracked files on the default branch (non-colliding untracked files do not block); alerts distinguish divergence, blocked fast-forwards and Git probe failures without discarding changes (exit 1; otherwise 0) |
 | `examples/` | fictional plans, a batch, `snapshot.json` |
 | `docs/` | proposal, spec, runbook, UI/UX reviews |
 
