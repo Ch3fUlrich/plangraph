@@ -233,9 +233,12 @@ cases! {
 
 #[test]
 fn repo_sync_docs_use_one_short_line() {
-    let lines: Vec<_> = include_str!("../../../docs/fleet-sync.md").lines().skip(2)
+    let lines: Vec<_> = include_str!("../../../docs/fleet-sync.md")
+        .lines()
+        .skip(2)
         .take_while(|line| !line.starts_with("Run `python3"))
-        .filter(|line| !line.is_empty()).collect();
+        .filter(|line| !line.is_empty())
+        .collect();
     assert_eq!(lines.len(), 1);
     assert!(lines[0].starts_with("`pg-repo-sync"));
     assert!(lines[0].len() <= 120);
