@@ -95,12 +95,12 @@ def test_tools_invalid_diff_ref_refused(diff_ref):
 
 @pytest.mark.parametrize('dispatch', ['routed', 'explicit', 'base'])
 @pytest.mark.parametrize('scenario, launches, terminal', [
-    ('verdict', 2, False), ('twice', 2, True), ('error', 2, True),
-    ('no-cap', 1, True), ('normal', 1, False), ('non-review', 1, False),
+    ('verdict', 2, False), ('twice', 3, True), ('error', 2, True),
+    ('no-cap', 3, True), ('normal', 1, False), ('non-review', 1, False),
     ('already-capped', 2, True), ('stderr-error', 2, True),
     ('zero-exit', 2, True), ('cancelled', 1, False),
-    ('timeout', 1, False), ('retry-timeout', 2, False), ('deadline', 1, True),
-    ('provider-stop', 2, True), ('thin-budget', 1, True),
+    ('timeout', 1, True), ('retry-timeout', 2, True), ('deadline', 1, True),
+    ('provider-stop', 2, True), ('thin-budget', 2, True),
     ('stalled', 1, False), ('retry-stalled', 2, False), ('retry-cancelled', 2, False),
     ('ordinary-timeout', 1, False), ('ordinary-cancelled', 1, False),
 ])
@@ -121,10 +121,10 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
         chosen = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6-luna')
     role = 'orchestrate' if scenario == 'non-review' else 'review'
     good = 'Review complete\nTEST-GAMING: no - searched tests\nVERDICT: ACCEPT'
-    exhausted = json.dumps({'type': 'step_finish', 'part': {
+    exhausted = json.dumps({'type': 'step_finish', 'sessionID': 'ses_fixture', 'part': {
         'reason': 'length', 'tokens': {'output': 0, 'reasoning': 32768}}})
     if scenario == 'error':
-        exhausted = json.dumps({'type': 'error', 'error': {'type': 'output-limit',
+        exhausted = json.dumps({'type': 'error', 'sessionID': 'ses_fixture', 'error': {'type': 'output-limit',
             'message': 'Response still truncated after two output token limit continuations'}})
     verdict = '\n'.join(json.dumps(e) for e in [
         {'type': 'text', 'part': {'text': good}},
@@ -142,7 +142,8 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
         assert child_env is calls[-1][1]['env']
         config = json.loads(child_env['OPENCODE_CONFIG_CONTENT'])
         if scenario == 'already-capped':
-            assert config['providers']['mimo']['models']['mimo-v2.6-flash']['body']['thinking'] == {'type': 'disabled'}
+            assert config['providers']['mimo']['models']['mimo-v2.6-flash']['limit']['output'] == 131072
+        runner.jobs[jid].session_id = 'ses_fixture'
         successful = scenario == 'normal' or len(calls) == 2 and scenario == 'verdict'
         if scenario in ('cancelled', 'ordinary-cancelled') or scenario == 'retry-cancelled' and len(calls) == 2:
             runner.jobs[jid].status = 'cancelled'
@@ -150,8 +151,10 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
             status = 'stalled' if scenario.endswith('stalled') else 'timeout'
             runner.jobs[jid].status, runner.jobs[jid].exit_code = status, 6 if status == 'stalled' else 124
             runner.jobs[jid].events.append({'event': 'watchdog_' + status, 'rule': 'max'})
-        if scenario in ('deadline', 'thin-budget'):
-            clock[:] = [time.time() + (2000 if scenario == 'deadline' else 1475)]
+        if terminal and len(calls) == launches:
+            clock[:] = [time.time() + 2000]
+        elif scenario == 'thin-budget':
+            clock[:] = [time.time() + 1475]
         if scenario == 'provider-stop':
             runner.provider_responses[jid] = {'status': 429}
         if scenario == 'stderr-error':
@@ -206,16 +209,17 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     if launches == 2:
         first, second = [json.loads(c[1]['env']['OPENCODE_CONFIG_CONTENT']) for c in calls]
         model = chosen.model.split('/', 1)[1]
-        assert first['providers']['mimo']['models'][model]['body']['thinking'] == {'type': 'disabled'}
-        assert second['providers']['mimo']['models'][model]['body']['thinking'] == {'type': 'disabled'}
+        assert first['providers']['mimo']['models'][model]['limit']['output'] == 131072
+        assert second['providers']['mimo']['models'][model]['limit']['output'] == 131072
         assert first['permission'] == second['permission']
         assert all(c[0][c[0].index('--model') + 1] == chosen.model for c in calls)
         from plangraph.spawner.opencode_answer import retry_prompt
         original = next(iter(runner.jobs.values())).task_prompt
         assert runner.jobs[record['job_id']].task_prompt == retry_prompt(original)
-        assert retry_prompt(original).split('=== INLINE DIFF (', 1)[1] == original.split('=== INLINE DIFF (', 1)[1]
+        assert calls[0][1]['env']['XDG_DATA_HOME'] == calls[1][1]['env']['XDG_DATA_HOME']
+        assert calls[1][0][calls[1][0].index('--session') + 1] == 'ses_fixture'
         assert runner.jobs[record['job_id']]._watchdog_limits['max_s'] < next(iter(runner.jobs.values()))._watchdog_limits['max_s']
-        assert record['reasoning_retry'] == 1
+        assert record['reasoning_continuations'] == 1
         assert any(e['event'] == 'opencode_reasoning_exhausted' for e in record['events'])
         assert any(e['event'] == 'opencode_reasoning_exhausted' for e in real[0]['events'])
     if scenario in ('normal', 'verdict'):
@@ -240,7 +244,7 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     if scenario == 'non-review':
         assert not any(e['event'].startswith(('opencode_step_finish', 'opencode_reasoning', 'reasoning_'))
                        for e in record['events'])
-    if scenario in ('timeout', 'retry-timeout', 'ordinary-timeout'):
+    if scenario == 'ordinary-timeout':
         assert record['status'] == 'timed_out' and record['reason'] == 'timeout'
     if scenario in ('stalled', 'retry-stalled'):
         assert record['status'] == record['reason'] == 'stalled'

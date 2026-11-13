@@ -126,10 +126,6 @@ def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch, spelling):
             name: {'headers': {'keep': 'yes'}, 'options': {'headers': {'also': 'yes'}}}
             for name in ('mimo', 'omniroute', 'other')}}
         cfg[spelling]['mimo']['settings'] = {'baseURL': '/gateway/v1'}
-        cfg[spelling]['mimo'].update(package='@opencode/ai/providers/openai-compatible',
-                                    models={'mimo-v2.6-pro': {}})
-        if spelling == 'provider':
-            cfg['providers'] = {'mimo': dict(cfg[spelling]['mimo'])}
         assert not gw.tagged(json.dumps(cfg), 'seat')
         env.update(OPENCODE_CONFIG_CONTENT=json.dumps(cfg), OMNIROUTE_BASE_URL='/gateway/v1')
     monkeypatch.setattr(opencode_render, 'render_gateway_providers', render)

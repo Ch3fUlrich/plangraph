@@ -323,7 +323,7 @@ class SpawnService(SeatSpawnMixin):
                     job = await self._launch_leg(record, chosen, prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
                         prompt_record=(self._path(record['run_id']).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
-                    if record.get('reason') in ('reasoning_output_limit', 'reasoning_only_length'):
+                    if record.get('reason') in ('reasoning_output_limit', 'reasoning_only_length', 'reasoning_session_missing'):
                         break
                     stop = self.runner.provider_responses.get(job.job_id)
                     if terminal_record(record, job):
@@ -338,6 +338,9 @@ class SpawnService(SeatSpawnMixin):
                         job.exit_code = job.exit_code or 1
                     reason = unavailable or (('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}')
                         if job.status in ('failed', 'skipped') else None)
+                    if stop and any(isinstance(slot, dict) and slot.get('seat_group')
+                            and slot.get('leg') == chosen.id for slot in (plan.seat_coverage or ())):
+                        reason = reason or 'provider_stop'
                     stop_status = stop.get('status') if isinstance(stop, dict) else None
                     down_token = (unavailable or '').split(':', 1)[0].strip()
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,

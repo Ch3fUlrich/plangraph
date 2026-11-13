@@ -33,11 +33,10 @@ class ReasoningLengthGate:
             part = event['part']
             if event.get('type') == 'text':
                 self.saw_text |= isinstance(part.get('text'), str) and bool(part['text'].strip())
-            if event.get('type') == 'step_finish' and not self.saw_text:
-                tokens = part.get('tokens')
-                reasoning = tokens.get('reasoning') if isinstance(tokens, dict) else None
-                if part.get('reason') == 'length' and type(reasoning) is int and reasoning > 0:
-                    self.exhausted = True
+            tokens = part.get('tokens') or {}
+            reasoning = tokens.get('reasoning') if isinstance(tokens, dict) else None
+            if event.get('type') == 'step_finish' and part.get('reason') == 'length' and type(reasoning) is int and reasoning > 0:
+                self.exhausted = not self.saw_text
         if self.saw_text:
             self.exhausted = False
         if self.exhausted:
@@ -45,10 +44,35 @@ class ReasoningLengthGate:
 
 
 def retry_prompt(prompt):
-    """Replace review instructions, retaining every inlined evidence block."""
-    starts = [prompt.find(marker) for marker in ('\n\n=== CONTEXT PACK ===', '\n\n=== INLINE DIFF (')]
-    start = min((i for i in starts if i >= 0), default=0)
-    return 'answer now, findings then VERDICT line, no further analysis\n\n' + prompt[start:]
+    """The original evidence already lives in the continued session."""
+    return 'answer now: findings, then the VERDICT line; no further analysis'
+
+
+class ReviewSession:
+    """Retain one isolated store across continuations, including cancellation."""
+    def __init__(self, deadline=None):
+        self.directory, self.id, self.closed = None, None, False
+        self.deadline = deadline
+        self.jobs = set()
+
+    def release(self, job_id=None):
+        import shutil
+        self.jobs.discard(job_id)
+        if self.closed and not self.jobs and self.directory:
+            shutil.rmtree(self.directory, ignore_errors=True)
+
+    def close(self):
+        self.closed = True
+        self.release()
+
+    def isolate(self, env, job_id):
+        from pathlib import Path
+        from .opencode_isolation import close_config_layers, CLOSED_LAYERS
+        self.directory = self.directory or close_config_layers(env)
+        env.update(CLOSED_LAYERS, OPENCODE_CONFIG_DIR=self.directory,
+                   OPENCODE_CONFIG=str(Path(self.directory) / 'pg-empty.json'))
+        self.jobs.add(job_id)
+        return self.directory
 
 
 def record_steps(job, stdout, stderr, env):
@@ -65,6 +89,8 @@ def record_steps(job, stdout, stderr, env):
             continue
         if not isinstance(event, dict):
             continue
+        if isinstance(event.get('sessionID'), str) and event['sessionID'].startswith('ses_'):
+            job.session_id = event['sessionID']
         part = event.get('part')
         if event.get('type') == 'step_finish' and isinstance(part, dict):
             tokens = part.get('tokens')
@@ -88,34 +114,30 @@ def record_steps(job, stdout, stderr, env):
     if not saw_text and (length or not any((s['output_tokens'] or 0) > 0 for s in steps) and (
             steps and steps[-1]['finish_reason'] == 'length' and steps[-1]['output_tokens'] == 0
             or output_limit)):
-        # Probe the isolated cap on a copy; retry also changes the instruction.
         job.events.append(dict(event='opencode_reasoning_exhausted',
-                               cap_available=cap_reasoning(dict(env), job.model_or_combo, allow_existing=True),
-                               **({'reason': 'reasoning_only_length'} if length else {})))
+                                **({'reason': 'reasoning_only_length'} if length else {})))
 
 
-def cap_reasoning(env, model, *, allow_existing=False):
-    """MiMo's documented thinking-off control: a zero reasoning budget for this run only."""
+def cap_reasoning(env, model):
+    """Set MiMo's combined reasoning/answer output cap from the model catalog."""
     from .mimo_policy import ACCEPTED_MIMO_IDS
+    from plangraph.catalog_data import SEED_MODELS
     if model not in ACCEPTED_MIMO_IDS:
         return False
     try:
         cfg = json.loads(env['OPENCODE_CONFIG_CONTENT'])
         provider, key = model.split('/', 1)
-        block = cfg['providers'][provider]
-        entry = block['models'][key]
-        if (not isinstance(entry, dict) or
-                entry.get('package', block.get('package')) != '@opencode/ai/providers/openai-compatible'):
+        block = cfg.setdefault('providers', cfg.get('provider', {})).setdefault(provider, {})
+        entry = block.setdefault('models', {}).setdefault(key, {})
+        if not isinstance(entry, dict) or not isinstance(entry.get('body', {}), dict):
             return False
-        body = entry.setdefault('body', {})
-        if not isinstance(body, dict):
-            return False
-        if body.get('thinking') == {'type': 'disabled'}:
-            return allow_existing
-        body['thinking'] = {'type': 'disabled'}
+        maximum = next(row['max_output_tokens'] for row in SEED_MODELS if row['model_id'] == model)
+        entry.setdefault('limit', {})['output'] = maximum
+        # Older harnesses also clamp model.limit.output by this process-wide default (32000).
+        env['OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX'] = str(maximum)
         env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
         return True
-    except (KeyError, ValueError, TypeError, AttributeError):
+    except (KeyError, ValueError, TypeError, AttributeError, StopIteration):
         return False
 
 

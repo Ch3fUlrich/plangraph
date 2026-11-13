@@ -15,7 +15,7 @@ def launch_leg_case(tmp_path):
 
     chosen = next(l for l in DEFAULT_LEGS if l.id == 'mimo-v2.6-flash')
     jobs = [JobInfo(name, 'failed', 'review', chosen.model, role='review', exit_code=1,
-                   events=[dict(event='opencode_reasoning_exhausted', cap_available=True)])
+                   events=[dict(event='opencode_reasoning_exhausted', reason='reasoning_only_length')])
             for name in ('first', 'second')]
     calls = []
     seat = SeatSpawnMixin()
@@ -28,6 +28,7 @@ def launch_leg_case(tmp_path):
 
     async def spawn(**options):
         job = jobs[len(calls)]
+        job.session_id = 'ses_fixture'
         calls.append(options)
         return job
 
@@ -35,26 +36,27 @@ def launch_leg_case(tmp_path):
     return seat, record, chosen, jobs, calls
 
 
-@pytest.mark.parametrize('scenario', ['no-cap', 'already-retried', 'twice', 'render-refused'])
+@pytest.mark.parametrize('scenario', ['deadline', 'twice', 'missing-session'])
 def test_reasoning_terminal_saved_at_launch_boundary(launch_leg_case, monkeypatch, scenario):
     import asyncio
     import json
 
     seat, record, chosen, jobs, calls = launch_leg_case
-    monkeypatch.setattr('plangraph.spawner.seat_spawn.time', SimpleNamespace(time=lambda: 101))
-    if scenario == 'no-cap':
-        jobs[0].events[0]['cap_available'] = False
-    if scenario == 'already-retried':
-        record['reasoning_retry'] = 1
-    if scenario == 'render-refused':
-        jobs[1].events = [dict(event='render_refused', reason='reasoning_output_limit: unavailable')]
+    monkeypatch.setattr('plangraph.spawner.seat_spawn.time', SimpleNamespace(
+        time=lambda: 201 if scenario == 'deadline' or len(calls) == 2 else 101))
+    if scenario == 'missing-session':
+        async def missing(**options):
+            calls.append(options)
+            return jobs[0]
+        seat.runner.spawn = missing
     job = asyncio.run(seat._launch_leg(record, chosen, prompt_record=None, watchdog={'max_s': 100}))
     saved = json.loads(seat._path(record['run_id']).read_text())
     assert saved['status'] == job.status == 'failed'
-    assert saved['reason'] == 'reasoning_output_limit' and saved['exit_code'] != 0
-    assert len(saved['attempts']) == len(calls) == (2 if scenario in ('twice', 'render-refused') else 1)
+    reason = 'reasoning_session_missing' if scenario == 'missing-session' else 'reasoning_only_length'
+    assert saved['reason'] == reason and saved['exit_code'] != 0
+    assert len(saved['attempts']) == len(calls) == (2 if scenario == 'twice' else 1)
     assert all(a['events'] for a in saved['attempts'])
-    assert saved['events'][-1] == {'event': 'reasoning_output_limit'}
+    assert saved['events'][-1] == dict(event=reason, continuations=len(calls) - 1)
 
 
 @pytest.mark.parametrize('remaining', [0, 0.01, 30, 30.01])
@@ -63,10 +65,10 @@ def test_reasoning_retry_needs_useful_budget(launch_leg_case, monkeypatch, remai
 
     seat, record, chosen, jobs, calls = launch_leg_case
     monkeypatch.setattr('plangraph.spawner.seat_spawn.time',
-                        SimpleNamespace(time=lambda: 200 - remaining))
+                        SimpleNamespace(time=lambda: 201 if len(calls) == 2 else 200 - remaining))
     asyncio.run(seat._launch_leg(record, chosen, prompt_record=None, watchdog={'max_s': 100, 'hard_max': True}))
-    assert len(calls) == (2 if remaining > 30 else 1)
-    if remaining > 30:
+    assert len(calls) == (2 if remaining > 0 else 1)
+    if remaining > 0:
         assert calls[1]['watchdog'] == {'max_s': pytest.approx(remaining), 'hard_max': True}
 
 
@@ -95,7 +97,7 @@ def test_retry_render_refusal_cannot_override_terminal_guard(launch_leg_case, mo
 
     async def spawn(**options):
         job = await original(**options)
-        if options.get('reasoning_cap'):
+        if len(calls) == 2:
             if guard == 'cancelled':
                 seat._path(record['run_id']).with_name('cancelled').touch()
             elif guard == 'kill_incomplete':

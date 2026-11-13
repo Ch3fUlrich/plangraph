@@ -115,22 +115,21 @@ adds `opencode_reasoning_exhausted`; later completed output is not retried.
 Display-text decoding also protects plain/mixed stdout answers; diagnostic-only JSON, including blank separator lines, is not answer text.
 The monitor's events reach `record.json` through either dispatch path.
 
-For an OpenCode inline `review`, shared `SeatSpawnMixin._launch_leg` retries
-once with the same evidence, model and harness, never unchanged. MiMo v2.6 Flash
-and Pro use model-local `body.thinking.type=disabled` (zero reasoning budget)
-in the isolated child's `OPENCODE_CONFIG_CONTENT.providers.mimo.models[model].body` on the first attempt too; the root config and other roles are unchanged.
-An already-disabled cap permits one changed-instruction retry; unsupported controls refuse.
-The failed attempt and its events stay in the record, with `reasoning_retry=1`
-saved before the retry. Tool denial, fresh job isolation and the original review
-wall deadline remain in force; the retry is additionally capped at 120 seconds.
-Its instruction is `answer now, findings then VERDICT line, no further analysis`; inlined context/diff blocks are retained verbatim, replacing preceding instructions.
-Document-only evidence is retained in full. No provider-health booking is added. The retry requires more than 30 seconds of remaining wall budget. Base-service launches keep their original shielded monitor cancellation and ownership fields.
-Repeated zero-output exhaustion, an unavailable cap, or no remaining retry budget
-ends the run `failed` with terminal `reason: reasoning_only_length` for recorded reasoning length stops (`reasoning_output_limit` for legacy output-limit errors); no spare leg or writer continuation runs. Cancellation, timeout and kill-incomplete still win.
-Terminal status, reason, attempts and events are saved at the shared launch boundary before either caller returns; routed exhaustion keeps normal failure witness metadata, and both callers finalize `ended` and release monitor registrations in `finally`.
-`run_watchdog.collect` detects reasoning-only length in stdout incrementally, reaps the hanging harness and returns its events immediately, before the wall timeout.
-Normal answer text, non-review roles and genuine watchdog/cancel/kill-incomplete outcomes retain their existing handling; retries do not duplicate attempt rows.
-Hermetic coverage is in `tests/test_spawner_review_tools_inline.py` and `tests/test_spawner_runner_answer.py`, plus recorded open-pipe regressions in `tests/test_spawner_reasoning_only_length.py`. Live proof and automatic prompt splitting are deferred to the next slice (D-5641/D-5642).
+`src/plangraph/spawner/opencode_answer.py:cap_reasoning`, called by
+`runner.py:SpawnerRunner.spawn`, sets MiMo's harness-read
+`OPENCODE_CONFIG_CONTENT.providers.mimo.models[model].limit.output` and
+`OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX` from `catalog_data.py:SEED_MODELS.max_output_tokens`:
+131072 for Pro and Flash, matching `deploy/omniroute/custom-models.json` (D-5645).
+The old 65536 overlay and OpenCode's 32000 custom-model fallback are not the provider maximum;
+reasoning and answer share this budget. V2 reads `limit.output`; the env also lifts older harness clamps.
+`run_watchdog.py:collect` detects recorded reasoning-only length with open pipes and reaps immediately.
+`seat_spawn.py:SeatSpawnMixin._launch_session` continues the same run with `--session` and the same
+private store until a completed VERDICT, bounded only by the original card `max_min`/run timeout.
+Each turn sends `answer now: findings, then the VERDICT line; no further analysis`; context is not replayed.
+`reasoning_continuations` and `reasoning_continuation` events persist count and both token counters;
+deadline expiry is `failed/reasoning_only_length`, never a silent timeout. Missing session evidence
+fails closed as `reasoning_session_missing`; cancellation/kill-incomplete and normal stops are unchanged.
+Recorded-event coverage: `tests/test_spawner_reasoning_only_length.py`; no automatic prompt splitting.
 
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:
@@ -307,7 +306,7 @@ must deduplicate by event_id: external delivery is at-least-once across crashes.
 Failed hooks are logged and retried on re-save; local inbox replay is idempotent.
 `PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds each child execution in seconds; unset gives a 25-minute review cap, while empty means no review cap;
 expiry kills its process tree and records rc 124 with FAILED completion.
-Terminal stall/timeout records preserve their outcome and events even without a watchdog event (`watchdog: null`). Provider responses label attempt reasons `provider_stop` only for failed/skipped jobs, not successful ones.
+Terminal stall/timeout records preserve their outcome and events even without a watchdog event (`watchdog: null`). A provider stop leaves the harness status and exit code unchanged (completed with exit 0 stays completed), adding `provider_stop` only when no reason exists and the stopped leg's own coverage slot names a seat group, preserving it in the attempt and unfilled-slot error while leaving completed non-seat reasons unset and tolerating empty, absent or non-dict coverage entries.
 The detached supervisor must survive the child; killing the supervisor itself
 requires a future recovery service. This interim event contract carries over to
 the later Temporal implementation (also covers FLEET-STATUS-HOOK).
@@ -320,6 +319,7 @@ The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md]
 
 CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
 A probe with its harness binary missing reports `host-not-ready` and books no leg event. Probe timeouts must be finite and strictly positive; TTL remains nonnegative (zero disables automatic probes). Invalid settings refuse before probe state writes, and CLI parameter refusals are JSON `ParameterRefused` with exit 2. Timeout errors name `--timeout` for an explicit CLI argument, `timeout_s` for a direct probe argument, or `PLANGRAPH_LEG_PROBE_TIMEOUT_S` for the environment. CLI and MCP probe refusal handlers catch only parameter-validation errors, not internal `ValueError`s. Spawn-call exceptions report probe infrastructure failure and never book leg liveness.
+Probe and quota bookkeeping key a leg by its model string: only a bare model of an agy leg gets the `agy/` prefix, a provider-qualified model is its own key, and legacy record rows without a harness keep their model-only key.
 Failed probes retain a scrubbed, single-line excerpt of the last 400 stderr
 characters in their result, output line and leg-state event. A `running` record
 on the same model/harness with a nonempty `live.log` grown within

@@ -75,3 +75,26 @@ def test_verifier_context_uses_configured_adapters(tmp_path):
     ctx = config.verifier_context(cfg)
     assert ctx.git is not None and ctx.decisions is not None
     assert ctx.runs is not None
+
+
+@pytest.mark.parametrize("key", ["default_lease", "lease_warn_s", "review_overdue_s"])
+@pytest.mark.parametrize("value", [0, -1, "abc", 1.5, 600.0, "600", True, False, None, [], {}])
+def test_lease_settings_require_positive_integers_at_load(tmp_path, key, value):
+    path = write_config(tmp_path, {key: value})
+    with pytest.raises(config.ConfigError, match=key):
+        config.load_config(path)
+
+
+@pytest.mark.parametrize("key", ["default_lease", "lease_warn_s", "review_overdue_s"])
+@pytest.mark.parametrize("value", [1, 315360000])
+def test_lease_settings_accept_inclusive_bounds_at_load(tmp_path, key, value):
+    cfg = config.load_config(write_config(tmp_path, {key: value}))
+    assert getattr(cfg, key) == value
+
+
+@pytest.mark.parametrize("key", ["default_lease", "lease_warn_s", "review_overdue_s"])
+@pytest.mark.parametrize("value", [315360001, 10**15])
+def test_lease_settings_refuse_above_bound_at_load(tmp_path, key, value):
+    path = write_config(tmp_path, {key: value})
+    with pytest.raises(config.ConfigError, match=rf"{key}.*315360000"):
+        config.load_config(path)

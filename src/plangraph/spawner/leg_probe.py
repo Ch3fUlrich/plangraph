@@ -15,7 +15,9 @@ from plangraph.routing_errors import ParameterRefused
 
 PROMPT = 'Create a file ok.txt containing the single word ok, then git add it and git commit -m probe. Do nothing else.'
 
-#: Probe commits ignore global/system git config (M11): signing/hooks must not turn infrastructure into a leg failure.
+#: The probe repo and its child commit ignore the operator's global/system git
+#: config (M11): a host commit.gpgsign=true or global core.hooksPath must never
+#: turn probe infrastructure into a recorded leg failure.
 GIT_ISOLATION = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'}
 
 #: GIT_DIR and kin name the repo every ``git`` resolves regardless of the
@@ -128,10 +130,8 @@ def seconds(name, default, value=None, *, positive=False, parameter=None):
 
 def key(leg):
     """One leg key for probe and quota bookkeeping (Q16/M8).
-
-    'agy/<model>' only for an agy leg's bare model; a model that already names
-    its provider is its own key.  Legs without a harness attribute (legacy
-    record rows) key on the model string alone, keeping historical rows stable.
+    Prefix only bare agy models; provider-qualified models are their own keys.
+    Legacy rows without a harness keep their historical model-only keys.
     """
     return ('agy/' + leg.model if getattr(leg, 'harness', None) == 'agy' and '/' not in leg.model
             else leg.model)
