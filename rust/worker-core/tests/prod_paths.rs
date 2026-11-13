@@ -132,3 +132,21 @@ fn prod_paths_envfiles_roots_and_normalization() {
         tmp.path()
     )));
 }
+
+#[test]
+fn prod_paths_preserves_quoted_and_escaped_path_whitespace() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("worker.service"), "[Service]\nWorkingDirectory=\"/home/user/my repo/worktrees/a\"\nExecStart=/home/user/my\\ repo/worktrees/a/run\nEnvironment=\"PYTHONPATH=/home/user/my repo/worktrees/a/lib:/usr/lib\"\n").unwrap();
+    let refs = prod_paths::unit_references(tmp.path(), tmp.path()).unwrap();
+    for path in [
+        "/home/user/my repo/worktrees/a",
+        "/home/user/my repo/worktrees/a/run",
+        "/home/user/my repo/worktrees/a/lib",
+    ] {
+        assert!(
+            refs.iter().any(|r| r.path == PathBuf::from(path)),
+            "{path}: {refs:?}"
+        );
+    }
+    assert_eq!(prod_paths::issues(&refs, &["/".into()]).len(), 3);
+}

@@ -87,9 +87,54 @@ pub fn issues(refs: &[Reference], roots: &[PathBuf]) -> Vec<Reference> {
 // No shell expansion or command execution is performed.
 fn paths(value: &str, home: &Path) -> Vec<PathBuf> {
     let re = regex::Regex::new(r#"(?:/|~/|%h/|\$HOME/|\$\{HOME\}/)[^\s\"':;|&<>)]*"#).unwrap();
-    re.find_iter(value)
-        .map(|m| normalize(Path::new(m.as_str()), home))
-        .collect()
+    let mut words = vec![];
+    let mut word = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for c in value.chars() {
+        if escaped {
+            word.push(c);
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if quote == Some(c) {
+            quote = None;
+        } else if quote.is_none() && (c == '\'' || c == '"') {
+            quote = Some(c);
+        } else if quote.is_none() && c.is_whitespace() {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+        } else {
+            word.push(c);
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    let mut result = vec![];
+    for word in words {
+        // Preserve whitespace in a quoted path or assignment. Shell command
+        // strings (sh -c) still need scanning for each embedded absolute path.
+        let value = word.split_once('=').map(|(_, v)| v).unwrap_or(&word);
+        for part in value.split(':') {
+            let part = part.trim_start_matches(['-', '+', '!', '@']);
+            if ["/", "~/", "%h/", "$HOME/", "${HOME}/"]
+                .iter()
+                .any(|p| part.starts_with(p))
+                && !part.contains(" /")
+                && !part.contains([';', '|', '&', '\n'])
+            {
+                result.push(normalize(Path::new(part), home));
+            } else {
+                result.extend(
+                    re.find_iter(part)
+                        .map(|m| normalize(Path::new(m.as_str()), home)),
+                );
+            }
+        }
+    }
+    result
 }
 
 fn add(refs: &mut Vec<Reference>, kind: &str, file: &Path, value: &str, home: &Path) {

@@ -14,6 +14,7 @@ rust/worker-core/src/host_launch.rs -> docs/host-tools.md
 rust/worker-core/src/disk_hygiene.rs -> docs/host-tools.md
 rust/worker-core/src/prod_paths.rs -> docs/host-tools.md
 rust/worker-core/src/host_cleanup_cli.rs -> docs/host-tools.md
+rust/worker-core/src/sweep_merged.rs -> docs/host-tools.md
 rust/pg-reap/** -> docs/pg-reap.md
 src/plangraph/fleet_sync/** -> docs/fleet-sync.md
 src/plangraph/keeper/** -> docs/KEEPER.md

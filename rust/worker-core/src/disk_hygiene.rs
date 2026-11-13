@@ -153,7 +153,7 @@ fn removable(repo: &Path, branch: &str) -> io::Result<bool> {
         .any(|s| s == format!("refs/remotes/origin/{short}")))
 }
 
-fn has_ignored_non_cache(path: &Path) -> io::Result<bool> {
+pub(crate) fn has_ignored_non_cache(path: &Path) -> io::Result<bool> {
     // NUL delimiters preserve filenames containing whitespace or newlines.
     let ignored = git(
         path,

@@ -98,6 +98,54 @@ Review a dry run before installing the 30 minute user timer and setting `PG_REPO
 `PG_WORKTREES` and `PG_PINS` in `~/.config/plangraph/disk-hygiene.env`.
 Live timer installation and real host cleanup are separate deployment evidence.
 
+`pg-disk-hygiene sweep-merged --repo MAIN --root WORKTREES` prints a dry-run
+branch/worktree removal plan. `--json` emits actions, skipped reasons and the
+GitHub call count. `--max N` caps branch action groups per run (default 20).
+The main checkout, invoking checkout, `main`, `master`, remote default branch,
+locked/prunable trees and trees outside the explicit root are protected.
+The command batches `gh pr list --state merged --limit 1000` once, then checks
+all PR states per branch, stopping at 64 total GitHub calls. Open PRs (including
+`phase/*`) and truncated per-branch histories are protected. A branch needs a
+MERGED PR with a matching tip SHA, or a CLOSED PR whose matching head is
+contained in `origin/main`; newer local commits never inherit an older PR's
+eligibility. Missing PR evidence preserves the branch.
+
+Worktrees qualify only for an eligible branch or an absent origin branch, and
+only when clean, with every commit reachable from origin. Detached trees use
+the same origin containment guard. Ignored files outside `target/` and
+`node_modules/`, tracked caches, user-unit references (using the `prod-paths`
+scanner, including quoted paths and drop-ins), or any process cwd preserve the
+tree. Every worktree of a branch must qualify before that branch is removed.
+On Linux the process check scans `/proc`; unreadable cwd links fail closed.
+Full removal coverage therefore requires visibility of all process cwds.
+On other operating systems worktree removal is conservatively skipped.
+
+`--apply` fetches/prunes origin, writes and syncs a private restore TSV before
+deletion, rechecks worktree guards and branch SHAs, removes worktrees first,
+then deletes eligible local branches. An absent-origin branch without PR
+evidence keeps its local branch even if its worktree is removed. Dry-run
+does not fetch, write state, or delete anything. `--remote` additionally opts
+into remote branch deletion with apply; remote and local tips must match, and
+a SHA lease prevents deleting a remote branch changed since planning.
+Without `--remote`, remote branches remain intact.
+
+Restore files live at `~/.local/state/plangraph/sweep/<UTC>.tsv` (override the
+state root with `--state DIR`), with header `branch\tsha\tpr\tworktree`.
+Keep the TSV after a partial failure; mutations stop at the first error.
+Recreate a recorded branch with `git branch BRANCH SHA`, then restore its tree
+with `git worktree add PATH BRANCH`. For a deleted remote, push the recreated
+branch to origin. Detached rows have an empty branch and can be restored with
+`git worktree add --detach PATH SHA`. These commands require the recorded
+objects to remain available; restore before Git garbage collection.
+`--unit-dir DIR` chooses a fixture or alternate user-unit directory.
+
+Affected fixture tests run in WSL from `rust/` with
+`PATH="$HOME/.cargo/bin:$PATH" cargo test -p pg-worker-core --test prod_paths
+--test sweep_merged --test disk_hygiene`. The sweep fixtures use a PATH-stubbed
+`gh`, temporary main/bare-origin repos and no real Git config writes. Run with
+full `/proc` visibility for the apply/removal assertions; unprivileged runs
+also verify that inaccessible processes preserve worktrees.
+
 `pg-package-host --spawn REQUEST.json --order ID1,ID2,ID3 --allow-workstation`
 starts a package through the existing `pg-spawnd shim` on the chosen host (SSH
 for remote hosts). Each target must already run its configured spawner daemon.
