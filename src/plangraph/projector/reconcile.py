@@ -113,9 +113,9 @@ def reconcile(store, source, projector=None, *, now=time.time, grace_s=900,
     stamp = store._iso(now_ts)
     conn = store.conn
     with store._write():
-        # ``unknown_shape`` alarms belong to ``apply`` and are never cleared by a pass
+        # Shape and ownership-refusal alarms belong to apply, not reconciliation.
         present = {(r["kind"], r["workflow_id"], r["key"]): r for r in open_alarms(store)
-                   if r["kind"] != UNKNOWN_SHAPE}
+                   if r["kind"] not in (UNKNOWN_SHAPE, "exec_stale")}
         for ident, row in present.items():
             if ident not in wanted:
                 conn.execute("UPDATE projector_alarms SET cleared_at=? WHERE id=?",

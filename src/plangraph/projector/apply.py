@@ -1,6 +1,6 @@
 """Idempotent apply of projected runs into the keeper (docs/projector.md, "Idempotent apply").
 
-Keeper rows are written only through ``Store.record_attempt`` / ``Store.set_state`` with a
+Keeper rows are written only through ``Store.record_attempt`` / ``Store.project_state`` with a
 ``system`` principal.  The ``projector_*`` ledger and watermark tables are plain SQL on the
 store's connection, each write inside the store's own write transaction.  ``record_attempt``
 opens its own transaction, so the attempt row and its ledger row cannot share one: a crash
@@ -144,28 +144,52 @@ class Projector:
             return False
         if (run_ord, rec.event_id) <= mark:
             result.states_stale += 1
-        elif state not in SETTABLE_STATES:
+        elif rec.state not in SETTABLE_STATES:
             result.states_skipped_state += 1
         else:
             try:
-                out = self.store.set_state(self.principal, rec.plan_key, rec.state,
-                                           (rec.reason or "")[:_REASON_CAP])
+                out = self.store.project_state(self.principal, rec.plan_key, rec.state,
+                    (rec.reason or "")[:_REASON_CAP], run=(wf, run, rec.attempt), run_ord=run_ord)
             except Refused as exc:
                 # ``bad_state``/``locked``: the item moved under us.
                 # ``bad_transition`` (RT-P1 sq5 fix 3): a late projection whose
                 # back move the state machine refuses on an OWNED card -- the
                 # card keeps the state its own run left it in, so the stale
                 # event is skipped rather than fatal (and still marked).
-                if exc.code not in ("bad_state", "locked", "bad_transition"):
+                if exc.code not in ("bad_state", "locked", "bad_transition", "exec_stale"):
                     raise
                 result.states_skipped_state += 1
+                if exc.code == "exec_stale":
+                    self._exec_alarm(rec, exc.msg)
+                    return False  # Retry before ledger/watermark: the owner may be projected later.
             else:
                 if out["changed"]:
                     result.states_written += 1
                 else:
                     result.states_existing += 1
+        self._exec_alarm(rec)
         self._mark(wf, run, act, 0, "state", rec.plan_key, None)
         return True
+
+    def _exec_alarm(self, rec: StateRec, detail=None) -> None:
+        """Durable per-event refusal alarm; refresh on every pass, clear when resolved."""
+        ident = ("exec_stale", rec.workflow_id, f"{rec.run_id}:ev{rec.event_id}")
+        with self.store._write():
+            row = self.conn.execute(
+                "SELECT id FROM projector_alarms WHERE kind=? AND workflow_id=? AND key=?"
+                " AND cleared_at IS NULL", ident).fetchone()
+            if row is not None:
+                if detail is None:
+                    self.conn.execute("UPDATE projector_alarms SET cleared_at=? WHERE id=?",
+                                      (self._stamp(), row[0]))
+                else:
+                    self.conn.execute("UPDATE projector_alarms SET detail=?, raised_at=? WHERE id=?",
+                                      (detail[:_REASON_CAP], self._stamp(), row[0]))
+            elif detail is not None:
+                self.conn.execute(
+                    "INSERT INTO projector_alarms(id, kind, workflow_id, key, detail, raised_at)"
+                    " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM projector_alarms),?,?,?,?,?)",
+                    (*ident, detail[:_REASON_CAP], self._stamp()))
 
     # ----------------------------------------------------------- watermark
     def _advance_watermark(self, proj: RunProjection, run_ord: int) -> None:
@@ -220,7 +244,7 @@ class Projector:
         mark = self._watermark(proj.workflow_id)
         for rec in sorted(proj.states, key=lambda s: s.event_id):
             complete &= self._apply_state(rec, run_ord, mark, result)
-        if complete:                       # a missing item keeps the run re-appliable
+        if complete:                       # missing items/unproven owners keep the run re-appliable
             self._advance_watermark(proj, run_ord)
         return result
 

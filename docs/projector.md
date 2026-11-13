@@ -74,7 +74,7 @@ Payloads are `{"metadata": {"encoding": b64 "json/plain"}, "data": b64}`; decode
 
 The projector never sets `done` or `cancelled` (not in `SETTABLE_STATES`).
 
-Refinements: a StateRec is emitted only when its state differs from the previously emitted state of the same run (no
+Refinements: a StateRec is emitted when its state or workflow attempt differs from the previous record of the same run (no duplicate
 `waiting, waiting`). A TimerStarted never overrides `needs_input` (the answer wait carries a timer). StateRec event ids: the
 ActivityTaskScheduled id for `running`; the attempt's closing event id for `needs_input`/`waiting`; the TimerStarted id; the
 workflow-end event id. Attempt fields not in the result fall back to the event times of ActivityTaskStarted (started_at) and
@@ -112,14 +112,14 @@ Tables (migration 3, `ddl.py`, PG and SQLite variants, created only through the 
   workflow_id `*` is the global watermark (`event_id` unused, `updated_at` = completion of the last full scan). The UI shows it: `GET /v1/projector_watermark` (read-only, same auth gate as `GET /v1/questions`) returns `{global, workflows, open_alarms}` (`open_alarms` is `null` for project-restricted callers: the count is not project-scoped; an unreadable table is `503 {"error": "unavailable"}`, never a 200 body) and the inbox page prints one line from it.
 * `projector_alarms(id, kind, workflow_id, key, detail, raised_at, cleared_at)`; open = `cleared_at IS NULL`.
 
-Writes go through the keeper `Store` (`record_attempt`, `set_state`) with a `system` principal, never raw SQL on keeper tables.
+Writes use system-only `project_state` (distinct audit verb) to install workflow/run/attempt ownership atomically; input `n`/`attempt` or schedule order supplies the workflow attempt, not activity retries.
 * Attempt `n` = next number for the key in history order, taken from `projector_applied` order; row fields `workflow_id`,
   `run_id`, `log_ref = "temporal:<activity_id>:<attempt>"`. Crash window (attempt row written, applied row not): on `Refused
   conflict` for that n, if the existing row has the same workflow_id/run_id/log_ref, just insert the applied row.
 * State: apply a StateRec only if its (run_ord, event_id) is greater than the stored watermark for the workflow (forward only),
-  only if the item exists and its current state is in `SETTABLE_STATES`; else record it applied with no keeper write and count
+  targets must be in `SETTABLE_STATES`; claimed cards record only ownership, while other keeper-owned states are skipped with
   `skipped_state`. Terminal (`parked`, `failed`) states are not overwritten by a later `running` from an older run.
-* Watermark row updated after each run is fully applied.
+* Watermarks advance only after full apply; `exec_stale` stays unmarked and raises/refreshes an apply-owned alarm until resolved. Only proven newer history supersedes an owner, retiring its run and preserving the worker binding.
 * `rebuild`: re-run every workflow from history in (start_time, workflow_id) order. On an existing database it is a no-op
   (idempotent); on a fresh keeper it yields attempts rows equal (ignoring `id`) and the same `projector_applied` set.
 

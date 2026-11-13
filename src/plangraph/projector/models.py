@@ -60,6 +60,7 @@ class StateRec:
     plan_key: str
     state: str
     reason: Optional[str]
+    attempt: int = 1
 
 
 @dataclass(frozen=True)

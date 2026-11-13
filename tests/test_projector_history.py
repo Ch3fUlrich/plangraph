@@ -112,7 +112,8 @@ def test_02_check_fail_then_ok():
     assert summary(p) == ("DEMO-2", "completed", "done", None, 17)
     assert attempts(p) == [("1", 1, 5, 7, "check_fail"), ("2", 1, 11, 13, "ok")]
     assert [a.tokens_in for a in p.attempts] == [1200, 2400]
-    assert states(p) == [(5, "running")]  # a check_fail close and the rerun add no state change
+    assert states(p) == [(5, "running"), (11, "running")]  # new attempt advances the owner
+    assert [s.attempt for s in p.states] == [1, 2]
 
 
 def test_03_usage_limit_wait_then_ok():

@@ -1,0 +1,1 @@
+- Projected history now establishes execution ownership before worker calls, fences delayed stale runs without blocking the live run, and alarms on retryable ownership conflicts.

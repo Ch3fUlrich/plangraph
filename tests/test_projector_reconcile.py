@@ -129,7 +129,8 @@ def test_state_drift_when_keeper_owns_the_item_while_workflow_is_open(world, src
     from keeper_util import to_claimed
     put(src_dir, *OPEN_01)
     project(world, src_dir, projector)
-    world.store.set_state(world.p("system"), "demo:DEMO-1", "open", "")
+    assert world.store._item("demo:DEMO-1")["exec_run_id"] is not None
+    world.store.set_state(world.p("system"), "demo:DEMO-1", "open", "", hand_back=True)
     to_claimed(world, "demo:DEMO-1")
     assert state(world, "demo:DEMO-1") == "claimed"
     assert kinds(run(world, src_dir)) == [("state_drift", "card:DEMO-1", "demo:DEMO-1")]

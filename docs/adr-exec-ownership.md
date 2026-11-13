@@ -79,9 +79,7 @@ park's single `_apply_state` transaction: a completion refused or lost to a
 race rolls the record back, so a failed completion never leaves a recorded
 owner.
 
-The projector does not yet forward run ids to `set_state`. Therefore the first
-run-carrying worker verb wins ownership, rather than the projector establishing
-the owner. The forward-only transition table applies to `set_state` with `run`,
+System-only `project_state` establishes workflow/run/attempt ownership before worker facts; newer watermark-ordered runs retire old owners without changing claims, preserving `exec_principal` after claim release. Worker recording is a compatibility fallback, not takeover. The forward-only transition table applies to `set_state` with `run`,
 **and to a bare run-less `set_state` on an OWNED card**: a back move there
 without `run`/`hand_back` is refused `bad_transition`, so router/l1/system (and
 a late projection) can no longer walk an owned card backwards and strand it
