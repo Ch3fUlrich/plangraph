@@ -10,7 +10,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 import asyncio, hashlib, json, os, socket, time, uuid
 from .runner import SpawnerRunner
-from .cancel_recorded import cancel_recorded
+from .cancel_recorded import cancel_recorded, expire_queue
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
@@ -30,10 +30,11 @@ class SpawnService(SeatSpawnMixin):
         if not isinstance(run_id, str) or not run_id.startswith('run-') or not run_id[4:].isalnum():
             raise ValueError('unknown run id')
         return self.state / 'runs' / run_id / 'record.json'
-    def result(self, run_id, **read_retry):
+    def result(self, run_id, *, expire=True, **read_retry):
         """Read one run record; retry options forward to read_text_retry."""
         try:
-            return json.loads(read_text_retry(self._path(run_id), **read_retry))
+            record = json.loads(read_text_retry(self._path(run_id), **read_retry))
+            return expire_queue(self, record) if expire else record
         except FileNotFoundError:
             raise ValueError('unknown run id') from None
 
@@ -107,12 +108,13 @@ class SpawnService(SeatSpawnMixin):
                 target['stdout_tail'] = keep_output(clean(target['stdout_tail']))
         atomic_write_private(self._path(record['run_id']), json.dumps(dict(redact(record), **({'item_key': item_key} if 'item_key' in record else {})), indent=2))
         publish(self._path(record['run_id']).parent, record, getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
-        if record.get('ended'):
-            getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
-
+        if record.get('ended'): getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
+        if record.get('ended') is not None:
+            (self.state / 'queue-wake').touch()
+            for event in getattr(self, '_queued', {}).values(): event.set()
     def ps(self):
         from .stall_watchdog import read_runs
-        return {'runs': sorted(read_runs(self.state), key=lambda r: r.get('started', 0), reverse=True)}
+        return {'runs': sorted((expire_queue(self, r) for r in read_runs(self.state)), key=lambda r: r.get('started', 0), reverse=True)}
 
     def route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
         try:
@@ -203,7 +205,7 @@ class SpawnService(SeatSpawnMixin):
     async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                     review_of=None, model=None, leg=None, override_reason=None,
                     dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
-                    seats=False, _plan=None, run_worktree=False, _placement=None):
+                    seats=False, _plan=None, run_worktree=False, _placement=None, _queued_record=None):
         from plangraph.settings import admit_review_scope
         admit_review_scope(card, role, review_scope)
         from plangraph.planner.routing import hand_picked, SpawnRefused, SpawnPlan
@@ -294,7 +296,7 @@ class SpawnService(SeatSpawnMixin):
         if plan.error or not plan.first_leg:
             raise SpawnRefused(plan.error or 'no eligible leg')
         plan = replace(plan, legs=witness_gate_legs(card, role, plan.legs), placement=_placement or plan.placement)  # before run artifacts
-        record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
+        record = dict(_queued_record or {}, run_id=(_queued_record or {}).get('run_id') or 'run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or (role == 'review' and (model is not None or leg is not None)) else None, served_model=None,
             served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),

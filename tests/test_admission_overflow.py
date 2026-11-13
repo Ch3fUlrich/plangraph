@@ -67,21 +67,21 @@ def test_failures_queue_with_safe_reasons(setup, failure, reason):
     service, _, remote = setup
     remote.side_effect = failure
     result = service.admit_spawn({})
-    assert result['status'] == 'queued'
-    assert reason in result['reason'] and '/secret' not in result['reason']
+    assert result['status'] == 'refused' and result['reason'] == 'host_memory_floor'
+    assert reason in result['overflow_reason'] and '/secret' not in result['error']
     assert remote.call_count == 2
 
 
 def test_private_card_never_copies(setup):
     service, _, remote = setup
     result = service.admit_spawn({}, card={'diff_ref': {'repo': '/private'}})
-    assert result['status'] == 'queued' and 'not public' in result['reason']
+    assert result['status'] == 'refused' and 'not public' in result['overflow_reason']
     remote.assert_not_called()
 
 
 def test_benchmark_not_forwarded(setup):
     service, _, remote = setup
-    assert 'benchmark' in service.admit_spawn({'benchmark': object()})['reason']
+    assert 'benchmark' in service.admit_spawn({'benchmark': object()})['overflow_reason']
     remote.assert_not_called()
 
 
@@ -150,12 +150,12 @@ def test_no_config_below_floor_refuses_spawn(setup, monkeypatch, capsys, cli_mix
         from plangraph.spawner import cli
         monkeypatch.setattr(cli, 'SpawnService', lambda **kw: shared)
         assert cli.main(['spawn', '--card', '{"task":"test"}',
-                         'Implement the requested change.']) == 5
+                         'Implement the requested change.']) == 2
         result = json.loads(capsys.readouterr().out)
-    assert result['status'] == 'queued' and result['exit_code'] == 5
-    assert result['reason'] == ('memory: free 4000 MB, floor 3000 MB, role 2048 MB'
-                                '; queue: repo is not public (absent or unknown allowlist)')
-    assert result['overflow_reason'] == result['reason']
+    assert result['status'] == 'refused' and result['exit_code'] == 2
+    assert result['reason'] == 'host_memory_floor'
+    assert result['overflow_reason'] == ('memory: free 4000 MB, floor 3000 MB, role 2048 MB'
+                                '; refused: repo is not public (absent or unknown allowlist)')
     remote.assert_not_called()
     shared._save.assert_called_once_with(result)
 

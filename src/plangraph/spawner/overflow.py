@@ -11,6 +11,7 @@ import secrets
 import shlex
 import subprocess
 import tempfile
+import time
 import uuid
 from typing import NamedTuple
 
@@ -108,6 +109,13 @@ def memory_refusal(free_mb, reservation_mb, floor_mb):
     return f'memory: free {free_mb} MB, floor {floor_mb} MB, role {reservation_mb} MB'
 
 
+def memory_floor_record(memory, role_mb, floor, detail, role='implement'):
+    return dict(run_id='run-' + uuid.uuid4().hex, status='refused', role=role,
+                reason='host_memory_floor', overflow_reason=detail, exit_code=2,
+                mem_available_mb=memory, floor_mb=floor, role_mb=role_mb, ended=time.time(),
+                error=f'host_memory_floor: MemAvailable {memory} MB, floor {floor} MB, role {role_mb} MB; {detail}')
+
+
 def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
             remote_first=False, local_refusal=None, host_order=()):
     """Select from config-enriched readiness records; age is computed on read."""
@@ -117,7 +125,7 @@ def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
     if not public:
         if remote_first:
             return Decision(None, local_reason or 'local_fallback_no_remote')
-        return Decision(None, local_reason + '; queue: repo is not public (absent or unknown allowlist)')
+        return Decision(None, local_reason + '; refused: repo is not public (absent or unknown allowlist)')
     candidates, refused = [], []
     records = ready_records.items() if remote_first else sorted(ready_records.items())
     for index, (name, row) in enumerate(records):
@@ -147,7 +155,7 @@ def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
         return Decision(min(candidates)[2], 'remote_most_free_ram' if remote_first else local_reason)
     if remote_first:
         return Decision(None, local_reason or 'local_fallback_no_remote')
-    return Decision(None, local_reason + '; queue: ' + ('; '.join(refused) or 'no overflow hosts configured'))
+    return Decision(None, local_reason + '; refused: ' + ('; '.join(refused) or 'no overflow hosts configured'))
 
 
 def ready_records(config, role='implement'):
@@ -336,13 +344,13 @@ def main(argv=None):
         attempts = 0
         while True:
             decision = decide(memory, role_mb, floor_mb, records, public)
-            if decision.host is None:
-                print(json.dumps({'overflow_reason': decision.reason}))
-                return 5
-            if attempts == 2:
-                print(json.dumps({'overflow_reason': 'queue: ' + '; '.join(
-                    name + ': ' + row.get('refusal', 'retry limit') for name, row in sorted(records.items()))}))
-                return 5
+            if decision.host is None or attempts == 2:
+                detail = decision.reason if decision.host is None else 'refused: retry limit'
+                record = memory_floor_record(memory, role_mb, floor_mb, detail, args.role)
+                cli.SpawnService()._save(record)
+                print(json.dumps(record))
+                print(record['error'], file=__import__('sys').stderr)
+                return 2
             name = decision.host
             attempts += 1
             try:

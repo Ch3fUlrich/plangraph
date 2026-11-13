@@ -92,7 +92,7 @@ def test_private_never_copies(inputs, monkeypatch, capsys, config):
     root, path, args = inputs
     path.write_text(json.dumps(config))
     monkeypatch.setattr(o, 'remote_spawn', lambda *a: pytest.fail('private copy'))
-    assert o.main(args) == 5
+    assert o.main(args) == 2
     assert 'not public' in capsys.readouterr().out
 
 
@@ -118,7 +118,7 @@ def test_retry_and_queue_reasons(inputs, monkeypatch, capsys):
     assert calls == ['ash', 'birch']
     assert json.loads(capsys.readouterr().out)['host'] == 'birch'
     monkeypatch.setattr(o, 'remote_spawn', lambda *a: None)
-    assert o.main(args) == 5
+    assert o.main(args) == 2
     output = capsys.readouterr().out
     assert 'ash: remote spawn failed' in output and 'birch: remote spawn failed' in output
 
@@ -281,15 +281,15 @@ def test_record_host(tmp_path, monkeypatch):
     assert record['host'] == 'invented-local'
 
 
-@pytest.mark.parametrize('hosts,code', [({'invented': 'alias'}, 5), ([], 1), (None, 1)])
+@pytest.mark.parametrize('hosts,code', [({'invented': 'alias'}, 2), ([], 1), (None, 1)])
 def test_malformed_host_config(inputs, monkeypatch, capsys, hosts, code):
     root, path, args = inputs
     path.write_text(json.dumps({'hosts': hosts, 'public_repos': [str(root)]}))
     monkeypatch.setattr(o, 'remote_spawn', lambda *a: pytest.fail('malformed host copied'))
     assert o.main(args) == code
     output = capsys.readouterr()
-    if code == 5:
-        assert 'queue:' in output.out and 'malformed readiness' in output.out
+    if code == 2:
+        assert 'refused:' in output.out and 'malformed readiness' in output.out
     else:
         assert 'input or resource check failed' in output.err
 

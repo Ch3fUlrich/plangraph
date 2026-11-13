@@ -382,6 +382,7 @@ raise SystemExit(code)
                     print(line, file=sys.stderr)
                     seen.add(line)
         print(json.dumps(result, indent=2))
+        if isinstance(result, dict) and result.get('reason') == 'host_memory_floor': print(result['error'], file=sys.stderr)
         if isinstance(result, dict):
             if 'seats' in result:
                 # rc 0 only while some seat can still deliver a verdict (planned, running or completed).
@@ -394,7 +395,6 @@ raise SystemExit(code)
     except (ValueError, KeyError, OSError, SpawnRefused) as exc:
         print(((f'{args.run_id}: ' if hasattr(args, 'run_id') else '') + type(exc).__name__) if isinstance(exc, PermissionError) else str(exc), file=sys.stderr)
         return 3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1
-
 
 if __name__ == '__main__':
     raise SystemExit(main())

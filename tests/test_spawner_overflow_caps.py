@@ -107,7 +107,8 @@ def test_cli_shared_ram_refusal(registry, monkeypatch, tmp_path):
         'state': str(tmp_path / 'state'), 'card': {'task': 'test'}, 'prompt': 'prompt'}) + '\n'))
     assert o.cli.main(['--supervise']) == 0
     result = json.loads(output.getvalue())
-    assert reason in result['reason'] and result['status'] == 'queued'
+    assert reason in result['overflow_reason'] and result['status'] == 'refused'
+    assert result['reason'] == 'host_memory_floor' and result['ended'] is not None
 
 
 @pytest.mark.parametrize('total,free,used', [(0, 0, 0), (1000, 100, 90), (1000, 99, 90.1)])

@@ -80,10 +80,14 @@ def admit(service, options, *, card=None, preview=False):
             if decision.host is None and decision.reason in ('local_fallback_no_remote', 'local_benchmark_database'):
                 return None
         if decision.host is None:
-            record = {'run_id': 'run-' + uuid.uuid4().hex,
-                      'status': 'refused' if remote_first else 'queued',
-                      'reason': decision.reason, 'overflow_reason': decision.reason,
-                      'exit_code': 2 if remote_first else 5}
+            record = overflow.memory_floor_record(memory, role_mb, floor, decision.reason, role)
+            if not overflow.memory_refusal(memory, role_mb, floor):
+                record.update(reason=decision.reason, error=decision.reason)
+            elif not remote_first and config.get('queue_memory_wait') is True and not options.get('seats'):
+                from .cancel_recorded import enqueue_memory
+                enqueue_memory(service, record, options, card, config)
+            from .item_key import annotate_item
+            annotate_item(record, card)
             break
         name = decision.host
         try:
@@ -139,7 +143,7 @@ class SeatSpawnMixin:
     _sync_seat = staticmethod(sync_seat)
 
     def admit_spawn(self, options, *, card=None):
-        """Check admission and persist any queued or remote run through the service."""
+        """Persist terminal refusals, supervised memory waits, or remote receipts."""
         record = admit(self, options, card=card)
         if record is not None:
             self._save(record)

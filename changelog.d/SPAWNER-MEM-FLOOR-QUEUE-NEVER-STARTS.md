@@ -1,0 +1,1 @@
+- Refuse unplaceable memory-floor spawns immediately with measured RAM evidence; explicitly opted-in memory waits retry on timer/run exit, expire after a configurable 15-minute bound, and cancel successfully before launch.
