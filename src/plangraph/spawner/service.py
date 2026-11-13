@@ -15,6 +15,7 @@ from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
 from .item_key import annotate_item
+from .skipped_attempts import fill_skipped_attempts
 class SpawnService(SeatSpawnMixin):
     def __init__(self, runner=None, state=None, leg_reader=None):
         self.runner = runner or SpawnerRunner()
@@ -54,25 +55,7 @@ class SpawnService(SeatSpawnMixin):
                 target['served_family'] = target.get('served_family') or 'unwitnessed'
             if target['served_model'] == 'unwitnessed':
                 target.setdefault('served_witness_reason', 'no authenticated harness telemetry; skipped or unobserved leg')
-        if record.get('ended') is not None:
-            attempted = {a['leg'].get('id') if isinstance(a.get('leg'), dict) else a.get('leg')
-                         for a in record.get('attempts', [])}
-            plan = record.get('plan') or {}
-            for candidate in plan.get('skipped', []):
-                leg = candidate.get('leg')
-                if leg not in attempted:
-                    record.setdefault('attempts', []).append(dict(leg=leg, status='skipped',
-                        down_reason='not_served_on_host' if (candidate.get('reason') or '').split(':', 1)[0].strip() == 'not_served_on_host' else None,
-                        skip_reason=candidate.get('skip_reason') or candidate.get('reason'),
-                        served_model='unwitnessed', served_family='unwitnessed',
-                        served_witness_reason='leg skipped before launch'))
-                    attempted.add(leg)
-            for leg in plan.get('legs', []):
-                if leg['id'] not in attempted:
-                    record.setdefault('attempts', []).append(dict(leg=leg, status='skipped',
-                        skip_reason='earlier_leg_succeeded' if record.get('status') in ('completed', 'dry_run') else 'run_terminated_before_leg',
-                        served_model='unwitnessed', served_family='unwitnessed',
-                        served_witness_reason='leg not launched'))
+        fill_skipped_attempts(record)
         env = dict(os.environ)
         env.update(getattr(self.runner, '_child_envs', {}).get(record.get('job_id'), {}))
         def clean(value):
