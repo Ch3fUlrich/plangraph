@@ -52,8 +52,8 @@ are counted; only Bash pre-tool events are candidates for polling refusals.
   that this failure preserves the old bytes and leaves no temporary entry, not
   that the update succeeds. There is no truncate/remove fallback or retry loop;
   filesystems without any supported rename report IO failure without
-  publishing partial state. For first publication and replacement, refusal codes 87, 1 and
-  50 advance through Ex/POSIX -> Ex/REPLACE_IF_EXISTS -> FileRenameInfo/boolean
+  publishing partial state. For rename calls on first publication and replacement,
+  refusal codes 87, 1 and 50 advance through Ex/POSIX -> Ex/REPLACE_IF_EXISTS -> FileRenameInfo/boolean
   ReplaceIfExists -> MoveFileExW/REPLACE_EXISTING|WRITE_THROUGH. Other errors stop.
   POSIX is preferred for retained snapshots and fresh opens during replacement;
   unsupported classes/flags fall back even when a destination exists. Sharing,
@@ -64,12 +64,24 @@ are counted; only Bash pre-tool events are candidates for polling refusals.
   every platform; native Windows execution is still required for OS acceptance.
   The API buffer length is `offset_of!(FILE_RENAME_INFO, FileName) + name_bytes + 2`,
   not the padded struct size; FileNameLength excludes NUL, RootDirectory is null,
-  and legacy uses the boolean union member. Preparation also has bounded fallback:
+  and legacy uses the boolean union member. windows-sys 0.61.2 declares
+  `FILE_RENAME_INFO_0.ReplaceIfExists: bool`; `true` is correct, not integer `1`.
+  Linux tests inspect the production buffer using the real windows-sys field
+  offset, flags/boolean, null root, UTF-16 name, byte length and terminating NUL.
+  Preparation has separate bounded fallbacks, not one combined refusal chain:
   absolute-path refusal canonicalizes the existing parent; DELETE-create refusal
   creates an ordinary read/write temp and uses MoveFileExW; write/sync refusal
   reopens the temp, permission-copy refusal uses the path API, and metadata refusal
   queries an opened destination. Sync and permission errors on those alternate
-  paths remain fatal. Every unexpected failed call prints `atomic_write step=...`
+  paths remain fatal. Absolute/canonical-parent, DELETE/plain-create,
+  write-reopen, metadata-open, permission-path and sync-reopen refusals are
+  proven only by injected seams, not native OS refusals. The rename refusal
+  sequence and combined preparation failures are also proven only by injected
+  seams. Those seams skip the refused call and exercise the alternate real IO;
+  on Linux the final publication uses `fs::rename`, not a Windows rename API.
+  The native Windows call site of the historical error 87 remains unidentified.
+  Cross-compilation proves type correctness, not native refusal or OS acceptance.
+  Every unexpected failed call prints `atomic_write step=...`
   with the original OS error, including recoverable failures; expected absent
   metadata during first publication is silent. No diagnostic includes a path.
   Non-POSIX Ex/replace, legacy and MoveFileExW can replace a closed destination,
@@ -278,17 +290,24 @@ Prompt-Git retains elapsed-time bounds on collection itself, excluding producer
 setup and cleanup handshakes: the escaped-stdout case must return in less than
 500 ms and the owned-group case in less than 3 s. Hung and closed-stdout cases
 also require less than 500 ms. The separate 30 s watchdog does not replace these
-assertions. The native producer cannot complete until the parent releases its
-control channel after collection returns. Hung/closed cases require the Git
+assertions. The stalled native producer cannot complete until the parent releases
+its control channel after collection returns. Hung/closed cases require the Git
 timeout error, a terminated producer and no drain marker; the escaped case
 releases its holder only after the result. The deterministic clock test still
 rejects extra EOF grace. Accept is nonblocking with a deadline, and every control
-socket has read and write timeouts. The drain test rejects disabled draining;
-the status test rejects in-place writes. Collection captures errors before
+socket has read and write timeouts. The drain test checks the below-cap prefix
+and cleanup; the status test rejects in-place writes. Collection captures errors before
 unconditional termination/reaping, including missing stdout, the initial poll,
 the deadline-loop poll and repeated cleanup-poll failure. Real-child fault tests
 assert exact poll counts, termination and ECHILD before test cleanup. Kill errors
 still cannot bypass the final wait. No retry wrapper or test ignore is used.
+The cap bounds reads to cap+1 bytes: once oversized, collection stops reading,
+terminates/reaps the owned child as needed and returns `TooLarge` without waiting
+for EOF or the full timeout. A continuously writing native producer pins that
+case with a <500 ms bound, termination/reaping and checkout cleanup. The drain
+fixture releases its checkout handle before emitting the over-cap suffix;
+stalled below-cap prefixes still time out as `Git`. Windows descendant cleanup
+is not proven: `child.kill()` targets only the owned child, not its descendants.
 Both crate manifests identify the existing windows-sys features used by these
 paths; Windows test-target compilation checks their uses, not native execution.
 Mutation checks confirm that returning a collection error before cleanup fails
@@ -310,7 +329,8 @@ the full Python suite because the existing changelog fragment is unmapped. That
 fallback is not executed under this lane's targeted-tests-only constraint.
 This fix round runs the selector with `--base origin/main -n 2 --within
 tests/test_check_changelog_docs.py tests/test_ci_select_rust_inputs.py
-tests/test_split_make_public.py --run`: these are the fragment/docs, Rust-input
+tests/test_split_make_public.py tests/test_turn_budget_fallback_docs.py --run`:
+these are the fragment/docs, Rust-input
 and public-diff contracts relevant to this Rust-only lane, not the Python suite.
 
 ### Windows workstation acceptance (not executed on the Linux builder)

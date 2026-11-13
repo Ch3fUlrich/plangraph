@@ -17,7 +17,7 @@ pub const FILE_MAX: u64 = 1024 * 1024;
 #[path = "rename.rs"]
 mod rename;
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 #[path = "windows_rename.rs"]
 mod windows_rename;
 #[cfg(any(windows, test))]

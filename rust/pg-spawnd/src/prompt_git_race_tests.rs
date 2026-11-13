@@ -16,7 +16,7 @@ const PRODUCER_WATCHDOG: Duration = Duration::from_secs(120);
 #[test]
 fn controlled_stdout_producer() {
     let Some(mode) = std::env::var_os(MODE) else {
-        return;
+        return healthy_over_cap_producer_returns_too_large_without_waiting_for_eof();
     };
     #[cfg(unix)]
     if mode == "escaped" || mode == "exited" || mode == "group" {
@@ -56,7 +56,18 @@ fn controlled_stdout_producer() {
         options.share_mode(0);
     }
     let held = options.open("held").unwrap();
-    std::io::stdout().write_all(&[b'x'; 1024]).unwrap();
+    if mode == "large" {
+        // Healthy and unbounded, not hung: keep producing until the collector
+        // closes stdout or terminates us. The test never releases this child.
+        control.write_all(b"ready").unwrap();
+        loop {
+            if std::io::stdout().write_all(&[b'x'; 8192]).is_err() {
+                drop(held);
+                std::process::exit(0);
+            }
+        }
+    }
+    std::io::stdout().write_all(&[b'x'; 512]).unwrap();
     std::io::stdout().flush().unwrap();
     if mode == "closed" {
         #[cfg(unix)]
@@ -76,12 +87,20 @@ fn controlled_stdout_producer() {
     control.read_exact(&mut go).unwrap();
     assert_eq!(go, [1]);
     std::io::stdout()
-        .write_all(&vec![b'x'; 1024 * 1024])
+        .write_all(&vec![
+            b'x';
+            if mode == "holder" { 256 } else { 1024 * 1024 }
+        ])
         .unwrap();
     std::io::stdout().flush().unwrap();
     drop(held);
     std::fs::write("drained", b"done\n").unwrap();
     control.write_all(b"done").unwrap();
+    if mode == "drain" {
+        // The valid prefix and checkout handle have drained before the final
+        // oversized suffix. Cap rejection must still perform child cleanup.
+        let _ = std::io::stdout().write_all(&vec![b'x'; 2 * 1024 * 1024]);
+    }
     std::process::exit(0);
 }
 
@@ -203,10 +222,11 @@ pub(super) fn oversized_stdout_is_drained_before_checkout_cleanup() {
     let (root, child, mut control) = producer("drain");
     let (tx, rx) = std::sync::mpsc::channel();
     let collector = std::thread::spawn(move || {
-        tx.send(collect_diff(child, 1, WATCHDOG)).unwrap();
+        tx.send(collect_diff(child, 2 * 1024 * 1024, WATCHDOG))
+            .unwrap();
     });
-    // The child has already emitted cap+1 but deliberately retains its handle.
-    // An early TooLarge is a failure, not an invitation to retry cleanup.
+    // The prefix is below cap and deliberately retains its checkout handle.
+    // Only the suffix after release is oversized; keep the cleanup assertions.
     assert_eq!(
         rx.recv_timeout(Duration::from_millis(100)),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout)
@@ -241,7 +261,40 @@ pub(super) fn oversized_exited_child_does_not_kill_group() {
 
 #[test]
 fn oversized_hung_producer_is_a_bounded_timeout_not_too_large() {
-    assert!(deadline_ends_wait("hung", 1) < Duration::from_millis(500));
+    // A stalled prefix is not evidence that the diff exceeds the cap.
+    assert!(deadline_ends_wait("hung", 4096) < Duration::from_millis(500));
+}
+
+#[test]
+fn healthy_over_cap_producer_returns_too_large_without_waiting_for_eof() {
+    let (root, child, mut control) = producer("large");
+    #[cfg(unix)]
+    let pid = child.id() as i32;
+    let start = Instant::now();
+    assert_eq!(
+        collect_diff(child, 4096, Duration::from_secs(2)),
+        Err(InlineDiffError::TooLarge)
+    );
+    assert!(start.elapsed() < Duration::from_millis(500));
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) },
+            -1
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+    }
+    let mut byte = [0];
+    match control.read(&mut byte) {
+        Ok(0) => (),
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => (),
+        result => panic!("oversized producer was not terminated: {result:?}"),
+    }
+    assert!(!root.join("drained").exists());
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

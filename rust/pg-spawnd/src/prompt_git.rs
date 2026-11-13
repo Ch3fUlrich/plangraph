@@ -94,20 +94,24 @@ fn collect_diff_with_poll(
                 .by_ref()
                 .take(cap.saturating_add(1) as u64)
                 .read_to_end(&mut bytes);
-            // Git for Windows may be a wrapper. Drain without retaining more bytes
-            // so its actual Git child can exit before the checkout is removed.
-            let result = result.and_then(|_| std::io::copy(&mut stdout, &mut std::io::sink()));
+            // Stop at cap+1: an oversized healthy producer need not reach EOF.
+            // The collector terminates/reaps its owned child before returning.
             drop(stdout);
             let _ = tx.send(result.map(|_| bytes));
         });
         let result = rx.recv_timeout(deadline.saturating_duration_since(now()));
         exited = poll(&mut child).map_err(|_| InlineDiffError::Git)?;
-        let completed = result.is_ok()
-            && wait_before_deadline(deadline, now, sleep, || {
-                exited = poll(&mut child)?;
-                Ok(exited.is_some() && reader.is_finished())
-            })
+        let bytes = result
+            .map_err(|_| InlineDiffError::Git)?
             .map_err(|_| InlineDiffError::Git)?;
+        if bytes.len() > cap {
+            return Err(InlineDiffError::TooLarge);
+        }
+        let completed = wait_before_deadline(deadline, now, sleep, || {
+            exited = poll(&mut child)?;
+            Ok(exited.is_some() && reader.is_finished())
+        })
+        .map_err(|_| InlineDiffError::Git)?;
         // An escaped descendant may still hold stdout. Detach on failure; do
         // not wait for its EOF or grant another grace period after the deadline.
         if !completed {
@@ -115,12 +119,6 @@ fn collect_diff_with_poll(
         }
         // is_finished makes this join nonblocking within the original budget.
         reader.join().map_err(|_| InlineDiffError::Git)?;
-        let bytes = result
-            .map_err(|_| InlineDiffError::Git)?
-            .map_err(|_| InlineDiffError::Git)?;
-        if bytes.len() > cap {
-            return Err(InlineDiffError::TooLarge);
-        }
         Ok(bytes)
     })();
     let status = reap_after_kill(&mut child, |child| {

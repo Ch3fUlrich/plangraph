@@ -115,17 +115,17 @@ mod tests {
 
     #[test]
     fn rename_buffer_uses_field_offset_not_struct_tail_padding() {
-        for offset in [12, 20] {
-            for name in ["a", "status.json", "status-\u{1f980}.json"] {
-                let units = name.encode_utf16().count();
-                assert_eq!(
-                    buffer_size(offset, units).unwrap() as usize,
-                    offset + units * 2 + 2
-                );
-            }
+        use windows_sys::Win32::Storage::FileSystem::FILE_RENAME_INFO;
+        let offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+        assert!(offset + 2 < std::mem::size_of::<FILE_RENAME_INFO>());
+        for name in ["a", "status.json", "status-\u{1f980}.json"] {
+            let units = name.encode_utf16().count();
+            let size = buffer_size(offset, units).unwrap() as usize;
+            assert_eq!(size, offset + units * 2 + 2);
+            assert_ne!(size, std::mem::size_of::<FILE_RENAME_INFO>() + units * 2);
         }
-        assert!(buffer_size(20, usize::MAX).is_err());
+        assert!(buffer_size(offset, usize::MAX).is_err());
         assert!(buffer_size(usize::MAX, 1).is_err());
-        assert!(buffer_size(20, u32::MAX as usize).is_err());
+        assert!(buffer_size(offset, u32::MAX as usize).is_err());
     }
 }
