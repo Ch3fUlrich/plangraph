@@ -30,6 +30,7 @@ install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
 with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
 The D-5504/D-5506 `mcp_tools.py` exception only splits schema data out of the full Python MCP transport; it also retires with MCP-RUST.
+Interim (operator D-5830): `**/*.py` and `**/*.sh` are allowlisted, so new Python and shell files pass the new-code gate; Rust stays the preferred language for new code, and the gate, its CI job and its tests stay in place for the other blocked extensions.
 
 ```bash
 python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
@@ -37,9 +38,10 @@ python tools/affected_tests.py --base origin/main --run -n auto  # writers / PR 
 python -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
 
-The affected selector falls back to the full suite for unmapped Python source,
-shared fixtures and suite configuration; documentation/status/build artifacts do
-not trigger a full run. Do not bypass a conservative fallback on PRs.
+The affected selector falls back to the full suite for shared fixtures and suite
+configuration; unmapped code selects a bounded smoke set (tests naming its directory,
+at most 12, plus `tests/test_affected_tests.py`), and CI/main keep the full suite; documentation, `changelog.d/` fragments,
+status and build artifacts, and `.md`/`.rst`/`.txt` files no test names, select no tests. Do not bypass a conservative fallback on PRs.
 Pass `--head <revision>` for a committed-only comparison, excluding staged,
 worktree and untracked changes; omit it to include checkout changes.
 Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
@@ -119,6 +121,7 @@ with compatibility re-exports at `seat_record.backfill` and
 `seat_verdict.apply_backfill`. Record parsing/discovery remain in `seat_record`;
 `seat_verdict.main()` remains the only keeper poster. The helper's path-specific
 Python exception covers this responsibility-only split of existing code.
+Explicit transport-only retries require `--repost-transport --url URL` without `--dry-run`; see the [backfill diagnosis](docs/seat-verdict-backfill-diagnosis.md).
 
 Backfill rejects pinned or explicitly overridden seats, incomplete/nonzero-exit records, writer-family seats, and records without a strict verdict. Family independence uses the same witnessed evidence model as the poster. Any eligible CHANGES takes precedence over ACCEPT in every discovery order; replay never falls through from a terminal or ambiguous CHANGES to another accepting seat. Apply JSON separates eligibility from `delivery` (`delivered`, `failed`, or `skipped`) and includes `verifier_exit` after a send. Corrupt journals and busy shared outbox locks skip with reasons without blocking other items. PR subprocesses have a 30-second timeout; lock acquisition is nonblocking. Exact completion-head equality remains required; backfill does not permit a different head via card ancestry.
 
