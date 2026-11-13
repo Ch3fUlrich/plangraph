@@ -218,7 +218,8 @@ class SeatSpawnMixin:
         """One normal launch, at most one capped review retry; never recurse or reroute."""
         if record.get('role') == 'review' and chosen.family == 'mimo':
             options.setdefault('reasoning_cap', True)
-            record['reasoning_cap'] = 0  # Thinking disabled, leaving output capacity.
+            if options['reasoning_cap']:
+                record['reasoning_cap'] = 0  # Thinking disabled, leaving output capacity.
         if record.get('cwd') is not None:
             options.setdefault('cwd', record['cwd'])
         async def launch(prompt_record, **kwargs):
@@ -247,7 +248,7 @@ class SeatSpawnMixin:
                         publish_cancel(job)
                     elif task.exception() is not None:
                         raise task.exception()
-            if kwargs.get('reasoning_cap') and self._path(record['run_id']).with_name('cancelled').exists():
+            if record.get('reasoning_retry') and self._path(record['run_id']).with_name('cancelled').exists():
                 job.status = 'cancelled'
             return job
 
@@ -334,7 +335,9 @@ class SeatSpawnMixin:
             from . import context_pack
             prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
         if role == 'review' and _needs_inline_diff(leg, card):
-            from .inline_diff import InlineDiffError, inline_diff_prompt
+            from .inline_diff import InlineDiffError, inline_diff_prompt, has_diff_text
+            if leg.tool_mode == 'prompt-only' and card.get('diff_ref') is None and has_diff_text(prompt):
+                return prompt
             try:
                 prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
                                             allow_document=document_review and leg.tool_mode != 'prompt-only', timeout=diff_timeout)

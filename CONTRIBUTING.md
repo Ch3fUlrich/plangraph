@@ -328,3 +328,7 @@ including copied parent usage; main-session caps remain enforced.
 Record-derived prompt-only review evidence is void unless the saved dispatched prompt contains diff text.
 
 CI selects Rust checks when a settings.json/settings.local.json changes and runs `pg-settings-lint --tracked ..` before clippy.
+
+The lesson-gate verification record is in `docs/lesson-gates-verification.md`.
+Prompt-record call-site allowances track the exact probe/preparation calls;
+companion evidence cannot bypass the prompt-only diff requirement.

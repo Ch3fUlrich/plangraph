@@ -135,6 +135,8 @@ def fake_claude(tmp_path, lines, exit_code=0):
     return factory
 
 
+REVIEW_DIFF = 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n'
+
 def run_review(tmp_path, monkeypatch, lines, exit_code=0):
     """Drive the production dispatch path for the claude Haiku leg and return (record, run dir)."""
     binary = tmp_path / "bin"
@@ -150,7 +152,7 @@ def run_review(tmp_path, monkeypatch, lines, exit_code=0):
         runner = SpawnerRunner(process_factory=fake_claude(tmp_path, lines, exit_code), default_cwd=str(tmp_path))
         service = spawn_service(runner, tmp_path / "state")
         monkeypatch.setattr(service, "_route", lambda *a, **k: SpawnPlan((leg,), (), "test", (), ()))
-        record = await service.spawn(card={"estimate_tokens": 1000}, prompt="review this", role="review",
+        record = await service.spawn(card={"estimate_tokens": 1000}, prompt="review this\n" + REVIEW_DIFF, role="review",
                                      writer_families=("mimo",), wait_seconds=None)
         return record, service._path(record["run_id"]).parent
     return asyncio.run(run())

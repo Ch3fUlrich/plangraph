@@ -189,6 +189,12 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     runner = SpawnerRunner(default_cwd=diff_ref['repo'], process_factory=factory)
     monkeypatch.setattr(runner, '_reap_process', reap)
     service = (SpawnService if dispatch == 'base' else spawn_service)(runner=runner, state=tmp_path / 'state')
+    # Legacy uncapped attempts retain their bounded retry path. New MiMo launches
+    # are separately checked for a proactive cap by test_review_probe.py.
+    launch_leg = service._launch_leg
+    async def legacy_uncapped(record, chosen, **options):
+        return await launch_leg(record, chosen, reasoning_cap=False, **options)
+    monkeypatch.setattr(service, '_launch_leg', legacy_uncapped)
     continuation = AsyncMock(wraps=service._continue_writer)
     monkeypatch.setattr(service, '_continue_writer', continuation)
     monkeypatch.setattr(service, '_route', lambda *a, **kw: plan)

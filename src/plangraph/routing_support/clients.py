@@ -132,7 +132,7 @@ def effective_child_base_url(env: Mapping[str, str] | None = None,
 def gateway_configuration_error(env=None, config=None):
     """One admission result for health, routing and child launch; never expose keys."""
     source = os.environ if env is None else env
-    if not effective_child_base_url(source, config):
+    if not str(effective_child_base_url(source, config) or '').strip():
         return 'gateway not configured: base URL missing'
     from .host_keys import add_host_keys, GATEWAY_KEY_ENV
     child = dict(source)

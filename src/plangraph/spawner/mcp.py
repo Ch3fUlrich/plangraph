@@ -116,12 +116,14 @@ TOOLS_METADATA = [
 
 # D-3244: the schema names the field route refuses without, so callers send it.
 CARD_SCHEMA = {'type': 'object', 'required': ['estimate_tokens'], 'properties': {
+    'writer_family': {'type': 'string', 'description': 'implement: binding writer family; defaults to first operator-priority family'},
+    'allow_family_fallthrough': {'type': 'boolean', 'description': 'explicitly permit implement routing to change writer family'},
     'stall_min': {'type': 'number', 'exclusiveMinimum': 0},
     'first_edit_min': {'type': 'number', 'exclusiveMinimum': 0},
     'cwd': {'type': 'string', 'description': 'absolute path to an existing git checkout'},
     'max_min': {'type': 'number', 'exclusiveMinimum': 0},
     'estimate_tokens': {'type': 'integer', 'minimum': 1, 'description': 'required: expected tokens of the run'},
-    'diff_ref': {'type': 'object', 'description': 'review: {repo, base, head}; inlined for inline-only seats'}}}
+    'diff_ref': {'type': 'object', 'description': 'review: {repo, base, head}; inlined for inline-only and prompt-only seats'}}}
 for _tool in TOOLS_METADATA:
     if _tool['name'] in ('plangraph_agent_status', 'plangraph_agent_cancel'):
         _tool['inputSchema']['properties']['run_id'] = {'type': 'string'}

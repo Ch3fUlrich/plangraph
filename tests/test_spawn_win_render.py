@@ -65,19 +65,19 @@ def test_render_unresolved_base_url_fails_closed(tmp_path, monkeypatch):
     service = spawn_service(runner, tmp_path)
 
     async def run():
-        record = await service.spawn(
-            card={"estimate_tokens": 1000},
-            role="review", writer_families=("gpt",),
-            leg="mimo-v2.6-pro", model="mimo/mimo-v2.6-pro",
-            override_reason="testing manual model override",
-            prompt="test", wait_seconds=0.1,
-        )
+        from plangraph.routing_errors import SpawnRefused
+        with pytest.raises(SpawnRefused, match='gateway not configured: base URL missing'):
+            await service.spawn(
+                card={"estimate_tokens": 1000},
+                role="review", writer_families=("gpt",),
+                leg="mimo-v2.6-pro", model="mimo/mimo-v2.6-pro",
+                override_reason="testing manual model override",
+                prompt="test", wait_seconds=0.1,
+            )
         assert factory.call_count == 0
-        assert record["status"] == "failed"
-        assert record["attempts"][0]["skip_reason"].startswith(
-            "not_served_on_host: gateway_base_url_unresolved"
-        )
-        assert "not_served_on_host" in (record.get("error") or "")
+        refusal = service.ps()['runs'][0]
+        assert refusal['status'] == 'refused'
+        assert 'gateway not configured' in refusal['error']
 
     asyncio.run(run())
 

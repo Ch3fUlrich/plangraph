@@ -5,13 +5,61 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+pub(crate) fn prompt_only_missing(record: &Value, directory: &Path) -> bool {
+    let leg = record
+        .get("chosen_leg")
+        .filter(|l| l.is_object())
+        .unwrap_or(&record["plan"]["first_leg"]);
+    let mode = leg["tool_mode"]
+        .as_str()
+        .or_else(|| record["tool_mode"].as_str());
+    if record["role"] != "review" || mode != Some("prompt-only") {
+        return false;
+    }
+    if matches!(record["status"].as_str(), Some("running" | "queued")) && record["ended"].is_null()
+    {
+        return false;
+    }
+    use std::io::Read;
+    let mut text = String::new();
+    let Ok(file) = std::fs::File::open(directory.join("prompt.txt")) else {
+        return true;
+    };
+    if file
+        .take(8 * 1024 * 1024 + 1)
+        .read_to_string(&mut text)
+        .is_err()
+        || text.len() > 8 * 1024 * 1024
+    {
+        return true;
+    }
+    let mut header = false;
+    for line in text.lines() {
+        if line.starts_with("diff --git ") {
+            header = true;
+        } else if header
+            && (line.starts_with("--- ")
+                || line.starts_with("+++ ")
+                || line.starts_with("@@ ")
+                || line.starts_with("GIT binary patch")
+                || line.starts_with("Binary files ")
+                || line.starts_with("old mode ")
+                || line.starts_with("new file mode ")
+                || line.starts_with("deleted file mode "))
+        {
+            return false;
+        }
+    }
+    true
+}
+
 fn reconcile_with(
     record: &mut Value,
     directory: &Path,
     now: f64,
     live: impl FnOnce(u32, Option<u64>) -> Option<bool>,
 ) {
-    if record["status"] != "running" {
+    if record["status"] != "running" || record["overflow_remote"] == true {
         return;
     }
     if let Ok(modified) = directory
@@ -38,6 +86,19 @@ fn reconcile_with(
 }
 
 pub(crate) fn reconcile(record: &mut Value, directory: &Path) {
+    if record["pid"].as_u64().is_some_and(|p| p > 0) && record["launched_leg"].is_null() {
+        let leg = record
+            .get("chosen_leg")
+            .filter(|l| l.is_object())
+            .unwrap_or(&record["plan"]["first_leg"]);
+        if leg.is_object() {
+            record["launched_leg"] = leg.clone();
+        }
+    }
+    if prompt_only_missing(record, directory) {
+        record["verdict_status"] = json!("void");
+        record["verdict_void_reason"] = json!("prompt_only_no_diff");
+    }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -107,6 +168,30 @@ fn process_live(pid: u32, start: Option<u64>) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn prompt_only_records_without_patch_are_void() {
+        let root = tempfile::tempdir().unwrap();
+        let record =
+            json!({"status":"completed","role":"review","chosen_leg":{"tool_mode":"prompt-only"}});
+        let mut missing = record.clone();
+        reconcile(&mut missing, root.path());
+        assert_eq!(missing["verdict_status"], "void");
+        std::fs::write(
+            root.path().join("prompt.txt"),
+            "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n",
+        )
+        .unwrap();
+        assert!(!prompt_only_missing(&record, root.path()));
+    }
+    #[test]
+    fn remote_overflow_process_is_not_queried_locally() {
+        let root = tempfile::tempdir().unwrap();
+        let mut record = json!({"status":"running","pid":42,"overflow_remote":true});
+        reconcile_with(&mut record, root.path(), 100.0, |_, _| {
+            panic!("remote PID queried locally")
+        });
+        assert_eq!(record["status"], "running");
+    }
     #[test]
     fn dead_pid_exits_on_next_read_without_inventing_exit_code() {
         let root = tempfile::tempdir().unwrap();

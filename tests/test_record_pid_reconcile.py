@@ -26,3 +26,24 @@ def test_status_and_ps_reconcile_record(tmp_path, monkeypatch, live, expected):
             assert row['ended'] >= row['started']
     assert calls == [(321, 45), (321, 45)]
     assert path.read_bytes() == before
+
+
+def test_remote_overflow_pid_is_never_queried_on_local_host(tmp_path, monkeypatch):
+    path = tmp_path / 'runs/run-remote/record.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(dict(run_id='run-remote', status='running', pid=123,
+        overflow_remote=True, host='remote-fixture')))
+    monkeypatch.setattr(stall_probe, '_record_pid_live', lambda *a: pytest.fail('remote PID queried locally'))
+    service = SpawnService(runner=SimpleNamespace(), state=tmp_path)
+    assert service.result('run-remote')['status'] == 'running'
+
+
+def test_log_age_does_not_claim_a_live_pid_has_exited(tmp_path, monkeypatch):
+    import os
+    log = tmp_path / 'live.log'
+    log.write_text('last output')
+    os.utime(log, (10, 10))
+    monkeypatch.setattr(stall_probe, '_record_pid_live', lambda *a: True)
+    record = stall_probe.reconcile_record({'status': 'running', 'pid': 123}, tmp_path, now=100)
+    assert record['live_log_age_s'] == 90
+    assert record['status'] == 'running'

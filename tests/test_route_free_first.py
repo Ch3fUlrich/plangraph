@@ -14,7 +14,7 @@ from plangraph.spawner.cli import main
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 
 # Ordering probes include inline-only review legs, which require diff metadata.
-CARD = {"estimate_tokens": 20000, "risk_tags": [],
+CARD = {"estimate_tokens": 20000, "risk_tags": [], "allow_family_fallthrough": True,
         "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
 FREE = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "openrouter-free"]
 DISABLED_FREE = {"opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free"}

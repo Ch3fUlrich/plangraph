@@ -97,7 +97,7 @@ def test_spawnable_legs_follow_a_rebound_default_table(monkeypatch):
                                          ('implement', (set(CLAUDE) | set(SOL) | {'cx-gpt-6.1-sol'}) - {LEAD_WRITER})])
 def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
     writers = ('xiaomi',) if role == 'review' else ()
-    routed = _svc(tmp_path).route({'estimate_tokens': 1000}, role=role, writer_families=writers)
+    routed = _svc(tmp_path).route({'estimate_tokens': 1000, 'allow_family_fallthrough': True}, role=role, writer_families=writers)
     assert not {leg.id for leg in routed.legs} & MANUAL
     explicit = {s['leg'] for s in routed.skipped if s['reason'] == 'explicit_only'}
     assert explicit == set(listed)

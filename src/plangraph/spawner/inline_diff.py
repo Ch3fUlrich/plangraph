@@ -72,8 +72,11 @@ def has_diff_text(prompt):
 
 def prompt_only_void(record, directory):
     """Check the persisted, dispatched prompt before accepting review evidence."""
-    if record.get('role') != 'review' or (record.get('chosen_leg') or {}).get('tool_mode') != 'prompt-only':
+    leg = record.get('chosen_leg') or (record.get('plan') or {}).get('first_leg') or {}
+    if record.get('role') != 'review' or leg.get('tool_mode', record.get('tool_mode')) != 'prompt-only':
         return False
+    if record.get('status') in ('running', 'queued') and record.get('ended') is None:
+        return False  # The dispatcher may still be constructing the prompt.
     try:
         present = has_diff_text((Path(directory) / 'prompt.txt').read_text('utf-8'))
     except (OSError, UnicodeError):

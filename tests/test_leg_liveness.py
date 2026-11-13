@@ -65,7 +65,7 @@ def test_commit_probe_and_timeout(monkeypatch, success):
         leg_state.record_probe_fail(key(leg), 'timeout', 'leg-probe')  # second consecutive failure
         assert leg_state.leg_status(key(leg))['state'] == 'down'
         from plangraph.planner.routing import plan_spawn
-        plan = plan_spawn({'estimate_tokens': 1000}, role='implement', legs=(leg,), catalog_rows=())
+        plan = plan_spawn({'estimate_tokens': 1000, 'allow_family_fallthrough': True}, role='implement', legs=(leg,), catalog_rows=())
         assert not plan.legs
         assert plan.skipped[0]['reason'] == 'down'
 
@@ -108,7 +108,7 @@ def test_execute_probe_falls_through(tmp_path, monkeypatch):
                        model_or_combo=kwargs['model_or_combo'], exit_code=0)
     monkeypatch.setattr(leg_probe, 'probe', fake_probe)
     monkeypatch.setattr(runner, 'spawn', spawn)
-    record = asyncio.run(service.spawn(card={'estimate_tokens': 1000}, prompt='work', wait_seconds=None))
+    record = asyncio.run(service.spawn(card={'estimate_tokens': 1000, 'allow_family_fallthrough': True}, prompt='work', wait_seconds=None))
     assert record['status'] == 'completed'
     assert len(probed) == 2 and len(launched) == 1
     assert record['attempts'][0]['status'] == 'skipped'

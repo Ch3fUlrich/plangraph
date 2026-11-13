@@ -1,4 +1,5 @@
 """Launch-boundary reasoning retries, terminal records, and cancellation guards."""
+from dataclasses import asdict
 from types import SimpleNamespace
 
 import pytest
@@ -105,7 +106,7 @@ def test_retry_render_refusal_cannot_override_terminal_guard(launch_leg_case, mo
         return job
 
     seat.runner.spawn = spawn
-    asyncio.run(seat._launch_leg(record, chosen, prompt_record=None, watchdog={'max_s': 100}))
+    asyncio.run(seat._launch_leg(record, chosen, prompt_record=None, reasoning_cap=False, watchdog={'max_s': 100}))
     assert len(calls) == 2 and record.get('reason') != 'reasoning_output_limit'
 
 
@@ -122,7 +123,7 @@ def test_cancel_marker_only_changes_exhausted_leg(launch_leg_case, exhausted):
     assert len(calls) == 1 and record.get('reason') != 'reasoning_output_limit'
 
 
-def test_normal_base_launch_keeps_original_schema(launch_leg_case):
+def test_normal_base_launch_preserves_ownership_and_names_leg(launch_leg_case):
     import asyncio
 
     seat, record, chosen, jobs, calls = launch_leg_case
@@ -132,7 +133,8 @@ def test_normal_base_launch_keeps_original_schema(launch_leg_case):
     before = dict(record)
     asyncio.run(seat._launch_leg(record, chosen, prompt_record=None))
     assert record == dict(before, job_id='first', pid=None, pid_start=2, job_name='owned',
-                          escapees=[], cwd=seat.runner.default_cwd)
+                          escapees=[], cwd=seat.runner.default_cwd,
+                          launched_leg=asdict(chosen))
 
 
 @pytest.mark.parametrize('cancel', ['outer', 'inner'])
@@ -166,3 +168,13 @@ def test_base_launch_preserves_shield_cancellation(launch_leg_case, cancel):
             await asyncio.gather(task, launch, return_exceptions=True)
 
     asyncio.run(run())
+
+
+def test_mimo_first_launch_is_capped(launch_leg_case):
+    import asyncio
+    seat, record, chosen, jobs, calls = launch_leg_case
+    jobs[0].events = []
+    jobs[0].status = 'completed'
+    asyncio.run(seat._launch_leg(record, chosen, prompt_record=None))
+    assert calls[0]['reasoning_cap'] is True
+    assert record['reasoning_cap'] == 0

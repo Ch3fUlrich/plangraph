@@ -147,7 +147,7 @@ def test_catalog_tier_survives_planning_and_cli(tier, role, monkeypatch, tmp_pat
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
         {'id': l.model, 'tier': tier if l.id == base.id else 'free',
          'available': 1, 'active': True} for l in legs])
-    card = {'estimate_tokens': 1000}
+    card = {'estimate_tokens': 1000, 'allow_family_fallthrough': True}
     plan = plan_spawn(card, role=role, writer_families=('claude',))
     assert next(l for l in plan.legs if l.id == base.id).tier == tier
     assert [TIERS.index(l.tier) for l in plan.legs] == sorted(TIERS.index(l.tier) for l in plan.legs)

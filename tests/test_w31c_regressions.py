@@ -85,7 +85,9 @@ def test_host_environment_is_pinned():
     assert Path(os.environ['AUTOOS_ROOT']).is_dir()
     assert not (Path(os.environ['AUTOOS_ROOT']) / 'opencode.jsonc').exists()
     import re
-    assert not [name for name in os.environ if re.search(r'(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|BEARER)', name, re.I)]
+    assert {name: os.environ[name] for name in os.environ
+            if re.search(r'(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|BEARER)', name, re.I)} == {
+                'AUTOOS_OMNIROUTE_KEY': 'fixture-gateway-key'}
 
 
 @pytest.mark.real_probe

@@ -5,7 +5,8 @@ from dataclasses import replace
 import pytest
 
 from plangraph.planner.legs import DEFAULT_LEGS
-from plangraph.planner.routing import plan_spawn
+from plangraph.routing_support.leg_state_flag import service_plan
+from types import SimpleNamespace
 from plangraph.planner.route_policy import RoutePolicy
 from plangraph.routing_support import clients
 
@@ -29,9 +30,8 @@ def test_gateway_configuration_refuses_before_route(gateway_env, monkeypatch):
         key_file = gateway_env / 'client.key'
         key_file.write_text('fixture-key')
         monkeypatch.setenv('PLANGRAPH_GATEWAY_KEY_FILE', str(key_file if key else gateway_env / 'absent'))
-        plan = plan_spawn({'estimate_tokens': 1000}, role='implement', legs=(leg,),
-                          catalog_rows=[], policy=RoutePolicy(),
-                          leg_reader=lambda *a, **k: {'state': 'up', 'evidence': None})
+        plan = service_plan(SimpleNamespace(leg_reader=lambda *a, **k: {'state': 'up', 'evidence': None}), card={'estimate_tokens': 1000}, role='implement', legs=(leg,),
+                          catalog_rows=[], policy=RoutePolicy())
         assert bool(plan.legs) is admitted
         if not admitted:
             assert 'gateway not configured' in json.dumps(plan.to_dict())

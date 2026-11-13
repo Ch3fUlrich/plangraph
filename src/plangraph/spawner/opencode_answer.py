@@ -45,7 +45,7 @@ def record_steps(job, stdout, stderr, env):
                                cap_available=cap_reasoning(dict(env), job.model_or_combo)))
 
 
-def cap_reasoning(env, model):
+def cap_reasoning(env, model, *, allow_already_capped=False):
     """MiMo's documented thinking-off control: a zero reasoning budget for this run only."""
     from .mimo_policy import ACCEPTED_MIMO_IDS
     if model not in ACCEPTED_MIMO_IDS:
@@ -59,8 +59,10 @@ def cap_reasoning(env, model):
                 entry.get('package', block.get('package')) != '@opencode/ai/providers/openai-compatible'):
             return False
         body = entry.setdefault('body', {})
-        if not isinstance(body, dict) or body.get('thinking') == {'type': 'disabled'}:
+        if not isinstance(body, dict):
             return False
+        if body.get('thinking') == {'type': 'disabled'}:
+            return allow_already_capped
         body['thinking'] = {'type': 'disabled'}
         env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
         return True

@@ -168,7 +168,7 @@ class _AgentsMixin:
             if remaining <= 0 or not sid:
                 return None
             try:
-                rows = self._agents_rows_strict(timeout=min(0.5, remaining))
+                rows = self._agents_rows_strict(timeout=min(STOP_TIMEOUT, remaining))
             except _ActionFailed:
                 rows = []
             for row in rows:

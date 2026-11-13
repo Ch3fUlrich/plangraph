@@ -42,6 +42,9 @@ def live_default_legs(role):
 
 def service_plan(service, **kwargs):
     from plangraph.planner.routing import plan_spawn
+    from .clients import gateway_leg_error
+    kwargs["gateway_check"] = gateway_leg_error
+    kwargs["enforce_writer_family"] = True
     kwargs.setdefault('legs', live_default_legs(kwargs.get('role')))
     reader = getattr(service, 'leg_reader', None)
     if not enabled() or not getattr(reader, 'enabled', False):

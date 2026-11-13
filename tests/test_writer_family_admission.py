@@ -1,7 +1,8 @@
 """Writer choice stays binding across unavailable legs."""
 import pytest
 from plangraph.planner.legs import DEFAULT_LEGS
-from plangraph.planner.routing import plan_spawn
+from plangraph.routing_support.leg_state_flag import service_plan
+from types import SimpleNamespace
 from plangraph.planner.route_policy import RoutePolicy
 
 
@@ -15,8 +16,8 @@ def test_down_writer_family_never_silently_changes(tmp_path, monkeypatch, allow,
     def state(model, **kw):
         return {'state': 'down' if 'sol' in model else 'ok', 'evidence': None}
     card = {'estimate_tokens': 100, 'writer_family': 'openai', 'allow_family_fallthrough': allow}
-    plan = plan_spawn(card, role='implement', legs=legs, catalog_rows=[],
-                      policy=RoutePolicy(), leg_reader=state)
+    plan = service_plan(SimpleNamespace(leg_reader=state), card=card, role='implement', legs=legs, catalog_rows=[],
+                      policy=RoutePolicy())
     assert [leg.family for leg in plan.legs] == expected
     if not allow:
         assert 'writer_family_unavailable' in str(plan.error)

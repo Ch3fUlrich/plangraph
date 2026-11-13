@@ -1,0 +1,1 @@
+- Bound each bridge poll by the remaining launch budget without imposing an artificial half-second query timeout.

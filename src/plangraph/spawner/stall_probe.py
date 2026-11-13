@@ -125,7 +125,7 @@ def _record_pid_live(pid, start):
 def reconcile_record(record, directory, now=None):
     """Reconcile a read snapshot; watchdogs own persistence, status reads stay read-only."""
     import time
-    if not isinstance(record, dict) or record.get('status') != 'running':
+    if not isinstance(record, dict) or record.get('status') != 'running' or record.get('overflow_remote'):
         return record
     now = time.time() if now is None else now
     try:

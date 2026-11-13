@@ -241,7 +241,7 @@ class SpawnPlan:
 
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
                 legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, placement=None,
-                catalog_rows=None) -> SpawnPlan:
+                catalog_rows=None, gateway_check=None, enforce_writer_family=False) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
     Measured inputs rank within cost tiers; implement writer priority is final.
     ``exclude_families`` excludes the specified family names from candidate legs.
@@ -332,13 +332,15 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         return st
 
     from .seats import seat_family
-    from .route_policy import implement_key
+    from .route_policy import implement_key, implement_family_excluded
     requested_family = card.get('writer_family')
-    if role == 'implement' and requested_family is None and candidates:
-        preferred = min(enumerate(candidates), key=lambda row:
+    if role == 'implement' and requested_family is None and (preferred_candidates := [
+            (i, l) for i, l in enumerate(candidates) if not implement_family_excluded(l)
+            and not policy.skip_reason(l, role)]):
+        preferred = min(preferred_candidates, key=lambda row:
             implement_key(row[1], TIERS.index(row[1].tier), row[0]))[1]
         requested_family = preferred.family
-    family_fenced = {l.id for l in candidates if role == 'implement'
+    family_fenced = {l.id for l in candidates if enforce_writer_family and role == 'implement'
         and not card.get('allow_family_fallthrough', False)
         and seat_family(l.family) != seat_family(requested_family)}
     states = {l.id: _leg_status(l) for l in candidates}
@@ -349,9 +351,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     skipped = []
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
-    from plangraph.routing_support.clients import gateway_leg_error
     for leg in candidates:
-        reason = gateway_leg_error(leg) or policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
+        reason = policy.skip_reason(leg, role) or ('excluded_family' if role == 'implement' and implement_family_excluded(leg) else None) or (gateway_check(leg) if gateway_check is not None else None) or (states[leg.id]["state"] if leg.id in limited else None)
         if reason:
             pass
         elif leg.id in family_fenced:
@@ -366,6 +367,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             except RouteError as exc:
                 reason = next(iter(exc.exclusion_reasons), 'routing_error')
                 states[leg.id] = dict(states[leg.id], evidence={'state': states[leg.id]['evidence'], 'error': str(exc)})
+        if reason == 'excluded_family' and role == 'implement' and implement_family_excluded(leg):
+            states[leg.id] = dict(states[leg.id], evidence={'state': states[leg.id]['evidence'],
+                'error': 'excluded_family: writer identity refused'})
         if reason:
             skipped.append({"leg": leg.id, "reason": reason,
                             "evidence": states[leg.id]["evidence"]})
@@ -384,7 +388,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         route = route_card(card, legs=candidates, unavailable=limited | policy_skipped | family_fenced | {s["leg"] for s in skipped if s["reason"].startswith("gateway not configured")},
                            exclude_families=excluded, role=role, now=now)
     except RouteError as exc:
-        if role == 'implement' and requested_family and not card.get('allow_family_fallthrough', False):
+        if enforce_writer_family and role == 'implement' and requested_family and not card.get('allow_family_fallthrough', False):
             exc = RouteError(f'writer_family_unavailable: {requested_family}; {exc}')
         return SpawnPlan((), tuple(skipped), "operator-order", (),
                          tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details), placement=placement)

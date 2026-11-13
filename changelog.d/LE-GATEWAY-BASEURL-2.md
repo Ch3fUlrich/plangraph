@@ -1,0 +1,1 @@
+- Share gateway admission with Rust health while keeping pure planner enumeration independent of host configuration.

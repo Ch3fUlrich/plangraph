@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from test_claude_stream_render import fake_claude, run_review
+from test_claude_stream_render import fake_claude, run_review, REVIEW_DIFF
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import SpawnPlan
 from plangraph.spawner.claude_stream import last_stop_reason
@@ -103,7 +103,7 @@ def test_route_is_terminal_only_for_claude(tmp_path, monkeypatch, harness, tool_
         async def continuation(*a):
             assert harness != 'claude', 'continued refused writer'
         monkeypatch.setattr(service, '_continue_writer', continuation)
-        return await service.spawn(card={'estimate_tokens': 1000}, prompt='review', role='review',
+        return await service.spawn(card={'estimate_tokens': 1000}, prompt='review\n' + REVIEW_DIFF, role='review',
                                    writer_families=('mimo',), wait_seconds=None)
     monkeypatch.setattr('shutil.which', lambda name, **k: name)
     if harness == 'opencode':

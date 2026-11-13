@@ -195,7 +195,21 @@ fn tools_list_matches_embedded_fixture() {
 fn health_tool_returns_expected_payload() {
     let tmp = TempDir::new();
     let socket = tmp.path().join("spawnd.sock");
-    let _guard = spawn_serve(&socket);
+    let _guard = ChildGuard {
+        child: std::process::Command::new(bin())
+            .arg("serve")
+            .arg("--socket")
+            .arg(&socket)
+            .arg("--state")
+            .arg(tmp.path())
+            .env("PG_SPAWND_PYTHON", tmp.path().join("absent-python"))
+            .env_remove("PG_SPAWND_ADAPTER")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    };
     let mut client = McpClient::connect(&socket);
     client.initialize();
     let response = client.request(
@@ -209,7 +223,7 @@ fn health_tool_returns_expected_payload() {
     assert_eq!(
         payload,
         serde_json::json!({
-            "status": "healthy",
+            "status": "degraded",
             "daemon": "pg-spawnd",
             "spawner_version": format!("pg-spawnd {}", env!("CARGO_PKG_VERSION")),
             "placement": "off",
@@ -217,6 +231,7 @@ fn health_tool_returns_expected_payload() {
             "active_jobs_count": 0,
             "catalog_models_count": 0,
             "gateway_default_url": "",
+            "gateway_error":"gateway not configured: health bridge unavailable",
         })
     );
 }

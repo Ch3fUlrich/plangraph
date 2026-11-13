@@ -452,7 +452,7 @@ class SpawnerRunner:
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
                 from .opencode_answer import cap_reasoning
-                if reasoning_cap and not cap_reasoning(child_env, model_or_combo):
+                if reasoning_cap and not cap_reasoning(child_env, model_or_combo, allow_already_capped=True):
                     render_reason = 'reasoning_output_limit: no supported reasoning cap'
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}

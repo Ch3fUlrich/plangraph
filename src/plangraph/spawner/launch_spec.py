@@ -130,7 +130,7 @@ def build(request: dict) -> dict:
         try:
             job = asyncio.run(service.runner.spawn(prompt=prompt, model_or_combo=leg.model,
                 role=request['role'], dry_run=True, client=leg.harness, extra_env=writer_env,
-                prepare_launch=True, reasoning_cap=request['role'] == 'review' and leg.family == 'mimo'))  # REMOVE-AT-R10: Rust owns redaction and recording.
+                prepare_launch=True, reasoning_cap=request['role'] == 'review' and getattr(leg, 'family', None) == 'mimo'))  # REMOVE-AT-R10: Rust owns redaction and recording.
         except (SpawnRefused, ValueError) as exc:
             raise LaunchRefused('refused', str(exc)) from None
         for event in job.events:

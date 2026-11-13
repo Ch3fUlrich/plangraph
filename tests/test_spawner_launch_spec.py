@@ -26,7 +26,10 @@ def request_data(tmp_path, monkeypatch):
         return None
     monkeypatch.setattr(spec, 'host_skip_reason_async', available)
     monkeypatch.setattr(spec, 'admitted_by_render', lambda model: True)
-    base = dict(PATH=str(tmp_path), SystemRoot='system', COMSPEC='cmd', TEMP=str(tmp_path))
+    base = dict(PATH=str(tmp_path), SystemRoot='system', COMSPEC='cmd', TEMP=str(tmp_path),
+        OPENCODE_CONFIG_CONTENT=json.dumps({'providers': {'mimo': {
+            'package': '@opencode/ai/providers/openai-compatible',
+            'models': {'mimo-v2.6-flash': {}}}}}))
     monkeypatch.setattr(runner, 'build_child_env', lambda *a, **kw: dict(base, **(a[0] or {})))
     return dict(run_id='run-' + 'a' * 32, job_id='external-job', role='review',
                 dry_run=False, leg={'id': 'qodercli-qwen3.8-flash'}, prompt='do work',

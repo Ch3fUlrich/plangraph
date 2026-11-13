@@ -220,6 +220,9 @@ def read_record_identity(seat_dir, key=None):
         raise RecordPending("cannot read record identity") from exc
     if not isinstance(record, dict):
         raise ValueError("cannot read record identity")
+    from plangraph.spawner.inline_diff import prompt_only_void
+    if prompt_only_void(record, seat_dir):
+        raise ValueError('void verdict: prompt_only_no_diff')
     if key is not None and "item_key" in record and record["item_key"] != key:
         raise ValueError("record item_key does not match --key")
     return {"item_key": record["item_key"]} if "item_key" in record else {}

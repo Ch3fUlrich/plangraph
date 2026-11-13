@@ -9,6 +9,7 @@ mod errors;
 mod evidence;
 mod evidence_row;
 mod fleet_snapshot;
+mod gateway_health;
 mod gitconfig_guard;
 mod health_cli;
 mod health_report;
