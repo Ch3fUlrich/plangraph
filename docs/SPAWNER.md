@@ -685,3 +685,5 @@ Only completed implement parents can start fixer continuations; review and judge
 Detached split-writer admission waits for every local child and preserves each refusal in the writers envelope; the CLI prints per-writer reasons and exits nonzero if any writer is refused.
 
 MCP startup preloads context packing and prompt admission before its source snapshot; a dry-spawn import comparison checks that spawn dependencies are already loaded.
+
+Only advertised agent-spawn and session-launch dry runs bypass the source guard; session relaunch always checks freshness, including requests with an undeclared dry_run key.

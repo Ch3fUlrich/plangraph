@@ -115,6 +115,7 @@ class SourceGuard:
     def check(self, name, arguments):
         """Refuse tools that start a real run or session; dry runs, route, ps, status,
         cancel, probe, session stop/list/mark_ready stay available."""
-        if name in GUARDED_TOOLS and not arguments.get('dry_run', False):
+        dry = name in ('plangraph_agent_spawn', 'plangraph_session_launch') and arguments.get('dry_run') is True
+        if name in GUARDED_TOOLS and not dry:
             if message := self.restart_required():
                 raise SourceChanged(message)

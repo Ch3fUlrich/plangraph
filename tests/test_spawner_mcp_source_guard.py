@@ -181,3 +181,17 @@ assert not loaded.difference(before), sorted(loaded.difference(before))
     done = subprocess.run([sys.executable, '-c', script], cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=30)
     assert done.returncode == 0, done.stderr
+
+
+def test_stale_session_relaunch_cannot_use_unadvertised_dry_run(tmp_path, monkeypatch):
+    identity = Mock(return_value=OLD)
+    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+    identity.return_value = NEW
+    sessions = Mock()
+    monkeypatch.setattr(server, '_sessions', lambda: sessions)
+    reply = asyncio.run(server.handle_rpc_request({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+        'params': {'name': 'plangraph_session_relaunch', 'arguments': {'name': 'review', 'dry_run': True}}}))
+    assert reply['error']['data']['type'] == 'SourceChanged'
+    assert reply['error']['message'] == RESTART
+    sessions.relaunch.assert_not_called()
+    sessions.audit_refusal.assert_not_called()
