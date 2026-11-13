@@ -141,9 +141,7 @@ def context_tokens(path) -> int | None:
         lines = lines[1:]
     for line in reversed(lines):
         result = _tail_ctx(line)
-        if result is _SIDECHAIN:
-            return None  # Never fall back to copied parent usage.
-        if result is _SKIP or result is None:
+        if result is _SIDECHAIN or result is _SKIP or result is None:
             continue
         return result
     return None

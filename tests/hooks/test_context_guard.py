@@ -40,19 +40,19 @@ class GuardCase(HookCase):
 
 
 class Thresholds(GuardCase):
-    def test_sidechain_transcript_never_inherits_parent_cap(self):
+    def test_sidechain_only_is_silent_and_main_usage_survives_child(self):
         for script in (SCRIPT, HOOKS / "ctx_guard_session.py"):
             for fill in (275000, 310000):
                 with self.subTest(script=script.name, fill=fill):
                     child = json.loads(usage_line(read=fill))
                     child["isSidechain"] = True
-                    self.write(usage_line(read=310000), json.dumps(child))
+                    self.write(json.dumps(child))
                     payload = {"transcript_path": str(self.transcript),
                                "session_id": SID, "cwd": str(self.home)}
                     proc = self.run_hook(script, payload)
                     self.assertEqual((proc.returncode, proc.stdout), (0, ""))
                     self.assertFalse(self.state_file().exists())
-        self.write(usage_line(read=310000))
+        self.write(usage_line(read=310000), json.dumps(child))
         self.assertIn("HARD-CAP", self.hook().stdout)
 
     def test_below_handoff_is_silent(self):

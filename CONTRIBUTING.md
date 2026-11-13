@@ -322,8 +322,8 @@ Pytest uses a session-owned temporary global Git config and disables system Git 
 
 Event-log seat reviews use completed step text only. A stop answer survives empty trailing steps, but new unfinished text or tool activity cannot supply a verdict; plain-text logs retain their existing path.
 
-The context guard suppresses handoff output for sidechain transcript records,
-including copied parent usage; main-session caps remain enforced.
+The context guard skips sidechain usage and continues to the newest main-thread
+usage; a sidechain-only transcript remains silent.
 
 Record-derived prompt-only review evidence is void unless the saved dispatched prompt contains diff text.
 
