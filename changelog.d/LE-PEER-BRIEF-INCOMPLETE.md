@@ -1,0 +1,1 @@
+- Refuse writer and session briefs containing unexpanded common rules or partial-brief continuation markers.

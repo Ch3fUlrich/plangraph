@@ -4,11 +4,21 @@ Review seats are deliberately unchecked: their prompts embed raw diffs which
 may legitimately contain control bytes. Non-string/empty admission is unchanged.
 """
 import unicodedata
+import re
+
+_COMMON_RULES = re.compile(r'\[\s*COMMON\s+RULES\s*\]', re.I)
+_FOLLOWS = re.compile(
+    r'\b(?:R\s*\d+\s*/\s*\d+|(?:common\s+)?rules|brief|part\s+\d+)'
+    r'\s*:?\s+(?:follows|to\s+follow)\b', re.I)
 
 
 def admit_prompt(prompt, refuse):
     """Return the input, or raise the entry's refusal without echoing its text."""
     if isinstance(prompt, str):
+        if _COMMON_RULES.search(prompt):
+            raise refuse('brief_incomplete: unexpanded_common_rules')
+        if _FOLLOWS.search(prompt):
+            raise refuse('brief_incomplete: continuation_marker')
         line, previous = 1, ''
         for char in prompt:
             if unicodedata.category(char) == 'Cc' and char not in '\t\n\r':

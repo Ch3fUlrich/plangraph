@@ -737,3 +737,11 @@ Explicit leg probes compare agy catalog IDs with `agy models` before launching.
 Native IDs and display names from an `Available models:` error list are accepted.
 Unknown IDs report `catalog_model_unknown` and book the leg down immediately;
 an unavailable list reports infrastructure failure without outage evidence.
+
+Writer lane briefs and session prompts must contain expanded common rules. The
+shared caller-brief admission refuses an unexpanded `[COMMON RULES]` token with
+`brief_incomplete: unexpanded_common_rules`, or continuation markers such as
+`R1/3 follows` / `Rules to follow` with `brief_incomplete: continuation_marker`.
+The refusal occurs before queueing or launch, including prompt-file sessions.
+Package renderers prepend the complete house rules; a rules ID must be expanded
+before submission. Review-seat prompts retain their raw-diff admission behavior.
