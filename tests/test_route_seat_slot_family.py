@@ -86,10 +86,8 @@ def test_resolved_slot_family_in_answer_and_record(service, dispatch):
     assert attempt['skip_reason'] == 'provider_stop'
 
 
-@pytest.mark.parametrize('reason', ['unknown', 'UNKNOWN', ' unknown ', None, ''])
-def test_unknown_adapter_skip_has_named_reason(service, tmp_path, monkeypatch, reason):
+def test_unknown_adapter_skip_has_named_reason(service, tmp_path, monkeypatch):
     from plangraph.routing_support.leg_state import LegAdapter, LegStateStore
-    from plangraph.routing_support.leg_state_flag import snapshot_admission
     from plangraph.spawner import leg_probe
     probes, reads = [], []
 
@@ -125,9 +123,14 @@ def test_unknown_adapter_skip_has_named_reason(service, tmp_path, monkeypatch, r
     assert probes == [GEMINI.id]
     assert reads == [1, 1]
     assert reader._snapshot_error == ('PermissionError', 'snapshot read locked')
-    # Preserve the original normalization matrix as a separate unit boundary;
-    # dispatch above uses only real adapter reads, never these status variants.
-    status_variant = SimpleNamespace(_snapshot_error=reader._snapshot_error,
+
+
+@pytest.mark.parametrize('reason', ['unknown', 'UNKNOWN', ' unknown ', None, ''])
+def test_snapshot_admission_normalizes_unknown_adapter_reasons(reason):
+    from plangraph.routing_support.leg_state_flag import snapshot_admission
+
+    # Each variant exercises normalization here; dispatch uses real adapter reads.
+    status_variant = SimpleNamespace(_snapshot_error=('PermissionError', 'snapshot read locked'),
         leg_status=lambda *a, **k: dict(state='unknown' if not reason else 'limited', reason=reason))
     assert snapshot_admission(status_variant, GEMINI.model, lambda text: text) == (
         'leg_state_snapshot_error: PermissionError: snapshot read locked')

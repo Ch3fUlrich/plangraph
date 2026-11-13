@@ -90,7 +90,9 @@ probe/provider evidence also recovers a snapshot error without another probe,
 including reviews, until `PLANGRAPH_LEG_PROBE_TTL_S` expires (default 1800 seconds);
 0 disables ordinary automatic probes, not snapshot-error recovery or explicit probes.
 
-The cause was found from the attempt shape of run-e99aae2287e541b48886d0f04e46c37e.
+The cause in run-e99aae2287e541b48886d0f04e46c37e was the refresh block in
+`src/plangraph/routing_support/leg_state.py:LegAdapter.leg_status`:
+`except Exception: self._error = 'unknown'` silently discarded snapshot errors.
 The replay proof is owned by plangraph:SPAWNER-LEG-SNAPSHOT-REPLAY-PROOF.
 Synthetic tests cover snapshot read errors, retry recovery, detailed scrubbed
 failure reasons, infrastructure failures without leg-failure bookings, and

@@ -1,6 +1,8 @@
 SPAWNER-LEG-STATE-SNAPSHOT-ERROR (D-5654; D-2739/D-5715): retry a failed leg snapshot once, then probe the same leg instead of silently skipping it; a failed probe retains the scrubbed exception type/message.
 
-The cause was found from the attempt shape of run-e99aae2287e541b48886d0f04e46c37e.
+The cause in run-e99aae2287e541b48886d0f04e46c37e was the refresh block in
+`src/plangraph/routing_support/leg_state.py:LegAdapter.leg_status`:
+`except Exception: self._error = 'unknown'` silently discarded snapshot errors.
 The replay proof is owned by plangraph:SPAWNER-LEG-SNAPSHOT-REPLAY-PROOF.
 
 Synthetic tests cover snapshot read error -> retry -> probe, retry recovery without a probe, underlying errors in scrubbed failure reasons, infrastructure failure without leg-failure bookings, and selection of a witnessed non-writer leg before an unwitnessed Opus leg.
