@@ -14,6 +14,8 @@ pub mod cpu;
 pub mod cpu_linux;
 pub mod diffscan;
 pub mod disk_hygiene;
+pub mod prod_paths;
+pub mod host_cleanup_cli;
 pub mod events;
 pub mod exit_class;
 pub mod exports;

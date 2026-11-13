@@ -61,6 +61,9 @@ fn run() -> io::Result<()> {
     Ok(())
 }
 fn main() -> std::process::ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("prod-paths") {
+        return pg_worker_core::host_cleanup_cli::prod_paths();
+    }
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
