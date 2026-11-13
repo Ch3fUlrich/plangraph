@@ -22,9 +22,8 @@ from typing import Any, Mapping
 from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
 from plangraph.spawner import bench_entry, leg_probe, remote_ps
 from plangraph.spawner.clients import effective_child_base_url
-from plangraph.spawner.git_guard import SourceGuard
 from plangraph.spawner.leg_state import leg_status
-from plangraph.spawner.mcp_limits import encode_reply, ps_reply
+from plangraph.spawner.mcp_limits import SourceGuard, encode_reply, ps_reply
 from plangraph.spawner.resolver import (
     DEFAULT_FALLBACK_MODELS,
     detect_model_family,
