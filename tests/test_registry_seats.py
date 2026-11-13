@@ -36,7 +36,7 @@ def fixed_seat_table(monkeypatch):
 def inline_seat_table(monkeypatch):
     # Test inline transport, not the production review preference order.
     from plangraph.planner import routing
-    ids = ("qodercli-qwen3.8-flash", "cx-gpt-6-luna")
+    ids = ("qodercli-qwen3.8-flash", "mimo-v2.6-flash")
     table = tuple(replace(next(leg for leg in DEFAULT_LEGS if leg.id == id), disabled=None)
                   for id in ids)
     monkeypatch.setitem(routing.plan_spawn.__kwdefaults__, "legs", table)
@@ -62,11 +62,11 @@ def test_inline_only_seat_gets_diff_inlined(tmp_path, monkeypatch, pre_d3552_pol
     out = asyncio.run(svc.spawn(card=card, prompt="review this", role="review",
                                 writer_families=("claude",), seats=True, dry_run=True))
     by_model = {c["model_or_combo"]: c["prompt"] for c in svc.runner.calls}
-    luna = by_model["omniroute/cx-gpt-6-luna"]
+    luna = by_model["mimo/mimo-v2.6-flash"]
     assert luna.startswith("review this") and "-one\n+two" in luna and "INLINE DIFF" in luna
     assert "-one" not in by_model["Qwen3.8-Flash"]
     assert len(out["seats"]) == 2
-    assert {r["chosen_leg"]["family"] for r in out["seats"]} == {"qwen", "gpt"}
+    assert {r["chosen_leg"]["family"] for r in out["seats"]} == {"qwen", "mimo"}
 
 
 def test_mcp_dispatch_seats_inline_diff(tmp_path, monkeypatch, pre_d3552_policy, inline_seat_table):
