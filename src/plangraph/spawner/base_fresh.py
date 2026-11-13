@@ -98,11 +98,16 @@ async def admitted_spawn(service, payload):
                   and not r.get('overflow_remote') for r in runs):
             await asyncio.sleep(.01)
             runs[:] = [service.result(r['run_id']) for r in runs]
-        return record if 'seats' in record else runs[0]
+        return record if record.get('seats') else runs[0]
     try:
         return await asyncio.wait_for(wait(), ADMISSION_TIMEOUT)
     except asyncio.TimeoutError:
         for task in service.tasks.values(): task.cancel()
         await asyncio.gather(*service.tasks.values(), return_exceptions=True)
+        for run_id in list(service.tasks):
+            run = service.result(run_id)
+            if run.get('status') == 'running' and not run.get('base_admitted'):
+                run.update(status='failed', reason='base_admission_timeout', error='base_admission_timeout', exit_code=1, ended=time.time())
+                service._save(run)
         return service.save_refusal(ValueError('base_admission_timeout'), payload.get('role', 'implement'),
                                     card=payload.get('card'), reason='base_admission_timeout')

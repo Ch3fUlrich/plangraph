@@ -93,7 +93,7 @@ def test_every_worker_role(repository, dispatch, hardened, role, decision):
         assert record['checked_base_sha'] == git(repo, 'rev-parse', 'HEAD')
     assert not calls
 @pytest.mark.parametrize('hardened', [False, True])
-@pytest.mark.parametrize('mode', ['pinned', 'worktree', 'seats'])
+@pytest.mark.parametrize('mode', ['pinned', 'worktree', 'seats', 'seats_plain'])
 def test_launch_variants_cannot_bypass(repository, dispatch, hardened, mode):
     from dataclasses import replace
     origin, repo = repository
@@ -102,6 +102,11 @@ def test_launch_variants_cannot_bypass(repository, dispatch, hardened, mode):
     card, options = {'estimate_tokens': 100}, {}
     if mode == 'pinned':
         options = dict(leg='cx-gpt-6.1-sol-xhigh', override_reason='hermetic admission test')
+    elif mode == 'seats_plain':
+        card['diff_ref'] = dict(repo=str(repo), base=old, head=old)
+        options.update(seats=True, role='review', writer_families=['deepseek'])
+        route = service._route
+        service._route = lambda *a, **k: replace(route(*a, **k), review_seats=route(*a, **k).legs)
     else:
         git(repo, 'fetch', 'origin', 'main')
         git(repo, 'merge', '--ff-only', 'origin/main')
@@ -116,22 +121,24 @@ def test_launch_variants_cannot_bypass(repository, dispatch, hardened, mode):
     result = asyncio.run(service.spawn(card, 'Implement a tested change', wait_seconds=None, **options))
     for record in result.get('seats', [result]):
         assert record['status'] == 'failed' and record['reason'] == 'base_stale: behind=2'
-        if mode != 'pinned':
+        if mode in ('worktree', 'seats'):
             assert record['run_worktree']['base_sha'] == old and record['run_worktree']['removed']
     assert not calls
 @pytest.mark.parametrize('role', ['implement', 'review', 'judge'])
 @pytest.mark.parametrize('current', [False, True])
-def test_continuation_rechecks_base(repository, dispatch, role, current):
+@pytest.mark.parametrize('diff', [True, False])
+def test_continuation_rechecks_base(repository, dispatch, role, current, diff):
     origin, repo = repository
     old = advance(origin, repo)
     git(repo, 'fetch', 'origin', 'main')
     git(repo, 'merge', '--ff-only', 'origin/main')
     card = dict(estimate_tokens=100, diff_ref=dict(repo=str(repo), base=old,
         head=git(repo, 'rev-parse', 'HEAD') if current else old))
+    if not diff: card.pop('diff_ref')
     service, calls = dispatch[0](False), dispatch[1]
     parent = dict(run_id='run-parent', role=role, status='completed', exit_code=0,
         cwd=str(repo), card=card, chosen_leg=service._route().to_dict()['first_leg'])
-    if role == 'implement' and not current:
+    if not current:
         git(repo, 'switch', '--detach', old)
     asyncio.run(service._continue_writer(parent, 'Remaining gaps: finish the test'))
     child = service.result(parent['continuation_run_id'])
@@ -210,3 +217,29 @@ def test_supervisor_admission_timeout_fails_closed(dispatch, monkeypatch):
     assert cli.main(['--supervise']) == 1
     assert json.loads(output.getvalue())['reason'] == 'base_admission_timeout'
     assert not dispatch[1]
+def test_admission_timeout_fails_original_run_records(dispatch, monkeypatch):
+    from plangraph.spawner import cli, base_fresh, service as service_module
+    service = dispatch[0](False)
+    admit = service_module.admit_base
+    async def hang(*args, launch=False, **kwargs):
+        if not launch: return await admit(*args, **kwargs)
+        await asyncio.Event().wait()
+    monkeypatch.setattr(service_module, 'admit_base', hang)
+    monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', .3)
+    monkeypatch.setattr(cli.sys, 'stdin', io.StringIO(json.dumps(dict(state=str(service.state), card={'estimate_tokens': 100}, prompt='Implement a tested change'))))
+    class Output(io.StringIO):
+        def close(self): pass
+    monkeypatch.setattr(cli.sys, 'stdout', Output())
+    code = cli.main(['--supervise'])
+    assert code == 1
+    runs = service.ps()['runs']
+    assert len(runs) > 1 and not [r for r in runs if r['status'] == 'running']
+def test_admission_wait_returns_refreshed_record_for_empty_seats(dispatch, monkeypatch):
+    from plangraph.spawner.base_fresh import admitted_spawn
+    service = dispatch[0](False)
+    async def spawn(**kwargs):
+        return dict(run_id='run-x', status='running', seats=[])
+    monkeypatch.setattr(service, 'spawn', spawn)
+    monkeypatch.setattr(service, 'result', lambda run_id: dict(run_id=run_id, status='failed', reason='base_stale: behind=1'))
+    assert asyncio.run(admitted_spawn(service, {}))['status'] == 'failed'
