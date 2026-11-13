@@ -34,7 +34,8 @@ def _canon_family(name):
 def _review_text_from_log(live_log: str) -> str:
     """Lifecycle events select OpenCode mode; otherwise keep plain logs intact."""
     event_log, texts = False, []
-    for line in live_log.splitlines():
+    for line in live_log.split("\n"):
+        line = line.removesuffix("\r")
         try:
             event = json.loads(line)
         except (ValueError, RecursionError):

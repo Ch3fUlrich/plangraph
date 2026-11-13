@@ -71,6 +71,22 @@ def test_json_final_verdict_parses_and_evidence_is_preserved(tmp_path):
                         "request_side_model": FREE_LEG["model"]}
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_json_raw_unicode_separators_preserve_final_text_and_verdict(tmp_path, newline):
+    reply = f"{FINDING}\u2028detail\u0085more\u2029context\nVERDICT: ACCEPT"
+    events = [event("step_start"), event("text", 2, text=reply), event("step_finish", 3)]
+    # Match JSON.stringify: these separators are raw characters inside the JSON string.
+    live = newline.join(json.dumps(e, ensure_ascii=False) for e in events) + newline
+
+    assert all(char in live for char in ("\u2028", "\u0085", "\u2029"))
+    assert seat_record._review_text_from_log(live) == reply
+
+    _, text = seat_record.evidence_from_record(rec_dir(tmp_path, live=live))
+
+    assert text == reply
+    assert sv.parse_verdict(text) == (True, 4)
+
+
 @pytest.mark.parametrize("split_parts", [False, True])
 def test_json_finding_after_verdict_stays_strict(tmp_path, split_parts):
     parts = [event("text", 2, text="VERDICT: ACCEPT"),
