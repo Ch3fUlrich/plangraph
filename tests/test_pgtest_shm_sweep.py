@@ -1,6 +1,7 @@
 import atexit
 import configparser
 import importlib
+import importlib.util
 import inspect
 import os
 import subprocess
@@ -8,6 +9,18 @@ import sys
 from pathlib import Path
 import pytest
 from pgtest_shm import _sweep_dead_pgtest_dirs
+
+
+def test_conftest_exec_without_sys_modules_registration(monkeypatch):
+    conftest = importlib.import_module("_plangraph_test_conftest")
+    spec = importlib.util.spec_from_file_location(
+        "oom_test_config", Path(__file__).with_name("conftest.py"))
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.delitem(sys.modules, spec.name, raising=False)
+    assert spec.name not in sys.modules
+    spec.loader.exec_module(module)
+    assert inspect.isfunction(module._make_worker_tmpdir)
+    assert sys.modules["_plangraph_test_conftest"] is conftest
 
 
 def test_sweep_dead_pgtest_dirs(tmp_path):

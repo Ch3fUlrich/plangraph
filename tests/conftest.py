@@ -20,8 +20,8 @@ from pathlib import Path
 from pgtest_shm import _sweep_dead_pgtest_dirs
 
 # Nested conftests may replace the unqualified module name during collection.
-sys.modules["_plangraph_test_conftest"] = sys.modules[__name__]
-
+if __name__ in sys.modules:
+    sys.modules["_plangraph_test_conftest"] = sys.modules[__name__]
 _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
