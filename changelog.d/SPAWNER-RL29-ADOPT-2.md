@@ -1,1 +1,0 @@
-- Hardened opt-in Linux restart recovery with validated run-scope adoption and scope CPU sampling. Windows recovery remains fail-closed pending a portable watch bridge.

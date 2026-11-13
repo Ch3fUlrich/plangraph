@@ -1,1 +1,0 @@
-- **TEMPORAL-PILOT-A:** Add fail-closed pilot preflight, isolated repository/card setup and redacted persistence, auth, jail, pin and check verification. Enforce pilot-key content, usable credentials, persistent filesystem types, sanitized child environments and fail-closed verification skips.

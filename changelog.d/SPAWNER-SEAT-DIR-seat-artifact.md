@@ -1,1 +1,0 @@
-- **SPAWNER-SEAT-DIR:** Publish private atomic review artifacts only for successful final response-witnessed attempts with exact dispatch hashes and actual finish telemetry; fail closed on incomplete replacements.

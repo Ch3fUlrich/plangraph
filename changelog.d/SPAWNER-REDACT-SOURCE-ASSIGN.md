@@ -1,1 +1,0 @@
-- Review diffs and tracked context slices preserve ordinary credential-named source assignments via producer-only source mode. Private-key blocks are masked in both modes; token scrubbing and context private-key refusal remain; caller prompts, tails and records retain the full fail-closed assignment rule. Python and Rust share source-mode parity fixtures (D-5250).

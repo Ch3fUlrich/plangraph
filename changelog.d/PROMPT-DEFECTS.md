@@ -1,1 +1,0 @@
-- **PROMPT-DEFECTS (D-3795):** Clarify prompt questions, completion contracts, retry bounds and repository pointers without changing runtime behavior.

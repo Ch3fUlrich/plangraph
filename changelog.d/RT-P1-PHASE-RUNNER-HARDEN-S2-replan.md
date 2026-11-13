@@ -1,4 +1,0 @@
-- Give Rust and Python phase branches matching original-key UTF-8 hash suffixes to separate sanitiser collisions, preserving pre-patch workflow replay.
-- Legacy finish now requires `pre_patch_phase` matching the original phase key, plus the checked-out legacy branch and exact local tip. The authenticated worker sets this field only when `phase-branch-hash-v1` is unpatched; patched requests omit it and missing provenance refuses legacy names. This is a trusted worker request contract, not independent verification of Temporal history by the keeper.
-- Real-repository tests cover missing provenance, provenance for a sanitiser-colliding key, successful pre-patch finish, and wrong tips. The HTTP adapter test verifies provenance transport.
-- Remove unrelated workflow import ordering and blank-line churn; keep the test-module size split. No file-size allowance or baseline changes.

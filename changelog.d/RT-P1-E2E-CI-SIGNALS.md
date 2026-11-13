@@ -1,1 +1,0 @@
-- Defer worker-spawn termination handlers until ownership and cleanup are registered, including process signals delivered through CI plugin threads; exercise the race with an unblocked peer in the regression test.

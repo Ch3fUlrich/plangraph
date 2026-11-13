@@ -1,1 +1,0 @@
-- **PG-WIN-TEST-BASELINE (D-3861, D-3900):** Preserve narrow Windows test exclusions and regenerate the scrubbed Windows spawn baseline with Writer attribution.

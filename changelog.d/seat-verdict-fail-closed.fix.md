@@ -1,1 +1,0 @@
-Reject colonless verdict prose, forward only the latest verified head, and persist send intent so interrupted verdict POSTs are not replayed. Haiku review seats remain eligible only over known non-Anthropic writer families.

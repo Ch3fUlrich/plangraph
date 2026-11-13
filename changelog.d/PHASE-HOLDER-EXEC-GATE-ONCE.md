@@ -1,1 +1,0 @@
-- System phase-holder completion validates execution fences once before the in-review bypass, preserving refusal and lease checks without recording ownership.

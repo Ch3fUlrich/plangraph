@@ -1,1 +1,0 @@
-- **SPAWNER-SILENT-RUN-HOTFIX (D-3769):** a writer with no output and no edit stalls at 15 min, not 45; an upstream cooldown or 429 line ends a quiet run and shows in its result. Removed at R10.

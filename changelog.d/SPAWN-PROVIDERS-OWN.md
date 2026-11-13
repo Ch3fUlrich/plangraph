@@ -1,1 +1,0 @@
-- The spawner provider overlay now reads plangraph's shipped `configuration/opencode/providers.json`, with a `PLANGRAPH_PROVIDERS_FILE` override, instead of the AutoOS checkout. Missing-file reasons, JSONC support, and overlay merge rules are unchanged; tests pin shipped-provider safety and leg-model drift.

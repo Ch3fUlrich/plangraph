@@ -1,1 +1,0 @@
-- **RT-P1-WF-VERSIONING:** Load the trusted workflow archive checker from the PR merge ref's first parent so older PR branches do not fail on a missing checker.

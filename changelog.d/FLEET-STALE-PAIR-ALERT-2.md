@@ -1,1 +1,0 @@
-- **FLEET-STALE-PAIR-ALERT (part 2):** Add inactive injected episode delivery using shared bounded acknowledgement/retry records and an independent heartbeat silence monitor; no lifecycle or timer changes.

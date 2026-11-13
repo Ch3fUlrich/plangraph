@@ -1,1 +1,0 @@
-- Fleet sync records first-parent main releases, advance supports optional host `ssh_target`, doctor resolves installed pg-spawnd and harnesses using registry `env.PATH` in fresh release clones, and keeper whoami no longer imports POSIX-only admin dependencies on Windows.

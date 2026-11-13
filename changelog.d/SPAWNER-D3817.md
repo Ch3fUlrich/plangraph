@@ -1,1 +1,0 @@
-- **SPAWNER (D-3817):** remove the console Sonnet implementer and count linked-worktree and reflog commits only when newly observed during the current writer attempt, without excluding backdated commits.

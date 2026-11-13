@@ -1,1 +1,0 @@
-- **KEEPER-VERIFY-SPAWNER-RECORD (part 2a):** Persist validated item keys on Python and Rust spawn, refusal, and continuation records; validate completion-item listing fallbacks without rewriting records.

@@ -1,5 +1,0 @@
-### PLACEMENT-R5 cleanup-2
-- Stream reachable-history blobs with fixed 64 KiB chunks and 16 KiB overlap (80 KiB buffer, linear scanning); scan commit messages from one object buffer. A single secret match longer than the overlap that straddles a chunk edge is out of scope; real credentials are far shorter. Patterns are unchanged. Reject truncated batch responses.
-- Preserve SSH_AUTH_SOCK only for publish transport children (push, fetch and ls-remote); retain all other Git/SSH environment scrubs.
-- Assert failed non-EXDEV installs leave no temporary pack and remove the redundant publish environment assertion.
-- Coverage gap retained: missing-object responses are tested synthetically through validate_batch; resolve-level mutation between inventory and batch validation is not exercised. There is no injection seam between the synchronous inventory and batch calls; external mutation requires a timing-dependent competing process rather than a hermetic test. Successful resolve batching remains covered.

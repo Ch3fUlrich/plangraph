@@ -1,5 +1,0 @@
-{
-  "weights": {"input_tokens": 1, "output_tokens": 1, "cache_creation_input_tokens": 1, "cache_read_input_tokens": 0.1},
-  "weekly_budget_weighted": 460000000,
-  "source": "ASSUMPTION: D-4239 nearly 1/2 of the week after one day, against 230M weighted per day measured on this host 2026-11-06; meter unread"
-}

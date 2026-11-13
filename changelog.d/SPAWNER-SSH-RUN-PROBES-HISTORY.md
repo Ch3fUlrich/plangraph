@@ -1,2 +1,0 @@
-- **SPAWNER-SSH-RUN-PROBES:** Ignore historical finished runs, preview ticks without writes, and bound new probe deliveries with durable overflow.
-- Suppress missing-log findings during startup grace; pull hosts retain their outbox without failing ticks. Configured bridge failures remain errors; probe rules now live in a separate module.

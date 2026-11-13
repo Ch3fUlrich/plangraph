@@ -1,9 +1,0 @@
-# Drop-in example — documentation only; copy without the .example suffix to make it live.
-# mkdir -p ~/.config/systemd/user/plangraph-render.service.d
-# cp kg.conf.example ~/.config/systemd/user/plangraph-render.service.d/kg.conf
-# systemctl --user daemon-reload
-#
-# Must be the live Omnigraph base URL, not a local sidecar. Both values are placeholders.
-[Service]
-Environment=PG_KG_URL=https://omnigraph.example.invalid
-Environment=PG_KG_GRAPHS=<graph-name>

@@ -1,4 +1,0 @@
-[workspace]
-resolver = "2"
-members = ["og-memory", "pg-ctx", "pg-hook", "pg-jail", "pg-mcp", "pg-probe", "pg-reap", "pg-spawnd", "plangraph-cli", "worker-core"]
-exclude = ["spikes"]

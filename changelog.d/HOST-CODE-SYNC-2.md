@@ -1,1 +1,0 @@
-Add GO-referenced, release-pinned fleet advances with serial canary rollout, health checks, rollback, rollout locks and release retention; validate hosts before contact and preserve optional health checks in the host schema and Rust model.

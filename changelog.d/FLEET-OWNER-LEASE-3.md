@@ -1,1 +1,0 @@
-- **FLEET-OWNER-LEASE (part 3):** Add unwired crash-safe filesystem ownership compare-and-swap and explicit bootstrap; wait up to five seconds for slot locks, reserve `.owner-` components for metadata, and make all record decisions under the slot lock.

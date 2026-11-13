@@ -1,1 +1,0 @@
-- **KEEPER-VERIFY-SPAWNER-RECORD (part 2c):** Fix quoted SSH discovery with real find/tar, stream bounded record reads, and publish only after an intact archive and SSH exit 0 or 1.

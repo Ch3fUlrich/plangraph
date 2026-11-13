@@ -1,1 +1,0 @@
-- **LE-FLEET-MSG-INVENTORY:** Resolve the provisioned local host by its real inventory name when the status snapshot lists it under Self. Bind its health identity to loopback, prefer Self over stale peer entries, and keep malformed status or foreign identities refused.

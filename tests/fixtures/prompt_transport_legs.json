@@ -1,9 +1,0 @@
-{"legs": [
-  {"id": "fixture-opencode", "tier": "free", "harness": "opencode", "model": "fixture/model", "family": "fixture", "windows": ["1m"], "max_request_tokens": 200000, "trains_on_data": false, "roles": ["review"]},
-  {"id": "fixture-claude", "tier": "free", "harness": "claude", "model": "fixture/model", "family": "fixture", "windows": ["1m"], "max_request_tokens": 200000, "trains_on_data": false, "roles": ["review"]},
-  {"id": "fixture-agy", "tier": "free", "harness": "agy", "model": "fixture/model", "family": "fixture", "windows": ["1m"], "max_request_tokens": 200000, "trains_on_data": false, "roles": ["review"]},
-  {"id": "fixture-qodercli", "tier": "free", "harness": "qodercli", "model": "fixture/model", "family": "fixture", "windows": ["1m"], "max_request_tokens": 200000, "trains_on_data": false, "roles": ["review"]},
-  {"id": "fixture-codex", "tier": "free", "harness": "codex", "model": "fixture/model", "family": "fixture", "windows": ["1m"], "max_request_tokens": 200000, "trains_on_data": false, "roles": ["review"]},
-  {"id": "fixture-gemini", "tier": "free", "harness": "gemini", "model": "fixture/model", "family": "fixture", "windows": ["1m"], "max_request_tokens": 200000, "trains_on_data": false, "roles": ["review"]},
-  {"id": "fixture-qwen", "tier": "free", "harness": "qwen", "model": "fixture/model", "family": "fixture", "windows": ["1m"], "max_request_tokens": 200000, "trains_on_data": false, "roles": ["review"]}
-]}

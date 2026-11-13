@@ -1,1 +1,0 @@
-- **LE-GUARD-TEXT (D-3795):** The context guard states the level and one calm next step, stays silent inside subagents, and an attended planner can set its own threshold for one session.

@@ -1,1 +1,0 @@
-- Treat `docs/schemas/**` and other repository files consumed by Rust tests as Rust CI inputs, selecting Linux and Windows Rust jobs without changing other job selection; guard the list with a Rust-source dependency scan and unlisted-input regression tests (D-5294).

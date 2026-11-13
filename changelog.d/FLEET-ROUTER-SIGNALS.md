@@ -1,1 +1,0 @@
-- **FLEET-ROUTER-SIGNALS:** Add pure injected six-signal acquisition and versioned JSON snapshots; no runtime caller or behavior change.

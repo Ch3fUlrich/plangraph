@@ -1,2 +1,0 @@
-- **SPAWNER-ORPHAN-REAP (slice 1):** cancellation with surviving processes fails with `kill_incomplete` instead of publishing `cancelled`; leg probes clean up owned process trees and temporary directories on timeout, exception, and cancellation. `setsid` containment and periodic reaping remain follow-up work.
-- Fix round: preserve terminal cancellation results, guard survivor publication, track probe job IDs, and bound each cleanup wait; cleanup failures still visit later jobs and retain the directory with an explicit error when safe removal cannot be proved.

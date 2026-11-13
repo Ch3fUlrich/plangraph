@@ -1,1 +1,0 @@
-- **PG-HOST-ONLINE-INSTALL:** Bootstrap can enroll a probe host in private orchestrator config without SSH or enabling the remote timer.

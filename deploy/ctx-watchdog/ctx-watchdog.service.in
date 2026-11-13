@@ -1,8 +1,0 @@
-[Unit]
-Description=Plangraph router context watchdog
-
-[Service]
-Type=oneshot
-Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
-ExecCondition=/bin/sh -c 'd="$${PLANGRAPH_SPAWN_STATE:-$${XDG_STATE_HOME:-%h/.local/state}/plangraph}"; p="$$d/quota-pause"; test -d "$$d" && test -r "$$d" && test -x "$$d" && test ! -e "$$p" && test ! -L "$$p" || { echo "ctx-watchdog: quota pause; relaunch skipped"; exit 1; }'
-ExecStart=@ROUTER_DIR@/router/bin/ctx-watchdog --apply

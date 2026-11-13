@@ -1,1 +1,0 @@
-- **BENCH-DATA-TEST:** Add a hermetic benchmark coverage/citation/model-identity contract with a reasoned legacy pending list, separately pinned count and SHA-256 fixture, null-safe ceiling fingerprints, order-independent mutation checks, optimization-safe checks, and suffix-aware model-name punctuation support; leave all catalog and benchmark row values unchanged.

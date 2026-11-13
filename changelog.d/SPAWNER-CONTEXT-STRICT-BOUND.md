@@ -1,1 +1,0 @@
-- **SPAWNER-CONTEXT-STRICT-BOUND:** Strict whole-prompt admission now bounds both review and tools legs without changing flag-off behavior; refusals expose only reason codes and sizes.

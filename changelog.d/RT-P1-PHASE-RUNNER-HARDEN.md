@@ -1,1 +1,0 @@
-- **RT-P1-PHASE-RUNNER-HARDEN (partial):** Refuse adoption of phase branches missing the base head, including racing creation; regress exact card sweeping for keys with identical readable segments. Live-phase hardening gate remains closed.

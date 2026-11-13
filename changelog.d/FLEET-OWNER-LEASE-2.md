@@ -1,1 +1,0 @@
-- **FLEET-OWNER-LEASE (part 2):** Add unwired pure compare-and-advance and explicit owner-preserving reconciliation; durable filesystem CAS remains for part 3.

@@ -1,1 +1,0 @@
-- **SPAWNER-TEXT-ONLY-TOOLCALL:** text-call detection runs before the terminal-reason check again, so a writer's text-only output no longer ends as a plain exit-code failure.

@@ -1,1 +1,0 @@
-- **FLEET-OWNER-LEASE (part 1):** Add an unwired versioned ownership read store with session-scoped unknown alarms, lease expiry evidence and explicit v0 migration; comparison and reconciliation remain part 2, filesystem CAS part 3.

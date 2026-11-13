@@ -1,1 +1,0 @@
-- SPAWNER-RUN-TREE-S1-TREE-PER-SHA: select detached run trees by verified origin/main SHA, recreate missing registered trees even when locked, and retain resumable runs' trees using the spawner's terminal-status predicate.

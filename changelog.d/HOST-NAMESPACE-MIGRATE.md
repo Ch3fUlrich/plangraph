@@ -1,1 +1,0 @@
-- Inventory host namespace consumers and operator gate dependencies in setup; add check/dry-run and allowlisted non-secret moves with old-path symlink shims, conflict refusal, interrupted-move recovery and metadata-only secret permission checks.

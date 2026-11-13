@@ -1,1 +1,0 @@
-- **COMPACT-NEVER-REPLACES-HANDOFF (D-4646):** Raise the spawner's default compact window to 400000 and document that an already-running daemon requires the real value in user settings env.

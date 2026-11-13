@@ -1,1 +1,0 @@
-- Align writer and CI changelog gates for doc-only skip trailers and indented section boundaries; verify fragment, dated-heading and skip syntax parity. Docs-map enforcement moves into Rust in S1c.

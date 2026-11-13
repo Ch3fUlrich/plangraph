@@ -1,1 +1,0 @@
-- **KEEPER-CLAIM-GUARD-FAIL-CLOSED:** Claims refuse when a configured decisions file cannot be read, even with force_stale; display reads remain best-effort (D-4020).

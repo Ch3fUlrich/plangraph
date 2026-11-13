@@ -1,1 +1,0 @@
-- Spawner: a review seat on the claude harness can run pytest; it starts in default mode with Read, Grep, Glob and pytest only, other roles stay in plan mode (D-3835, D-3872).

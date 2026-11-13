@@ -1,1 +1,0 @@
-- **PLACEMENT-R7A-JOB-SCHEMA (D-3676, D-3741):** add reversible Postgres migration 10 for federation storage with bounded blob chunks and live-attempt backstops; no routes or deployment.

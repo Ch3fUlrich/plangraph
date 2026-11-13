@@ -1,1 +1,0 @@
-- **LE-PUBLIC-PUSH-GUARD (D-3795):** Detect public checkouts missing the reviewed executable push gate and provide explicit, non-overwriting installation.

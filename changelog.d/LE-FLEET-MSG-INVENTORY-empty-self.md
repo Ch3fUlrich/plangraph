@@ -1,1 +1,0 @@
-- **LE-FLEET-MSG-INVENTORY:** Refuse empty Self public keys in endpoint probing and discovery so a stale Peer twin cannot bind the local host.

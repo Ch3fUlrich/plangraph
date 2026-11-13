@@ -1,1 +1,0 @@
-- Align spawner regression coverage with Sol-only writers while retaining multi-leg mechanism assertions; repair round-trip loading of retained roleless legs and use Sol for the completion smoke.

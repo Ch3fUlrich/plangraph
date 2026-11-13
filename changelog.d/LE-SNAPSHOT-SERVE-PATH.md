@@ -1,1 +1,0 @@
-- **LE-SNAPSHOT-SERVE-PATH:** Document the pinned snapshot-serve checkout and read-only forced-command helper, with hermetic checks for missing and existing PYTHONPATH directories.

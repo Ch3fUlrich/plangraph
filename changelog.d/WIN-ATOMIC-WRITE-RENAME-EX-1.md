@@ -1,1 +1,0 @@
-- Pass cap - 1 in the stalled prompt-Git below-cap timeout test, preserving its name and all error, cleanup and timing assertions.

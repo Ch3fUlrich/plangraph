@@ -1,5 +1,0 @@
-{
-  "router_repo": "<git URL of the router repo>",
-  "router_sha": "<40 hex pinned commit>",
-  "router_dir": ".local/share/plangraph/router"
-}

@@ -1,1 +1,0 @@
-- **AUTOOS-SKILLS-REMOVE-AND-RELINK (D-5648, D-5658):** Carry structured-memory and the coding-principles Codex adapter from AutoOS into skills/; qualify AutoOS tooling and ADR paths, parameterize deployment and graph identity examples, and add three memory evals with a resolving coding-principles pointer.

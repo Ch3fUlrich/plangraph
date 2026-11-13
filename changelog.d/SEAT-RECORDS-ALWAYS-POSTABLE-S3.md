@@ -1,1 +1,0 @@
-- Add explicit transport-only seat verdict reposts with unchanged import order, pre-send journal preservation, and fail-closed retry validation.

@@ -1,1 +1,0 @@
-Raise Linux spawned agents and pytest workers to OOM adjustment >=500; cap automatic pytest concurrency on small hosts and document earlyoom/isolated-daemon policy and the router-owned live probe (D-5075).

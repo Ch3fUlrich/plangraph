@@ -1,1 +1,0 @@
-Add Claude Sonnet/Opus 5.5 agy legs (review and implement, by explicit --leg or model override only, never routed) and effort-variant legs for sol, luna and agy gemini; resolve `agy/<model>` overrides to their leg; declare cx effort models per run for opencode; read local RAM on Windows so CLI spawns no longer die on `/proc/meminfo` (operator 2026-11-09).

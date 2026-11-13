@@ -1,1 +1,0 @@
-- Reject phases on non-seen evidence observations and overlong outcome lines on read-back; only seen observations participate in restart episodes (D-3984).

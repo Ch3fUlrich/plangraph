@@ -1,1 +1,0 @@
-- **SPAWNER-REVIEW-CHOICE follow-up (D-3605, D-4779):** glm stays off for review: `review_allowed_families` no longer lifts glm and the `opencode-go-glm-5.2` leg is disabled.

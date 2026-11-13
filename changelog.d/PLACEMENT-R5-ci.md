@@ -1,1 +1,0 @@
-- Refresh the standalone worker lockfile after merging main so clean runners resolve the worker-core dependencies reproducibly; retain main's bounded fake-server ETXTBSY regression coverage.

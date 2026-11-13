@@ -1,1 +1,0 @@
-- Verify the existing Haiku review leg and close explicit-selection gaps: every Claude writer part now fences Claude review legs, and Haiku cannot enable tools; pin normal run-record/stdout behavior with affected tests.

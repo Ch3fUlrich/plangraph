@@ -1,1 +1,0 @@
-- Derive missing seat finish evidence from the last recorded `opencode_step_finish` event, preserving top-level then completion precedence and refusing PASS for absent, unusable or nonterminal final reasons without reviving an earlier stop; add hermetic coverage through the real verdict posting path (D-5624).

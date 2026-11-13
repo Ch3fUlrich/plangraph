@@ -1,1 +1,0 @@
-- **AUTOOS-HOOKS-INTERIM-S06 (D-3516):** add hooks test helpers and the missing-file guard test from PR #292; the AutoOS path in the helper is now a synthetic default.

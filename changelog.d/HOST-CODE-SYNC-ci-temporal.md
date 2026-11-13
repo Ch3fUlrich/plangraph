@@ -1,1 +1,0 @@
-- **HOST-CODE-SYNC (replan-0387):** Cache the verified Temporal CLI binary across all three CI consumers and extend cache-miss download retries to a six-minute window, with an offline workflow regression guard.

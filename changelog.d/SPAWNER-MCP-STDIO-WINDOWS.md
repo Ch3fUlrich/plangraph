@@ -1,1 +1,0 @@
-- **SPAWNER-MCP-STDIO-WINDOWS (register 51):** Read MCP stdin on a daemon thread with a private reader so Windows pipes and redirected files work and blocked input cannot delay exit.

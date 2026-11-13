@@ -1,1 +1,0 @@
-- **FLEET-CAP-RESOLVER:** Add a pure shared S12 resolver with exact-SHA recorded activation, honest policy fallback provenance, propagated catalog alarms, defensive unknown handling and tested override refusal; default prior pass-through, no callers enabled. Immutable exact-SHA CI, review, merge and outside-family ACCEPT remain required gates.

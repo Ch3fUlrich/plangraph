@@ -1,1 +1,0 @@
-- A review seat whose opencode run exits rc 1 with tools denied and a final VERDICT line now completes; the record keeps rc 1 and the event (D-4430).

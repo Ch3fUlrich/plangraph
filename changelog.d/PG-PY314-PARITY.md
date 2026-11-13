@@ -1,1 +1,0 @@
-- **PG-PY314-PARITY (D-3774):** preserve strict scan errors and symlink-loop diagnostics across Python versions; shorten bound test socket paths.

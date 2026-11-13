@@ -1,1 +1,0 @@
-- Pin the existing keeper check metadata and RS-WIRING claim fields with a Rust round-trip against the actual Python claim builder, covering default and explicit card metadata.

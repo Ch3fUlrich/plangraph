@@ -1,1 +1,0 @@
-- **SEAT-PATH-FIXES (D-3676):** allow explicit inline document reviews without diff_ref, route mimo-flash inline-only, align verdict commentary parsing, and cap reviews at 25 minutes unless explicitly overridden.

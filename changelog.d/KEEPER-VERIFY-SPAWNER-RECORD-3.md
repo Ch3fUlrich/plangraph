@@ -1,1 +1,0 @@
-- **KEEPER-VERIFY-SPAWNER-RECORD (part 2b):** Add a manual local or SSH spawner-record mirror with strict proof reduction, symlink refusal, and non-replacing publication.

@@ -1,2 +1,0 @@
-- **OPERATOR-STEP-PROBE (D-3773):** flag unprobed operator commands, missing host guards and stale gates on important work; render shared shell guards.
-- The merge landed in a burst of nine; CI at its merge sha failed from the merge order and was waived by D-3837; this line carries the item's evidence.

@@ -1,1 +1,0 @@
-- Add a stdlib-only OpenCode lane wake runner with idle checks, authenticated local HTTP, durable at-most-once inbox consumption, STOP handling, and credential-free event logs.

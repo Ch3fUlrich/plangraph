@@ -1,1 +1,0 @@
-- **SPAWNER-LEG-STATE-FLIP:** Enable shared leg state by default, retain declared routing on reader failure, and defer waiting legs next tick.

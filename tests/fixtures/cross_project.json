@@ -1,9 +1,0 @@
-{
-  "generated": "2026-10-01T00:00:00Z",
-  "head": null,
-  "items": [
-    {"project": "atlas", "id": "R1", "key": "atlas:R1", "title": "Atlas prerequisite", "kind": "lane", "track": "T0", "owner": "atlas-lead", "state": "open", "estimate_h": 2, "depends_on": [], "corrects": null, "priority": 0},
-    {"project": "borealis", "id": "X", "key": "borealis:X", "title": "Cross-project dependent", "kind": "lane", "track": "T2", "owner": "Borealis Lead", "state": "open", "estimate_h": 3, "depends_on": ["atlas:R1"], "corrects": null, "priority": 0},
-    {"project": "borealis", "id": "GOAL", "key": "borealis:GOAL", "title": "Borealis goal", "kind": "goal", "track": "T2", "owner": "Borealis Lead", "state": "open", "estimate_h": 0, "depends_on": ["borealis:X"], "corrects": null, "priority": 0}
-  ]
-}

@@ -1,2 +1,0 @@
-- **SKILLS-REMAINDER-CLASSIFY (D-3798):** Move the site-free homelab-access skill into skills/ with 3 evals; its MCP server stays in AutoOS until AUTOOS-INTO-PLANGRAPH.
-- **SKILLS-REMAINDER-CLASSIFY (D-3840):** PR #410 was squash-merged without the item trailer; this line carries the item's evidence (D-3840).

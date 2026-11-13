@@ -1,1 +1,0 @@
-- Skip and acknowledge configured keeper completion delivery for runs without an item, avoiding repeated watchdog tracebacks (D-4171).

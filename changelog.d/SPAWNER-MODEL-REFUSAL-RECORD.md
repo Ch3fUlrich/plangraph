@@ -1,2 +1,0 @@
-- **SPAWNER-MODEL-REFUSAL-RECORD:** Record Claude classifier refusals as terminal model_refusal failures, retaining output without rerouting or booking a leg limit.
-- **SPAWNER-MODEL-REFUSAL-RECORD (D-3840):** PR #399 was squash-merged without the item trailer; this line carries the item's evidence (D-3840).

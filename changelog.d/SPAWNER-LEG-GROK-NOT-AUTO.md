@@ -1,1 +1,0 @@
-- **SPAWNER-LEG-GROK-NOT-AUTO:** The grok review leg is never picked automatically, like the muse leg; an explicit --leg with a reason still works (D-4543, D-4557).

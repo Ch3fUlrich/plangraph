@@ -1,1 +1,0 @@
-- Keep daemon startup available when file-configured shadow reconciliation encounters invalid inventory; log the error instead (D-4659).

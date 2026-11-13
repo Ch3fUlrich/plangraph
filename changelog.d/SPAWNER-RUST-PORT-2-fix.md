@@ -1,2 +1,0 @@
-- Bind Rust doctor-source validation and Python configured-host filtering to one hermetic JSON golden table, including CRLF rejection cases and shared probe limits; avoid checkout-format-dependent source assertions.
-- Normalize fleet helper nonzero exits to a fixed RuntimeError and cover snapshot fallback without leaking diagnostics; retire only the completed fleet projection's Python waiver while preserving main's unrelated exceptions.

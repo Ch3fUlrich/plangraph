@@ -1,2 +1,0 @@
-- **SPAWNER-RL10A (D-3676, D-3714):** Hold every until a class default and the non-verdict heuristic false, add open-until and all-permutation properties, and pin duplicate attempts to the last input row.
-- **SPAWNER-RL10A (D-3676, D-3714):** Bound non-verdict probes and add role/route scoping, neutral handling and hourly incident tests.

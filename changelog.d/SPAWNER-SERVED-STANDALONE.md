@@ -1,1 +1,0 @@
-- **SPAWNER-SERVED-STANDALONE (register 47):** host admission lists models with `opencode models --standalone`: the shared background server ignores the run overlay, so a new host refused every gateway leg and a host with a failed service checked nothing.

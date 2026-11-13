@@ -1,1 +1,0 @@
-- **FLEET-STALE-PAIR-ALERT (part 1):** Add inactive injected stale-pair observation and episode evidence; reject zero tolerance, validate replacement baselines and diagnose saturated ages; no delivery, caller, binary or lifecycle changes; later activation requires reviewed flags, exact-SHA live GO and immutable run records, with rollback by removing the later caller.

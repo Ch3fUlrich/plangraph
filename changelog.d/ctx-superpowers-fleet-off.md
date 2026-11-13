@@ -1,1 +1,0 @@
-- **CTX-SUPERPOWERS-FLEET-OFF (D-5144 (2)):** Fleet session launches disable the Superpowers plugin through one launch-local settings argument on Linux and Windows; attended invocations and user settings are unchanged.

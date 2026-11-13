@@ -1,2 +1,0 @@
-- Require non-blank Why:/How: sections for new decisions through MCP, CLI define, storage create and apply_ops; preserve legacy imports and existing-item edits.
-- Defer decision validation in MCP create and CLI define to storage so duplicate-key, conflict and locked refusals keep precedence over missing Why:/How: sections.

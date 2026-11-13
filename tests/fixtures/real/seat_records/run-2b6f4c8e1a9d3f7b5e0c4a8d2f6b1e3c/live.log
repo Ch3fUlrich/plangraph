@@ -1,5 +1,0 @@
-
-> build - cx-gpt-6-luna
-VERDICT: FIX
-SEV2 Applications/media-acquire/chaptarr_seed_import.py:921 - `all_books` only visits authors in the initial snapshot, so an author added mid-run is omitted from later settle polls and final row counts; fetch the current author list on each poll (or merge newly observed authors) while reusing the snapshot only for the initial plan read.
-SEV2 Applications/media-acquire/chaptarr_seed_import.py:917 - If `/book?authorId=<id>` returns a book under multiple authors but the row has no `id`, it is not deduplicated; confirm IDs are guaranteed by the API or deduplicate with a stable fallback key.

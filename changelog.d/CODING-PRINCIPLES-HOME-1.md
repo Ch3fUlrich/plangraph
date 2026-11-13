@@ -1,1 +1,0 @@
-- **CODING-PRINCIPLES-HOME (D-3798):** Move the coding-principles skill into skills/ with its changelog-backtracking reference and 3 evals; the AutoOS brain scratch path and starters pointer are dropped.

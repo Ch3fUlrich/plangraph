@@ -1,1 +1,0 @@
-- **RT-P1-WF-VERSIONING:** Require explicit worker identity and successful promotion; add bounded attempts, replay-safe rollover, immutable build archives, process-crash qualification, and an operational runbook; CI policy wiring awaits authorization.

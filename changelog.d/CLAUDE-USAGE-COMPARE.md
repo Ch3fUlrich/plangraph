@@ -1,1 +1,0 @@
-- **CLAUDE-USAGE-COMPARE:** Add a compare subcommand to tools/claude_usage.py that shows per-role weighted usage, share and share delta across two UTC windows.

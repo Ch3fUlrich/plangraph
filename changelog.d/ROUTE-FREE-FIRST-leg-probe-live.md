@@ -1,2 +1,0 @@
-- Keep bounded, scrubbed probe stderr in diagnostics and leg-state events; let recently writing live runs override probe-only failures without masking provider quota/usage limits.
-- Guard state wiring for plain runners, keep probes in their service's state tree, verify log size growth across probes, preserve the legacy reason bound, and omit null probe states.

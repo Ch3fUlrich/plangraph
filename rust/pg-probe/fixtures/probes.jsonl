@@ -1,5 +1,0 @@
-{"id":"rule-changelog","kind":"rule","question":"Which decision requires a changelog and mapped documentation update?","gold":"D-653","expected_path":{"tool":"context"},"planner_proposed":true}
-{"id":"rule-rust","kind":"rule","question":"Which decision makes Rust the default for new production code?","gold":"D-4691","expected_path":{"tool":"context"},"planner_proposed":true}
-{"id":"rule-file-size","kind":"rule","question":"Which decision is cited by the pre-push 400-line file-size gate?","gold":"D-3198","expected_path":{"file_class":"rule_store"},"planner_proposed":true}
-{"id":"knowledge-keeper-cli","kind":"knowledge","question":"What is the plangraph keeper CLI module?","gold":"plangraph.keeper.cli","expected_path":{"file_class":"repository_source"},"planner_proposed":true}
-{"id":"knowledge-core-location","kind":"knowledge","question":"Where does the pg-worker-core crate live?","gold":"rust/worker-core","expected_path":{"file_class":"repository_source"},"planner_proposed":true}

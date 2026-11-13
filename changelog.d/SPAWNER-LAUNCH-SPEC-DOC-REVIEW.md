@@ -1,1 +1,0 @@
-- **SPAWNER-LAUNCH-SPEC-DOC-REVIEW:** Accept a strictly boolean explicit leg opt-in for launch-spec document reviews without a diff, preserving default refusal and strict context bounds (D-4004).

@@ -1,1 +1,0 @@
-- Fix the exited-worker teardown test's PID-publication race: shell redirection creates the PID file before `echo` fills it, so waiting only for the directory entry let the reaper skip an empty record and leave the detached harness alive. Wait for the complete PID record instead, with deterministic empty/partial-record regressions.

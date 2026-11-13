@@ -1,1 +1,0 @@
-Host readiness now checks configured spawner and remote-ps source imports, reports numeric origin/main lag (unknown on read failure), requires a session probe, and emits stable per-check `HOST-NOT-READY` lines for consumers.

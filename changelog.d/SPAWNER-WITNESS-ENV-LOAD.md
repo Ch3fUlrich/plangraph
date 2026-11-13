@@ -1,1 +1,0 @@
-- **SPAWNER-WITNESS-ENV-LOAD (D-4673):** Load parent-only gateway call-log credentials from a private file when needed; name unavailable witness reasons, prioritize gateway review legs, and validate all witness-required review legs before creating run artifacts.

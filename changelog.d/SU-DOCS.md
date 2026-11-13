@@ -1,1 +1,0 @@
-- **SU-DOCS:** The orchestration-setup design (scrubbed) and a pointer to the private plan-base originals land in docs/plans (D-4910).

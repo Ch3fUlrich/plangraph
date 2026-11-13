@@ -1,1 +1,0 @@
-- **LE-WRITER-SECRET-SANDBOX:** Scrub URL passwords and secret assignments before run output persistence and outbound prompts, buffering split lines and withholding output explicitly on scrub failure.

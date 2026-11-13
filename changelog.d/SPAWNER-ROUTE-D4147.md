@@ -1,1 +1,0 @@
-- **SPAWNER-ROUTE-D4147:** Discover models with bounded standalone OpenCode, retain Sol-first implement routing, prefer MiMo then table order for review, exclude every writer family, and ignore legacy local expiry in favor of OmniRoute. Disabled legs remain listed; leg-state enablement is unchanged.

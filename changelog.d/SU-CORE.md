@@ -1,1 +1,0 @@
-- Add the Rust plangraph CLI with embedded setup manifest, preserving JSON/hook merges, env validation, private rotating backups, atomic locked writes, dry-run and drift checks; run its contract suite on Linux and Windows.

@@ -1,3 +1,0 @@
-RL26: add read-only catalog bridge, 60-second catalog cache and shared reference admission, off by default. External acceptance and historical live gate remain outstanding.
-Fix r5: admission never selects a leg; preserve the planner choice in every mode. Explicit selection belongs to RL20. Guard probe with the review-role rule and omit empty suggestion suffixes. Preserve validation refusal records and host handling.
-Fix round: omit sanitized-empty ambiguous candidate suffixes; log Warn-mode catalog failure once per process. Both regressions reproduced before their fixes; external acceptance and historical live gate remain outstanding.

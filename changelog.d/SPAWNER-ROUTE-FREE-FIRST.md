@@ -1,2 +1,0 @@
-- **SPAWNER-ROUTE-FREE-FIRST (D-3901):** keep Sol first across implement tiers, serving free review legs before named subscription groups, and measured ranking within each group. Seats follow the review route and retain per-writer coverage. Anthropic legs remain registered but cannot implement; explicit overrides are unchanged.
-- Disabled legs stay listed with a non-empty reason and never route; empty roles without a reason are rejected. Console Sonnet retains its D-3893/D-3828 reason. Inline-diff seat tests use a fixed serving table independent of review preferences.

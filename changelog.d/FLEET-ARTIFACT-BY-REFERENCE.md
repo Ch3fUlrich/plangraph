@@ -1,2 +1,0 @@
-- **FLEET-ARTIFACT-BY-REFERENCE:** Transport private documents by verified git artifact pointers and refuse oversize session messages.
-- **FLEET-ARTIFACT-BY-REFERENCE (D-3840):** PR #400 was squash-merged without the item trailer; this line carries the item's evidence (D-3840).

@@ -1,1 +1,0 @@
-- **KEEPER-SNAP-S0-TIMINGS S0b:** Snapshot and changelog decision texts reuse the existing per-file-version decision book; enforcement remains uncached. Snapshot benchmark now seeds decision evidence.

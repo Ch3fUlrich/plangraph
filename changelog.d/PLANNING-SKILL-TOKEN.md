@@ -1,1 +1,0 @@
-- **PLANNING-SKILL-TOKEN:** Read the plan graph before operator questions and routed research; add purpose, retry facts and an evidence-labelled wording guide to briefs.

@@ -1,1 +1,0 @@
-- **KEEPER-CLAIM-GUARD-UNCACHED:** Read decisions fresh once per stale-claim guard while preserving cached display and snapshot reads.

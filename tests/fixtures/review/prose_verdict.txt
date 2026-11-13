@@ -1,9 +1,0 @@
-## V1 - passing with a caveat
-
-`views.py:blocked` skips items with no deps. The test `test_blocked_empty`
-covers the empty case. The reviewer likes the change but leaves a caveat
-in the verdict line instead of a clean decision.
-
-TEST-GAMING: no - searched src/ and tests/ for test-only guards: 0 hits
-
-VERDICT: pass, but the docs need a follow-up

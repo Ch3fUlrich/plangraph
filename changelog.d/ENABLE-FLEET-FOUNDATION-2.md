@@ -1,1 +1,0 @@
-- **ENABLE-FLEET-FOUNDATION (part 2):** Add default-off persisted hysteresis ticks and preserve silence episodes and one-sided compaction evidence.

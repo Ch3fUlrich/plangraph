@@ -1,1 +1,0 @@
-- **KEEPER-VERIFY-SPAWNER-RECORD:** Verify keeper-owned mirrored spawner records with host, item, writer and family binding; preserve legacy run evidence by default.
