@@ -23,3 +23,5 @@ it does not perform host-specific repository synchronization.
 Parity fixtures record Python behavior before implementation; integration
 tests use temporary homes, worklogs and repositories. No tests use live keeper
 writes or live fleet sessions.
+
+leet-name ROLE combines local and enabled remote session listings, retries one transport failure, and prefers a live session confirmed by the role's launch record during overlap. ROUTING_STATE_DIR and FLEET_HOST_POLICY retain their legacy meanings. Configure local aliases in the host policy when needed.

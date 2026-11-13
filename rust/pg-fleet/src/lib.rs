@@ -1,5 +1,21 @@
+pub mod fleet_name;
 pub mod handoff;
 pub mod path_check;
+pub mod process;
+
+/// The private data checkout remains the source of operational data during cutover.
+pub fn data_home() -> std::path::PathBuf {
+    std::env::var_os("RESUME_DIGEST_HOME")
+        .filter(|s| !s.is_empty())
+        .map_or_else(|| home().join("code/plangraph-data/router"), Into::into)
+}
+
+pub fn read_json(path: &std::path::Path, limit: u64) -> Option<serde_json::Value> {
+    if paths::secret(path) || std::fs::metadata(path).ok()?.len() > limit {
+        return None;
+    }
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
 pub mod paths;
 
 /// Python json.dumps' default separators, without escaping Unicode.
