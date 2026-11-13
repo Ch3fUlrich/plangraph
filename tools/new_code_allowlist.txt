@@ -29,4 +29,5 @@ tools/merge_gate.py | D-5252 rule 9.14: read-only JSON shadow CLI for the Python
 tools/merge_gate_core.py | D-5252 rule 9.14: imports seat_verdict parser/coverage and ci_commit_gate path authority; no duplicated Rust policy
 tests/test_keeper_mcp_snapshot.py | MCP schema/reply parity guard (D-5062), retired by MCP-RUST
 src/plangraph/spawner/redact_tokens.py | Python scrubber parity helper required by D-5279 option A; retired by SPAWNER-RUST-PORT
+tools/seat_backfill.py | D-5062 rule 9.14: responsibility-only extraction of existing seat_record/seat_verdict backfill helpers to meet the 400-line gate; no new behaviour
 src/plangraph/keeper/mcp_tools.py | D-5504/D-5506 rule 9.14: schema-only split required to add close_merged without growing the 400-line Python MCP transport; retired by MCP-RUST

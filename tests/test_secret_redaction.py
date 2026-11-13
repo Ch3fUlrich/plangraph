@@ -220,3 +220,17 @@ def test_stream_scrub_failure():
     lines = env_redact.OutputLines(broken)
     assert lines.feed('unfinished') == ''
     assert 'redaction failed; output withheld' in lines.feed('', final=True)
+
+
+@pytest.mark.parametrize('scrub', [env_redact.redact, env_redact.redact_source, env_redact.redact_output])
+def test_token_scrub_failure_withholds_input(monkeypatch, scrub):
+    calls = []
+    def broken(*args, **kwargs):
+        calls.append(True)
+        raise RuntimeError('synthetic token scrub failure')
+
+    # Patch the lookup site of the imported redact_tokens.TOKENS reference.
+    monkeypatch.setattr(env_redact, 'TOKENS', SimpleNamespace(sub=broken))
+    text = 'diagnostic ' + 'gh' + 'p_' + 'A9' * 15 + '\n'
+    assert scrub(text) == '[autoos:redaction failed; output withheld]\n'
+    assert calls == [True]

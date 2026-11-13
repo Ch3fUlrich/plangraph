@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 import os
 import signal
-import socket
 import subprocess
 import sys
 import time
@@ -209,12 +208,6 @@ def run_cli(args, env=None, cwd=None):
                           env=_env(env), cwd=cwd)
 
 
-def _free_port():
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
 def _token_of(out: str) -> str:
     return out.strip().rsplit(":", 1)[1].strip()
 
@@ -278,12 +271,13 @@ def start_local(base: Path, signing: bool = False) -> Keeper:
         out = run_cli(args)
         assert out.returncode == 0, out.stderr
         tokens[name] = _token_of(out.stdout)
-    port = _free_port()
+    ready_file = base / "ready.json"
+    ready_file.unlink(missing_ok=True)
     proc = subprocess.Popen(
         [sys.executable, "-m", "plangraph.keeper.daemon", "--config", str(cfg),
-         "--host", "127.0.0.1", "--port", str(port)],
+         "--host", "127.0.0.1", "--port", "0", "--ready-file", str(ready_file)],
         env=_env({"PYTHONFAULTHANDLER": "1"}), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    keeper = Keeper(f"http://127.0.0.1:{port}", tokens,
+    keeper = Keeper("", tokens,
                     {"decisions", "runs", "batch", "admin"}, True, base, cfg,
                     batch_dir, runs_dir, proc)
     deadline = time.time() + _start_timeout()
@@ -291,8 +285,12 @@ def start_local(base: Path, signing: bool = False) -> Keeper:
         if proc.poll() is not None:
             raise RuntimeError("keeper exited: " + proc.stderr.read().decode()[:500])
         try:
-            if keeper.get("/v1/health").status == 200:
-                return keeper
+            if ready_file.exists():
+                endpoint = json.loads(ready_file.read_text(encoding="utf-8"))
+                keeper.url = f"http://{endpoint['host']}:{endpoint['port']}"
+                if keeper.get("/v1/health").status == 200:
+                    return keeper
+            time.sleep(0.05)
         except OSError:
             time.sleep(0.05)
     keeper.stop()

@@ -89,10 +89,22 @@ def keeper_thread_guard():
 
 
 @pytest.fixture(autouse=True)
-def no_leaked_keeper_threads(keeper_thread_guard):
-    """Bounded-join keeper-owned starts, not session-runtime executor threads."""
-    with keeper_thread_guard():
+def no_leaked_keeper_threads(request, no_leaked_keeper_fixture_threads):
+    """Test-body starts stay test-owned; fixture starts follow their own scope."""
+    from _keeper_threads import thread_scope
+    no_leaked_keeper_fixture_threads(request.node)
+    with thread_scope(request):
         yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def no_leaked_keeper_fixture_threads(request):
+    import _keeper_threads as guard
+    # Session fixture setup uses session hooks, not tests/conftest.py's hooks.
+    request.config.pluginmanager.register(guard)
+    request.addfinalizer(lambda: request.config.pluginmanager.unregister(guard))
+    with guard.guard_new_threads(scope=lambda: guard.current_scope(request)) as watch_scope:
+        yield watch_scope
 
 
 @pytest.fixture

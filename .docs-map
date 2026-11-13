@@ -1,5 +1,6 @@
 # enforce-after: 2026-11-08
 # Docs mapping for plangraph (rule D-653)
+rust/pg-ctx/** -> docs/repo-mirror.md
 rust/pg-hook/** -> docs/rust-hooks.md
 rust/pg-mcp/** -> docs/keeper/mcp-rust.md
 rust/pg-probe/** -> docs/context-probes.md
