@@ -426,32 +426,6 @@ jobs:
       - name: cargo test replay
         run: cargo test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay
 
-  cancel-on-failure:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Cancel this run on its first failed job
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for attempt in $(seq 1 90); do
-            jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '[.jobs[] | select(.name != "cancel-on-failure")]')
-            if jq -e 'any(.[]; .conclusion == "failure")' <<< "$jobs" >/dev/null; then
-              gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
-              exit 0
-            fi
-            if jq -e 'any(.[]; .name == "ci-gate" and .status == "completed")' <<< "$jobs" >/dev/null; then
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "CI cancellation monitor exceeded its bound" >&2
-          exit 1
-
   ci-gate:
     name: ci-gate
     runs-on: ubuntu-24.04

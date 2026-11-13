@@ -322,7 +322,7 @@ Pytest uses a session-owned temporary global Git config and disables system Git 
 
 Event-log seat reviews use completed step text only. A stop answer survives empty trailing steps, but new unfinished text or tool activity cannot supply a verdict; plain-text logs retain their existing path.
 
-CI runs pytest in three deterministic `PYTEST_SHARD=INDEX/COUNT` shards while keeping xdist groups together and loadgroup scheduling; PR runs stop at ten failures and same-repository runs cancel on the first failed job. Synthetic sensitivity sweeps never consult host quota databases.
+CI runs pytest in three deterministic `PYTEST_SHARD=INDEX/COUNT` shards while keeping xdist groups together and loadgroup scheduling; PR runs stop at ten failures within each pytest job. Empty shards succeed without broadening the selected tests. Whole-run cancellation is not installed. Synthetic sensitivity sweeps never consult host quota databases.
 
 CI timing measurements and pending PR-run evidence are tracked in `docs/ci-performance.csv`. Sensitivity reproducibility runs one case per seed so all five seeds retain coverage across workers.
 

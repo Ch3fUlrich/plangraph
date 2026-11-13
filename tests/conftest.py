@@ -472,3 +472,9 @@ def fake_ownership(monkeypatch):
     born = real_stat(os.getpid())[4]   # only processes started after this test session exist for the stubbed view
     monkeypatch.setattr(proc_kill, '_stat', lambda pid, root='/proc': (lambda st: st if st and st[4] >= born else None)(real_stat(pid, root)))
     monkeypatch.setattr(SpawnerRunner, 'identity_provider', staticmethod(lambda pid, **k: real_identity(pid, **k) or 'fake-token'))
+
+
+def pytest_sessionfinish(session, exitstatus):
+    # An affected selection can legitimately assign no items to this shard.
+    if exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and os.environ.get('PYTEST_SHARD'):
+        session.exitstatus = pytest.ExitCode.OK

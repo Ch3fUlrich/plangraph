@@ -216,6 +216,9 @@ def main(root=None):
     if args.within is not None and not plan["tests"]:
         print("no pg-affected tests")
         return 0
+    if args.run and not plan["tests"]:
+        print("no affected tests")
+        return 0
     if args.run and plan["tests"]:
         if importlib.util.find_spec("pytest") is None:
             print(f"FAIL pytest-missing: {sys.executable}; install with {sys.executable} -m pip install -e .[test]", file=sys.stderr)
