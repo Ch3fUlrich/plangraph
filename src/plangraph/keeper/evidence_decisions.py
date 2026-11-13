@@ -29,6 +29,7 @@ by a non-space) do not act as boundaries.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -63,13 +64,22 @@ class DecisionsOriginUnreadable(OSError):
     """The configured repository or origin/main decisions blob is unreadable."""
 
 
+def _origin_git_env() -> dict[str, str]:
+    """Ignore caller repository/config overrides; retain transport safety guards."""
+    env = {name: value for name, value in os.environ.items()
+           if not name.startswith("GIT_") or name in {"GIT_ALLOW_PROTOCOL", "GIT_TERMINAL_PROMPT"}}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    return env
+
+
 def read_decisions_origin(path: Path) -> str:
     """Discover the repo, fetch main and read its configured blob; never fall back."""
+    env = _origin_git_env()
     try:
         path = path.resolve()
         root = subprocess.run(
             ["git", "-C", str(path.parent), "rev-parse", "--show-toplevel"],
-            check=True, capture_output=True, timeout=30).stdout.decode("utf-8").strip()
+            check=True, capture_output=True, env=env, timeout=30).stdout.decode("utf-8").strip()
         repo = Path(root).resolve()
         relative = path.relative_to(repo).as_posix()
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -78,13 +88,13 @@ def read_decisions_origin(path: Path) -> str:
         subprocess.run(
             ["git", "-C", str(repo), "fetch", "origin",
              "+refs/heads/main:refs/remotes/origin/main"],
-            check=True, capture_output=True, timeout=60)
+            check=True, capture_output=True, env=env, timeout=60)
     except (OSError, subprocess.SubprocessError):
         raise DecisionsFetchFailed from None
     try:
         return subprocess.run(
             ["git", "-C", str(repo), "cat-file", "blob", f"origin/main:{relative}"],
-            check=True, capture_output=True, timeout=30).stdout.decode("utf-8")
+            check=True, capture_output=True, env=env, timeout=30).stdout.decode("utf-8")
     except (OSError, ValueError, subprocess.SubprocessError):
         raise DecisionsOriginUnreadable from None
 

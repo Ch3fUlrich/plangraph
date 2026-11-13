@@ -19,11 +19,9 @@ def git(repo, *args):
 def data_repos(tmp_path, monkeypatch, request):
     # Ignore caller hooks/config and repository-local Git environment, including
     # the context inherited when these tests run inside the pre-push hook.
-    names = subprocess.run(
-        ["git", "rev-parse", "--local-env-vars"], check=True,
-        capture_output=True, text=True, timeout=30).stdout.splitlines()
-    for name in names:
-        monkeypatch.delenv(name, raising=False)
+    for name in list(os.environ):
+        if name.startswith("GIT_"):
+            monkeypatch.delenv(name)
     for name, value in {
         "HOME": str(tmp_path), "XDG_CONFIG_HOME": str(tmp_path / "config"),
         "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
@@ -162,6 +160,53 @@ def test_configured_file_may_be_in_a_worktree(data_repos):
     assert git(repos.clone, "rev-parse", "HEAD") == repos.base
 
 
+@pytest.mark.parametrize("caller_setting", [
+    "repository-env", "indexed-config", "repository-indexed-config", "global-config", "system-config",
+])
+def test_origin_read_ignores_ambient_repository_and_config(data_repos, tmp_path, monkeypatch, caller_setting):
+    repos = data_repos
+    other = tmp_path / "other"
+    git(tmp_path, "clone", str(repos.origin), str(other))
+    push_decision(repos)
+    git(repos.clone, "update-ref", "refs/remotes/origin/main", repos.base)
+    if "repository" in caller_setting:
+        for name, value in {
+            "GIT_DIR": str(other / ".git"), "GIT_WORK_TREE": str(other),
+            "GIT_INDEX_FILE": str(other / ".git/index"),
+            "GIT_OBJECT_DIRECTORY": str(other / ".git/objects"),
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(other / ".git/objects"),
+            "GIT_COMMON_DIR": str(other / ".git"), "GIT_NAMESPACE": "unrelated",
+        }.items():
+            monkeypatch.setenv(name, value)
+    if "indexed" in caller_setting:
+        monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+        monkeypatch.setenv("GIT_CONFIG_KEY_0", f"url.{other.as_posix()}.insteadOf")
+        monkeypatch.setenv("GIT_CONFIG_VALUE_0", str(repos.origin))
+    if caller_setting in {"global-config", "system-config"}:
+        config = tmp_path / "hostile.gitconfig"
+        config.write_text(
+            f'[url "{other.as_posix()}"]\n\tinsteadOf = {repos.origin}\n', encoding="utf-8")
+        monkeypatch.setenv("GIT_CONFIG_" + caller_setting.split("-")[0].upper(), str(config))
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "0")
+    run, isolated = subprocess.run, []
+
+    def capture_env(args, **kwargs):
+        env = kwargs.get("env", {})
+        isolated.append(
+            {name for name in env if name.startswith("GIT_")} == {
+                "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_TERMINAL_PROMPT", "GIT_ALLOW_PROTOCOL"}
+            and env.get("GIT_CONFIG_NOSYSTEM") == "1"
+            and env.get("GIT_CONFIG_GLOBAL") == os.devnull
+            and env.get("GIT_ALLOW_PROTOCOL") == "file")
+        return run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", capture_env)
+    result = verify(repos.ctx)
+    assert result.ok, result.detail
+    assert isolated == [True, True, True]
+    assert repos.log.read_text(encoding="utf-8") == repos.initial
+
+
 @pytest.mark.parametrize("failure", [
     "missing-ref", "missing-log", "invalid-utf8", "directory", "gitlink",
 ])
@@ -238,17 +283,27 @@ def test_origin_context_does_not_cache_by_stale_checkout_metadata(data_repos):
     from plangraph.keeper.context_sources import decision_book
 
     repos = data_repos
+    # Warm the stat cache for this exact path using the local-document adapter.
+    local = evidence.DecisionsAdapter(repos.log)
+    assert "D-5571" not in decision_book(local)["rows"]
     assert "D-5571" not in decision_book(repos.ctx.decisions)["rows"]
     before = repos.log.stat()
     push_decision(repos)
     assert "D-5571" in decision_book(repos.ctx.decisions)["rows"]
+    assert "D-5571" not in decision_book(local)["rows"]
     after = repos.log.stat()
     assert (before.st_ino, before.st_mtime_ns, before.st_size) == (
         after.st_ino, after.st_mtime_ns, after.st_size)
+    git(repos.clone, "remote", "set-url", "origin", str(repos.clone / "missing"))
+    assert decision_book(repos.ctx.decisions)["rows"] == {}
 
 
-def test_configured_nonrepo_file_refuses_without_fallback(tmp_path):
-    log = tmp_path / "decisions.md"
+def test_configured_nonrepo_file_refuses_without_fallback(data_repos):
+    nonrepo = data_repos.clone.parent / "nonrepo"
+    nonrepo.mkdir()
+    # An invalid gitfile bounds discovery even when tmp_path is inside a repo.
+    (nonrepo / ".git").write_text("gitdir: missing\n", encoding="utf-8")
+    log = nonrepo / "decisions.md"
     log.write_text("| D-1 | demo | Local only |\n")
     ctx = evidence.default_context({"decisions_file": str(log)})
     result = verify(ctx, "D-1")
