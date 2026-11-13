@@ -32,6 +32,18 @@ plan, saved `chosen_leg`, and attempt rows; omitted or explicit `null` effort
 stays `null`. All other validated leg fields are retained too. The per-run
 renderer declares cx effort models; see [SPAWNER.md](SPAWNER.md#card-driven-routing-core).
 
+## DeepSeek review identity (D-5641, D-5643)
+
+The `omniroute-deepseek-flash` subscription leg requests
+`omniroute/deepseek-v4.1-flash`, not the obsolete `omniroute/deepseek-flash`.
+The Go review leg already requests `opencode-go/deepseek-v4.1-flash`.
+Registration is not host availability: the launch boundary checks the rendered
+child config via `opencode models --standalone` and skips an absent id with
+`not_served_on_host` before starting a harness run. The recorded local probe
+does not yet list the corrected OmniRoute id; its provider declaration and
+gateway and credential readiness remain a host-side operator request. Never replace
+it with the distinct paid `omniroute/deepseek-direct-flash` route.
+
 ## Replan-0438 CI reconciliation
 
 All existing test names and #763 checks remain. The lane diff was searched for
