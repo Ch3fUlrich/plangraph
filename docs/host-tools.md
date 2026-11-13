@@ -55,3 +55,11 @@ the host identity; explicit overrides must match. Drift prints one `ALERT` line 
 host, path and escaped values and exits 1. Clean checkouts are silent.
 Git context variables, including `GIT_DIR` and injected config, are removed from
 child processes so fixtures and host checks cannot address unrelated metadata.
+
+With no arguments, `pg-repo-sync` discovers every direct child of `$HOME/code`
+containing `.git`, including symlinked directories. Missing HOME or root is silent
+success. `--root DIR` and `--repo PATH` are repeatable; explicit labels stay as passed.
+It fetches origin and silently fast-forwards only a clean default branch.
+Alerts use exactly `detached`, `other-branch:NAME`, `tracked-changes`, `diverged`, or
+`fetch-failed`; failed probes map to those codes, never a fabricated behind count.
+Add `--sync` to `--check-config` to perform both checks on a worker host.
