@@ -22,7 +22,7 @@ DISABLED_FREE = {"opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-fr
 ACTIVE_FREE = ["openrouter-free"]
 SUBS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]
 WRITERS = [*SUBS[:2], "openrouter-free", "opencode-big-pickle", "agy-gemini-4-argon",
-           "mimo-v2.6-flash", "mimo-v2.6-pro", "omniroute-deepseek-flash",
+           "mimo-v2.6-flash", "mimo-v2.6-pro",
            "omniroute-muse-spark", "deepseek"]
 
 
@@ -363,7 +363,7 @@ def test_writer_order_d2683_implement_first_seven(monkeypatch):
     expected = [*SUBS[:2], 'opencode-deepseek-v4.1-flash-free',
                 'opencode-glm-5.3-flash-free', 'openrouter-free',
                 'opencode-big-pickle', 'agy-gemini-4-argon',
-                'mimo-v2.6-flash', 'mimo-v2.6-pro', 'omniroute-deepseek-flash',
+                'mimo-v2.6-flash', 'mimo-v2.6-pro',
                 'omniroute-muse-spark', 'deepseek']
     for gemini_tier in ("trial", "free", "subscription", "paid"):
         plan = plan_spawn(c, role="implement", catalog_rows=(

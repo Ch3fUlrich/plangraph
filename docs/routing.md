@@ -1,28 +1,5 @@
 # Implement route defaults (D-5206)
 
-## Fixed-order reference (D-5696/D-5706/D-5712)
-
-| Position | Implement | Standard review | High review | Complex review |
-| --- | --- | --- | --- | --- |
-| 1 | Sol xhigh | Mimo Pro medium | Sol medium | Sol xhigh |
-| 2 | Hydrogen high | OpenCode Go DeepSeek medium | Terra medium | Terra xhigh |
-| 3 | Sonnet high, non-Claude-Code only | Mimo Flash medium | Hydrogen medium | Hydrogen high |
-| 4 | Mimo Pro medium | Haiku xhigh | Mimo Pro medium | Mimo Pro medium |
-| 5 | OpenCode Go DeepSeek medium | Ember Max | OpenCode Go DeepSeek medium | OpenCode Go DeepSeek medium |
-| 6 | Mimo Flash medium | OmniRoute DeepSeek medium (dead) | Mimo Flash medium | Mimo Flash medium |
-| 7 | Ember Max | — | Haiku xhigh | Haiku xhigh |
-| 8 | OmniRoute DeepSeek medium (dead) | — | Ember Max | Ember Max |
-| 9 | — | — | OmniRoute DeepSeek medium (dead) | OmniRoute DeepSeek medium (dead) |
-
-Planning: Fable 5.2 high. Terra is Sol's same-family fallback. Review excludes
-writer families; Haiku needs diff <100k; Ember needs opposing eligible cheaper
-verdicts. D-5712 refuses Claude Code Sonnet for implement; AgY Sonnet is allowed
-by this core, otherwise skip position 3. Admission remains upstream.
-**D-5696 remains OPEN:** live legacy/admission migration is not complete; see
-`changelog.d/SPAWNER-ROUTE-ORDER-D5696-1.md` for scope and dead-leg evidence.
-
-## Existing live defaults (until activation)
-
 An implement card uses `cx-gpt-6.1-sol-xhigh` (model `omniroute/cx-gpt-6.1-sol-xhigh`,
 effort `xhigh`), then `agy-gemini-3.8-flash` (agy harness). Quota, cooldown, or a
 confirmed availability refusal advances without an override; safety refusals,
@@ -62,6 +39,7 @@ Operator leg JSON preserves its validated `effort` through the loaded leg, route
 plan, saved `chosen_leg`, and attempt rows; omitted or explicit `null` effort
 stays `null`. All other validated leg fields are retained too. The per-run
 renderer declares cx effort models; see [SPAWNER.md](SPAWNER.md#card-driven-routing-core).
+Fixed ordering also preserves unset effort; OmniRoute DeepSeek Flash is review-only.
 
 ## Replan-0438 CI reconciliation
 

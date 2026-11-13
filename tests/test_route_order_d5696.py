@@ -34,10 +34,12 @@ def test_implement_order_efforts_and_limited_fallthrough(catalog):
     expected = [('cx-gpt-6.1-sol-xhigh', 'xhigh'),
                 ('agy-gemini-4-hydrogen-high', 'high'),
                 ('agy-claude-sonnet-5-5-high', 'high'),
-                ('mimo-v2.6-pro', 'medium'), ('opencode-go-deepseek-v4-flash', 'medium'),
-                ('mimo-v2.6-flash', 'medium'), ('muse-ember-max', 'max'),
-                ('omniroute-deepseek-flash', 'medium')]
+                ('mimo-v2.6-pro', None), ('opencode-go-deepseek-v4-flash', None),
+                ('mimo-v2.6-flash', None)]
     assert signature(ordered(catalog, 'implement')) == expected
+    review_only = tuple(replace(leg, roles=('implement', 'review')) for leg in catalog
+                        if leg.id in ('muse-ember-max', 'omniroute-deepseek-flash'))
+    assert not ordered(review_only, 'implement')
     # Admission remains upstream: the ordering core cannot resurrect a limited leg.
     assert signature(ordered(catalog[1:], 'implement')) == expected[1:]
     from plangraph.planner.routing import plan_spawn
@@ -61,11 +63,11 @@ def test_implement_order_efforts_and_limited_fallthrough(catalog):
 
 
 def test_standard_review_order_efforts_and_writer_fence(catalog):
-    expected = [('mimo-v2.6-pro', 'medium'),
-                ('opencode-go-deepseek-v4-flash', 'medium'),
-                ('mimo-v2.6-flash', 'medium'),
-                ('claude-haiku-5.5', 'xhigh'),
-                ('omniroute-deepseek-flash', 'medium')]
+    expected = [('mimo-v2.6-pro', None),
+                ('opencode-go-deepseek-v4-flash', None),
+                ('mimo-v2.6-flash', None),
+                ('claude-haiku-5.5', None),
+                ('omniroute-deepseek-flash', None)]
     result = ordered(catalog, 'review', writer_families=('gpt',), diff_tokens=99999)
     assert signature(result) == expected
     assert signature(ordered(catalog, 'review', writer_families=('mimo', 'anthropic'),
@@ -84,9 +86,9 @@ def test_complex_review_sol_terra_hydrogen_and_efforts(catalog, order_class):
         (f'agy-gemini-4-hydrogen-{hydrogen_effort}', hydrogen_effort)]
     # Terra is Sol's same-family fallback, not the second independent seat.
     assert [leg.family for leg in (result[0], result[2])] == ['gpt', 'gemini']
-    assert signature(result[3:]) == [('mimo-v2.6-pro', 'medium'),
-        ('opencode-go-deepseek-v4-flash', 'medium'), ('mimo-v2.6-flash', 'medium'),
-        ('omniroute-deepseek-flash', 'medium')]
+    assert signature(result[3:]) == [('mimo-v2.6-pro', None),
+        ('opencode-go-deepseek-v4-flash', None), ('mimo-v2.6-flash', None),
+        ('omniroute-deepseek-flash', None)]
     fenced = ordered(catalog, 'review', order_class=order_class,
                      writer_families=('gpt',), diff_tokens=1000)
     assert fenced[0].id == f'agy-gemini-4-hydrogen-{hydrogen_effort}'
@@ -104,10 +106,15 @@ def test_catalog_uses_valid_existing_leg_schema(tmp_path, catalog):
     from dataclasses import asdict
     from plangraph.planner.legs import spawnable_legs
     registrations = tuple(leg for leg in spawnable_legs() if leg.id in {l.id for l in catalog})
-    path.write_text(json.dumps({'legs': [asdict(leg) for leg in registrations]}))
+    def row(leg):
+        return {key: value for key, value in asdict(leg).items()
+                if leg.windows or key not in ('windows', 'max_request_tokens', 'trains_on_data')}
+    path.write_text(json.dumps({'legs': [row(leg) for leg in registrations]}))
     assert load_legs(path) == registrations
-    unknown = next(asdict(leg) for leg in registrations if not leg.windows)
-    for change in ({'disabled': None}, {'expires': 10}, {'roles': ['implement']}):
+    unknown = next(row(leg) for leg in registrations if not leg.windows)
+    for change in ({'disabled': None}, {'expires': 10}, {'roles': ['implement']},
+                   {'windows': []}, {'max_request_tokens': None}, {'trains_on_data': None},
+                   {'trains_on_data': 'false'}):
         path.write_text(json.dumps({'legs': [dict(unknown, **change)]}))
         with pytest.raises(ValueError):
             load_legs(path)
@@ -198,11 +205,14 @@ def test_order_capabilities_are_existing_facts_or_unset(catalog):
 
 
 def test_d5712_sonnet_source_and_position_2_to_4(catalog):
-    sonnet = next(leg for leg in catalog if leg.id == 'agy-claude-sonnet-5-5-high')
+    from plangraph.planner.legs import spawnable_legs
+    sonnet = next(leg for leg in spawnable_legs() if leg.id == 'agy-claude-sonnet-5-5-high')
+    assert sonnet.model == 'claude-sonnet-5-5-high' and sonnet.effort == 'high'
     with pytest.raises(ValueError, match='D-5712: claude_code_subscription_forbidden_for_implement'):
         ordered((replace(sonnet, harness='claude'),), 'implement')
-    agy = replace(sonnet, id='agy-sonnet-5.5')
-    assert ordered((agy,), 'implement') == (replace(agy, effort='high'),)
+    assert ordered((sonnet,), 'implement') == (sonnet,)
+    medium = next(leg for leg in spawnable_legs() if leg.id == 'agy-sonnet-5.5')
+    assert not ordered((medium,), 'implement')  # Never alias a medium registration to high.
     other = replace(sonnet, harness='opencode')
     assert ordered((other,), 'implement') == (replace(other, effort='high'),)
     absent = tuple(leg for leg in catalog if leg.id != sonnet.id)
@@ -210,18 +220,22 @@ def test_d5712_sonnet_source_and_position_2_to_4(catalog):
         'cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high', 'mimo-v2.6-pro']
 
 
-def test_live_legacy_door_keeps_d5696_open():
+@pytest.mark.parametrize('model,replacement', [('gemini-3.8-flash', 'gemini-4-hydrogen'),
+    ('omniroute/gemini-3.8-flash-high', 'gemini-4-hydrogen'),
+    ('omniroute/cx-gpt-6-luna', 'gpt-6.1-terra')])
+def test_live_legacy_door_keeps_d5696_open(model, replacement):
     from plangraph.planner.legs import DEFAULT_LEGS
-    from plangraph.planner.routing import plan_spawn
-    legacy = next(leg for leg in DEFAULT_LEGS if leg.id == 'agy-gemini-3.8-flash')
-    plan = plan_spawn({'estimate_tokens': 1000}, role='implement', legs=(legacy,),
-                      catalog_rows=(), leg_reader=lambda *a, **kw: dict(state='ok', evidence=None))
-    assert plan.legs == (legacy,)  # No claim of global legacy fencing or DONE.
+    legacy = replace(next(leg for leg in DEFAULT_LEGS if leg.id == 'agy-gemini-3.8-flash'),
+                     id='legacy', model=model)
+    # Do not enshrine successful live legacy routing. Item 2 is explicitly UNMET
+    # in the changelog/report; only the fixed-order core has this refusal.
+    with pytest.raises(ValueError, match=replacement):
+        payment_order((legacy,), 'implement', order_class='standard')
 
 
 def test_order_never_bypasses_role_admission(catalog):
     assert not ordered((replace(catalog[0], roles=('orchestrate',)),), 'implement')
-    sonnet = replace(catalog[2], id='agy-sonnet-5.5', roles=('review',))
+    sonnet = replace(catalog[2], roles=('review',))
     assert not ordered((sonnet,), 'implement')
 
 
@@ -232,3 +246,21 @@ def test_unknown_capability_declarations_are_not_live_admissions():
                'claude-fable-5-2'}
     rows = [row for row in DEFAULT_FALLBACK_MODELS if row['id'].rsplit('/', 1)[-1] in unknown]
     assert len(rows) == 6 and all(not row['active'] and row['available'] == 0 for row in rows)
+
+
+@pytest.mark.parametrize('effort', [None, 'low', 'max'])
+def test_order_preserves_registered_effort_not_id_suffix(catalog, effort):
+    leg = replace(catalog[0], effort=effort)
+    assert ordered((leg,), 'implement') == (leg,)
+    assert ordered((leg,), 'implement')[0] is leg
+
+
+def test_disabled_declaration_cannot_bypass_capability_validation(tmp_path):
+    import json
+    from dataclasses import asdict
+    from plangraph.planner.legs import DEFAULT_LEGS, load_legs
+    raw = asdict(next(leg for leg in DEFAULT_LEGS if leg.id == 'muse-ember-max'))
+    path = tmp_path / 'legs.json'
+    path.write_text(json.dumps({'legs': [raw]}))
+    with pytest.raises(ValueError, match='windows.*max_request_tokens.*trains_on_data'):
+        load_legs(path)

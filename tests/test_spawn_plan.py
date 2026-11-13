@@ -82,7 +82,7 @@ def test_operator_order_and_roles_roundtrip(tmp_path):
     assert [l.id for l in DEFAULT_LEGS if "implement" in l.roles] == [
         "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "openrouter-free",
         "cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "agy-gemini-4-argon", "opencode-big-pickle",
-        "mimo-v2.6-flash", "mimo-v2.6-pro", "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
+        "mimo-v2.6-flash", "mimo-v2.6-pro", "omniroute-muse-spark", "deepseek"]
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
         "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
@@ -93,7 +93,9 @@ def test_operator_order_and_roles_roundtrip(tmp_path):
         "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark",
         "opencode-go-deepseek-v4-flash", "omniroute-gemini-3.8-flash", "claude-haiku-5.5"]  # D-3605 Haiku leg
     path = tmp_path / "legs.json"
-    path.write_text(json.dumps({"legs": [dataclasses.asdict(l) for l in DEFAULT_LEGS]}))
+    path.write_text(json.dumps({"legs": [{k: v for k, v in dataclasses.asdict(l).items()
+        if l.windows or k not in ('windows', 'max_request_tokens', 'trains_on_data')}
+        for l in DEFAULT_LEGS]}))
     assert load_legs(path) == DEFAULT_LEGS
 
 
@@ -107,7 +109,7 @@ def test_benchmark_within_tier_only(monkeypatch):
     assert [l.id for l in p.legs] == [
         'cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash', 'opencode-big-pickle',
         'openrouter-free', 'opencode-glm-5.3-flash-free', 'opencode-deepseek-v4.1-flash-free',
-        'omniroute-muse-spark', 'omniroute-deepseek-flash', 'mimo-v2.6-pro', 'mimo-v2.6-flash',
+        'omniroute-muse-spark', 'mimo-v2.6-pro', 'mimo-v2.6-flash',
         'agy-gemini-4-argon', 'deepseek']
     assert p.legs[-1].tier == 'paid'
     assert p.p_source == "benchmark"
@@ -164,7 +166,7 @@ def test_orchestrate_role_routes_opencode_first(tmp_path, capsys):
     assert plan.first_leg.id == "opencode-gemini-4-argon"
     # fallthrough: agy-sonnet runs on Antigravity quota, not Claude Max; never deepseek (D-2744)
     assert [l.id for l in plan.legs] == ["opencode-gemini-4-argon", "mimo-v2.6-pro",
-                                       "omniroute-deepseek-flash", "omniroute-muse-spark", "agy-sonnet-5.5", "agy-opus"]
+                                       "omniroute-muse-spark", "agy-sonnet-5.5", "agy-opus"]
     with pytest.raises(ValueError, match=re.escape("role must be implement|review|orchestrate")):
         plan_spawn(CARD, role="drive")
     from plangraph.spawner.cli import main

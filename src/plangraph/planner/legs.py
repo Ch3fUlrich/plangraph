@@ -127,7 +127,7 @@ DEFAULT_LEGS = (
         "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
         roles=("review",)),
     Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-flash",
-        "deepseek", ("128k",), 100000, False, roles=("implement", "review", "orchestrate")),
+        "deepseek", ("128k",), 100000, False, roles=("review",)),
     Leg("omniroute-muse-spark", "subscription", "opencode",
         "omniroute/muse-spark-1.3-contributor", "muse", ("128k",), 100000, False,
         roles=("implement", "review", "orchestrate")),
@@ -212,17 +212,17 @@ LEAD_WRITER = WRITER_ORDER[0]
 EXPLICIT_LEGS: tuple[Leg, ...] = (
     *(Leg(f"agy-claude-{m}-5-5-{e}", "subscription", "agy", f"claude-{m}-5-5-{e}",
           "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
-          roles=("review", "implement"), note="operator 2026-11-09: Antigravity quota")
+          roles=("review", "implement"), effort=e, note="operator 2026-11-09: Antigravity quota")
       for m in ("sonnet", "opus") for e in ("low", "medium", "high")),
     *(Leg(f"agy-gemini-3.8-flash-{e}", "subscription", "agy", f"gemini-3.8-flash-{e}",
-          "gemini", ("128k", "256k", "1m"), 900000, False, roles=("review",))
+          "gemini", ("128k", "256k", "1m"), 900000, False, roles=("review",), effort=e)
       for e in ("low", "medium", "high")),
     *(Leg(f"cx-gpt-6.1-sol-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6.1-sol-{e}",
           "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",), effort=e)
       for e in CX_EFFORTS),
     *(Leg(f"cx-gpt-6-luna-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6-luna-{e}",
           "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
-          tool_mode="inline-only")
+          tool_mode="inline-only", effort=e)
       for e in CX_EFFORTS),
 )
 # Promote the existing effort leg; retain plain Sol as an active explicit-only pick.
@@ -280,8 +280,11 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     for key in raw:
         if key not in _FIELDS:
             problems.append(f"{where}: unknown field {key!r}")
+    declaration = (isinstance(raw.get('disabled'), str) and bool(raw['disabled'].strip())
+                   and raw.get('expires') is None and raw.get('roles') == [])
+    capabilities = ('windows', 'max_request_tokens', 'trains_on_data')
     for key in _REQUIRED:
-        if key not in raw:
+        if key not in raw and not (declaration and key in capabilities):
             problems.append(f"{where}: missing field {key!r}")
     for key in _STR_FIELDS:
         if key in raw and not isinstance(raw[key], str):
@@ -297,9 +300,6 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         problems.append(f"{where}.tool_mode: {raw['tool_mode']!r} not in {TOOL_MODES}")
     windows = raw.get("windows")
     disabled = raw.get("disabled")
-    unknown = (isinstance(disabled, str) and bool(disabled.strip()) and raw.get('expires') is None
-               and raw.get('roles') == [] and windows == [] and raw.get('max_request_tokens') is None
-               and raw.get('trains_on_data') is None)
     if raw.get("effort") is not None and raw["effort"] not in CX_EFFORTS:
         problems.append(f"{where}.effort: must be one of {CX_EFFORTS} or null")
     expiry = raw.get('expires')
@@ -313,23 +313,25 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
             or any(not isinstance(r, str) or r not in ("implement", "review", "orchestrate") for r in roles)
             or len(set(roles)) != len(roles)):
         problems.append(f"{where}.roles: must be a subset of implement|review|orchestrate")
-    if "windows" in raw and not unknown:
+    if "windows" in raw:
         if (not isinstance(windows, (list, tuple)) or not windows
                 or any(not isinstance(w, str) or w not in WINDOW_CLASSES
                        for w in windows)):
             problems.append(f"{where}.windows: must be a non-empty subset of "
                             f"{WINDOW_CLASSES}")
-    if "max_request_tokens" in raw and not unknown:
+    if "max_request_tokens" in raw:
         mrt = raw["max_request_tokens"]
         if not _is_int(mrt) or mrt <= 0:
             problems.append(f"{where}.max_request_tokens: must be a positive int")
     for key in ("trains_on_data", "claude_family"):
-        if key in raw and not (unknown and key == 'trains_on_data') and not isinstance(raw[key], bool):
+        if key in raw and not isinstance(raw[key], bool):
             problems.append(f"{where}.{key}: must be a bool")
     if len(problems) > start:
         return None
     data = dict(raw)
-    data["windows"] = tuple(windows)
+    data["windows"] = tuple(windows) if windows is not None else ()
+    for key in capabilities[1:]:
+        data.setdefault(key, None)
     data["roles"] = tuple(roles)
     return Leg(effort=data.pop("effort", None), **data)
 

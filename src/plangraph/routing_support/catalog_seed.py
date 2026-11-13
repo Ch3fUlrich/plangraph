@@ -28,8 +28,7 @@ LEGACY_ROUTE_REPLACEMENTS = {
 OPERATOR_ROUTE_ORDERS = {
     'implement': ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high',
                   'agy-claude-sonnet-5-5-high', 'mimo-v2.6-pro',
-                  'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash',
-                  'muse-ember-max', 'omniroute-deepseek-flash'),
+                  'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash'),
     'review': {
         'standard': ('mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash',
                      'claude-haiku-5.5', 'muse-ember-max', 'omniroute-deepseek-flash'),

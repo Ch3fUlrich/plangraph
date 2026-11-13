@@ -102,7 +102,9 @@ def test_implement_route_still_skips_banned_and_off(tmp_path):
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
     assert reasons['opencode-deepseek-v4.1-flash-free'].startswith('disabled: D-4196')
     assert reasons['opencode-glm-5.3-flash-free'].startswith('disabled: D-4196')
-    assert reasons['omniroute-deepseek-flash'] == 'banned_family'
+    review_only = next(leg for leg in DEFAULT_LEGS if leg.id == 'omniroute-deepseek-flash')
+    assert review_only.roles == ('review',) and review_only.id not in reasons
+    assert all(row['leg'] != review_only.id for row in plan.candidates)
     assert plan.first_leg.id == 'cx-gpt-6.1-sol-xhigh'
     for leg_id in ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.2"):
         expected = r"leg disabled: .*D-3605" if "glm" in leg_id else r"writer disabled \(D-3828\)"

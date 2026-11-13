@@ -36,10 +36,9 @@ def test_deepseek_review_registry_model_ids():
     for id, model in expected.items():
         leg = legs[id]
         assert leg.model == model
-        assert leg.roles == (('implement', 'review', 'orchestrate')
-                             if id == 'omniroute-deepseek-flash' else ('review',))
+        assert leg.roles == ('review',)
         assert leg.harness == 'opencode'
-        assert leg.effort == 'medium'
+        assert leg.effort is None
 
 
 # DeepSeek-only projection of PR #818's recorded standalone listing. The
@@ -83,10 +82,31 @@ def test_unserved_deepseek_never_starts_child(monkeypatch, tmp_path, model):
     assert record['attempts'][0]['skip_reason'] == 'not_served_on_host: ' + leg.model
 
 
-def test_hermetic_deepseek_tests_run_without_real_probe_marker():
+def test_hermetic_deepseek_tests_run_without_real_probe_marker(request):
+    marks = getattr(request.module, 'pytestmark', ())
+    marks = marks if isinstance(marks, (list, tuple)) else (marks,)
+    assert 'real_probe' not in {mark.name for mark in marks}
     for test in (test_deepseek_recorded_probe_filters_before_launch,
                  test_unserved_deepseek_never_starts_child):
         assert 'real_probe' not in {mark.name for mark in getattr(test, 'pytestmark', ())}
+
+
+@pytest.mark.parametrize('marks', [pytest.mark.real_probe, [pytest.mark.real_probe]])
+def test_module_level_real_probe_marker_is_detected(request, monkeypatch, marks):
+    monkeypatch.setattr(request.module, 'pytestmark', marks, raising=False)
+    with pytest.raises(AssertionError):
+        test_hermetic_deepseek_tests_run_without_real_probe_marker(request)
+
+
+def test_hermetic_deepseek_cases_execute_under_default_selection():
+    import subprocess
+    import sys
+    result = subprocess.run([sys.executable, '-m', 'pytest', '-q',
+        __file__ + '::test_deepseek_recorded_probe_filters_before_launch',
+        __file__ + '::test_unserved_deepseek_never_starts_child'],
+        capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '5 passed' in result.stdout and 'deselected' not in result.stdout
 
 
 def test_position_8_is_dead_until_host_evidence(monkeypatch):
