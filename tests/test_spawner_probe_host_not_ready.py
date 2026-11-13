@@ -66,6 +66,10 @@ def test_partial_host_only_marks_missing_harness(tmp_path, monkeypatch):
     from plangraph.planner import legs
     from plangraph.routing_support.liveness import unavailable
 
+    async def listed(*args):
+        return None
+    monkeypatch.setattr(leg_probe, 'catalog_model_check', listed)
+
     store = LegStateStore(tmp_path / 'legs.sqlite')
     runner = FailingRunner(store)
     present, absent = leg('agy'), leg('qodercli', 'sample/other')

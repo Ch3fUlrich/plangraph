@@ -121,7 +121,7 @@ DEFAULT_LEGS = (
         "mimo", ("128k", "256k", "1m"), 200000, False,
         roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
     _replace(_legacy["agy-sonnet-5.5"], roles=("orchestrate", "review")),
-    Leg("agy-claude-opus", "subscription", "agy", "claude-opus-4-6-thinking",
+    Leg("agy-claude-opus", "subscription", "agy", "claude-opus-5-5-high",
         "claude", ("128k", "256k"), 180000, False, claude_family=True, roles=("review",)),
     Leg("agy-opus-5.5", "subscription", "agy", "claude-opus-5-5-high",
         "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,

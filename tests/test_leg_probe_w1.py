@@ -330,6 +330,10 @@ def test_probe_many_skips_a_limited_leg(tmp_path, monkeypatch):
     from plangraph.planner import legs as planner_legs
     from plangraph.spawner import leg_probe
 
+    async def listed(*args):
+        return None
+    monkeypatch.setattr(leg_probe, 'catalog_model_check', listed)
+
     store = LegStateStore(tmp_path / 'legs.sqlite')
     monkeypatch.setattr(planner_legs, 'DEFAULT_LEGS', (
         planner_legs.Leg('zz-limited', 'free', 'agy', 'zz-model-a', 'other',

@@ -109,3 +109,7 @@ on line 57. The full suite was not run, following the brief's final prohibition
 on whole-suite runs; no test was skipped or weakened to hide those failures.
 
 The shipped provider config and the pending benchmark inventory use the same `omniroute/deepseek-v4.1-flash` identity; the pending row explicitly records missing measurements. Historical fallthrough replay projects the legacy alias onto this registered identity.
+
+The agy Opus review alias uses the native `claude-opus-5-5-high` ID. Explicit
+probes compare catalog IDs against the harness list and mark unknown IDs down
+before a writer or reviewer launch can spend a run on them.

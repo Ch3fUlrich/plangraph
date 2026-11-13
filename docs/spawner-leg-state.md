@@ -103,3 +103,7 @@ Missing, empty or older logs retain normal cooldown behaviour. Provider and
 probe records serving evidence; this override applies only to probe failures.
 The probe result adds `state` only for serving failures (or `host-not-ready`);
 ordinary successes and failures omit the key, rather than returning null.
+
+A `leg-catalog` probe with `catalog_model_unknown` is decisive native model-list
+evidence and books down on the first failure. It retains the normal expiry and
+provider-limit precedence; ordinary liveness failures still require two probes.

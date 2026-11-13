@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -136,6 +137,50 @@ def key(leg):
     """
     return ('agy/' + leg.model if getattr(leg, 'harness', None) == 'agy' and '/' not in leg.model
             else leg.model)
+
+
+def harness_model_ids(text):
+    """Read agy's native IDs or display names, including its error-list form."""
+    text = re.sub(r'\x1b\[[0-9;]*m', '', text)
+    if 'Available models:' in text:
+        text = text.split('Available models:', 1)[1]
+    models = set()
+    for line in text.splitlines():
+        # `agy models` emits native-ID<TAB>display-name rows.
+        line = line.split('\t', 1)[0]
+        line = line.strip().strip('│').strip()
+        if re.fullmatch(r'[a-z0-9]+(?:[.-][a-z0-9]+)+', line):
+            models.add(line)
+        elif re.fullmatch(r'[A-Za-z][A-Za-z0-9 .-]+ \([A-Za-z]+\)', line):
+            display = line.lower()
+            if display.startswith('claude '):
+                display = display.replace('.', '-')
+            models.add(re.sub(r'[^a-z0-9.]+', '-', display).strip('-'))
+    return models
+
+
+async def catalog_model_check(leg, store):
+    """A native list mismatch is decisive; list infrastructure never books down."""
+    if leg.harness != 'agy' or shutil.which(leg.harness) is None:
+        return None
+    try:
+        result = await asyncio.to_thread(subprocess.run, [leg.harness, 'models'],
+                                        capture_output=True, text=True, timeout=15,
+                                        env=probe_env())
+        text = result.stdout + '\n' + result.stderr
+        models = harness_model_ids(text) if result.returncode == 0 or 'Available models:' in text else set()
+    except (OSError, subprocess.SubprocessError):
+        models = set()
+    if not models:
+        return dict(ok=False, reason='catalog_model_list_unavailable', infra=True, seconds=0.0)
+    model = leg.model.removeprefix('agy/')
+    from plangraph.routing_support.clients import build_standalone_fallback_command
+    command = build_standalone_fallback_command('agy', '', model=model)
+    model = command[command.index('--model') + 1]
+    if model in models:
+        return None
+    store.record_probe_fail(key(leg), 'catalog_model_unknown', caller='leg-catalog')
+    return dict(ok=False, reason='catalog_model_unknown', infra=False, seconds=0.0, state='down')
 
 
 def reset_iso(reset):
@@ -396,5 +441,7 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None):
                                 skipped='limited',
                                 reset_at=(status.get('evidence') or {}).get('reset_at')))
             continue
-        results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout, store=state)))
+        catalog = await catalog_model_check(leg, state)
+        results.append(dict(id=leg.id, **(catalog if catalog is not None else
+                                         await probe(runner, leg, timeout_s=timeout, store=state))))
     return dict(ok=all(row['ok'] for row in results), probes=results)

@@ -732,3 +732,8 @@ Before marking the session complete, use the same binary with
 commit gate and checks every commit for a Plan-Item trailer; only success prints
 `ALL DONE`. Missing Writer or Plan-Item refuses locally before a push. Conditional
 Gate-Edit, Test-Removal and manual Hand-Edit forms come from the gate contract.
+
+Explicit leg probes compare agy catalog IDs with `agy models` before launching.
+Native IDs and display names from an `Available models:` error list are accepted.
+Unknown IDs report `catalog_model_unknown` and book the leg down immediately;
+an unavailable list reports infrastructure failure without outage evidence.
