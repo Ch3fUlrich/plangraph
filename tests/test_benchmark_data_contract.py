@@ -14,6 +14,7 @@ from plangraph.planner.legs import CX_EFFORTS, Leg, leg_active, spawnable_legs
 from plangraph.routing_support.catalog_seed import SEED_BENCHMARKS
 
 PENDING_PATH = Path(__file__).resolve().parents[1] / "configuration/benchmark_data_pending.json"
+FROZEN_CEILING_PATH = Path(__file__).with_name("fixtures") / "benchmark_data_ceiling.json"
 
 # Frozen admission ceiling, NOT generated from live rows or the pending file.
 # Remove debt from the JSON when resolved; never extend/rebaseline this set.
@@ -83,9 +84,7 @@ FROZEN_PENDING = frozenset(
     {("missing_row", subject, effort) for subject, effort in _LEGACY_MISSING}
     | {(problem, subject, effort) for subject, effort in _LEGACY_UNSOURCED
        for problem in ("source_url", "source_date", "source_identity")})
-# Independent literal anchor: editing either legacy table must fail separately.
-FROZEN_PENDING_COUNT = 108
-FROZEN_PENDING_SHA256 = "b2420c166464ab574b732d3f93fb2a589441a6c3bcda83585ff83c0cce238fd3"
+# The independent count/hash anchor lives outside this module in FROZEN_CEILING_PATH.
 
 
 def _effort(model_id):
@@ -105,16 +104,19 @@ def _names_model(row):
     if not isinstance(record, dict):
         return False
     # Identifiers/URLs in record metadata are NOT publisher text naming a model.
-    text = "\n".join(record.get(field, "") for field in ("title", "excerpt")
-                     if isinstance(record.get(field), str))
+    texts = [record[field] for field in ("title", "excerpt")
+             if isinstance(record.get(field), str)]
     aliases = row.get("aliases", [])
     if not isinstance(aliases, list) or any(
             not isinstance(alias, str) or not alias.strip() for alias in aliases):
         return False
-    # A terminal period is prose; a period introducing an id suffix is not.
-    return any(re.search(r"(?<![\w./-])" + re.escape(name) + r"(?![\w/-]|\.[\w./-])",
+    # Punctuation may terminate a name; parenthesized, effort and release
+    # qualifiers extend it even when whitespace separates them from the name.
+    continuation = (r"(?![\w/-]|\.[\w./-]|\s*\(|\s+v?\d|\s+(?:"
+                    + "|".join((*CX_EFFORTS, "next", "preview", "latest")) + r")\b)")
+    return any(re.search(r"(?<![\w./-])" + re.escape(name) + continuation,
                          text, re.IGNORECASE)
-               for name in (row["model_id"], *aliases))
+               for text in texts for name in (row["model_id"], *aliases))
 
 
 def _violations(rows, models, legs):
@@ -217,9 +219,11 @@ def test_catalog_benchmark_contract(monkeypatch, tmp_path):
 
 
 def test_pending_list_cannot_grow():
-    canonical = json.dumps(sorted(FROZEN_PENDING), separators=(",", ":")).encode("utf-8")
-    if (len(FROZEN_PENDING) != FROZEN_PENDING_COUNT
-            or hashlib.sha256(canonical).hexdigest() != FROZEN_PENDING_SHA256):
+    anchor = json.loads(FROZEN_CEILING_PATH.read_text(encoding="utf-8"))
+    ordered = sorted(FROZEN_PENDING, key=lambda key: (*key[:2], key[2] is not None, key[2] or ""))
+    canonical = json.dumps(ordered, separators=(",", ":")).encode("utf-8")
+    if (len(FROZEN_PENDING) != anchor["count"]
+            or hashlib.sha256(canonical).hexdigest() != anchor["sha256"]):
         raise AssertionError("frozen pending ceiling changed; do not rebaseline")
     _pending_keys(json.loads(PENDING_PATH.read_text(encoding="utf-8")))
 

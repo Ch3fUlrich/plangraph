@@ -77,6 +77,9 @@ SQLite schema, runtime admission, ranking, or availability.
   string explicitly listed in the row's `aliases` array (optional, defaults to
   empty). Matching is case-insensitive and token-bounded: a different release
   or effort suffix cannot match a shorter id; sentence-final periods are allowed.
+  Parenthesized qualifiers and whitespace-separated effort/version suffixes
+  extend the identity and must be included in an explicitly listed alias.
+  Publisher fields are checked separately, so their boundary cannot form a suffix.
   Record metadata and the URL do not count as publisher text. `updated_at` is
   not a source date and a generic
   `benchmark_source` label is not identity evidence.
@@ -88,9 +91,12 @@ the leg id and its qualified model id, so a retargeted leg cannot reuse a waiver
 Its initial 58 entries cover 33 missing-row cases and the three provenance gaps
 on each of 25 existing rows
 (108 individual violations). An independently frozen set in the test bounds
-the exact allowed violations. Its count and SHA-256 are literal test constants,
-not derived from the pending file or legacy tables; changing those tables also
-fails the fingerprint check. A separate test compares the pending file with that
+the exact allowed violations. Its literal count and SHA-256 are pinned separately
+in `tests/fixtures/benchmark_data_ceiling.json`, not in the legacy-table module
+and not derived from the pending file. Editing the tables and any module-local
+pins together still fails the independent fingerprint check. Canonical ordering
+distinguishes null from named efforts without comparing those types directly.
+A separate test compares the pending file with that
 ceiling, allowing only removals, so additions and same-size substitutions fail.
 Resolved violations must be removed; provenance debt cannot hide missing rows.
 Do not extend or regenerate the frozen ceiling when fixing data.
