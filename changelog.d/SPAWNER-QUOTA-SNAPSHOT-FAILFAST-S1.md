@@ -3,3 +3,5 @@ Spawner: quota refusals fail fast and routing reads omniroute `quota_snapshots` 
 A configured read-only `QUOTA_SNAPSHOT_DB` preserves `next_reset_at`; API rows without a reset or timestamp hold for 30 minutes from observation.
 
 Local push checks select affected files against origin/main and refuse full-suite execution (operator package R2).
+
+The host-view integration test declares its Rust projection-helper dependency through the existing shared helper; CI still requires that binary.
