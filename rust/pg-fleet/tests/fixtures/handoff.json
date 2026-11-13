@@ -1,0 +1,338 @@
+[
+  {
+    "name": "valid",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": []
+  },
+  {
+    "name": "missing Goal",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "missing heading \"## Goal\""
+    ]
+  },
+  {
+    "name": "missing Keeper",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "missing heading \"## Keeper\""
+    ]
+  },
+  {
+    "name": "missing Done",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "missing heading \"## Done\""
+    ]
+  },
+  {
+    "name": "missing In flight",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "missing heading \"## In flight\""
+    ]
+  },
+  {
+    "name": "missing Planned",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "missing heading \"## Planned\""
+    ]
+  },
+  {
+    "name": "missing Open",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "missing heading \"## Open\""
+    ]
+  },
+  {
+    "name": "missing Traps",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "missing heading \"## Traps\""
+    ]
+  },
+  {
+    "name": "missing Drill-down",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n",
+    "reasons": [
+      "missing heading \"## Drill-down\""
+    ]
+  },
+  {
+    "name": "order",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "heading order: got Goal, Keeper, Done, In flight, Open, Planned, Traps, Drill-down; expected Goal, Keeper, Done, In flight, Planned, Open, Traps, Drill-down"
+    ]
+  },
+  {
+    "name": "extra duplicate",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Notes\n- x\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n## Goal\n- again\n",
+    "reasons": [
+      "line 16: unexpected heading \"## Notes\"",
+      "line 22: duplicate heading \"## Goal\""
+    ]
+  },
+  {
+    "name": "40 lines",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": []
+  },
+  {
+    "name": "41 lines",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n- x\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "card has 41 lines, max 40"
+    ]
+  },
+  {
+    "name": "bad header # L1 card build-L1 2026-10-31T05:10Z",
+    "text": "# L1 card build-L1 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 1: header must be \"# <role> card · <session-name> · <YYYY-MM-DDTHH:MMZ>\", got \"# L1 card build-L1 2026-10-31T05:10Z\""
+    ]
+  },
+  {
+    "name": "bad header # L1 card · build-L1 · 2026-10-31 05:10",
+    "text": "# L1 card · build-L1 · 2026-10-31 05:10\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 1: header must be \"# <role> card · <session-name> · <YYYY-MM-DDTHH:MMZ>\", got \"# L1 card · build-L1 · 2026-10-31 05:10\""
+    ]
+  },
+  {
+    "name": "bad header # L1 card · build-L1 · 2026-10-31T05:10",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 1: header must be \"# <role> card · <session-name> · <YYYY-MM-DDTHH:MMZ>\", got \"# L1 card · build-L1 · 2026-10-31T05:10\""
+    ]
+  },
+  {
+    "name": "bad header # L1 card · build-L1 · 2026-13-31T05:10Z",
+    "text": "# L1 card · build-L1 · 2026-13-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 1: header stamp 2026-13-31T05:10Z is not a valid UTC date"
+    ]
+  },
+  {
+    "name": "bad header # L1 card · build-L1 · 2026-10-31T25:10Z",
+    "text": "# L1 card · build-L1 · 2026-10-31T25:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 1: header stamp 2026-10-31T25:10Z is not a valid UTC date"
+    ]
+  },
+  {
+    "name": "bad header # <role> card · <session-name> · <YYYY-MM-DDTHH:MMZ>",
+    "text": "# <role> card · <session-name> · <YYYY-MM-DDTHH:MMZ>\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 1: header must be \"# <role> card · <session-name> · <YYYY-MM-DDTHH:MMZ>\", got \"# <role> card · <session-name> · <YYYY-MM-DDTHH:MMZ>\""
+    ]
+  },
+  {
+    "name": "bad header # L1 card · <session-name> · 2026-10-31T05:10Z",
+    "text": "# L1 card · <session-name> · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 1: header must be \"# <role> card · <session-name> · <YYYY-MM-DDTHH:MMZ>\", got \"# L1 card · <session-name> · 2026-10-31T05:10Z\""
+    ]
+  },
+  {
+    "name": "bad header ## L1 card · build-L1 · 2026-10-31T05:10Z",
+    "text": "## L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 1: header must be \"# <role> card · <session-name> · <YYYY-MM-DDTHH:MMZ>\", got \"## L1 card · build-L1 · 2026-10-31T05:10Z\"",
+      "line 1: unexpected heading \"## L1 card · build-L1 · 2026-10-31T05:10Z\""
+    ]
+  },
+  {
+    "name": "header not first",
+    "text": "\n# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 1: header must be \"# <role> card · <session-name> · <YYYY-MM-DDTHH:MMZ>\", got \"\""
+    ]
+  },
+  {
+    "name": "empty goal",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- none\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "section \"## Goal\" is empty: write \"- none\""
+    ]
+  },
+  {
+    "name": "mixed none",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n- 10-31T03:12Z plangraph:REGISTRY-ROUTE PR#257 seats qwen+luna ACCEPT, pytest 212 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n- and a trap\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "section \"## Traps\": \"- none\" must be the only line"
+    ]
+  },
+  {
+    "name": "done none",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- none\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": []
+  },
+  {
+    "name": "empty",
+    "text": "\n\n",
+    "reasons": [
+      "card is empty"
+    ]
+  },
+  {
+    "name": "valid Done - 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 CI run 41168126109 green\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": []
+  },
+  {
+    "name": "valid Done - 10-31T04:44Z SESSION-SPAWN-MCP PR#248 seats ACCEPT",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z SESSION-SPAWN-MCP PR#248 seats ACCEPT\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": []
+  },
+  {
+    "name": "valid Done - 10-31T04:44Z plangraph:REGISTRY-ROUTE 0123456 pytest 5 passed",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z plangraph:REGISTRY-ROUTE 0123456 pytest 5 passed\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": []
+  },
+  {
+    "name": "valid Done - 10-31T04:44Z workst-gen:GEN-SRV-P3-DEPLOY-EMPTY aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa verdict ACCEPT",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z example:GEN-SRV-P3-DEPLOY-EMPTY aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa verdict ACCEPT\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": []
+  },
+  {
+    "name": "valid Done - 10-31T04:44Z OS-236 - operator confirmed in session",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z OS-236 - operator confirmed in session\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": []
+  },
+  {
+    "name": "valid Done - 02-29T04:44Z DEBTCAP 0123456 leap day in a leap-year card",
+    "text": "# L1 card · s · 2028-03-01T00:00Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 02-29T04:44Z DEBTCAP 0123456 leap day in a leap-year card\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": []
+  },
+  {
+    "name": "bad Done Done line must be",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n10-31T04:44Z D-3294 07e60525 CI green\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done line must be \"- MM-DDTHH:MMZ KEY|D-nnnn sha|PR#n evidence\", got \"10-31T04:44Z D-3294 07e60525 CI green\""
+    ]
+  },
+  {
+    "name": "bad Done Done line must be",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n* 10-31T04:44Z D-3294 07e60525 CI green\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done line must be \"- MM-DDTHH:MMZ KEY|D-nnnn sha|PR#n evidence\", got \"* 10-31T04:44Z D-3294 07e60525 CI green\""
+    ]
+  },
+  {
+    "name": "bad Done Done line must be",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done line must be \"- MM-DDTHH:MMZ KEY|D-nnnn sha|PR#n evidence\", got \"- 10-31T04:44Z D-3294 07e60525\""
+    ]
+  },
+  {
+    "name": "bad Done Done stamp \"D-3294\"",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- D-3294 07e60525 CI green\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done stamp \"D-3294\" must be a UTC MM-DDTHH:MMZ",
+      "line 8: Done id \"07e60525\" must be a keeper KEY or D-nnnn",
+      "line 8: Done ref \"CI\" must be a sha (7-40 hex) or PR#n (- when nothing was committed)"
+    ]
+  },
+  {
+    "name": "bad Done Done stamp \"2026-10-31T04:44Z\"",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 2026-10-31T04:44Z D-3294 07e60525 CI green\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done stamp \"2026-10-31T04:44Z\" must be a UTC MM-DDTHH:MMZ"
+    ]
+  },
+  {
+    "name": "bad Done Done stamp \"10-31T04:44\"",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44 D-3294 07e60525 CI green\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done stamp \"10-31T04:44\" must be a UTC MM-DDTHH:MMZ"
+    ]
+  },
+  {
+    "name": "bad Done Done stamp \"13-31T04:44Z\"",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 13-31T04:44Z D-3294 07e60525 CI green\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done stamp \"13-31T04:44Z\" must be a UTC MM-DDTHH:MMZ"
+    ]
+  },
+  {
+    "name": "bad Done Done stamp \"10-31T24:44Z\"",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T24:44Z D-3294 07e60525 CI green\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done stamp \"10-31T24:44Z\" must be a UTC MM-DDTHH:MMZ"
+    ]
+  },
+  {
+    "name": "bad Done Done stamp \"02-30T04:44Z\"",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 02-30T04:44Z D-3294 07e60525 CI green\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done stamp \"02-30T04:44Z\" must be a UTC MM-DDTHH:MMZ"
+    ]
+  },
+  {
+    "name": "bad Done Done id \"d-3294\"",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z d-3294 07e60525 CI green\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done id \"d-3294\" must be a keeper KEY or D-nnnn"
+    ]
+  },
+  {
+    "name": "bad Done Done id \"<KEY|D-nnnn>\"",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z <KEY|D-nnnn> 07e60525 CI green\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done id \"<KEY|D-nnnn>\" must be a keeper KEY or D-nnnn"
+    ]
+  },
+  {
+    "name": "bad Done Done ref \"07e605\"",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e605 CI green\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done ref \"07e605\" must be a sha (7-40 hex) or PR#n (- when nothing was committed)"
+    ]
+  },
+  {
+    "name": "bad Done Done ref \"07E60525\"",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07E60525 CI green\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done ref \"07E60525\" must be a sha (7-40 hex) or PR#n (- when nothing was committed)"
+    ]
+  },
+  {
+    "name": "bad Done Done ref \"#248\"",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 #248 CI green\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done ref \"#248\" must be a sha (7-40 hex) or PR#n (- when nothing was committed)"
+    ]
+  },
+  {
+    "name": "bad Done Done evidence missing",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 <evidence>\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done evidence missing (CI run id / test / verdict)"
+    ]
+  },
+  {
+    "name": "bad Done Done evidence missing",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 07e60525 tbd\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done evidence missing (CI run id / test / verdict)"
+    ]
+  },
+  {
+    "name": "bad Done Done evidence missing",
+    "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z D-3294 - -\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done evidence missing (CI run id / test / verdict)"
+    ]
+  },
+  {
+    "name": "non leap",
+    "text": "# L1 card · s · 2027-03-01T00:00Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 02-29T04:44Z D-1 0123456 ok\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
+    "reasons": [
+      "line 8: Done stamp 02-29T04:44Z is not a date in the card's year"
+    ]
+  }
+]

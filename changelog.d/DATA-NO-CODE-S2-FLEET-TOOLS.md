@@ -1,0 +1,1 @@
+- Add the native fleet command crate, fixed-card handoff validation and locked worklog logging, with Python parity cases and a repairable fleet PATH check.
