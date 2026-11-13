@@ -7,6 +7,14 @@ cancellation, and guards still stop dispatch. Eligibility and harness policy app
 Both designated writers precede all other cost tiers, even when catalog tiers
 change: Sol xhigh, then Gemini Flash (rule 3.23a / D-5212). Other eligible legs
 retain cost-tier order, with subscriptions before pay-as-you-go.
+Writer and review payment ordering uses one classification function for the
+payment class of raw and catalog-projected legs, treating muse-amber as paid:
+after the implement writer prefix (Sol, then Gemini Flash), no pay-as-you-go leg
+precedes a subscription-class leg, and muse-amber precedes paid DeepSeek.
+The designated writers keep that prefix even when catalog tiers reprice them as
+pay-as-you-go; review has no writer prefix. A trial or free slot keeps its position
+unless it is a writer-prefix leg; a tier-less or id-less leg never raises.
+This pure ordering core does not check serving state or change admission.
 Main's registered implementation fallbacks retain their roles, permanent disables,
 expiry/re-probe behavior and benchmark ranking within the remaining cost tiers.
 Exhausting all eligible legs still yields no route; writer priority never bypasses

@@ -338,3 +338,27 @@ def test_spare_writer_family_is_never_launched(service, monkeypatch):
     assert writer.model not in [call['model_or_combo'] for call in svc.runner.calls]
     assert all(s['family'] is None and 'distinct_family_unavailable' in s['reason']
                for s in answer['seat_coverage'])
+
+
+@pytest.mark.parametrize('coverage,seat', [
+    ((), False), (None, False), ((None, 'invalid-slot'), False),
+    ((dict(leg=LUNA.id, seat_group='seats-fixture'),), True),
+    ((None, 'invalid-slot', dict(leg=LUNA.id, seat_group='seats-fixture')), True)])
+def test_stopped_seat_is_failed_without_labeling_nonseat_legs(service, coverage, seat):
+    svc = service(False, skip=(GEMINI.model, LUNA.model))
+    plan = routing.SpawnPlan((GEMINI, LUNA), (), 'test', (LUNA,), (), seat_coverage=coverage)
+    answer = asyncio.run(svc._spawn(card=CARD, role='review', wait_seconds=None, _plan=plan))
+    saved = json.loads(svc._path(answer['run_id']).read_text())
+    for record in (answer, saved):
+        nonseat, stopped = record['attempts']
+        assert nonseat['status'] == 'completed'
+        assert nonseat['skip_reason'] is None
+        assert stopped['status'] == record['status'] == 'completed'
+        assert stopped['skip_reason'] == ('provider_stop' if seat else None)
+        assert record['exit_code'] == 0
+        if seat and len(coverage) == 1:
+            assert 'provider_stop' in record['error']
+            assert 'distinct_family_unavailable' in record['error']
+        else:
+            assert not record.get('error')
+    assert all(job.status == 'completed' and job.exit_code == 0 for job in svc.runner.jobs.values())
