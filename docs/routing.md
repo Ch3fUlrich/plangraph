@@ -1,7 +1,5 @@
 # Implement route defaults (D-5206)
 
-See [card-driven routing and admission](SPAWNER.md#card-driven-routing-core) for the live policy.
-
 An implement card uses `cx-gpt-6.1-sol-xhigh` (model `omniroute/cx-gpt-6.1-sol-xhigh`,
 effort `xhigh`), then `agy-gemini-3.8-flash` (agy harness). Quota, cooldown, or a
 confirmed availability refusal advances without an override; safety refusals,

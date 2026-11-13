@@ -29,15 +29,6 @@ _ROLES = ("implement", "review", "orchestrate")
 _KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_families")
 
 
-def legacy_route_refusal(*values):
-    """D-5696 legacy identities are refused before ranking or live admission."""
-    from plangraph.routing_support.catalog_seed import LEGACY_ROUTE_REPLACEMENTS
-    for legacy, replacement in LEGACY_ROUTE_REPLACEMENTS.items():
-        if any(isinstance(value, str) and legacy in value.lower() for value in values):
-            return 'legacy model refused: ' + legacy + '; use ' + replacement
-    return None
-
-
 def review_priority(leg) -> int:
     """D-4147 role order within a cost tier; no new family preferences."""
     return 2 if "haiku" in leg.model.lower() else 0 if leg.family == "mimo" else 1

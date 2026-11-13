@@ -40,9 +40,6 @@ def quota_paused(state=None, role=None, leg=None):
 
 def admit_leg(leg):
     """An override cannot enable a disabled leg, regardless of override_reason."""
-    from plangraph.planner.route_policy import legacy_route_refusal
-    if leg is not None and (reason := legacy_route_refusal(leg.id, leg.model)):
-        raise SpawnRefused(reason)
     if leg is not None and not leg_active(leg):
         raise SpawnRefused('leg disabled: ' + leg.id + ': ' + (leg.disabled or 'expired')
                            + '; override cannot enable a disabled leg')
@@ -54,9 +51,6 @@ def resolve_target(target, *, chosen=None):
     SPAWNABLE_LEGS = spawnable_legs()   # call time: callers rebind DEFAULT_LEGS
     if chosen is not None and target != chosen.model:
         raise SpawnRefused('model and leg disagree')
-    from plangraph.planner.route_policy import legacy_route_refusal
-    if reason := legacy_route_refusal(target):
-        raise SpawnRefused(reason)
     admit_leg(chosen)
     # Bare Mimo spellings are explicitly refused, even when also a leg id.
     if target.startswith('mimo-'):

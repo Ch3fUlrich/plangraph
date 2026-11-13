@@ -1,2 +1,1 @@
-- Fence legacy Gemini 3.8 Flash and GPT-6 Luna identities at plan_spawn and live spawner admission for every role, name Hydrogen/Terra replacements, and preserve allowed audited leg pins without enabling new order tables.
-- Round 2 also fences keeper routing, shares the trimmed order-core legacy list, scopes skip evidence by role, tolerates non-string identities, and restores the writer guidance and original planning contracts.
+- The live default route (`SpawnService.route`) never routes legacy Gemini 3.8 Flash or GPT-6 Luna identities (D-5696) and never auto-routes an argon leg for review (D-5648); explicit pins and `plan_spawn` with explicit legs are unchanged.

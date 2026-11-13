@@ -17,8 +17,8 @@ from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # n
 from .legs import DEFAULT_LEGS, READINESS_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
 from .provider_stop import next_leg_after_provider_stop
 from .review_order import review_key, catalog_tiers
-from .route_policy import legacy_route_refusal
 from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts  # noqa: F401
+
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
            "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
             "SpawnRefused", "SpawnPlan", "plan_spawn",
@@ -39,9 +39,11 @@ _PROVIDER_EXITS = frozenset({"usage_limit", "outage"})
 #: Exit classes that leave the routing loop (planner queue or inbox).
 _PARK_EXITS = frozenset({"contract_defect", "needs_input", "flaky_check", "cancelled"})
 
+
 @dataclass(frozen=True)
 class Route:
     """The routing decision for one card."""
+
     window_class: str
     harness: str
     legs: tuple[Leg, ...]
@@ -56,8 +58,10 @@ class Route:
     def first_leg(self) -> Leg:
         return self.legs[0]
 
+
 def _is_int(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
 
 def effective_estimate(estimate_tokens: int | None, subtasks: int = 1) -> int:
     """Estimate scaled by ``1 + 0.1 * (subtasks - 1)``, rounded up.
@@ -78,6 +82,7 @@ def effective_estimate(estimate_tokens: int | None, subtasks: int = 1) -> int:
 def _fits(effective: int, window_class: str) -> bool:
     return effective * 100 <= USABLE_FRACTION_PCT * WINDOW_TOKENS[window_class]
 
+
 def pick_window_class(effective: int, floor: str | None = None) -> str:
     """Smallest class whose 55% share holds ``effective``, never below ``floor``.
 
@@ -94,6 +99,7 @@ def pick_window_class(effective: int, floor: str | None = None) -> str:
 
 def _review(tags: Sequence[str]) -> tuple[str, int]:
     return ("risky", 2) if tags else ("standard", 1)
+
 
 def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: int = 1,
                unavailable: Collection[str] = (), exclude_families: Collection[str] = (),
@@ -134,9 +140,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     dropped: dict[str, int] = {}
     eligible: list[tuple[int, int, Leg]] = []
     for pos, leg in enumerate(legs):
-        if why := legacy_route_refusal(leg.id, leg.model):
-            pass
-        elif not leg_active(leg, now=now):
+        if not leg_active(leg, now=now):
             why = "disabled"
         elif effective_role == "implement" and implement_family_excluded(leg):
             why = "excluded_family"
@@ -208,6 +212,7 @@ def next_after_failure(route: Route, tried: Sequence[str], exit_class: str,
             return ("promote", leg)
     return ("park", None)
 
+
 @dataclass(frozen=True)
 class SpawnPlan:
     legs: tuple[Leg, ...]
@@ -233,6 +238,7 @@ class SpawnPlan:
         result["first_leg"] = asdict(self.first_leg) if self.first_leg else None
         return result
 
+
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
                 legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, placement=None,
                 catalog_rows=None) -> SpawnPlan:
@@ -246,7 +252,6 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     ``catalog_rows`` injects tier/admission data; None reads the live catalog once.
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
-    Legacy identities are refused before ranking and live admission.
     """
     placement = dict(placement) if placement is not None else dict(host=None, reason='placement_not_evaluated', free_mb=None)
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
@@ -298,10 +303,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
     from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS, get_catalog_models
     catalog_rows = tuple(get_catalog_models() if catalog_rows is None else catalog_rows)
-    legacy_skips = [{"leg": l.id, "reason": reason, "evidence": None} for l in legs
-                    if role in l.roles and (reason := legacy_route_refusal(l.id, l.model))]
-    legs = catalog_tiers(tuple(l for l in legs if not legacy_route_refusal(l.id, l.model)
-                              and l.model not in OPERATOR_REMOVED_MODELS), catalog_rows)
+    legs = catalog_tiers(tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS), catalog_rows)
     for candidate in legs:
         validate_model(candidate.model, allow_inactive=not leg_active(candidate, now=now), catalog_rows=catalog_rows)
     candidates = tuple(l for l in legs if role in l.roles and leg_active(l, now=now))
@@ -334,7 +336,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
                        "evidence": {"kind": "leg_disabled", "reason": l.disabled}}
                for l in legs if role in l.roles and not leg_active(l, now=now)]
-    skipped = legacy_skips
+    skipped = []
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
     for leg in candidates:
@@ -443,8 +445,6 @@ def validate_model(model, *, allow_inactive=False, catalog_rows=None):
     from . import legs as _legs   # read at call time: explicit legs are registered too
     if not isinstance(model, str) or not model:
         raise SpawnRefused('model must be a nonempty string')
-    if reason := legacy_route_refusal(model):
-        raise SpawnRefused(reason)
     check_mimo_path(model)
     rows = get_catalog_models() if catalog_rows is None else catalog_rows
     inactive = {row['id'] for row in rows if not catalog_row_admitted(row)} if not allow_inactive else set()

@@ -30,8 +30,19 @@ def initialize(service, reader, boundary):
     return reader
 
 
+def live_default_legs(role):
+    """Unpinned live legs: D-5696 legacy ids and, for review, D-5648 argon are never routed."""
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from .catalog_seed import LEGACY_ROUTE_REPLACEMENTS
+    def fenced(leg):
+        ident = f'{leg.id}{leg.model}'.lower()
+        return any(old in ident for old in LEGACY_ROUTE_REPLACEMENTS) or (role == 'review' and 'argon' in ident)
+    return tuple(leg for leg in DEFAULT_LEGS if not fenced(leg))
+
+
 def service_plan(service, **kwargs):
     from plangraph.planner.routing import plan_spawn
+    kwargs.setdefault('legs', live_default_legs(kwargs.get('role')))
     reader = getattr(service, 'leg_reader', None)
     if not enabled() or not getattr(reader, 'enabled', False):
         return plan_spawn(**kwargs, leg_reader=reader)

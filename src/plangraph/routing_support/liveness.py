@@ -12,7 +12,7 @@ def provider_exhausted(skipped):
     policy = {'banned_family', 'off_family', 'paused_harness', 'excluded_family',
               'inline_only_needs_diff', 'no_verdict_seat', 'explicit_only'}
     return any(r in states for r in reasons) and all(
-        r in states | policy or r.startswith(('disabled:', 'legacy model refused:')) for r in reasons)
+        r in states | policy or r.startswith('disabled:') for r in reasons)
 
 
 def require_available(leg, reader, card):
