@@ -10,7 +10,9 @@ from pathlib import Path
 import secrets
 import shlex
 import subprocess
+import sys
 import tempfile
+import time
 import uuid
 from typing import NamedTuple
 
@@ -108,6 +110,13 @@ def memory_refusal(free_mb, reservation_mb, floor_mb):
     return f'memory: free {free_mb} MB, floor {floor_mb} MB, role {reservation_mb} MB'
 
 
+def memory_floor_record(memory, role_mb, floor, detail, role='implement'):
+    return dict(run_id='run-' + uuid.uuid4().hex, status='refused', role=role,
+                reason='host_memory_floor', overflow_reason=detail, exit_code=2,
+                mem_available_mb=memory, floor_mb=floor, role_mb=role_mb, ended=time.time(),
+                error=f'host_memory_floor: MemAvailable {memory} MB, floor {floor} MB, role {role_mb} MB; {detail}')
+
+
 def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
             remote_first=False, local_refusal=None, host_order=()):
     """Select from config-enriched readiness records; age is computed on read."""
@@ -178,8 +187,8 @@ def ready_records(config, role='implement'):
     return records
 
 
-def local_resources():
-    runs = cli.SpawnService().ps()['runs']
+def local_resources(state=None):
+    runs = cli.SpawnService(state=state).ps()['runs']
     return sum(row.get('status') == 'running' for row in runs), available_memory_mb()
 
 
@@ -309,7 +318,9 @@ def main(argv=None):
     parser.add_argument('--card', required=True)
     parser.add_argument('--prompt', required=True)
     parser.add_argument('--role', default='implement')
+    parser.add_argument('--state', required=True, help='invoking spawn state directory (local only)')
     args, options = parser.parse_known_args(argv)
+    local = ['--state', args.state, 'spawn', '--card', '@' + args.card]
     if args.role != 'implement':
         options.extend(['--role', args.role])
     try:
@@ -319,12 +330,11 @@ def main(argv=None):
         except (OSError, ValueError):
             config = {}
         if placement_policy(registry_caps(), config)[1]:
-            return cli.main(['spawn', '--card', '@' + args.card,
-                             Path(args.prompt).read_text(), *options])
+            return cli.main([*local, Path(args.prompt).read_text(), *options])
         role_mb, floor_mb = local_limits(registry_caps(), args.role)
-        _, memory = local_resources()
+        _, memory = local_resources(args.state)
         if decide(memory, role_mb, floor_mb, {}, False).reason == 'local room':
-            return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
+            return cli.main([*local, Path(args.prompt).read_text(), *options])
         public = str(Path(args.repo).resolve()) in [str(Path(p).expanduser().resolve())
                                                   for p in config.get('public_repos', [])]
         card = json.loads(Path(args.card).read_text())
@@ -336,13 +346,20 @@ def main(argv=None):
         attempts = 0
         while True:
             decision = decide(memory, role_mb, floor_mb, records, public)
-            if decision.host is None:
-                print(json.dumps({'overflow_reason': decision.reason}))
-                return 5
-            if attempts == 2:
-                print(json.dumps({'overflow_reason': 'queue: ' + '; '.join(
-                    name + ': ' + row.get('refusal', 'retry limit') for name, row in sorted(records.items()))}))
-                return 5
+            if decision.host is None or attempts == 2:
+                detail = decision.reason if decision.host is None else 'refused: retry limit'
+                detail = detail.replace('; queue:', '; refused:')
+                refusals = [f'{name}: {row["refusal"]}' for name, row in sorted(records.items())
+                            if row.get('refusal')]
+                reported = detail.replace('; refused: ', '; ').removeprefix('refused: ').split('; ')
+                detail = '; '.join([detail, *(reason for reason in refusals if reason not in reported)])
+                record = memory_floor_record(memory, role_mb, floor_mb, detail, args.role)
+                if not memory_refusal(memory, role_mb, floor_mb):
+                    record.update(reason=detail, error=detail)
+                cli.SpawnService(state=args.state)._save(record)
+                print(json.dumps(record))
+                print(record['error'], file=sys.stderr)
+                return 2
             name = decision.host
             attempts += 1
             try:
@@ -358,7 +375,7 @@ def main(argv=None):
                 return 0
             records[name]['refusal'] = refusal
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        print('overflow input or resource check failed', file=__import__('sys').stderr)
+        print('overflow input or resource check failed', file=sys.stderr)
         return 1
 
 
