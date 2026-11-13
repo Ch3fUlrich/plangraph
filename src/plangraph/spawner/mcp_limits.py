@@ -55,6 +55,8 @@ def _fingerprint(root):
     and real runs are refused (fail closed) instead of ignoring the file."""
     digest = hashlib.sha256()
     try:
+        if not root.is_dir():
+            raise OSError('package tree is unavailable')
         for path in sorted(root.rglob('*')):
             if any(part in ('.git', '__pycache__') for part in path.relative_to(root).parts) or path.suffix in ('.pyc', '.pyo'):
                 continue

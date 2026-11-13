@@ -141,7 +141,10 @@ def test_unreadable_file_and_missing_tree_fail_closed(tmp_path, monkeypatch):
     (tmp_path / 'gone.py').symlink_to(tmp_path / 'missing.py')
     first, second = (mcp_limits.current_source_identity(tmp_path) for _ in range(2))
     assert len(first) == 12 and first != second
-    assert len(mcp_limits.current_source_identity(tmp_path / 'absent')) == 12
+    missing_first, missing_second = (mcp_limits.current_source_identity(tmp_path / 'absent') for _ in range(2))
+    assert missing_first != missing_second
+    guard = mcp_limits.SourceGuard(lambda: mcp_limits.current_source_identity(tmp_path / 'absent'))
+    assert guard.restart_required() is not None
 
 
 @pytest.mark.parametrize('name', ['plangraph_session_launch', 'plangraph_session_relaunch'])
