@@ -1140,6 +1140,10 @@ mod tests {
         assert_legacy_change_path("");
     }
     #[test]
+    fn raw_empty_check_kind_runs_red_first_then_writer() {
+        assert_legacy_change_path("");
+    }
+    #[test]
     fn legacy_json_without_check_kind_runs_red_first_then_writer() {
         assert_legacy_change_path("json");
     }
