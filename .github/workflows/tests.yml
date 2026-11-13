@@ -309,7 +309,7 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: cargo check (windows-gnu)
-        run: cargo check --target x86_64-pc-windows-gnu -p pg-worker-core -p pg-spawnd --all-targets
+        run: cargo check --target x86_64-pc-windows-gnu -p pg-worker-core -p pg-spawnd -p plangraph-cli --all-targets
       - name: Build pg-jail helper
         run: cargo build -p pg-jail
       - name: cargo test
@@ -335,6 +335,8 @@ jobs:
             ~/.cargo/git
             rust/target
           key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+      - name: cargo test -p plangraph-cli
+        run: cargo test -p plangraph-cli
       - name: cargo test -p pg-spawnd
         run: cargo test -p pg-spawnd
       - name: cargo test -p pg-worker-core

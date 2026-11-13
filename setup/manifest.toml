@@ -1,0 +1,7 @@
+# Embedded by plangraph-cli. Target paths are relative to the selected user home.
+[[files]]
+component = "environment"
+target = ".config/plangraph/plangraph.env"
+format = "env"
+content = "PG_URL=http://127.0.0.1:8765\nPG_LEASE_S=7200\nPG_HEARTBEAT_S=900\n"
+

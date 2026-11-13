@@ -355,3 +355,29 @@ def test_summary_is_immediate(repo, monkeypatch, capsys):
 
     monkeypatch.setattr(preflight, "run", run)
     assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
+
+
+def test_shared_rust_changes_exclude_standalone_workspaces(repo, monkeypatch):
+    rust = repo / 'rust'
+    for directory in ('one', 'worker', 'spikes/demo'):
+        (rust / directory).mkdir(parents=True)
+    (rust / 'Cargo.toml').write_text('[workspace]\nmembers=["one"]\n')
+    (rust / 'one/Cargo.toml').write_text('[package]\nname="one"\n')
+    (rust / 'worker/Cargo.toml').write_text('[package]\nname="external-worker"\n[workspace]\n')
+    (rust / 'spikes/demo/Cargo.toml').write_text('[package]\nname="external-spike"\n[workspace]\n')
+    subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
+    subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                    'commit', '-qm', 'workspace fixture'], cwd=repo, check=True)
+    monkeypatch.setattr(preflight.shutil, 'which', lambda _: '/fake/cargo')
+    commands = preflight.rust_commands(repo, 'HEAD~1', 'HEAD')
+    # Initial fixture commit touches each standalone manifest too; all are independent.
+    assert ['cargo', 'clippy', '--manifest-path', 'worker/Cargo.toml', '-p',
+            'external-worker', '--all-targets', '--', '-D', 'warnings'] in commands
+    (rust / 'Cargo.lock').write_text('# shared root input\n')
+    subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
+    subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                    'commit', '-qm', 'shared input'], cwd=repo, check=True)
+    commands = preflight.rust_commands(repo, 'HEAD~1', 'HEAD')
+    assert commands == [['cargo', 'fmt', '--check'],
+                        ['cargo', 'clippy', '-p', 'one', '--all-targets', '--', '-D', 'warnings'],
+                        ['cargo', 'test', '-p', 'one']]

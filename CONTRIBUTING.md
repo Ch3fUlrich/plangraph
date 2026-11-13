@@ -305,3 +305,6 @@ Run its hermetic contracts with `cargo test --manifest-path rust/Cargo.toml -p
 pg-worker-core --test turn_budget_hook --test turn_budget_poll --test
 turn_budget_alert --test turn_budget_watchdog`. Tests never install hooks, read
 live session state, or change permissions/settings files.
+
+The Rust `plangraph-cli` setup contract lives in `docs/setup.md`; manifest changes
+are Rust CI inputs and are tested against disposable user homes.

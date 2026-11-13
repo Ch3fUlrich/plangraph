@@ -60,21 +60,41 @@ def rust_commands(root, base, head):
         raise SkipFamily("no rust changes")
     if not shutil.which("cargo"):
         raise FailFamily("missing required tool: cargo")
-    manifests = {}
+    manifests, workspace_roots = {}, {"rust"}
     for manifest in (root / "rust").rglob("Cargo.toml"):
         if "target" in manifest.parts:
             continue
         data = tomllib.loads(manifest.read_text())
+        directory = manifest.parent.relative_to(root).as_posix()
+        if "workspace" in data:
+            workspace_roots.add(directory)
         if "package" in data:
-            manifests[manifest.parent.relative_to(root).as_posix()] = data["package"]["name"]
-    selected = set()
+            manifests[directory] = data["package"]["name"]
+    # A nested [workspace] is independently built; shared root files select only
+    # root members, never packages that cargo -p cannot resolve from rust/.
+    workspace = {path: max((w for w in workspace_roots
+                           if path == w or path.startswith(w + "/")), key=len)
+                 for path in manifests}
+    selected = {}
     for path in changed:
         owners = [p for p in manifests if path.startswith(p + "/")]
-        selected.update([max(owners, key=len)] if owners else manifests)
-    packages = [arg for p in sorted(selected) for arg in ("-p", manifests[p])]
-    return [["cargo", "fmt", "--check"],
-            ["cargo", "clippy", *packages, "--all-targets", "--", "-D", "warnings"],
-            ["cargo", "test", *packages]]
+        if owners:
+            owner = max(owners, key=len)
+            selected.setdefault(workspace[owner], set()).add(owner)
+        else:
+            selected.setdefault("rust", set()).update(p for p in manifests
+                                                       if workspace[p] == "rust")
+    commands = []
+    for owner in sorted(selected):
+        packages = [arg for p in sorted(selected[owner])
+                    for arg in ("-p", manifests[p])]
+        manifest_args = ([] if owner == "rust" else
+                         ["--manifest-path", str(Path(owner).relative_to("rust") / "Cargo.toml")])
+        commands.extend([["cargo", "fmt", *manifest_args, "--check"],
+                         ["cargo", "clippy", *manifest_args, *packages,
+                          "--all-targets", "--", "-D", "warnings"],
+                         ["cargo", "test", *manifest_args, *packages]])
+    return commands
 
 
 def test_environment(root, env):
