@@ -199,6 +199,16 @@ def test_git_checkout_scans_tracked_files_only(tree):
     assert [h.path for h in sc.scan_tree(tree, sc.build_config())] == ["tracked.txt"]
 
 
+def test_git_ignored_untracked_secret_is_not_scanned(tree):
+    _git(tree, "init", "-q")
+    (tree / ".gitignore").write_text("scratch.txt\n")
+    (tree / "tracked.txt").write_text("addr " + IP_A + "\n")
+    (tree / "scratch.txt").write_text("addr " + IP_A + "\n")
+    _git(tree, "add", ".gitignore", "tracked.txt")
+    _git(tree, "commit", "-qm", "x")
+    assert [h.path for h in sc.scan_tree(tree, sc.build_config())] == ["tracked.txt"]
+
+
 def test_file_removed_from_index_but_in_head_is_still_scanned(tree):
     _git(tree, "init", "-q")
     _leaky(tree)
