@@ -74,7 +74,7 @@ fn fetch(repo: &Path) -> bool {
 }
 
 fn sync(repo: &Path) -> (u64, Option<String>) {
-    let fetched = repo.join(".git").exists() && fetch(repo);
+    let fetched = fetch(repo);
     let default = match text(
         repo,
         &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
@@ -172,12 +172,18 @@ fn run() -> Result<bool, &'static str> {
             _ => return Err("usage: pg-repo-sync [--root DIR]... [--repo PATH]... [--verbose]"),
         }
     }
-    if roots.is_empty() && repos.is_empty() {
+    let default_roots = roots.is_empty() && repos.is_empty();
+    if default_roots {
         roots.push(PathBuf::from(env::var_os("HOME").ok_or("HOME is unavailable")?).join("code"));
     }
     for root in roots {
-        for entry in fs::read_dir(root).map_err(|_| "repository discovery failed")? {
-            let path = entry.map_err(|_| "repository discovery failed")?.path();
+        let entries = match fs::read_dir(root) {
+            Ok(entries) => entries,
+            Err(_) if default_roots => continue,
+            Err(_) => return Err("repository discovery failed"),
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_dir())
                 && path.join(".git").exists()
@@ -196,13 +202,10 @@ fn run() -> Result<bool, &'static str> {
     repos.dedup();
     let mut alerts = false;
     for repo in repos {
-        let name: String = repo
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .chars()
-            .flat_map(char::escape_default)
-            .collect();
+        let name = repo.file_name().unwrap_or_default().to_string_lossy();
+        if name.chars().any(char::is_control) {
+            continue;
+        }
         let (behind, reason) = sync(&repo);
         if let Some(reason) = reason {
             println!("ALERT {name} behind={behind} reason={reason}");

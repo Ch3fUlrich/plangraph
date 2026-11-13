@@ -27,6 +27,21 @@ def failure_reason(job, stop=None):
     return first_reason(text) or ('provider_stop' if stop else f'harness exit code {job.exit_code}')
 
 
+def refusal_record(record, job):
+    """Persist a safety stop at dispatch, not in the fallthrough classifier."""
+    refusal = next((e for e in getattr(job, 'events', ()) if e.get('event') == 'model_refusal'), None)
+    if refusal is None and job.status != 'model_refusal' and record.get('reason') != 'model_refusal':
+        return False
+    reason = record.get('reason')
+    if reason in (None, 'harness_limit', 'credit_limit', 'usage_limit', 'tool_call_only'):
+        reason = 'model_refusal'
+    record.update(status='failed', exit_code=job.exit_code or 1, reason=reason,
+                  events=record.get('events', []) + getattr(job, 'events', []))
+    if refusal is not None:
+        record.update({k: refusal[k] for k in ('stop_reason', 'refusal_text_chars') if k in refusal})
+    return True
+
+
 def _booking_seconds():
     """H1: the booked-down window is clamped to [60, 86400] seconds.
 
@@ -161,7 +176,7 @@ def fallthrough_reason(service, chosen, job, record):
     from .question_bridge import question_exit
     if question_exit(job, record):
         return None
-    if record.get('reason') == 'model_refusal' or any(e.get('event') == 'model_refusal' for e in getattr(job, 'events', ())):
+    if record.get('reason') == 'model_refusal' or getattr(job, 'status', None) == 'model_refusal' or any(e.get('event') == 'model_refusal' for e in getattr(job, 'events', ())):
         return None   # safety stops are not provider limits or leg-health evidence
     # Before the terminal check: text-call output replaces writer_no_changes; tool_call_only keeps the other terminals.
     if tool_call_only(job, record):
@@ -174,6 +189,11 @@ def fallthrough_reason(service, chosen, job, record):
             for e in (*record.get('events', ()), *getattr(job, 'events', ()))):
         return None   # terminal verdicts must stop dispatch, not merely keep their name
     streams = (job.stdout, job.stderr)
+    if record.get('role') == 'review':
+        # A diagnostic label alone is not quota evidence; validate its payload.
+        streams = tuple('\n'.join(line.split(':', 1)[1].strip()
+                        if line.strip().startswith(('usage_limit:', 'credit_limit:')) else line
+                        for line in text.splitlines()) for text in streams)
     line = harness_limit_line(job.exit_code, *(map(without_progress, streams) if is_opencode(job) else streams))
     if not line and getattr(job, 'refusal', None) and job.exit_code == 7:
         # F3: a confirmed refusal (e.g. a 402 provider envelope whose reason is
@@ -205,7 +225,16 @@ def fallthrough_reason(service, chosen, job, record):
     if reason is not None:
         _book_failure(service, chosen, 'model_unavailable: ' + reason)
         notify_leg_refused(service, record, chosen, reason)
-    return reason
+    stop = getattr(getattr(service, 'runner', None), 'provider_responses', {}).get(getattr(job, 'job_id', None))
+    if (not reason and record.get('role') == 'review' and stop
+            and not getattr(job, 'survivors', ())
+            and job.status in ('failed', 'skipped', 'limited')):
+        return 'provider_stop'
+    # Review/seat failures exhaust the existing route, not the whole run.
+    # Ordinary failures carry diagnostics, not booking/notification evidence.
+    return reason or (failure_reason(job) if record.get('role') == 'review'
+                      and not getattr(job, 'survivors', ())
+                      and job.status in ('failed', 'skipped', 'limited') else None)
 
 
 def release_attempts(service, record):

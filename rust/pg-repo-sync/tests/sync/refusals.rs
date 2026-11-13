@@ -1,11 +1,67 @@
 use super::{fs, Fixture};
 
+#[test]
+fn unavailable_default_root_is_empty_but_explicit_root_errors() {
+    let f = Fixture::new();
+    for (not_a_directory, explicit) in [(false, false), (false, true), (true, false), (true, true)]
+    {
+        if not_a_directory {
+            fs::write(f.seed.join("code"), "not a directory").unwrap();
+        }
+        let mut command = f.command(env!("CARGO_BIN_EXE_pg-repo-sync"));
+        command.env("HOME", &f.seed);
+        if explicit {
+            command.arg("--root").arg(f.seed.join("code"));
+        }
+        let out = command.output().unwrap();
+        assert_eq!(out.status.code(), Some(i32::from(explicit)), "{out:?}");
+        assert!(out.stdout.is_empty(), "{out:?}");
+        assert_eq!(out.stderr.is_empty(), !explicit, "{out:?}");
+    }
+}
+
+#[test]
+fn explicit_bare_repository_fetches_without_a_dot_git_entry() {
+    let mut f = Fixture::new();
+    f.repo = f.origin.clone();
+    f.git(&f.repo, &["remote", "add", "origin", "../seed"]);
+    let out = f.run();
+    assert!(out.status.success(), "{out:?}");
+    assert!(out.stdout.is_empty() && out.stderr.is_empty(), "{out:?}");
+    let remote = f.git(&f.seed, &["rev-parse", "HEAD"]);
+    assert_eq!(f.git(&f.repo, &["rev-parse", "origin/main"]), remote);
+}
+
+#[test]
+fn repository_names_preserve_unicode_and_skip_controls() {
+    for name in ["café", "проект", "line\nbreak", "tab\tname"] {
+        let mut f = Fixture::new();
+        fs::rename(&f.repo, f.base.join("code").join(name)).unwrap();
+        f.repo = f.base.join("code").join(name);
+        fs::write(f.repo.join("tracked"), "local edits").unwrap();
+        let before = f.snapshot();
+        let out = f.run();
+        let control = name.chars().any(char::is_control);
+        let expected = format!("ALERT {name} behind=1 reason=tracked-changes\n");
+        assert_eq!(out.status.code(), Some(i32::from(!control)), "{out:?}");
+        assert_eq!(out.stdout, if control { b"" } else { expected.as_bytes() });
+        assert!(out.stderr.is_empty(), "{out:?}");
+        assert_eq!(f.snapshot(), before);
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn probe_failures_after_successful_fetch_are_not_fetch_failures() {
     for (script, behind) in [
-        ("if [ \"$5\" = symbolic-ref ] && [ \"$7\" = refs/remotes/origin/HEAD ]; then exit 2; fi", 1),
-        ("if [ \"$5\" = symbolic-ref ] && [ \"$7\" = refs/remotes/origin/HEAD ]; then echo refs/heads/main; exit 0; fi", 1),
+        (
+            "if [ \"$5\" = symbolic-ref ] && [ \"$7\" = refs/remotes/origin/HEAD ]; then exit 2; fi",
+            1,
+        ),
+        (
+            "if [ \"$5\" = symbolic-ref ] && [ \"$7\" = refs/remotes/origin/HEAD ]; then echo refs/heads/main; exit 0; fi",
+            1,
+        ),
     ] {
         let f = Fixture::new();
         let remote_head = f.git(&f.seed, &["rev-parse", "HEAD"]);

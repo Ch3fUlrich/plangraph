@@ -267,7 +267,9 @@ class SeatSpawnMixin:
             job.status = 'cancelled'
             return job
         limits = options.get('watchdog') or {}
-        remaining = record['started'] + limits.get('max_s', 1500) - time.time()
+        cap, deadline = limits.get('max_s', 1500), limits.get('deadline')
+        if deadline is None and cap is not None: deadline = record['started'] + cap
+        remaining = deadline - time.time() if deadline is not None else float('inf')
         if evidence.get('cap_available') and not record.get('reasoning_retry') and remaining > 30:
             record_attempt(job)
             record['events'].append(dict(event='reasoning_capped_retry', leg=chosen.id,
@@ -275,7 +277,7 @@ class SeatSpawnMixin:
             record['reasoning_retry'] = 1  # durable before launching the sole retry
             self._save(record)
             job = await launch(**dict(options, reasoning_cap=True,
-                watchdog=dict(limits, max_s=remaining, hard_max=True)))
+                watchdog=dict(limits, max_s=remaining if deadline is not None else None, hard_max=True)))
             if protected(job):
                 return job
             cap_unavailable = any(e.get('event') == 'render_refused' and

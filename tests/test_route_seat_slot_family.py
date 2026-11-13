@@ -344,7 +344,7 @@ def test_spare_writer_family_is_never_launched(service, monkeypatch):
     ((), False), (None, False), ((None, 'invalid-slot'), False),
     ((dict(leg=LUNA.id, seat_group='seats-fixture'),), True),
     ((None, 'invalid-slot', dict(leg=LUNA.id, seat_group='seats-fixture')), True)])
-def test_stopped_seat_is_failed_without_labeling_nonseat_legs(service, coverage, seat):
+def test_stopped_seat_keeps_status_and_carries_provider_stop(service, coverage, seat):
     svc = service(False, skip=(GEMINI.model, LUNA.model))
     plan = routing.SpawnPlan((GEMINI, LUNA), (), 'test', (LUNA,), (), seat_coverage=coverage)
     answer = asyncio.run(svc._spawn(card=CARD, role='review', wait_seconds=None, _plan=plan))
@@ -356,9 +356,42 @@ def test_stopped_seat_is_failed_without_labeling_nonseat_legs(service, coverage,
         assert stopped['status'] == record['status'] == 'completed'
         assert stopped['skip_reason'] == ('provider_stop' if seat else None)
         assert record['exit_code'] == 0
-        if seat and len(coverage) == 1:
+        if seat:
             assert 'provider_stop' in record['error']
             assert 'distinct_family_unavailable' in record['error']
         else:
             assert not record.get('error')
     assert all(job.status == 'completed' and job.exit_code == 0 for job in svc.runner.jobs.values())
+
+
+@pytest.mark.parametrize('dispatch', [False, True], ids=['base', 'dispatch'])
+def test_stopped_seat_is_failed_without_labeling_nonseat_legs(service, dispatch):
+    # A genuinely failed stopped job fails; completed jobs above stay completed (D-5657).
+    svc = service(dispatch)
+    spawn = svc.runner.spawn
+
+    async def failed_stop(**kwargs):
+        job = await spawn(**kwargs)
+        job.status, job.exit_code, job.stderr = 'failed', 7, ''
+        svc.runner.provider_responses[job.job_id] = {'status': 429, 'body': 'rate limited'}
+        return job
+
+    svc.runner.spawn = failed_stop
+    plan = routing.SpawnPlan((LUNA,), (), 'test', (LUNA,), (),
+                            seat_coverage=(dict(leg=LUNA.id, seat_group='seats-fixture'),))
+    answer = asyncio.run(svc._spawn(card=CARD, role='review', wait_seconds=None, _plan=plan))
+    assert answer['status'] == 'failed' and answer['exit_code'] != 0
+    assert answer['attempts'][0]['skip_reason'] == 'provider_stop'
+
+
+@pytest.mark.parametrize('nonseat', [None, 'invalid-slot', dict(leg=GEMINI.id)])
+def test_mixed_coverage_cannot_label_an_unrelated_leg(nonseat):
+    from dataclasses import asdict
+    from plangraph.spawner.seat_artifact import sync_seat
+    coverage = [dict(leg=LUNA.id, seat_group='seats-fixture'), nonseat]
+    record = dict(role='review', chosen_leg=asdict(GEMINI), status='completed', ended=1,
+                  plan=dict(seat_coverage=coverage, review_seats=[asdict(LUNA)]))
+    sync_seat(record)
+    assert coverage[0] == dict(leg=LUNA.id, seat_group='seats-fixture')
+    assert record['plan']['review_seats'] == [asdict(LUNA)]
+    assert record['chosen_leg']['id'] == GEMINI.id
