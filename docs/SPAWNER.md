@@ -713,3 +713,11 @@ family in operator order) before availability checks. Only boolean
 `allow_family_fallthrough: true` permits another writer family. Exhausting the
 bound family returns `writer_family_unavailable`. Run records name
 `launched_leg` even when that harness subsequently fails.
+
+Session launcher configuration accepts `require_remote_control: true`. Required
+launches and relaunches poll their own agent row for a nonempty
+`bridgeSessionId`, bounded by the resolve budget (maximum sixty seconds). A
+missing bridge returns `RC-MISSING`, retains the session id for cleanup, and
+stores state `rc_missing`. This applies to the Linux and Windows session APIs.
+The external fleet/terminal launchers must enable this policy and retain their
+interactive `--remote-control NAME` workstation launch path.

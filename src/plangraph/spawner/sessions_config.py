@@ -19,7 +19,7 @@ from plangraph.routing_errors import ParameterRefused
 
 SESSION_CONFIG_KEYS = frozenset({
     "cwd_roots", "models", "efforts", "permission_modes", "mcp_configs",
-    "style_text", "compact_window", "ctx_cap_tokens", "session_names",
+    "style_text", "compact_window", "ctx_cap_tokens", "session_names", "require_remote_control",
 })
 COUNTERS_FILE = "_counters.json"  # beside the records; no session name starts with "_" (D-3605)
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
@@ -99,6 +99,8 @@ class _ConfigMixin:
         return cfg
 
     def _check_config(self, cfg):
+        if 'require_remote_control' in cfg and type(cfg['require_remote_control']) is not bool:
+            raise _refuse('require_remote_control must be boolean')
         unknown = sorted(set(cfg) - SESSION_CONFIG_KEYS)
         if unknown:
             raise _refuse(f"config has unknown keys: {unknown}")

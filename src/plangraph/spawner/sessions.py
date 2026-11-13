@@ -91,6 +91,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         ParameterRefused from the run or the id poll -> "unknown" written and
         the original exception re-raised. The marker is unlinked only after
         the "running"/"unknown" write. Returns (session_id, warning)."""
+        rec.pop('bridgeSessionId', None)
         launched_ms = self._now() * 1000.0  # before the start: rows near it count
         # The write-ahead keeps any existing launched_ts: only SUCCESSFUL launches stamp it.
         rec.update({"state": "launching", "session_id": None, "job_id": None,
@@ -134,6 +135,14 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
             # new session is untracked (round 4).
             raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}",
                                 session_id=sid) from exc
+        if rec.get('require_remote_control'):
+            bridge = self._wait_bridge(sid)
+            if bridge is None:
+                rec.update(state='rc_missing', reason='RC-MISSING', ts=self._now())
+                self._write_record(name, rec)
+                raise _ActionFailed('RC-MISSING: launch has no bridgeSessionId within bound', session_id=sid)
+            rec['bridgeSessionId'] = bridge
+            self._write_record(name, rec)
         return sid, warning
 
     # ---- actions -------------------------------------------------------
@@ -195,6 +204,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
                "mcp": str(mcp_path), "prompt_file": str(prompt_path),
                "handoff": str(handoff_path) if handoff_path else None,
                "parent": parent, "children": [], "ts": None,
+               "require_remote_control": cfg.get("require_remote_control", False),
                "session_id": None, "job_id": None,
                "permission_mode": mode, "platform": self._platform,
                "stopped_ts": None}
@@ -356,6 +366,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         # Stop + confirm the old session first (D-3193): failure refuses the relaunch.
         stopped_sid = self._ensure_stopped(rec, old_name)
         new_rec = self._relaunch_record(rec, name, handoff_path)
+        new_rec['require_remote_control'] = cfg.get('require_remote_control', False)
         # The relaunch starts through _start (D-3193): its write-ahead record
         # and every outcome are _start's to write; failure leaves the old gone.
         sid, warning = self._start(name, new_rec, bg_argv, env, cwd_path, prompt_arg,

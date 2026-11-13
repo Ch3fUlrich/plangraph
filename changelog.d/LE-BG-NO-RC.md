@@ -1,0 +1,1 @@
+- Fail required session launches with RC-MISSING within a bounded bridge check, preserving the launched session identity for recovery.
