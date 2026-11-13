@@ -25,13 +25,25 @@ fn copied_definition_fails() {
 #[test]
 fn canonical_definition_and_import_pass() {
     let dir = tree();
-    put(dir.path(), "caller.py", "from pkg.auth import read_token as token\n");
-    put(dir.path(), "pkg/caller.py", "from .auth import (\n read_token,\n)\n");
+    put(
+        dir.path(),
+        "caller.py",
+        "from pkg.auth import read_token as token\n",
+    );
+    put(
+        dir.path(),
+        "pkg/caller.py",
+        "from .auth import (\n read_token,\n)\n",
+    );
     check(dir.path(), "[files]\n").unwrap();
 }
 #[test]
 fn noncanonical_import_fails() {
-    for import in ["from bad import read_token as t", "from bad import (\n read_token,\n)", "import bad.read_token"] {
+    for import in [
+        "from bad import read_token as t",
+        "from bad import (\n read_token,\n)",
+        "import bad.read_token",
+    ] {
         let dir = tree();
         put(dir.path(), "caller.py", &format!("# comment\n{import}\n"));
         reject(dir.path(), "[files]\n", "caller.py:2:");
@@ -44,7 +56,11 @@ fn baseline_covered_extra_and_stale_hits() {
     put(dir.path(), "capabilities-baseline.toml", base);
     put(dir.path(), "copy.py", "def read_token(): pass\n");
     check(dir.path(), base).unwrap();
-    put(dir.path(), "copy.py", "def read_token(): pass\ndef read_token(): pass\n");
+    put(
+        dir.path(),
+        "copy.py",
+        "def read_token(): pass\ndef read_token(): pass\n",
+    );
     reject(dir.path(), base, "copy.py:2:");
     fs::remove_file(dir.path().join("copy.py")).unwrap();
     reject(dir.path(), base, "stale baseline");
@@ -54,7 +70,11 @@ fn baseline_covered_extra_and_stale_hits() {
 #[test]
 fn baseline_cannot_grow_or_add_entries() {
     let dir = tree();
-    put(dir.path(), "capabilities-baseline.toml", "[files]\n'copy.py'=2\n");
+    put(
+        dir.path(),
+        "capabilities-baseline.toml",
+        "[files]\n'copy.py'=2\n",
+    );
     for base in ["[files]\n", "[files]\n'copy.py'=1\n"] {
         reject(dir.path(), base, "only shrink");
     }
@@ -73,24 +93,53 @@ fn toml_errors_and_missing_canonical_file() {
     let dir = tree();
     fs::remove_file(dir.path().join("pkg/auth.py")).unwrap();
     reject(dir.path(), "[files]\n", "canonical module missing");
-    put(dir.path(), "capabilities-baseline.toml", "[files]\n'x.py'=0\n");
+    put(
+        dir.path(),
+        "capabilities-baseline.toml",
+        "[files]\n'x.py'=0\n",
+    );
     reject(dir.path(), "[files]\n", "zero count");
 }
 #[test]
 fn rust_and_javascript_definitions_and_imports() {
     for (lang, ext, definition, import) in [
-        ("rust", "rs", "pub async fn token() {}", "use wrong::{token as t};"),
-        ("javascript", "js", "export function token() {}", "import {token as t} from 'wrong';"),
-        ("typescript", "ts", "function token() {}", "import {token} from 'wrong';"),
+        (
+            "rust",
+            "rs",
+            "pub async fn token() {}",
+            "use wrong::{token as t};",
+        ),
+        (
+            "javascript",
+            "js",
+            "export function token() {}",
+            "import {token as t} from 'wrong';",
+        ),
+        (
+            "typescript",
+            "ts",
+            "function token() {}",
+            "import {token} from 'wrong';",
+        ),
     ] {
         let dir = tree();
-        let registry = REGISTRY.replace("python", lang).replace("read_token", "token");
+        let registry = REGISTRY
+            .replace("python", lang)
+            .replace("read_token", "token");
         put(dir.path(), "capabilities.toml", &registry);
         put(dir.path(), &format!("pkg/auth.{ext}"), definition);
-        let good = if lang == "rust" { "use pkg::auth::token;" } else { "import {token} from 'pkg/auth';" };
+        let good = if lang == "rust" {
+            "use pkg::auth::token;"
+        } else {
+            "import {token} from 'pkg/auth';"
+        };
         put(dir.path(), &format!("caller.{ext}"), good);
         check(dir.path(), "[files]\n").unwrap();
-        put(dir.path(), &format!("copy.{ext}"), &format!("{definition}\n{import}\n"));
+        put(
+            dir.path(),
+            &format!("copy.{ext}"),
+            &format!("{definition}\n{import}\n"),
+        );
         reject(dir.path(), "[files]\n", &format!("copy.{ext}:2:"));
     }
 }
