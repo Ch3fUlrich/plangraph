@@ -43,7 +43,7 @@ def admit(service, options, *, card=None, preview=False):
     _, memory = resources(service)
     if not remote_first and not overflow.memory_refusal(memory, role_mb, floor):
         return None
-    repo = Path(((card or {}).get('diff_ref') or {}).get('repo') or
+    repo = Path(((card or {}).get('diff_ref') or {}).get('repo') or options.get('cwd') or
                 getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
     public = str(repo) in [str(Path(p).expanduser().resolve()) for p in config.get('public_repos', [])]
     benchmark_local = remote_first and options.get('benchmark') is not None
@@ -55,7 +55,7 @@ def admit(service, options, *, card=None, preview=False):
                 if name != local and overflow.host_config(registry, name).get('id') != local}
     health = overflow.local_health_refusal(config, memory) if remote_first else None
     flags = []
-    for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope'):
+    for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope', 'cwd'):
         if options.get(key) is not None:
             flags.extend(('--' + key.replace('_', '-'), str(options[key])))
     for family in options.get('writer_families', ()):
@@ -152,6 +152,10 @@ class SeatSpawnMixin:
             bound = inspect.signature(self._spawn).bind(*args, **kwargs)
             options = dict(bound.arguments)
             card = options.get('card')
+            from .prompt_input import resolve_cwd
+            cwd = resolve_cwd(options.get('cwd'), card)
+            if cwd is not None:
+                options['cwd'] = bound.arguments['cwd'] = cwd
             from .prompt_guard import admit_prompt
             from plangraph.planner.routing import SpawnRefused
             if options.get('role', 'implement') == 'implement':
@@ -174,9 +178,10 @@ class SeatSpawnMixin:
                     return {'writers': await asyncio.gather(*(dispatch(g, b) for g, b in zip(groups, briefs)))}
                 options['prompt'] = briefs[0]
                 return await self._spawn(**options)
+            dispatch_kwargs = bound.kwargs
             if '_placement' in options:
-                kwargs['_placement'] = options['_placement']
-            return await self._spawn(*args, **kwargs)
+                dispatch_kwargs['_placement'] = options['_placement']
+            return await self._spawn(*bound.args, **dispatch_kwargs)
         except Exception as exc:
             self.save_refusal(exc, options.get('role', kwargs.get('role', args[2] if len(args) > 2 else 'implement')),
                               card=options.get('card', kwargs.get('card', args[0] if args else None)),
@@ -208,6 +213,8 @@ class SeatSpawnMixin:
 
     async def _launch_leg(self, record, chosen, *, routed=False, **options):
         """One normal launch, at most one capped review retry; never recurse or reroute."""
+        if record.get('cwd') is not None:
+            options.setdefault('cwd', record['cwd'])
         async def launch(prompt_record, **kwargs):
             job = await self.runner.spawn(prompt_record=prompt_record, **kwargs)
             self._running_records[job.job_id] = record

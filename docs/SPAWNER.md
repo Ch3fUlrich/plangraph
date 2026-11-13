@@ -251,6 +251,11 @@ python -m plangraph.spawner.cli result run-ID
 ```
 Cards may also be inline JSON; `spawn --prompt-file FILE` replaces the prompt argument for prompts over the argv limit; it reads UTF-8, strips a BOM, and a bad file exits 2 with a `prompt_file_*` or `prompt_input_*` refusal. `card.context` (`path:start-end` slices, at most 64) is inlined as a CONTEXT PACK for inline-only legs (cap `PLANGRAPH_CONTEXT_PACK_MAX_CHARS`, default 60000; built once per spawn, each slice file read once and passed through `redact`; a secret-looking name, a `.git` part or an untracked file is skipped with a `context_path_refused` warning; with entries, no git work tree, a symlink loop or too many entries refuse the spawn (without entries a failed listing only adds `big_file_scan_skipped`); a range past the end of the file adds `context_range_past_eof`) and a brief naming a 400+ line file without a slice adds a `big_file_unsliced` warning (D-3622, D-3649). `--state PATH` precedes the verb; otherwise
 `PLANGRAPH_SPAWN_STATE` or the XDG plangraph state directory is used.
+`spawn --cwd PATH` or card `cwd` selects an absolute existing Git checkout;
+relative, missing, non-checkout and conflicting flag/card paths are refused.
+Without either, the caller's cwd is unchanged. The selected path is recorded in
+`record.cwd` and passed to the runner; `completion.head_sha` is that checkout's
+HEAD at completion, not at launch. `seat_verdict --head` must still match it.
 `--dry-run` plans without a child. Spawn returns a `wait_cmd`:
 `plangraph-spawn wait RUN_ID --timeout SECONDS` (omit timeout to block indefinitely).
 Never use `pgrep -f` wait loops, including in writer/seat briefs: they can match

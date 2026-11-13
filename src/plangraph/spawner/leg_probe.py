@@ -14,12 +14,10 @@ from plangraph.routing_support import leg_state
 from plangraph.routing_errors import ParameterRefused
 
 PROMPT = 'Create a file ok.txt containing the single word ok, then git add it and git commit -m probe. Do nothing else.'
-
 #: The probe repo and its child commit ignore the operator's global/system git
 #: config (M11): a host commit.gpgsign=true or global core.hooksPath must never
 #: turn probe infrastructure into a recorded leg failure.
 GIT_ISOLATION = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'}
-
 #: GIT_DIR and kin name the repo every ``git`` resolves regardless of the
 #: process cwd. Inherited from a caller inside a lane worktree or a git hook,
 #: they redirected the writer's ``git add/commit`` -- and the probe's own git

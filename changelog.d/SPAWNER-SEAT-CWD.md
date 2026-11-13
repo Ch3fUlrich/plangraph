@@ -1,0 +1,1 @@
+- Add validated spawn `--cwd` and card `cwd` checkout selection so review completion records bind to that checkout's HEAD; foreign verdict `--head` values remain refused.

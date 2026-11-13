@@ -14,7 +14,6 @@ from .runner import spawn_service as SpawnService, redact_output
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
 from plangraph.routing_support import background_process_options
 
-
 def _drain_chunks(chunks, write, observe=lambda size: None):
     """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""
     from .env_redact import redact_env_values
@@ -117,6 +116,7 @@ def main(argv=None):
         if verb == 'spawn':
             p.add_argument('prompt', nargs='?')
             p.add_argument('--prompt-file')
+            p.add_argument('--cwd', help='absolute path to an existing git checkout')
             p.add_argument('--review-scope', choices=['per-fixer', 'batch'])
             p.add_argument('--model')
             p.add_argument('--leg')
@@ -190,9 +190,10 @@ def main(argv=None):
                 exc = SpawnRefused('spawn by card; card required')
                 service.save_refusal(exc, args.role)
                 raise exc
-            from .prompt_input import resolve_prompt
+            from .prompt_input import resolve_prompt, resolve_cwd
             try:
                 prompt = resolve_prompt(args.prompt, args.prompt_file)
+                cwd = resolve_cwd(args.cwd, args.card)
                 from .prompt_guard import admit_prompt
                 if args.role == 'implement': admit_prompt(prompt, SpawnRefused)
             except SpawnRefused as exc:
@@ -200,7 +201,7 @@ def main(argv=None):
                 raise
             payload = dict(card=args.card, prompt=prompt, role=args.role,
                 writer_families=args.writer_family, review_of=args.review_of, model=args.model,
-                review_scope=args.review_scope, run_worktree=args.run_worktree,
+                review_scope=args.review_scope, run_worktree=args.run_worktree, cwd=cwd,
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
                 no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
             from plangraph.settings import admit_review_scope
@@ -394,7 +395,6 @@ raise SystemExit(code)
     except (ValueError, KeyError, OSError, SpawnRefused) as exc:
         print(((f'{args.run_id}: ' if hasattr(args, 'run_id') else '') + type(exc).__name__) if isinstance(exc, PermissionError) else str(exc), file=sys.stderr)
         return 3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1
-
 
 if __name__ == '__main__':
     raise SystemExit(main())
