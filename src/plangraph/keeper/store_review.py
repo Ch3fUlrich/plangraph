@@ -113,10 +113,9 @@ class ReviewMixin:
             pass
 
     def _waiver_active(self, item):
-        """D-217 hook: whether a router waiver is recorded for this epoch."""
-        # The same truthiness question ``digest`` asks, so an item can never be
-        # "waived" to one of them and not the other.
-        return bool(item.get("review_waiver"))
+        """D-217 hook: only a canonical D-id may loosen either review gate."""
+        waiver = item.get("review_waiver")
+        return isinstance(waiver, str) and re.fullmatch(r"D-[0-9]+", waiver) is not None
 
     def _epoch_change_streak(self, item):
         """Trailing ``changes_requested`` events with no pass since, this epoch.
@@ -249,10 +248,7 @@ class ReviewMixin:
                 if auth.norm_family(principal.family) == first_family:
                     raise Refused("same_family",
                                   "second reviewer shares a family")
-            waiver = fresh.get("review_waiver")
-            waived = (tier == "high" and self._waiver_active(fresh)
-                      and isinstance(waiver, str)
-                      and re.fullmatch(r"D-[0-9]+", waiver) is not None)
+            waived = tier == "high" and self._waiver_active(fresh)
             non_anthropic = self._card_requires_non_anthropic_seats(fresh)
             need = 1 if waived and not non_anthropic else 2
             passed = len(prior) + 1

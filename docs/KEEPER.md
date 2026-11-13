@@ -307,9 +307,9 @@ state and epoch, which are re-checked in the lock (`conflict` otherwise), and `c
 input (a git/CI/HTTP answer, a decisions file edited after the pre-lock read) is only as fresh as the pre-lock call. Evidence for an item an earlier op of the same
 batch creates or moves is verified in the lock instead.
 
-Waiver rule (D-217 / X6c3): `waive_second_family(key, D-NNN)` succeeds only if the D-NNN row in the decisions file contains `Waives: <project:ID>`
+Waiver rule (D-217 / X6c3): `waive_second_family(key, D-NNN)` requires an exact ASCII `D-[0-9]+` identifier (`validation` otherwise) and succeeds only if that row in the decisions file contains `Waives: <project:ID>`
 for exactly that key (whole token; a row may name several keys; code blocks do not count). `Waives:` and `Closes:` tokens count only inside the DECISION cell (3rd column) of their D-row (D-276). A forged D-id still needs the decision verifier, so the
-residual risk above applies to waivers too: a raw-SQL writer who can edit DECISIONS.md can name any key.
+residual risk above applies to waivers too: a raw-SQL writer who can edit DECISIONS.md can name any key. Malformed stored waiver values waive neither the second-family gate nor the verdict count.
 
 Waiver re-check window (S1-2, documented residual): the `Waives:` row is verified before the write lock is taken, as the evidence verifiers are, because
 the decisions-file read is pre-lock I/O. If DECISIONS.md is edited between that read and the write, the waiver is recorded against the earlier text.

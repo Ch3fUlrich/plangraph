@@ -199,13 +199,18 @@ def test_waiver_disallowed_tier_stays_refused(w, tier):
         assert _count(w, KEY, "review_verdict") == 0
 
 
-@pytest.mark.parametrize("waiver", ["waived", "D-", "D-217-extra", "D-217\n"])
+@pytest.mark.parametrize("waiver", ["waived", "D-", "D-217-extra", "D-217\n", "d-217", " D-217"])
 def test_waiver_without_d_id_does_not_replace_verdict(w, waiver):
     to_in_review(w, KEY)
     # A malformed legacy/cache value is not a decision-backed single-seat waiver.
     w.conn.execute("UPDATE items SET review_waiver=? WHERE key=?", (waiver, KEY))
     result = w.store.verdict(w.p("reviewer"), KEY, True, "not a D-id")
     assert result == {"key": KEY, "state": "in_review", "reviews_passed": 1}
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(_same_family_reviewer(w), KEY, True, "still same family")
+    assert exc.value.code == "same_family"
+    assert w.store._item(KEY)["state"] == "in_review"
+    assert _count(w, KEY, "review_verdict") == 1
     assert _count(w, KEY, "review_passed") == 0
 
 

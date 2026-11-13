@@ -232,8 +232,8 @@ class WaiverMixin:
             raise Refused("bad_state",
                           f"{key} is review_tier={item.get('review_tier')}:"
                           " no second family to waive")
-        if not isinstance(decision_id, str) or not decision_id:
-            raise Refused("validation", "decision_id is required")
+        if not isinstance(decision_id, str) or not re.fullmatch(r"D-[0-9]+", decision_id):
+            raise Refused("validation", "decision_id must look like D-NNN")
         # The slow decision lookup runs before the write lock, exactly as
         # ``add_evidence_router`` verifies its evidence.
         result = self._verify_evidence(item, "decision", {"id": decision_id}, now)
