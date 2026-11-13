@@ -221,12 +221,15 @@ def test_add_host_keys_receives_needs_gateway_for_mimo_without_root(tmp_path, mo
 
 @pytest.mark.parametrize('source', ['parent', 'file'])
 def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch, capsys, caplog, source):
-    """(i) Router D-2801 (a): parent PLANGRAPH_OMNIROUTE_KEY reaches child env without leaking.
+    """(i) D-5755: parent/file PLANGRAPH_OMNIROUTE_KEY reaches child env without leaking.
 
-    The child prints the sentinel to stdout and stderr so redact_env_values is
-    proven to scrub it from the recorded tails, not merely absent by luck.
+    The child prints the sentinel on both streams; recorded tails must scrub it.
     """
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_OMNIROUTE_KEY_FILE', str(tmp_path / 'absent.key'))
     sentinel = "SENTINEL-PARENT-ENV-KEY-999"
+    assert os.environ['HOME'] == str(tmp_path)
+    assert os.environ.get('PLANGRAPH_OMNIROUTE_KEY_FILE') == str(tmp_path / 'absent.key')
     if source == 'file':
         key_file = tmp_path / 'client.key'; key_file.write_text(sentinel + '\r\n'); key_file.chmod(0o600)
         monkeypatch.setenv('PLANGRAPH_OMNIROUTE_KEY_FILE', str(key_file))
@@ -359,11 +362,8 @@ def test_add_host_keys_not_called_on_refusal(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('missing', ['url', 'key'])
 def test_unresolved_refusal_falls_through_to_next_leg(tmp_path, monkeypatch, missing):
-    """F4: no-URL refusal maps to not_served_on_host and falls through (I6).
-
-    End to end through the real service path (spawn_service dispatch loop,
-    real runner.spawn, mocked process factory): leg 1 is gateway-keyed with
-    no base URL anywhere, leg 2 launches and completes.
+    """F4: no URL/key maps to not_served_on_host/gateway_key_absent and falls through.
+    Real service/runner, mocked factory: leg 1 lacks a URL or key; leg 2 completes (I6).
     """
     monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path / "absent-root"))
     expected = REFUSAL_UNRESOLVED if missing == 'url' else 'gateway_key_absent'

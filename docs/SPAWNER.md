@@ -1,11 +1,12 @@
 # Plangraph Spawner & Model Routing Architecture
 
 Gateway children use `PLANGRAPH_OMNIROUTE_KEY`, resolved at spawn time from
-`~/.config/plangraph/omniroute-client.key` (client key only, mode `0600` recommended);
+`~/.config/plangraph/omniroute-client.key` (client key only, mode `0600` expected);
 `PLANGRAPH_OMNIROUTE_KEY_FILE` overrides that path. Only owner-readable regular
-files qualify; group- or world-writable files are refused. Group/other read bits
-are accepted. Missing, empty or unreadable files also skip with `gateway_key_absent`,
-without logging key values. Zen keeps `<AUTOOS_ROOT>/configuration/api-keys.yml`.
+files qualify; group- or world-writable files are refused, as are files with
+any group/other permission bits. Missing, empty or unreadable files also skip
+with `gateway_key_absent`, without logging key values.
+Zen's separate flat file is `~/.config/autoos/api_keys.conf`.
 
 ### QUOTA-PAUSE-GATE
 

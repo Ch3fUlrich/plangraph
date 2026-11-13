@@ -1,8 +1,4 @@
-"""Host key handoff to child runs (plangraph:MODEL-ROUTE-SPAWN, D-2759).
-
-Hermetic: real tmp_path client-key bytes and explicitly isolated legacy helper
-contracts. Production gateway tests never import the legacy helper.
-"""
+"""Hermetic host key handoff (D-2759): production reader with file-read faults."""
 import pytest
 from pathlib import Path
 
@@ -19,6 +15,7 @@ GATEWAY_FAKE = 'fake-gateway-key-AAA111'
 ZEN_FAKE = 'fake-zen-key-BBB222'
 PARENT_GATEWAY = 'parent-env-gateway-key-333'
 PARENT_ZEN = 'parent-env-zen-key-444'
+PRODUCTION_GATEWAY_READER = host_keys._gateway_key
 
 GATEWAY_STUB = 'def resolve_client_key(env, keys_file):\n    assert isinstance(env, dict) and keys_file.name == "api-keys.yml"\n    return %r\n' % GATEWAY_FAKE
 ZEN_STUB = 'def read_keys(path):\n    return {\"zen\": %r}\n' % ZEN_FAKE
@@ -31,6 +28,9 @@ def _fake_root(tmp_path):
     (root / 'configuration').mkdir()
     # Fake keys file; the stub helpers never read it and no real key exists here.
     (root / 'configuration' / 'api-keys.yml').write_text('omniroute_server: fake-not-a-key\nzen: fake-not-a-key\n')
+    flat = tmp_path / '.config/autoos/api_keys.conf'
+    flat.parent.mkdir(parents=True, exist_ok=True)
+    flat.write_text('zen: fake-not-a-key\n')
     (root / 'tools' / 'autoos_gateway_key.py').write_text(GATEWAY_STUB)
     (root / 'tools' / 'keys_file.py').write_text(ZEN_STUB)
     return root
@@ -48,19 +48,17 @@ def fake_autoos(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def legacy_gateway(fake_autoos, monkeypatch):
-    """Keep pre-file helper contracts separate from production gateway reads."""
-    def resolve(env):
-        try:
-            path = host_keys._keys_path(env)
-            if not path.is_file():
-                return None
-            helper = host_keys._load_helper(path.parent.parent, 'autoos_gateway_key')
-            key = helper.resolve_client_key(dict(env), path)
-            return key if isinstance(key, str) and key.strip() else None
-        except (Exception, SystemExit):
-            return None
-    monkeypatch.setattr(host_keys, '_gateway_key', resolve)
+def gateway_read_fault(fake_autoos, monkeypatch):
+    """Inject stub faults at file read only; production handles all failures."""
+    original = Path.read_text
+    def fault_read(path, *args, **kwargs):
+        if path != fake_autoos / 'client.key':
+            return original(path, *args, **kwargs)
+        stub = fake_autoos / 'tools/autoos_gateway_key.py'
+        namespace = {}
+        exec(compile(original(stub), str(stub), 'exec'), namespace)
+        return namespace['resolve_client_key']({}, fake_autoos / 'configuration/api-keys.yml')
+    monkeypatch.setattr(Path, 'read_text', fault_read)
 
 
 @pytest.fixture(autouse=True)
@@ -98,7 +96,8 @@ def test_no_gateway_key_when_not_needed(fake_autoos):
 
 def test_real_zen_keys_path_unchanged(tmp_path, monkeypatch):
     root = _fake_root(tmp_path)
-    path = root / 'configuration/api-keys.yml'
+    path = tmp_path / '.config/autoos/api_keys.conf'
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('zen: ' + ZEN_FAKE + '\n')
     (root / 'tools/keys_file.py').write_text('import yaml\ndef read_keys(path):\n    return yaml.safe_load(path.read_text())\n')
     monkeypatch.setenv('AUTOOS_ROOT', str(root))
@@ -106,6 +105,18 @@ def test_real_zen_keys_path_unchanged(tmp_path, monkeypatch):
     env = {}
     add_host_keys(env, 'opencode/glm-5.3-flash-free', needs_gateway=False)
     assert env == {ZEN_KEY_ENV: ZEN_FAKE}
+
+
+def test_gateway_failure_cases_use_production_reader(gateway_read_fault):
+    assert host_keys._gateway_key is PRODUCTION_GATEWAY_READER
+
+
+def test_legacy_gateway_helper_contract_is_not_a_production_source(fake_autoos):
+    helper = host_keys._load_helper(fake_autoos, 'autoos_gateway_key')
+    assert helper.resolve_client_key({}, fake_autoos / 'configuration/api-keys.yml') == GATEWAY_FAKE
+    _write_helper(fake_autoos, 'autoos_gateway_key', RAISING_STUB)
+    (fake_autoos / 'configuration/api-keys.yml').unlink()
+    assert host_keys._gateway_key({}) == GATEWAY_FAKE
 
 
 def test_missing_root_leaves_env_unchanged(tmp_path, monkeypatch):
@@ -116,7 +127,7 @@ def test_missing_root_leaves_env_unchanged(tmp_path, monkeypatch):
     assert redaction_env({'PATH': '/bin'}) == {'PATH': '/bin'}
 
 
-def test_helper_raising_at_import_gives_no_key(fake_autoos, legacy_gateway):
+def test_helper_raising_at_import_gives_no_key(fake_autoos, gateway_read_fault):
     root = fake_autoos
     (root / 'tools' / 'autoos_gateway_key.py').write_text(RAISING_STUB)
     (root / 'tools' / 'keys_file.py').write_text(RAISING_STUB)
@@ -223,7 +234,7 @@ class _PartiallyBrokenBase:
     def __getitem__(self, key):
         if key == 'BROKEN':
             raise RuntimeError('broken getitem')
-        return {'PATH': '/bin', 'HOME': '/home/x'}[key]
+        return {'PATH': '/bin', 'HOME': str(Path.home())}[key]
 
 
 class _ExplodingBase(_PartiallyBrokenBase):
@@ -235,7 +246,8 @@ class _ExplodingBase(_PartiallyBrokenBase):
 
 def _assert_only_other_helper_resolves(helper_name):
     env = {}
-    add_host_keys(env, 'opencode/glm-5.3-flash-free', needs_gateway=True)
+    reason = add_host_keys(env, 'opencode/glm-5.3-flash-free', needs_gateway=True)
+    assert reason == (host_keys.GATEWAY_KEY_ABSENT if helper_name == 'autoos_gateway_key' else None)
     red = redaction_env({'PATH': '/bin'})
     if helper_name == 'autoos_gateway_key':
         assert env == {ZEN_KEY_ENV: ZEN_FAKE}
@@ -251,7 +263,7 @@ def _assert_only_other_helper_resolves(helper_name):
     pytest.param('autoos_gateway_key', GATEWAY_ATTR_CALL_STUB, id='gateway-attribute'),
     pytest.param('keys_file', ZEN_ATTR_CALL_STUB, id='zen-attribute'),
 ])
-def test_call_time_helper_raise_means_no_key(fake_autoos, legacy_gateway, helper_name, stub):
+def test_call_time_helper_raise_means_no_key(fake_autoos, gateway_read_fault, helper_name, stub):
     # H1: ANY Exception from the helper call (resolve_client_key, read_keys)
     # means None; the other helper is unharmed and nothing raises.
     _write_helper(fake_autoos, helper_name, stub)
@@ -262,7 +274,7 @@ def test_call_time_helper_raise_means_no_key(fake_autoos, legacy_gateway, helper
     pytest.param('autoos_gateway_key', GATEWAY_EXIT_CALL_STUB, id='gateway'),
     pytest.param('keys_file', ZEN_EXIT_CALL_STUB, id='zen'),
 ])
-def test_call_time_sys_exit_means_no_key(fake_autoos, legacy_gateway, helper_name, stub):
+def test_call_time_sys_exit_means_no_key(fake_autoos, gateway_read_fault, helper_name, stub):
     # H5: a helper calling sys.exit() at call time must not crash the
     # supervisor either -- same pattern as the import-time SystemExit gap.
     _write_helper(fake_autoos, helper_name, stub)
@@ -270,20 +282,20 @@ def test_call_time_sys_exit_means_no_key(fake_autoos, legacy_gateway, helper_nam
 
 
 @pytest.mark.parametrize('helper_name', ['autoos_gateway_key', 'keys_file'])
-def test_sys_exit_at_import_means_no_key(fake_autoos, legacy_gateway, helper_name):
+def test_sys_exit_at_import_means_no_key(fake_autoos, gateway_read_fault, helper_name):
     # H2: Exception or SystemExit at import -> None.
     _write_helper(fake_autoos, helper_name, EXIT_IMPORT_STUB)
     _assert_only_other_helper_resolves(helper_name)
 
 
-def test_keyboard_interrupt_at_import_propagates(fake_autoos, legacy_gateway):
+def test_keyboard_interrupt_at_import_propagates(fake_autoos, gateway_read_fault):
     # H2 names the exception NOT to swallow: a Ctrl-C must still interrupt.
     _write_helper(fake_autoos, 'autoos_gateway_key', KEYBOARD_INTERRUPT_IMPORT_STUB)
     with pytest.raises(KeyboardInterrupt):
         add_host_keys({}, 'mimo/mimo-v2.6-pro', needs_gateway=True)
 
 
-def test_read_keys_returning_non_dict_means_no_key(fake_autoos, legacy_gateway):
+def test_read_keys_returning_non_dict_means_no_key(fake_autoos, gateway_read_fault):
     # H1: .get on a non-dict must not escape.
     _write_helper(fake_autoos, 'keys_file', ZEN_LIST_STUB)
     _assert_only_other_helper_resolves('keys_file')
@@ -293,7 +305,7 @@ def test_read_keys_returning_non_dict_means_no_key(fake_autoos, legacy_gateway):
     pytest.param(GATEWAY_NONSTR_STUB, ZEN_NONSTR_STUB, id='non-str'),
     pytest.param(GATEWAY_BLANK_STUB, ZEN_BLANK_STUB, id='blank'),
 ])
-def test_non_str_or_blank_key_means_no_key(fake_autoos, legacy_gateway, gateway_stub, zen_stub):
+def test_non_str_or_blank_key_means_no_key(fake_autoos, gateway_read_fault, gateway_stub, zen_stub):
     # H3: a non-str or blank key -> None, for both lookups.
     _write_helper(fake_autoos, 'autoos_gateway_key', gateway_stub)
     _write_helper(fake_autoos, 'keys_file', zen_stub)
@@ -304,13 +316,13 @@ def test_non_str_or_blank_key_means_no_key(fake_autoos, legacy_gateway, gateway_
 
 
 @pytest.mark.parametrize('helper_name', ['autoos_gateway_key', 'keys_file'])
-def test_absent_helper_file_means_no_key(fake_autoos, legacy_gateway, helper_name):
+def test_absent_helper_file_means_no_key(fake_autoos, gateway_read_fault, helper_name):
     # H4: a missing helper under an existing root -> no key, nothing raises.
     (fake_autoos / 'tools' / (helper_name + '.py')).unlink()
     _assert_only_other_helper_resolves(helper_name)
 
 
-def test_absent_helper_files_leave_env_unchanged(fake_autoos, legacy_gateway):
+def test_absent_helper_files_leave_env_unchanged(fake_autoos, gateway_read_fault):
     # H4: both helpers absent -> no key at all, env unchanged.
     (fake_autoos / 'tools' / 'autoos_gateway_key.py').unlink()
     (fake_autoos / 'tools' / 'keys_file.py').unlink()
@@ -320,9 +332,11 @@ def test_absent_helper_files_leave_env_unchanged(fake_autoos, legacy_gateway):
     assert redaction_env({'PATH': '/bin'}) == {'PATH': '/bin'}
 
 
-def test_absent_keys_file_means_no_key(fake_autoos, legacy_gateway):
+def test_absent_keys_file_means_no_key(fake_autoos, gateway_read_fault):
     # H4: the keys file absent with the helpers present -> no key, env unchanged.
     (fake_autoos / 'configuration' / 'api-keys.yml').unlink()
+    (fake_autoos / 'client.key').unlink()
+    host_keys._keys_path({}).unlink()
     assert (fake_autoos / 'tools/autoos_gateway_key.py').is_file()
     assert (fake_autoos / 'tools/keys_file.py').is_file()
     env = {}
@@ -331,18 +345,18 @@ def test_absent_keys_file_means_no_key(fake_autoos, legacy_gateway):
     assert redaction_env({'PATH': '/bin'}) == {'PATH': '/bin'}
 
 
-def test_failures_never_raise_or_leak_key_values(fake_autoos, legacy_gateway, capsys):
+def test_failures_never_raise_or_leak_key_values(fake_autoos, gateway_read_fault, capsys, caplog):
     # H5: the helpers raise with the fake key in the message; nothing may
     # surface that message in an exception, a log or a print.
     _write_helper(fake_autoos, 'autoos_gateway_key', GATEWAY_LEAK_STUB)
     _write_helper(fake_autoos, 'keys_file', ZEN_LEAK_STUB)
     env = {}
-    add_host_keys(env, 'opencode/glm-5.3-flash-free', needs_gateway=True)
+    assert add_host_keys(env, 'opencode/glm-5.3-flash-free', needs_gateway=True) == host_keys.GATEWAY_KEY_ABSENT
     assert env == {}
     assert redaction_env({'PATH': '/bin'}) == {'PATH': '/bin'}
     captured = capsys.readouterr()
-    assert GATEWAY_FAKE not in captured.out + captured.err
-    assert ZEN_FAKE not in captured.out + captured.err
+    assert GATEWAY_FAKE not in captured.out + captured.err + caplog.text
+    assert ZEN_FAKE not in captured.out + captured.err + caplog.text
 
 
 def test_add_host_keys_never_raises_on_broken_env(fake_autoos):
@@ -362,7 +376,7 @@ def test_redaction_env_keeps_every_name_when_base_copy_raises(fake_autoos):
     # one by one (only the item whose read raises is skipped) and BOTH fake
     # keys are in the result.
     env = redaction_env(_PartiallyBrokenBase())
-    assert env == {'PATH': '/bin', 'HOME': '/home/x',
+    assert env == {'PATH': '/bin', 'HOME': str(Path.home()),
                    GATEWAY_KEY_ENV: GATEWAY_FAKE, ZEN_KEY_ENV: ZEN_FAKE}
     # Nothing enumerable at all: the resolvable keys are still carried.
     assert redaction_env(_ExplodingBase()) == {

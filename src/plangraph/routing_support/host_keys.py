@@ -1,7 +1,7 @@
 """Resolve child credentials at spawn time, never at import.
 
-The gateway uses a plangraph client-key file; Zen keeps the AutoOS keys helper
-and source unchanged. Neither resolver logs, prints, or raises credential values.
+The gateway uses a private plangraph client-key file; Zen uses its separate
+flat keys file. Neither resolver logs, prints, or raises credential values.
 
 Contract: every failure -- a missing file, a helper that raises or exits on
 import or at call time, a non-Mapping keys result, a non-str or blank key --
@@ -29,9 +29,8 @@ _ZEN_FREE_MODEL = re.compile(r"opencode/.+-free")
 
 
 def _keys_path(env):
-    """<root>/configuration/api-keys.yml under the AutoOS root of `env`."""
-    root = env.get("AUTOOS_ROOT") or os.environ.get("AUTOOS_ROOT") or str(Path.home() / "code/AutoOS")
-    return Path(root) / "configuration" / "api-keys.yml"
+    """Zen's flat config file, independent of the gateway client key."""
+    return Path(env.get("HOME") or Path.home()) / ".config/autoos/api_keys.conf"
 
 
 def _load_helper(root, name):
@@ -60,7 +59,7 @@ def _gateway_key(env):
         override = env.get(GATEWAY_KEY_FILE_ENV) or os.environ.get(GATEWAY_KEY_FILE_ENV)
         path = Path(override) if override else Path(env.get("HOME") or Path.home()) / ".config/plangraph/omniroute-client.key"
         mode = path.stat().st_mode
-        if not stat.S_ISREG(mode) or mode & 0o022 or not mode & 0o400:
+        if not stat.S_ISREG(mode) or mode & 0o077 or not mode & 0o400:
             return None
         key = path.read_text(encoding="utf-8").rstrip("\r\n")
         return key if key.strip() else None
@@ -74,7 +73,8 @@ def _zen_key(env):
         keys_path = _keys_path(env)
         if not keys_path.is_file():
             return None
-        helper = _load_helper(keys_path.parent.parent, "keys_file")
+        root = env.get("AUTOOS_ROOT") or os.environ.get("AUTOOS_ROOT")
+        helper = _load_helper(root, "keys_file") if root else None
         read_keys = getattr(helper, "read_keys", None)
         if not callable(read_keys):
             return None
