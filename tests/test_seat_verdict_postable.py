@@ -140,3 +140,189 @@ def test_non_repost_poster_systemexit_propagates(run):
     with pytest.raises(SystemExit):
         sb.apply_backfill(args, {"key": "demo:A", "writer_families": ["deepseek"]},
             {"seat_dir": seat, "head_sha": HEAD_SHA}, poster, {"reasons": []})
+
+"""Bounded late-persistence retries must post only the newly witnessed review."""
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from test_seat_verdict_record import record_dir, HEAD_SHA, REVIEW, seat_record, sv
+from test_seat_record_opencode import event, event_log
+
+
+@pytest.fixture
+def pending_run(tmp_path, monkeypatch):
+    argv = record_dir(tmp_path, "run-" + "1" * 32, item_key="demo:A")
+    argv.remove("--dry-run")
+    argv += ["--url", "unused"]
+    state = SimpleNamespace(argv=argv, seat=Path(argv[argv.index("--seat-dir") + 1]),
+                            calls=[], ticks=0, waits=[], reads=0, clock_reads=0, after_wait=lambda: None)
+    original = sv.evidence_from_record
+    def read(*args, **kwargs):
+        state.reads += 1
+        return original(*args, **kwargs)
+    def send(url, token, payload):
+        assert url == "unused" and token == "dummy"
+        state.calls.append(payload)
+        return 200, "recorded"
+    def advance(seconds):
+        assert not state.calls, "never post the stale tail before persistence"
+        state.waits.append(seconds)
+        state.ticks += seconds
+        state.after_wait()
+    def clock():
+        state.clock_reads += 1
+        return state.ticks
+    def post(wait=2.5):
+        assert sv.main.__kwdefaults__, "bounded retry clock/sleep injection required; no real waits"
+        options = {"clock": clock, "sleep": advance}
+        if wait is not None:
+            options["record_wait"] = wait
+        try:
+            return sv.main(argv, **options)
+        except UnicodeDecodeError as exc:
+            raise AssertionError("torn UTF-8 must retry, not escape the poster") from exc
+    state.post = post
+    monkeypatch.setattr(sv, "evidence_from_record", read)
+    monkeypatch.setattr(sv, "send", send)
+    monkeypatch.setattr(sv.urllib.request, "urlopen", lambda *a, **k: pytest.fail("network forbidden"))
+    return state
+
+
+@pytest.mark.parametrize("field", ["head", "tail", "both", "live"])
+def test_completed_record_reread_until_fields_persist(pending_run, field):
+    path = pending_run.seat / "record.json"
+    complete = json.loads(path.read_text())
+    pending = dict(complete)
+    if field in ("head", "both"):
+        pending["completion"] = {}
+    if field in ("tail", "both", "live"):
+        pending["stdout_tail"] = ""
+    if field == "live":
+        (pending_run.seat / "live.log").write_text(event_log(event("step_start")))
+    path.write_text(json.dumps(pending))
+    def persist():
+        if len(pending_run.waits) == 2:
+            path.write_text(json.dumps(complete))
+            if field == "live":
+                (pending_run.seat / "live.log").write_text(REVIEW)
+    pending_run.after_wait = persist
+    assert pending_run.post() == 0
+    assert pending_run.waits == [1, 1] and pending_run.ticks == 2 and pending_run.reads == 3
+    assert len(pending_run.calls) == 1 and pending_run.calls[0]["ok"] is True
+    assert HEAD_SHA in pending_run.calls[0]["reason"]
+
+
+@pytest.mark.parametrize("settles", [False, True])
+@pytest.mark.parametrize("initial,reason", [
+    *((initial, "stdout_tail accumulates every leg; live.log required")
+      for initial in (None, b"", b" \t\n")),
+    (b"\xe2\x82", "live.log unreadable: UnicodeDecodeError"),
+    *((event_log(event("step_start"), malformed).encode(), "record has no review text (no final text in live.log)")
+      for malformed in ({"type": "step_finish"}, *({"type": "step_finish", "part": part}
+                                                 for part in (None, [], "x", 42)))),
+    *((event_log(event("step_start"), *([] if blank is None else
+       [event("text", text=blank)]), *([] if finish is None else
+        [event("step_finish", reason=finish)])).encode(), "record has no review text (no final text in live.log)")
+       for blank in (None, "", " \t\n") for finish in (None, "stop", "length", "tool-calls"))])
+def test_late_live_log_rereads_without_stale_tail(pending_run, capsys, initial, reason, settles):
+    path, live = pending_run.seat / "record.json", pending_run.seat / "live.log"
+    record = json.loads(path.read_text())
+    assert record["stdout_tail"] == REVIEW
+    if initial is None or not initial.strip():
+        record["attempts"] *= 2  # Only multi-attempt records require a nonempty live.log.
+    path.write_text(json.dumps(record))
+    if initial is not None:
+        live.write_bytes(initial)
+    if settles:
+        pending_run.after_wait = lambda: live.write_text(event_log(event("step_start"),
+            event("text", text="persisted final finding\nVERDICT: FIX"),
+            event("step_finish", reason="stop")))
+    else:
+        try:
+            seat_record.evidence_from_record(pending_run.seat)
+        except ValueError as exc:
+            assert isinstance(exc, getattr(seat_record, "RecordPending", ()))
+        else:
+            pytest.fail("missing live review must be pending, not the stale tail")
+    assert pending_run.post() == (0 if settles else sv.EXIT_REFUSED)
+    assert pending_run.waits == ([1] if settles else [1, 1, 0.5])
+    assert pending_run.ticks == (1 if settles else 2.5) and pending_run.ticks <= 2.5
+    assert pending_run.reads == (2 if settles else 4)
+    captured = capsys.readouterr()
+    if settles:
+        assert len(pending_run.calls) == 1 and pending_run.calls[0]["ok"] is False
+        assert "persisted final finding" in pending_run.calls[0]["reason"] and not captured.err
+    else:
+        assert not pending_run.calls and not captured.out
+        assert captured.err.count("seat_verdict: refused, record:") == 1
+        assert captured.err == f"seat_verdict: refused, record: {reason}\n"
+
+
+def test_deleted_record_mid_wait_refuses_without_full_timeout(pending_run, capsys):
+    path = pending_run.seat / "record.json"
+    record = json.loads(path.read_text())
+    record["completion"] = {}
+    path.write_text(json.dumps(record))
+    pending_run.after_wait = path.unlink
+    assert pending_run.post() == sv.EXIT_REFUSED
+    assert pending_run.waits == [1] and pending_run.ticks == 1 and pending_run.reads == 2
+    captured = capsys.readouterr()
+    assert "record.json unreadable: FileNotFoundError" in captured.err
+    assert captured.err.count("refused") == 1 and not captured.out and not pending_run.calls
+    with pytest.raises(ValueError) as error:
+        seat_record.evidence_from_record(pending_run.seat)
+    assert type(error.value) is ValueError
+
+
+@pytest.mark.parametrize("read_number", [1, 2])
+@pytest.mark.parametrize("failure", ["torn", "unreadable"])
+@pytest.mark.parametrize("settles", [False, True])
+def test_record_read_errors_wait_for_complete_persistence(
+        pending_run, monkeypatch, capsys, read_number, failure, settles):
+    path, read_text, reads = pending_run.seat / "record.json", Path.read_text, []
+    def read(self, *args, **kwargs):
+        if self == path:
+            reads.append(self)
+            if len(reads) == read_number or not settles and len(reads) > read_number:
+                if failure == "unreadable":
+                    raise PermissionError("persistence in progress")
+                return "{"
+        return read_text(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", read)
+    assert pending_run.post(wait=None) == (0 if settles else sv.EXIT_REFUSED)
+    assert pending_run.ticks == (1 if settles else 30)
+    assert pending_run.waits == [1] * (1 if settles else 30)
+    assert len(reads) == read_number + (2 if settles else 30)
+    assert len(pending_run.calls) == (1 if settles else 0)
+    assert capsys.readouterr().err.count("refused") == (0 if settles else 1)
+
+
+def test_record_identity_rechecked_after_wait(pending_run, capsys):
+    path = pending_run.seat / "record.json"
+    record = json.loads(path.read_text())
+    record["completion"] = {}
+    path.write_text(json.dumps(record))
+    def persist():
+        record.update(item_key="demo:B", completion={"head_sha": HEAD_SHA})
+        path.write_text(json.dumps(record))
+    pending_run.after_wait = persist
+    assert pending_run.post() == sv.EXIT_REFUSED
+    assert pending_run.waits == [1] and pending_run.ticks == 1 and not pending_run.calls
+    assert "item_key does not match --key" in capsys.readouterr().err
+
+
+def test_invalid_fields_refuse_without_waiting(pending_run, capsys):
+    path = pending_run.seat / "record.json"
+    record = json.loads(path.read_text())
+    record["completion"] = {"head_sha": HEAD_SHA + "\n"}
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="completion.head_sha") as error:
+        seat_record.evidence_from_record(pending_run.seat)
+    assert type(error.value) is ValueError  # Invalid, not pending; strict fullmatch is intentional.
+    assert pending_run.post() == sv.EXIT_REFUSED
+    assert not pending_run.waits and pending_run.ticks == 0 and not pending_run.calls
+    assert pending_run.reads == 1 and pending_run.clock_reads == 2  # Deadline set, one terminal read, no retry.
+    assert "completion.head_sha" in capsys.readouterr().err

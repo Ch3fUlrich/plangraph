@@ -31,12 +31,13 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 from seat_backfill import apply_backfill, repost_transport, _SEND_STATE
-from seat_record import evidence_from_record
+from seat_record import evidence_from_record, RecordPending
 ROUTE = "/v1/verdict"
 TIMEOUT = 30
 EXIT_IO, EXIT_REFUSED, EXIT_NO_VERDICT, EXIT_PASS_REFUSED = 1, 2, 3, 4
@@ -206,7 +207,7 @@ def send(url, token, payload):
         return exc.code, exc.read(65536).decode("utf-8", "replace")
 
 
-def read_record_identity(seat_dir):
+def read_record_identity(seat_dir, key=None):
     """Read binding identity independently of evidence; absent fields are legacy."""
     record_path = seat_dir / "record.json"
     try:
@@ -215,14 +216,16 @@ def read_record_identity(seat_dir):
         if record_path.is_symlink():
             raise ValueError("cannot read record identity") from exc
         return {}
-    except (OSError, ValueError) as exc:
-        raise ValueError("cannot read record identity") from exc
+    except (OSError, ValueError, RecursionError) as exc:
+        raise RecordPending("cannot read record identity") from exc
     if not isinstance(record, dict):
         raise ValueError("cannot read record identity")
+    if key is not None and "item_key" in record and record["item_key"] != key:
+        raise ValueError("record item_key does not match --key")
     return {"item_key": record["item_key"]} if "item_key" in record else {}
 
 
-def main(argv=None):
+def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
     send_state = _SEND_STATE.get()
     if send_state is not None: send_state["started"] = False
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -260,22 +263,29 @@ def main(argv=None):
     if any(v is None for v in (args.key, args.seat_dir, args.writer_family, args.token_dir)):
         ap.error("single-record mode requires --key, --seat-dir, --writer-family, --token-dir")
     writer_families = parse_writer_families(args.writer_family)
-    try:
-        record_identity = read_record_identity(args.seat_dir)
-    except ValueError as exc:
-        print(f"seat_verdict: refused, {exc}", file=sys.stderr)
-        return EXIT_REFUSED
-    if "item_key" in record_identity and record_identity["item_key"] != args.key:
-        print("seat_verdict: refused, record item_key does not match --key", file=sys.stderr)
-        return EXIT_REFUSED
     from_record = not (args.seat_dir / "evidence.json").exists() and (args.seat_dir / "record.json").exists()
     if from_record:
-        try:
-            evidence, text = evidence_from_record(args.seat_dir, cli_writer_families=writer_families)
-        except ValueError as exc:
-            print(f"seat_verdict: refused, record: {exc}", file=sys.stderr)
-            return EXIT_REFUSED
+        deadline = clock() + record_wait
+        while True:
+            try:
+                read_record_identity(args.seat_dir, args.key)
+                evidence, text = evidence_from_record(args.seat_dir, cli_writer_families=writer_families)
+                break
+            except ValueError as exc:
+                # Windows write/replace lock contention can raise PermissionError;
+                # allow persistence to finish, but never wait past this deadline.
+                remaining = deadline - clock()
+                if isinstance(exc, RecordPending) and remaining > 0:
+                    sleep(min(1, remaining))
+                    continue
+                print(f"seat_verdict: refused, record: {exc}", file=sys.stderr)
+                return EXIT_REFUSED
     else:
+        try:
+            read_record_identity(args.seat_dir, args.key)
+        except ValueError as exc:
+            print(f"seat_verdict: refused, {exc}", file=sys.stderr)
+            return EXIT_REFUSED
         try:
             evidence = json.loads((args.seat_dir / "evidence.json").read_text("utf-8"))
             text = (args.seat_dir / "review.txt").read_text("utf-8")
