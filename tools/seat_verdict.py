@@ -36,7 +36,7 @@ import urllib.request
 from pathlib import Path
 
 from seat_backfill import apply_backfill
-from seat_record import evidence_from_record
+from seat_record import evidence_from_record, guard_toolless_reply
 ROUTE = "/v1/verdict"
 TIMEOUT = 30
 EXIT_IO, EXIT_REFUSED, EXIT_NO_VERDICT, EXIT_PASS_REFUSED = 1, 2, 3, 4
@@ -279,6 +279,11 @@ def main(argv=None):
         if not isinstance(evidence, dict):
             print("seat_verdict: evidence.json is not an object", file=sys.stderr)
             return EXIT_IO
+        try:
+            guard_toolless_reply(args.seat_dir, text)
+        except ValueError as exc:
+            print(f"seat_verdict: refused, {exc}", file=sys.stderr)
+            return EXIT_REFUSED
     for field in ("item_key", "key"):
         if field in evidence and evidence[field] != args.key:
             source = "record" if from_record else "evidence"
