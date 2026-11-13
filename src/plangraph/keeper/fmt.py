@@ -47,6 +47,10 @@ def ready_context_rows(rows, ub) -> str:
             line += " | " + ",".join(ctx["linked_decisions"][-3:])
         if ctx.get("stale"):
             line += " | STALE: " + ctx["stale"]
+        if row.get("prs"):
+            line += " | in progress PR " + ",".join(map(str, row["prs"]))
+        if row.get("reconcile_reason"):
+            line += " | needs-reconcile: " + row["reconcile_reason"]
         out.append(line)
     return "\n".join(out)
 

@@ -1,0 +1,2 @@
+- Ready excludes merged/outdated work, explains needs-reconcile and open-PR progress, and shares a cached Rust repository index with claim for remote default refs.
+- Use that index for every configured default ref, check candidates beyond the display limit, serialize concurrent refreshes, and reject malformed, shallow or over-budget index results.

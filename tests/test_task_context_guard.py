@@ -9,6 +9,7 @@ real throw-away repository in ``tmp_path``; the decisions log is a temp file.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 
 import pytest
@@ -21,8 +22,10 @@ from plangraph.keeper.evidence_git import GitAdapter
 
 
 def _git(repo, *args):
+    env = {k: v for k, v in os.environ.items() if k not in (
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE") and not k.startswith("GIT_CONFIG")}
     return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True,
-                          text=True).stdout.strip()
+                          text=True, env=env).stdout.strip()
 
 
 def _commit(repo, name, message):
@@ -52,7 +55,8 @@ def decisions(tmp_path):
 
 
 @pytest.fixture
-def w(tmp_path, repo, decisions):
+def w(tmp_path, repo, decisions, monkeypatch):
+    monkeypatch.setenv("PG_KEEPER_TRUTH_LOCAL", "1")
     world = World(tmp_path)
     world.store.ctx = {"git": GitAdapter({"demo": {"path": str(repo), "ref": "main"}}),
                        "decisions": DecisionsAdapter(decisions)}
@@ -239,15 +243,16 @@ def test_claim_with_a_cancelled_dep_names_the_dep_and_reason(w):
 
 
 # ----------------------------------------------------------------- ready
-def test_ready_flags_merged_items_and_sorts_them_last(w, repo):
+def test_ready_excludes_merged_items_and_explains_reconciliation(w, repo):
     keys = seed(w, [("A", []), ("B", [])])
     w.store.set_priority(w.p("router"), keys[0], 5)
     _merge_lane(repo, keys[0])
     text = w.store.ready(w.p("reader"), project="demo")
     lines = text.splitlines()
     assert lines[0].startswith("demo:B |")
-    assert lines[1].startswith("demo:A |") and "STALE: already merged" in lines[1]
-    assert len(lines) == 2   # one line per item, no footer
+    assert len(lines) == 1
+    dropped = w.store.ready(w.p("reader"), needs_reconcile=True)
+    assert dropped.startswith("demo:A |") and "already merged" in dropped
 
 
 def test_ready_flags_untouched_items_and_superseded_premises(w, decisions):

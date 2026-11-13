@@ -1,5 +1,7 @@
 # Repository mirrors (REPO-MIRROR slice 1)
 
+Keeper ready/claim repository indexing is documented in [Repository truth](keeper/repository-truth.md).
+
 `pg-ctx::mirror::Mirror::from_repos(config, root)` reads `repos.json` as a JSON
 object, e.g. `{"demo":"https://example.invalid/demo.git"}`. Names start with an
 ASCII letter/digit and contain only letters/digits, `.`, `_`, `-`; use absolute

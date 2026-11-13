@@ -28,6 +28,10 @@ from __future__ import annotations
 
 import bisect
 import json
+import os
+import subprocess
+import time
+from contextlib import nullcontext
 
 from .. import views
 from . import context_sources as src
@@ -168,6 +172,28 @@ class ContextMixin:
 
     def _work(self, item, fetch):
         gitad = self._adapter("git")
+        if gitad is not None and os.environ.get("PG_KEEPER_TRUTH_LOCAL") != "1":
+            with getattr(gitad, "_fetch_lock", nullcontext()):
+                repo, ref = src._repo_ref(gitad, item["project"])
+                cache = getattr(self, "_repository_truth", {})
+                stamp, data = cache.get((repo, ref), (float("-inf"), None))
+                if time.monotonic() - stamp >= 60:
+                    try:
+                        result = subprocess.run(
+                            [os.environ.get("PG_KEEPER_TRUTH_BIN", "pg-keeper-truth"), "index", repo, ref],
+                            capture_output=True, text=True, timeout=300, check=True)
+                        data = json.loads(result.stdout)["items"]
+                        if not isinstance(data, dict) or any(not isinstance(w, dict) or any(
+                                not isinstance(w.get(f, []), list) for f in ("commits", "lanes", "prs")) for w in data.values()):
+                            raise ValueError("invalid repository index")
+                    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+                        data = None
+                    cache[(repo, ref)] = (time.monotonic(), data)
+                    self._repository_truth = cache
+                if data is None:
+                    return {"commits": None, "lanes": None, "prs": None, "unknown": True}
+                full, bare = data.get(item["key"], {}), data.get(item["id"], {})
+                return {name: full.get(name, []) + bare.get(name, []) for name in ("commits", "lanes", "prs")}
         return {"commits": src.plan_item_commits(gitad, item["project"], item["key"],
                                                  fetch=fetch),
                 "lanes": src.open_lanes(gitad, item["project"], item["key"])}
@@ -245,31 +271,33 @@ class ContextMixin:
         return ensure_cap(brief)
 
     # -------------------------------------------------------------- ready
-    def _ready_items(self, project=None, n=10, owner=None, agent=False):
-        """``views.ready`` rows (copies) with ``context``; stale rows sort last.
-
-        The git check runs on the first :data:`READY_GIT_LIMIT` rows of the
-        whole ready list (after a first stale sort on the keeper-only facts)
-        BEFORE the cut to *n*, so a merged row cannot crowd out a fresh one.
-        """
+    def _ready_items(self, project=None, n=10, owner=None, agent=False,
+                     needs_reconcile=False, in_progress=False):
+        """Partition every candidate using the same repository facts as claim."""
         items = self._all_items()
         index = {it["key"]: it for it in items}
         rows = [dict(row) for row in
                 views.ready(items, project=project, owner=owner, agent=agent)]
-        inputs, activity = self._inputs(index), self._last_activity_map()
+        inputs, activity = self._inputs(index, fresh=True), self._last_activity_map()
+        selected = []
         for row in rows:
-            row["context"] = self._task_context(row, index, inputs=inputs,
-                                                activity=activity, git=False)
-        rows.sort(key=lambda r: r["context"]["stale"] is not None)  # stable
-        for row in rows[:READY_GIT_LIMIT]:
-            ctx = row["context"]
-            ctx["work_exists"] = self._work(row, fetch=False)
-            ctx["stale"] = self._stale_reason(row, ctx)
-        rows.sort(key=lambda r: r["context"]["stale"] is not None)
-        return rows if n is None else rows[:max(0, int(n))]
+            ctx = self._task_context(row, index, inputs=inputs, activity=activity, fetch=True)
+            row["context"] = ctx
+            work = ctx["work_exists"]
+            row["prs"] = work.get("prs") or []
+            reasons = self._claim_facts(ctx)
+            if work.get("unknown"):
+                reasons.append("repository index unavailable")
+            row["reconcile_reason"] = " | ".join(reasons) or None
+            bucket = "in_progress" if row["prs"] else "reconcile" if reasons else "ready"
+            row["repository_status"] = bucket
+            wanted = "reconcile" if needs_reconcile else "in_progress" if in_progress else "ready"
+            if bucket == wanted:
+                selected.append(row)
+        return selected if n is None else selected[:max(0, int(n))]
 
-    def _ready_text(self, project=None, n=10, owner=None, agent=False):
-        rows = self._ready_items(project=project, n=n, owner=owner, agent=agent)
+    def _ready_text(self, project=None, n=10, owner=None, agent=False, **filters):
+        rows = self._ready_items(project=project, n=n, owner=owner, agent=agent, **filters)
         return ready_context_rows(rows, views.unblocks(self._all_items()))
 
     # -------------------------------------------------------------- claim
@@ -296,6 +324,20 @@ class ContextMixin:
             raise Refused("bad_state", f"cannot read decisions file: {path}") from None
         ctx = self._task_context(item, index, inputs=inputs,
                                  fetch=True)
+        facts = self._claim_facts(ctx)
+        if ctx["work_exists"].get("unknown"):
+            facts.append("repository index unavailable")
+        if ctx["work_exists"].get("prs"):
+            facts.append(f"in progress PR {ctx['work_exists']['prs']}")
+        if not facts:
+            return None
+        if reason is None:
+            raise Refused("bad_state", f"{item['key']} stale: " + " | ".join(facts)
+                          + " (override: force_stale=<reason>, audited)")
+        return {"reason": reason, "overrode": facts}
+
+    @staticmethod
+    def _claim_facts(ctx):
         facts = []
         commits = ctx["work_exists"]["commits"]
         lanes = ctx["work_exists"]["lanes"]
@@ -310,12 +352,7 @@ class ContextMixin:
             facts.append("premise outdated: " + ",".join(ctx["newer_decisions"])
                          + " names this item after its definition; re-confirm"
                          " (edit the item to cite it) first")
-        if not facts:
-            return None
-        if reason is None:
-            raise Refused("bad_state", f"{item['key']} stale: " + " | ".join(facts)
-                          + " (override: force_stale=<reason>, audited)")
-        return {"reason": reason, "overrode": facts}
+        return facts
 
     def _not_open_facts(self, item, index):
         """Why a non-claimable item is not claimable, with reasons (for refusals)."""
