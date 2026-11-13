@@ -115,6 +115,7 @@ TOOLS_METADATA = [
 CARD_SCHEMA = {'type': 'object', 'required': ['estimate_tokens'], 'properties': {
     'stall_min': {'type': 'number', 'exclusiveMinimum': 0},
     'first_edit_min': {'type': 'number', 'exclusiveMinimum': 0},
+    'cwd': {'type': 'string', 'description': 'absolute path to an existing git checkout'},
     'max_min': {'type': 'number', 'exclusiveMinimum': 0},
     'estimate_tokens': {'type': 'integer', 'minimum': 1, 'description': 'required: expected tokens of the run'},
     'diff_ref': {'type': 'object', 'description': 'review: {repo, base, head}; inlined for inline-only seats'}}}

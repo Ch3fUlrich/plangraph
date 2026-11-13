@@ -3,7 +3,7 @@ from __future__ import annotations
 from .env_redact import first_reason, harness_limit_line, redact, unavailable_reason
 from .gateway_witness import witness_order, witness_gate_legs
 from .exit_outcome import fallthrough_reason, refusal_record, release_attempts, terminal_reason
-from .git_guard import prepare_worktree, writer_launch
+from .git_guard import prepare_worktree, selected_checkout, writer_launch
 from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
 from dataclasses import asdict, replace
@@ -153,7 +153,7 @@ class SpawnService(SeatSpawnMixin):
         if reason != 'remaining_gaps' or record.get('continuation_run_id'):
             return
         child = dict(run_id='run-' + uuid.uuid4().hex, parent_run_id=record['run_id'],
-                     continuation=1, role='implement', cwd=None if record.get('run_worktree') else record['cwd'],
+                     continuation=1, role='implement', cwd=None if record.get('run_worktree') else record['cwd'], selected_cwd=selected_checkout(self, record),
                      chosen_leg=record['chosen_leg'], started=time.time(), ended=None,
                      status='running', exit_code=None, gaps=gaps)
         record['continuation_run_id'] = child['run_id']
@@ -162,7 +162,7 @@ class SpawnService(SeatSpawnMixin):
         self._save(child)
         try:
             chosen = child['chosen_leg']
-            worktree = await prepare_worktree(self, child, {'lane_branch': (record.get('run_worktree') or {}).get('branch')}, bool(record.get('run_worktree')), continuation=True)
+            worktree = await prepare_worktree(self, child, {'lane_branch': (record.get('run_worktree') or {}).get('branch')}, bool(record.get('run_worktree')), continuation=True, repo=child['selected_cwd'])
             job = await self.runner.spawn(prompt=render_fixer_brief([{'text': g} for g in gaps]),
                 model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=worktree.get('cwd', child['cwd']), wake_variant='fixer',  # REMOVE-AT-R10
                 prompt_record=(self._path(child['run_id']).with_name('prompt.txt'), child, self._save))  # REMOVE-AT-R10
@@ -203,7 +203,7 @@ class SpawnService(SeatSpawnMixin):
     async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                     review_of=None, model=None, leg=None, override_reason=None,
                     dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
-                    seats=False, _plan=None, run_worktree=False, _placement=None):
+                    seats=False, _plan=None, run_worktree=False, _placement=None, cwd=None):
         from plangraph.settings import admit_review_scope
         admit_review_scope(card, role, review_scope)
         from plangraph.planner.routing import hand_picked, SpawnRefused, SpawnPlan
@@ -215,7 +215,7 @@ class SpawnService(SeatSpawnMixin):
                 writer_families=writer_families, review_of=review_of, model=model, leg=leg,
                 dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=no_fallthrough,
                 benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
-                override_reason=override_reason, run_worktree=run_worktree, _placement=_placement)
+                override_reason=override_reason, run_worktree=run_worktree, _placement=_placement, cwd=cwd)
         if _plan is not None:
             plan = _plan
         elif model is not None or leg is not None or not card:
@@ -299,7 +299,7 @@ class SpawnService(SeatSpawnMixin):
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or (role == 'review' and (model is not None or leg is not None)) else None, served_model=None,
             served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
              started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
-            cwd=getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
+            cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
         pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
         async def execute():
             try:
