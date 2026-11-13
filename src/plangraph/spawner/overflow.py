@@ -20,8 +20,14 @@ from plangraph.keeper.credential_guard import mask
 from plangraph.fleet_sync.genconfig import config_dir
 from plangraph.routing_errors import ParameterRefused
 
-from . import cli
 from .private_io import atomic_write_private
+
+def __getattr__(name):
+    # Keep the compatibility attribute without loading the executable module on import.
+    if name == 'cli':
+        from importlib import import_module
+        return import_module('.cli', __package__)
+    raise AttributeError(name)
 
 class Decision(NamedTuple):
     host: str | None
@@ -177,6 +183,7 @@ def ready_records(config, role='implement'):
 
 
 def local_resources(state=None):
+    from . import cli
     runs = cli.SpawnService(state=state).ps()['runs']
     return sum(row.get('status') == 'running' for row in runs), available_memory_mb()
 
@@ -313,6 +320,7 @@ def remote_spawn(name, host, card, prompt, options):
 
 
 def main(argv=None):
+    from . import cli
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('verb', choices=['spawn'])
     parser.add_argument('--repo', required=True)
