@@ -34,6 +34,7 @@ mod reconcile_time;
 #[cfg(unix)]
 #[allow(dead_code)]
 mod reconcile_watch;
+mod record_status;
 mod records;
 mod review_artifacts;
 mod review_probe;

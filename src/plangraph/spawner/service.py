@@ -34,7 +34,8 @@ class SpawnService(SeatSpawnMixin):
     def result(self, run_id, **read_retry):
         """Read one run record; retry options forward to read_text_retry."""
         try:
-            return json.loads(read_text_retry(self._path(run_id), **read_retry))
+            from .stall_probe import reconcile_record
+            return reconcile_record(json.loads(read_text_retry(self._path(run_id), **read_retry)), self._path(run_id).parent)
         except FileNotFoundError:
             raise ValueError('unknown run id') from None
 

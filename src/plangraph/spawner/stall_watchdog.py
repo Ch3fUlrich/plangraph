@@ -134,7 +134,8 @@ def _read_runs(state, *, dry_run=False, sweep=False):
                     expired = _expire_queue(record, time.time())
                     if expired != record:
                         atomic_write_private(path, json.dumps(expired, indent=2))
-            record = expired
+            from .stall_probe import reconcile_record
+            record = reconcile_record(expired, path.parent)
             completion = record.get('completion') if isinstance(record.get('completion'), dict) else {}
             if completion.get('parent_session') and not record.get('parent_session'):
                 record['parent_session'] = completion['parent_session']

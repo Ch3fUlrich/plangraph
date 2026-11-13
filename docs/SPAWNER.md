@@ -725,3 +725,9 @@ interactive `--remote-control NAME` workstation launch path.
 `pg-spawnd rc-watch` compares RC-required live session records against a bounded `claude agents --json` query. Each missing bridge produces one durable notice to the recorded parent (or routing). Episode state survives timer restarts and rearms only when the bridge reconnects. Failed queries produce an error instead of treating unknown state as a disconnection.
 
 `pg-spawnd run-watch` marks accepted running/queued runs `stalled_no_leg` when no PID, launched-leg record, or running/completed attempt exists within ten minutes (`PLANGRAPH_NO_LEG_TIMEOUT_S`). It writes one durable parent/routing notice and preserves the terminal state across ticks. A job id alone is queued bookkeeping and does not prove a harness launched.
+
+Every run status/result/list read reconciles running records against the recorded
+PID and start identity, and observes `live.log` age when available. A proven
+missing, zombie, or reused PID reads as `exited` with reason `pid_gone`; unknown
+process-query results retain the recorded state. These are read-only snapshots:
+status polling does not rewrite records or race the completion writer.

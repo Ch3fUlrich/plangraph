@@ -86,3 +86,53 @@ def probe_run(state, record, now, *, dry_run=False, hung=None):
         return None
     except (OSError, ValueError, TypeError, KeyError, AttributeError, UnicodeError):
         return event
+
+
+def _record_pid_live(pid, start):
+    """Tri-state existence: access/query failures never prove a dead process."""
+    if os.name == 'nt':
+        import ctypes
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.OpenProcess.restype = ctypes.c_void_p
+        handle = k32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return False if ctypes.get_last_error() == 87 else None
+        try:
+            code = ctypes.c_uint32()
+            if not k32.GetExitCodeProcess(ctypes.c_void_p(handle), ctypes.byref(code)):
+                return None
+            if code.value != 259:
+                return False
+            from .win_recorded import creation
+            token = creation(pid, handle)
+            return None if token is None else start is None or token == start
+        finally:
+            k32.CloseHandle(ctypes.c_void_p(handle))
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return None
+    import sys
+    if sys.platform.startswith('linux'):
+        from .proc_kill import _stat
+        info = _stat(pid)
+        return None if info is None else info[0] not in ('Z', 'X') and (start is None or info[4] == start)
+    return True
+
+
+def reconcile_record(record, directory, now=None):
+    """Reconcile a read snapshot; watchdogs own persistence, status reads stay read-only."""
+    import time
+    if not isinstance(record, dict) or record.get('status') != 'running':
+        return record
+    now = time.time() if now is None else now
+    try:
+        record['live_log_age_s'] = max(0, now - (Path(directory) / 'live.log').stat().st_mtime)
+    except OSError:
+        pass
+    pid = record.get('pid')
+    if type(pid) is int and 0 < pid <= 0xffffffff and _record_pid_live(pid, record.get('pid_start')) is False:
+        record.update(status='exited', reason='pid_gone', ended=now)
+    return record
