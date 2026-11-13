@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import json
 import re
 import subprocess
 import sys
@@ -511,9 +512,38 @@ def _open_pr_merges(
     return violations
 
 
+def package_rules():
+    """Machine-readable package contract, exported by the trailer authority."""
+    patterns = [WRITER_RE.pattern, HAND_EDIT_RE.pattern,
+                GATE_EDIT_RE.pattern, TEST_REMOVAL_RE.pattern]
+    template = '''Every task is one commit with this identity:
+git -c user.name="Sergej Maul" -c user.email="71930650+Ch3fUlrich''' + '@' + '''users.noreply.github.com" commit
+Put both trailers in the final paragraph, with exact spelling and spacing:
+Plan-Item: plangraph:{key}
+Writer: {writer}
+Conditional trailers: Gate-Edit: D-<digits> for gate edits;
+Test-Removal: D-<digits> for removed tests; Hand-Edit: <reason> only for manual edits.
+Writer syntax for Claude: ''' + CLAUDE_WRITER_RE.pattern + '''
+Every commit adds a changelog.d fragment and updates docs according to .docs-map.
+Rust only for new production code; exceptions require tools/new_code_allowlist.txt.
+Files stay at most 800 lines. Write a failing test first, run affected tests only
+in WSL with PATH=$HOME/.cargo/bin:$PATH. Git tests clear GIT_DIR, GIT_WORK_TREE,
+GIT_INDEX_FILE and GIT_CONFIG* and use temporary repos only. Never change a real
+repository's config, contact a real host, change systemctl or delete live data.
+Use Linux worker host / Windows worker host in tracked text, never host names.
+Before each task, inspect code and git log --grep for existing behavior; record
+SKIPPED with a commit or file as proof when already implemented.
+Keep STATUS-{package}.txt untracked: time, task, key, DONE|SKIPPED|REFUTED, sha, tests.
+Do not push. Before reporting ALL DONE run pg-writer-package check on the branch;
+the check must pass the commit gate and package trailers for the whole range.
+'''
+    return dict(trailer_patterns=patterns, template=template)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest='command')
+    subparsers.add_parser('package-rules')
 
     check_parser = subparsers.add_parser('check')
     check_parser.add_argument('--base', required=True, help='Base commit SHA')
@@ -531,6 +561,9 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as exc:  # argparse already printed usage; keep main() return-based
         return int(exc.code or 0)
 
+    if args.command == 'package-rules':
+        print(json.dumps(package_rules()))
+        return 0
     if args.command != 'check':
         parser.print_help(sys.stderr)
         return 2

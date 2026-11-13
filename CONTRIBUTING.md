@@ -341,3 +341,7 @@ participate; the temporary worktree is removed after success or refusal.
 Preflight resolves changed Rust paths to their nearest package manifest. Workspace
 members use package selection; standalone crates (including `rust/worker`) run
 format, clippy and test with their own `--manifest-path`.
+
+`ci_commit_gate.py package-rules` exports the writer package contract and trailer
+patterns from the gate authority. The Rust `pg-writer-package` renderer consumes
+that contract; its check operation refuses completion until branch policy passes.

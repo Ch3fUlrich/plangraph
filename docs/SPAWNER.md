@@ -715,3 +715,20 @@ Watchdog silent-run alerts use `kind=stall` with `stalled_at` (the silence deadl
 Run monitors stop three consecutive tool calls with the same name and canonical arguments as `tool_loop`, deduplicating streaming updates by call ID. Complete structured Opencode, Claude and Codex tool frames are recognized; plain text is not a tool call. Tool-loop signals wake the monitor immediately. With 180 seconds of stdout silence and a proven unchanged process-tree CPU sample, the run ends as `stuck`; missing CPU evidence does not authorize that stop, and CPU progress keeps the run alive until its other limits. CPU sampling is bounded and shared scans survive a single consumer’s cancellation.
 
 `PLANGRAPH_SPAWN_P90_TABLE` optionally names measured JSON data shaped as `{"<card_class>": {"implement": {"stall_min": 30, "max_min": 55}}}`; the numbers here illustrate the format, not measurements. Cards select it with `card_class`. Only positive finite numeric values are accepted, and table values only widen defaults. Unknown classes or malformed configured data refuse launch. No p90 dataset is shipped without evidence.
+
+### Writer package sessions
+
+SPAWNER-PACKAGE-SESSIONS uses `pg-writer-package` (Rust worker-core binary).
+Pass one JSON object on stdin. `render` accepts `repo`, `key` (without the
+plangraph prefix), `writer`, `package` and `body`; stdout is the complete brief
+with the gate-owned house rules prepended. For example, from `rust/`:
+
+```sh
+printf '%s\n' '{"operation":"render","repo":"..","key":"ITEM","writer":"codex/session","package":"W1","body":"Task details"}' | cargo run -q -p pg-worker-core --bin pg-writer-package
+```
+
+Before marking the session complete, use the same binary with
+`{"operation":"check","repo":"..","base":"<package-base>"}`. It runs the real
+commit gate and checks every commit for a Plan-Item trailer; only success prints
+`ALL DONE`. Missing Writer or Plan-Item refuses locally before a push. Conditional
+Gate-Edit, Test-Removal and manual Hand-Edit forms come from the gate contract.
