@@ -1,5 +1,7 @@
 # Fleet code sync
 
+`pg-repo-sync [--repo PATH]...` defaults to direct `$HOME/code` repos (symlinks included); default-branch fetch/ff is silent, alerts exit 1.
+
 Run `python3 -m plangraph.fleet_sync release record` after fetching origin/main.
 The newest of the last 50 locally known first-parent main commits with successful required branch checks is
 recorded privately and atomically in `~/.local/state/plangraph/release.json`.
