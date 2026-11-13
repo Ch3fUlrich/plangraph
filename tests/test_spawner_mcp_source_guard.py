@@ -89,6 +89,7 @@ def test_source_identity_uses_module_tree_not_cwd_or_git_redirect(tmp_path, monk
 
 @pytest.mark.parametrize('git_absent', [False, True])
 def test_source_identity_without_git_hashes_python_tree(tmp_path, monkeypatch, git_absent):
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path.parent))
     if git_absent:
         monkeypatch.setattr(git_guard.subprocess, 'run', Mock(side_effect=FileNotFoundError))
     source = tmp_path / 'spawner'
@@ -123,3 +124,12 @@ def test_server_import_eagerly_loads_spawn_dependencies(tmp_path):
     done = subprocess.run([sys.executable, '-c', script], cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=30)
     assert done.returncode == 0, done.stderr
+
+
+def test_source_identity_hash_skips_unreadable_files(tmp_path, monkeypatch):
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path.parent))
+    source = tmp_path / 'spawner'
+    source.mkdir()
+    (source / 'ok.py').write_text('x')
+    (source / 'gone.py').symlink_to(source / 'missing.py')
+    assert len(git_guard.current_source_identity(source)) == 12

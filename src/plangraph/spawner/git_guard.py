@@ -11,6 +11,9 @@ most and never removed or rolled back.  Offending keys are removed with
 per key - git's own ``config.lock`` read-modify-write.  The file is never
 rewritten from a snapshot.  Errors listing the config only record a warning
 event: the run is neither failed nor restored.
+
+The module also owns the MCP source-change guard (``SourceGuard``): it refuses
+real spawns once the spawner's own source tree differs from the one loaded.
 """
 from pathlib import Path
 from contextlib import contextmanager
@@ -39,8 +42,12 @@ def current_source_identity(source=None):
         pass
     digest = hashlib.sha256()
     for path in sorted(source.rglob('*.py')):
+        try:
+            data = path.read_bytes()
+        except OSError:
+            continue
         digest.update(path.relative_to(source).as_posix().encode() + b'\0')
-        digest.update(path.read_bytes() + b'\0')
+        digest.update(data + b'\0')
     return digest.hexdigest()[:12]
 
 
