@@ -30,7 +30,6 @@ install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 The MCP snapshot guard and D-5661 Python freshness gate have path-specific `tools/new_code_allowlist.txt` entries
 with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
 The D-5504/D-5506 `mcp_tools.py` exception only splits schema data out of the full Python MCP transport; it also retires with MCP-RUST.
-Interim (operator D-5830): `**/*.py` and `**/*.sh` are allowlisted, so new Python and shell files pass the new-code gate; Rust stays the preferred language for new code, and the gate, its CI job and its tests stay in place for the other blocked extensions.
 
 ```bash
 python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
@@ -315,3 +314,5 @@ Pre-push preflight passes `--base`/`--head` to scrub, which reads changed blobs 
 Pre-push and preflight prepend an existing `~/.cargo/bin` to PATH. Missing Cargo refuses selected Rust or placement checks immediately with one `CARGO FAIL:` line before running those checks.
 
 Test fixtures set a Git discovery ceiling at their temporary root; settings discovery honors that ceiling so temporary policies remain isolated even when TMPDIR is inside the checkout.
+
+Operator D-5847 restores the Rust-only new-code gate: Python and shell exceptions are per-file, including `src/plangraph/spawner/base_fresh.py` already in flight before D-5847; recursive Python test exceptions remain.
