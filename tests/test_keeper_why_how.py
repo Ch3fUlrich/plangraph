@@ -21,6 +21,14 @@ def w(tmp_path):
     world.close()
 
 
+@pytest.fixture
+def doors(w, tmp_path):
+    from door_util import Doors
+    doors = Doors(w, tmp_path)
+    yield doors
+    doors.close()
+
+
 @pytest.mark.parametrize("kind", ["goal", "decision"])
 @pytest.mark.parametrize("description, missing", [
     (None, "Why: and How:"), ("short prose", "Why: and How:"),
@@ -32,19 +40,23 @@ def w(tmp_path):
     ("Why: useful\nHow: \t", "How:"),
     ("Why: \nHow: \t", "Why: and How:"),
 ])
-def test_front_doors_refuse_missing_sections(w, tmp_path, capsys, kind, description, missing):
+def test_front_doors_refuse_missing_sections(w, doors, tmp_path, kind, description, missing):
     items = [defn("G", kind=kind, description=description)]
+    token = tmp_path / "router.token"
+    token.write_text(w.tok("router"))
     result = handle({"id": 1, "method": "tools/call", "params": {
         "name": "create", "arguments": {"items": items}}},
-        SimpleNamespace(call=lambda *args: ("created", False)))["result"]
+        HttpKeeper(doors.url, str(token)))["result"]
     assert result["isError"]
+    key = "demo:G" if kind == "decision" else "G"
     assert result["content"][0]["text"] == (
-        f"missing_why_how: G: description missing {missing}")
+        f"missing_why_how: {key}: description missing {missing}")
     path = tmp_path / "items.json"
     path.write_text(json.dumps(items))
-    assert cmd_define(SimpleNamespace(file=path, edit=False), object()) == 2
-    error = capsys.readouterr().err
-    assert "missing_why_how" in error and missing in error
+    code, out, error = doors.pg("router", "define", "--file", str(path))
+    assert code == 2 and not out
+    assert error.strip() == f"missing_why_how: {key}: description missing {missing}"
+    assert w.store._all_items() == []
     if kind != "decision":
         assert w.store.create_items(w.p("router"), items)["created"] == ["demo:G"]
 
@@ -88,7 +100,7 @@ def test_cli_edit_does_not_enforce_sections(tmp_path):
         "key": "demo:G", "fields": {"description": "legacy prose"}})]
 
 
-def test_decision_creation_is_exempt(w):
+def test_legacy_decision_import_is_exempt(w):
     # The exemption is legacy-only; new decisions use the ordinary section rule.
     result = w.store.import_items(w.p("router"), [
         defn("D", kind="decision"),
@@ -99,6 +111,11 @@ def test_decision_creation_is_exempt(w):
     w.store.apply_ops(w.p("router"), [
         {"op": "edit", "key": "demo:D", "fields": {"description": "still legacy"}}])
     assert w.store.show(w.p("reader"), "demo:D")["description"] == "still legacy"
+
+
+def test_decision_creation_is_exempt(w):
+    """Keep the historical test name for the legacy-only exemption."""
+    test_legacy_decision_import_is_exempt(w)
 
 
 @pytest.mark.parametrize("path", ["single", "batch", "batch_list"])
@@ -149,6 +166,43 @@ def test_decision_creation_preserves_conflict_and_lock_precedence(w, path, state
     assert exc.value.code == code
     if code == "conflict":
         assert exc.value.msg.endswith("demo:D already exists")
+    assert w.store._all_items() == before
+    assert w.conn.execute("SELECT COUNT(*) FROM events WHERE key IS NOT NULL").fetchone()[0] == events
+
+
+@pytest.mark.parametrize("door", ["mcp", "mcp_apply_ops", "cli", "cli_envelope"])
+@pytest.mark.parametrize("state, code", [
+    ("open", "conflict"), ("cancelled", "locked"),
+    ("duplicate", "validation"), ("new", "missing_why_how")])
+def test_front_doors_preserve_decision_refusal_precedence(w, doors, tmp_path, door, state, code):
+    w.store.import_items(w.p("router"), [
+        defn("D", kind="decision"), defn("G", ["D"], kind="goal")])
+    if state == "cancelled":
+        w.store.cancel(w.p("router"), "demo:D", "drop")
+    before = w.store._all_items()
+    events = w.conn.execute("SELECT COUNT(*) FROM events WHERE key IS NOT NULL").fetchone()[0]
+    items = [defn("NEW", kind="decision")]
+    if state == "duplicate":
+        items *= 2
+    elif state != "new":
+        items.append(defn("D", kind="decision"))
+    if door.startswith("mcp"):
+        token = tmp_path / "router.token"
+        token.write_text(w.tok("router"))
+        tool, body = ("create", {"items": items}) if door == "mcp" else (
+            "apply_ops", {"ops": [{"op": "create", "item": items}]})
+        result = handle({"id": 1, "method": "tools/call", "params": {
+            "name": tool, "arguments": body}}, HttpKeeper(doors.url, str(token)))["result"]
+        assert result["isError"]
+        error = result["content"][0]["text"]
+    else:
+        path = tmp_path / "items.json"
+        path.write_text(json.dumps({"items": items} if door == "cli_envelope" else items))
+        status, out, error = doors.pg("router", "define", "--file", str(path))
+        assert status == 2 and not out
+    assert error.startswith(code + ":")
+    if code == "conflict":
+        assert error.strip().endswith("demo:D already exists")
     assert w.store._all_items() == before
     assert w.conn.execute("SELECT COUNT(*) FROM events WHERE key IS NOT NULL").fetchone()[0] == events
 
