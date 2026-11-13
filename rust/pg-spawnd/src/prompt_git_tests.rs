@@ -110,6 +110,8 @@ fn check_existing_marker_single_replacement(launch: &crate::launch::LaunchSpec) 
     );
 }
 fn check_multiline_native_stdin_roundtrip(launch: &crate::launch::LaunchSpec) {
+    #[cfg(not(unix))]
+    let _ = launch;
     #[cfg(unix)]
     {
         use std::io::Write;
@@ -211,49 +213,12 @@ fn check_external_diff_textconv_hooks_not_run(root: &Path) {
 #[cfg(unix)]
 #[test]
 fn timeout_owned_git_reaped() {
-    use std::os::unix::process::CommandExt;
-    let mut command = std::process::Command::new("sh");
-    command
-        .args(["-c", "sleep 60 & wait"])
-        .stdout(Stdio::piped())
-        .process_group(0);
-    let child = command.spawn().unwrap();
-    let pid = child.id() as i32;
-    let started = std::time::Instant::now();
-    assert_eq!(
-        collect_diff(child, 1024, Duration::from_millis(30)),
-        Err(InlineDiffError::Git)
-    );
-    assert!(started.elapsed() < Duration::from_secs(3));
-    assert_eq!(
-        unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) },
-        -1
-    );
+    race::deadline_ends_wait("group", 1024);
 }
 #[cfg(unix)]
 #[test]
 fn oversized_exited_child_does_not_kill_group() {
-    use std::os::unix::process::CommandExt;
-    let root = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
-    std::fs::create_dir_all(&root).unwrap();
-    let mut command = std::process::Command::new("sh");
-    command
-        .args([
-            "-c",
-            "(sleep 0.3; touch survived) >/dev/null & printf oversized",
-        ])
-        .current_dir(&root)
-        .stdout(Stdio::piped())
-        .process_group(0);
-    let mut child = command.spawn().unwrap();
-    child.wait().unwrap();
-    assert_eq!(
-        collect_diff(child, 1, Duration::from_secs(1)),
-        Err(InlineDiffError::TooLarge)
-    );
-    std::thread::sleep(Duration::from_millis(500));
-    assert!(root.join("survived").exists());
-    std::fs::remove_dir_all(root).unwrap();
+    race::oversized_exited_child_does_not_kill_group();
 }
 
 #[test]
@@ -337,14 +302,10 @@ fn inline_only_NO_tools_header() {
     std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
-#[allow(non_snake_case, unused_mut, unused_variables)]
+#[allow(non_snake_case)]
 fn too_large_InlineDiffError_no_truncation() {
-    let (root, mut launch, args, repos) = review_fixture();
-    let diff = serde_json::from_value(args["card"]["diff_ref"].clone()).unwrap();
-    assert_eq!(
-        read_diff(&repos["repo"], &diff, 1),
-        Err(InlineDiffError::TooLarge)
-    );
+    let (root, repo, diff) = fixture();
+    assert_eq!(read_diff(&repo, &diff, 1), Err(InlineDiffError::TooLarge));
     std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
@@ -361,17 +322,13 @@ fn non_utf8_0x9d_lossy_no_run_death() {
 #[cfg(unix)]
 #[test]
 fn timeout_escaped_stdout_holder_bounded() {
-    use std::os::unix::process::CommandExt;
-    let child = std::process::Command::new("sh")
-        .args(["-c", "setsid sleep 1 & sleep 60"])
-        .stdout(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let start = std::time::Instant::now();
-    assert_eq!(
-        collect_diff(child, 1024, Duration::from_millis(30)),
-        Err(InlineDiffError::Git)
-    );
-    assert!(start.elapsed() < Duration::from_millis(500));
+    race::deadline_ends_wait("escaped", 1024);
 }
+
+#[test]
+fn oversized_stdout_is_drained_before_checkout_cleanup() {
+    race::oversized_stdout_is_drained_before_checkout_cleanup();
+}
+
+#[path = "prompt_git_race_tests.rs"]
+mod race;

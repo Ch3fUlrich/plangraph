@@ -11,6 +11,10 @@ use std::{
 
 pub const FILE_MAX: u64 = 1024 * 1024;
 
+#[cfg(any(windows, test))]
+#[path = "rename.rs"]
+mod rename;
+
 pub fn read_json(path: &Path) -> Option<Value> {
     let mut bytes = Vec::new();
     File::open(path)
@@ -29,7 +33,23 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         return Err(std::io::Error::other("status too large"));
     }
     let parent = path.parent().unwrap();
+    #[cfg(not(windows))]
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    #[cfg(windows)]
+    let mut file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            DELETE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+        };
+        // Rename by handle needs DELETE access. Unlike NamedTempFile::new_in,
+        // this creates a normal file, without FILE_ATTRIBUTE_TEMPORARY.
+        tempfile::Builder::new().make_in(parent, |name| {
+            fs::OpenOptions::new()
+                .access_mode(DELETE | FILE_GENERIC_READ | FILE_GENERIC_WRITE)
+                .create_new(true)
+                .open(name)
+        })?
+    };
     file.write_all(bytes)?;
     match fs::metadata(path) {
         Ok(metadata) => file.as_file().set_permissions(metadata.permissions())?,
@@ -37,10 +57,116 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         Err(e) => return Err(e),
     }
     file.as_file().sync_all()?;
+    #[cfg(not(windows))]
     file.persist(path).map_err(|e| e.error)?;
+    #[cfg(windows)]
+    replace_status(&mut file, path)?;
     #[cfg(unix)]
     File::open(parent)?.sync_all()?;
     Ok(())
+}
+
+#[cfg(windows)]
+fn replace_status(file: &mut tempfile::NamedTempFile, path: &Path) -> std::io::Result<()> {
+    use rename::{wide, Step};
+    use std::{mem, os::windows::io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileRenameInfo, FileRenameInfoEx, MoveFileExW, SetFileInformationByHandle,
+        FILE_RENAME_INFO, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+    let name = wide(&std::path::absolute(path)?);
+    let offset = mem::offset_of!(FILE_RENAME_INFO, FileName);
+    let name_bytes = u32::try_from((name.len() - 1) * mem::size_of::<u16>())
+        .map_err(|_| std::io::ErrorKind::InvalidInput)?;
+    // Cover the full C header (including tail padding) and the UTF-16 tail.
+    let size = mem::size_of::<FILE_RENAME_INFO>() + name_bytes as usize + 2;
+    let size_u32 = u32::try_from(size).map_err(|_| std::io::ErrorKind::InvalidInput)?;
+    let mut storage = vec![0usize; size.div_ceil(mem::size_of::<usize>())];
+    let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    // SAFETY: word-aligned, zeroed storage covers header, name and NUL. The
+    // absolute target shares the tempfile's directory/volume; handle has DELETE.
+    unsafe {
+        (*info).RootDirectory = std::ptr::null_mut();
+        (*info).FileNameLength = name_bytes; // BYTES, excluding NUL
+        std::ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            storage.as_mut_ptr().cast::<u8>().add(offset).cast::<u16>(),
+            name.len(),
+        );
+    }
+    let replacing = match fs::symlink_metadata(path) {
+        Ok(_) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e),
+    };
+    rename::rename_with_fallback(replacing, |step| {
+        let class = if step == Step::Legacy {
+            FileRenameInfo
+        } else {
+            FileRenameInfoEx
+        };
+        // SAFETY: buffer/handle remain live; MoveFileExW names include NUL and
+        // omit COPY_ALLOWED, so no non-atomic cross-volume copy can occur.
+        let result = unsafe {
+            (*info).Anonymous.Flags = 0;
+            match step {
+                Step::Posix => (*info).Anonymous.Flags = 0x1 | 0x2,
+                Step::Replace => (*info).Anonymous.Flags = 0x1,
+                Step::Legacy => (*info).Anonymous.ReplaceIfExists = true,
+                Step::Move => (),
+            }
+            if step == Step::Move {
+                let source = wide(file.path());
+                MoveFileExW(
+                    source.as_ptr(),
+                    name.as_ptr(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            } else {
+                SetFileInformationByHandle(file.as_raw_handle(), class, info.cast(), size_u32)
+            }
+        };
+        if result == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    })?;
+    // Never let TempPath remove a future file reusing the old temporary name.
+    file.disable_cleanup(true);
+    Ok(())
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn reader_without_delete_sharing_blocks_replace_without_corrupting_status() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::{
+        Foundation::ERROR_SHARING_VIOLATION,
+        Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("status.json");
+    let original = br#"{"wake_calls":1}"#;
+    let replacement = br#"{"wake_calls":2}"#;
+    atomic_write(&path, original).unwrap();
+    let mut held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(&path)
+        .unwrap();
+    // This documents an unresolved publication limitation, not a successful
+    // counter update: the hook reports this IO error without denying ordinary work.
+    let error = atomic_write(&path, replacement).unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(ERROR_SHARING_VIOLATION as i32));
+    let mut snapshot = Vec::new();
+    held.read_to_end(&mut snapshot).unwrap();
+    assert_eq!(snapshot, original);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    let entries: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, ["status.json"]);
 }
 
 pub fn successful(payload: &Value) -> bool {
@@ -53,10 +179,8 @@ pub fn successful(payload: &Value) -> bool {
 
 pub fn changed_paths(payload: &Value, command: Option<&str>) -> Vec<std::path::PathBuf> {
     let cwd = payload["cwd"].as_str().unwrap_or("");
-    if matches!(
-        payload["tool_name"].as_str(),
-        Some("Edit" | "Write" | "NotebookEdit")
-    ) {
+    let tool = payload["tool_name"].as_str();
+    if matches!(tool, Some("Edit" | "Write" | "NotebookEdit")) {
         return ["file_path", "notebook_path"]
             .iter()
             .filter_map(|key| payload["tool_input"][key].as_str())
