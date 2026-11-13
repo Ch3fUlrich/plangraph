@@ -1009,7 +1009,7 @@ def spawn_service(*args, **kwargs):
         async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
-                        seats=False, _plan=None, run_worktree=False, _placement=None):
+                        seats=False, _plan=None, run_worktree=False, _placement=None, cwd=None):
             from .private_io import SAVE_READ_ATTEMPTS
             from .run_watchdog import leg_limits, terminal_status, thresholds
             from .question_bridge import rounds_exhausted
@@ -1023,7 +1023,7 @@ def spawn_service(*args, **kwargs):
                     review_of=review_of, model=model, leg=leg, override_reason=override_reason,
                     dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=not seats or no_fallthrough,
                     benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
-                    seats=seats, run_worktree=run_worktree, _placement=_placement,
+                    seats=seats, run_worktree=run_worktree, _placement=_placement, cwd=cwd,
                 )
             from plangraph.settings import admit_review_scope
             admit_review_scope(card, role, review_scope)
@@ -1041,7 +1041,7 @@ def spawn_service(*args, **kwargs):
                 served_family=None, request_side_model=None, witness_kind=None,
                 writer_family=None, status='running', started=time.time(),
                 given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
-                ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
+                ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
             from .context_pack import annotate
             from .item_key import annotate_item
             pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
