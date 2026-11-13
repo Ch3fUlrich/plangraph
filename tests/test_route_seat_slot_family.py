@@ -353,12 +353,12 @@ def test_stopped_seat_is_failed_without_labeling_nonseat_legs(service, coverage,
         nonseat, stopped = record['attempts']
         assert nonseat['status'] == 'completed'
         assert nonseat['skip_reason'] is None
-        assert stopped['status'] == record['status'] == ('failed' if seat else 'completed')
+        assert stopped['status'] == record['status'] == 'completed'
         assert stopped['skip_reason'] == ('provider_stop' if seat else None)
-        assert record['exit_code'] == (1 if seat else 0)
-        if seat:
+        assert record['exit_code'] == 0
+        if seat and len(coverage) == 1:
             assert 'provider_stop' in record['error']
-            if len(coverage) == 1:
-                assert 'distinct_family_unavailable' in record['error']
+            assert 'distinct_family_unavailable' in record['error']
         else:
             assert not record.get('error')
+    assert all(job.status == 'completed' and job.exit_code == 0 for job in svc.runner.jobs.values())

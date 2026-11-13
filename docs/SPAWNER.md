@@ -307,7 +307,7 @@ must deduplicate by event_id: external delivery is at-least-once across crashes.
 Failed hooks are logged and retried on re-save; local inbox replay is idempotent.
 `PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds each child execution in seconds; unset gives a 25-minute review cap, while empty means no review cap;
 expiry kills its process tree and records rc 124 with FAILED completion.
-Terminal stall/timeout records preserve their outcome and events even without a watchdog event (`watchdog: null`). A provider-stopped leg whose own seat slot names a seat group is recorded as failed with a nonzero exit code even if its harness exits 0, preserving `provider_stop` in its attempt and unfilled-slot error under the failed/skipped-only reason rule without changing non-seat statuses or reasons.
+Terminal stall/timeout records preserve their outcome and events even without a watchdog event (`watchdog: null`). A provider stop leaves the harness status and exit code unchanged (completed with exit 0 stays completed), adding `provider_stop` only when no reason exists and the stopped leg's own coverage slot names a seat group, preserving it in the attempt and unfilled-slot error while leaving completed non-seat reasons unset and tolerating empty, absent or non-dict coverage entries.
 The detached supervisor must survive the child; killing the supervisor itself
 requires a future recovery service. This interim event contract carries over to
 the later Temporal implementation (also covers FLEET-STATUS-HOOK).
