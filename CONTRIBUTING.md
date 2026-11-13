@@ -310,3 +310,7 @@ The Rust `plangraph-cli` setup contract lives in `docs/setup.md`; manifest chang
 are Rust CI inputs and are tested against disposable user homes.
 Installer host-requirement changes are also Rust CI inputs. Package execution
 tests use disposable command fixtures; run only affected pytest files locally.
+Package R Python files already in flight are individually listed in
+`tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
+
+Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
