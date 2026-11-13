@@ -16,7 +16,7 @@ fn check_and_dry_run_do_not_create_roots_or_read_secret_content() {
     );
     assert_eq!(
         namespace::run(&home, &data, &manifest("secret"), Mode::Apply).0,
-        3
+        0
     );
     assert!(!data.exists());
     let (code, rows) = namespace::run(&home, &data, &manifest("non-secret"), Mode::DryRun);
@@ -165,4 +165,24 @@ fn operator_root_shims_do_not_break_child_checks() {
         namespace::run(&home, &data, &manifest("non-secret"), Mode::Check).0,
         0
     );
+}
+#[test]
+fn bare_apply_is_a_read_only_preview() {
+    use std::process::Command;
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let data = root.path().join("data");
+    fs::create_dir_all(home.join(".config/autoos")).unwrap();
+    let old = home.join(".config/autoos/daily-gate.conf");
+    fs::write(&old, "fixture").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+        .args(["namespace", "apply"])
+        .env("HOME", &home)
+        .env("PLANGRAPH_DATA_ROOT", &data)
+        .env("PLANGRAPH_ENV_FILE", home.join("absent.env"))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(!data.exists());
+    assert!(!fs::symlink_metadata(old).unwrap().file_type().is_symlink());
 }

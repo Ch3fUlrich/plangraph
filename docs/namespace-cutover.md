@@ -3,8 +3,8 @@
 `setup/manifest.toml` inventories legacy/new paths, consumers and classifications.
 `plangraph namespace inventory` prints that static inventory and the paired
 operator task/gate edge. It never scans or opens secret contents.
-`namespace check` uses names, links and permission metadata only. `namespace apply
---dry-run` previews non-secret moves without creating roots; `namespace apply`
+`namespace check` uses names, links and permission metadata only. `namespace apply` (also `namespace apply --dry-run`) previews moves without
+creating roots; `namespace apply --yes`
 only renames explicitly classified non-secret/state paths and leaves old paths
 as symlinks. It does not execute automatically during setup.
 
@@ -14,7 +14,12 @@ path is assumed. Private configuration, environment files, shell profiles, envir
 and container storage remain operator-only. Secrets require 0600 files and 0700
 directories on Unix, and private user ACLs on Windows. Windows ACL privacy stays operator-only and is never certified by mode bits.
 Windows symlink creation requires the normal OS developer-mode/privilege support.
-A failed shim leaves the destination intact; repair the conflict or resume apply. No secret contents or values are printed or logged.
+A failed move rolls back completed moves and removes their generated shims.
+Rollback never overwrites a recreated old path: a concurrent conflict retains both
+copies and exits 3 for manual reconciliation. Private lock/control files may remain.
+Operator-only inventory rows are informational during apply; check still reports
+them as drift until the operator completes that work. No secret contents or values
+are printed or logged.
 
 Existing targets are never overwritten. In particular, reconcile legacy breaker
 state with the earlier copy-once import before namespace apply: archive the old

@@ -1,0 +1,1 @@
+- Make namespace apply a preview unless --yes is supplied, retain migration locks for the batch, and roll back failed batches with no-clobber moves that preserve concurrent conflicts.

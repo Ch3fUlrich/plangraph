@@ -1,5 +1,9 @@
 //! Explicit allowlist for non-secret moves. Secret/container/profile edits are operator-only.
-use crate::{atomic, setup::Mode};
+use crate::{
+    atomic,
+    namespace_transaction::{rename_new, Transaction},
+    setup::Mode,
+};
 use serde::Deserialize;
 use std::fs;
 use std::io;
@@ -87,14 +91,18 @@ fn commit_move(
     old: &Path,
     new: &Path,
     source: bool,
+    transaction: &mut Transaction,
     link: impl FnOnce(&Path, &Path) -> io::Result<()>,
 ) -> Result<(), ActionError> {
     if source {
-        fs::rename(old, new)?;
+        rename_new(old, new)?;
     }
     // A failed shim never writes back over a concurrently recreated old path.
     // Keep the destination intact; the next apply resumes or reports a conflict.
-    link(old, new).map_err(|_| ActionError { partial: source })
+    let index = transaction.record(old, new, source);
+    link(old, new).map_err(|_| ActionError { partial: source })?;
+    transaction.linked(index);
+    Ok(())
 }
 #[cfg(unix)]
 fn shim(old: &Path, new: &Path) -> io::Result<()> {
@@ -144,6 +152,7 @@ fn action(
     data: &Path,
     entry: &Entry,
     mode: Mode,
+    transaction: &mut Transaction,
     link: fn(&Path, &Path) -> io::Result<()>,
 ) -> Result<&'static str, ActionError> {
     let old = resolve(home, data, &entry.old)?;
@@ -184,7 +193,7 @@ fn action(
     }
     fs::create_dir_all(new.parent().unwrap())?;
     fs::create_dir_all(old.parent().unwrap())?;
-    let _lock = atomic::lock(&new)?;
+    transaction.hold(atomic::lock(&new)?);
     // Recheck after lock. Never overwrite a destination created by another mover.
     if is_shim(&old, &new)? {
         return Ok("skipped");
@@ -193,7 +202,7 @@ fn action(
     if source && present(&new)? {
         return Err(io::Error::other("migration conflict").into());
     }
-    commit_move(&old, &new, source, link)?;
+    commit_move(&old, &new, source, transaction, link)?;
     Ok("moved")
 }
 pub fn run(home: &Path, data: &Path, manifest: &str, mode: Mode) -> (i32, Vec<String>) {
@@ -216,15 +225,13 @@ fn run_with(
     let mut code = 0;
     let mut moved = false;
     let mut rows = Vec::new();
+    let mut transaction = Transaction::default();
     for entry in manifest.namespace {
-        match action(home, data, &entry, mode, link) {
+        match action(home, data, &entry, mode, &mut transaction, link) {
             Ok(status) => {
                 moved |= status == "moved";
                 if status != "skipped" && mode == Mode::Check {
                     code = code.max(1);
-                }
-                if status == "operator-only" && mode == Mode::Apply {
-                    code = code.max(3);
                 }
                 rows.push(format!("namespace {} {status}", entry.name));
             }
@@ -235,7 +242,16 @@ fn run_with(
                     "namespace {} refused conflict or unsafe path",
                     entry.name
                 ));
+                break;
             }
+        }
+    }
+    if mode == Mode::Apply && code != 0 {
+        if transaction.rollback() {
+            rows.push("namespace rollback restored completed moves".into());
+        } else {
+            code = 3;
+            rows.push("namespace rollback refused concurrent conflict; data retained".into());
         }
     }
     if mode == Mode::Apply && moved && code != 0 {
@@ -252,7 +268,8 @@ pub fn cli(home: &Path, args: &[String]) -> i32 {
     {
         ["check"] => Mode::Check,
         ["apply", "--dry-run"] => Mode::DryRun,
-        ["apply"] => Mode::Apply,
+        ["apply"] => Mode::DryRun,
+        ["apply", "--yes"] => Mode::Apply,
         ["inventory"] => {
             let manifest: crate::setup::Manifest = toml::from_str(crate::setup::MANIFEST).unwrap();
             for entry in manifest.namespace {
@@ -297,11 +314,13 @@ mod tests {
         let old = root.path().join("old");
         let new = root.path().join("new");
         fs::write(&old, b"original").unwrap();
-        assert!(commit_move(&old, &new, true, |old, _| {
-            fs::write(old, b"concurrent").unwrap();
-            Err(io::Error::from(io::ErrorKind::AlreadyExists))
-        })
-        .is_err());
+        assert!(
+            commit_move(&old, &new, true, &mut Transaction::default(), |old, _| {
+                fs::write(old, b"concurrent").unwrap();
+                Err(io::Error::from(io::ErrorKind::AlreadyExists))
+            })
+            .is_err()
+        );
         assert_eq!(fs::read(old).unwrap(), b"concurrent");
         assert_eq!(fs::read(new).unwrap(), b"original");
     }
@@ -319,6 +338,31 @@ mod tests {
         });
         assert_eq!(code, 3);
         assert_eq!(fs::read(data.join("new")).unwrap(), b"original");
+    }
+    #[test]
+    fn later_shim_failure_rolls_back_every_successful_move() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let data = root.path().join("data");
+        fs::create_dir(&home).unwrap();
+        fs::write(home.join("first"), b"one").unwrap();
+        fs::write(home.join("second"), b"two").unwrap();
+        let manifest="files=[]\n[[namespace]]\nname='first'\nold='first'\nnew='@DATA@/first'\nkind='state'\nconsumers=[]\n[[namespace]]\nname='second'\nold='second'\nnew='@DATA@/second'\nkind='state'\nconsumers=[]\n";
+        let (code, _) = run_with(&home, &data, manifest, Mode::Apply, |old, new| {
+            if old.file_name().unwrap() == "second" {
+                Err(io::Error::other("injected failure"))
+            } else {
+                shim(old, new)
+            }
+        });
+        assert_eq!(code, 3);
+        for name in ["first", "second"] {
+            assert!(!fs::symlink_metadata(home.join(name))
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            assert!(!data.join(name).exists());
+        }
     }
     #[test]
     fn metadata_errors_are_not_absence() {
