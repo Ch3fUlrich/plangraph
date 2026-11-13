@@ -7,12 +7,22 @@ const NEW: &[u8] = br#"{"wake_calls":2,"other":"retained"}"#;
 type Outcome = (io::Result<()>, Vec<Stage>, Vec<(Stage, Option<i32>)>);
 
 fn exercise(failures: &[(Stage, i32)], replacing: bool) -> Outcome {
+    exercise_with_reader(failures, replacing, true)
+}
+
+fn exercise_with_reader(
+    failures: &[(Stage, i32)],
+    replacing: bool,
+    retain_reader: bool,
+) -> Outcome {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("status-\u{1f980}.json");
-    let mut held = replacing.then(|| {
+    if replacing {
         fs::write(&path, OLD).unwrap();
-        fs::File::open(&path).unwrap()
-    });
+        assert!(!fs::metadata(&path).unwrap().permissions().readonly());
+    }
+    let mut held = (replacing && (retain_reader || cfg!(not(windows))))
+        .then(|| fs::File::open(&path).unwrap());
     let seen = RefCell::new(Vec::new());
     let errors = RefCell::new(Vec::new());
     let result = atomic_write(
@@ -71,7 +81,11 @@ fn error_87_at_every_prepublication_site_uses_a_real_io_fallback() {
             (Stage::Metadata, Stage::MetadataOpen),
             (Stage::Sync, Stage::SyncReopened),
         ] {
-            let (result, seen, errors) = exercise(&[(site, 87)], replacing);
+            // Plain creation selects MoveFileExW, which cannot replace an open
+            // destination even when the reader shares DELETE. Other preparation
+            // fallbacks still reach POSIX rename and retain the snapshot handle.
+            let (result, seen, errors) =
+                exercise_with_reader(&[(site, 87)], replacing, site != Stage::CreateDelete);
             result.unwrap();
             assert!(seen.contains(&fallback), "{site:?}: {seen:?}");
             assert_eq!(errors, [(site, Some(87))]);
@@ -94,7 +108,9 @@ fn each_refused_rename_class_publishes_first_and_existing_documents() {
         for code in [87, 1, 50] {
             for refused in 1..=4 {
                 let failures: Vec<_> = stages[..refused].iter().map(|&s| (s, code)).collect();
-                let (result, seen, errors) = exercise(&failures, replacing);
+                // Refusing POSIX semantics tests closed-destination publication,
+                // not the separate held-reader contract that only POSIX supplies.
+                let (result, seen, errors) = exercise_with_reader(&failures, replacing, false);
                 assert_eq!(result.is_ok(), refused < 4);
                 assert_eq!(
                     &seen[seen.len() - (refused + 1).min(4)..],
@@ -177,7 +193,8 @@ fn combined_error_87_sites_recover_without_skipping_durability_or_permissions() 
         if replacing {
             failures.push((Stage::Permissions, 87));
         }
-        let (result, seen, errors) = exercise(&failures, replacing);
+        // CreateDelete refusal selects the non-POSIX MoveFileExW path.
+        let (result, seen, errors) = exercise_with_reader(&failures, replacing, false);
         result.unwrap();
         assert!(seen.contains(&Stage::SyncReopened));
         assert_eq!(seen.last(), Some(&Stage::Move));
@@ -227,12 +244,13 @@ fn fallback_preserves_existing_permissions() {
 fn refused_ex_class_still_reaches_sharing_failure_and_preserves_destination() {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::{
-        Foundation::ERROR_SHARING_VIOLATION,
+        Foundation::ERROR_ACCESS_DENIED,
         Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE},
     };
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("status.json");
     fs::write(&path, OLD).unwrap();
+    assert!(!fs::metadata(&path).unwrap().permissions().readonly());
     let mut held = fs::OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
@@ -254,13 +272,15 @@ fn refused_ex_class_still_reaches_sharing_failure_and_preserves_destination() {
         },
     )
     .unwrap_err();
-    assert_eq!(error.raw_os_error(), Some(ERROR_SHARING_VIOLATION as i32));
+    // Legacy rename rejects any open replacement destination with access denied;
+    // it need not open it for DELETE first and report a sharing violation (32).
+    assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32));
     assert_eq!(
         failures,
         [
             (Stage::Posix, Some(87)),
             (Stage::Replace, Some(87)),
-            (Stage::Legacy, Some(ERROR_SHARING_VIOLATION as i32))
+            (Stage::Legacy, Some(ERROR_ACCESS_DENIED as i32))
         ]
     );
     let mut snapshot = Vec::new();
@@ -272,4 +292,32 @@ fn refused_ex_class_still_reaches_sharing_failure_and_preserves_destination() {
         .map(|e| e.unwrap().file_name())
         .collect();
     assert_eq!(entries, ["status.json"]);
+}
+
+#[cfg(windows)]
+#[test]
+fn non_posix_fallbacks_reject_even_delete_sharing_readers_without_publication() {
+    use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
+    for (refusals, stopped) in [
+        (vec![Stage::Posix], Stage::Replace),
+        (vec![Stage::Posix, Stage::Replace], Stage::Legacy),
+        (
+            vec![Stage::Posix, Stage::Replace, Stage::Legacy],
+            Stage::Move,
+        ),
+        (vec![Stage::CreateDelete], Stage::Move),
+    ] {
+        let failures: Vec<_> = refusals.iter().map(|&stage| (stage, 87)).collect();
+        // Rust File::open shares READ | WRITE | DELETE. Keep it open: a refusal
+        // must not relax Windows' non-POSIX destination-handle restriction.
+        let (result, seen, errors) = exercise(&failures, true);
+        assert_eq!(
+            result.unwrap_err().raw_os_error(),
+            Some(ERROR_ACCESS_DENIED as i32)
+        );
+        assert_eq!(seen.last(), Some(&stopped));
+        let mut expected: Vec<_> = failures.iter().map(|&(s, c)| (s, Some(c))).collect();
+        expected.push((stopped, Some(ERROR_ACCESS_DENIED as i32)));
+        assert_eq!(errors, expected);
+    }
 }

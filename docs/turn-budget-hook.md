@@ -72,6 +72,9 @@ are counted; only Bash pre-tool events are candidates for polling refusals.
   paths remain fatal. Every unexpected failed call prints `atomic_write step=...`
   with the original OS error, including recoverable failures; expected absent
   metadata during first publication is silent. No diagnostic includes a path.
+  Non-POSIX Ex/replace, legacy and MoveFileExW can replace a closed destination,
+  but reject an open destination even when its reader shares DELETE. Those real
+  access failures stop the fallback chain; they are not unsupported-class errors.
 - One model call is one distinct `assistant.message.id` in the session's JSONL
   transcript. Multiple streamed blocks or tool uses from that response count
   once. User/tool-result, progress, sidechain and missing-ID records do not count.
@@ -343,3 +346,20 @@ the production preparation path, actual files, exact publication bytes, held
 snapshots, copied permissions and exact directory entries; they are not native
 OS acceptance evidence. The previous error-87 workstation call is not known from
 this Linux run, and no Windows run ID or completed proof is claimed here.
+
+Round-4 CI diagnosis (source locations at `cc3aa58f`, all in
+`rust/worker-core/src/turn_budget/windows_write_tests.rs`):
+- `error_87_at_every_prepublication_site_uses_a_real_io_fallback:75` and
+  `combined_error_87_sites_recover_without_skipping_durability_or_permissions:181`
+  injected DELETE-create refusal and reached MoveFileExW with the destination
+  reader still open; non-POSIX replacement returned access denied (5).
+- `each_refused_rename_class_publishes_first_and_existing_documents:98` refused
+  POSIX rename but required non-POSIX replacement of that same held destination.
+- `refused_ex_class_still_reaches_sharing_failure_and_preserves_destination:257`
+  reached legacy rename correctly but expected sharing error 32 instead of its
+  actual access-denied error 5. Only the POSIX path promises the former error.
+The success fixtures now use closed Windows destinations only on non-POSIX
+paths; separate held-reader checks pin their exact failure and preserve both
+snapshots and directory entries. Writable attributes are asserted; source DELETE
+access and Rust's default READ/WRITE/DELETE sharing were not the defects. The
+refusal seam skips the real refused call, not the next API's Windows restrictions.
