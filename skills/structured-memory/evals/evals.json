@@ -1,7 +1,7 @@
 [
   {
     "id": "structured-memory-1",
-    "prompt": "My project bridge returns no project rules and only two global Preferences. Should I rebuild the graph before recalling this repository's decisions?",
+    "prompt": "My project bridge returns no project rules for this repository. Should I rebuild the graph before recalling this repository's decisions?",
     "must": ["OMNIGRAPH_GRAPH_ID", "decision-keyed", "exactly one row"],
     "must_not": ["Yes, rebuild", "project data belongs in memory"]
   },
