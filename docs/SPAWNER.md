@@ -721,3 +721,5 @@ missing bridge returns `RC-MISSING`, retains the session id for cleanup, and
 stores state `rc_missing`. This applies to the Linux and Windows session APIs.
 The external fleet/terminal launchers must enable this policy and retain their
 interactive `--remote-control NAME` workstation launch path.
+
+`pg-spawnd rc-watch` compares RC-required live session records against a bounded `claude agents --json` query. Each missing bridge produces one durable notice to the recorded parent (or routing). Episode state survives timer restarts and rearms only when the bridge reconnects. Failed queries produce an error instead of treating unknown state as a disconnection.

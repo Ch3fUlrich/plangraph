@@ -11,6 +11,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 serde = "1"
 sha2 = "0.10"
 regex = "1"
+tempfile = "3"
 tokio = { version = "1.53", features = ["rt", "net", "io-util", "macros", "time"] }
 
 [target.'cfg(unix)'.dependencies]

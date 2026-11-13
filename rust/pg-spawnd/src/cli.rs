@@ -129,6 +129,9 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("agents-view") {
         return crate::agent_view::execute(rest, out);
     }
+    if verb.as_deref() == Some("rc-watch") {
+        return crate::rc_watch::execute(rest, out);
+    }
     if verb.as_deref() == Some("review-probe") {
         return crate::review_probe::execute(rest, out);
     }

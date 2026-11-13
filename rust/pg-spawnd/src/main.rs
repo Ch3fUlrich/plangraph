@@ -20,6 +20,7 @@ mod placement;
 mod prompt;
 mod prompt_git;
 mod pyjson;
+mod rc_watch;
 mod reconcile;
 #[allow(dead_code)]
 mod reconcile_attach;

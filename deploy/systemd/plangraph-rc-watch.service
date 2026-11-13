@@ -1,0 +1,7 @@
+[Unit]
+Description=Detect Remote Control drops for required sessions
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/plangraph/watchdog.env
+ExecStart=%h/.cargo/bin/pg-spawnd rc-watch
+TimeoutStartSec=30
