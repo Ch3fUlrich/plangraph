@@ -31,7 +31,7 @@ def terminal_record(record, job):
         return False
     status = terminal_status(job.status, record.get('role'))
     record.update(status=status, exit_code=job.exit_code, reason=job.status,
-                  watchdog=next(e for e in job.events if e['event'].startswith('watchdog_')),
+                  watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
                   events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s and earlier legs' events
     return True
 

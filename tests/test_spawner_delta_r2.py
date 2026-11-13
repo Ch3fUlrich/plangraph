@@ -34,7 +34,7 @@ def test_failed_review_keeps_leg_not_banner(tmp_path, monkeypatch, stopped):
     leg = Leg('sample', 'subscription', 'opencode', 'provider/model', 'synthetic', (), 1, False)
     runner = NS(_processes={}, _tasks={}, provider_responses={}, jobs={})
     async def spawn(**kw):
-        job = NS(job_id='sample', status='completed' if stopped else 'failed', exit_code=0 if stopped else 1,
+        job = NS(job_id='sample', status='failed', exit_code=1,
                  stdout='VERDICT: CHANGES\nTEST_GAMING: NO\n',
                  stderr='> build · provider/model\nError: transport failed',
                  served_model=None, served_family=None, served_witness_reason=None, events=[])

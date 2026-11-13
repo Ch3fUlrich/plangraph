@@ -154,7 +154,11 @@ def main(argv=None):
     try:
         if args.verb == 'probe':
             from .leg_probe import probe_many, reset_iso
-            result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout))
+            try:
+                result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout))
+            except ValueError as exc:
+                print(json.dumps(dict(status='refused', refusal='ParameterRefused', error=str(exc), exit_code=2)))
+                return 2
             if args.json:
                 print(json.dumps(result))
             else:
@@ -240,6 +244,7 @@ from plangraph.routing_support.host_keys import redaction_env
 redact_base = redaction_env(os.environ)
 path = sys.argv[1]
 from pathlib import Path
+from plangraph.spawner.proc_kill import _stat
 try:
     Path(path + ".pid").write_text(str(os.getpid()))
 except OSError:
@@ -297,6 +302,7 @@ def service_with_log(*args, **kwargs):
     save = service._save
     def save_with_log(record):
         record["supervisor_stderr_path"] = path
+        record["supervisor_pid_start"] = (_stat(os.getpid()) or (None,) * 5)[4]
         return save(record)
     service._save = save_with_log
     return service

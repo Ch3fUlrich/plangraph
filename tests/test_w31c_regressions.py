@@ -65,6 +65,8 @@ os.write(2, b'rotation-recovered\\n')
     assert 'supervisor_stderr_path' in bootstrap
     record = json.loads((state / 'runs/run-fake/record.json').read_text())
     assert record['supervisor_stderr_path'] == str(log)
+    if sys.platform.startswith('linux'):
+        assert isinstance(record['supervisor_pid_start'], int) and record['supervisor_pid_start'] > 0
 
 
 def test_host_environment_is_pinned():

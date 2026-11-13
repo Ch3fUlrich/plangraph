@@ -11,6 +11,7 @@ import tempfile
 import time
 
 from plangraph.routing_support import leg_state
+from plangraph.routing_errors import ParameterRefused
 
 PROMPT = 'Create a file ok.txt containing the single word ok, then git add it and git commit -m probe. Do nothing else.'
 
@@ -116,10 +117,13 @@ def caller_heads():
     return heads
 
 
-def seconds(name, default, value=None):
-    value = float(os.environ.get(name, default) if value is None else value)
-    if not math.isfinite(value) or value < 0:
-        raise ValueError('invalid ' + name)
+def seconds(name, default, value=None, *, positive=False):
+    try:
+        value = float(os.environ.get(name, default) if value is None else value)
+    except (TypeError, ValueError):
+        raise ParameterRefused('invalid ' + name) from None
+    if not math.isfinite(value) or value < 0 or (positive and value == 0):
+        raise ParameterRefused('invalid ' + name)
     return value
 
 
@@ -198,7 +202,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
     reported as ``ok=False`` with reason "probe leaked into caller repo" --
     the caller's repo is never auto-reset.
     """
-    timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout_s)
+    timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout_s, positive=True)
     state = store if store is not None else leg_state
     start = time.monotonic()
     # Missing executables describe this host, not the remote leg. Check each
@@ -251,7 +255,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
             except asyncio.TimeoutError:
                 ok, reason = False, 'timeout'
             except (ValueError, RuntimeError, OSError) as exc:
-                ok, reason = False, 'exit 1'
+                ok, reason, infra = False, 'probe infra: spawn', True
                 stderr = getattr(exc, 'stderr', '') or ''
         if ok is None:
             try:
@@ -318,6 +322,9 @@ async def before_launch(runner, leg, role, dry_run):
         return 'quota pause'
     if dry_run:
         return None
+    ttl = seconds('PLANGRAPH_LEG_PROBE_TTL_S', 1800)
+    if ttl and role in ('implement', 'fix'):
+        seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, positive=True)
     state = _store_for(runner)
     adapter = state if getattr(state, 'enabled', False) else None
     state = adapter.store if adapter else state
@@ -341,7 +348,6 @@ async def before_launch(runner, leg, role, dry_run):
     status = state.leg_status(key(leg))
     if status.get('state') == 'limited':
         return 'limited until ' + reset_iso((status.get('evidence') or {}).get('reset_at'))
-    ttl = seconds('PLANGRAPH_LEG_PROBE_TTL_S', 1800)
     if not ttl or role not in ('implement', 'fix'):
         return admission()
     ts = state.last_probe_ts(key(leg))  # successes only: a failed probe is not fresh evidence
@@ -368,6 +374,7 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None):
     unknown = ids - {leg.id for leg in SPAWNABLE_LEGS}
     if unknown:
         raise ValueError('unknown legs: ' + ', '.join(sorted(unknown)))
+    timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout, positive=True)
     # --all-writers means the routed writers; an explicit leg is probed only by name.
     selected = [leg for leg in SPAWNABLE_LEGS if leg_active(leg) and
                 (leg.id in ids or (all_writers and leg in DEFAULT_LEGS and
