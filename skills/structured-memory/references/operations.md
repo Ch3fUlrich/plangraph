@@ -83,8 +83,9 @@ Server: `omnigraph-server` v0.13.0 (migrated from v0.8.1, D-1038) · MCP bridge
    corrupts data. Also consult `omnigraph://best-practices/{queries,data,search}`.
 
    A bridge is **pinned to one graph** by `OMNIGRAPH_GRAPH_ID`, and no tool takes a graph
-   argument — so `schema_get`/`query`/`mutate` always act on that graph. Reading a second
-   graph (e.g. global `Preference`s in `memory`) requires a **second** MCP server entry.
+   argument — so `schema_get`/`query`/`mutate` always act on that graph. Keep one bridge
+   per repo; do not add a second for `memory`. Global preferences are already
+   Principles 2 and 6 of `skills/coding-principles/SKILL.md`.
 
 2. **`.gq` is neither Cypher nor GraphQL — both habits fail at character 1.** The
    parser wants a named `query` envelope with **brace-delimited** clauses and

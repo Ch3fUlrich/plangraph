@@ -72,8 +72,8 @@ Before editing code, load prior memory for the current project:
 
 1. Identify the project slug (the repository folder name, e.g. `agent-skills`).
 2. Query the project subgraph for `Rule`, `Decision`, `Preference`, `Convention`
-   nodes edged to that `Project`, plus global `Preference` nodes (`scope: global`,
-   in the shared `memory` graph — needs the second bridge, see below).
+   nodes edged to that `Project` (global preferences are not read from `memory`;
+   they are Principles 2 and 6 of `skills/coding-principles/SKILL.md`).
    **Scope first, rank second:** narrow by graph traversal *before* invoking
    `nearest`/`bm25`/`rrf`, so ranking runs over the relevant set rather than every
    node — cheaper and more relevant. Ranking ops are ordering, not filtering, so
