@@ -329,3 +329,29 @@ def test_admission_timeout_terminates_admitted_children_but_not_prior_runs(tmp_p
             for task in service.tasks.values(): task.cancel()
             await asyncio.gather(*service.tasks.values(), return_exceptions=True)
     asyncio.run(exercise())
+
+
+def test_admission_timeout_removes_unlaunched_worktree(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import base_fresh
+    from plangraph.spawner.service import SpawnService
+    repo, attempt = tmp_path / 'repo', tmp_path / 'attempt'
+    repo.mkdir()
+    git(repo, 'init', '-q')
+    git(repo, 'commit', '--allow-empty', '-m', 'initial')
+    git(repo, 'worktree', 'add', '--detach', str(attempt), 'HEAD')
+    service = SpawnService(SimpleNamespace(default_cwd=str(repo), jobs={}), state=tmp_path / 'state')
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', .02)
+    async def hold():
+        await asyncio.Event().wait()
+    async def spawn(**kwargs):
+        run = dict(run_id='run-pending', status='running', cwd=str(attempt), selected_cwd=str(repo),
+                   base_admitted=False, run_worktree={'path': str(attempt)})
+        service._save(run)
+        service.tasks[run['run_id']] = asyncio.create_task(hold())
+        return run
+    monkeypatch.setattr(service, 'spawn', spawn)
+    result = asyncio.run(base_fresh.admitted_spawn(service, {}))
+    assert result['reason'] == 'base_admission_timeout'
+    record = service.result('run-pending')
+    assert not attempt.exists() and record['run_worktree']['removed']

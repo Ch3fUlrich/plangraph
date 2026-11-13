@@ -119,6 +119,8 @@ async def admitted_spawn(service, payload):
                 await service.cancel(run_id)  # stop already-admitted workers, not just their supervisors
                 run = service.result(run_id)
                 if run.get('reason') != 'kill_incomplete':
+                    if run.get('run_worktree') and not run.get('base_admitted'):
+                        await asyncio.to_thread(_remove_refused_worktree, service, run)
                     service._save(dict(run, status='failed', reason='base_admission_timeout', error='base_admission_timeout', exit_code=1, ended=time.time()))
             if not task.done(): task.cancel()
         await asyncio.gather(*owned.values(), return_exceptions=True)

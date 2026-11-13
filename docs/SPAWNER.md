@@ -693,3 +693,5 @@ The MCP source fingerprint includes non-Python package assets; Git metadata and 
 An unavailable package tree produces a fresh source token on every check, so real MCP launches fail closed until reconnecting to readable code.
 
 An admission timeout cancels every worker started by that request, including already-admitted split siblings, and persists failure; runs that existed before the request keep running.
+
+Admission timeout removes a created worktree when its worker never reached launch admission, using the same non-forced cleanup as a freshness refusal.
