@@ -136,8 +136,8 @@ def test_same_family_case_differences_refused(w, second_family):
 
 def test_case_insensitive_family_reaches_done_under_waiver(w):
     to_in_review(w, KEY)
-    w.store.waive_second_family(w.p("router"), KEY, DECISION)
     w.store.verdict(w.p("reviewer"), KEY, True, "ok")
+    w.store.waive_second_family(w.p("router"), KEY, DECISION)
     twin = _reviewer(w, "twin", " TEAMC ")
     result = w.store.verdict(twin, KEY, True, "waived")
     assert result["state"] == "done"
@@ -288,9 +288,9 @@ def test_digest_lists_pending_waiver_claimed(w):
 
 def test_digest_keeps_done_waiver_shape(w):
     to_in_review(w, KEY)
-    w.store.waive_second_family(w.p("router"), KEY, DECISION)
     twin = _reviewer(w, "twin", "teamC")
     w.store.verdict(w.p("reviewer"), KEY, True, "ok")
+    w.store.waive_second_family(w.p("router"), KEY, DECISION)
     w.store.verdict(twin, KEY, True, "ok")
     digest = w.store.digest(w.p("router"))
     assert {"key": KEY, "decision_id": DECISION} in digest["waivers"]

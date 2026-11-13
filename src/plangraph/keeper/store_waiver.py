@@ -1,12 +1,12 @@
 """Router review decisions: D-217 waiver and D-5504/D-5506 merged GO close.
 
-The two-reviewer gate (D-219, ``store_review``) normally requires the second
-passing verdict to come from a different family.  When that seat is unavailable
-the router may record a **verified ``decision``** that waives the second-family
-requirement for one item: after ``waive_second_family(principal, key, D-NNN)``
-the two passing verdicts may share a family.  Distinct principals, non-null
-families and the claimant/delegate exclusion all still apply — the waiver only
-relaxes *which families* count.
+The two-reviewer gate (D-219, ``store_review``) normally requires two passing
+verdicts from different families. When that seat is unavailable, the router may
+record a **verified ``decision``** for one item using
+``waive_second_family(principal, key, D-NNN)``. An active D-id waiver permits
+one passing verdict with single-seat coverage (D-5658). Distinct principals,
+non-null families, writer-family conflicts and claimant/delegate exclusions
+still apply; the waiver itself is not a verdict.
 
 Like ``add_evidence_router`` the slow decision verification runs before the
 write lock, and the row is re-read and guarded inside ``BEGIN IMMEDIATE``.

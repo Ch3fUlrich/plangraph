@@ -1,9 +1,9 @@
 """D-217 second-family waiver (part 2 of the two-reviewer gate).
 
-A router may record a verified ``decision`` that waives the "second reviewer
-from a different family" requirement for one item; the two passing verdicts may
-then share a family.  Everything else about the gate (distinct principals,
-non-null families, neither claimant nor delegate) still applies.
+A router's verified D-id waiver permits one passing verdict to close a high
+item, retaining writer independence and sensitive single-seat coverage. A
+waiver recorded after the first verdict still permits a distinct second
+principal of the same family. All other refusals remain in force.
 """
 import io
 import json
@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from evidence_fakes import FakeDecisions, FakeGit, make_ctx
 from keeper_util import World, defn, pass_review, seed, to_in_review
 from plangraph.keeper import api, auth, cli, config
 from plangraph.keeper import events as keeper_events
@@ -106,13 +107,95 @@ def test_waive_sets_column_and_event(w):
 
 # ------------------------------------------------------------------ the effect
 
-def test_waiver_lets_same_family_second_reviewer_reach_done(w):
+def test_waiver_one_passing_verdict_reaches_done(w):
     to_in_review(w, KEY)
     w.store.waive_second_family(w.p("router"), KEY, DECISION)
+    assert w.store._waiver_active(w.store._item(KEY))
+    result = w.store.verdict(w.p("reviewer"), KEY, True, "waived second seat")
+    assert result == {"key": KEY, "state": "done", "reviews_passed": 1}
+    assert w.store._item(KEY)["state"] == "done"
+    assert _count(w, KEY, "review_verdict") == 1
+    assert _count(w, KEY, "review_passed") == 1
+    assert w.store.verify_chain() == []
+    assert w.store.verify_integrity() == []
+
+
+@pytest.mark.parametrize("family,code", [
+    ("google", None), ("xiaomi", "same_family"), ("anthropic", "coverage"),
+])
+def test_waiver_one_commit_verdict_keeps_family_and_coverage_gates(w, family, code):
+    sha = "a" * 40
+    w.store.ctx = make_ctx(
+        git=FakeGit(trailers_by_sha={sha: {"Writer": "mimo-v2 run1"}}),
+        decisions=FakeDecisions(waiving={(DECISION, KEY)}))
+    to_in_review(w, KEY, kind="commit+ci", ref={"commit": sha})
+    w.store.waive_second_family(w.p("router"), KEY, DECISION)
+    token = auth.add_principal(w.conn, "waiverReviewer", "reviewer", ["demo"],
+                               family=family)
+    reviewer = auth.authenticate(w.conn, token)
+    if code:
+        with pytest.raises(Refused) as exc:
+            w.store.verdict(reviewer, KEY, True, "waived but independent")
+        assert exc.value.code == code
+        assert w.store._item(KEY)["state"] == "in_review"
+        assert _count(w, KEY, "review_verdict") == 0
+        assert _count(w, KEY, "review_passed") == 0
+    else:
+        result = w.store.verdict(reviewer, KEY, True, "covered")
+        assert result == {"key": KEY, "state": "done", "reviews_passed": 1}
+        assert _count(w, KEY, "review_verdict") == 1
+    assert w.store.verify_integrity() == []
+
+
+def test_waiver_still_refuses_writer_family(w):
+    to_in_review(w, KEY)
+    w.store.waive_second_family(w.p("router"), KEY, DECISION)
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("reviewerSame"), KEY, True, "writer family")
+    assert exc.value.code == "same_family"
+    assert w.store._item(KEY)["state"] == "in_review"
+    assert _count(w, KEY, "review_verdict") == 0
+
+
+def test_waiver_writer_family_change_request_is_unchanged(w):
+    to_in_review(w, KEY)
+    w.store.waive_second_family(w.p("router"), KEY, DECISION)
+    result = w.store.verdict(w.p("reviewerSame"), KEY, False, "needs changes")
+    assert result == {"key": KEY, "state": "claimed", "reviews_passed": 0}
+    assert _count(w, KEY, "review_verdict") == 0
+    assert _count(w, KEY, "changes_requested") == 1
+    assert w.store.verify_integrity() == []
+
+
+@pytest.mark.parametrize("tier", ["standard", "none"])
+def test_waiver_disallowed_tier_stays_refused(w, tier):
+    w.store.edit_definition(w.p("router"), KEY,
+                            {"review_tier": tier, "evidence_kinds": ["decision"]})
+    w.store.claim(w.p("l1main"), KEY)
+    with pytest.raises(Refused) as exc:
+        w.store.waive_second_family(w.p("router"), KEY, DECISION)
+    assert exc.value.code == "bad_state"
+    assert w.store._item(KEY)["review_waiver"] is None
+    assert _count(w, KEY, "waiver_set") == 0
+
+
+@pytest.mark.parametrize("waiver", ["waived", "D-", "D-217-extra", "D-217\n"])
+def test_waiver_without_d_id_does_not_replace_verdict(w, waiver):
+    to_in_review(w, KEY)
+    # A malformed legacy/cache value is not a decision-backed single-seat waiver.
+    w.conn.execute("UPDATE items SET review_waiver=? WHERE key=?", (waiver, KEY))
+    result = w.store.verdict(w.p("reviewer"), KEY, True, "not a D-id")
+    assert result == {"key": KEY, "state": "in_review", "reviews_passed": 1}
+    assert _count(w, KEY, "review_passed") == 0
+
+
+def test_waiver_lets_same_family_second_reviewer_reach_done(w):
+    to_in_review(w, KEY)
     second = _same_family_reviewer(w)
     first_result = w.store.verdict(w.p("reviewer"), KEY, True, "ok")
     assert first_result["state"] == "in_review"
     assert first_result["reviews_passed"] == 1
+    w.store.waive_second_family(w.p("router"), KEY, DECISION)
     done_result = w.store.verdict(second, KEY, True, "waived family")
     assert done_result["state"] == "done"
     assert done_result["reviews_passed"] == 2
@@ -123,18 +206,20 @@ def test_waiver_lets_same_family_second_reviewer_reach_done(w):
 
 def test_waiver_still_refuses_same_principal_twice(w):
     to_in_review(w, KEY)
-    w.store.waive_second_family(w.p("router"), KEY, DECISION)
     w.store.verdict(w.p("reviewer"), KEY, True, "ok")
+    w.store.waive_second_family(w.p("router"), KEY, DECISION)
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("reviewer"), KEY, True, "again")
     assert exc.value.code == "same_principal"
     assert w.store._item(KEY)["state"] == "in_review"
+    assert _count(w, KEY, "review_verdict") == 1
+    assert _count(w, KEY, "review_passed") == 0
 
 
 def test_waiver_still_refuses_family_null_reviewer(w):
     to_in_review(w, KEY)
-    w.store.waive_second_family(w.p("router"), KEY, DECISION)
     w.store.verdict(w.p("reviewer"), KEY, True, "ok")
+    w.store.waive_second_family(w.p("router"), KEY, DECISION)
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("reviewerNoFam"), KEY, True, "who?")
     assert exc.value.code == "family_unknown"
@@ -164,9 +249,9 @@ def test_show_exposes_waiver_and_reviews(w):
 
 def test_digest_exposes_waivers(w):
     to_in_review(w, KEY)
-    w.store.waive_second_family(w.p("router"), KEY, DECISION)
     second = _same_family_reviewer(w)
     w.store.verdict(w.p("reviewer"), KEY, True, "ok")
+    w.store.waive_second_family(w.p("router"), KEY, DECISION)
     w.store.verdict(second, KEY, True, "ok")
     digest = w.store.digest(w.p("router"))
     assert {"key": KEY, "decision_id": DECISION} in digest["waivers"]

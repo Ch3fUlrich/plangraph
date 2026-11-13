@@ -26,14 +26,15 @@ tiers: a reviewer whose family is among the item's authoritative writers may
 file a change request (``ok=False``) but may never record an ACCEPT seat
 (D-2458), so no ``verdict(ok=True)`` can be recorded by a writer's own family.
 
-The waiver path (D-217) lives in ``store_waiver``: once the router records a
-verified decision, ``_waiver_active`` is true and the second passing verdict on
-a ``high`` item may share the first reviewer's family.  It is a no-op on a
-``standard`` item (``bad_state``), which never had a second seat to fill.
+The waiver path (D-217, D-5658) lives in ``store_waiver``: an active D-id waiver
+lets one passing verdict close a ``high`` item, with single-seat coverage and
+all writer-family gates intact. Waivers on ``standard`` or ``none`` items
+remain refused (``bad_state``).
 """
 from __future__ import annotations
 
 import json
+import re
 
 from . import auth
 from .errors import Refused
@@ -110,7 +111,7 @@ class ReviewMixin:
             pass
 
     def _waiver_active(self, item):
-        """D-217 hook: a verified waiver lets the two verdicts share a family."""
+        """D-217 hook: whether a router waiver is recorded for this epoch."""
         # The same truthiness question ``digest`` asks, so an item can never be
         # "waived" to one of them and not the other.
         return bool(item.get("review_waiver"))
@@ -246,15 +247,20 @@ class ReviewMixin:
                 if auth.norm_family(principal.family) == first_family:
                     raise Refused("same_family",
                                   "second reviewer shares a family")
-            if len(prior) + 1 >= 2:
+            waiver = fresh.get("review_waiver")
+            waived = (tier == "high" and self._waiver_active(fresh)
+                      and isinstance(waiver, str)
+                      and re.fullmatch(r"D-[0-9]+", waiver) is not None)
+            need = 1 if waived else 2
+            passed = len(prior) + 1
+            if passed >= need:
                 # Only the verdict that would close a high item is checked;
                 # a refusal appends nothing and leaves the round intact.
-                self._check_coverage(principal, fresh, prior, need=2,
+                self._check_coverage(principal, fresh, prior, need=need,
                                      sensitive=True, now=now)
             self._append(principal, key, "review_verdict",
                          self._verdict_payload(principal, fresh), now)
-            passed = len(prior) + 1
-            if passed >= 2:
+            if passed >= need:
                 return self._pass(principal, key, reason, fresh, now,
                                   reviews_passed=passed)
         return {"key": key, "state": "in_review", "reviews_passed": passed}
@@ -288,8 +294,8 @@ class ReviewMixin:
     def _pass(self, principal, key, reason, item, now, reviews_passed):
         """Write ``done`` (and lock it) plus ``review_passed``, under the lock.
 
-        Reached from either tier: one standard verdict or the second high
-        verdict.  The UPDATE is guarded on ``in_review`` and the epoch, so a
+        Reached from either tier: one standard verdict, or one waived/two high
+        verdicts.  The UPDATE is guarded on ``in_review`` and the epoch, so a
         peer verdict that slipped in between the pre-read and here loses.
         """
         cursor = self.conn.execute(
