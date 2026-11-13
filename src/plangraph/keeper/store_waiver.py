@@ -91,7 +91,8 @@ class WaiverMixin:
         # DecisionsAdapter.text returns ONLY the DECISION cell (D-276).
         # Only the router's timestamp prefix may precede the GO verdict.
         if isinstance(text, str):
-            text = re.sub(r"^\([0-2][0-9]:[0-5][0-9]Z, date -u\)\s+", "", text)
+            text = re.sub(r"^\(~?(?:[01][0-9]|2[0-3]):[0-5][0-9x]Z"
+                          r"(?:, date -u)?\)\s+", "", text)
         if not isinstance(text, str) or not re.match(r"^GO(?=$|\s)", text):
             raise Refused("evidence_unverified", "go_row_not_go")
         if re.match(r"^GO\s+(?:#[0-9]+|`#[0-9]+`)(?=$|[\s,;:.])", text):

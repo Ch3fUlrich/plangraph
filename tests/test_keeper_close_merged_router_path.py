@@ -23,6 +23,20 @@ def no_external_io(monkeypatch):
 PR_FORMS = ["#786", "#786,", "`#786`", "`#786`,"]
 
 
+@pytest.mark.parametrize("stamp", ["(18:30Z, date -u)", "(18:30Z)",
+                                  "(18:3xZ)", "(18:3xZ, date -u)",
+                                  "(~18:30Z)", ""])
+@pytest.mark.parametrize("verdict", ["GO", "NO GO"])
+def test_all_log_stamp_forms_preserve_go_authority(w, stamp, verdict):
+    w.decision_path.write_text(
+        f"| D-5504 | demo | {stamp} {verdict} #786; GO-HEAD {HEAD} |\n",
+        encoding="utf-8")
+    if verdict == "GO":
+        assert _close(w)["state"] == "done"
+    else:
+        _refused(w, "evidence_unverified", "go_row_not_go")
+
+
 # Verbatim authority clauses from the router decision log on origin/main,
 # router/docs/decisions-log.md (linked by router/DECISIONS.md). The remaining
 # review narrative is omitted: it is not part of the head-bound GO authority.

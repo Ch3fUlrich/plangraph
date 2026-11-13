@@ -1,0 +1,1 @@
+- Accept all decision-log timestamp prefixes in merged GO closes, including approximate and x-minute stamps, while retaining non-GO refusal and exact PR-head binding.
