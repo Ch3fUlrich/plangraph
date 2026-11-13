@@ -219,14 +219,21 @@ def test_mcp_show_without_brief_is_unchanged(live):
     assert "reviews" in reply["result"]["content"][0]["text"]
 
 
-def test_mcp_create_reports_the_warning(live):
+def test_mcp_create_reports_the_warning(live, monkeypatch):
+    # A server warning still passes through MCP with fully valid definitions.
+    store = live[0].store
+    create = store.create_items
+    def warned(*args):
+        return dict(create(*args), warnings=[brief_mod.BRIEF_WARNING])
+    monkeypatch.setattr(store, "create_items", warned)
     reply = mcp.handle(
         {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
          "params": {"name": "create", "arguments": {"items": [
              defn("W1", description="Why: Test creation.\nHow: Create a lane."),
              defn("W1G", ["W1", "W1D"], kind="goal",
                   description="Why: Test creation.\nHow: Create a goal."),
-             defn("W1D", kind="decision")]}}},
+             defn("W1D", kind="decision",
+                  description="Why: Test creation.\nHow: Create a decision.")]}}},
         _client(live, "router"))
     assert reply["result"]["isError"] is False
     assert "description missing: brief will be empty" in \

@@ -1,0 +1,1 @@
+- Require non-blank Why:/How: sections for new decisions through MCP, CLI define, storage create and apply_ops; preserve legacy imports and existing-item edits.
