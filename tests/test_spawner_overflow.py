@@ -3,6 +3,7 @@ import hashlib
 import shlex
 import subprocess
 import sys
+from unittest.mock import Mock
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 
@@ -83,7 +84,10 @@ def inputs(tmp_path, monkeypatch):
     card.write_text(json.dumps({'diff_ref': {'repo': str(tmp_path), 'base': 'abc', 'head': 'def'}}))
     prompt = tmp_path / 'prompt.txt'
     prompt.write_text('a prompt')
-    monkeypatch.setattr(o, 'local_resources', lambda: (4, 4000))
+    monkeypatch.setattr(o, 'local_resources', lambda *a: (4, 4000))
+    from plangraph.spawner.service import SpawnService
+    service = SpawnService(state=tmp_path / 'state')
+    monkeypatch.setattr(o.cli, 'SpawnService', Mock(return_value=service))
     return tmp_path, config, ['spawn', '--repo', str(tmp_path), '--card', str(card), '--prompt', str(prompt)]
 
 
@@ -121,6 +125,19 @@ def test_retry_and_queue_reasons(inputs, monkeypatch, capsys):
     assert o.main(args) == 2
     output = capsys.readouterr().out
     assert 'ash: remote spawn failed' in output and 'birch: remote spawn failed' in output
+
+
+@pytest.mark.parametrize('detail', ['private repo', 'malformed hosts', 'refused: retry limit'])
+def test_nonmemory_refusal_reason_and_caller_state(inputs, monkeypatch, capsys, detail):
+    root, path, args = inputs
+    path.write_text('{}')
+    monkeypatch.setattr(o, 'decide', lambda *a: o.Decision(None, detail))
+    monkeypatch.setattr(o, 'memory_refusal', lambda *a: None)
+    assert o.main(args + ['--state', str(root / 'state')]) == 2
+    output = capsys.readouterr(); record = json.loads(output.out)
+    assert record['reason'] == record['error'] == detail
+    assert 'host_memory_floor' not in output.out + output.err
+    o.cli.SpawnService.assert_called_with(state=str(root / 'state')); assert json.loads((root / 'state/runs' / record['run_id'] / 'record.json').read_text()) == record
 
 
 @pytest.mark.parametrize('contents', ['bad json', '{}', 'stale'])

@@ -63,7 +63,7 @@ def test_forward_options_and_save(setup):
     (KeyError('/secret/path'), 'required field'),
     (TypeError('/secret/path'), 'invalid type'),
 ])
-def test_failures_queue_with_safe_reasons(setup, failure, reason):
+def test_failures_refuse_with_safe_reasons(setup, failure, reason):
     service, _, remote = setup
     remote.side_effect = failure
     result = service.admit_spawn({})
@@ -72,6 +72,9 @@ def test_failures_queue_with_safe_reasons(setup, failure, reason):
     assert remote.call_count == 2
 
 
+def test_failures_queue_with_safe_reasons(setup):
+    """Historical entry point; refusal cases are named by the parametrized test."""
+    test_failures_refuse_with_safe_reasons(setup, overflow.RemoteRefusal('remote copy failed'), 'remote copy failed')
 def test_private_card_never_copies(setup):
     service, _, remote = setup
     result = service.admit_spawn({}, card={'diff_ref': {'repo': '/private'}})
@@ -83,8 +86,6 @@ def test_benchmark_not_forwarded(setup):
     service, _, remote = setup
     assert 'benchmark' in service.admit_spawn({'benchmark': object()})['overflow_reason']
     remote.assert_not_called()
-
-
 class SharedService(SeatSpawnMixin):
     async def _spawn(self, card=None, prompt='', **kwargs):
         raise AssertionError('local spawn')

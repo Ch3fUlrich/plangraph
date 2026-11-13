@@ -10,7 +10,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 import asyncio, hashlib, json, os, socket, time, uuid
 from .runner import SpawnerRunner
-from .cancel_recorded import cancel_recorded, expire_queue
+from .cancel_recorded import cancel_recorded, expire_queue, register_execute
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
@@ -302,7 +302,8 @@ class SpawnService(SeatSpawnMixin):
             served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
              started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
-        pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
+        pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card)  # D-3622, D-3649: one pack per spawn, off the loop
+        if not _queued_record: self._save(record)
         async def execute():
             try:
                 from .run_watchdog import leg_limits, prepare_run, terminal_record
@@ -386,9 +387,7 @@ class SpawnService(SeatSpawnMixin):
                 terminal_reason(record)
                 release_attempts(self, record)
                 self._save(record)
-
-        task = asyncio.create_task(execute())
-        self.tasks[record['run_id']] = task
+        if (task := await register_execute(self, record, execute, _queued_record)) is None: return self.result(record['run_id'], attempts=SAVE_READ_ATTEMPTS)
         if dry_run or wait_seconds is None:
             await task
         elif wait_seconds > 0:
@@ -398,5 +397,4 @@ class SpawnService(SeatSpawnMixin):
                 pass
         return self.result(record['run_id'], attempts=SAVE_READ_ATTEMPTS)
 
-    async def cancel(self, run_id):
-        return await cancel_recorded(self, run_id)
+    async def cancel(self, run_id): return await cancel_recorded(self, run_id)

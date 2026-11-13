@@ -10,6 +10,7 @@ from pathlib import Path
 import secrets
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -186,8 +187,8 @@ def ready_records(config, role='implement'):
     return records
 
 
-def local_resources():
-    runs = cli.SpawnService().ps()['runs']
+def local_resources(state=None):
+    runs = cli.SpawnService(state=state).ps()['runs']
     return sum(row.get('status') == 'running' for row in runs), available_memory_mb()
 
 
@@ -317,7 +318,9 @@ def main(argv=None):
     parser.add_argument('--card', required=True)
     parser.add_argument('--prompt', required=True)
     parser.add_argument('--role', default='implement')
+    parser.add_argument('--state')
     args, options = parser.parse_known_args(argv)
+    if args.state is not None: options.extend(['--state', args.state])
     if args.role != 'implement':
         options.extend(['--role', args.role])
     try:
@@ -330,7 +333,7 @@ def main(argv=None):
             return cli.main(['spawn', '--card', '@' + args.card,
                              Path(args.prompt).read_text(), *options])
         role_mb, floor_mb = local_limits(registry_caps(), args.role)
-        _, memory = local_resources()
+        _, memory = local_resources(args.state) if args.state is not None else local_resources()
         if decide(memory, role_mb, floor_mb, {}, False).reason == 'local room':
             return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
         public = str(Path(args.repo).resolve()) in [str(Path(p).expanduser().resolve())
@@ -347,9 +350,10 @@ def main(argv=None):
             if decision.host is None or attempts == 2:
                 detail = decision.reason if decision.host is None else 'refused: retry limit'
                 record = memory_floor_record(memory, role_mb, floor_mb, detail, args.role)
-                cli.SpawnService()._save(record)
+                if not memory_refusal(memory, role_mb, floor_mb): record.update(reason=detail, error=detail)
+                cli.SpawnService(state=args.state)._save(record)
                 print(json.dumps(record))
-                print(record['error'], file=__import__('sys').stderr)
+                print(record['error'], file=sys.stderr)
                 return 2
             name = decision.host
             attempts += 1
@@ -366,7 +370,7 @@ def main(argv=None):
                 return 0
             records[name]['refusal'] = refusal
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        print('overflow input or resource check failed', file=__import__('sys').stderr)
+        print('overflow input or resource check failed', file=sys.stderr)
         return 1
 
 

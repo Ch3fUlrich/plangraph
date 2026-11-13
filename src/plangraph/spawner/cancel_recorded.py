@@ -1,7 +1,9 @@
 """Bounded memory-wait lifecycle and ownership-safe recorded cancellation."""
 import asyncio
+import errno
 import math
 import time
+from contextlib import asynccontextmanager, ExitStack
 
 from .private_io import SAVE_READ_ATTEMPTS
 from .notify import inbox_lock
@@ -11,18 +13,58 @@ def queue_now():
     return time.time()
 
 def expire_queue(service, record):
-    """Enforce durable bounds on reads too, including after supervisor loss."""
-    if record.get('status') == 'queued':
-        with inbox_lock(service._path(record['run_id'])):
-            record = service.result(record['run_id'], expire=False)
-            if record.get('status') == 'queued':
-                record.setdefault('queue_bound_s', 900)
-                record.setdefault('queued_until', record.get('started', 0) + record['queue_bound_s'])
-                if queue_now() >= record['queued_until']:
-                    record.update(status='failed', reason='queue_timeout', exit_code=1,
-                                  ended=queue_now(), error='queue_timeout')
-                    service._save(record)
+    """Compute an expired view without locking, publishing or changing storage."""
+    record = dict(record)
+    if record.get('status') in ('queued', 'queue_claimed'):
+        record.setdefault('queue_bound_s', 900)
+        record.setdefault('queued_until', record.get('started', 0) + record['queue_bound_s'])
+        if queue_now() >= record['queued_until']:
+            record.update(status='failed', reason='queue_timeout', exit_code=1,
+                          ended=queue_now(), error='queue_timeout')
     return record
+
+@asynccontextmanager
+async def queue_lock(service, run_id, timeout=1):
+    """Bound contention and yield the loop instead of blocking on another process."""
+    deadline = time.monotonic() + timeout
+    with ExitStack() as stack:
+        while True:
+            try:
+                stack.enter_context(inbox_lock(service._path(run_id), blocking=False))
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK): raise
+                if time.monotonic() >= deadline: raise TimeoutError('queue lock deadline') from exc
+                await asyncio.sleep(.01)
+        yield
+
+async def register_execute(service, record, execute, queued):
+    if queued:
+        async with queue_lock(service, record['run_id']):
+            current = service.result(record['run_id'], expire=False)
+            if current['status'] != 'queue_claimed': return
+            expired = expire_queue(service, current)
+            if expired['status'] == 'failed':
+                service._save(expired)
+                return
+            if execute: record.update(status='running', started=time.time())
+            record.pop('reason', None)
+            service._save(record)
+            if execute is None: return
+            task = service.tasks[record['run_id']] = asyncio.create_task(execute())
+            return task
+    if execute is None:
+        service._save(record)
+        return
+    task = service.tasks[record['run_id']] = asyncio.create_task(execute())
+    return task
+
+async def fail_wait(service, run_id, reason, error):
+    async with queue_lock(service, run_id):
+        record = service.result(run_id, expire=False)
+        if record['status'] in ('queued', 'queue_claimed'):
+            record.update(status='failed', reason=reason, error=error, ended=queue_now(), exit_code=1)
+            service._save(record)
 
 async def queue_pause(event, delay):
     deadline = time.monotonic() + delay
@@ -58,41 +100,43 @@ async def _wait_memory(service, record, options, card, event):
     from . import overflow
     run_id = record['run_id']
     try:
-        while service.result(run_id)['status'] == 'queued':
+        while True:
+            async with queue_lock(service, run_id):
+                record = service.result(run_id, expire=False)
+                if record['status'] != 'queued': return
+                expired = expire_queue(service, record)
+                if expired['status'] == 'failed':
+                    service._save(expired)
+                    return
             event.clear()
             now = queue_now()
             role_mb, floor = overflow.local_limits(overflow.registry_caps(), options.get('role', 'implement'))
             memory = overflow.available_memory_mb()
             record.update(mem_available_mb=memory, floor_mb=floor, role_mb=role_mb)
             if not overflow.memory_refusal(memory, role_mb, floor):
-                with inbox_lock(service._path(run_id)):
-                    if service.result(run_id, expire=False)['status'] != 'queued': return
+                async with queue_lock(service, run_id):
+                    record = service.result(run_id, expire=False)
+                    if record['status'] != 'queued': return
                     if queue_now() >= record['queued_until']: continue
-                    record.update(status='running', started=now, exit_code=None)
-                    record.pop('reason', None)
+                    record.update(status='queue_claimed', mem_available_mb=memory, floor_mb=floor, role_mb=role_mb)
                     service._save(record)
                 service._queued.pop(run_id, None)
                 await service._spawn(**dict(options, card=card, wait_seconds=None, _queued_record=record))
                 return
             await queue_pause(event, min(5, record['queued_until'] - now))
     except asyncio.CancelledError:
-        if service.result(run_id)['status'] == 'queued':
-            record.update(status='failed', reason='queue_interrupted', error='queue_interrupted',
-                          ended=queue_now(), exit_code=1)
-            service._save(record)
+        await fail_wait(service, run_id, 'queue_interrupted', 'queue_interrupted')
         raise
     except Exception as exc:
-        record.update(status='failed', reason='queue_start_failed', error=type(exc).__name__,
-                      ended=queue_now(), exit_code=1)
-        service._save(record)
+        await fail_wait(service, run_id, 'queue_start_failed', str(exc))
     finally:
         service._queued.pop(run_id, None)
 
 
 async def cancel_recorded(service, run_id):
-    with inbox_lock(service._path(run_id)):
+    async with queue_lock(service, run_id):
         record = service.result(run_id, attempts=SAVE_READ_ATTEMPTS, expire=False)
-        queued = record['status'] == 'queued'
+        queued = record['status'] in ('queued', 'queue_claimed')
         if queued:
             record.update(status='cancelled', reason='cancelled', error=None, exit_code=0, ended=time.time())
             service._save(record)  # durable before the waiter can claim the run
@@ -110,8 +154,10 @@ async def cancel_recorded(service, run_id):
     if task and not task.done():
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-    record.update(status='failed' if survivors else 'cancelled', exit_code=0 if queued else 1, ended=time.time())
-    if queued: getattr(service, '_queued', {}).pop(run_id, None)
+    if queued:
+        getattr(service, '_queued', {}).pop(run_id, None)
+        return service.result(run_id, expire=False)  # already durably cancelled under the lock
+    record.update(status='failed' if survivors else 'cancelled', exit_code=1, ended=time.time())
     if survivors:   # unprovable ownership or survivors: terminal kill_incomplete, never 'cancelled'
         record.update(status='failed', reason='kill_incomplete', survivors=survivors,
                       events=record.get('events', []) + [{'event': 'kill_incomplete', 'survivors': survivors}])

@@ -1011,6 +1011,7 @@ def spawn_service(*args, **kwargs):
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
                         seats=False, _plan=None, run_worktree=False, _placement=None, _queued_record=None):
             from .private_io import SAVE_READ_ATTEMPTS
+            from .cancel_recorded import register_execute
             from .run_watchdog import leg_limits, terminal_status, thresholds
             from .question_bridge import rounds_exhausted
             if rounds_exhausted(self, card, role):
@@ -1051,7 +1052,7 @@ def spawn_service(*args, **kwargs):
                     record.setdefault('skipped', []).append(skipped)
                     record['attempts'].append(dict(leg=skipped.get('leg'), status='skipped',
                         skip_reason=skipped.get('skip_reason') or skipped.get('reason')))
-            self._save(record)
+            if not _queued_record: self._save(record)
 
             if not plan.legs or plan.error:
                 host_skips = [s for s in plan.skipped if any(marker in str(s) for marker in ('not_served_on_host', 'harness_missing'))]
@@ -1061,7 +1062,7 @@ def spawn_service(*args, **kwargs):
                               exit_code=1 if host_skips else 4 if exhausted else 2, ended=time.time(),
                               error='; '.join(s.get('skip_reason') or s.get('reason', '') for s in host_skips) if host_skips else plan.error,
                               evidence=plan.to_dict()['skipped'])
-                self._save(record)
+                await register_execute(self, record, None, _queued_record)
                 return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
 
             async def execute():
@@ -1196,8 +1197,8 @@ def spawn_service(*args, **kwargs):
                     release_attempts(self, record)
                     self._save(record)
 
-            task = asyncio.create_task(execute())
-            self.tasks[run_id] = task
+            task = await register_execute(self, record, execute, _queued_record)
+            if task is None: return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
             if dry_run or wait_seconds is None:
                 await task
             elif wait_seconds > 0:
