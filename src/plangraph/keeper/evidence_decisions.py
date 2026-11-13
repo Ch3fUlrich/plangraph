@@ -64,7 +64,7 @@ class DecisionsOriginUnreadable(OSError):
 
 
 def read_decisions_origin(path: Path) -> str:
-    """Discover the repo, fetch main and show its configured log; never fall back."""
+    """Discover the repo, fetch main and read its configured blob; never fall back."""
     try:
         path = path.resolve()
         root = subprocess.run(
@@ -77,13 +77,13 @@ def read_decisions_origin(path: Path) -> str:
     try:
         subprocess.run(
             ["git", "-C", str(repo), "fetch", "origin",
-             "refs/heads/main:refs/remotes/origin/main"],
+             "+refs/heads/main:refs/remotes/origin/main"],
             check=True, capture_output=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
         raise DecisionsFetchFailed from None
     try:
         return subprocess.run(
-            ["git", "-C", str(repo), "show", f"origin/main:{relative}"],
+            ["git", "-C", str(repo), "cat-file", "blob", f"origin/main:{relative}"],
             check=True, capture_output=True, timeout=30).stdout.decode("utf-8")
     except (OSError, ValueError, subprocess.SubprocessError):
         raise DecisionsOriginUnreadable from None

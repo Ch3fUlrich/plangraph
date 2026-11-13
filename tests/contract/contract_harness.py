@@ -298,10 +298,15 @@ def start_local(base: Path, signing: bool = False) -> Keeper:
         assert out.returncode == 0, out.stderr
         tokens[name] = _token_of(out.stdout)
     port = _free_port()
+    # Runtime fetches need the same isolation as setup, including removal of
+    # inherited repository selectors and command-line Git configuration pairs.
+    env = {name: value for name, value in _env({"PYTHONFAULTHANDLER": "1"}).items()
+           if not name.startswith("GIT_")}
+    env.update(git_env)
     proc = subprocess.Popen(
         [sys.executable, "-m", "plangraph.keeper.daemon", "--config", str(cfg),
          "--host", "127.0.0.1", "--port", str(port)],
-        env=_env({"PYTHONFAULTHANDLER": "1"}), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     keeper = Keeper(f"http://127.0.0.1:{port}", tokens,
                     {"decisions", "runs", "batch", "admin"}, True, base, cfg,
                     batch_dir, runs_dir, proc)

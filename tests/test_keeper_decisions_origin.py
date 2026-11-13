@@ -86,9 +86,35 @@ def test_pushed_worktree_decision_verifies_in_one_sync_with_stale_checkout(data_
     result = verify(repos.ctx)
     assert result.ok, result.detail
     assert result.detail == "decision D-5571 is recorded"
-    assert [args[3] for args in calls] == ["rev-parse", "fetch", "show"]
+    assert [args[3] for args in calls] == ["rev-parse", "fetch", "cat-file"]
+    assert calls[-1][-2] == "blob"
     assert calls[-1][-1] == f"origin/main:{repos.relative}"
     assert git(repos.clone, "rev-parse", "origin/main") == head
+    assert git(repos.clone, "rev-parse", "HEAD") == repos.base
+    assert repos.log.read_text(encoding="utf-8") == repos.initial
+
+
+@pytest.mark.parametrize("recorded", [True, False])
+def test_origin_main_rewrite_refreshes_tracking_ref_in_one_sync(data_repos, monkeypatch, recorded):
+    repos = data_repos
+    head = push_decision(repos)
+    tree = f"{head if recorded else repos.base}^{{tree}}"
+    rewritten = git(repos.origin, "commit-tree", tree, "-m", "Rewrite decisions authority")
+    git(repos.origin, "update-ref", "refs/heads/main", rewritten, head)
+    run, fetches = subprocess.run, []
+
+    def capture_fetch(args, **kwargs):
+        if "fetch" in args:
+            fetches.append(args)
+        return run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", capture_fetch)
+    result = verify(repos.ctx)
+    assert result.ok is recorded, result.detail
+    assert result.detail == f"decision D-5571 is {'recorded' if recorded else 'not recorded'}"
+    assert len(fetches) == 1
+    assert fetches[0][-1] == "+refs/heads/main:refs/remotes/origin/main"
+    assert git(repos.clone, "rev-parse", "origin/main") == rewritten
     assert git(repos.clone, "rev-parse", "HEAD") == repos.base
     assert repos.log.read_text(encoding="utf-8") == repos.initial
 
@@ -136,13 +162,24 @@ def test_configured_file_may_be_in_a_worktree(data_repos):
     assert git(repos.clone, "rev-parse", "HEAD") == repos.base
 
 
-@pytest.mark.parametrize("failure", ["missing-ref", "missing-log", "invalid-utf8"])
+@pytest.mark.parametrize("failure", [
+    "missing-ref", "missing-log", "invalid-utf8", "directory", "gitlink",
+])
 def test_unreadable_origin_log_is_named_without_local_fallback(data_repos, monkeypatch, failure):
     repos = data_repos
     if failure != "missing-ref":
         log = repos.worktree / repos.relative
         if failure == "missing-log":
             log.unlink()
+        elif failure == "directory":
+            log.unlink()
+            log.mkdir()
+            (log / "entry.md").write_text(repos.initial, encoding="utf-8")
+            git(repos.worktree, "add", "-A")
+        elif failure == "gitlink":
+            git(repos.worktree, "rm", repos.relative)
+            git(repos.worktree, "update-index", "--add", "--cacheinfo",
+                "160000", repos.base, repos.relative)
         else:
             log.write_bytes(b"\xff\n")
         git(repos.worktree, "commit", "-am", "Make origin log unreadable")
@@ -241,3 +278,48 @@ def test_fetch_timeout_is_named_and_sanitised(data_repos, monkeypatch):
     result = verify(data_repos.ctx, "D-1")
     assert not result.ok
     assert result.detail == "could not read the decisions file (DecisionsFetchFailed)"
+
+
+@pytest.mark.parametrize("caller_setting", ["global-config", "indexed-config", "repository-env"])
+def test_contract_keeper_fetch_is_hermetic(data_repos, tmp_path, monkeypatch, caller_setting):
+    # Exercise the real daemon, not just the fixture's Git setup commands.
+    monkeypatch.syspath_prepend(str(Path(__file__).parent / "contract"))
+    import contract_harness as harness
+    from contract_world import claim, evidence as attach, make_plan
+
+    base = tmp_path / "contract"
+    replacement = (tmp_path / "missing").as_posix() + "/"
+    prefix = base.as_posix() + "/"
+    if caller_setting == "global-config":
+        config = tmp_path / "hostile.gitconfig"
+        config.write_text(f'[url "{replacement}"]\n\tinsteadOf = {prefix}\n', encoding="utf-8")
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    elif caller_setting == "indexed-config":
+        monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+        monkeypatch.setenv("GIT_CONFIG_KEY_0", f"url.{replacement}.insteadOf")
+        monkeypatch.setenv("GIT_CONFIG_VALUE_0", prefix)
+        monkeypatch.setenv("GIT_CONFIG_KEY_1", "protocol.file.allow")
+        monkeypatch.setenv("GIT_CONFIG_VALUE_1", "never")
+        monkeypatch.setenv("GIT_ALLOW_PROTOCOL", "https")
+    else:
+        monkeypatch.setenv("GIT_DIR", str(data_repos.clone / ".git"))
+        monkeypatch.setenv("GIT_WORK_TREE", str(data_repos.clone))
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "1")
+    popen, guards = subprocess.Popen, []
+
+    def capture_guards(args, **kwargs):
+        if "plangraph.keeper.daemon" in args:
+            guards.append(tuple(kwargs["env"].get(name) for name in (
+                "GIT_TERMINAL_PROMPT", "GIT_ALLOW_PROTOCOL")))
+        return popen(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", capture_guards)
+    keeper = harness.start_local(base)
+    try:
+        key = make_plan(keeper).key
+        epoch = claim(keeper, key)
+        result = attach(keeper, key, epoch)
+        assert result["verified"] is True, result["detail"]
+        assert guards == [("0", "file")]
+    finally:
+        keeper.stop()
