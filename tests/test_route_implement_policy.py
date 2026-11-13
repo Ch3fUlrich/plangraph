@@ -16,6 +16,7 @@ CARD = {"estimate_tokens": 20000, "risk_tags": [],
 WRITERS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "openrouter-free",
            "opencode-big-pickle", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
            "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
+LIVE = [leg for leg in WRITERS if leg != "agy-gemini-3.8-flash"]  # D-5696: fenced on the live route
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +36,7 @@ def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card,
         return {"state": state if model == "omniroute/cx-gpt-6.1-sol-xhigh" else "available", "evidence": None}
     service = SpawnService(state=tmp_path, leg_reader=reader)
     plan = service.route(card, role="implement")
-    expected = WRITERS if state == "available" else WRITERS[1:]
+    expected = LIVE if state == "available" else LIVE[1:]
     if card.get("risk_tags"):
         expected = [lid for lid in expected if not next(l for l in DEFAULT_LEGS if l.id == lid).trains_on_data]
     assert [leg.id for leg in plan.legs] == expected
@@ -94,7 +95,7 @@ def test_implement_renamed_operator_claude_fails_closed(tmp_path, monkeypatch, c
     from plangraph.planner.route_policy import RoutePolicy
     from plangraph.planner.routing import RouteError, route_card
     template, fallback = (next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
-                          for leg_id in WRITERS[:2])
+                          for leg_id in LIVE[:2])
     row = dict(dataclasses.asdict(template), id="operator-writer", model="provider/some-model",
                family="unidentified-high" if identity == "unknown" else "gpt", claude_family=identity == "flag",
                harness="claude" if identity == "harness" else "opencode")
@@ -176,8 +177,8 @@ def test_default_writer_refusal_falls_through_to_agy(tmp_path, refusal):
     runner.spawn = spawn
     service = SpawnService(runner, state=tmp_path)
     record = asyncio.run(service.spawn(card=CARD, prompt="Implement public code", wait_seconds=None))
-    assert calls == [("omniroute/cx-gpt-6.1-sol-xhigh", "opencode"), ("gemini-3.8-flash", "agy")]
+    assert calls == [("omniroute/cx-gpt-6.1-sol-xhigh", "opencode"), ("openrouter/free", "opencode")]
     assert record["status"] == "completed"
-    assert record["chosen_leg"]["id"] == "agy-gemini-3.8-flash"
+    assert record["chosen_leg"]["id"] == "openrouter-free"
     assert record["chosen_leg"]["effort"] is None
     assert not (tmp_path / "spawn-overrides.jsonl").exists()
