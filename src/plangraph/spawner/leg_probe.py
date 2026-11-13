@@ -130,10 +130,8 @@ def seconds(name, default, value=None, *, positive=False, parameter=None):
 
 def key(leg):
     """One leg key for probe and quota bookkeeping (Q16/M8).
-
-    'agy/<model>' only for an agy leg's bare model; a model that already names
-    its provider is its own key.  Legs without a harness attribute (legacy
-    record rows) key on the model string alone, keeping historical rows stable.
+    Prefix only bare agy models; provider-qualified models are their own keys.
+    Legacy rows without a harness keep their historical model-only keys.
     """
     return ('agy/' + leg.model if getattr(leg, 'harness', None) == 'agy' and '/' not in leg.model
             else leg.model)
