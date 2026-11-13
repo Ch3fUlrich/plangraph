@@ -20,7 +20,7 @@ import os
 import sqlite3
 import subprocess
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 THRESHOLDS = (50, 75, 90)
@@ -30,7 +30,7 @@ STALE_REMIND_HOURS = 24
 ROLLOVER_RISE = 10  # remaining% rising this much within a null-reset series = refill
 CONTAINER = os.environ.get("QUOTA_GATEWAY_CONTAINER", "autoos-omniroute")
 SQL = ("SELECT provider,connection_id,window_key,remaining_percentage,is_exhausted,"
-       "next_reset_at,created_at FROM quota_snapshots WHERE created_at>=? OR id IN "
+       "next_reset_at,created_at FROM quota_snapshots WHERE julianday(created_at)>=julianday(?) OR id IN "
        "(SELECT max(id) FROM quota_snapshots GROUP BY provider,connection_id,window_key) "
        "ORDER BY id")
 JS = ('const D=require("better-sqlite3");'
@@ -47,7 +47,7 @@ def fetch_rows(since_iso, container=CONTAINER):
 
 def fetch_rows_db(since_iso, db_path):
     """Read the snapshots from a sqlite file opened read-only: no docker, no write."""
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30)
+    con = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
     try:
         cursor = con.execute(SQL, (since_iso,))
         columns = [column[0] for column in cursor.description]
@@ -201,7 +201,19 @@ def run(rows, state_path, send, *, now=None, dry_run=False):
             state["sent"][key] = {"at": datetime.fromtimestamp(now, UTC).isoformat(), **meta}
             _save(path, state)
 
-    windows = evaluate(rows, now)
+    # Carry the last null-reset observation across polls, including long outages.
+    history = list(rows)
+    state.setdefault("last_rows", {})
+    for group, series in _groups(rows).items():
+        gid = _gid(*group)
+        previous = state["last_rows"].get(gid)
+        if previous and _ts(previous["created_at"]) < _ts(series[0]["created_at"]):
+            history.append(previous)
+        if series[-1]["next_reset_at"] is None:
+            state["last_rows"][gid] = series[-1]
+        else:
+            state["last_rows"].pop(gid, None)
+    windows = evaluate(history, now)
     for w in windows:
         wid = _window_id(w, state["epochs"])
         for th in THRESHOLDS:
@@ -212,6 +224,9 @@ def run(rows, state_path, send, *, now=None, dry_run=False):
     notice = reader_notice(rows, now)
     if notice and notice[0] not in state["sent"]:
         emit(notice[0], notice[1], {})
+    _prune(state, now)
+    # Advance only after every delivery succeeds; the next read covers downtime.
+    state["last_read"] = datetime.fromtimestamp(now, UTC).isoformat()
     if not dry_run and json.dumps(state, sort_keys=True) != before:
         _save(path, state)
     return lines
@@ -226,8 +241,6 @@ def main(argv=None):
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args(argv)
     now = time.time()
-    since = (datetime.fromtimestamp(now, UTC) - timedelta(hours=BURN_HOURS)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    rows = fetch_rows_db(since, a.db) if a.db else fetch_rows(since)
 
     def send(line):
         from plangraph.fleet_bus.client import build_client
@@ -237,6 +250,14 @@ def main(argv=None):
     lock.parent.mkdir(parents=True, exist_ok=True)
     with lock.open("a") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)  # same lock for dry-run and real runs
+        state_path = Path(a.state)
+        state = json.loads(state_path.read_text()) if state_path.exists() else {}
+        # Old state has no checkpoint: recover from its earliest remembered epoch.
+        checkpoint = state.get("last_read")
+        stamps = [checkpoint] if checkpoint else list(state.get("epochs", {}).values())
+        cutoff = min([now - BURN_HOURS * 3600, *(_ts(s) for s in stamps)])
+        since = datetime.fromtimestamp(cutoff, UTC).isoformat()
+        rows = fetch_rows_db(since, a.db) if a.db else fetch_rows(since)
         lines = run(rows, a.state, send, now=now, dry_run=a.dry_run)
     for line in lines:
         print(line)

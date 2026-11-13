@@ -15,8 +15,8 @@ RESET = "2026-11-19T00:00:00.000Z"
 def test_timer_requires_read_only_snapshot_source():
     unit = (Path(__file__).resolve().parents[1] / "deploy/systemd/plangraph-quota-alarms.service").read_text()
     assert "EnvironmentFile=%h/.config/plangraph/quota-alarms.env" in unit
-    assert "ExecStartPre=/usr/bin/test -n ${QUOTA_SNAPSHOT_DB}" in unit
-    assert "--db ${QUOTA_SNAPSHOT_DB}" in unit
+    assert 'ExecStartPre=/usr/bin/test -n "${QUOTA_SNAPSHOT_DB}"' in unit
+    assert '--db "${QUOTA_SNAPSHOT_DB}"' in unit
 
 
 def row(minutes, remaining, reset=RESET, provider="codex", window="weekly"):
@@ -191,3 +191,54 @@ def test_dry_run_takes_the_same_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(quota_alarms, "fetch_rows", lambda since: [])
     quota_alarms.main(["--state", str(tmp_path / "st.json"), "--dry-run"])
     assert calls == [quota_alarms.fcntl.LOCK_EX]
+
+
+def test_db_timestamp_formats_share_the_same_cutoff(tmp_path):
+    rows = [row(0, 90), row(30, 60), row(60, 40)]
+    rows[1]['created_at'] = rows[1]['created_at'].replace('T', ' ')
+    db = tmp_path / 'snapshots.sqlite'
+    make_db(db, rows)
+    found = quota_alarms.fetch_rows_db(row(15, 0)['created_at'], db)
+    assert [r['remaining_percentage'] for r in found] == [60, 40]
+
+
+def test_read_only_db_uri_escapes_special_path_characters(tmp_path):
+    db = tmp_path / 'snapshot ? # %.sqlite'
+    make_db(db, [row(0, 40)])
+    assert quota_alarms.fetch_rows_db(row(0, 0)['created_at'], db)[0]['remaining_percentage'] == 40
+
+
+def test_poll_recovers_refill_outside_burn_lookback(tmp_path, monkeypatch):
+    from plangraph.fleet_bus import client
+    from types import SimpleNamespace
+    sent = []
+    monkeypatch.setattr(client, 'build_client', lambda: SimpleNamespace(send=lambda routing, line: sent.append(line)))
+    state = tmp_path / 'state.json'
+    db = tmp_path / 'snapshots.sqlite'
+    make_db(db, [row(0, 5, reset=None)])
+    args = ['--state', str(state), '--db', str(db)]
+    monkeypatch.setattr(quota_alarms.time, 'time', lambda: now(0))
+    quota_alarms.main(args)
+    assert len(sent) == 3
+    db.unlink()
+    make_db(db, [row(0, 5, reset=None), row(60, 100, reset=None), row(480, 5, reset=None)])
+    monkeypatch.setattr(quota_alarms.time, 'time', lambda: now(480))
+    quota_alarms.main(args)
+    assert len(sent) == 6
+    quota_alarms.main(args)
+    assert len(sent) == 6
+
+
+def test_null_reset_refill_compares_with_previous_poll(tmp_path):
+    state = tmp_path / 'state.json'
+    sent = []
+    run([row(0, 5, reset=None)], state, sent.append, now=now(0))
+    lines = run([row(480, 40, reset=None)], state, sent.append, now=now(480))
+    assert len(lines) == 1 and '>=50%' in lines[0]
+    assert run([row(490, 35, reset=None)], state, sent.append, now=now(490)) == []
+
+
+def test_contribution_notes_use_existing_section():
+    text = (Path(__file__).resolve().parents[1] / 'CONTRIBUTING.md').read_text()
+    assert '# In-flight language exceptions' not in text
+    assert 'Package R Python' not in text
