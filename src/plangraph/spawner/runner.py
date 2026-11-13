@@ -1095,6 +1095,7 @@ def spawn_service(*args, **kwargs):
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
                         worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
+                        if worktree and not await admit_base(self, record, card): return
                         job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
                             role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10

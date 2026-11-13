@@ -1,2 +1,3 @@
 - D-5661: refuse stale or unfetchable bases before spawner model calls for every worker role and diff review; record the fetched base SHA, with only an explicit `base_decision: D-NNN` allowing an older base.
 - Round 2: keep real base admission by default in tests, scope mechanics fakes explicitly, fetch an explicit tracking ref with one retry, cover genuinely unfetched worktrees, and document detached CLI refusal reporting (D-5661).
+- Round 3: recheck each prepared worker run-worktree before model launch on routed and pinned paths, refusing stale card-declared lane continuations even when the source repository is fresh; retain the explicit decision waiver and detached CLI exit-status limitation (D-5661).

@@ -53,7 +53,7 @@ def base_fresh(repo, *, default=None, fetch=True, timeout=60) -> dict:
 
 
 async def admit_base(service, record, card):
-    """Shared record-creation gate for routed, pinned and seat runs, before launch."""
+    """Gate the record cwd (again after worktree creation) or reviewed diff before launch."""
     card = card or {}
     review = record.get('role') in ('review', 'judge')
     diff = card.get('diff_ref') if review else None

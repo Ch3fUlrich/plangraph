@@ -322,6 +322,7 @@ class SpawnService(SeatSpawnMixin):
                     launched = True
                     leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, record['run_id'])
                     worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
+                    if worktree and not await admit_base(self, record, card): return
                     job = await self._launch_leg(record, chosen, prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
                         prompt_record=(self._path(record['run_id']).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
@@ -384,7 +385,6 @@ class SpawnService(SeatSpawnMixin):
                 terminal_reason(record)
                 release_attempts(self, record)
                 self._save(record)
-
         task = asyncio.create_task(execute())
         self.tasks[record['run_id']] = task
         if dry_run or wait_seconds is None:

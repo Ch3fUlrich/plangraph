@@ -250,6 +250,40 @@ def test_launch_variants_cannot_bypass(repository, dispatch, hardened, mode):
     assert not dispatch[1]
 
 
+@pytest.mark.parametrize('hardened', [False, True])
+@pytest.mark.parametrize('pinned', [False, True])
+@pytest.mark.parametrize('stale', [False, True])
+@pytest.mark.parametrize('decision', [None, 'D-123', 'invalid'])
+def test_initial_continuation_checks_worktree_base(repository, dispatch, hardened, pinned, stale, decision):
+    origin, repo = repository
+    old = advance(origin, repo)
+    git(repo, 'fetch', 'origin', 'main')
+    git(repo, 'merge', '--ff-only', 'origin/main')
+    current = git(origin, 'rev-parse', 'main')
+    git(repo, 'branch', 'lane/resume', old if stale else current)
+    service, calls = dispatch[0](hardened), dispatch[1]
+    card = dict(estimate_tokens=100, lane_branch='lane/resume', continuation=True,
+                base_decision=decision)
+    options = dict(leg='cx-gpt-6.1-sol-xhigh', override_reason='hermetic base admission test') if pinned else {}
+    record = asyncio.run(service.spawn(card, 'Implement a tested change',
+        run_worktree=True, wait_seconds=None, **options))
+    assert service.result(record['run_id']) == record
+    metadata = record['run_worktree']
+    assert record['cwd'] == metadata['path']
+    assert metadata['base_sha'] == git(metadata['path'], 'rev-parse', 'HEAD') == (old if stale else current)
+    assert git(repo, 'rev-parse', 'HEAD') == current
+    if stale and decision != 'D-123':
+        assert record['status'] == 'failed' and record['exit_code'] != 0
+        assert record['reason'] == 'base_stale: behind=2'
+        assert not calls and not service.runner.jobs and 'job_id' not in record
+    else:
+        assert record['status'] == 'completed' and len(calls) == 1
+        assert calls[0]['cwd'] == metadata['path']
+        assert record['base_sha'] == card['base_sha'] == current
+        if decision == 'D-123':
+            assert record['base_decision'] == decision
+
+
 def test_worktree_head_and_unfetched_remote(repository):
     from plangraph.spawner.base_fresh import base_fresh
     origin, repo = repository
@@ -286,6 +320,44 @@ def test_cli_help_documents_detached_admission(capsys):
     help_text = ' '.join(capsys.readouterr().out.split())
     assert 'Detached non-dry spawn returns 0 before admission' in help_text
     assert 'base_stale' in help_text and 'status/result' in help_text
+
+
+def test_detached_cli_later_worktree_refusal_is_reported_by_status(repository, dispatch, monkeypatch, capsys):
+    import io
+    from plangraph.spawner import cli
+    origin, repo = repository
+    old = advance(origin, repo)
+    git(repo, 'fetch', 'origin', 'main')
+    git(repo, 'merge', '--ff-only', 'origin/main')
+    git(repo, 'branch', 'lane/resume', old)
+    service, calls = dispatch[0](True), dispatch[1]
+    monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
+    class Input(io.StringIO):
+        def close(self):
+            pass
+    class Supervisor:
+        def __init__(self, *args, **kwargs):
+            self.stdin, self.stdout = Input(), self
+        def readline(self):
+            async def execute():
+                payload = json.loads(self.stdin.getvalue())
+                payload.pop('state')
+                initial = await service.spawn(**payload, wait_seconds=0)
+                line = json.dumps(initial)
+                await service.tasks[initial['run_id']]
+                return line + '\n'
+            return asyncio.run(execute())
+        def close(self):
+            pass
+    monkeypatch.setattr(cli, '_start_supervisor', Supervisor)
+    card = dict(estimate_tokens=100, lane_branch='lane/resume', continuation=True)
+    assert cli.main(['spawn', '--card', json.dumps(card), '--run-worktree', 'Implement a tested change']) == 0
+    initial = json.loads(capsys.readouterr().out)
+    assert initial['status'] == 'running'
+    assert cli.main(['status', initial['run_id']]) == 1
+    final = json.loads(capsys.readouterr().out)
+    assert final['status'] == 'failed' and final['reason'] == 'base_stale: behind=2'
+    assert not calls
 
 
 def test_continuation_rechecks_base(repository, dispatch):
