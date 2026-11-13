@@ -95,11 +95,11 @@ def test_tools_invalid_diff_ref_refused(diff_ref):
 
 @pytest.mark.parametrize('dispatch', ['routed', 'explicit', 'base'])
 @pytest.mark.parametrize('scenario, launches, terminal', [
-    ('verdict', 2, False), ('twice', 3, True), ('error', 2, True),
-    ('no-cap', 3, True), ('normal', 1, False), ('non-review', 1, False),
+    ('verdict', 2, False), ('twice', 2, True), ('error', 2, True),
+    ('no-cap', 2, True), ('normal', 1, False), ('non-review', 1, False),
     ('already-capped', 2, True), ('stderr-error', 2, True),
     ('zero-exit', 2, True), ('cancelled', 1, False),
-    ('timeout', 1, True), ('retry-timeout', 2, True), ('deadline', 1, True),
+    ('timeout', 1, False), ('retry-timeout', 2, False), ('deadline', 1, True),
     ('provider-stop', 2, True), ('thin-budget', 2, True),
     ('stalled', 1, False), ('retry-stalled', 2, False), ('retry-cancelled', 2, False),
     ('ordinary-timeout', 1, False), ('ordinary-cancelled', 1, False),
@@ -209,8 +209,9 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     if launches == 2:
         first, second = [json.loads(c[1]['env']['OPENCODE_CONFIG_CONTENT']) for c in calls]
         model = chosen.model.split('/', 1)[1]
-        assert first['providers']['mimo']['models'][model]['limit']['output'] == 131072
-        assert second['providers']['mimo']['models'][model]['limit']['output'] == 131072
+        if scenario != 'no-cap':
+            assert first['providers']['mimo']['models'][model]['limit']['output'] == 131072
+            assert second['providers']['mimo']['models'][model]['limit']['output'] == 131072
         assert first['permission'] == second['permission']
         assert all(c[0][c[0].index('--model') + 1] == chosen.model for c in calls)
         from plangraph.spawner.opencode_answer import retry_prompt
@@ -218,6 +219,7 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
         assert runner.jobs[record['job_id']].task_prompt == retry_prompt(original)
         assert calls[0][1]['env']['XDG_DATA_HOME'] == calls[1][1]['env']['XDG_DATA_HOME']
         assert calls[1][0][calls[1][0].index('--session') + 1] == 'ses_fixture'
+        assert 0 < runner.jobs[record['job_id']]._watchdog_limits['max_s'] <= 120
         assert runner.jobs[record['job_id']]._watchdog_limits['max_s'] < next(iter(runner.jobs.values()))._watchdog_limits['max_s']
         assert record['reasoning_continuations'] == 1
         assert any(e['event'] == 'opencode_reasoning_exhausted' for e in record['events'])
@@ -244,8 +246,9 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     if scenario == 'non-review':
         assert not any(e['event'].startswith(('opencode_step_finish', 'opencode_reasoning', 'reasoning_'))
                        for e in record['events'])
-    if scenario == 'ordinary-timeout':
+    if 'timeout' in scenario:
         assert record['status'] == 'timed_out' and record['reason'] == 'timeout'
+        assert record['exit_code'] == 124
     if scenario in ('stalled', 'retry-stalled'):
         assert record['status'] == record['reason'] == 'stalled'
     if 'timeout' in scenario or 'stalled' in scenario:

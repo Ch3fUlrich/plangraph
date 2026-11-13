@@ -525,7 +525,7 @@ class SpawnerRunner:
             from .run_watchdog import thresholds, edit_signature
             job._watchdog_limits = watchdog or thresholds(role=role)
             if review_session is not None and review_session.deadline is not None:
-                job._watchdog_limits = dict(job._watchdog_limits, max_s=review_session.deadline - job.start_time, hard_max=True)
+                job._watchdog_limits = dict(job._watchdog_limits, max_s=min(job._watchdog_limits['max_s'], review_session.deadline - job.start_time), hard_max=True)
             job._live_log = live_log
             job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir) if role in ('implement', 'fix') else None
             if tools_event:
@@ -710,7 +710,7 @@ class SpawnerRunner:
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
             exit_code = self.jobs[job_id].exit_code if (self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled')
                                                         or self.jobs[job_id].survivors
-                                                        or getattr(self.jobs[job_id], 'refusal', None)) else proc.returncode
+                                                        or getattr(self.jobs[job_id], 'refusal', None) or any(e.get('event') == 'reasoning_only_length' for e in self.jobs[job_id].events)) else proc.returncode
             job = self.jobs[job_id]
             for line in stderr_text.splitlines():
                 try:

@@ -207,16 +207,17 @@ class SeatSpawnMixin:
             raise InlineDiffError('review prompt packaging deadline exceeded') from None
 
     async def _launch_leg(self, record, chosen, *, routed=False, **options):
-        """One run and isolated session, continued only inside the original wall budget."""
-        from .opencode_answer import ReviewSession
+        """One isolated review session with at most one bounded exhaustion retry."""
+        from .opencode_answer import ReviewSession, launch_review
         session = ReviewSession(record['started'] + (options.get('watchdog') or {}).get('max_s', 1500)) if chosen.harness == 'opencode' and record.get('role') == 'review' else None
         try:
-            return await self._launch_session(record, chosen, routed=routed, session=session, **options)
+            return await launch_review(self, record, chosen, routed=routed, session=session, **options)
         finally:
             if session is not None:
                 session.close()
 
     async def _launch_session(self, record, chosen, *, routed, session, **options):
+        from .opencode_answer import record_attempt, fail_review
         async def launch(prompt_record, **kwargs):
             if session is not None:
                 kwargs['review_session'] = session
@@ -261,15 +262,6 @@ class SeatSpawnMixin:
             return next((e for e in getattr(job, 'events', ())
                          if e.get('event') == 'opencode_reasoning_exhausted'), None)
 
-        def record_attempt(job, status='continued'):
-            record['attempts'].append(dict(leg=asdict(chosen), job_id=job.job_id,
-                status=status, skip_reason=failure if status == 'failed' else None,
-                served_model=job.served_model, served_family=job.served_family,
-                served_witness_reason=job.served_witness_reason,
-                **(dict(request_side_model=job.request_side_model, witness_kind=job.witness_kind) if routed else {}),
-                stdout_tail=job.stdout, stderr_tail=job.stderr, events=job.events))
-            record.setdefault('events', []).extend(job.events)
-
         job = await launch(**options)
         evidence = exhausted(job)
         if evidence is None:
@@ -277,20 +269,20 @@ class SeatSpawnMixin:
         failure = evidence.get('reason', 'reasoning_output_limit')
         limits = options.get('watchdog') or {}
         record.setdefault('reasoning_continuations', 0)
-        while True:
+        for retry in range(2):
             remaining = record['started'] + limits.get('max_s', 1500) - time.time()
-            if protected(job) and (job.status != 'timeout' or getattr(job, 'survivors', ()) or record.get('reason') or record.get('status') != 'running'):
+            if protected(job):
                 return job
             if self._path(record['run_id']).with_name('cancelled').exists():
                 job.status = 'cancelled'
                 return job
-            if remaining <= 0 or job.status == 'timeout':
+            if retry or record['reasoning_continuations'] or remaining <= 0:
                 break
             if session is None or not (getattr(job, 'session_id', None) or session.id):
                 failure = 'reasoning_session_missing'  # never silently start a fresh context
                 break
             session.id = getattr(job, 'session_id', None) or session.id
-            record_attempt(job)
+            record_attempt(record, chosen, job, routed)
             record['reasoning_continuations'] += 1
             usage = [e for e in job.events if e.get('event') == 'opencode_step_finish']
             record['events'].append(dict(event='reasoning_continuation', leg=chosen.id,
@@ -300,25 +292,10 @@ class SeatSpawnMixin:
             from .opencode_answer import retry_prompt
             job = await launch(**dict(options,
                 prompt=retry_prompt(options.get('prompt', '')),
-                watchdog=dict(limits, max_s=remaining, hard_max=True)))
-            if any(line in ('VERDICT: ACCEPT', 'VERDICT: REQUEST_CHANGES') for line in job.stdout.splitlines()) and job.status == 'completed':
+                watchdog=dict(limits, max_s=min(120, remaining), hard_max=True)))
+            if exhausted(job) is None:
                 return job
-            if any(e.get('event') in ('render_refused', 'spawn_failed', 'monitor_failed', 'dispatch_refused') for e in job.events):
-                return job
-        job.status, job.exit_code = 'failed', job.exit_code or 1
-        job.events.append(dict(event=failure, continuations=record['reasoning_continuations']))
-        record_attempt(job, 'failed')
-        if routed:
-            record.update(request_side_model=job.request_side_model, witness_kind=job.witness_kind,
-                served_model_mismatch=any(e.get('event') == 'served_model_mismatch' for e in job.events))
-        record.update(status='failed', reason=failure, exit_code=job.exit_code,
-            served_model=job.served_model, served_family=job.served_family,
-            served_witness_reason=job.served_witness_reason,
-            writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
-            stdout_tail=record.get('stdout_tail', '') + job.stdout,
-            stderr_tail=record.get('stderr_tail', '') + job.stderr)
-        self._save(record)  # terminal evidence must survive even if the caller never saves again
-        return job
+        return fail_review(self, record, chosen, job, routed, failure)
 
     def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
         """Assemble one leg's payload, then enforce its request limit."""

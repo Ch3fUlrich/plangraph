@@ -3,6 +3,90 @@ import json
 
 from .env_redact import normalize
 
+REVIEW_PROMPT_MAX_BYTES = 24_000
+
+
+def split_review_prompt(prompt):
+    """Keep all evidence and producer spans; refuse an unsplittable source line."""
+    from .context_pack import PromptBoundError
+    from .env_redact import _SourcePrompt
+    if len(prompt.encode()) <= REVIEW_PROMPT_MAX_BYTES:
+        return [prompt]
+    bound, start, end, size, chunks = REVIEW_PROMPT_MAX_BYTES - 512, 0, 0, 0, []
+    for line in prompt.splitlines(keepends=True):
+        length = len(line.encode())
+        if length > bound:
+            raise PromptBoundError('prompt_too_large: review source line exceeds split bound')
+        if size + length > bound:
+            chunks.append((start, end)); start, size = end, 0
+        end, size = end + len(line), size + length
+    chunks.append((start, end))
+    out = []
+    for i, (start, end) in enumerate(chunks):
+        text = prompt[start:end]
+        if type(prompt) is _SourcePrompt:
+            text = _SourcePrompt(text, tuple((max(a, start) - start, min(b, end) - start)
+                for a, b in prompt.spans if a < end and b > start))
+        instruction = ('Now review the complete request; findings, then the VERDICT line.'
+                       if i == len(chunks) - 1 else 'Do not review yet; retain this evidence and acknowledge receipt only.')
+        out.append(f'Review request part {i + 1}/{len(chunks)}. {instruction}\n=== REVIEW PROMPT PART ===\n'
+                   + text + '\n=== END REVIEW PROMPT PART ===\n')
+    return out
+
+
+def record_attempt(record, chosen, job, routed, status='continued', failure=None):
+    from dataclasses import asdict
+    record['attempts'].append(dict(leg=asdict(chosen), job_id=job.job_id,
+        status=status, skip_reason=failure if status == 'failed' else None,
+        served_model=job.served_model, served_family=job.served_family,
+        served_witness_reason=job.served_witness_reason,
+        **(dict(request_side_model=job.request_side_model, witness_kind=job.witness_kind) if routed else {}),
+        stdout_tail=job.stdout, stderr_tail=job.stderr, events=job.events))
+    record.setdefault('events', []).extend(job.events)
+
+
+def fail_review(service, record, chosen, job, routed, failure):
+    job.status, job.exit_code = 'failed', job.exit_code or 1
+    job.events.append(dict(event=failure, continuations=record.get('reasoning_continuations', 0)))
+    record_attempt(record, chosen, job, routed, 'failed', failure)
+    if routed:
+        record.update(request_side_model=job.request_side_model, witness_kind=job.witness_kind,
+            served_model_mismatch=any(e.get('event') == 'served_model_mismatch' for e in job.events))
+    record.update(status='failed', reason=failure, exit_code=job.exit_code,
+        served_model=job.served_model, served_family=job.served_family,
+        served_witness_reason=job.served_witness_reason,
+        writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
+        stdout_tail=record.get('stdout_tail', '') + job.stdout,
+        stderr_tail=record.get('stderr_tail', '') + job.stderr)
+    service._save(record)
+    return job
+
+
+async def launch_review(service, record, chosen, *, routed, session, **options):
+    """Load large MiMo requests serially in one private session before reviewing."""
+    from .mimo_policy import ACCEPTED_MIMO_IDS
+    prompts = (split_review_prompt(options.get('prompt', ''))
+               if session is not None and chosen.model in ACCEPTED_MIMO_IDS else [options.get('prompt', '')])
+    if len(prompts) > 1:
+        record.setdefault('events', []).append(dict(event='review_prompt_split', parts=len(prompts),
+            bytes=len(options.get('prompt', '').encode()), max_bytes=REVIEW_PROMPT_MAX_BYTES))
+        service._save(record)
+    for i, prompt in enumerate(prompts):
+        job = await service._launch_session(record, chosen, routed=routed, session=session,
+                                            **dict(options, prompt=prompt))
+        if i < len(prompts) - 1 and job.status == 'terminated_after_answer':
+            return fail_review(service, record, chosen, job, routed, 'reasoning_session_missing')
+        if i == len(prompts) - 1 or job.status != 'completed' or record.get('status') != 'running':
+            return job
+        if service._path(record['run_id']).with_name('cancelled').exists():
+            job.status = 'cancelled'
+            return job
+        session.id = getattr(job, 'session_id', None) or session.id
+        if not session.id:
+            return fail_review(service, record, chosen, job, routed, 'reasoning_session_missing')
+        record_attempt(record, chosen, job, routed, 'context_loaded')
+        service._save(record)
+
 
 def reasoning_only_length(step):
     return (step.get('finish_reason') == 'length'
@@ -41,6 +125,8 @@ class ReasoningLengthGate:
             self.exhausted = False
         if self.exhausted:
             self.stopped.set()
+        else:
+            self.stopped.clear()
 
 
 def retry_prompt(prompt):
@@ -114,8 +200,10 @@ def record_steps(job, stdout, stderr, env):
     if not saw_text and (length or not any((s['output_tokens'] or 0) > 0 for s in steps) and (
             steps and steps[-1]['finish_reason'] == 'length' and steps[-1]['output_tokens'] == 0
             or output_limit)):
-        job.events.append(dict(event='opencode_reasoning_exhausted',
-                                **({'reason': 'reasoning_only_length'} if length else {})))
+        evidence = dict(event='opencode_reasoning_exhausted',
+                        **({'reason': 'reasoning_only_length'} if length else {}))
+        if evidence not in job.events:
+            job.events.append(evidence)
 
 
 def cap_reasoning(env, model):

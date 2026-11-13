@@ -32,14 +32,19 @@ directory. Its home fallback is systemd `%h`, independent of the manager's `HOME
 redeploy the service template to apply the guard.
 
 Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; private-key blocks are masked in both modes, and token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
-Python and Rust order: complete/truncated PEM, Bearer, then plain-mode pre-pass P:
+Python and Rust order: complete/truncated PEM, Bearer, then plain-mode pre-pass P (Python first masks wider names as below):
 shield every matched assignment's name/quote/separator with an indexed marker
 `U+E000 + decimal index + U+E001`, leaving values untouched; run the wrapped join,
 then restore the names.
 P is skipped entirely if either shield character already occurs in the text.
 Then main's order runs: full assignments, wrapped prefixed tokens, URL userinfo,
-token catalog and JWT. The shielded join cannot cross/eat a credential name while
-its value is unmasked. Source mode skips P and assignments; its order is unchanged.
+token catalog and JWT. P protects only OLD matched names; the unchanged joins can still eat wider names.
+Source mode (`redact_source`) skips P and both assignment stages; its order is unchanged.
+Python masks wider plain assignments and exact `os.environ` subscript assignments through the physical line end (CR/LF only), before P; OLD behavior and both joins are unchanged.
+Exact new double-quoted colon keys remain open gap A2, the JSON-key rule. Next-line and backslash continuation forms remain open gap slice C REDACT-ASSIGN-JOIN-GAPS; neither join is fixed.
+JSON-tail limit-loss: a wider plain assignment hides the rest of its line, including later limit evidence inside JSON strings or dict-style text. Structured 429/402 JSON readers can lose limit evidence after scrubbing; dict-style lines are not read even raw, while raw streaming refusal detection and raw step accounting still run before scrubbing.
+Slice A2 also owns three known gaps: a wider name starting where an older-rule match ends is not masked yet; a wider name hides the whole rest of its line, including a later older-rule label; and quoted keys with blanks before the colon stay as on main.
+Secrecy-safe over-masks remain unchanged: mismatched or half quotes around wider names, Unicode line and paragraph separators counted as blanks, and a comparison sign after a subscript name.
 The catalog covers OpenAI, GitHub, Slack, AWS and Google prefixes; wrapped bodies
 share its alphabets/floors and bounded 4096-byte LF/CRLF joins.
 Source spans must start and end on line boundaries; invalid spans (even empty ones) withhold the prompt.
@@ -122,14 +127,14 @@ The monitor's events reach `record.json` through either dispatch path.
 131072 for Pro and Flash, matching `deploy/omniroute/custom-models.json` (D-5645).
 The old 65536 overlay and OpenCode's 32000 custom-model fallback are not the provider maximum;
 reasoning and answer share this budget. V2 reads `limit.output`; the env also lifts older harness clamps.
-`run_watchdog.py:collect` detects recorded reasoning-only length with open pipes and reaps immediately.
-`seat_spawn.py:SeatSpawnMixin._launch_session` continues the same run with `--session` and the same
-private store until a completed VERDICT, bounded only by the original card `max_min`/run timeout.
+`run_watchdog.py:collect` detects open-pipe reasoning-only length, records the reason and reaps immediately.
+`seat_spawn.py:SeatSpawnMixin._launch_session` retries once with `--session` and the same
+private store, capped at 120 seconds and the remaining original card `max_min`/run timeout.
 Each turn sends `answer now: findings, then the VERDICT line; no further analysis`; context is not replayed.
 `reasoning_continuations` and `reasoning_continuation` events persist count and both token counters;
-deadline expiry is `failed/reasoning_only_length`, never a silent timeout. Missing session evidence
-fails closed as `reasoning_session_missing`; cancellation/kill-incomplete and normal stops are unchanged.
-Recorded-event coverage: `tests/test_spawner_reasoning_only_length.py`; no automatic prompt splitting.
+repeated exhaustion is `failed/reasoning_only_length`; watchdog timeout remains `timeout` (`timed_out` on review records).
+Missing session evidence fails as `reasoning_session_missing`; completed prose is not retried (existing `no_verdict` still applies).
+MiMo review prompts over 24000 UTF-8 bytes are automatically split at source lines into bounded parts in the same private session; all evidence is retained before the final review instruction. Unsplittable lines fail closed; chunks share one retry and wall budget. Hermetic 25/55/100 KB coverage is not a live proof; live run IDs and each host's #781 spawner-source evidence remain open in PR #807.
 
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:

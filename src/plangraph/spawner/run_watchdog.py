@@ -339,17 +339,18 @@ async def collect(runner, job_id, proc):
                 delay = min(delay, EDIT_RETRY_S)   # Q7: keep retrying a lost baseline
             done, _ = await asyncio.wait(waiters, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
             if length_wait.done() and not length_gate.exhausted:
-                waiters = [waiter for waiter in waiters if waiter is not length_wait]
+                length_wait = asyncio.ensure_future(length_gate.stopped.wait()); waiters = [task, refusal_wait, length_wait]
             if (refused.is_set() or length_gate.exhausted) and not task.done() and job.status in ('cancelled', 'stalled', 'timeout'):
                 # Q14/M9/M15: a cancel/stall/timeout verdict is never stomped;
                 # the refusal is booked (job.refusal) but the verdict stands.
                 # Drop the resolved waiter so the loop keeps sampling normally.
                 waiters = [task]
             elif (refused.is_set() or length_gate.exhausted) and not task.done():
-                # D-3605 (a): a refused/rate-limited/credit/auth dispatch ends the run now,
-                # never 'running' until a stall rule fires; the leg loop records leg_state.
+                # Dispatch refusals and reasoning-only length stops end open-pipe runs now.
                 job.status, job.exit_code = 'failed', 7
-                if not length_gate.exhausted:
+                if length_gate.exhausted:
+                    job.events.extend([dict(event='reasoning_only_length'), dict(event='opencode_reasoning_exhausted', reason='reasoning_only_length')])
+                else:
                     job.events.append({'event': 'dispatch_refused', 'reason': job.refusal})
                 logging.getLogger(__name__).info('%s %s', job_id,
                     'reasoning_only_length' if length_gate.exhausted else 'dispatch refused')
