@@ -4,7 +4,8 @@ The two-reviewer gate (D-219, ``store_review``) normally requires two passing
 verdicts from different families. When that seat is unavailable, the router may
 record a **verified ``decision``** for one item using
 ``waive_second_family(principal, key, D-NNN)``. An active D-id waiver permits
-one passing verdict with single-seat coverage (D-5658). Distinct principals,
+one passing verdict with single-seat coverage (D-5658), except auth/secrets
+cards still require two distinct non-Anthropic families. Distinct principals,
 non-null families, writer-family conflicts and claimant/delegate exclusions
 still apply; the waiver itself is not a verdict.
 
@@ -127,20 +128,7 @@ class WaiverMixin:
         need = 2 if item["review_tier"] == "high" else 1
         if len(seats) < need:
             raise Refused("coverage", f"insufficient_seat_families: need {need}")
-        card = self.conn.execute("SELECT risk_tags FROM cards WHERE key=?",
-                                 (item["key"],)).fetchone()
-        tags = []
-        if card is not None:
-            try:
-                tags = json.loads(card["risk_tags"])
-            except (ValueError, TypeError, RecursionError):
-                raise Refused("validation", "card_risk_tags_invalid") from None
-            # Match put_card's canonical vocabulary, not a permissive JSON
-            # iterable. Noncanonical spelling is invalid, never lower risk.
-            if not isinstance(tags, list) or any(
-                    not isinstance(tag, str) or tag not in RISK_TAGS for tag in tags):
-                raise Refused("validation", "card_risk_tags_invalid")
-        if {"auth", "secrets"}.intersection(tags) \
+        if self._card_requires_non_anthropic_seats(item) \
                 and len(set(seats) - {"anthropic"}) < 2:
             raise Refused("coverage", "insufficient_non_anthropic_seat_families: need 2")
         writers = writer_families(self, item, self._ctx(item, now))
@@ -176,6 +164,23 @@ class WaiverMixin:
         if not set(seats).issubset(recorded_seats - {None}):
             raise Refused("coverage", "seat_family_not_recorded")
         return seats
+
+    def _card_requires_non_anthropic_seats(self, item):
+        """Shared risk gate for merged closes and high-tier verdicts."""
+        card = self.conn.execute("SELECT risk_tags FROM cards WHERE key=?",
+                                 (item["key"],)).fetchone()
+        tags = []
+        if card is not None:
+            try:
+                tags = json.loads(card["risk_tags"])
+            except (ValueError, TypeError, RecursionError):
+                raise Refused("validation", "card_risk_tags_invalid") from None
+            # Match put_card's canonical vocabulary, not a permissive JSON
+            # iterable. Noncanonical spelling is invalid, never lower risk.
+            if not isinstance(tags, list) or any(
+                    not isinstance(tag, str) or tag not in RISK_TAGS for tag in tags):
+                raise Refused("validation", "card_risk_tags_invalid")
+        return bool({"auth", "secrets"}.intersection(tags))
 
     def _close_merged(self, principal, key, decision_id, families, now):
         self._require_role(principal, "router")

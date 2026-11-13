@@ -1,7 +1,8 @@
 """D-217 second-family waiver (part 2 of the two-reviewer gate).
 
 A router's verified D-id waiver permits one passing verdict to close a high
-item, retaining writer independence and sensitive single-seat coverage. A
+item, except auth/secrets cards require two non-Anthropic families, retaining
+writer independence and sensitive single-seat coverage. A
 waiver recorded after the first verdict still permits a distinct second
 principal of the same family. All other refusals remain in force.
 """
@@ -177,6 +178,25 @@ def test_waiver_disallowed_tier_stays_refused(w, tier):
     assert exc.value.code == "bad_state"
     assert w.store._item(KEY)["review_waiver"] is None
     assert _count(w, KEY, "waiver_set") == 0
+    epoch = w.store._item(KEY)["epoch"]
+    w.store.add_evidence(w.p("l1main"), KEY, epoch, "decision", {"id": DECISION})
+    w.store.submit(w.p("l1main"), KEY, epoch)
+    # A legacy/cache waiver must not bypass standard independence or none's ban.
+    w.conn.execute("UPDATE items SET review_waiver=? WHERE key=?", (DECISION, KEY))
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("reviewerSame"), KEY, True, "stored waiver")
+    assert exc.value.code == ("bad_state" if tier == "none" else "same_family")
+    assert w.store._item(KEY)["state"] == "in_review"
+    assert _count(w, KEY, "review_verdict") == 0
+    assert _count(w, KEY, "review_passed") == 0
+    if tier == "standard":
+        assert w.store.verdict(w.p("reviewer"), KEY, True) == {
+            "key": KEY, "state": "done", "reviews_passed": 1}
+    else:
+        with pytest.raises(Refused) as exc:
+            w.store.verdict(w.p("reviewer"), KEY, True, "stored waiver")
+        assert exc.value.code == "bad_state"
+        assert _count(w, KEY, "review_verdict") == 0
 
 
 @pytest.mark.parametrize("waiver", ["waived", "D-", "D-217-extra", "D-217\n"])

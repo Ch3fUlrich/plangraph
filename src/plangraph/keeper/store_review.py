@@ -28,7 +28,8 @@ file a change request (``ok=False``) but may never record an ACCEPT seat
 
 The waiver path (D-217, D-5658) lives in ``store_waiver``: an active D-id waiver
 lets one passing verdict close a ``high`` item, with single-seat coverage and
-all writer-family gates intact. Waivers on ``standard`` or ``none`` items
+all writer-family gates intact, except auth/secrets cards still need two
+distinct non-Anthropic seat families. Waivers on ``standard`` or ``none`` items
 remain refused (``bad_state``).
 """
 from __future__ import annotations
@@ -38,6 +39,7 @@ import re
 
 from . import auth
 from .errors import Refused
+from .store_waiver import _known_family
 
 
 class ReviewMixin:
@@ -251,11 +253,18 @@ class ReviewMixin:
             waived = (tier == "high" and self._waiver_active(fresh)
                       and isinstance(waiver, str)
                       and re.fullmatch(r"D-[0-9]+", waiver) is not None)
-            need = 1 if waived else 2
+            non_anthropic = self._card_requires_non_anthropic_seats(fresh)
+            need = 1 if waived and not non_anthropic else 2
             passed = len(prior) + 1
             if passed >= need:
                 # Only the verdict that would close a high item is checked;
                 # a refusal appends nothing and leaves the round intact.
+                if non_anthropic:
+                    seats = {_known_family(v.get("family")) for v in prior}
+                    seats.add(_known_family(principal.family))
+                    if len(seats - {None, "anthropic"}) < 2:
+                        raise Refused("coverage",
+                                      "insufficient_non_anthropic_seat_families: need 2")
                 self._check_coverage(principal, fresh, prior, need=need,
                                      sensitive=True, now=now)
             self._append(principal, key, "review_verdict",
