@@ -42,7 +42,6 @@ impl Fixture {
         c.env_clear()
             .env("PATH", env::var_os("PATH").unwrap())
             .env("HOME", &self.base)
-            .env("GIT_CEILING_DIRECTORIES", &self.base)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_AUTHOR_NAME", "Fixture")
@@ -155,6 +154,29 @@ cases! {
         let expected = "ALERT alias-worktrees reason=detached\nALERT dangling reason=fetch-failed\nALERT linked-lanes reason=detached\nALERT repo reason=detached\n";
         assert_eq!(f.run(&[], Some(1)), expected);
     }
+    #[cfg(unix)] invalid_git_entries_never_fetch_or_merge_the_parent(f) {
+        use std::os::unix::fs::symlink;
+        fs::rename(f.base.join("code"), f.base.join("original-code")).unwrap();
+        f.git(&f.base, &["clone", f.origin.to_str().unwrap(), "code"]);
+        let parent = f.base.join("code");
+        f.commit(&f.seed, "tracked", "new parent update");
+        f.git(&f.seed, &["push", f.origin.to_str().unwrap(), "main"]);
+        for name in ["dangling", "empty", "invalid"] { fs::create_dir(parent.join(name)).unwrap(); }
+        symlink("missing", parent.join("dangling/.git")).unwrap();
+        fs::create_dir(parent.join("empty/.git")).unwrap();
+        fs::write(parent.join("invalid/.git"), "not a git directory").unwrap();
+        let state = || (f.git(&parent, &["rev-parse", "HEAD", "origin/main"]),
+            fs::read(parent.join("tracked")).unwrap(), fs::read(parent.join(".git/FETCH_HEAD")).ok());
+        let before = state();
+        let expected = "ALERT dangling reason=fetch-failed\nALERT empty reason=fetch-failed\nALERT invalid reason=fetch-failed\n";
+        assert_eq!(f.run(&[], Some(1)), expected);
+        assert_eq!(state(), before);
+        for name in ["dangling", "empty", "invalid"] {
+            let label = format!("code/{name}");
+            assert_eq!(f.run(&["--repo", &label], Some(1)), format!("ALERT {label} reason=fetch-failed\n"));
+            assert_eq!(state(), before);
+        }
+    }
     #[cfg(unix)] defensive_probe_failures_use_fetch_failed(f) {
         use std::os::unix::fs::PermissionsExt;
         let real = f.command("sh").args(["-c", "command -v git"]).output().unwrap();
@@ -185,7 +207,11 @@ cases! {
     #[cfg(unix)] discovery_labels_cannot_forge_alerts_or_mangle_bytes(f) {
         use std::os::unix::ffi::OsStringExt;
         f.git(&f.repo, &["switch", "--detach"]);
-        for (raw, escaped) in [(b"line\nALERT forged".to_vec(), "line\\nALERT forged"), (b"bad\xff".to_vec(), "bad\\xff"), (b"slash\\tab\t\r\x1b".to_vec(), "slash\\\\tab\\t\\r\\u{1b}")] {
+        let unicode = ['\u{2028}', '\u{2029}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}', '\u{202e}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}'];
+        let labels = [(b"line\nALERT forged".to_vec(), "line\\nALERT forged"), (b"bad\xff".to_vec(), "bad\\xff"), (b"slash\\tab\t\r\x1b".to_vec(), "slash\\\\tab\\t\\r\\u{1b}")]
+            .into_iter().map(|(raw, escaped)| (raw, escaped.to_owned()))
+            .chain(unicode.into_iter().map(|ch| (format!("unicode{ch}").into_bytes(), format!("unicode{}", ch.escape_default()))));
+        for (raw, escaped) in labels {
             let path = f.base.join("code").join(std::ffi::OsString::from_vec(raw)); fs::rename(&f.repo, &path).unwrap();
             assert_eq!(f.run(&[], Some(1)), format!("ALERT {escaped} reason=detached\n"));
             let mut c = f.cli(); c.arg("--repo").arg(&path);
@@ -195,6 +221,22 @@ cases! {
     }
     fixture_recreates_stale_base_and_ignores_cleanup_errors(f) {
         fs::write(f.base.join("stale"), "stale").unwrap(); let fresh = Fixture::at(f.base.clone());
-        assert!(!fresh.base.join("stale").exists()); drop(fresh); drop(f);
+        assert!(!fresh.base.join("stale").exists()); drop(fresh);
+        let base = f.base.clone();
+        fs::write(&base, "cleanup obstruction").unwrap();
+        assert_eq!(fs::remove_dir_all(&base).unwrap_err().kind(), std::io::ErrorKind::NotADirectory);
+        drop(f);
+        assert_eq!(fs::read(&base).unwrap(), b"cleanup obstruction");
+        fs::remove_file(base).unwrap();
     }
+}
+
+#[test]
+fn repo_sync_docs_use_one_short_line() {
+    let lines: Vec<_> = include_str!("../../../docs/fleet-sync.md").lines().skip(2)
+        .take_while(|line| !line.starts_with("Run `python3"))
+        .filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].starts_with("`pg-repo-sync"));
+    assert!(lines[0].len() <= 120);
 }

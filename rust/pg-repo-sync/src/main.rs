@@ -16,17 +16,13 @@ fn git(repo: &Path, args: &[&str]) -> Command {
             "core.fsmonitor=false",
         ])
         .args(args)
+        .env("GIT_DIR", ".git")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    for key in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_COMMON_DIR",
-    ] {
+    for key in ["GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"] {
         command.env_remove(key);
     }
     command
@@ -97,7 +93,9 @@ fn escaped_label(label: &OsStr) -> String {
     let mut escaped = String::new();
     for chunk in label.as_encoded_bytes().utf8_chunks() {
         for ch in chunk.valid().chars() {
-            if ch.is_control() || ch == '\\' {
+            if ch.is_control()
+                || matches!(ch, '\\' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            {
                 escaped.extend(ch.escape_default());
             } else {
                 escaped.push(ch);
