@@ -140,9 +140,14 @@ printf '#!/bin/sh\nexit 0\n' > "$target"
 "##,
     );
     symlink("/bin/bash", bins.join("bash")).unwrap();
-    let invoke = || {
+    let invoke = |allow_unpinned| {
         Command::new(env!("CARGO_BIN_EXE_plangraph"))
             .args(["install", "--only", "nodejs", "--yes"])
+            .args(if allow_unpinned {
+                vec!["--allow-unpinned-scripts"]
+            } else {
+                vec![]
+            })
             .env("HOME", root.path())
             .env("PATH", &bins)
             .env("XDG_STATE_HOME", root.path().join("state"))
@@ -151,7 +156,10 @@ printf '#!/bin/sh\nexit 0\n' > "$target"
             .output()
             .unwrap()
     };
-    let output = invoke();
+    let refused = invoke(false);
+    assert!(!refused.status.success());
+    assert!(!root.path().join("apt-calls").exists());
+    let output = invoke(true);
     assert!(
         output.status.success(),
         "{}",
@@ -159,7 +167,7 @@ printf '#!/bin/sh\nexit 0\n' > "$target"
     );
     let calls = fs::read(root.path().join("apt-calls")).unwrap();
     assert!(String::from_utf8_lossy(&calls).contains("install -y -- nodejs"));
-    let output = invoke();
+    let output = invoke(true);
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("skipped"));
     assert_eq!(fs::read(root.path().join("apt-calls")).unwrap(), calls);

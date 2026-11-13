@@ -49,3 +49,7 @@ AutoOS remains read-only in this package. Its parallel removal owner should
 replace the relevant legacy setup entry with a thin caller of
 `plangraph install --only core,agents --yes`, forwarding dry-run. No code in
 plangraph invokes AutoOS setup, and no AutoOS source was modified.
+
+Vendor scripts are unpinned and refuse before downloading or preparing packages
+unless the operator explicitly passes `--allow-unpinned-scripts`. `--yes` alone
+does not permit them; dry-run/check remain available without that opt-in.

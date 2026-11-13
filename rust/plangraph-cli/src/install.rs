@@ -167,6 +167,7 @@ struct SystemHost {
     home: PathBuf,
     root: bool,
     apt_updated: bool,
+    allow_unpinned_scripts: bool,
 }
 impl SystemHost {
     fn command(&self, program: &str, privileged: bool) -> Command {
@@ -274,6 +275,10 @@ impl Host for SystemHost {
         )
     }
     fn script(&mut self, url: &str, privileged: bool) -> Result<(), String> {
+        if !self.allow_unpinned_scripts {
+            eprintln!("install refused unpinned script; --allow-unpinned-scripts required");
+            return Err("unpinned script refused".into());
+        }
         self.apt(&["curl", "ca-certificates"])?;
         let file = tempfile::NamedTempFile::new().map_err(|_| "temporary file unavailable")?;
         self.execute(
@@ -317,6 +322,7 @@ pub fn cli(home: &Path, args: &[String]) -> i32 {
     let mut dry_run = false;
     let mut check = false;
     let mut yes = false;
+    let mut allow_unpinned_scripts = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -327,6 +333,7 @@ pub fn cli(home: &Path, args: &[String]) -> i32 {
             "--dry-run" => dry_run = true,
             "--check" => check = true,
             "--yes" => yes = true,
+            "--allow-unpinned-scripts" => allow_unpinned_scripts = true,
             _ => return 2,
         }
         index += 1;
@@ -363,6 +370,7 @@ pub fn cli(home: &Path, args: &[String]) -> i32 {
         home: home.into(),
         root,
         apt_updated: false,
+        allow_unpinned_scripts,
     };
     let (code, rows) = run(&mut host, only, dry_run, check);
     for row in rows {

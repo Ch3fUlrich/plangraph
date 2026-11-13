@@ -1,0 +1,1 @@
+- Require explicit --allow-unpinned-scripts consent before downloading or executing unpinned vendor installers, including privileged scripts.
