@@ -194,6 +194,9 @@ The private word list is never stored in the repo: point the hook at it via envi
 `PLANGRAPH_SCRUB_WORDS=<path to words.txt>` (optional extra allowances: `PLANGRAPH_SCRUB_RULES=<path to rules.toml>`).
 Unset, the hook uses `~/.config/plangraph/scrub-words.txt` (requires `chmod 600`).
 A missing default warns once that the private-word rule is inactive; public patterns still run.
+A synthetic test fixture that trips a public rule (for example an IPv6 loopback or documentation address) gets a
+`[[scrub.allow_value]]` row in `tools/split/scrub_ci.toml` with `path`, `rule`, the value's `value_sha256` and a `why`;
+never allow a real host or address.
 An explicit missing or unreadable list refuses pushes to any remote. The env list wins.
 Remotes are public unless `git config remote.<name>.plangraph-private true` is set:
 that skips private-word matching, not public patterns. Classification uses local config only.
