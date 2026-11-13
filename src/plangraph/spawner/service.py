@@ -148,7 +148,7 @@ class SpawnService(SeatSpawnMixin):
         gaps = remaining_gaps(output)
         reason = ('nonzero_exit' if record.get('exit_code') != 0 or record.get('status', 'completed') != 'completed' else
                   'continuation_limit' if record.get('continuation') else
-                  'not_writer' if record.get('role') not in ('implement', 'review', 'judge') else
+                  'not_writer' if record.get('role') != 'implement' else
                   'clean_report' if not gaps else 'remaining_gaps')
         record['continuation_reason'] = reason
         if reason != 'remaining_gaps' or record.get('continuation_run_id'):

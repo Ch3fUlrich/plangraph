@@ -134,6 +134,10 @@ def test_continuation_rechecks_base(repository, dispatch, role, current, diff):
     if not current:
         git(repo, 'switch', '--detach', old)
     asyncio.run(service._continue_writer(parent, 'Remaining gaps: finish the test'))
+    if role != 'implement':
+        assert parent['continuation_reason'] == 'not_writer' and 'continuation_run_id' not in parent
+        assert not calls
+        return
     child = service.result(parent['continuation_run_id'])
     assert child['status'] == ('completed' if current else 'failed'), child.get('error')
     assert len(calls) == int(current)
