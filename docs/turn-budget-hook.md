@@ -39,6 +39,19 @@ are counted; only Bash pre-tool events are candidates for polling refusals.
   Replacement retains an existing status file's permissions; new files keep the
   private tempfile default. The file is synced before rename and, on Unix, the
   parent status directory is synced after rename for crash durability.
+  On Windows, `storage.rs:atomic_write` creates the same-directory temporary
+  file with DELETE access; `storage.rs:replace_status` uses
+  `SetFileInformationByHandle(FileRenameInfoEx)` with REPLACE_IF_EXISTS and
+  POSIX_SEMANTICS instead of tempfile's `MoveFileExW`. The concurrent-reader test
+  retains a Rust `File::open` reader (which permits `FILE_SHARE_DELETE`) across
+  each update: that handle keeps the old bytes, fresh opens parse complete JSON,
+  and all 30 counter increments are published. This does not guarantee updates
+  against readers opened without `FILE_SHARE_DELETE`: those can cause a sharing
+  violation and a skipped count. The Windows-only storage regression asserts
+  that this failure preserves the old bytes and leaves no temporary entry, not
+  that the update succeeds. There is no truncate/remove fallback or retry loop;
+  filesystems without this rename support likewise report IO failure without
+  publishing partial state.
 - One model call is one distinct `assistant.message.id` in the session's JSONL
   transcript. Multiple streamed blocks or tool uses from that response count
   once. User/tool-result, progress, sidechain and missing-ID records do not count.
@@ -221,6 +234,41 @@ directory entries (not a tempfile suffix), concurrent readers always parsing
 complete JSON during updates, mode preservation and bounded-history
 recovery; watchdog tests exercise changing counts, delivery and recovery using
 an explicitly injected clock rather than wall time.
+The concurrent-reader test handshakes each of 30 writes while retaining an old
+Rust read handle (delete-sharing on Windows), verifies its snapshot remains
+byte-identical, and checks every fresh observation and the exact final count.
+It uses no sleeps or read retries; an in-place/partial-write mutation fails
+rather than merely losing coverage to scheduling. Channel waits have watchdogs
+so a failed peer cannot hang the handshake.
 Storage tests also cover existing over-cap status and rejected over-cap writes.
 The watchdog subprocess suite is Unix-only because its delivery fixtures use
 `/bin/sh` and `/bin/cat`; opt-out children clear both budget environment variables.
+
+### Race-regression evidence and remaining limit
+
+Round 3 removes prompt-Git elapsed-time assertions: the native producer cannot
+complete until the parent releases its control channel after collection returns.
+The hung/closed-stdout cases require the Git timeout error, a terminated producer,
+and no drain marker; the escaped-stdout case releases its holder only after the
+result. Accept is nonblocking with a deadline, and every control socket has read
+and write timeouts. Both deadline tests fail with an unbounded child wait inserted
+before cleanup; the drain test fails with draining disabled. The status test still
+rejects an in-place-write mutation. Injecting a kill error fails the reaping test
+with error propagation and passes with unconditional wait; a missing connection
+fails by external timeout before the bounded accept fix. No retry wrapper or test
+ignore is used. Both crate manifests explicitly identify the existing windows-sys
+features used by these paths; Windows test-target compilation checks their uses.
+
+The no-delete-sharing publication finding remains open in
+`storage.rs:replace_status`: supporting an indefinitely retained incompatible
+reader needs a different publication/read protocol, not a rename flag or retry.
+The Windows-only preservation regression is cross-compiled here, not executed;
+native Windows runtime acceptance is still required. The successful concurrent
+test is unchanged in strength and establishes only the delete-sharing case.
+This supersedes the round-2 changelog's broader held-reader claim.
+
+Local checks cover the prompt-Git module, the full `turn_budget_hook` test file,
+strict native clippy for both crates, and Windows test-target compilation.
+`affected_tests.py -n 2` requires `--base`; with `--base origin/main` it selects
+the full Python suite because the existing changelog fragment is unmapped. That
+fallback is not executed under this lane's targeted-tests-only constraint.
