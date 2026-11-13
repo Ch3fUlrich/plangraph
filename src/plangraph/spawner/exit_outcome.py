@@ -1,5 +1,6 @@
 """Shared dispatch outcome policy for base and routed launches."""
 import atexit
+import json
 
 from plangraph.routing_support.leg_state import _down_seconds
 from .env_redact import first_reason, harness_limit_line, unavailable_reason
@@ -24,7 +25,20 @@ def is_opencode(job):
 
 def failure_reason(job, stop=None):
     text = without_progress(job.stderr) if is_opencode(job) else job.stderr
-    return first_reason(text) or ('provider_stop' if stop else f'harness exit code {job.exit_code}')
+    reason = first_reason(text)
+    if not reason and is_opencode(job):
+        reason = next((first_reason(e.get('message') or '') for e in reversed(getattr(job, 'events', ()))
+                       if e.get('event') == 'opencode_error' and e.get('message')), None)
+    if not reason and is_opencode(job):
+        for line in getattr(job, 'stdout', '').splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            error = event.get('error') if isinstance(event, dict) and event.get('type') == 'error' else None
+            if isinstance(error, dict) and isinstance(error.get('message'), str):
+                reason = first_reason(error['message']) or reason
+    return reason or ('provider_stop' if stop else f'harness exit code {job.exit_code}')
 
 
 def refusal_record(record, job):
@@ -325,7 +339,8 @@ def terminal_reason(record, job=None):
                 and not stdout.lstrip().startswith(('{', '['))):
             record['reason'] = 'exit1_after_stdout'
             return
-        record['reason'] = (reason or record.get('error')
+        last_reason = real[-1].get('skip_reason') if real else None
+        record['reason'] = (reason or last_reason or record.get('error')
                             or first_reason(stderr)
                             or f"harness exit {record['exit_code']}")
 

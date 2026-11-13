@@ -2,7 +2,7 @@
 from __future__ import annotations
 from .env_redact import first_reason, harness_limit_line, redact, unavailable_reason
 from .gateway_witness import witness_order, witness_gate_legs
-from .exit_outcome import fallthrough_reason, refusal_record, release_attempts, terminal_reason
+from .exit_outcome import failure_reason, fallthrough_reason, refusal_record, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, selected_checkout, writer_launch
 from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
@@ -336,7 +336,7 @@ class SpawnService(SeatSpawnMixin):
                         break
                     unavailable = fallthrough_reason(self, chosen, job, record)
                     if unavailable: job.status, job.exit_code = 'failed', job.exit_code or 1
-                    reason = unavailable or (('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}')
+                    reason = unavailable or (failure_reason(job, stop)
                         if job.status in ('failed', 'skipped') else None)
                     if stop and any(isinstance(slot, dict) and slot.get('seat_group')
                             and slot.get('leg') == chosen.id for slot in (plan.seat_coverage or ())):

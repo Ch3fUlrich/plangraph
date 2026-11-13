@@ -702,15 +702,20 @@ class SpawnerRunner:
             job = self.jobs[job_id]
             kept = []
             for line in stderr_text.splitlines(keepends=True):
+                from .proc_kill import oom_envelope, record_oom_envelope
+                telemetry = oom_envelope(line)
+                if telemetry is not None:
+                    record_oom_envelope(job.events, telemetry)
+                    extras = {k: v for k, v in telemetry.items() if k != 'plangraph_oom'}
+                    if extras:
+                        from .env_redact import redact_env_values
+                        job.events.append(dict(event='oom_telemetry_detail', detail=redact_output(
+                            redact_env_values(json.dumps(extras), self._child_envs.get(job_id, os.environ)))))
+                    continue
                 try:
                     envelope = json.loads(line)
                 except (ValueError, TypeError):
                     kept.append(line)
-                    continue
-                if isinstance(envelope, dict) and set(envelope) == {'plangraph_oom'}:
-                    # Telemetry lives in events only; it never becomes stderr content.
-                    from .proc_kill import record_oom_envelope
-                    record_oom_envelope(job.events, envelope)
                     continue
                 kept.append(line)
                 if not isinstance(envelope, dict) or set(envelope) != {'autoos_provider_response'}:

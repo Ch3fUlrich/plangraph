@@ -227,8 +227,9 @@ def normalize(text):
 
 def first_reason(text):
     """First diagnostic, excluding the OOM wrapper's structured telemetry."""
+    from .proc_kill import oom_envelope
     return next((line.strip() for line in normalize(text).splitlines()
-                 if line.strip() and not re.search(r'\{\s*"plangraph_oom"\s*:', line)), '')
+                 if line.strip() and oom_envelope(line) is None), '')
 
 
 def opencode_limit(text):

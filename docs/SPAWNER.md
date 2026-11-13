@@ -669,3 +669,5 @@ Rust source-filter tests and pytest's real `configured_hosts` checks consume
 `tests/fixtures/doctor_sources.json`, binding both validators and probe limits
 to the same accepted/rejected cases. Rust embeds JSON, never Python source or
 an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
+
+OOM wrapper lines are recognized by their known event shape, including `wrapper:` prefixes and extra metadata. The known event is retained in `events`; extra metadata is redacted into an `oom_telemetry_detail` event. Unknown or diagnostic-bearing envelopes remain in stderr. These untrusted telemetry events confer no provider identity or authorization. OpenCode structured `type=error` messages survive display-text decoding and supply attempt diagnostics. When all legs fail, the run reason selects the last real attempt before accumulated errors or stderr. The three Dell incident captures are replayed by `tests/test_spawner_oom_reason.py` using `tests/fixtures/spawner_dell_oom.json`.
