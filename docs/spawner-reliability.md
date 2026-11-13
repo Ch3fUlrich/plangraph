@@ -51,6 +51,8 @@ Tools-mode injection defaults off; rollback is off. The operator environment
 the operator config `plangraph/reliability.json`; `roles.review` overrides the
 global setting. Shadow computes a boolean count without changing the prompt.
 Inline-only review requires diff_ref and the NO-tools header even when off.
+Prompt-only review/judge file requests without inline material or `diff_ref` refuse as `toolless_needs_inline`; supplied diffs use the existing `inline_diff` transport.
+Tool-less replies containing tool-call markup refuse as `toolless_tool_markup` (exit 2); unknown Claude tool evidence fails closed, while prose mentioning “invoke” is allowed.
 Repositories resolve through the self host in operator-owned hosts.json, never
 adapter cwd. Raw diffs are capped at 262144 bytes before lossy UTF-8 decoding.
 Only exact stdin carriers are injected; multiline .cmd/.bat launchers refuse.

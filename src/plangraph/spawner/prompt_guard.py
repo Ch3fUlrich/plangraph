@@ -1,9 +1,30 @@
-"""Caller-brief admission, not repository context/diffs or review-seat prompts.
+"""Caller-brief admission and prompt-only review material checks.
 
-Review seats are deliberately unchecked: their prompts embed raw diffs which
-may legitimately contain control bytes. Non-string/empty admission is unchanged.
+Review seats skip control-byte admission: raw diffs may legitimately contain
+those bytes. Prompt-only file reviews must supply their evidence inline.
 """
 import unicodedata
+import re
+
+
+_REPO_PATH = re.compile(r'\b[\w./-]+\.(?:py|rs|md|txt|json|jsonl|toml|ya?ml|js|ts|tsx|jsx|sh|sql|cfg|ini)\b', re.I)
+_FILE_REQUEST = re.compile(r'\b(?:read|open|check|inspect|review)\b[^\n.!?]{0,80}\b(?:plan|code|source|file)s?\b', re.I)
+_INLINE = re.compile(
+    r'^\s*(`{3,}|~{3,})[^\n]*\n(.*?)^\s*\1\s*$'
+    r'|^=== (?:INLINE [^\n]+|CONTEXT PACK) ===\n(.*?)^=== END [^\n]+ ==='
+    r'|^## (?:File: [^\n]+|PR [^\n]+)\n(.*?)(?=^## |\Z)', re.M | re.S)
+
+
+def admit_toolless(prompt, card, role, leg, refuse):
+    """Prompt-only file reviews need supplied material; never read files here."""
+    if role not in ('review', 'judge') or getattr(leg, 'tool_mode', 'tools') != 'prompt-only':
+        return
+    if card.get('diff_ref') is not None:
+        return  # seat_spawn uses the existing inline_diff transport.
+    if not (_REPO_PATH.search(prompt) or _FILE_REQUEST.search(prompt)):
+        return
+    if not any((m[2] or m[3] or m[4] or '').strip() for m in _INLINE.finditer(prompt)):
+        raise refuse('toolless_needs_inline')
 
 
 def admit_prompt(prompt, refuse):

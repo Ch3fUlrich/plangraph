@@ -110,6 +110,7 @@ INLINE_DIFF_HARNESSES = frozenset({'opencode'})
 
 def _needs_inline_diff(leg, card):
     return (getattr(leg, 'tool_mode', 'tools') == 'inline-only'
+            or (getattr(leg, 'tool_mode', 'tools') == 'prompt-only' and card.get('diff_ref') is not None)
             or (getattr(leg, 'harness', None) in INLINE_DIFF_HARNESSES
                 and card.get('diff_ref') is not None))
 
@@ -313,11 +314,15 @@ class SeatSpawnMixin:
         ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
         ``document_review`` allows explicit ``--leg`` document reviews and dry-run planning; live routed
         inline-only review legs need the card's diff and refuse without ``diff_ref`` (r3).
-        OpenCode tools-mode reviews inline a diff when supplied, but also support non-diff reviews."""
+        OpenCode tools-mode and prompt-only reviews inline a supplied diff_ref."""
+        from .prompt_guard import admit_toolless
+        from plangraph.routing_errors import SpawnRefused
+        admit_toolless(prompt, card, role, leg, SpawnRefused)
         if getattr(leg, 'tool_mode', 'tools') == 'inline-only':
             from . import context_pack
             prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
-        if role == 'review' and _needs_inline_diff(leg, card):
+        if _needs_inline_diff(leg, card) and (role == 'review' or
+                role == 'judge' and getattr(leg, 'tool_mode', 'tools') == 'prompt-only'):
             from .inline_diff import InlineDiffError, inline_diff_prompt
             try:
                 prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,

@@ -22,6 +22,35 @@ from seat_backfill import backfill
 _HEAD_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 # F8: both spellings count (review/tail.md uses TEST-GAMING).
 _TEST_GAMING = re.compile(r"^TEST[_-]GAMING:[ \t]*(.*)$", re.I | re.M)
+_TOOL_MARKUP = re.compile(r'<\s*(?:invoke_tool\b|invoke\s+name\s*=|function_calls\b)', re.I)
+
+
+def guard_toolless_reply(run_dir, text, record=None, live_log=''):
+    """Reject fabricated tool transcripts; Claude needs affirmative tool evidence."""
+    if not _TOOL_MARKUP.search(text):
+        return
+    leg = (record or {}).get('chosen_leg')
+    leg = leg if isinstance(leg, dict) else {}
+    mode, harness = leg.get('tool_mode'), leg.get('harness')
+    toolless = record is None or mode == 'prompt-only' or harness == 'opencode'
+    if harness == 'claude' and not toolless:
+        try:
+            stream = (Path(run_dir) / 'claude-stream.jsonl').read_text('utf-8')
+        except (OSError, UnicodeError):
+            stream = live_log
+        tools = None
+        for line in stream.split('\n'):
+            try:
+                event = json.loads(line)
+            except (ValueError, RecursionError):
+                continue
+            if isinstance(event, dict) and event.get('type') == 'system' and event.get('subtype') == 'init':
+                tools = event.get('tools')
+        toolless = not (isinstance(tools, list) and tools and all(isinstance(t, str) and t for t in tools))
+    elif mode == 'inline-only':
+        toolless = True
+    if toolless:
+        raise ValueError('toolless_tool_markup')
 
 def _canon_family(name):
     """Canonical family of a model or family name via seat_verdict's alias table."""
@@ -32,16 +61,22 @@ def _canon_family(name):
     return family
 
 def _review_text_from_log(live_log: str) -> str:
-    """Lifecycle events select OpenCode mode; otherwise keep plain logs intact."""
+    """Extract final OpenCode step or Claude result; keep plain logs intact."""
     event_log, texts = False, []
+    claude, answer = False, None
     for line in live_log.split("\n"):
         line = line.removesuffix("\r")
         try:
             event = json.loads(line)
         except (ValueError, RecursionError):
             continue
-        if (not isinstance(event, dict)
-                or event.get("type") not in ("step_start", "step_finish", "text", "tool_use")
+        if not isinstance(event, dict):
+            continue
+        if event.get('type') == 'system' and event.get('subtype') == 'init':
+            claude = True
+        if event.get('type') == 'result':
+            answer = event.get('result') if not event.get('is_error') else ''
+        if (event.get("type") not in ("step_start", "step_finish", "text", "tool_use")
                 or not isinstance(event.get("part"), dict)):
             continue
         event_log |= event["type"] in ("step_start", "step_finish")
@@ -51,6 +86,8 @@ def _review_text_from_log(live_log: str) -> str:
             part = event["part"]
             if isinstance(part.get("text"), str):
                 texts.append(part["text"])
+    if claude and isinstance(answer, str):
+        return answer
     return "\n".join(texts) if event_log else live_log
 
 def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None) -> tuple[dict, str]:
@@ -114,6 +151,7 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         review_text = str(record.get("stdout_tail") or "")
     if not review_text.strip():
         raise ValueError("record has no review text (live.log and stdout_tail empty)")
+    guard_toolless_reply(run_dir, review_text, record, live_log)
     served = record.get("served_model")
     leg = record.get("chosen_leg")
     chosen = leg.get("model") if isinstance(leg, dict) else None
