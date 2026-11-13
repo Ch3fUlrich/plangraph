@@ -21,6 +21,7 @@ mod package_probe;
 mod package_probe_scripts;
 mod package_scripts;
 mod package_transport;
+mod package_windows;
 mod placement;
 mod prompt;
 mod prompt_git;

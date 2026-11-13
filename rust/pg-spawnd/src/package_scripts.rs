@@ -102,17 +102,16 @@ Git worktree add -b {branch} {work} {base}
 [IO.File]::WriteAllText({package}, {text})
 Git -C {work} rev-parse HEAD | Set-Content -LiteralPath (Join-Path {work} .package-base)
 [IO.File]::WriteAllText({runner_path}, {runner})
-$action='powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + {runner_path} + '"'
-& schtasks /Create /TN {task} /TR $action /SC ONCE /ST 23:59 /F | Out-Null
-if ($LASTEXITCODE -ne 0) {{ throw 'task creation failed' }}
-& schtasks /Run /TN {task} | Out-Null
-if ($LASTEXITCODE -ne 0) {{ throw 'task start failed' }}
+{schedule}
 Start-Sleep -Seconds 30
 $launchedPid=[int](Get-Content -LiteralPath {pid})
 $process=Get-Process -Id $launchedPid -ErrorAction SilentlyContinue
 if (!$process) {{ throw 'detached package died' }}
 @{{pid=$launchedPid;task={task};alive=$true;started_process=$process.StartTime.ToUniversalTime().ToString('o')}} | ConvertTo-Json -Compress
 "#,
+        schedule = crate::package_windows::commands(s(r,"run_id"),s(r,"runner_path")).into_iter()
+            .map(|args|format!("& schtasks {} | Out-Null\nif ($LASTEXITCODE -ne 0) {{ throw 'scheduled task failed' }}",args.iter().map(|s|ps(s)).collect::<Vec<_>>().join(" ")))
+            .collect::<Vec<_>>().join("\n"),
         repo = ps(&host.repo),
         root = ps(&host.root),
         base = ps(s(r, "base_ref")),
