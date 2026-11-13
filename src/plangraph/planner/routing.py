@@ -142,6 +142,8 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     for pos, leg in enumerate(legs):
         if not leg_active(leg, now=now):
             why = "disabled"
+        elif effective_role == "review" and "review" not in leg.roles:
+            why = "role"
         elif effective_role == "implement" and implement_family_excluded(leg):
             why = "excluded_family"
         elif leg.id in unavailable:
@@ -250,8 +252,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     excluded; seats cover each writer part (:func:`pick_seats`).  An inline-only
     review leg needs ``card["diff_ref"]``: the spawner inlines that diff.
     ``catalog_rows`` injects tier/admission data; None reads the live catalog once.
-    Readers may be a LegStateStore or a callable with the leg_status contract.
-    Account/combo scope comes from the card and is never a wildcard.
+    Readers follow leg_status; account/combo scope is never a wildcard.
     """
     placement = dict(placement) if placement is not None else dict(host=None, reason='placement_not_evaluated', free_mb=None)
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
@@ -408,7 +409,6 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                                   key=lambda leg: input_order[leg.id])
                 for i, leg in zip(positions, siblings):
                     ordered[i] = leg
-        # Only measured legs bypass role preferences, never the cost-tier key.
         table_order = {leg.id: i for i, leg in enumerate(ordered)}
         ordered.sort(key=lambda leg: review_key(leg, TIERS.index(leg.tier), table_order[leg.id],
                      measured=rows.get(leg.model, rows.get(leg.id)) is not None))

@@ -14,11 +14,10 @@ from plangraph.planner.routing import SpawnPlan, plan_spawn
 def test_missing_legs_roles_and_probe_evidence(leg_id, store):
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
     if leg_id == 'opencode-deepseek-v4.1-flash-free':
-        assert not leg_active(leg)
-        assert leg.disabled == 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'
+        assert leg_active(leg) and 'D-5648' in leg.note
     else:
         assert leg_active(leg)
-    assert set(leg.roles) == {'review', 'implement'}
+    assert set(leg.roles) == ({'implement'} if leg_id == 'agy-gemini-4-argon' else {'review', 'implement'})
     store.record_probe_pass(leg.model, 'leg-probe', now=100)
     assert store.last_probe_ts(leg.model) == 100
     assert store.leg_status(leg.model, now=101)['state'] == 'ok'

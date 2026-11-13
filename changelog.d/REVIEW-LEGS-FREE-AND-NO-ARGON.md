@@ -1,0 +1,1 @@
+- D-5648: refresh review registrations, retain Argon rows without review, reuse payment-tier ordering and secrets/training exclusions; document the separate free-Mimo path-policy blocker and deferred live-proof commands.

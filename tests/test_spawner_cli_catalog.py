@@ -38,7 +38,9 @@ def test_missing_legs_registered_for_utility(lid, model):
         'agy-sonnet-5.5', 'omniroute-deepseek-flash', 'omniroute-muse-spark'} else set())
     if lid in {'agy-sonnet-5.5', 'agy-opus-5.5'}:
         expected_roles.remove('implement')
-    active = lid != 'opencode-deepseek-v4.1-flash-free'
+    if lid == 'agy-gemini-4-argon':
+        expected_roles.remove('review')
+    active = True
     assert (leg.model, leg_active(leg), set(leg.roles)) == (model, active, expected_roles)
     if not active:
         assert leg.disabled == 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'

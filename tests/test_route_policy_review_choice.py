@@ -21,7 +21,7 @@ def test_disabled_leg_never_a_route_option():
 
 
 def test_large_review_falls_through_small_window_with_reason():
-    small = next(l for l in DEFAULT_LEGS if l.id == 'opencode-go-gemini-4-argon')
+    small = next(l for l in DEFAULT_LEGS if l.id == 'opencode-go-deepseek-v4-flash')
     large = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-3.8-flash')
     route = route_card({'estimate_tokens': 200000, 'window_class': '128k'},
                        legs=(small, large), role='review')

@@ -106,10 +106,11 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
     # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
     assert [leg["id"] for leg in bare["legs"]] == [
-        "agy-gemini-3.8-flash", "opencode-big-pickle", "opencode-gemini-4-argon", "agy-gemini-4-argon",
+        "opencode-deepseek-v4.1-flash-free", "opencode-go-longcat-2.5-free", "console-openrouter-free",
+        "agy-gemini-3.8-flash", "opencode-big-pickle",
         "agy-gpt-oss-120b", "omniroute-deepseek-flash", "omniroute-muse-spark",
-        "opencode-go-gemini-4-argon", "opencode-go-muse-spark", "opencode-console-muse-spark",
-        "opencode-go-deepseek-v4-flash",
+        "opencode-go-muse-spark", "opencode-console-muse-spark",
+        "opencode-go-deepseek-v4-flash", "console-deepseek-flash",
         ]
 
 
@@ -127,7 +128,7 @@ def test_review_route_ignores_ambient_catalog_tiers(tmp_path, capsys, monkeypatc
     ambient = route_json(tmp_path, capsys)
     assert reads == [1]
     assert next(c for c in ambient['candidates'] if c['leg'] == 'agy-gemini-3.8-flash')['tier'] == 'paid'
-    assert ambient['first_leg']['id'] == 'opencode-big-pickle'
+    assert ambient['first_leg']['id'] == 'opencode-deepseek-v4.1-flash-free'
     test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch)
     assert reads == [1]  # The exact-order probe must inject its own catalog input.
 

@@ -100,7 +100,7 @@ def test_implement_route_still_skips_banned_and_off(tmp_path):
     from plangraph.spawner.service import SpawnService
     plan = plan_spawn(CARD, role="implement")
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
-    assert reasons['opencode-deepseek-v4.1-flash-free'].startswith('disabled: D-4196')
+    assert reasons['opencode-deepseek-v4.1-flash-free'] == 'banned_family'
     assert reasons['opencode-glm-5.3-flash-free'].startswith('disabled: D-4196')
     assert reasons['omniroute-deepseek-flash'] == 'banned_family'
     assert plan.first_leg.id == 'cx-gpt-6.1-sol-xhigh'
@@ -142,7 +142,8 @@ def test_new_legs_use_catalog_models_and_sit_before_the_paid_deepseek_leg():
     assert set(NEW_IDS) <= set(ids)
     for leg in (l for l in DEFAULT_LEGS if l.id in NEW_IDS):
         assert leg.model == CATALOG_MODELS[leg.id] and leg.model in rows
-        assert (leg.harness, leg.tier, leg.roles) == ("opencode", "subscription", ("review",))
+        roles = () if 'gemini-4-argon' in leg.model else ("review",)
+        assert (leg.harness, leg.tier, leg.roles) == ("opencode", "subscription", roles)
         assert not leg.trains_on_data and leg.tool_mode == "tools"
         assert leg.windows == ("128k",) and leg.max_request_tokens == 100000
     # L1 placement: the new review legs sit just before the paid deepseek leg,

@@ -107,7 +107,7 @@ def test_read_only_loader(tmp_path, table):
 
 def test_provider_qualified_rows_reach_legs_and_missing_stays_eligible(tmp_path):
     from plangraph.planner.benchmarks import benchmark_rows_from_db
-    measured = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-argon')
+    measured = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-3.8-flash')
     missing = next(l for l in DEFAULT_LEGS if l.id == 'opencode-big-pickle')
     path = database(tmp_path / 'bench.db', [f'{measured.harness}/{measured.model}'])
     before = path.read_bytes()

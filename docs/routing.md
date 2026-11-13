@@ -67,3 +67,44 @@ files: `139 passed in 63.38s (0:01:03)`. The untouched argv-limit file reproduce
 `2 failed, 44 passed in 5.38s`, both at its digest-versus-redaction assertion
 on line 57. The full suite was not run, following the brief's final prohibition
 on whole-suite runs; no test was skipped or weakened to hide those failures.
+
+## Review cost tiers and retained registrations (D-5648)
+
+`planner/review_order.py::review_key` already orders by the registered payment
+tier, projected from an explicitly supplied catalog by `catalog_tiers`: free,
+subscription, then pay-as-you-go. Measurements only reorder within one tier;
+review seats consume that route. No second cost-order table was added.
+
+DeepSeek's free OpenCode registration supersedes its D-4196 stop under D-5648;
+the GLM D-4196 stop and all other existing disables remain. LongCat's free Go
+route and Console OpenRouter's free route have independent families. Console
+DeepSeek Flash is a paid direct-API route, not a free subscription benefit.
+Big Pickle retains review. Every `gemini-4-argon` row remains registered for its
+other roles; the review-only Go row is retained disabled with its reason.
+
+The existing `routing.py::_NO_TRAIN_TAGS` / `route_card` privacy filter excludes
+training legs for `risk_tags: ["secrets"]` (also auth, money and live-step).
+OpenCode's [model privacy catalog](https://opencode.ai/docs/zen/#privacy) states
+no prompt training for free DeepSeek and LongCat; Big Pickle may train. The free
+OpenRouter route retains the conservative training flag. No privacy bypass was
+added. `opencode/mimo-v2.6-flash-free` cannot be enabled in this registry-only
+slice: `mimo_policy.py:7-23` permits only the two direct Mimo paths, and clients,
+runner, catalog admission and leg loading share that guard. Changing it requires
+a policy slice; free Mimo may train on prompts when that slice admits it.
+The strict benchmark contract also remains fail-closed:
+`tests/test_benchmark_data_contract.py:218` requires sourced rows for every active
+leg, but has no rows for the re-enabled DeepSeek or these three new routes. Its
+frozen debt ceiling cannot grow. This registry-only slice does not fabricate
+measurements, extend that ceiling, or weaken the contract; benchmark validation
+therefore remains blocked pending separately sourced benchmark evidence.
+
+Deferred live proof commands (public prompts only; not executed in this slice):
+
+```sh
+opencode run --standalone --format json --model opencode/deepseek-v4.1-flash-free 'Reply OK.'
+opencode run --standalone --format json --model opencode/mimo-v2.6-flash-free 'Reply OK.'
+opencode run --standalone --format json --model opencode/big-pickle 'Reply OK.'
+opencode run --standalone --format json --model opencode-go/longcat-2.5-free 'Reply OK.'
+opencode run --standalone --format json --model console-openrouter/openrouter/free 'Reply OK.'
+opencode run --standalone --format json --model console-deepseek/deepseek-flash 'Reply OK.'
+```

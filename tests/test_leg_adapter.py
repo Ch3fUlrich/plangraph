@@ -120,6 +120,8 @@ def test_catalog_policy_is_not_mutated(tmp_path):
     expected.insert(expected.index('omniroute/deepseek-direct-flash'),
                     'console-meta/muse-spark-1.3-contributor')
     expected.insert(expected.index('omniroute/deepseek-direct-flash'), 'omniroute/gemini-3.8-flash')
+    expected[expected.index('omniroute/cx-gpt-6.1-sol-xhigh'):expected.index('omniroute/cx-gpt-6.1-sol-xhigh')] = [
+        'opencode-go/longcat-2.5-free', 'console-openrouter/openrouter/free', 'console-deepseek/deepseek-flash']
     assert first == second == expected
     assert resolver.DEFAULT_FALLBACK_MODELS == before
     assert not calls

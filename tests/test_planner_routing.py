@@ -14,7 +14,7 @@ from plangraph.planner.routing import (RouteError, effective_estimate,
                                        next_after_failure, pick_window_class,
                                         plan_spawn, route_card)
 
-DEFAULT_LEGS = tuple(dataclasses.replace(leg, disabled=None) for leg in DEFAULT_LEGS)  # mechanics probes ignore live policy
+DEFAULT_LEGS = tuple(dataclasses.replace(leg, disabled=None, trains_on_data=True) if leg.id == "opencode-deepseek-v4.1-flash-free" else dataclasses.replace(leg, disabled=None) for leg in DEFAULT_LEGS if leg.id not in {"opencode-go-longcat-2.5-free", "console-openrouter-free", "console-deepseek-flash"})  # fixed mechanics table
 route_card = functools.partial(route_card, legs=DEFAULT_LEGS)
 plan_spawn = functools.partial(plan_spawn, catalog_rows=())
 D25_IDS = [
@@ -339,16 +339,16 @@ def test_writer_order_d2683_unavailable_skipped():
 
 
 def test_writer_order_d2683_review_order_unchanged():
-    # D-4196: without a diff, disabled Zen and inline-only Go cannot lead.
+    # D-5648: the re-enabled free leg needs no inline diff.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="review", writer_families=("claude",))
-    assert plan.first_leg.id == "agy-gemini-3.8-flash"
+    assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
 
 
 def test_writer_order_d2683_writer_family_exclusion():
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
-    assert plan_rev.first_leg.id == "agy-gemini-3.8-flash"
+    assert plan_rev.first_leg.id == "opencode-deepseek-v4.1-flash-free"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
     assert plan_imp.first_leg.id == "cx-gpt-6.1-sol-xhigh" and "gemini" not in {l.family for l in plan_imp.legs}
     # F2: writer_families does not exclude implement legs
@@ -381,7 +381,7 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     review = plan_spawn(dict(c, diff_ref={"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}), role="review", writer_families=("gpt",), benchmark=rows, leg_reader=reader)
     assert {s["leg"]: s["reason"] for s in review.skipped}["mimo-v2.6-pro"] == "limited"
     from test_route_free_first import WRITERS, FREE
-    assert [l.id for l in plan.legs] == [*WRITERS[:2], FREE[0], FREE[1], *WRITERS[2:6], *WRITERS[7:]]
+    assert [l.id for l in plan.legs] == [*WRITERS[:3], FREE[1], *WRITERS[3:7], *WRITERS[8:]]
 
 
 def test_no_implement_plan_leg_has_claude_family():

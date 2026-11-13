@@ -15,7 +15,7 @@ import pytest
 def test_real_binary_unavailable_and_secret(tmp_path, monkeypatch, caplog, explicit):
     from plangraph.spawner.runner import SpawnerRunner
     first = replace(DEFAULT_LEGS[0], harness='opencode', model='omniroute/cx-gpt-6.1-sol')
-    second = replace(first, id='second', model='opencode-go/gemini-4-argon')
+    second = replace(first, id='second', model='opencode/big-pickle')
     binary = tmp_path / 'opencode'
     binary.write_text('#!/bin/sh\ncase "$*" in *cx-gpt*) echo "Error: Model unavailable: x $MY_GATEWAY_TOKEN" >&2; exit 1;; esac\necho success\n')
     binary.chmod(0o755)
@@ -51,16 +51,22 @@ def test_dry_run_never_probes(tmp_path, monkeypatch):
 def test_free_zen_legs_are_exactly_the_disabled_set():
     free = {l.id: l.disabled for l in DEFAULT_LEGS if l.model.startswith('opencode/')}
     reason = 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'
-    assert free == {'opencode-deepseek-v4.1-flash-free': reason,
+    assert free == {'opencode-deepseek-v4.1-flash-free': None,
                     'opencode-glm-5.3-flash-free': reason,
                     'opencode-big-pickle': None, 'opencode-gemini-4-argon': None}
 
 
 @pytest.mark.parametrize('leg_id', ['opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free'])
-def test_explicit_disabled_zen_leg_refused(tmp_path, leg_id):
+def test_explicit_disabled_zen_leg_refused(tmp_path, leg_id, monkeypatch):
     leg = next(l for l in DEFAULT_LEGS if l.id == leg_id)  # D-3828: disabled, never removed
     from plangraph.planner.routing import SpawnRefused
     service = spawn_service(state=tmp_path)
+    if leg_id == 'opencode-deepseek-v4.1-flash-free':
+        assert leg.disabled is None and 'D-5648' in leg.note
+        # Preserve the historical permanent-disable regression after D-5648.
+        leg = replace(leg, disabled='D-4196 historical fixture')
+        monkeypatch.setattr('plangraph.planner.legs.DEFAULT_LEGS', tuple(
+            leg if l.id == leg.id else l for l in DEFAULT_LEGS))
     assert leg.disabled
     with pytest.raises(SpawnRefused, match='leg disabled: .*D-4196'):
         asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x',

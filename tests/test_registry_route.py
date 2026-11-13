@@ -101,11 +101,11 @@ def test_legs_carry_tool_mode():
 def test_override_with_catalog_harness_spawns(tmp_path, monkeypatch):
     db = _seeded()
     db.conn.execute("UPDATE catalog_models SET available=1, status='active' WHERE model_id=?",
-                    ("opencode-go/gemini-4-argon",))
+                    ("opencode-go/deepseek-v4.1-flash",))
     db.conn.commit()
     svc = _service(tmp_path, monkeypatch, db)
     record = asyncio.run(svc.spawn(card=CARD, prompt="task", role="review", writer_families=("gpt",),
-                                   model="opencode-go/gemini-4-argon",
+                                   model="opencode-go/deepseek-v4.1-flash",
                                    override_reason="registry route test", dry_run=True))
     assert record["status"] == "dry_run"
     assert record["chosen_leg"]["harness"] == "opencode"
@@ -182,10 +182,13 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
             assert plan.first_leg.id == 'cx-gpt-6.1-sol-xhigh'
             from plangraph.planner.routing import SpawnRefused
             from plangraph.spawner.service import SpawnService
-            with pytest.raises(SpawnRefused, match=r"leg disabled: .*D-4196"):
-                asyncio.run(SpawnService(state=tmp_path).spawn(
-                    card=CARD, leg=leg_id, override_reason="policy regression", dry_run=True))
-            assert not (tmp_path / "spawn-overrides.jsonl").exists()
+            if by_id[leg_id].disabled:
+                with pytest.raises(SpawnRefused, match=r"leg disabled: .*D-4196"):
+                    asyncio.run(SpawnService(state=tmp_path).spawn(
+                        card=CARD, leg=leg_id, override_reason="policy regression", dry_run=True))
+                assert not (tmp_path / "spawn-overrides.jsonl").exists()
+            else:
+                assert leg_id == 'opencode-deepseek-v4.1-flash-free' and 'D-5648' in by_id[leg_id].note
 
 
 def test_route_skips_paused_harness_per_role():
@@ -227,7 +230,7 @@ def test_claude_written_high_gets_luna_and_qwen(pre_d3552_policy):
     # D-3901: seats follow the free-first review route, retaining coverage.
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
     assert plan.error is None
-    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "opencode-gemini-4-argon"}
+    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "opencode-go-longcat-2.5-free"}
 
 
 def test_default_policy_seats_deepseek_for_review():
@@ -248,11 +251,11 @@ def test_seat_excludes_every_writer_family(pre_d3552_policy):
     from plangraph.keeper.coverage import uncovered
     plan = plan_spawn(RCARD, role="review", writer_families=("gpt", "qwen"))
     assert plan.error is None
-    assert set(_families(plan)) == {"gemini", "mimo"}  # Free personal Argon survives the agy pause.
+    assert set(_families(plan)) == {"longcat", "openrouter"}  # Free independent families survive the agy pause.
     assert uncovered(["gpt", "qwen"], _families(plan), need=1) == []
     # Coverage names the parts as the keeper does (gpt = openai, qwen = alibaba).
-    assert plan.seat_coverage == ({"leg": "opencode-gemini-4-argon", "covers": ["alibaba", "openai"]},
-                                  {"leg": "mimo-v2.6-flash", "covers": ["alibaba", "openai"]})
+    assert plan.seat_coverage == ({"leg": "opencode-go-longcat-2.5-free", "covers": ["alibaba", "openai"]},
+                                  {"leg": "console-openrouter-free", "covers": ["alibaba", "openai"]})
 
 
 def test_high_needs_two_families_per_part_incl_non_claude():
@@ -267,7 +270,7 @@ def test_high_needs_two_families_per_part_incl_non_claude():
 
 def test_uncoverable_parts_are_an_error():
     only = RoutePolicy(banned_families=("deepseek", "glm", "gpt", "mimo", "gemini", "muse",
-                                        "north", "laguna", "nvidia", "openai", "openrouter", "kimi", "grok", "pickle"),
+                                        "north", "laguna", "nvidia", "openai", "openrouter", "kimi", "grok", "pickle", "longcat"),
                        off_families=(), paused_harnesses={})
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",), policy=only)
     assert plan.error and "qwen" in _families(plan)

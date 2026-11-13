@@ -38,7 +38,7 @@ def test_injected_catalog_is_the_only_tier_and_admission_snapshot(monkeypatch):
 @pytest.mark.parametrize('row_key', ['model', 'id'])
 def test_partial_benchmarks_keep_each_cost_tier_and_measured_order(row_key):
     # Deliberately reverse table order/cost and include two measured peers.
-    specs = [('agy-gemini-4-argon', 'paid'), ('agy-gpt-oss-120b', 'subscription'),
+    specs = [('agy-sonnet-5.5', 'paid'), ('agy-gpt-oss-120b', 'subscription'),
              ('opencode-big-pickle', 'free'), ('agy-gemini-3.8-flash', 'subscription'),
              ('opencode-go-deepseek-v4-flash', 'paid')]
     legs = tuple(replace(TABLE[id], tier=tier) for id, tier in specs)
@@ -50,7 +50,7 @@ def test_partial_benchmarks_keep_each_cost_tier_and_measured_order(row_key):
                       writer_families=('mimo',), policy=RoutePolicy(),
                       leg_reader=lambda *a, **k: {'state': 'ok', 'evidence': None})
     assert [leg.id for leg in plan.legs] == ['opencode-big-pickle', 'agy-gpt-oss-120b',
-        'agy-gemini-3.8-flash', 'opencode-go-deepseek-v4-flash', 'agy-gemini-4-argon']
+        'agy-gemini-3.8-flash', 'opencode-go-deepseek-v4-flash', 'agy-sonnet-5.5']
     assert [leg.tier for leg in plan.review_seats] == ['free', 'subscription']
     assert [row['p_source'] for row in plan.candidates] == ['prior', *['measured'] * 4]
 
@@ -67,13 +67,13 @@ def test_review_key_applies_measurement_gate_per_leg():
 
 def test_partial_benchmarks_do_not_pin_unmeasured_families():
     legs = tuple(replace(TABLE[id], tier='subscription', tool_mode='tools') for id in (
-        'agy-gemini-4-argon', 'mimo-v2.6-flash', 'agy-gpt-oss-120b'))
+        'agy-gemini-3.8-flash', 'mimo-v2.6-flash', 'agy-gpt-oss-120b'))
     row = {'aa_intelligence': 47, 'cost_per_task_usd': 0, 'pool_burn_weight': 0}
     plan = plan_spawn(CARD, role='review', legs=legs, catalog_rows=(),
                       benchmark={legs[-1].model: row}, writer_families=('claude',),
                       policy=RoutePolicy(),
                       leg_reader=lambda *a, **k: {'state': 'ok', 'evidence': None})
-    assert [leg.id for leg in plan.legs] == ['agy-gpt-oss-120b', 'mimo-v2.6-flash', 'agy-gemini-4-argon']
+    assert [leg.id for leg in plan.legs] == ['agy-gpt-oss-120b', 'mimo-v2.6-flash', 'agy-gemini-3.8-flash']
     assert [detail['p_source'] for detail in plan.candidates] == ['measured', 'prior', 'prior']
 
 

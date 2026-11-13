@@ -13,7 +13,7 @@ from plangraph.spawner.cli import main
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 CARD = {"estimate_tokens": 20000, "risk_tags": [],
         "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
-WRITERS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "openrouter-free",
+WRITERS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "opencode-deepseek-v4.1-flash-free", "openrouter-free",
            "opencode-big-pickle", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
            "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
 
@@ -60,7 +60,7 @@ def test_implement_family_exclusion_over_all_catalog_rows():
         candidate = dataclasses.replace(template, id="catalog:" + model, model=model,
                                         family=row["family"], claude_family=False)
         route = route_card(CARD, legs=(candidate, fallback), role="implement")
-        assert (candidate in route.legs) == (row["family"] != "claude"), model
+        assert (candidate in route.legs) == (row["family"] not in {"claude", "longcat"}), model
 
 
 @pytest.mark.parametrize("alias", ["claude", "anthropic", "fable", "opus", "sonnet", "haiku"])
@@ -96,6 +96,7 @@ def test_implement_renamed_operator_claude_fails_closed(tmp_path, monkeypatch, c
     template, fallback = (next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
                           for leg_id in WRITERS[:2])
     row = dict(dataclasses.asdict(template), id="operator-writer", model="provider/some-model",
+               roles=("implement", "review"),
                family="unidentified-high" if identity == "unknown" else "gpt", claude_family=identity == "flag",
                harness="claude" if identity == "harness" else "opencode")
     if identity == "id":

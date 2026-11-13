@@ -22,10 +22,10 @@ def assert_review_seat_safety(estimate):
         exception = not diff
         fenced = review.review_seats[:-1] if exception else review.review_seats
         assert not any(leg.claude_family or leg.family in ("claude", "anthropic") for leg in fenced)
-        if exception:
-            assert [leg.id for leg in review.review_seats] == ["agy-gemini-3.8-flash", "agy-sonnet-5.5"]
+        if estimate > 72089:
+            assert [leg.id for leg in review.review_seats] == ["agy-gemini-3.8-flash", "mimo-v2.6-flash" if diff else "agy-sonnet-5.5"]
         else:
-            assert [leg.id for leg in review.review_seats] == ["agy-gemini-3.8-flash", "mimo-v2.6-flash"]
+            assert [leg.id for leg in review.review_seats] == ["opencode-deepseek-v4.1-flash-free", "opencode-go-longcat-2.5-free"]
 
 
 def test_review_same_family_table_order():
