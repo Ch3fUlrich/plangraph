@@ -31,6 +31,26 @@ fn run() -> i32 {
         println!("environment checked {} keys", effective.len());
         return 0;
     }
+    if args.first().is_some_and(|a| a == "unit-breaker") {
+        return plangraph_cli::breaker::cli(&home, &args[1..]);
+    }
+    if args.first().is_some_and(|a| a == "migrate-breaker") {
+        if args.len() > 2 || (args.len() == 2 && args[1] != "--dry-run") {
+            return 2;
+        }
+        let new = plangraph_cli::paths::state(&home);
+        let old = new.parent().unwrap().join("autoos/breaker");
+        return match plangraph_cli::migrate::breaker(&old, &new.join("breaker"), args.len() == 2) {
+            Ok(count) => {
+                println!("breaker migration files={count}");
+                0
+            }
+            Err(_) => {
+                eprintln!("breaker migration refused");
+                2
+            }
+        };
+    }
     let mode = match args
         .iter()
         .map(String::as_str)

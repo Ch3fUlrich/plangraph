@@ -1,0 +1,4 @@
+# Render @ROUTER_DIR@ with the same pinned router path as ctx-watchdog.service.
+[Service]
+ExecStart=
+ExecStart=%h/.local/bin/plangraph unit-breaker --unit ctx-watchdog.service -- @ROUTER_DIR@/router/bin/ctx-watchdog --apply

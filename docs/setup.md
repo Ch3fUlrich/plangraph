@@ -25,3 +25,20 @@ File content permissions are private on Unix; Windows uses the user's directory 
 The setup contract tests run on Linux and Windows CI.
 
 Live service activation and private configuration belong to the operator cutover.
+
+## Unit breaker
+
+`plangraph unit-breaker --unit NAME [--threshold 5] -- COMMAND ARGS...` keeps
+locked state under XDG_STATE_HOME/plangraph/breaker (LOCALAPPDATA on Windows).
+It preserves Linux exit-code plus normalized SHA1 signatures from the reference;
+Windows uses failure classes. Success resets, 130/143 are neutral, and five
+identical failures persist a trip before disabling the unit and writing one alert.
+PLANGRAPH_ALERT_INBOX selects a private alert file; otherwise stderr is used.
+An unavailable manager leaves a `.tripped` marker. Corrupt state refuses execution.
+`unit-breaker status` is the router status interface; `reset NAME` clears a trip.
+
+`plangraph migrate-breaker --dry-run` previews the copy-once import from the old
+state namespace. Apply without the flag; existing new state always wins and the
+old state remains for rollback. `deploy/breaker` supplies the retained watchdog
+wrapper and removal instructions for disabled watchers. Activating these templates
+requires the operator's router decision; it is a cutover step, not setup activation.

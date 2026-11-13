@@ -1,0 +1,1 @@
+- Port the unit failure breaker to Rust with compatible signatures, locked state, one alert per trip, disabled-unit refusal, status/reset, copy-once migration and watchdog cutover templates.
