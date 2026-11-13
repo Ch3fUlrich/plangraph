@@ -7,8 +7,8 @@ import time
 
 ADMISSION_TIMEOUT = 180
 def _git_env():
-    return {k: v for k, v in os.environ.items()
-            if k not in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR')}
+    from .prompt_input import checkout_env
+    return checkout_env()
 def _check(repo, default=None, fetch=True, timeout=60, ref='HEAD'):
     repo = os.fspath(repo)
     def git(*args, check=True):
