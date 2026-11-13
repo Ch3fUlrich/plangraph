@@ -16,23 +16,29 @@ import json
 import os
 import re
 import subprocess
+from html import unescape
 from pathlib import Path
 from types import SimpleNamespace
 from seat_backfill import backfill
 _HEAD_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 # F8: both spellings count (review/tail.md uses TEST-GAMING).
 _TEST_GAMING = re.compile(r"^TEST[_-]GAMING:[ \t]*(.*)$", re.I | re.M)
-_TOOL_MARKUP = re.compile(r'<\s*(?:invoke_tool\b|invoke\s+name\s*=|function_calls\b)', re.I)
+_TOOL_MARKUP = re.compile(
+    r'<\s*(?:[\w.-]+:)?(?:invoke_tool|invoke|parameter|function_calls?|tool_use)\b', re.I)
 
 
 def guard_toolless_reply(run_dir, text, record=None, live_log=''):
-    """Reject even quoted markup on tool-less/unknown harnesses; Claude needs tool evidence."""
-    if not _TOOL_MARKUP.search(text):
+    """Reject even quoted markup on tool-less/unknown harnesses; Claude needs tool evidence.
+
+    Scope is the extracted final result only, not earlier Claude assistant turns
+    or tool events. Encoded/namespaced markup in that result is still markup.
+    """
+    if not _TOOL_MARKUP.search(unescape(text)):
         return
     leg = (record or {}).get('chosen_leg')
     leg = leg if isinstance(leg, dict) else {}
     mode, harness = leg.get('tool_mode'), leg.get('harness')
-    toolless = not harness or mode in ('prompt-only', 'inline-only')
+    toolless = mode in ('prompt-only', 'inline-only') or (not harness and mode != 'tools')
     if harness == 'claude' and not toolless:
         try:
             stream = (Path(run_dir) / 'claude-stream.jsonl').read_text('utf-8')

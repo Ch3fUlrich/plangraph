@@ -50,9 +50,19 @@ Tools-mode injection defaults off; rollback is off. The operator environment
 `PLANGRAPH_RELIABILITY_INLINE_REVIEW_DIFF` overrides `inline_review_diff` in
 the operator config `plangraph/reliability.json`; `roles.review` overrides the
 global setting. Shadow computes a boolean count without changing the prompt.
-Inline-only review requires diff_ref and the NO-tools header even when off.
-Prompt-only review/judge file requests without inline material (including a plain pasted unified diff with file headers, a hunk and content) or `diff_ref` refuse as `toolless_needs_inline`; supplied diffs use the existing `inline_diff` transport. Non-string prompts refuse as `toolless_prompt_not_string`.
-Tool-less (`prompt-only`/`inline-only`) replies containing tool-call markup refuse as `toolless_tool_markup` (exit 2); unknown Claude tool evidence and absent harnesses fail closed, while OpenCode tools-mode replies and prose mentioning “invoke” are allowed. Quoted/code-span markup remains a known false positive on tool-less seats; no quoting exemption can hide a fabricated transcript.
+Live routed inline-only review requires diff_ref and the NO-tools header even when off.
+Tool-less (`prompt-only`/`inline-only`) review/judge file requests need inline material
+after context packing, or `diff_ref` via the existing `inline_diff` transport;
+otherwise they refuse as `toolless_needs_inline`. Nonempty blocks must label the
+requested paths; unrelated output examples do not qualify. Plain pasted unified
+diffs need file headers, a hunk and content, not a git preamble (timestamps allowed).
+Non-string prompts refuse as `toolless_prompt_not_string`.
+Tool-less final replies containing tool-call markup (including HTML-escaped and
+namespaced tags) refuse as `toolless_tool_markup` (exit 2). Only the extracted final
+result is scanned, not earlier Claude assistant turns. Unknown Claude tool evidence
+and absent harnesses without explicit tools mode fail closed. OpenCode tools-mode
+replies and prose mentioning “invoke” remain allowed. Quoted/code-span markup is an
+intentional tool-less false positive; quoting cannot hide a fabricated transcript.
 Repositories resolve through the self host in operator-owned hosts.json, never
 adapter cwd. Raw diffs are capped at 262144 bytes before lossy UTF-8 decoding.
 Only exact stdin carriers are injected; multiline .cmd/.bat launchers refuse.

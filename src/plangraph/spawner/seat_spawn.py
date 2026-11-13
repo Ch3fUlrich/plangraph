@@ -317,12 +317,13 @@ class SeatSpawnMixin:
         OpenCode tools-mode and prompt-only reviews inline a supplied diff_ref."""
         from .prompt_guard import admit_toolless
         from plangraph.routing_errors import SpawnRefused
-        admit_toolless(prompt, card, role, leg, SpawnRefused)
+        if not isinstance(prompt, str):
+            admit_toolless(prompt, card, role, leg, SpawnRefused)
         if getattr(leg, 'tool_mode', 'tools') == 'inline-only':
             from . import context_pack
             prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
         if _needs_inline_diff(leg, card) and (role == 'review' or
-                role == 'judge' and getattr(leg, 'tool_mode', 'tools') == 'prompt-only'):
+                role == 'judge' and getattr(leg, 'tool_mode', 'tools') in ('prompt-only', 'inline-only')):
             from .inline_diff import InlineDiffError, inline_diff_prompt
             try:
                 prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
@@ -330,6 +331,7 @@ class SeatSpawnMixin:
             except InlineDiffError as exc:
                 _refuse_oversized_diff(exc, leg)
                 raise
+        admit_toolless(prompt, card, role, leg, SpawnRefused)
         return prompt
 
     async def _spawn_seats(self, *, card, prompt, role, writer_families, review_of, model, leg,

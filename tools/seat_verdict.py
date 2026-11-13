@@ -280,6 +280,7 @@ def main(argv=None):
             print("seat_verdict: evidence.json is not an object", file=sys.stderr)
             return EXIT_IO
         try:
+            # Standalone evidence only; record-backed seats were checked with leg/init evidence above.
             guard_toolless_reply(args.seat_dir, text)
         except ValueError as exc:
             print(f"seat_verdict: refused, {exc}", file=sys.stderr)

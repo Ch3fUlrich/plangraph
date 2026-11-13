@@ -871,3 +871,9 @@ path = "configuration/opencode/plugins/bash-guard/index.mjs"
 rule = "credential-shape"
 value_sha256 = "fc27ccfa93f112c61779d5d8e15c2a47633c1a27a17cc66b5021e490d76d347a"
 why = "AutoOS bash-guard plugin comment naming a guarded path (byte copy @f806c42b, D-4844)"
+
+[[scrub.allow_value]]
+path = "tests/fixtures/seat_toolless_incident.json"
+rule = "high-entropy"
+value_sha256 = "4e550a7c90f118de8f27d795d4c44d5c852bfff2502bde3a7ad991d64d0011e8"
+why = "Operator-supplied recorded public repository-relative plan path, not a credential or site value"
