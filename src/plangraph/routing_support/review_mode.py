@@ -19,12 +19,13 @@ def _contract_object(pairs):
 
 
 def load_prompt_transport_contract(raw=None):
-    """Read packaged v1 data; optional JSON must retain the authoritative reasons.
+    """Read packaged v1 data; optional JSON must match the authoritative document.
 
     This loads data only: admission/grammar enforcement belongs to later slices.
     Return a fresh object so consumers cannot mutate another caller's contract.
     """
-    text = files("plangraph").joinpath("config/prompt_transport_v1.json").read_text(encoding="utf-8") if raw is None else raw
+    text = (files("plangraph").joinpath("config/prompt_transport_v1.json")
+            .read_text(encoding="utf-8") if raw is None else raw)
     doc = json.loads(text, object_pairs_hook=_contract_object)
     if not isinstance(doc, dict) or type(doc.get("version")) is not int or doc["version"] != 1:
         raise ValueError("unsupported prompt transport contract version")
@@ -33,8 +34,10 @@ def load_prompt_transport_contract(raw=None):
             or not all(isinstance(name, str) and name for name in reasons.values())
             or len(set(reasons.values())) != len(reasons)):
         raise ValueError("invalid or duplicate prompt transport reasons")
-    if raw is not None and reasons != load_prompt_transport_contract()["reasons"]:
-        raise ValueError("unknown prompt transport reason name")
+    if raw is not None:
+        authoritative = load_prompt_transport_contract()
+        if json.dumps(doc, sort_keys=True) != json.dumps(authoritative, sort_keys=True):
+            raise ValueError("unknown prompt transport contract data or reason name")
     modes, names = doc.get("modes"), set()
     if not isinstance(modes, list) or not modes:
         raise ValueError("missing prompt transport modes")
