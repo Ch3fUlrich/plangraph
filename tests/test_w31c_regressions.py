@@ -44,6 +44,9 @@ def test_supervisor_path_and_bounded_stderr(monkeypatch, tmp_path, capsys, insta
     assert log.name.startswith('supervisor-')
     # Exercise the actual child bootstrap with a fake supervisor, including raw fd writes.
     bootstrap = command[2]
+    # The bootstrap owns its pathlib import, not an incidental CLI export.
+    bootstrap = bootstrap.replace('from plangraph.spawner import cli as supervisor',
+        'from plangraph.spawner import cli as supervisor\ndel supervisor.Path')
     fake = """import os
 service = supervisor.SpawnService(state=sys.argv[2])
 if sys.argv[3] == 'win32':
@@ -65,6 +68,7 @@ os.write(2, b'rotation-recovered\\n')
     child_env = dict(kw['env'], PYTHONPATH=root)
     child = subprocess.Popen([sys.executable, '-c', bootstrap, str(log), str(state), platform], stderr=log.open('ab'), env=child_env)
     assert child.wait(timeout=10) == 0, log.read_text()[-2000:]
+    assert int(Path(str(log) + '.pid').read_text()) == child.pid
     assert log.stat().st_size > 0
     assert 'rotation-recovered' in log.read_text()
     assert sum(p.stat().st_size for p in state.glob('supervisor-*.stderr.log*')) <= 2 * 1024 * 1024

@@ -117,13 +117,14 @@ def caller_heads():
     return heads
 
 
-def seconds(name, default, value=None, *, positive=False):
+def seconds(name, default, value=None, *, positive=False, parameter=None):
+    label = parameter if value is not None and parameter else name
     try:
         value = float(os.environ.get(name, default) if value is None else value)
     except (TypeError, ValueError):
-        raise ParameterRefused('invalid ' + name) from None
+        raise ParameterRefused('invalid ' + label) from None
     if not math.isfinite(value) or value < 0 or (positive and value == 0):
-        raise ParameterRefused('invalid ' + name)
+        raise ParameterRefused('invalid ' + label)
     return value
 
 
@@ -202,7 +203,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
     reported as ``ok=False`` with reason "probe leaked into caller repo" --
     the caller's repo is never auto-reset.
     """
-    timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout_s, positive=True)
+    timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout_s, positive=True, parameter='timeout_s')
     state = store if store is not None else leg_state
     start = time.monotonic()
     # Missing executables describe this host, not the remote leg. Check each
@@ -370,11 +371,11 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None):
     SPAWNABLE_LEGS = spawnable_legs()
     ids = {legs} if isinstance(legs, str) else set(legs or ())
     if not (ids or all_writers):
-        raise ValueError('select --leg ID or --all-writers')
+        raise ParameterRefused('select --leg ID or --all-writers')
     unknown = ids - {leg.id for leg in SPAWNABLE_LEGS}
     if unknown:
-        raise ValueError('unknown legs: ' + ', '.join(sorted(unknown)))
-    timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout, positive=True)
+        raise ParameterRefused('unknown legs: ' + ', '.join(sorted(unknown)))
+    timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout, positive=True, parameter='--timeout')
     # --all-writers means the routed writers; an explicit leg is probed only by name.
     selected = [leg for leg in SPAWNABLE_LEGS if leg_active(leg) and
                 (leg.id in ids or (all_writers and leg in DEFAULT_LEGS and

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from plangraph.planner.legs import Leg
+from plangraph.routing_errors import ParameterRefused
 from plangraph.routing_support.leg_state import LegStateStore
 from plangraph.spawner import cli, exit_outcome, leg_probe, proc_kill
 from plangraph.spawner.run_watchdog import terminal_record
@@ -83,13 +84,66 @@ def test_probe_cli_returns_structured_parameter_refusal(
     assert refusal['refusal'] == 'ParameterRefused'
     assert refusal['exit_code'] == 2
     expected_error = {'missing-leg': 'select --leg ID or --all-writers',
-                      'bad-leg': 'unknown legs: unknown-leg'}.get(
+                      'bad-leg': 'unknown legs: unknown-leg',
+                      'bad-timeout': 'invalid --timeout'}.get(
                           case, 'invalid PLANGRAPH_LEG_PROBE_TIMEOUT_S')
     assert refusal['error'] == expected_error
     assert 'Traceback' not in output.err
     assert 'invalid-probe-duration' not in output.out + output.err
     runner.spawn.assert_not_called()
     assert not runner.leg_reader.path.exists()
+
+
+@pytest.mark.parametrize('json_output', [False, True])
+def test_probe_cli_internal_value_error_is_not_parameter_refusal(
+        tmp_path, monkeypatch, capsys, json_output):
+    from plangraph.planner import legs
+    leg = Leg('sample', 'free', 'agy', 'sample-model', 'synthetic', (), 1000, False,
+              roles=('implement',))
+    monkeypatch.setattr(legs, 'DEFAULT_LEGS', (leg,))
+    runner = NS(leg_reader=LegStateStore(tmp_path / 'legs.sqlite'))
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: NS(runner=runner))
+    probe = AsyncMock(side_effect=ValueError('internal probe failure'))
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    args = ['probe', '--leg', leg.id, '--timeout', '5'] + (['--json'] if json_output else [])
+    assert cli.main(args) == 1
+    output = capsys.readouterr()
+    assert output.out == ''
+    assert output.err == 'internal probe failure\n'
+    probe.assert_awaited_once()
+    assert not runner.leg_reader.path.exists()
+
+
+@pytest.mark.parametrize('entry,label', [('probe', 'timeout_s'), ('probe_many', '--timeout')])
+@pytest.mark.parametrize('value', [0, -1, float('nan'), float('inf'), 'invalid-probe-duration'])
+def test_explicit_probe_timeout_refusal_names_parameter(
+        tmp_path, monkeypatch, entry, label, value):
+    from plangraph.planner import legs
+    leg = Leg('sample', 'free', 'agy', 'sample-model', 'synthetic', (), 1000, False,
+              roles=('implement',))
+    monkeypatch.setattr(legs, 'DEFAULT_LEGS', (leg,))
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    runner = NS(leg_reader=store, spawn=AsyncMock())
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', '180')
+    with pytest.raises(ParameterRefused, match='^invalid ' + label + '$'):
+        asyncio.run(leg_probe.probe(runner, leg, timeout_s=value, store=store) if entry == 'probe'
+                    else leg_probe.probe_many(runner, [leg.id], timeout=value))
+    runner.spawn.assert_not_called()
+    assert not store.path.exists()
+
+
+def test_parameter_refused_is_a_value_error():
+    assert issubclass(ParameterRefused, ValueError)
+
+
+def test_probe_mcp_internal_value_error_is_not_parameter_refusal(tmp_path, monkeypatch):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    server = MCPSpawnerServer(state=tmp_path)
+    probe_many = AsyncMock(side_effect=ValueError('internal probe failure'))
+    monkeypatch.setattr(leg_probe, 'probe_many', probe_many)
+    with pytest.raises(ValueError, match='^internal probe failure$'):
+        asyncio.run(server.call_tool('plangraph_agent_probe', {'leg': ['sample']}))
+    probe_many.assert_awaited_once()
 
 
 @pytest.mark.parametrize('status', ['completed', 'dry_run', 'failed', 'skipped'])
@@ -155,6 +209,7 @@ def test_orphaned_checks_supervisor_pid_start_time(
     assert record['status'] == 'running' and record['ended'] is None
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='requires a real Windows runner')
 def test_orphaned_on_windows_never_imports_proc_stat_or_signals(tmp_path, monkeypatch):
     import builtins
     path = tmp_path / 'supervisor.stderr.log'
@@ -166,10 +221,24 @@ def test_orphaned_on_windows_never_imports_proc_stat_or_signals(tmp_path, monkey
         assert not name.endswith('proc_kill')
         return original_import(name, *args, **kwargs)
     signal = Mock(side_effect=AssertionError('Windows must never probe with os.kill'))
-    with monkeypatch.context() as patch:
-        patch.setattr(os, 'name', 'nt')
-        patch.setattr(os, 'kill', signal)
-        patch.setattr(builtins, '__import__', checked_import)
-        result = exit_outcome.orphaned(record, 200)
+    monkeypatch.setattr(os, 'kill', signal)
+    monkeypatch.setattr(builtins, '__import__', checked_import)
+    result = exit_outcome.orphaned(record, 200)
     assert result is None
     signal.assert_not_called()
+
+
+def test_orphaned_windows_guard_precedes_process_stat_and_signal():
+    import ast
+    import inspect
+    function = ast.parse(inspect.getsource(exit_outcome.orphaned)).body[0]
+    guard = next(node for node in function.body if isinstance(node, ast.If))
+    assert any(isinstance(node, ast.Compare) and ast.unparse(node) == "os.name == 'nt'"
+               for node in ast.walk(guard.test))
+    assert len(guard.body) == 1 and isinstance(guard.body[0], ast.Return)
+    assert isinstance(guard.body[0].value, ast.Constant) and guard.body[0].value.value is None
+    process_import = next(node for node in ast.walk(function)
+                          if isinstance(node, ast.ImportFrom) and node.module == 'proc_kill')
+    signal = next(node for node in ast.walk(function)
+                  if isinstance(node, ast.Call) and ast.unparse(node.func) == 'os.kill')
+    assert guard.end_lineno < process_import.lineno < signal.lineno

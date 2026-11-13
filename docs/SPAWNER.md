@@ -290,7 +290,7 @@ implemented, and enabling by default and the Rust port remain later slices.
 Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
 chosen leg, served model/family with witness kind (a structured claude `system/init` model is a native witness; a mismatch with the requested leg sets `served_model_mismatch`), writer family, status, started/ended timestamps,
 attempts with provider stop details, job id, pid, and stdout tail.
-These records are the only source for `--review-of`; unknown ids refuse. Linux supervisors record their process start-time token; other platforms skip the `/proc` import and lookup. A reused supervisor pid ends the run as `orphaned` before signaling; matching or unreadable start-time evidence retains the POSIX missing-process check (permission denied means alive). Windows orphan checks return before importing process-stat helpers or signaling.
+These records are the only source for `--review-of`; unknown ids refuse. Linux supervisors record their process start-time token; non-Linux supervisor startup skips the `/proc` import and lookup. POSIX orphan checks attempt the `/proc` lookup when a recorded start-time token is present, even on non-Linux hosts. A reused supervisor pid ends the run as `orphaned` before signaling; matching or unreadable start-time evidence retains the POSIX missing-process check (permission denied means alive). Windows orphan checks return before importing process-stat helpers or signaling.
 
 On terminal save the supervisor publishes a completion per run to
 `inbox/parent.jsonl` and the authenticated live keeper HTTP sink. Events
@@ -319,7 +319,7 @@ audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
 The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md](spawner-seats.md) (D-3198).
 
 CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
-A probe with its harness binary missing reports `host-not-ready` and books no leg event. Probe timeouts must be finite and strictly positive; TTL remains nonnegative (zero disables automatic probes). Invalid settings refuse before probe state writes, and CLI parameter refusals are JSON `ParameterRefused` with exit 2. Spawn-call exceptions report probe infrastructure failure and never book leg liveness.
+A probe with its harness binary missing reports `host-not-ready` and books no leg event. Probe timeouts must be finite and strictly positive; TTL remains nonnegative (zero disables automatic probes). Invalid settings refuse before probe state writes, and CLI parameter refusals are JSON `ParameterRefused` with exit 2. Timeout errors name `--timeout` for an explicit CLI argument, `timeout_s` for a direct probe argument, or `PLANGRAPH_LEG_PROBE_TIMEOUT_S` for the environment. CLI and MCP probe refusal handlers catch only parameter-validation errors, not internal `ValueError`s. Spawn-call exceptions report probe infrastructure failure and never book leg liveness.
 Failed probes retain a scrubbed, single-line excerpt of the last 400 stderr
 characters in their result, output line and leg-state event. A `running` record
 on the same model/harness with a nonempty `live.log` grown within
