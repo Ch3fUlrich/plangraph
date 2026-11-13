@@ -317,6 +317,7 @@ def build_standalone_fallback_command(
 ) -> list[str]:
     """Build direct CLI command as offline emergency fallback when gateway is offline."""
     cname = client_name.lower()
+    if cname == "claude" and model == "claude-haiku-5-5" and role == "review": tool_mode = "prompt-only"
     if cname == "agy":
         cmd = ["agy", "--dangerously-skip-permissions"]
         if model:

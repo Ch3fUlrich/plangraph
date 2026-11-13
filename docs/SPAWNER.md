@@ -678,3 +678,9 @@ boundary. Paid catalog overrides and unknown billing evidence also require it;
 missing or failed execution refuses the launch. Private configuration and gateway
 export requirements are in [daily spend admission](cost-gate.md). Dry runs do not
 launch and remain available without private budget configuration.
+
+Haiku is the existing `claude-haiku-5.5` leg (review only, Claude family,
+subscription harness `claude -p`). Explicit picks use normal run records/stdout
+and host admission. Any Claude/Anthropic writer part fences it, including mixed
+writer families and `review_of` evidence. Its review command always sets
+`--tools ""` and strict empty MCP config, including explicit tool-mode requests.

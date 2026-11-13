@@ -57,8 +57,8 @@ def test_clients_explicit_mode_overrides_leg(monkeypatch):
     from plangraph.planner import legs
 
     monkeypatch.setattr(legs, "DEFAULT_LEGS", (
-        replace(legs.DEFAULT_LEGS[-1], tool_mode="inline-only"),))
-    cmd = build_command("p", "claude-haiku-5-5", role="review", client="claude",
+        replace(legs.DEFAULT_LEGS[-1], model="claude/test-override", tool_mode="inline-only"),))
+    cmd = build_command("p", "claude/test-override", role="review", client="claude",
                         tool_mode="tools")
     assert cmd[cmd.index("--tools") + 1] == "Read,Grep,Glob,Bash"
 

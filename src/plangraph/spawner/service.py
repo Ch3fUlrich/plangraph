@@ -178,7 +178,6 @@ class SpawnService(SeatSpawnMixin):
         finally:
             child['ended'] = time.time()
             self._save(child)
-
     def save_refusal(self, exc, role='implement', *, card=None, placement=None, **extra):
         """Persist pre-service refusals using the same record contract (``extra``: seat fields)."""
         from plangraph.planner.routing import SpawnRefused, BenchmarkError, BenchRequired
@@ -221,7 +220,7 @@ class SpawnService(SeatSpawnMixin):
         elif model is not None or leg is not None or not card:
             # Overrides change the selected model, not the card safety contract.
             from plangraph.planner.routing import plan_spawn
-            from plangraph.planner.seats import seat_family, writer_parts
+            from plangraph.planner.seats import seat_family, writer_parts, claude_writer_fence
             reviewed = ((source.get('given_writer_families') or [f for f in [source.get('writer_family')] if f]) if (source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)) else []) if review_of else []
             plan_spawn(card, role=role, legs=(), writer_families=[*writer_families, *reviewed])
             chosen = next((l for l in spawnable_legs() if l.id == leg), None) if leg else None
@@ -264,13 +263,14 @@ class SpawnService(SeatSpawnMixin):
                              detect_model_family(target), windows, context,
                              bool(row.get('trains_on_prompts', True)), roles=(role,),
                              tool_mode=row.get('tool_mode', 'tools'))
+            if (chosen.claude_family or seat_family(chosen.family) == 'anthropic') and claude_writer_fence(role, [*writer_families, *reviewed]): raise SpawnRefused('excluded writer family')
             if reviewed and {seat_family(f) for f in reviewed} <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             # D-3084 per-part: a seat is excluded only when it covers no writer part.
             if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             require_available(chosen, self.leg_reader, card)
-            if role == 'implement' and role not in chosen.roles:
+            if role not in chosen.roles:
                 raise SpawnRefused('writer disabled (D-3828): ' + chosen.id)
             if chosen.tier == 'paid':
                 available = self._route(card, role, writer_families, review_of,

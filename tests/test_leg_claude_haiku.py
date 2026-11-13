@@ -98,3 +98,51 @@ def test_witness_reads_stream_json_model():
 def test_anthropic_writer_excludes_every_claude_family_review_leg():
     plan = plan_spawn(CARD, role="review", writer_families=("anthropic",), leg_reader=_clear)
     assert not [l.id for l in plan.legs if l.claude_family]
+
+
+@pytest.mark.parametrize('writers', [('claude','gpt'),('gpt','anthropic')])
+def test_explicit_haiku_cannot_review_any_claude_writer_part(tmp_path, monkeypatch, writers):
+    import asyncio
+    from plangraph.planner.routing import SpawnRefused
+    from plangraph.spawner.service import SpawnService
+    service = SpawnService(state=tmp_path, leg_reader=_clear)
+    with pytest.raises(SpawnRefused, match='excluded writer family'):
+        asyncio.run(service.spawn(card=CARD, role='review', writer_families=writers,
+            leg='claude-haiku-5.5', override_reason='hermetic explicit review', dry_run=True))
+
+
+def test_explicit_tool_mode_cannot_enable_haiku_tools():
+    cmd = build_command('p','claude-haiku-5-5',role='review',client='claude',tool_mode='tools')
+    assert cmd[cmd.index('--tools')+1] == ''
+
+
+def test_explicit_haiku_uses_normal_run_record_and_stdout(tmp_path):
+    import asyncio
+    from test_spawner_paid_last import fake_runner
+    from plangraph.spawner.service import SpawnService
+    runner = fake_runner(tmp_path,text='VERDICT: PASS')
+    service = SpawnService(runner=runner,state=tmp_path,leg_reader=_clear)
+    result = asyncio.run(service.spawn(card=CARD,prompt='review this',role='review',
+        writer_families=('gpt',),leg='claude-haiku-5.5',
+        override_reason='hermetic Haiku review',wait_seconds=None))
+    record = service.result(result['run_id'])
+    assert runner.calls[0]['client'] == 'claude'
+    assert runner.calls[0]['model_or_combo'] == 'claude-haiku-5-5'
+    assert record['chosen_leg']['id'] == 'claude-haiku-5.5'
+    assert record['stdout_tail'] == 'VERDICT: PASS'
+    assert service._path(result['run_id']).is_file()
+    assert record['attempts'][0]['leg']['id'] == 'claude-haiku-5.5'
+
+
+def test_catalog_claude_override_cannot_bypass_mixed_writer_fence(tmp_path, monkeypatch):
+    import asyncio
+    from plangraph.planner.routing import SpawnRefused
+    from plangraph.spawner.service import SpawnService
+    model = 'anthropic/claude-haiku-catalog'
+    monkeypatch.setattr('plangraph.spawner.resolver.get_catalog_models', lambda: [
+        dict(id=model,tier='subscription',harness='claude',context_tokens=200000,
+             tool_mode='prompt-only',active=True,available=1,trains_on_prompts=False)])
+    service = SpawnService(state=tmp_path,leg_reader=_clear)
+    with pytest.raises(SpawnRefused,match='excluded writer family'):
+        asyncio.run(service.spawn(card=CARD,role='review',writer_families=('claude','gpt'),
+            model=model,override_reason='hermetic catalog review',dry_run=True))

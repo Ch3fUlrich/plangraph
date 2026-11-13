@@ -32,3 +32,7 @@ Live startup-token savings: not measured. No live measurement run IDs exist in
 the repository's records, so a fixed 25k saving is not claimed.
 Open step: three-run before/after token probe with recorded run IDs and token
 counts for each run. Runner structure is unchanged.
+
+The registered Haiku review model is always prompt-only, even if a caller asks
+for tools. The Claude command supplies an empty tool set and strict empty MCP
+configuration. Generic Claude review models retain their configured tool mode.
