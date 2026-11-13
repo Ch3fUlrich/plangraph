@@ -49,6 +49,7 @@ pub mod live_probe;
 pub mod lockfile;
 pub mod outcome;
 pub mod packet;
+pub mod package_placement;
 pub mod pathjail;
 pub mod placement_rule_bridge;
 pub mod placement_rule_store;

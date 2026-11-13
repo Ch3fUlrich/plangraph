@@ -21,3 +21,15 @@ Install the fleet service and timer in `~/.config/systemd/user/`, and create
 `~/.config/plangraph/fleet-worker.env` with `PLANGRAPH_HOST_NAME` set to the
 registry ID. Enable with `systemctl --user enable --now pg-fleet-series@worker.timer`.
 Deployment and multi-host evidence require operator access and are not local tests.
+
+Before each package start, call `pg-package-host` with the existing
+`~/.config/plangraph/hosts.json` registry (`--registry` overrides it).
+It uses samples at most 120 seconds old and probes stale/missing hosts over SSH.
+It reserves 2048 MB above a 3000 MB RAM floor, gates at load/core >= 1,
+then orders by load/core, swap, runs, recorded sessions, free RAM and registry order.
+Windows workstation placement requires `--allow-workstation`.
+JSON includes the selected host, measurements and every admission refusal.
+Exit 5 means queue: no host admits. `--reservation-mb` sets package memory.
+This admission module is also the Rust overflow spawner's policy source.
+The phase-batch-orchestration skill is absent from this checkout; its caller
+must invoke this command before launch when that skill is available.
