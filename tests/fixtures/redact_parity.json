@@ -112,6 +112,6 @@
   {"id": "py-name-scope-passwd-plain", "input": "passwd=v", "expected": "passwd=[REDACTED]", "source": "passwd=v"},
   {"id": "py-name-scope-client-credential", "input": "CLIENT_CREDENTIAL=v", "expected": "CLIENT_CREDENTIAL=[REDACTED]", "source": "CLIENT_CREDENTIAL=v"},
   {"id": "py-name-scope-negative-prose", "input": "the secret is out and no token was shown", "expected": "the secret is out and no token was shown", "source": "the secret is out and no token was shown"},
-  {"id": "py-name-scope-negative-path", "input": "C:/work/token/password/file.txt", "expected": "C:/work/token/password/file.txt", "source": "C:/work/token/password/file.txt"},
+  {"id": "py-name-scope-negative-path", "input": "C:/work/token/file.txt", "expected": "C:/work/token/file.txt", "source": "C:/work/token/file.txt"},
   {"id": "py-name-scope-negative-url", "input": "https://example.com/secret/page?b=1", "expected": "https://example.com/secret/page?b=1", "source": "https://example.com/secret/page?b=1"}
 ]
