@@ -12,6 +12,8 @@ pub struct Manifest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Entry {
+    #[serde(default)]
+    pub platforms: Vec<String>,
     pub component: String,
     pub target: String,
     pub format: String,
@@ -35,6 +37,11 @@ pub fn run(home: &Path, binary: &Path, manifest: &str, mode: Mode) -> (i32, Vec<
     let mut changed = 0;
     let mut failed = 0;
     for entry in manifest.files {
+        if !entry.platforms.is_empty()
+            && !entry.platforms.iter().any(|os| os == std::env::consts::OS)
+        {
+            continue;
+        }
         let target = Path::new(&entry.target);
         let safe = !entry.target.is_empty()
             && target
@@ -100,10 +107,17 @@ fn apply(path: &Path, binary: &Path, entry: &Entry, mode: Mode) -> Result<&'stat
         Err(_) => return Err("read".into()),
     };
     let quoted = serde_json::to_string(&binary.to_string_lossy()).map_err(|_| "binary")?;
+    let systemd_binary = binary
+        .to_string_lossy()
+        .replace('%', "%%")
+        .replace('$', "$$")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
     let content = entry
         .content
         .replace("@BINARY_JSON@", &quoted[1..quoted.len() - 1])
-        .replace("@BINARY@", &binary.to_string_lossy());
+        .replace("@BINARY@", &binary.to_string_lossy())
+        .replace("@BINARY_SYSTEMD@", &systemd_binary);
     let bytes = match entry.format.as_str() {
         "json" | "hooks" => {
             let mut target: Value = old

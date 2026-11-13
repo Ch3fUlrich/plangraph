@@ -1,0 +1,1 @@
+- Keep Taildrop sorting in plangraph: add one locked Rust fetcher, filename-only owner/unsorted filing, no-clobber collisions and Linux setup service/timer entries.

@@ -51,6 +51,9 @@ fn run() -> i32 {
             }
         };
     }
+    if args.first().is_some_and(|a| a == "taildrop-sort") {
+        return plangraph_cli::taildrop::cli(&home, &args[1..]);
+    }
     let mode = match args
         .iter()
         .map(String::as_str)

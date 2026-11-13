@@ -26,3 +26,4 @@ src/plangraph/routing_support/opencode_overlay.py -> docs/opencode-gateway.md
 src/plangraph/planner/** -> docs/routing.md
 rust/plangraph-cli/** -> docs/setup.md
 setup/manifest.toml -> docs/setup.md
+deploy/taildrop/** -> docs/taildrop.md

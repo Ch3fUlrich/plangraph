@@ -42,3 +42,11 @@ state namespace. Apply without the flag; existing new state always wins and the
 old state remains for rollback. `deploy/breaker` supplies the retained watchdog
 wrapper and removal instructions for disabled watchers. Activating these templates
 requires the operator's router decision; it is a cutover step, not setup activation.
+
+## Taildrop
+
+The keep decision and filename-only contract are in `docs/taildrop.md`.
+The embedded manifest installs its Linux service/timer idempotently, pointing at
+the current binary with systemd path quoting. Platform-qualified entries are
+skipped on other systems. `plangraph taildrop-sort --dry-run` checks the intended
+operation without fetching files or creating state; activation remains cutover.

@@ -5,3 +5,31 @@ target = ".config/plangraph/plangraph.env"
 format = "env"
 content = "PG_URL=http://127.0.0.1:8765\nPG_LEASE_S=7200\nPG_HEARTBEAT_S=900\n"
 
+[[files]]
+component = "taildrop-service"
+platforms = ["linux"]
+target = ".config/systemd/user/taildrop-sort.service"
+format = "text"
+content = '''[Unit]
+Description=Plangraph shared Taildrop fetcher and owner sorter
+[Service]
+Type=oneshot
+ExecStart="@BINARY_SYSTEMD@" taildrop-sort
+StandardOutput=journal
+StandardError=journal
+'''
+
+[[files]]
+component = "taildrop-timer"
+platforms = ["linux"]
+target = ".config/systemd/user/taildrop-sort.timer"
+format = "text"
+content = '''[Unit]
+Description=Fetch and sort the shared Taildrop inbox once a minute
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Persistent=false
+[Install]
+WantedBy=timers.target
+'''

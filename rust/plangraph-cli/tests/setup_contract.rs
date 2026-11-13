@@ -143,3 +143,19 @@ fn superseded_patterns_cannot_replace_two_distinct_commands() {
     let desired = json!({"Stop":[{"hooks":[{"command":"one"}]},{"hooks":[{"command":"two"}]}]});
     assert!(plangraph_cli::merge::hooks(&mut target, &desired, &["legacy*".into()]).is_err());
 }
+#[cfg(target_os = "linux")]
+#[test]
+fn systemd_binary_does_not_expand_dollars_or_specifiers() {
+    let root = tempfile::tempdir().unwrap();
+    let binary = Path::new("/tmp/binary ${UNKNOWN}%x/plangraph");
+    assert_eq!(
+        setup::run(root.path(), binary, setup::MANIFEST, Mode::Apply).0,
+        0
+    );
+    let service = fs::read_to_string(
+        root.path()
+            .join(".config/systemd/user/taildrop-sort.service"),
+    )
+    .unwrap();
+    assert!(service.contains("binary $${UNKNOWN}%%x/plangraph"));
+}
