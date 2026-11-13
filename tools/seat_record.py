@@ -31,6 +31,25 @@ def _canon_family(name):
         raise ValueError(f"unknown model family {name!r}")
     return family
 
+def _review_text_from_log(live_log: str) -> str:
+    """Keep plain logs intact; OpenCode events yield only the final step's text."""
+    event_log, texts = False, []
+    for line in live_log.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or "type" not in event:
+            continue
+        event_log = True
+        if event["type"] == "step_start":
+            texts.clear()
+        elif event["type"] == "text":
+            part = event.get("part")
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                texts.append(part["text"])
+    return "\n".join(texts) if event_log else live_log
+
 def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None) -> tuple[dict, str]:
     """Return (evidence, review_text) for a record.json-only seat run dir.
 
@@ -82,7 +101,7 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
     except OSError:
         live_log = ""
     if live_log.strip():
-        review_text = live_log
+        review_text = _review_text_from_log(live_log)
     else:
         # F4: stdout_tail accumulates every leg (service.py/runner.py append to
         # it), so it may stand in for live.log only on a single-attempt record.
