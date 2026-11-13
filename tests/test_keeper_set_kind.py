@@ -33,7 +33,8 @@ def w(tmp_path):
     world = World(tmp_path)
     world.store.create_items(world.p("router"), [
         defn("A"), defn("B"), defn("C"), defn("D"), defn("GATE", kind="gate"),
-        defn("DEC", kind="decision", operator=True, wait="answer"),
+        defn("DEC", kind="decision", operator=True, wait="answer",
+             description="Why: choose\nHow: answer"),
         defn("G", ["A", "B", "C", "D", "GATE", "DEC"], kind="goal")])
     yield world
     world.close()
