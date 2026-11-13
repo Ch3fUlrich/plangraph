@@ -1,0 +1,1 @@
+- Record the plangraph credential prerequisite and external ownership, traffic-evidence requirements, smoke checks, and rollback for local proxy retirement.
