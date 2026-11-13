@@ -12,7 +12,8 @@ R-orch-10: Give privileged, installer or state-mutating changes a Sonnet final r
 
 R-lead-01: An L1 takes its own named default at once and reports it.
   It waits for the router only for GO rows, waivers and router-only keeper verbs. (why: defaults must not wait; source: D-5642)
-R-lead-02: When a route leg fails, the L1 tries the next route leg before it sends BLOCKED. (why: one failed leg is not the end; source: D-5641)
+R-lead-02: When a route leg fails, the L1 tries the next leg the spawner route offers for that role before sending BLOCKED.
+  If the card or order names one model, rule 11 forbids swaps and the L1 backs off or sends BLOCKED. (why: one failed leg is not the end; source: D-5641)
 R-lead-03: Every seat card carries its item key. (why: seats need a clear item link; source: D-5658)
 R-lead-04: After two design rounds with no agreement, the L1 cuts the item smaller. (why: smaller items help design move on; source: D-5658)
 R-lead-05: A fix for a live failure is done only after a live proof run. (why: tests alone do not prove a live fix; source: D-5658)

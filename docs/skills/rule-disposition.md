@@ -63,7 +63,7 @@ role card.
 | R-orch-29 | code | none (gap) | pin 1M combos for orchestrator seats |
 | R-orch-30 | code | none (gap) | fan out at most 10 seats |
 | R-lead-01 | card | role card: orchestrator | D-5642 take named defaults now |
-| R-lead-02 | card | role card: orchestrator | D-5641 try the next route leg |
+| R-lead-02 | card | role card: orchestrator | D-5641 next offered leg, D-1504 no named-model swaps |
 | R-lead-03 | card | role card: orchestrator | D-5658 link each seat to its item |
 | R-lead-04 | card | role card: orchestrator | D-5658 cut smaller after two rounds |
 | R-lead-05 | card | role card: orchestrator | D-5658 prove live fixes with live runs |
