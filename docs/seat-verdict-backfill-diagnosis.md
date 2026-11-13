@@ -76,7 +76,7 @@ No live verdict application, seat spawning, merge, or deployment was performed
 for this diagnosis. The forward completion bridge remains implementation work;
 the existing discovery fallback is not evidence that it is live.
 
-For a saved `verdict.json` with `status: retry` and reason `keeper verdict transport not configured`, explicitly re-post with `python3 tools/seat_verdict.py --key K --seat-dir RUN --url URL --token-dir DIR [--head FULLSHA]` after configuring transport. The command uses the record's `given_writer_families` and completion head by default, rechecks the existing identity, head, family and PASS gates, and shares the locked outbox; keeper acknowledgement marks delivery so another invocation cannot replay it. It refuses terminal or ambiguous sends rather than treating them as transport retries. If the recorded writer list is absent, use the normal explicit `--writer-family`/`--head` manual path only after operator reconciliation.
+For a saved `verdict.json` with `status: retry` and reason `keeper verdict transport not configured`, explicitly re-post with `python3 tools/seat_verdict.py --repost-transport --key K --seat-dir RUN --url URL --token-dir DIR [--head FULLSHA]` after configuring transport. The command uses the record's `given_writer_families` and completion head by default, rechecks the existing identity, head, family and PASS gates, and shares the locked outbox; keeper acknowledgement marks delivery so another invocation cannot replay it. It refuses terminal or ambiguous sends rather than treating them as transport retries. If the recorded writer list is absent, use the normal explicit `--writer-family`/`--head` manual path only after operator reconciliation.
 
 ## Round 1 fail-closed backfill corrections
 

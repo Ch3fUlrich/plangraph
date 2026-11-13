@@ -1,12 +1,15 @@
 """Late record persistence and the operator's transport-only repost path."""
 import json
 from pathlib import Path
+import re
+import shlex
 from types import SimpleNamespace
 import sys
 
 import pytest
 
 from test_seat_verdict_record import record_dir, HEAD_SHA, REVIEW, sv
+from test_seat_record_opencode import event, event_log
 import seat_backfill as sb
 
 
@@ -52,6 +55,48 @@ def test_completed_record_reread_until_fields_persist(run, field):
     assert sv.main(argv, clock=lambda: ticks[0], sleep=advance) == 0
     assert len(waits) == 2 and len(calls) == 1
     assert HEAD_SHA in calls[0]["reason"] and calls[0]["ok"] is True
+
+
+@pytest.mark.parametrize("blank", [None, "", " \t\n"])
+def test_unfinished_live_step_rereads_nonempty_tail_before_posting(run, blank):
+    argv, seat, calls = run
+    assert json.loads((seat / "record.json").read_text())["stdout_tail"] == REVIEW
+    events = [event("step_start")]
+    if blank is not None:
+        events.append(event("text", text=blank))
+    live = seat / "live.log"
+    live.write_text(event_log(*events))
+    ticks, waits = [0], []
+    final_text = "persisted final finding\nVERDICT: FIX"
+    def advance(seconds):
+        assert not calls, "the stale PASS tail must not post while live text is pending"
+        waits.append(seconds)
+        ticks[0] += seconds
+        live.write_text(event_log(*events, event("text", text=final_text),
+                                  event("step_finish", reason="stop")))
+    assert sv.main(argv, clock=lambda: ticks[0], sleep=advance) == 0
+    assert waits == [1] and len(calls) == 1
+    assert calls[0]["ok"] is False and "persisted final finding" in calls[0]["reason"]
+
+
+@pytest.mark.parametrize("tail", ["", REVIEW])
+@pytest.mark.parametrize("finish", [None, "stop", "length", "tool-calls"])
+def test_empty_live_step_wait_is_bounded_and_finished_tail_is_not_pending(
+        run, capsys, tail, finish):
+    argv, seat, calls = run
+    path = seat / "record.json"
+    record = json.loads(path.read_text())
+    record["stdout_tail"] = tail
+    path.write_text(json.dumps(record))
+    events = [event("step_start")]
+    if finish is not None:
+        events.append(event("step_finish", reason=finish))
+    (seat / "live.log").write_text(event_log(*events))
+    ticks = [0]
+    assert sv.main(argv, record_wait=2, clock=lambda: ticks[0],
+                   sleep=lambda s: ticks.__setitem__(0, ticks[0] + s)) == sv.EXIT_REFUSED
+    assert ticks == [2 if finish is None or not tail else 0] and not calls
+    assert "no final text in live.log" in capsys.readouterr().err
 
 
 def test_missing_fields_wait_is_bounded_by_default_thirty_seconds(run, capsys):
@@ -125,6 +170,22 @@ def test_omitted_writer_family_requires_explicit_repost(run, monkeypatch, writer
     assert exc.value.code == 2 and calls == []
 
 
+def test_diagnosis_documented_transport_repost_command_posts(run):
+    original, seat, calls = run
+    doc = Path(__file__).resolve().parents[1] / "docs/seat-verdict-backfill-diagnosis.md"
+    command = re.search(r"`(python3 tools/seat_verdict\.py [^`]+)`", doc.read_text())[1]
+    values = {"K": "demo:A", "RUN": str(seat), "URL": "unused",
+              "DIR": original[original.index("--token-dir") + 1]}
+    argv = [values.get(arg, arg) for arg in
+            shlex.split(command.removesuffix(" [--head FULLSHA]"))[2:]]
+    (seat / "verdict.json").write_text(json.dumps({"status": "retry", "attempts": 1,
+        "reason": "keeper verdict transport not configured"}))
+    assert sv.main(argv) == 0
+    assert len(calls) == 1 and calls[0]["key"] == "demo:A"
+    assert json.loads((seat / "verdict.json").read_text())["status"] == "delivered"
+    assert (seat / "verdict.delivered").exists()
+
+
 @pytest.mark.parametrize("head", [False, True])
 def test_transport_retry_plain_command_posts_and_closes_outbox(run, head):
     argv, seat, calls = run
@@ -141,7 +202,7 @@ def test_transport_retry_plain_command_posts_and_closes_outbox(run, head):
     assert calls[0]["ok"] is True
     assert json.loads((seat / "verdict.json").read_text())["status"] == "delivered"
     assert (seat / "verdict.delivered").exists()
-    assert sv.main(argv) != 0
+    assert sv.main(argv) == 1
     assert len(calls) == 1
 
 
@@ -169,7 +230,7 @@ def test_transport_repost_keeps_verifier_and_outbox_gates(run, change):
         journal["status"] = "sending"
     path.write_text(json.dumps(record))
     (seat / "verdict.json").write_text(json.dumps(journal))
-    assert sv.main(argv) != 0
+    assert sv.main(argv) == 1
     assert calls == []
     assert json.loads((seat / "verdict.json").read_text()) == journal
     assert not (seat / "verdict.delivered").exists()

@@ -36,7 +36,11 @@ def _canon_family(name):
 
 def _review_text_from_log(live_log: str) -> str:
     """Final-step text, retaining a stop-completed answer across empty steps."""
-    event_log, texts, completed = False, [], None
+    return _review_log_state(live_log)[0]
+
+def _review_log_state(live_log: str) -> tuple[str, bool]:
+    """Review text and whether the last lifecycle step is still unfinished."""
+    event_log, texts, completed, unfinished = False, [], None, False
     for line in live_log.split("\n"):
         line = line.removesuffix("\r")
         try:
@@ -50,6 +54,7 @@ def _review_text_from_log(live_log: str) -> str:
         event_log |= event["type"] in ("step_start", "step_finish")
         if event["type"] == "step_start":
             texts.clear()
+            unfinished = True
         elif event["type"] == "text":
             part = event["part"]
             if isinstance(part.get("text"), str):
@@ -59,13 +64,14 @@ def _review_text_from_log(live_log: str) -> str:
         elif event["type"] == "tool_use":
             completed = None
         elif event["type"] == "step_finish":
+            unfinished = False
             if event["part"].get("reason") == "stop":
                 if any(t.strip() for t in texts):
                     completed = "\n".join(texts)
             else:
                 completed = None
     text = completed if completed is not None else "\n".join(texts)
-    return text if event_log else live_log
+    return (text if event_log else live_log), unfinished
 
 def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None) -> tuple[dict, str]:
     """Return (evidence, review_text) for a record.json-only seat run dir.
@@ -121,8 +127,9 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         live_log = (run_dir / "live.log").read_text("utf-8")
     except OSError:
         live_log = ""
+    unfinished = False
     if live_log.strip():
-        review_text = _review_text_from_log(live_log)
+        review_text, unfinished = _review_log_state(live_log)
     else:
         # F4: stdout_tail accumulates every leg (service.py/runner.py append to
         # it), so it may stand in for live.log only on a single-attempt record.
@@ -131,7 +138,7 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
             raise ValueError("stdout_tail accumulates every leg; live.log required")
         review_text = str(record.get("stdout_tail") or "")
     if not review_text.strip():
-        error = RecordPending if not record.get("stdout_tail") else ValueError
+        error = RecordPending if unfinished or not record.get("stdout_tail") else ValueError
         detail = "no final text in live.log" if live_log.strip() else "live.log and stdout_tail empty"
         raise error(f"record has no review text ({detail})")
     served = record.get("served_model")

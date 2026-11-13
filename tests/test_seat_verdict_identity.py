@@ -63,6 +63,30 @@ def test_unreadable_identity_cannot_be_laundered_by_evidence_builder(
     assert 'cannot read record identity' in capsys.readouterr().err
 
 
+@pytest.mark.parametrize('error', [PermissionError, OSError])
+def test_unreadable_companion_record_refuses_with_evidence_before_io(
+        tmp_path, monkeypatch, capsys, error):
+    record = tmp_path / 'record.json'
+    record.write_text(json.dumps({'item_key': KEY}))
+    (tmp_path / 'evidence.json').write_text(json.dumps({'served_model': 'gemini-3-pro'}))
+    (tmp_path / 'review.txt').write_text('VERDICT: FIX\n')
+    reads = []
+    def read(path, *args, **kwargs):
+        reads.append(path)
+        assert path == record, 'unreadable identity must refuse before evidence or token reads'
+        raise error('record unavailable')
+    def forbidden(*args, **kwargs):
+        pytest.fail('unreadable companion must not derive, sleep or post')
+    monkeypatch.setattr(Path, 'read_text', read)
+    monkeypatch.setattr(sv, 'evidence_from_record', forbidden)
+    monkeypatch.setattr(sv, 'send', forbidden)
+    assert sv.main(['--key', OTHER_KEY, '--seat-dir', str(tmp_path),
+                    '--writer-family', 'xiaomi', '--token-dir', str(tmp_path),
+                    '--url', 'unused'], sleep=forbidden) == sv.EXIT_REFUSED
+    assert reads == [record]
+    assert 'cannot read record identity' in capsys.readouterr().err
+
+
 @pytest.mark.parametrize('source', ['record', 'evidence', 'both'])
 @pytest.mark.parametrize('identity', [{}, {'item_key': KEY}, {'item_key': None}])
 def test_omitted_key_is_required_before_any_seat_or_token_read(
