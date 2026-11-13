@@ -171,7 +171,9 @@ def _call_tool(mid, params, client):
                 or any(not isinstance(entry, dict) for entry in items)):
             return _tool_error(
                 mid, "validation: items must be a list of objects (<= 50)")
-        if error := creation_error(items):
+        # The store checks decisions after duplicate/conflict/lock refusals.
+        if error := creation_error(
+                [item for item in items if item.get("kind") != "decision"]):
             return _tool_error(mid, error)
     elif name == "edit":
         if (not isinstance(args.get("key"), str) or not args.get("key")
