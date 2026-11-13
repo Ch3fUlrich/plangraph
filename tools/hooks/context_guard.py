@@ -223,15 +223,21 @@ def run_hook() -> int:
         hard = max(hard, handoff)  # a garbled pair must never hide or misreport the hard cap
         try:
             from context_compaction import scan
-        except ImportError:
+        except Exception:
             scan = None
+            if os.environ.get("AUTOOS_CTX_DEBUG"):
+                print("context_guard: context_compaction unavailable; continuing without scan", file=sys.stderr)
         # Independent cursor survives clearing below-threshold announce state.
         scan_path = state_dir().with_name("ctx-guard-scan") / ("%s.scan" % session_id)
         try:
             previous = json.loads(read_text_capped(scan_path))
         except (OSError, ValueError):
             previous = None
-        scanned = scan(transcript_path, previous) if scan else None
+        try:
+            scanned = scan(transcript_path, previous) if scan else None
+        except Exception:
+            if os.environ.get("AUTOOS_CTX_DEBUG"):
+                print("context_guard: context_compaction unavailable; continuing without scan", file=sys.stderr)
         stored = read_state(session_id) or {}
         scan_state = scanned or {}
         boundary = scan_state.get("boundary") if scan_state.get("fleet") else None

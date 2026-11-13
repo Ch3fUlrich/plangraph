@@ -1,10 +1,11 @@
 """Carried AutoOS compaction contracts and deliberate plangraph differences."""
 import json
 import os
+import shutil
 import sys
 from unittest.mock import patch
 
-from hookkit import SID, load_module, usage_line
+from hookkit import HOOKS, SID, load_module, usage_line
 from test_context_guard import GuardCase
 
 BOUNDARY = json.dumps({"type": "system", "subtype": "compact_boundary"})
@@ -146,6 +147,38 @@ class Compaction(GuardCase):
             self.assertEqual(text, guard.emit_line("hard", 301000, 300000))
         scan_path = self.state_file().parent.with_name("ctx-guard-scan") / (SID + ".scan")
         self.assertFalse(scan_path.exists())
+
+    def broken_compaction_hook(self, body, **env):
+        for name in ("context_guard.py", "hook_common.py"):
+            shutil.copyfile(HOOKS / name, self.tmp / name)
+        (self.tmp / "context_compaction.py").write_text(body, encoding="utf-8")
+        self.write(usage_line(inp=301000))
+        payload = {"transcript_path": str(self.transcript), "session_id": SID, "cwd": "/w/x"}
+        proc = self.run_hook(self.tmp / "context_guard.py", payload, PYTHONDONTWRITEBYTECODE="1", **env)
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("HARD-CAP ctx=301k >= 300k", proc.stdout)
+        with patch.dict(os.environ, self.env(), clear=True):
+            self.assertEqual(self.ctx_text(proc), load_module("context_guard").emit_line("hard", 301000, 300000))
+        scan_path = self.state_file().parent.with_name("ctx-guard-scan") / (SID + ".scan")
+        self.assertFalse(scan_path.exists())
+        return proc
+
+    def test_broken_compaction_import_keeps_hard_cap_guidance(self):
+        proc = self.broken_compaction_hook("raise RuntimeError('synthetic import failure')\n")
+        self.assertEqual(proc.stderr, "")
+
+    def test_broken_compaction_scan_keeps_hard_cap_guidance(self):
+        proc = self.broken_compaction_hook("def scan(*args):\n    raise RuntimeError('synthetic scan failure')\n")
+        self.assertEqual(proc.stderr, "")
+
+    def test_broken_compaction_debug_note(self):
+        for body in ("raise RuntimeError('synthetic import failure')\n",
+                     "def scan(*args):\n    raise RuntimeError('synthetic scan failure')\n"):
+            with self.subTest(body=body):
+                self.state_file().unlink(missing_ok=True)
+                proc = self.broken_compaction_hook(body, AUTOOS_CTX_DEBUG="1")
+                self.assertEqual(proc.stderr,
+                                 "context_guard: context_compaction unavailable; continuing without scan\n")
 
     def test_deliberate_difference_persistence_failure_does_not_hide_warning(self):
         import io
