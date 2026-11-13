@@ -23,6 +23,9 @@ _HEAD_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 # F8: both spellings count (review/tail.md uses TEST-GAMING).
 _TEST_GAMING = re.compile(r"^TEST[_-]GAMING:[ \t]*(.*)$", re.I | re.M)
 
+class RecordPending(ValueError):
+    """Completion persistence may still supply missing fields."""
+
 def _canon_family(name):
     """Canonical family of a model or family name via seat_verdict's alias table."""
     from seat_verdict import model_family, KNOWN_FAMILIES  # local: seat_verdict imports this module
@@ -32,8 +35,8 @@ def _canon_family(name):
     return family
 
 def _review_text_from_log(live_log: str) -> str:
-    """Lifecycle events select OpenCode mode; otherwise keep plain logs intact."""
-    event_log, texts = False, []
+    """Final-step text, retaining a stop-completed answer across empty steps."""
+    event_log, texts, completed = False, [], None
     for line in live_log.split("\n"):
         line = line.removesuffix("\r")
         try:
@@ -51,7 +54,18 @@ def _review_text_from_log(live_log: str) -> str:
             part = event["part"]
             if isinstance(part.get("text"), str):
                 texts.append(part["text"])
-    return "\n".join(texts) if event_log else live_log
+                if part["text"].strip():
+                    completed = None
+        elif event["type"] == "tool_use":
+            completed = None
+        elif event["type"] == "step_finish":
+            if event["part"].get("reason") == "stop":
+                if any(t.strip() for t in texts):
+                    completed = "\n".join(texts)
+            else:
+                completed = None
+    text = completed if completed is not None else "\n".join(texts)
+    return text if event_log else live_log
 
 def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None) -> tuple[dict, str]:
     """Return (evidence, review_text) for a record.json-only seat run dir.
@@ -68,10 +82,12 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         if record is None:
             record = json.loads(record_path.read_text("utf-8"))
         stat = record_path.stat()
+    except FileNotFoundError as exc:
+        raise ValueError("record.json unreadable: FileNotFoundError") from exc
     except OSError as exc:
-        raise ValueError(f"record.json unreadable: {type(exc).__name__}") from exc
+        raise RecordPending(f"record.json unreadable: {type(exc).__name__}") from exc
     except (ValueError, RecursionError) as exc:
-        raise ValueError(f"record.json is not valid JSON: {exc}") from exc
+        raise RecordPending(f"record.json is not valid JSON: {exc}") from exc
     if not isinstance(record, dict):
         raise ValueError("record.json is not an object")
     # F6: bind the record to its directory and to this uid's write access.
@@ -97,23 +113,29 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         raise ValueError(f"record exit_code {exit_code!r} is not 0")
     completion = record.get("completion")
     head_sha = completion.get("head_sha") if isinstance(completion, dict) else None
-    if not isinstance(head_sha, str) or not _HEAD_SHA.match(head_sha):
-        raise ValueError("record completion.head_sha missing or not 40 hex chars")
+    if not isinstance(head_sha, str) or not _HEAD_SHA.fullmatch(head_sha):
+        error = RecordPending if head_sha in (None, "") else ValueError
+        raise error("record completion.head_sha missing or not 40 hex chars")
     try:
         live_log = (run_dir / "live.log").read_text("utf-8")
-    except OSError:
+    except FileNotFoundError:
         live_log = ""
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RecordPending(f"live.log unreadable: {type(exc).__name__}") from exc
     if live_log.strip():
         review_text = _review_text_from_log(live_log)
     else:
         # F4: stdout_tail accumulates every leg (service.py/runner.py append to
         # it), so it may stand in for live.log only on a single-attempt record.
         attempts = record.get("attempts")
-        if not isinstance(attempts, list) or len(attempts) > 1:
+        if not isinstance(attempts, list):
             raise ValueError("stdout_tail accumulates every leg; live.log required")
+        if len(attempts) > 1:
+            raise RecordPending("stdout_tail accumulates every leg; live.log required")
         review_text = str(record.get("stdout_tail") or "")
     if not review_text.strip():
-        raise ValueError("record has no review text (live.log and stdout_tail empty)")
+        detail = "no final text in live.log" if live_log.strip() else "live.log and stdout_tail empty"
+        raise RecordPending(f"record has no review text ({detail})")
     served = record.get("served_model")
     leg = record.get("chosen_leg")
     chosen = leg.get("model") if isinstance(leg, dict) else None

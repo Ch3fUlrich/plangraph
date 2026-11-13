@@ -1,0 +1,1 @@
+- Retry pending review-record persistence for at most 30 seconds, retain stop-completed review text across empty steps, and refuse missing records immediately without posting stale tails.
