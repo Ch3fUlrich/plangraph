@@ -386,7 +386,7 @@ def test_recorded_capture_matches_registered_provider_identity(recorded_plan):
     registered = next(leg for leg in DEFAULT_LEGS if leg.id == 'omniroute-deepseek-flash')
     skipped = next(row for row in CAPTURE['skipped'] if row['leg'] == registered.id)
     assert skipped['reason'] == 'not_served_on_host: ' + registered.model
-    assert registered.model == 'omniroute/deepseek-flash'
+    assert registered.model == 'omniroute/deepseek-v4.1-flash'
     unlaunched = [a['leg'] for a in CAPTURE['attempts'] if a['skip_reason'] == 'run_terminated_before_leg']
     assert unlaunched == [leg.id for leg in recorded_plan.legs[1:]]
     assert [a['leg'] for a in CAPTURE['attempts'] if a['skip_reason'] == 'unknown'] == [
