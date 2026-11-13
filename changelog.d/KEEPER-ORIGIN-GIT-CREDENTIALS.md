@@ -1,0 +1,1 @@
+Carry the caller's global git credential.* entries into the isolated keeper decisions fetch env (GIT_CONFIG_COUNT), so a private https origin authenticates instead of failing every claim with DecisionsFetchFailed; other GIT_* overrides stay dropped.
