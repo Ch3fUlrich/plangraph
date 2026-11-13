@@ -290,7 +290,7 @@ implemented, and enabling by default and the Rust port remain later slices.
 Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
 chosen leg, served model/family with witness kind (a structured claude `system/init` model is a native witness; a mismatch with the requested leg sets `served_model_mismatch`), writer family, status, started/ended timestamps,
 attempts with provider stop details, job id, pid, and stdout tail.
-These records are the only source for `--review-of`; unknown ids refuse. POSIX supervisors record their process start-time token; a reused supervisor pid ends the run as `orphaned`. Legacy pid-only records retain the missing-process check; unavailable start-time evidence never proves reuse.
+These records are the only source for `--review-of`; unknown ids refuse. Linux supervisors record their process start-time token; other platforms skip the `/proc` import and lookup. A reused supervisor pid ends the run as `orphaned` before signaling; matching or unreadable start-time evidence retains the POSIX missing-process check (permission denied means alive). Windows orphan checks return before importing process-stat helpers or signaling.
 
 On terminal save the supervisor publishes a completion per run to
 `inbox/parent.jsonl` and the authenticated live keeper HTTP sink. Events

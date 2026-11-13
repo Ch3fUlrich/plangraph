@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 from types import SimpleNamespace as NS
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -82,7 +82,10 @@ def test_probe_cli_returns_structured_parameter_refusal(
     assert refusal['status'] == 'refused'
     assert refusal['refusal'] == 'ParameterRefused'
     assert refusal['exit_code'] == 2
-    assert refusal['error']
+    expected_error = {'missing-leg': 'select --leg ID or --all-writers',
+                      'bad-leg': 'unknown legs: unknown-leg'}.get(
+                          case, 'invalid PLANGRAPH_LEG_PROBE_TIMEOUT_S')
+    assert refusal['error'] == expected_error
     assert 'Traceback' not in output.err
     assert 'invalid-probe-duration' not in output.out + output.err
     runner.spawn.assert_not_called()
@@ -124,25 +127,49 @@ def test_terminal_record_without_watchdog_event_keeps_terminal_outcome(status, r
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='supervisor orphan detection is POSIX-only')
-@pytest.mark.parametrize('observed_start', [None, 100, 101])
-@pytest.mark.parametrize('signal_error', [None, PermissionError])
+@pytest.mark.parametrize('observed_start,signal_error', [
+    (None, None), (None, PermissionError), (None, ProcessLookupError),
+    (100, None), (100, PermissionError), (100, ProcessLookupError), (101, None)])
 def test_orphaned_checks_supervisor_pid_start_time(
         tmp_path, monkeypatch, observed_start, signal_error):
     path = tmp_path / 'supervisor.stderr.log'
     path.with_suffix(path.suffix + '.pid').write_text('12345')
     record = dict(status='running', ended=None, supervisor_stderr_path=str(path),
                   supervisor_pid_start=100)
-    monkeypatch.setattr(proc_kill, '_stat', lambda pid:
-                        ('S', 1, pid, pid, observed_start) if observed_start is not None else None)
-    def signal(pid, number):
-        assert (pid, number) == (12345, 0)
-        if signal_error:
-            raise signal_error()
+    stat = Mock(return_value=('S', 1, 12345, 12345, observed_start)
+                if observed_start is not None else None)
+    monkeypatch.setattr(proc_kill, '_stat', stat)
+    signal = Mock(side_effect=signal_error)
     monkeypatch.setattr(os, 'kill', signal)
     result = exit_outcome.orphaned(record, 200)
-    if observed_start in (None, 100):
+    stat.assert_called_once_with(12345)
+    if observed_start == 101:
+        signal.assert_not_called()
+    else:
+        signal.assert_called_once_with(12345, 0)
+    if observed_start in (None, 100) and signal_error is not ProcessLookupError:
         assert result is None
     else:
         assert result['status'] == 'failed' and result['reason'] == 'orphaned'
         assert result['ended'] == 200 and result['exit_code'] == 1
     assert record['status'] == 'running' and record['ended'] is None
+
+
+def test_orphaned_on_windows_never_imports_proc_stat_or_signals(tmp_path, monkeypatch):
+    import builtins
+    path = tmp_path / 'supervisor.stderr.log'
+    path.with_suffix(path.suffix + '.pid').write_text('12345')
+    record = dict(status='running', ended=None, supervisor_stderr_path=str(path),
+                  supervisor_pid_start=100)
+    original_import = builtins.__import__
+    def checked_import(name, *args, **kwargs):
+        assert not name.endswith('proc_kill')
+        return original_import(name, *args, **kwargs)
+    signal = Mock(side_effect=AssertionError('Windows must never probe with os.kill'))
+    with monkeypatch.context() as patch:
+        patch.setattr(os, 'name', 'nt')
+        patch.setattr(os, 'kill', signal)
+        patch.setattr(builtins, '__import__', checked_import)
+        result = exit_outcome.orphaned(record, 200)
+    assert result is None
+    signal.assert_not_called()

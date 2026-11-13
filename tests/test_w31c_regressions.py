@@ -13,7 +13,8 @@ from plangraph.spawner import cli, resolver
 
 
 @pytest.mark.parametrize('installed', [True, False])
-def test_supervisor_path_and_bounded_stderr(monkeypatch, tmp_path, capsys, installed):
+@pytest.mark.parametrize('platform', ['native', 'win32'])
+def test_supervisor_path_and_bounded_stderr(monkeypatch, tmp_path, capsys, installed, platform):
     state = tmp_path / 'state'
     saved = []
     class Service:
@@ -45,6 +46,11 @@ def test_supervisor_path_and_bounded_stderr(monkeypatch, tmp_path, capsys, insta
     bootstrap = command[2]
     fake = """import os
 service = supervisor.SpawnService(state=sys.argv[2])
+if sys.argv[3] == 'win32':
+    def forbidden_stat(pid):
+        raise AssertionError('Windows supervisors must not read /proc')
+    globals()['_stat'] = forbidden_stat
+    sys.platform = 'win32'
 service._save({'run_id': 'run-fake', 'status': 'running'})
 original_replace = os.replace
 def missing_source_once(source, destination):
@@ -57,7 +63,7 @@ os.write(2, b'rotation-recovered\\n')
 """
     bootstrap = bootstrap.replace('supervisor.main(["--supervise"])', 'exec(' + repr(fake) + ')')
     child_env = dict(kw['env'], PYTHONPATH=root)
-    child = subprocess.Popen([sys.executable, '-c', bootstrap, str(log), str(state)], stderr=log.open('ab'), env=child_env)
+    child = subprocess.Popen([sys.executable, '-c', bootstrap, str(log), str(state), platform], stderr=log.open('ab'), env=child_env)
     assert child.wait(timeout=10) == 0, log.read_text()[-2000:]
     assert log.stat().st_size > 0
     assert 'rotation-recovered' in log.read_text()
@@ -65,7 +71,9 @@ os.write(2, b'rotation-recovered\\n')
     assert 'supervisor_stderr_path' in bootstrap
     record = json.loads((state / 'runs/run-fake/record.json').read_text())
     assert record['supervisor_stderr_path'] == str(log)
-    if sys.platform.startswith('linux'):
+    if platform == 'win32':
+        assert record['supervisor_pid_start'] is None
+    elif sys.platform.startswith('linux'):
         assert isinstance(record['supervisor_pid_start'], int) and record['supervisor_pid_start'] > 0
 
 

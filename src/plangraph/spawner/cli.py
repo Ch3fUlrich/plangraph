@@ -243,10 +243,10 @@ from plangraph.routing_support.host_keys import redaction_env
 # bootstrap top, not per emitted line (D-2759).
 redact_base = redaction_env(os.environ)
 path = sys.argv[1]
-from pathlib import Path
-from plangraph.spawner.proc_kill import _stat
+if sys.platform.startswith("linux"):
+    from plangraph.spawner.proc_kill import _stat
 try:
-    Path(path + ".pid").write_text(str(os.getpid()))
+    supervisor.Path(path + ".pid").write_text(str(os.getpid()))
 except OSError:
     pass
 read_fd, write_fd = os.pipe()
@@ -302,7 +302,7 @@ def service_with_log(*args, **kwargs):
     save = service._save
     def save_with_log(record):
         record["supervisor_stderr_path"] = path
-        record["supervisor_pid_start"] = (_stat(os.getpid()) or (None,) * 5)[4]
+        record["supervisor_pid_start"] = (_stat(os.getpid()) or (None,) * 5)[4] if sys.platform.startswith("linux") else None
         return save(record)
     service._save = save_with_log
     return service

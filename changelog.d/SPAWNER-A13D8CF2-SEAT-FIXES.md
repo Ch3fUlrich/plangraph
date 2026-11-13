@@ -1,1 +1,2 @@
 - Refuse invalid probe timeouts without liveness evidence, classify spawn-call errors as probe infrastructure, return structured CLI probe refusals, restrict provider-stop reasons to failed/skipped attempts, tolerate absent watchdog events, and bind supervisor orphan checks to recorded process start times.
+- Restore completed-and-stopped review coverage, assert exact probe CLI refusal diagnostics and supervisor signal calls, and skip Linux process-stat imports and lookups on other supervisor platforms.
