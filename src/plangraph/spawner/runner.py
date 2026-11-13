@@ -46,7 +46,7 @@ IMPLEMENT_HEADER = ("You run as the opencode build agent: git commit is allowed 
 _keeper_unconfigured_last_warned = None
 
 
-from .env_redact import first_reason, redact, _redact_prompt
+from .env_redact import first_reason, redact, redact_output, _redact_prompt
 from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
@@ -310,7 +310,7 @@ class SpawnerRunner:
         gateway: bool = True,
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
-        client: str | None = None,
+        client: str | None = None, reasoning_cap=False,
         watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial',  # REMOVE-AT-R10
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
@@ -450,6 +450,9 @@ class SpawnerRunner:
                     child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
+                from .opencode_answer import cap_reasoning
+                if reasoning_cap and not cap_reasoning(child_env, model_or_combo):
+                    render_reason = 'reasoning_output_limit: no supported reasoning cap'
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
         else:
@@ -473,11 +476,7 @@ class SpawnerRunner:
                     else:
                         from plangraph.routing_errors import SpawnRefused
                         raise SpawnRefused('no admitted legs for combo: ' + model_or_combo)
-                stdin_note = (
-                    f" [stdin: {len(prompt.encode('utf-8'))} bytes]"
-                    if cmd[0] in STDIN_PROMPT_HARNESSES
-                    else ""
-                )
+                stdin_note = f" [stdin: {len(prompt.encode('utf-8'))} bytes]"
                 job = JobInfo(
                     job_id=job_id,
                     status="dry_run",
@@ -525,20 +524,16 @@ class SpawnerRunner:
                 job.events.append(tools_event)
 
             if render_reason:
-                job.status = 'failed'
-                job.exit_code = 1
-                job.stderr = render_reason
-                job.end_time = time.time()
+                job.status, job.exit_code = 'failed', 1
+                job.stderr, job.end_time = render_reason, time.time()
                 job.events.append({'event': 'render_refused', 'reason': render_reason})
                 return job
 
             from .resolver import host_skip_reason_async
             unavailable = await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
             if unavailable:
-                job.status = 'failed'
-                job.exit_code = 1
-                job.stderr = unavailable
-                job.end_time = time.time()
+                job.status, job.exit_code = 'failed', 1
+                job.stderr, job.end_time = unavailable, time.time()
                 return job
             from .resolver import admitted_by_render
             if admitted_by_render(model_or_combo):  # trace a later launch failure to D-2869
@@ -546,14 +541,16 @@ class SpawnerRunner:
 
             import shutil
             resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
-            from plangraph.routing_support.clients import launch_stdin_payload
-            payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
+            from plangraph.routing_support.clients import PromptTransportError, launch_stdin_payload
+            try:
+                payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
+            except PromptTransportError as exc:
+                job.status, job.exit_code, job.stderr, job.end_time = 'failed', 1, str(exc), time.time()
+                return job
             resolved_exe, launch_refusal = _resolve_launch(resolved_exe, cmd[1:], is_nt=_is_nt())
             if launch_refusal:
-                job.status = 'failed'
-                job.exit_code = 1
-                job.stderr = launch_refusal
-                job.end_time = time.time()
+                job.status, job.exit_code = 'failed', 1
+                job.stderr, job.end_time = launch_refusal, time.time()
                 return job
 
             if payload is not None:
@@ -727,10 +724,11 @@ class SpawnerRunner:
                                            nonce=self._nonces[job_id])
             from .env_redact import redact_env_values
             env = self._child_envs.get(job_id, os.environ)
-            from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer
+            from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer, record_steps
+            record_steps(job, stdout_text, stderr_text, env)
             decoded, stderr_text, exit_code = native_answer(job, answer_text(stdout_text) if is_opencode(job) else stdout_text, stderr_text, exit_code)
-            job.stdout = redact(redact_env_values(decoded, env))
-            job.stderr = redact(redact_env_values(stderr_text, env))
+            job.stdout = redact_output(redact_env_values(decoded, env))
+            job.stderr = redact_output(redact_env_values(stderr_text, env))
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
@@ -786,7 +784,7 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-claude-stream'
                 # D-3649: the review text (VERDICT line) is the stream's final result, not the raw stream.
                 await asyncio.to_thread(render_review_output, job, stdout_text,
-                                        lambda text: redact(redact_env_values(text, env)))
+                                        lambda text: redact_output(redact_env_values(text, env)))
 
             await witness_native(self, job_id, job, stdout_text, requested_model)
             # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
@@ -1057,8 +1055,8 @@ def spawn_service(*args, **kwargs):
 
             if not plan.legs or plan.error:
                 host_skips = [s for s in plan.skipped if any(marker in str(s) for marker in ('not_served_on_host', 'harness_missing'))]
-                exhausted = not plan.legs and (not plan.error or
-                    bool(plan.skipped) and all(s['reason'] == 'limited' for s in plan.skipped))
+                from plangraph.routing_support.liveness import provider_exhausted
+                exhausted = not plan.legs and (not plan.error or provider_exhausted(plan.skipped))
                 record.update(status='failed' if host_skips else 'limited' if exhausted else 'refused',
                               exit_code=1 if host_skips else 4 if exhausted else 2, ended=time.time(),
                               error='; '.join(s.get('skip_reason') or s.get('reason', '') for s in host_skips) if host_skips else plan.error,
@@ -1095,23 +1093,11 @@ def spawn_service(*args, **kwargs):
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
                         worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
-                        job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
+                        job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
                             role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
-                        self._running_records[job.job_id] = record
-                        process = self.runner._processes.get(job.job_id)
-                        record.update(job_id=job.job_id, pid=process.pid if process else None,
-                                      **{k: bool(v) if k == 'job_object' else v for k, v in getattr(self.runner, '_owned', {}).get(job.job_id, {}).items() if k != 'pid'},
-                                      writer_family=chosen.family,
-                                      cwd=job.cwd or getattr(self.runner, 'default_cwd', os.getcwd()))
-                        self._save(record)
-                        task = self.runner._tasks.get(job.job_id)
-                        if task:
-                            await asyncio.wait([task])   # a monitor cancelled by runner.cancel ends the leg, not this loop
-                            if task.cancelled():
-                                from .cancel_job import publish_cancel; publish_cancel(job)
-                            elif not task.cancelled() and task.exception() is not None:
-                                raise task.exception()
+                        if record.get('reason') == 'reasoning_output_limit':
+                            return
                         if job.survivors:   # kill_incomplete: terminal, no fall-through leg, no second writer
                             record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason='kill_incomplete'))
                             record.update(status='failed', exit_code=1, reason='kill_incomplete', survivors=job.survivors,

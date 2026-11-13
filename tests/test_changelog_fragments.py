@@ -11,6 +11,24 @@ FOLD = ROOT / "tools" / "changelog_fold.py"
 CHANGELOG = "## Unreleased\n- existing entry\n"
 
 
+def test_tracked_tree_has_no_case_only_duplicate_paths():
+    paths = subprocess.check_output(
+        ["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")
+    folded = {}
+    for path in filter(None, paths):
+        assert path.casefold() not in folded, (folded.get(path.casefold()), path)
+        folded[path.casefold()] = path
+
+
+def test_slice_fragments_are_consolidated():
+    paths = list((ROOT / "changelog.d").glob("*.md"))
+    for slice_id in ("s2", "s3", "s4", "s5"):
+        fragments = [p for p in paths if p.stem.lower().replace("-", "").startswith("rff" + slice_id)
+                     and "s2s5" not in p.stem.lower().replace("-", "")]
+        assert len(fragments) <= 1, fragments  # Folding may consume the canonical fragment.
+        assert all("remain outstanding" not in p.read_text() for p in fragments)
+
+
 def run_fold(repo, *extra_args):
     return subprocess.run(
         [sys.executable, str(FOLD), *extra_args],

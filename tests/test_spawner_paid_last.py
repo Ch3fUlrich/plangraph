@@ -58,8 +58,12 @@ def test_paid_pin(tmp_path, monkeypatch, harness, pin, free_up, reason):
 
 
 def test_only_sol_writes():
-    assert legs.WRITER_ORDER == ('cx-gpt-6.1-sol', 'opencode-console-muse-spark')
-    assert [leg.id for leg in legs.DEFAULT_LEGS if 'implement' in leg.roles] == list(legs.WRITER_ORDER)
+    assert legs.WRITER_ORDER == ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash')
+    assert [leg.id for leg in legs.DEFAULT_LEGS if 'implement' in leg.roles] == [
+        'opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free', 'openrouter-free',
+        'cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash', 'agy-gemini-4-argon', 'opencode-big-pickle',
+        'mimo-v2.6-flash', 'mimo-v2.6-pro', 'omniroute-deepseek-flash', 'omniroute-muse-spark',
+        'opencode-console-muse-spark', 'deepseek']
     assert {'deepseek', 'openrouter-free', 'mimo-v2.6-pro'} <= {leg.id for leg in legs.DEFAULT_LEGS}
 
 
@@ -91,12 +95,12 @@ def test_muse_amber_paid_pin_checks_free_availability(tmp_path, monkeypatch, pin
 
 @pytest.mark.parametrize('pin', ['leg', 'model'])
 @pytest.mark.parametrize('subscriptions_up', [
-    ('cx-gpt-6.1-sol', 'cx-gpt-6-luna'), ('cx-gpt-6.1-sol',), ('cx-gpt-6-luna',), ()])
+    ('cx-gpt-6.1-sol-xhigh', 'cx-gpt-6-luna'), ('cx-gpt-6.1-sol-xhigh',), ('cx-gpt-6-luna',), ()])
 @pytest.mark.parametrize('reason', [None, 'Audited public writer override'])
 def test_muse_writer_pin_cannot_bypass_available_subscriptions(tmp_path, monkeypatch, pin, subscriptions_up, reason):
     # Mechanics table retains coverage for more than one subscription writer.
     table = tuple(replace(leg, roles=('implement',)) for leg in legs.DEFAULT_LEGS
-                  if leg.id in (*legs.WRITER_ORDER, 'cx-gpt-6-luna'))
+                  if leg.id in (legs.LEAD_WRITER, 'cx-gpt-6-luna', legs.MUSE_AMBER))
     use_table(monkeypatch, table)
     writers = {leg.id: leg for leg in table}
     amber = writers[legs.MUSE_AMBER]
@@ -117,11 +121,11 @@ def test_muse_writer_pin_cannot_bypass_available_subscriptions(tmp_path, monkeyp
         assert [call['model_or_combo'] for call in runner.calls] == [amber.model]
 
 
-@pytest.mark.parametrize('down_ids', [('cx-gpt-6.1-sol',), ('cx-gpt-6.1-sol', 'cx-gpt-6-luna')])
+@pytest.mark.parametrize('down_ids', [('cx-gpt-6.1-sol-xhigh',), ('cx-gpt-6.1-sol-xhigh', 'cx-gpt-6-luna')])
 @pytest.mark.parametrize('role', ['implement', 'review'])
 def test_measured_down_subscriptions_still_precede_paid_muse(tmp_path, monkeypatch, down_ids, role):
     import time
-    subscriptions = ('cx-gpt-6.1-sol', 'cx-gpt-6-luna')
+    subscriptions = ('cx-gpt-6.1-sol-xhigh', 'cx-gpt-6-luna')
     writers = tuple(leg for leg in legs.DEFAULT_LEGS if leg.id in (*subscriptions, legs.MUSE_AMBER))
     table = tuple(replace(leg, roles=(role,)) for leg in writers)
     use_table(monkeypatch, table)

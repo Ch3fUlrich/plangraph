@@ -6,7 +6,7 @@ from .env_redact import first_reason, harness_limit_line, unavailable_reason
 
 #: Verdicts a guard or a cancel owns.  No later fallthrough outcome may stomp
 #: them and terminal_reason never pops them (M9/M15, Q14).
-TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled')
+TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled', 'reasoning_output_limit')
 
 
 def without_progress(text):
@@ -252,6 +252,13 @@ def terminal_reason(record, job=None):
     reason = record.get('reason')
     if reason in TERMINAL_REASONS:
         return
+    if record.get('status') in ('failed', 'refused'):
+        diagnostic = '\n'.join(record.get(key) or '' for key in ('error', 'stderr', 'stderr_tail'))
+        diagnostic += '\n' + (getattr(job, 'stderr', '') or '')
+        for named in ('prompt_too_large', 'stdin_prompt_flag_missing'):
+            if named + ':' in diagnostic:
+                record['reason'] = named
+                return
     if (record.get('role') == 'review' and record.get('status') == 'completed'
             and record.get('exit_code') in (None, 0)):
         from plangraph.review.verdict import judge

@@ -29,6 +29,6 @@ def test_fleet_disables_superpowers_only_in_launch_argv(platform, tmp_path, monk
         "enabledPlugins": {"superpowers@superpowers-marketplace": False},
     }
     assert argv[:2] == expected_head + ["--bg"]
-    assert argv[-3:] == ["--append-system-prompt", "style", "prompt"]
+    assert argv[-3:] == ["--append-system-prompt", "style", '']
     assert attended_argv == builder._claude_head() == expected_head
     assert settings.read_text() == attended_settings

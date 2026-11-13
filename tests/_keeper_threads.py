@@ -1,14 +1,40 @@
 """Thread-identity leak checks shared by the public fixtures and their tests."""
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 import sys
 import threading
 from time import monotonic
 from unittest.mock import patch
 
+import pytest
+
 _TESTS = Path(__file__).resolve().parent
 THREAD_SHUTDOWN_TIMEOUT = 10.0
 JOIN_INTERVAL = 1.0
+_FIXTURE_REQUEST = ContextVar("keeper_fixture_request", default=None)
+_TEST_REQUEST = ContextVar("keeper_test_request", default=None)
+
+
+@contextmanager
+def thread_scope(request, *, fixture=False):
+    """Fixture setup overrides the current test, including dynamic fixture requests."""
+    context = _FIXTURE_REQUEST if fixture else _TEST_REQUEST
+    token = context.set(request)
+    try:
+        yield
+    finally:
+        context.reset(token)
+
+
+def current_scope(session_request):
+    return (_FIXTURE_REQUEST.get() or _TEST_REQUEST.get() or session_request).node
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_fixture_setup(fixturedef, request):
+    with thread_scope(request, fixture=True):
+        return (yield)
 
 
 def _keeper_start():
@@ -34,42 +60,70 @@ def _keeper_start():
 
 
 @contextmanager
-def guard_new_threads(*, timeout=THREAD_SHUTDOWN_TIMEOUT):
-    """Join owned starts/descendants until stopped or the shared deadline expires."""
-    started = set()
-    lock = threading.Lock()
+def guard_new_threads(*, timeout=THREAD_SHUTDOWN_TIMEOUT, scope=None):
+    """Join owned starts/descendants at context exit or their pytest scope's teardown."""
+    started, groups = {}, {}
+    lock = threading.RLock()
     original_start = threading.Thread.start
+
+    def finish(owner):
+        group = groups[owner]
+        try:
+            _join_threads(group, lock, timeout)
+        finally:
+            with lock:
+                groups.pop(owner)
+                for thread in group:
+                    started.pop(thread, None)
+
+    def watch_scope(owner):
+        with lock:
+            if owner not in groups:
+                groups[owner] = set()
+                if owner is not None:
+                    owner.addfinalizer(lambda: finish(owner))
+            return groups[owner]
 
     def start(thread, *args, **kwargs):
         with lock:
-            owned = threading.current_thread() in started or _keeper_start()
+            parent = threading.current_thread()
+            owned = parent in started or _keeper_start()
             if owned:
-                started.add(thread)  # before start: descendants inherit ownership
+                group = started[parent] if parent in started else watch_scope(
+                    scope() if scope is not None else None)
+                group.add(thread)  # before start: descendants inherit scope ownership
+                started[thread] = group
         try:
             return original_start(thread, *args, **kwargs)
         except BaseException:
             if owned:
                 with lock:
-                    started.discard(thread)
+                    group.discard(thread)
+                    started.pop(thread, None)
             raise
 
     with patch.object(threading.Thread, "start", start):
         try:
-            yield
+            yield watch_scope
         finally:
-            deadline = monotonic() + timeout
-            while True:
-                with lock:
-                    pending = [thread for thread in started if thread.is_alive()]
-                if not pending or monotonic() >= deadline:
-                    break
-                for thread in pending:
-                    remaining = deadline - monotonic()
-                    if remaining <= 0:
-                        break
-                    thread.join(timeout=min(JOIN_INTERVAL, remaining))
-            with lock:
-                leaked = sorted((thread for thread in started if thread.is_alive()),
-                                key=lambda thread: thread.name)
-            assert not leaked, "Leaked keeper threads: " + ", ".join(
-                f"{thread.name} (daemon={thread.daemon})" for thread in leaked)
+            for owner in list(groups):
+                finish(owner)
+
+
+def _join_threads(started, lock, timeout):
+    deadline = monotonic() + timeout
+    while True:
+        with lock:
+            pending = [thread for thread in started if thread.is_alive()]
+        if not pending or monotonic() >= deadline:
+            break
+        for thread in pending:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                break
+            thread.join(timeout=min(JOIN_INTERVAL, remaining))
+    with lock:
+        leaked = sorted((thread for thread in started if thread.is_alive()),
+                        key=lambda thread: thread.name)
+    assert not leaked, "Leaked keeper threads: " + ", ".join(
+        f"{thread.name} (daemon={thread.daemon})" for thread in leaked)

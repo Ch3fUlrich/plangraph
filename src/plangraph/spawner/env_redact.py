@@ -2,16 +2,59 @@
 import json
 import re
 from decimal import Decimal
+from .redact_tokens import TOKENS, JWT, redact_wrapped, join_shielded_assignments
+
+
+def _redact_pem(text):
+    # Scan markers once: a lazy complete-block regex retries every unterminated
+    # BEGIN against the whole suffix, quadratic on adversarial prompt text.
+    out, copied, start = [], 0, None
+    for match in re.finditer(r'-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----', text):
+        if match[1] == 'BEGIN' and start is None:
+            start = match.start()
+        elif match[1] == 'END' and start is not None:
+            out.extend((text[copied:start], '[REDACTED]'))
+            copied, start = match.end(), None
+    if start is not None:
+        return ''.join((*out, text[copied:start], '[REDACTED]'))
+    return ''.join((*out, text[copied:]))
+
+
+_ASSIGNMENT = re.compile(
+    r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
+    r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
+    r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)")
+
+
+def _redact_assignments(text):
+    def replace(m):
+        value = m[0][len(m[1]):]
+        return m[1] + (value[0] + '[REDACTED]' + value[-1]
+                       if value[0] in '\"\x27' and value[-1] == value[0] else '[REDACTED]')
+    return _ASSIGNMENT.sub(replace, text)
 
 
 def redact(value):
-    """Shared fail-closed output scrubber; never return raw text on failure."""
+    """Shared fail-closed scrubber; hashes stay readable outside child output."""
     return _redact(value, source=False)
 
 
 def redact_source(value):
     """Spawner-read source only: skip credential-name assignments, nothing else."""
     return _redact(value, source=True)
+
+
+def redact_output(text):
+    """Child-produced free text only, never prompts or structured records."""
+    if not isinstance(text, str):
+        raise TypeError('redact_output requires text, not a record')
+    try:
+        text = re.sub(r'\b[0-9a-fA-F]{32,}\b', '[REDACTED]', redact(text))
+        return re.sub(r'[A-Za-z0-9+/_-]{40,}={0,2}', lambda m: '[REDACTED]'
+                      if re.search(r'[0-9]', m[0]) and re.search(r'[A-Za-z]', m[0])
+                      else m[0], text)
+    except Exception:
+        return '[autoos:redaction failed; output withheld]\n'
 
 
 def _redact(value, *, source):
@@ -23,24 +66,17 @@ def _redact(value, *, source):
         if isinstance(value, (list, tuple)):
             return [_redact(v, source=source) for v in value]
         if isinstance(value, str):
-            # Complete PEM blocks first, then any header cut off before its END.
-            value = re.sub(r'(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----',
-                           '[REDACTED]', value)
-            value = re.sub(r'(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*', '[REDACTED]', value)
-            value = re.sub(r'\b(?:x?sk)-[A-Za-z0-9_-]+', '[REDACTED]', value)
+            value = _redact_pem(value)
             value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
+            if not source:
+                # P joins values behind shielded names, then main's order runs.
+                value = join_shielded_assignments(value, _ASSIGNMENT)
+                value = _redact_assignments(value)
+            value = redact_wrapped(value)
             # Greedily consume through the last @ within the quoted/space boundary.
             value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',
                            r'\1[REDACTED]\2', value)
-            if source:
-                return value
-            return re.sub(
-                r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
-                r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
-                r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)",
-                lambda m: m[1] + (m[0][len(m[1])] + '[REDACTED]' + m[0][-1]
-                                  if m[0][len(m[1])] in '\"\x27' and
-                                  m[0][-1] == m[0][len(m[1])] else '[REDACTED]'), value)
+            return JWT.sub('[REDACTED]', TOKENS.sub('[REDACTED]', value))
         return value
     except Exception:
         return '[autoos:redaction failed; output withheld]\n'
@@ -89,6 +125,10 @@ def _redact_prompt(prompt, scrub):
         for start, end in prompt.spans:
             if not offset <= start <= end <= len(prompt):
                 raise ValueError('invalid source span')
+            if ((start and prompt[start - 1] not in '\r\n') or
+                    (end < len(prompt) and prompt[end - 1:end] not in ('\r', '\n')
+                     and prompt[end] not in '\r\n')):
+                raise ValueError('source spans must start and end on line boundaries')
             parts.extend((scrub(prompt[offset:start]), redact_source(prompt[start:end])))
             offset = end
         return ''.join((*parts, scrub(prompt[offset:])))
@@ -97,7 +137,7 @@ def _redact_prompt(prompt, scrub):
 
 
 class OutputLines:
-    """Hold incomplete lines across reads, including cancellation/EOF tails."""
+    """Child streams only: hold incomplete lines and scrub before logs/tail cuts."""
     def __init__(self, scrub):
         self.scrub, self.pending, self.discarding = scrub, '', False
 
@@ -116,7 +156,9 @@ class OutputLines:
         if not text:
             return ''
         try:
-            return self.scrub(text)
+            # run_watchdog's callback removes env values; broad output-only
+            # rules belong here, not in its shared prompt/record scrubber.
+            return redact_output(self.scrub(text))
         except Exception:
             return '[autoos:redaction failed; output withheld]\n'
 

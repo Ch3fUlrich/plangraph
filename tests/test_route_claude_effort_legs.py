@@ -28,6 +28,7 @@ LUNA = {f"cx-gpt-6-luna-{e}": f"omniroute/cx-gpt-6-luna-{e}"
 GEMINI = {f"agy-gemini-3.8-flash-{e}": f"gemini-3.8-flash-{e}"
           for e in ("low", "medium", "high")}
 NEW = {**CLAUDE, **SOL, **LUNA, **GEMINI}
+MANUAL = (set(NEW) - {LEAD_WRITER}) | {'cx-gpt-6.1-sol'}
 
 
 @pytest.fixture
@@ -42,7 +43,7 @@ def store(tmp_path, monkeypatch):
 def plan(store, role='review', writers=('xiaomi',), legs=DEFAULT_LEGS):
     # No diff_ref: inline-only legs (luna) skip with inline_only_needs_diff.
     return plan_spawn(dict(estimate_tokens=1000), role=role, writer_families=writers, leg_reader=store, now=100,
-                      policy=RoutePolicy(), legs=legs)
+                      policy=RoutePolicy(), legs=legs, catalog_rows=())
 
 
 def test_leg_data():
@@ -69,10 +70,9 @@ def test_leg_data():
 
 
 def test_explicit_legs_stay_out_of_every_route():
-    """D-3605 (Claude no default seat/writer) and D-3828 (no writer fallback) hold:
-    the keeper and plan_spawn route over DEFAULT_LEGS, which holds none of them."""
-    assert {leg.id for leg in EXPLICIT_LEGS} == set(NEW)
-    assert not {leg.id for leg in DEFAULT_LEGS} & set(NEW)
+    """D-5206 promotes only Sol xhigh; every other effort leg stays explicit-only."""
+    assert {leg.id for leg in EXPLICIT_LEGS} == MANUAL
+    assert {leg.id for leg in DEFAULT_LEGS} & set(NEW) == {LEAD_WRITER}
     assert spawnable_legs() == DEFAULT_LEGS + EXPLICIT_LEGS
 
 
@@ -85,19 +85,20 @@ def test_spawnable_legs_follow_a_rebound_default_table(monkeypatch):
     assert spawnable_legs() == fake + EXPLICIT_LEGS
     from plangraph.spawner.target import resolve_target
     assert resolve_target('zz-test')[1].id == 'zz-test'
-    assert EXPLICIT_WRITERS == frozenset(CLAUDE) | frozenset(SOL)
+    assert EXPLICIT_WRITERS == (frozenset(CLAUDE) | frozenset(SOL) | {'cx-gpt-6.1-sol'}) - {LEAD_WRITER}
 
 
 @pytest.mark.parametrize('role,listed', [('review', {**CLAUDE, **GEMINI, **LUNA}),
-                                         ('implement', {**CLAUDE, **SOL})])
+                                         ('implement', (set(CLAUDE) | set(SOL) | {'cx-gpt-6.1-sol'}) - {LEAD_WRITER})])
 def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
     writers = ('xiaomi',) if role == 'review' else ()
     routed = _svc(tmp_path).route({'estimate_tokens': 1000}, role=role, writer_families=writers)
-    assert not {leg.id for leg in routed.legs} & set(NEW)
+    assert not {leg.id for leg in routed.legs} & MANUAL
     explicit = {s['leg'] for s in routed.skipped if s['reason'] == 'explicit_only'}
     assert explicit == set(listed)
     if role == 'implement':
-        assert routed.legs[0].id == LEAD_WRITER
+        from test_route_free_first import WRITERS
+        assert [leg.id for leg in routed.legs] == WRITERS
 
 
 @pytest.mark.parametrize('role', ['review', 'implement'])
@@ -105,7 +106,7 @@ def test_plan_spawn_skip_accounting_unchanged(store, role):
     """Only `route` output lists them; plan_spawn (spawn plans, keeper) stays as on main."""
     result = plan(store, role=role, writers=('xiaomi',) if role == 'review' else ())
     assert not any(s['reason'] == 'explicit_only' for s in result.skipped)
-    assert not {leg.id for leg in result.legs} & set(NEW)
+    assert not {leg.id for leg in result.legs} & MANUAL
 
 
 def _svc(tmp_path):
@@ -128,7 +129,7 @@ def test_explicit_claude_review_seat(tmp_path, leg_id):
             override_reason='operator 2026-11-09 claude seats'))
 
 
-@pytest.mark.parametrize('leg_id', ['agy-claude-opus-5-5-high', 'cx-gpt-6.1-sol-xhigh'])
+@pytest.mark.parametrize('leg_id', ['agy-claude-opus-5-5-high', 'cx-gpt-6.1-sol', *SOL, 'agy-gemini-3.8-flash'])
 def test_explicit_writer_implement_allowed(tmp_path, leg_id):
     result = asyncio.run(_svc(tmp_path).spawn(
         card={'estimate_tokens': 20000}, prompt='Implement public code', role='implement',
@@ -136,7 +137,7 @@ def test_explicit_writer_implement_allowed(tmp_path, leg_id):
     assert result['chosen_leg']['id'] == leg_id
 
 
-@pytest.mark.parametrize('leg_id', ['agy-gemini-3.8-flash', 'mimo-v2.6-pro'])
+@pytest.mark.parametrize('leg_id', ['agy-gpt-oss-120b', 'opencode-go-deepseek-v4-flash'])
 def test_other_writers_still_refused(tmp_path, leg_id):
     with pytest.raises(SpawnRefused, match='D-3828'):
         asyncio.run(_svc(tmp_path).spawn(
@@ -181,10 +182,12 @@ def test_service_route_lists_explicit_legs(tmp_path):
 
 
 def test_agy_command_passes_the_served_model():
-    from plangraph.routing_support.clients import build_command
+    from plangraph.routing_support.clients import build_command, launch_stdin_payload
     cmd = build_command('hi', 'claude-opus-5-5-high', role='review', client='agy')
     assert cmd == ['agy', '--dangerously-skip-permissions', '--model',
-                   'claude-opus-5-5-high', '-p', 'hi']
+                   'claude-opus-5-5-high', '-p', '', '--input-format', 'stream-json', '--output-format', 'stream-json']
+    assert json.loads(launch_stdin_payload(cmd, 'hi', 'agy')) == {
+        'event': 'user', 'message': {'role': 'user', 'content': 'hi'}}
 
 
 def _render(model, models=None):

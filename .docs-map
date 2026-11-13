@@ -2,12 +2,16 @@
 # Docs mapping for plangraph (rule D-653)
 rust/pg-mcp/** -> docs/keeper/mcp-rust.md
 rust/pg-probe/** -> docs/context-probes.md
+rust/pg-reap/** -> docs/pg-reap.md
 src/plangraph/fleet_sync/** -> docs/fleet-sync.md
 src/plangraph/keeper/** -> docs/KEEPER.md
 src/plangraph/routing_support/clients.py -> docs/lean-review-harness.md
 src/plangraph/routing_support/review_mode.py -> docs/lean-review-harness.md
 src/plangraph/spawner/** -> docs/SPAWNER.md
 rust/worker-core/src/writer_* -> docs/SPAWNER.md
+rust/worker-core/src/turn_budget/** -> docs/turn-budget-hook.md
+rust/worker-core/src/bin/turn-budget-hook.rs -> docs/turn-budget-hook.md
+rust/worker-core/src/bin/flow-watchdog.rs -> docs/flow-watchdog.md
 tests/fixtures/keeper_mcp_*.json -> docs/keeper/mcp-rust.md
 tests/test_check_changelog_docs.py -> CONTRIBUTING.md
 tests/test_keeper_mcp_snapshot.py -> docs/keeper/mcp-rust.md
@@ -16,3 +20,4 @@ src/plangraph/routing_support/leg_state.py -> docs/spawner-leg-state.md
 # Shared rust/Cargo.toml and rust/Cargo.lock are not owned by a single crate.
 src/plangraph/routing_support/opencode_render.py -> docs/opencode-gateway.md
 src/plangraph/routing_support/opencode_overlay.py -> docs/opencode-gateway.md
+src/plangraph/planner/** -> docs/routing.md

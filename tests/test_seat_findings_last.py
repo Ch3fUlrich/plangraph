@@ -3,6 +3,8 @@ from dataclasses import replace
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
+
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import SpawnRefused, plan_spawn
 from plangraph.spawner.runner import SpawnerRunner
@@ -10,7 +12,7 @@ from plangraph.spawner.service import SpawnService
 
 
 def test_live_skip_precedes_typed_disabled_entries():
-    live = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol')
+    live = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-xhigh')
     disabled_writer = replace(live, id='disabled-test-writer', disabled='synthetic disable')
     evidence = {'status': 429}
     plan = plan_spawn({'estimate_tokens': 1000}, role='implement', legs=(live, disabled_writer), leg_reader=lambda model, **kw: {
@@ -37,7 +39,7 @@ def test_explicit_client_mismatch_refused(tmp_path):
 
 @pytest.mark.parametrize('reason', [None, 'operator override'])
 def test_disabled_override_matches_runner(tmp_path, reason):
-    leg = next(l for l in DEFAULT_LEGS if l.disabled and 'D-4196' in l.disabled)
+    leg = next(l for l in DEFAULT_LEGS if l.id == 'opencode-glm-5.3-flash-free')
     service = SpawnService(state=tmp_path)
     with pytest.raises(SpawnRefused) as service_error:
         asyncio.run(service._spawn(card={'estimate_tokens': 1000}, leg=leg.id,

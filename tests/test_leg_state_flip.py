@@ -160,20 +160,24 @@ def test_fixture_disabled_reader_matches_main_plan(tmp_path, monkeypatch):
     assert len(seen) == 1 and callable(seen[0])
     assert seen[0]('sample') == dict(state='ok', evidence=None)
     s.hung.waiting.add(baseline.legs[0].id)
-    # Hung preference cannot promote paid Muse ahead of the subscription writer.
-    assert s._route(CARD).legs == baseline.legs
+    # Hung preference rotates main's remaining utility inputs, but paid stays last.
+    expected = (*baseline.legs[1:-2], baseline.legs[0], *baseline.legs[-2:])
+    assert s._route(CARD).legs == expected
 
 
 def test_fixture_hung_writer_keeps_subscriptions_before_paid(tmp_path):
     from plangraph.planner.legs import MUSE_AMBER, WRITER_ORDER
+    from test_route_free_first import WRITERS
     s = service(tmp_path)
     baseline = plan_spawn(CARD, role='implement', leg_reader=None)
-    assert tuple(leg.id for leg in baseline.legs) == WRITER_ORDER
+    assert [leg.id for leg in baseline.legs] == WRITERS
     assert asdict(s._route(CARD)) == asdict(baseline)
     s.hung.waiting.add(baseline.legs[0].id)
-    assert tuple(leg.id for leg in s._route(CARD).legs) == ('cx-gpt-6.1-sol', MUSE_AMBER)
+    assert s._route(CARD).legs == (*baseline.legs[1:-2], baseline.legs[0], *baseline.legs[-2:])
     s.hung.waiting.update(WRITER_ORDER)
-    assert s._route(CARD).legs == baseline.legs
+    route = s._route(CARD).legs
+    assert route == (*baseline.legs[2:-2], *baseline.legs[:2], *baseline.legs[-2:])
+    assert [leg.id for leg in route if leg.tier == 'paid'] == [MUSE_AMBER, 'deepseek']
 
 
 def test_rank_subset_and_leg_keys(boundary, tmp_path):

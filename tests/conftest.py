@@ -89,10 +89,22 @@ def keeper_thread_guard():
 
 
 @pytest.fixture(autouse=True)
-def no_leaked_keeper_threads(keeper_thread_guard):
-    """Bounded-join keeper-owned starts, not session-runtime executor threads."""
-    with keeper_thread_guard():
+def no_leaked_keeper_threads(request, no_leaked_keeper_fixture_threads):
+    """Test-body starts stay test-owned; fixture starts follow their own scope."""
+    from _keeper_threads import thread_scope
+    no_leaked_keeper_fixture_threads(request.node)
+    with thread_scope(request):
         yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def no_leaked_keeper_fixture_threads(request):
+    import _keeper_threads as guard
+    # Session fixture setup uses session hooks, not tests/conftest.py's hooks.
+    request.config.pluginmanager.register(guard)
+    request.addfinalizer(lambda: request.config.pluginmanager.unregister(guard))
+    with guard.guard_new_threads(scope=lambda: guard.current_scope(request)) as watch_scope:
+        yield watch_scope
 
 
 @pytest.fixture
@@ -239,6 +251,13 @@ def real_served_models():
     return _real_served_models
 
 
+@pytest.fixture
+def fixed_catalog_rows(monkeypatch):
+    """Exact-order probes use declared leg tiers, never ambient catalog rows."""
+    from plangraph.planner.routing import plan_spawn
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, 'catalog_rows', ())
+
+
 @pytest.fixture(autouse=True)
 def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     """UNKNOWN host; tests may opt into config with monkeypatch.setenv('AUTOOS_ROOT', ...)."""
@@ -247,6 +266,9 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     state = tmp_path_factory.mktemp('xdg-state')  # never the production spawner/leg state (D-2844)
     monkeypatch.setenv('XDG_STATE_HOME', str(state))
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
+    monkeypatch.setenv('PLANGRAPH_CATALOG_DB', str(state / 'absent-catalog.db'))
+    from plangraph.routing_support import catalog_db
+    monkeypatch.setattr(catalog_db, 'DEFAULT_DB_PATH', state / 'absent-catalog.db')
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '0')
     # Services remain default-on, but never construct the production adapter.
     from plangraph.routing_support import leg_state_flag

@@ -29,6 +29,7 @@ Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so t
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
 with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
+The D-5504/D-5506 `mcp_tools.py` exception only splits schema data out of the full Python MCP transport; it also retires with MCP-RUST.
 
 ```bash
 python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
@@ -45,6 +46,13 @@ Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
 the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
 
+CI suite selection in `tools/ci_select.py` treats `docs/schemas/**` and its
+`RUST_INPUTS` list as Rust inputs even when they are documentation. These inputs
+select both `rust` and `rust-windows` via the shared `rust` output without changing
+other suites. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
+literals, manifest-relative reads and paths leaving `rust/`; new repository
+inputs must be added to `RUST_INPUTS`, not inline to the workflow.
+
 ## Lanes
 
 Completed Rust ports remove only their own Python waiver from
@@ -59,8 +67,25 @@ One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `m
 The RUN-WORKTREE Python regression exception (D-5062) retires with SPAWNER-RUST-PORT.
 Work that covers two plan items is two lanes.
 A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) only for the item's latest verified head; interrupted sends are not blindly replayed.
+Seat records bind manual `tools/seat_verdict.py --key` posting to their recorded `item_key`; a different key or an explicit null is refused before token reads or network I/O. Older records without the field remain usable through the manual CLI. Card/environment identity validation never infers a target from prompt text.
+The `evidence.json` path applies the same refusal to every supplied `item_key` or `key`, including explicit nulls and conflicting aliases; evidence without either identity field retains the legacy manual path. Reviewer tokens belong to the seat's model family, not the `--writer-family` being reviewed.
+When evidence and a record coexist, the record's `item_key` remains binding even if evidence omits or replaces it; an unreadable or malformed companion record is refused. The record identity check also runs independently of evidence derivation on the record-only path. `--key` is required for all manual invocations, including legacy records; omitting it exits 2 before seat/token reads or network I/O.
 
-New production code must be Rust unless explicitly listed in `tools/new_code_allowlist.txt`; the host-readiness source-probe helper is a single-file exception for the pre-gate lane, retired by `SPAWNER-RUST-PORT`.
+Historical seat discovery uses `python3 tools/seat_verdict.py --snapshot plan.snapshot.json --records-dir RECORDS` (equivalently, `--backfill-dry-run`). It is local and read-only by default; `--format json` emits structured outcomes, and `--pr-cache CACHE` supplies evidenced-commit-to-PR mappings without network access. Keeper writes require `--backfill-apply --url URL --token-dir TOKENS`; only apply may enable network PR lookup with `--pr-lookup-gh`. Backfill retains the existing verdict parser, exact-head binding, independent reviewer family and PASS safety gates. It shares the spawner's locked `verdict.json` / `verdict.delivered` outbox, so completed or ambiguous sends are never blindly replayed, including when the forward path already handled the record. A nonzero verifier result is terminal for automatic backfill replay; reconcile an ambiguous delivery before any operator-authorized retry. See [the historical backfill diagnosis](docs/seat-verdict-backfill-diagnosis.md) for the original observations; Slice A has since supplied the forward completion bridge.
+
+Batch orchestration and guarded outbox delivery live in `tools/seat_backfill.py`,
+with compatibility re-exports at `seat_record.backfill` and
+`seat_verdict.apply_backfill`. Record parsing/discovery remain in `seat_record`;
+`seat_verdict.main()` remains the only keeper poster. The helper's path-specific
+Python exception covers this responsibility-only split of existing code.
+
+Backfill rejects pinned or explicitly overridden seats, incomplete/nonzero-exit records, writer-family seats, and records without a strict verdict. Family independence uses the same witnessed evidence model as the poster. Any eligible CHANGES takes precedence over ACCEPT in every discovery order; replay never falls through from a terminal or ambiguous CHANGES to another accepting seat. Apply JSON separates eligibility from `delivery` (`delivered`, `failed`, or `skipped`) and includes `verifier_exit` after a send. Corrupt journals and busy shared outbox locks skip with reasons without blocking other items. PR subprocesses have a 30-second timeout; lock acquisition is nonblocking. Exact completion-head equality remains required; backfill does not permit a different head via card ancestry.
+
+Discovery and apply JSON always include `delivery` and `verifier_exit`, initially `null`; item reasons are collected only after a record binds by item key, named prompt item, or matching evidenced PR. An item with no bound review reports `no record`, including its missing-seat requirements. Writer attribution unions Git trailers and matching implementation records; an unknown writer witness refuses independence. Record traversal uses `os.walk(followlinks=False)`: symlinked directories are pruned and reported separately on stderr, never attributed as another item's rejection reason. Presence of `pin`, `pinned`, or `spawn_pin` refuses a seat unless the value is explicitly boolean `false`. The library entry points enforce explicit apply and reject contradictory dry-run flags too. Per-seat lock-open, lock, journal-read/write, and unexpected poster errors report `delivery=failed` with a phase and exception type while allowing other items to finish; once written, a `sending` journal remains ambiguous after a crash or invalid verifier result and is never blindly replayed.
+
+Missing configured repository paths and failed or empty Git trailer lookups refuse as `unknown writer`, never partial implementation-record coverage. PR/writer resolution errors remain reasoned per-item outcomes. Missing apply URL or token directory reports `delivery=failed` before touching the shared forward journal or lock. Library callers default absent/null `records_dir` to `~/.local/share/plangraph/spawner-records` and absent `url` to `PG_URL`, matching the CLI. Explicit backfill modes reject `--key`, `--seat-dir`, `--head`, and `--writer-family`; prompt contradiction checks recognize only known snapshot item keys rather than metadata such as `demo:GPT-4` or `demo:PASS`, while exact named-item prompt binding is preserved.
+
+New production code must be Rust unless explicitly listed in `tools/new_code_allowlist.txt`; the host-readiness source-probe helper is a single-file exception for the pre-gate lane, retired by `SPAWNER-RUST-PORT`. `src/plangraph/spawner/redact_tokens.py` is a second one: the Python scrubber must mirror the Rust token catalog until that port retires it (D-5279).
 
 For an offline judge brief, run `python3 tools/judge_prompt.py --findings findings.txt
 --base origin/main --head HEAD --ci-summary ci.json --output judge.md`, with
@@ -130,3 +155,98 @@ An explicit missing or unreadable list refuses pushes to any remote. The env lis
 Remotes are public unless `git config remote.<name>.plangraph-private true` is set:
 that skips private-word matching, not public patterns. Classification uses local config only.
 Diagnostics never show matched values or the words-file path.
+
+## Shadow merge decision (D-5252, slice 1)
+
+`python3 tools/merge_gate.py facts.json` prints `GO <sha>` (exit 0) or
+`REFUSE <code> <detail>` (exit 1); it only reads that file. No collection,
+network, merge, GO-row write, verdict post or item closure is implemented.
+`merge_gate_core.decide(facts)` is pure and returns one immutable decision.
+Facts: `head_sha_at_check`, `head_sha_now` (full lowercase SHA), `required_checks`
+(nonempty names), `ci_checks` (complete latest-per-name records with `name`,
+`head_sha`, `status`, `conclusion`), `seats` (`family`, raw `verdict` text,
+boolean `pinned`, `open_findings` severity strings), `writer_families`,
+`changed_paths`, `tier`, `plan_key`, `item_key`, boolean `preflight_present`,
+and `main_changed_production_paths` (complete main delta since CI base).
+Path lists include deleted paths and both rename sides. Missing facts refuse;
+only completed success checks pass (unrequired suites may be skipped).
+The trusted future collector owns
+completeness, freshness and evidence provenance; this CLI grants no authority.
+First refusal wins: head, CI red/pending, seat absent/pinned/family/findings/
+acceptance, gate path, tier, PLAN key, preflight, stale green (rule 3.19).
+Python imports the existing strict seat parser/coverage and trailer door table;
+additional conservative path categories cover docs-map, deployment, allowlists,
+redact/auth and gate/check/scrub tools without copying the door list.
+
+The facts object and every CI/seat record require exactly the keys above;
+missing, renamed, non-string or extra keys refuse (`ci_pending` for facts/CI,
+`seat_missing` for seats). Top-level schema validation precedes the semantic
+refusal order; CI/seat record schemas are validated at their respective stages.
+Wrong value types, UNKNOWN values and duplicate evidence never yield GO.
+Required/check names, writer/seat families, severity lists and normalized path
+lists must be unique; every supplied seat must independently parse as accepting.
+Malformed CI values refuse `ci_pending`; malformed writer families refuse
+`seat_family_is_writer`; malformed seat pinning/findings/verdicts refuse
+`seat_pinned`/`finding_open`/`seat_missing`, respectively. Duplicate seat families
+refuse `seat_missing`, duplicate changed paths refuse `gate_path`, and duplicate
+main-delta paths refuse `stale_green`. LOW-only findings remain nonblocking.
+Item/PLAN keys must match `[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?`, with no UNKNOWN
+component; invalid keys refuse `plan_key_mismatch`. String-list entries must be
+nonempty, printable and have no surrounding whitespace. Paths use the same
+case/separator/dot normalization for both evidence and imported door patterns.
+Both door tables must be nonempty tuple/list collections of valid path patterns;
+the authority's existing root globs `roles*` and `scopes*` are intentional
+slash-less exceptions. Missing/malformed/duplicate table entries refuse
+`gate_path`, including when a table is accidentally replaced by a plain string.
+Duplicate JSON object keys at any depth and undecodable or excessively nested
+JSON refuse `ci_pending` without a traceback. Decision tests block file,
+environment and clock access inside the real parser/coverage dependency calls,
+in addition to subprocess, network and verdict-post effects.
+
+### Shadow merge decision slice 2: fail-closed boundaries
+
+`required_checks` must include `ci-gate`, `select`, the live `ci_select.ALWAYS`
+table and every suite selected by the existing pure `ci_select.select()` policy
+for `changed_paths`. The selector sees both literal and normalized paths so
+case normalization cannot silently remove a required suite. Empty, trivial or
+incomplete self-declared lists refuse `ci_pending`; each required check must
+complete successfully on the exact head. Every supplied check still participates
+in red/pending detection, even if it is not required. Invalid selector tables or
+results refuse `ci_pending`; the policy is imported, not copied into the gate.
+
+Slice 2 limit: this is a local repository-policy floor, not live GitHub branch
+protection/ruleset discovery, workflow parsing or authenticated evidence
+collection. Additional workflow jobs (including browser and platform jobs), live
+required contexts, workflow/base provenance and completeness/freshness must be
+established by the trusted future collector and included in `required_checks`.
+No count or self-declared list proves those external facts. This shadow CLI
+remains non-authoritative and must not be wired directly to unattended merges.
+
+Both the public core boundary and the CLI catch unexpected validation/dependency
+exceptions and return `REFUSE ci_pending facts unavailable or invalid`, without
+exception text or a traceback. Malformed parser/coverage return values refuse
+`seat_missing`. The CLI validates the decision's outcome, defined reason code,
+single-line detail and exact GO head before printing exactly one result line.
+The defined refusal codes remain `head_moved`, `ci_red`, `ci_pending`,
+`seat_missing`, `seat_pinned`, `seat_family_is_writer`, `finding_open`,
+`gate_path`, `tier_high`, `plan_key_mismatch`, `preflight_missing`, `stale_green`.
+
+Evidence paths are literal: `*`, `?` and `[` refuse `gate_path` in PR paths or
+`stale_green` in main-delta paths. Only imported door patterns may use globs.
+Shared fixtures are registered in `tests/conftest.py`, with bounded support code
+in `tests/_merge_gate_support.py`; neither test module imports the other. The
+guards block subprocess entry points, `os.system`/`os.popen`, socket construction
+and connection/server helpers, `urllib.request.urlopen` and verdict posting.
+Real dependency calls retain the scoped file/environment/clock guards. Tests
+isolate each live door table and verify the refusal disappears without it.
+
+## Turn-budget hook development
+
+The standalone Rust `turn-budget-hook` lives in `rust/worker-core`, beside the
+existing watchdog binaries; `tools/hooks/install_hooks.sh` remains Python-only.
+Build, registration examples, injectable state paths and the polling-recognition
+boundary are documented in [Turn-budget hook](docs/turn-budget-hook.md).
+Run its hermetic contracts with `cargo test --manifest-path rust/Cargo.toml -p
+pg-worker-core --test turn_budget_hook --test turn_budget_poll --test
+turn_budget_alert --test turn_budget_watchdog`. Tests never install hooks, read
+live session state, or change permissions/settings files.

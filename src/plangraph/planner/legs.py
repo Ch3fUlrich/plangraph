@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,6 +61,8 @@ class Leg:
     roles: tuple[str, ...] = ("orchestrate",)
     tool_mode: str = "tools"
     disabled: str | None = None
+    expires: float | None = None
+    effort: str | None = None
 
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
@@ -67,7 +71,6 @@ def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=Fals
                claude, note)
 
 
-#: D25 order.  Position is the preference inside a tier.
 DEFAULT_LEGS: tuple[Leg, ...] = (
     _leg("qodercli-qwen3.8-flash", "free", "qodercli", "Qwen3.8-Flash", "qwen",
          ("128k", "256k"), 100000, False,
@@ -120,10 +123,18 @@ DEFAULT_LEGS = (
     _replace(_legacy["agy-sonnet-5.5"], roles=("orchestrate", "review")),
     Leg("agy-claude-opus", "subscription", "agy", "claude-opus-4-6-thinking",
         "claude", ("128k", "256k"), 180000, False, claude_family=True, roles=("review",)),
+    Leg("agy-opus-5.5", "subscription", "agy", "claude-opus-5-5-high",
+        "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
+        roles=("review",)),
     Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-flash",
-        "deepseek", ("128k",), 100000, False, roles=("review",)),
-    Leg("omniroute-muse-spark", "subscription", "opencode", "omniroute/muse-spark-1.3-contributor",
-        "muse", ("128k",), 100000, False, roles=("review",)),
+        "deepseek", ("128k",), 100000, False, roles=("implement", "review", "orchestrate")),
+    Leg("omniroute-muse-spark", "subscription", "opencode",
+        "omniroute/muse-spark-1.3-contributor", "muse", ("128k",), 100000, False,
+        roles=("implement", "review", "orchestrate")),
+    Leg("agy-opus", "subscription", "agy", "claude-opus-5-5-medium", "claude",
+        ("128k",), 100000, False, claude_family=True, roles=("review", "orchestrate")),
+    Leg("opencode-gemini-4-argon", "free", "opencode", "opencode/gemini-4-argon",
+        "gemini", ("128k",), 100000, True, roles=("review", "orchestrate")),
     Leg("opencode-go-gemini-4-argon", "subscription", "opencode",
         "opencode-go/gemini-4-argon", "gemini", ("128k",), 100000,
         False, roles=("review",)),
@@ -153,7 +164,6 @@ DEFAULT_LEGS = (
         disabled="D-4193 upstream route not verified",
         note="D-4193 upstream route not verified, conservative"),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
-    # D-3605 Haiku leg: last, so it sorts after every non-claude review leg.
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
         tool_mode="prompt-only",
@@ -162,20 +172,24 @@ DEFAULT_LEGS = (
 
 #: D-5198: the console Muse review seat and fallback writer.
 MUSE_AMBER = "opencode-console-muse-spark"
-# D-5198/D-5240: retain Sol; paid Muse writes only after subscription writers.
-WRITER_ORDER: tuple[str, ...] = ("cx-gpt-6.1-sol", MUSE_AMBER)
-# D-3828: retain every leg and its review order; only WRITER_ORDER legs write.
-DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
-                             disabled=leg.disabled or (
-                                 'D-3828: writer disabled; no retained review or orchestrate role'
-                                 if leg.roles == ('implement',) else None))
-                     if leg.id not in WRITER_ORDER else leg for leg in DEFAULT_LEGS)
-LEAD_WRITER = "cx-gpt-6.1-sol"
+# Preserve role-neutral keeper admission before applying implement-only policy.
+READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
+                               disabled=leg.disabled or (
+                                   'D-3828: writer disabled; no retained review or orchestrate role'
+                                   if leg.roles == ('implement',) else None))
+                       if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
+
+# D-5206/D-5212 change writer priority, not the registered fallback roles.
+WRITER_ORDER: tuple[str, ...] = (
+    "cx-gpt-6.1-sol-xhigh",  # D-5206: effort-qualified default, then agy fallback
+    "agy-gemini-3.8-flash",
+)
+LEAD_WRITER = WRITER_ORDER[0]
 
 #: Operator 2026-11-09: Claude 5.5 seats and effort variants, spawnable by an
 #: explicit ``--leg`` pick (or the model override) only.  They are NOT in
-#: DEFAULT_LEGS, so no route, keeper plan or role order changes (D-3605: Claude is
-#: no default writer or seat; D-3828: no writer fallback); ``SpawnService.route``
+#: DEFAULT_LEGS, except Sol xhigh promoted below (D-5206); Claude is never an
+#: automatic writer; ``SpawnService.route``
 #: appends them as ``explicit_only`` skips, ``plan_spawn`` does not.  Model ids are what ``agy models`` and OmniRoute
 #: /v1/models served that day (agy serves no Sonnet xhigh, cx no -ultra).  Claude
 #: legs are claude-family, so the D-2511 fence keeps them off claude-written work.
@@ -189,13 +203,20 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
           "gemini", ("128k", "256k", "1m"), 900000, False, roles=("review",))
       for e in ("low", "medium", "high")),
     *(Leg(f"cx-gpt-6.1-sol-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6.1-sol-{e}",
-          "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",))
+          "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",), effort=e)
       for e in CX_EFFORTS),
     *(Leg(f"cx-gpt-6-luna-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6-luna-{e}",
           "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
           tool_mode="inline-only")
       for e in CX_EFFORTS),
 )
+# Promote the existing effort leg; retain plain Sol as an active explicit-only pick.
+_plain_sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
+_sol_xhigh = next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER)
+DEFAULT_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in DEFAULT_LEGS)
+EXPLICIT_LEGS = (_plain_sol, *(leg for leg in EXPLICIT_LEGS if leg.id != LEAD_WRITER))
+# Keeper readiness keeps its existing admission, but uses the current routed id.
+READINESS_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in READINESS_LEGS)
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
     leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)
@@ -220,9 +241,10 @@ _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",
 _STR_FIELDS = ("id", "tier", "harness", "model", "family", "note", "tool_mode")
 
 
-def leg_active(leg: Leg) -> bool:
-    """Local policy may disable a leg; OmniRoute owns temporal availability."""
-    return leg.disabled is None
+def leg_active(leg: Leg, now=None) -> bool:
+    """Temporary operator stops expire; permanent safety exclusions do not."""
+    return leg.disabled is None or (leg.expires is not None and
+                                   (time.time() if now is None else now) >= leg.expires)
 
 
 def _is_int(value) -> bool:
@@ -241,7 +263,7 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         except MimoPathError as exc:
             problems.append(f"{where}.model: {exc}")
     for key in raw:
-        if key not in _FIELDS and key != "expires":
+        if key not in _FIELDS:
             problems.append(f"{where}: unknown field {key!r}")
     for key in _REQUIRED:
         if key not in raw:
@@ -260,6 +282,11 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         problems.append(f"{where}.tool_mode: {raw['tool_mode']!r} not in {TOOL_MODES}")
     windows = raw.get("windows")
     disabled = raw.get("disabled")
+    if raw.get("effort") is not None and raw["effort"] not in CX_EFFORTS:
+        problems.append(f"{where}.effort: must be one of {CX_EFFORTS} or null")
+    expiry = raw.get('expires')
+    if expiry is not None and (isinstance(expiry, bool) or not isinstance(expiry, (int, float)) or not math.isfinite(expiry)):
+        problems.append(f"{where}.expires: must be a finite epoch timestamp")
     if disabled is not None and (not isinstance(disabled, str) or not disabled.strip()):
         problems.append(f"{where}.disabled: must be a non-empty reason string")
     roles = raw.get("roles", ("orchestrate",))
@@ -284,10 +311,9 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     if len(problems) > start:
         return None
     data = dict(raw)
-    data.pop("expires", None)  # Old operator rows remain loadable, without local expiry.
     data["windows"] = tuple(windows)
     data["roles"] = tuple(roles)
-    return Leg(**data)
+    return Leg(effort=data.pop("effort", None), **data)
 
 
 def load_legs(path: Path | None) -> tuple[Leg, ...]:

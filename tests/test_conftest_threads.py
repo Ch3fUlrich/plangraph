@@ -1,5 +1,11 @@
 """Runtime-owned executors outlive a test without becoming keeper leaks."""
 import asyncio
+import ast
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import FunctionType
@@ -162,3 +168,141 @@ def test_guard_waits_past_first_join_for_worker_to_stop(monkeypatch, keeper_thre
     finally:
         release.set()
         real_join(timeout=5)
+
+
+def _run_scoped_thread_case(tmp_path, scope, leak_test_body, start_in_test,
+                           leak_fixture=False):
+    """Run the real guard fixtures without the repo's unrelated autouse fixtures."""
+    source = Path(__file__).resolve().parent
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "_keeper_threads.py").write_text((source / "_keeper_threads.py").read_text())
+    tree = ast.parse((source / "conftest.py").read_text())
+    fixtures = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                and (node.name == "keeper_thread_guard"
+                     or node.name.startswith("no_leaked_keeper_"))]
+    fixture_source = ast.unparse(ast.Module(body=fixtures, type_ignores=[]))
+    (tests / "conftest.py").write_text("import pytest\n" + fixture_source + '''
+import json
+from pathlib import Path
+
+reports = []
+
+def pytest_runtest_logreport(report):
+    reports.append([report.nodeid, report.when, report.outcome])
+
+def pytest_sessionfinish(session):
+    Path("reports.json").write_text(json.dumps(reports))
+''')
+    (tests / "test_scope.py").write_text('''
+import json
+from pathlib import Path
+import threading
+import pytest
+import _keeper_threads as guard
+
+events = []
+body_threads = []
+elapsed = [0.0]
+guard.monotonic = lambda: elapsed[0]
+
+@pytest.fixture(scope=SCOPE)
+def keeper_worker():
+    release = threading.Event()
+    worker = threading.Thread(target=release.wait, name="fixture-worker", daemon=True)
+    real_join = worker.join
+    tearing_down = [False]
+
+    def join(timeout):
+        events.append("fixture-join")
+        assert tearing_down[0], "fixture worker joined before its scope teardown"
+        if LEAK_FIXTURE:
+            elapsed[0] += guard.THREAD_SHUTDOWN_TIMEOUT
+            return
+        release.set()
+        real_join(timeout=5)
+        assert not worker.is_alive()
+
+    worker.join = join
+    worker.start()
+    events.append("fixture-start")
+    yield worker
+    tearing_down[0] = True
+    events.append("fixture-teardown")
+
+def test_first(requestFIXTURE_ARGS):
+    worker = request.getfixturevalue("keeper_worker")
+    assert worker.is_alive()
+    events.append("first")
+    if LEAK_TEST_BODY:
+        release = threading.Event()
+        leaked = threading.Thread(target=release.wait, name="body-leak", daemon=True)
+        real_join = leaked.join
+
+        def join(timeout):
+            elapsed[0] += timeout
+
+        leaked.join = join
+        body_threads.append((release, leaked, real_join))
+        leaked.start()
+
+def test_second(request):
+    worker = request.getfixturevalue("keeper_worker")
+    assert worker.is_alive()
+    assert events == ["fixture-start", "first"]
+    events.append("second")
+    for release, leaked, real_join in body_threads:
+        release.set()
+        real_join(timeout=5)
+        assert not leaked.is_alive()
+
+def teardown_module():
+    # Module fixture teardown follows this xunit finalizer; record at process exit.
+    import atexit
+    atexit.register(lambda: Path("events.json").write_text(json.dumps(events)))
+'''.replace("SCOPE", repr(scope)).replace("LEAK_TEST_BODY", repr(leak_test_body))
+        .replace("LEAK_FIXTURE", repr(leak_fixture))
+        .replace("FIXTURE_ARGS", "" if start_in_test else ", keeper_worker"))
+    config = tmp_path / "pytest.ini"
+    config.write_text("[pytest]\n")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-c", str(config),
+         "--confcutdir", str(tmp_path), str(tests)],
+        cwd=tmp_path, env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+                           "PYTEST_ADDOPTS": "", "PYTEST_PLUGINS": ""},
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode in (0, 1), result.stdout + result.stderr
+    reports = json.loads((tmp_path / "reports.json").read_text())
+    events = json.loads((tmp_path / "events.json").read_text())
+    return result, reports, events
+
+
+@pytest.mark.parametrize("scope", ["module", "session"])
+@pytest.mark.parametrize("start_in_test", [False, True])
+def test_guard_joins_fixture_threads_at_their_scope_teardown(tmp_path, scope, start_in_test):
+    result, reports, events = _run_scoped_thread_case(tmp_path, scope, False, start_in_test)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert all(outcome == "passed" for _, _, outcome in reports)
+    assert events == ["fixture-start", "first", "second", "fixture-teardown", "fixture-join"]
+
+
+@pytest.mark.parametrize("scope", ["module", "session"])
+@pytest.mark.parametrize("start_in_test", [False, True])
+def test_guard_still_fails_test_body_leaks_with_scoped_fixture(tmp_path, scope, start_in_test):
+    result, reports, events = _run_scoped_thread_case(tmp_path, scope, True, start_in_test)
+    assert result.returncode == 1, result.stdout + result.stderr
+    failures = [(node, phase) for node, phase, outcome in reports if outcome == "failed"]
+    assert failures == [("tests/test_scope.py::test_first", "teardown")], result.stdout
+    assert "Leaked keeper threads: body-leak" in result.stdout
+    assert events == ["fixture-start", "first", "second", "fixture-teardown", "fixture-join"]
+
+
+@pytest.mark.parametrize("scope", ["module", "session"])
+def test_guard_fails_fixture_leaks_only_at_scope_teardown(tmp_path, scope):
+    result, reports, events = _run_scoped_thread_case(tmp_path, scope, False, True,
+                                                    leak_fixture=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    failures = [(node, phase) for node, phase, outcome in reports if outcome == "failed"]
+    assert failures == [("tests/test_scope.py::test_second", "teardown")], result.stdout
+    assert "Leaked keeper threads: fixture-worker" in result.stdout
+    assert events == ["fixture-start", "first", "second", "fixture-teardown", "fixture-join"]

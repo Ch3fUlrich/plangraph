@@ -287,3 +287,22 @@ def test_exact_tier_checks_inject_leg_table(w, repo, monkeypatch, entry_point):
         test_ready_card_moves_to_ready(w, repo)
     else:
         test_route_for_card_prefers_qodercli(w)
+
+
+@pytest.mark.parametrize("entry_point", ["gate_card", "route_for_card"])
+def test_keeper_readiness_does_not_enable_implementation_fallbacks(w, repo, entry_point):
+    """S5 writer admission must not lift main's role-neutral readiness policy."""
+    (key,) = seed(w, [("A", [])])
+    put(w, key)
+    if entry_point == "gate_card":
+        route = gate(w, repo, key).route
+    else:
+        route = service.route_for_card(w.store, w.p("router"), key, legs=DEFAULT_LEGS)
+    assert route.first_leg.id == "agy-gemini-3.8-flash"
+    # D-5206 replaces plain Sol with xhigh without lifting keeper-only admission.
+    assert {leg.id for leg in route.legs if leg.roles == ("implement",)} == {"cx-gpt-6.1-sol-xhigh"}
+    # D-5212 changes worker priority, not S5's registered free/paid fallbacks.
+    worker = service.route_for_card(w.store, w.p("router"), key,
+                                    legs=DEFAULT_LEGS, role="implement")
+    assert [leg.id for leg in worker.legs[:2]] == ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash"]
+    assert worker.legs[-1].id == "deepseek"

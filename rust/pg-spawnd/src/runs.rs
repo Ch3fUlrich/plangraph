@@ -50,8 +50,7 @@ impl Runs {
         plan: Value,
         launch: impl FnOnce(&Path, &Value) -> Result<crate::launch::LaunchSpec, ToolError>,
     ) -> Result<Value, ToolError> {
-        let run_id = new_run_id();
-        let job_id = new_job_id();
+        let (run_id, job_id) = (new_run_id(), new_job_id());
         let dry = args.get("dry_run") == Some(&json!(true));
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;
@@ -88,51 +87,28 @@ impl Runs {
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
+        if let Some(warnings) = launch.warnings {
+            base["warnings"] = json!(warnings);
+        }
+        let mut events: Vec<Value> = launch
+            .events
+            .unwrap_or_default()
+            .into_iter()
+            .map(Value::Object)
+            .collect();
+        crate::records::annotate_item(&mut base, &args["card"], &mut events);
         if !dry && crate::gitconfig_guard::writer_role(&role) {
             let dir = crate::gitconfig_guard::run_dir(state, &run_id)
                 .map_err(|_| internal("invalid run id"))?;
             match crate::gitconfig_guard::capture(&launch.cwd, &dir) {
                 Ok(armed) => base["gitconfig_guard"] = json!(armed),
                 Err(_) => {
+                    base["events"] = json!(events);
                     base["reason"] = json!("gitconfig_capture_refused");
                     return Ok(create(state, &run_id, host, base, Status::Refused)?.to_value());
                 }
             }
         }
-        if let Some(warnings) = launch.warnings {
-            base["warnings"] = json!(warnings);
-        }
-        let item = args["card"]["item"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned)
-            .or_else(|| {
-                std::env::var("PLANGRAPH_SPAWN_ITEM")
-                    .ok()
-                    .filter(|s| !s.is_empty())
-            });
-        base["item_key"] = match item {
-            Some(s) if crate::records::valid_item(&s) => {
-                json!(s)
-            }
-            Some(_) => {
-                if base.get("warnings").is_none() {
-                    base["warnings"] = json!([]);
-                }
-                base["warnings"]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(json!("invalid item_key; stored as null"));
-                Value::Null
-            }
-            None => Value::Null,
-        };
-        let events: Vec<Value> = launch
-            .events
-            .unwrap_or_default()
-            .into_iter()
-            .map(Value::Object)
-            .collect();
         let attempt_id = book_attempt(&mut base, &leg);
         if dry {
             let mut tail = format!("[dry-run] Planned command: {}", launch.argv.join(" "));
@@ -166,7 +142,7 @@ impl Runs {
                     .collect(),
                 stdin: launch.stdin.map(String::into_bytes),
                 base: base.as_object().unwrap().clone(),
-                events,
+                events: events.clone(),
                 finish: Some(Box::new(move |record, status| {
                     finish(record, status, &leg, attempt_id)
                 })),
@@ -174,6 +150,7 @@ impl Runs {
             match self.supervisor.start(spec) {
                 Ok(()) => {}
                 Err(SupervisorError::QueueFull) => {
+                    base["events"] = json!(events);
                     base["refusal"] = json!("QueueFull");
                     base["error"] = json!("run queue full");
                     base["exit_code"] = json!(2);
@@ -197,33 +174,35 @@ pub(crate) fn store_prompt(
     dry: bool,
 ) -> Result<(), ToolError> {
     use sha2::{Digest, Sha256};
-    let raw = launch
-        .prompt
-        .as_ref()
-        .ok_or_else(|| internal("launch prompt missing"))?;
-    let mut carriers = launch
-        .stdin
-        .iter()
-        .chain(launch.argv.iter())
-        .chain(launch.env.values())
-        .filter(|s| !raw.is_empty() && s.contains(raw));
-    let channel = if raw.is_empty() {
-        String::new()
-    } else {
-        carriers
-            .next()
-            .ok_or_else(|| internal("launch prompt carrier missing"))?
-            .clone()
-    };
-    if carriers.any(|s| s != &channel) {
-        return Err(internal("launch prompt carriers differ"));
+    let missing = || internal("launch prompt missing");
+    let raw = launch.prompt.as_ref().ok_or_else(missing)?;
+    let argv = &launch.argv;
+    // Short substrings of flags/model names are not evidence of a task carrier.
+    let mut carriers = argv.iter().chain(launch.env.values());
+    let exposed = carriers.any(|s| s == raw || (raw.len() >= 16 && s.contains(raw)));
+    if !raw.is_empty() && exposed {
+        return Err(internal("launch prompt must not be in argv or env"));
     }
-    let redacted = pg_worker_core::redact::redact(raw);
-    for arg in launch.argv.iter_mut().chain(launch.env.values_mut()) {
-        *arg = arg.replace(raw, &redacted);
-    }
-    if let Some(stdin) = &mut launch.stdin {
-        *stdin = stdin.replace(raw, &redacted);
+    let prompt = pg_worker_core::redact::redact(raw);
+    match launch.stdin.as_mut() {
+        Some(stdin) if stdin == raw => *stdin = prompt.clone(),
+        Some(stdin) => {
+            let mut event: Value =
+                serde_json::from_str(stdin).map_err(|_| internal("invalid prompt stream"))?;
+            let stream = argv
+                .windows(2)
+                .any(|w| w == ["--input-format", "stream-json"]);
+            if !stream
+                || event["event"] != "user"
+                || event["message"]["content"].as_str() != Some(raw)
+            {
+                return Err(internal("launch prompt carriers differ"));
+            }
+            event["message"]["content"] = json!(prompt);
+            *stdin = event.to_string() + "\n";
+        }
+        None if !raw.is_empty() => return Err(internal("launch prompt carrier missing")),
+        None => {}
     }
     if let Some(warnings) = &mut launch.warnings {
         for warning in warnings {
@@ -237,7 +216,6 @@ pub(crate) fn store_prompt(
                 .map_err(|_| internal("could not redact launch event"))?;
         }
     }
-    let prompt = channel.replace(raw, &redacted);
     let path = pg_worker_core::run::record::run_dir(state, id)
         .map_err(|_| internal("invalid run id"))?
         .join("prompt.txt");

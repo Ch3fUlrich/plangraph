@@ -35,10 +35,33 @@ def review_priority(leg) -> int:
 
 
 def implement_key(leg, tier_idx, pos):
-    """Cost precedes writer preference; eligibility is applied first."""
+    """Eligible Sol xhigh then Gemini precede other cost tiers (rule 3.23a/D-5212).
+
+    Remaining subscription legs precede pay-as-you-go; table order breaks ties.
+    """
     from .legs import LEAD_WRITER, WRITER_ORDER
+    from .review_order import paid_priority
     index = WRITER_ORDER.index(leg.id) if leg.id in WRITER_ORDER else len(WRITER_ORDER)
-    return (tier_idx, leg.id != LEAD_WRITER, index, pos)
+    return (leg.id != LEAD_WRITER, index, tier_idx, paid_priority(leg), pos)
+
+
+def implement_model_family(value):
+    """Implement-only aliases must not change scoring or cross-family review."""
+    from plangraph.routing_support.resolver import detect_model_family
+    if any(alias in value.lower() for alias in ("anthropic", "fable")):
+        return "claude"
+    return detect_model_family(value)
+
+
+def implement_family_excluded(leg):
+    """No Claude identity or unidentified family may write automatically, even renamed."""
+    from plangraph.routing_support.resolver import MODEL_FAMILIES
+    from .legs import spawnable_legs
+    registered = {l.family for l in spawnable_legs() if l.model == leg.model}
+    identities = {implement_model_family(value) for value in
+                  (leg.id, leg.family, leg.model, leg.harness, *registered)}
+    return (leg.claude_family or "claude" in identities
+            or not identities.intersection(MODEL_FAMILIES | {"grok", "openrouter"}))
 
 
 @dataclass(frozen=True)

@@ -17,13 +17,16 @@ BY_ID = {leg.id: leg for leg in DEFAULT_LEGS}
 
 def test_gemini_remains_free_review_only_and_sol_keeps_base_model():
     gemini = BY_ID['agy-gemini-3.8-flash']
-    assert (gemini.tier, gemini.roles) == ('free', ('review',))
+    assert (gemini.tier, gemini.roles) == ('free', ('implement', 'review'))
     assert gemini.note == 'gemini after its Friday-evening reset'
-    assert BY_ID['cx-gpt-6.1-sol'].model == 'omniroute/cx-gpt-6.1-sol'
+    from plangraph.planner.legs import spawnable_legs
+    assert next(leg for leg in spawnable_legs() if leg.id == 'cx-gpt-6.1-sol').model == 'omniroute/cx-gpt-6.1-sol'
     review = plan_spawn({'estimate_tokens': 1000}, role='review', writer_families=('gpt',))
     assert review.first_leg.id == gemini.id
     writers = plan_spawn({'estimate_tokens': 1000}, role='implement')
-    assert [leg.id for leg in writers.legs] == ['cx-gpt-6.1-sol', MUSE_AMBER]
+    from test_route_free_first import WRITERS
+    assert [leg.id for leg in writers.legs] == WRITERS
+    assert writers.first_leg.effort == 'xhigh'
 
 
 @pytest.mark.parametrize('role', [None, 'implement', 'review', 'orchestrate'])
@@ -31,7 +34,7 @@ def test_gemini_remains_free_review_only_and_sol_keeps_base_model():
 @pytest.mark.parametrize('implicit_first', [False, True])
 def test_non_muse_failure_promotion_does_not_rotate_subscriptions(role, exit_class, implicit_first):
     """Historical name: generic subscription rotation also applies without Muse."""
-    ids = ('cx-gpt-6.1-sol', 'cx-gpt-6-luna', 'deepseek')
+    ids = ('cx-gpt-6.1-sol-xhigh', 'cx-gpt-6-luna', 'deepseek')
     legs = tuple(replace(BY_ID[mid], disabled=None) for mid in ids)
     route = route_card({'estimate_tokens': 1000}, legs=legs, role=role)
     assert MUSE_AMBER not in {leg.id for leg in route.legs}
@@ -57,7 +60,7 @@ def test_qualified_catalog_tiers_apply_symmetrically_to_registered_legs(role, ti
     rows = [{'id': leg.model if '/' in leg.model else f'{leg.harness}/{leg.model}',
              'tier': tier} for leg in DEFAULT_LEGS]
     projected = catalog_tiers(DEFAULT_LEGS, rows, role)
-    protected = {MUSE_AMBER, 'cx-gpt-6.1-sol'} if role == 'implement' else {MUSE_AMBER}
+    protected = {MUSE_AMBER}
     assert [leg.tier for leg in projected] == [
         leg.tier if leg.id in protected else tier for leg in DEFAULT_LEGS]
     assert [leg.roles for leg in projected] == [leg.roles for leg in DEFAULT_LEGS]
@@ -68,7 +71,7 @@ def test_qualified_catalog_tiers_apply_symmetrically_to_registered_legs(role, ti
 @pytest.mark.parametrize('reason', [None, 'Audited public writer pin'])
 def test_paid_writer_pin_observes_host_subscription_cooldown(tmp_path, pin, cooled, reason):
     from plangraph.planner.routing import SpawnRefused
-    sol = BY_ID['cx-gpt-6.1-sol']
+    sol = BY_ID['cx-gpt-6.1-sol-xhigh']
     amber = BY_ID[MUSE_AMBER]
     service = SpawnService(state=tmp_path, leg_reader=lambda *a, **kw:
                            {'state': 'available', 'evidence': None})
@@ -81,7 +84,10 @@ def test_paid_writer_pin_observes_host_subscription_cooldown(tmp_path, pin, cool
     options = dict(card={'estimate_tokens': 1000}, role='implement', dry_run=True,
                    override_reason=reason,
                    **{pin: amber.id if pin == 'leg' else amber.model})
-    with pytest.raises(SpawnRefused, match='subscription writers available: ' + sol.id):
+    subscriptions = [leg.id for leg in service.route({'estimate_tokens': 1000}).legs
+                     if leg.tier == 'subscription']
+    assert sol.id in subscriptions
+    with pytest.raises(SpawnRefused, match='subscription writers available: ' + ', '.join(subscriptions)):
         asyncio.run(service.spawn(**options))
     assert not service.runner.jobs
     assert not (tmp_path / 'spawn-overrides.jsonl').exists()

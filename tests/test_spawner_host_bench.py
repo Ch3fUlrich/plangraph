@@ -107,7 +107,7 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
     # D-5240: the subscription DeepSeek seat precedes paid Muse.
     assert [leg["id"] for leg in bare["legs"]] == [
-        "agy-gemini-3.8-flash", "opencode-big-pickle", "agy-gemini-4-argon",
+        "agy-gemini-3.8-flash", "opencode-big-pickle", "opencode-gemini-4-argon", "agy-gemini-4-argon",
         "agy-gpt-oss-120b", "omniroute-deepseek-flash", "omniroute-muse-spark",
         "opencode-go-gemini-4-argon", "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash",
         "opencode-console-muse-spark",
@@ -160,14 +160,20 @@ def test_unmapped_leg_no_p(tmp_path, capsys, monkeypatch):
 
 
 def test_implement_order_unchanged_by_benchmark(tmp_path):
-    """D-2683: implement ignores benchmark p; ordering stays operator order."""
+    """D-5212 pins Sol/Gemini; D-5092 utility stays within all remaining cost tiers."""
     from plangraph.planner.routing import plan_spawn
     db = seeded_db(tmp_path)
     rows = benchmark_options(False, str(db))["benchmark"]
     with_bench = plan_spawn(CARD, role="implement", benchmark=rows).to_dict()
     bare = plan_spawn(CARD, role="implement").to_dict()
-    assert with_bench["p_source"] == "operator-order" == bare["p_source"]
-    assert [leg["id"] for leg in with_bench["legs"]] == [leg["id"] for leg in bare["legs"]]
+    assert with_bench["p_source"] == "benchmark" and bare["p_source"] == "operator-order"
+    assert {leg["id"] for leg in with_bench["legs"]} == {leg["id"] for leg in bare["legs"]}
+    from plangraph.planner.legs import TIERS
+    for plan in (with_bench, bare):
+        assert [l["id"] for l in plan["legs"][:2]] == ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash"]
+        assert plan["first_leg"]["effort"] == "xhigh"
+        tiers = [TIERS.index(l["tier"]) for l in plan["legs"][2:]]
+        assert tiers == sorted(tiers)
 
 
 def test_seed_idempotent(tmp_path):

@@ -32,19 +32,47 @@ directory. Its home fallback is systemd `%h`, independent of the manager's `HOME
 redeploy the service template to apply the guard.
 
 Source mode skips only credential-name assignment masking, for spawner-generated review git diffs and tracked context-file content; private-key blocks are masked in both modes, and token-shaped rules and context private-key refusal remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
+Python and Rust order: complete/truncated PEM, Bearer, then plain-mode pre-pass P:
+shield every matched assignment's name/quote/separator with an indexed marker
+`U+E000 + decimal index + U+E001`, leaving values untouched; run the wrapped join,
+then restore the names.
+P is skipped entirely if either shield character already occurs in the text.
+Then main's order runs: full assignments, wrapped prefixed tokens, URL userinfo,
+token catalog and JWT. The shielded join cannot cross/eat a credential name while
+its value is unmasked. Source mode skips P and assignments; its order is unchanged.
+The catalog covers OpenAI, GitHub, Slack, AWS and Google prefixes; wrapped bodies
+share its alphabets/floors and bounded 4096-byte LF/CRLF joins.
+Source spans must start and end on line boundaries; invalid spans (even empty ones) withhold the prompt.
+Long hex (32+), then base64/url-safe blobs (40+, mixing letters and digits), run
+only on child output via Python's `redact_output`, and as part of Rust's `redact`.
+Python never runs these broad rules on prompts or record structures: SHAs and hashes
+must stay readable there, including run IDs, card hashes and prompt SHA-256 fields.
+Stored stdout/stderr tails have already passed the output scrubber at collection.
+A tail therefore masks commit SHAs and long slash paths: take SHAs from git or the run record, never from a tail.
 
-### Windows prompt delivery
+### Prompt delivery
 
-Oversized Qoder commands move the prompt to UTF-8 text stdin before the Windows
-argv guard (32,000 characters, or 8,000 for batch shims). This uses the existing
-per-job stdin payload path, not a temporary prompt file. Qoder retains an explicit
-empty `-p` value with `--input-format text`; missing prompt flags fail with
-`stdin_prompt_flag_missing`. Oversized Windows agy
-commands use `--input-format stream-json --output-format stream-json -p ""`, with
+Every harness and helper receives the prompt by stdin or file, never argv, for
+all prompt sizes on every OS (D-5233). Python's Linux OOM child inherits the stdin
+pipe; pg-spawnd uses the same launch-spec transport.
+Child env construction drops only known legacy task carriers (`PROMPT`, `PROMPT_TEXT`,
+`PROMPT_SUFFIX`, `TASK_PROMPT`, `PLANGRAPH_TASK_PROMPT`, case-insensitive), including
+overlays; unrelated shell/theme/template configuration survives. Rust refuses exact
+prompt carriers and embedded prompts of at least 16 bytes in argv/env, without
+mistaking short incidental substrings of flags or model names for task transport.
+SSH overflow passes a staged UTF-8 file to the real spawn CLI's `--prompt-file`
+option, preserving trailing newlines without shell command substitution.
+Request-budget refusals keep the launch adapter's exit status in their run record;
+pre-exec refusals without an exit code also retain the named `prompt_too_large` reason.
+Qoder retains an explicit empty `-p` value with `--input-format text`; missing prompt flags fail with
+`stdin_prompt_flag_missing` in launch-spec refusals and Python run records. All agy commands use
+`--input-format stream-json --output-format stream-json -p ""`, with
 one UTF-8 NDJSON user event on stdin followed by EOF. The last result's
 `response` supplies the answer and verdict; an ERROR or missing result fails
 explicitly, without publishing an unsuccessful response as an answer.
-Short agy prompts and Linux launches retain their existing argv form; see [background review launches and deadlines](spawner-operations.md) for Windows console suppression and bounded prompt packaging.
+OpenCode, Claude, Gemini and Qwen read text stdin; Codex uses `exec -`. Fleet sessions
+also read stdin; SSH overflow uses `--prompt-file` without shell expansion. Assembled
+prompts exceeding the leg budget (three chars/token) record `prompt_too_large`.
 Rejected stdin input or an unavailable/closed input pipe fails the run explicitly;
 the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.
@@ -60,9 +88,11 @@ value keeps the default 90-minute wall, and a positive numeric value sets second
 The package-wide `inline_diff_prompt` bound change was dropped to preserve main's
 cost-context contract: `max_chars` measures only the diff and exact-fit diffs pass.
 Oversized diffs keep `InlineDiffError`'s `diff too large for leg` text and diff-only
-size; strict mode maps that refusal to `inline_diff_oversized`. The separate
-opt-in `PLANGRAPH_CONTEXT_STRICT=1` whole-prompt bound retains
-`inline_prompt_oversized` for oversized instructions/framing. Neither truncates;
+size, prefixed with `prompt_too_large`. Seat assembly maps that refusal to
+`PromptBoundError` (`ContextError` and `InlineDiffError`) with `inline_diff_oversized`;
+the base `InlineDiffError` is not itself a context/bound error. Whole-prompt admission retains `inline_prompt_oversized`
+for oversized instructions/framing, both under the named `prompt_too_large`
+reason regardless of `PLANGRAPH_CONTEXT_STRICT`. Neither truncates;
 missing diff references, empty diffs and failed `git diff` calls fail explicitly.
 
 In `opencode_answer.final_answer`, `allow_unfinished=True` accepts pending text
@@ -73,6 +103,35 @@ Only a `stop` with non-blank pending text clears that block; empty or
 whitespace-only stops and tool calls cannot launder truncation into a verdict.
 A completed `stop` answer remains eligible.
 
+### Reasoning-only output exhaustion (MIMO-REASONING-OUTPUT-LIMIT)
+
+Before decoding display stdout, `opencode_answer.record_steps` retains each
+`step_finish` as an `opencode_step_finish` event with `finish_reason`,
+`output_tokens` and `reasoning_tokens`; absent usage remains null, not zero.
+Structured `output-limit` errors and the matching OpenCode stderr diagnostic
+add `opencode_output_limit`. These are diagnostic events, not served-model witnesses.
+A final `length` step with output zero, or that error with no text/output,
+adds `opencode_reasoning_exhausted`; later completed output is not retried.
+Display-text decoding also protects plain/mixed stdout answers; diagnostic-only JSON, including blank separator lines, is not answer text.
+The monitor's events reach `record.json` through either dispatch path.
+
+For an OpenCode inline `review`, shared `SeatSpawnMixin._launch_leg` retries
+once with the same prompt, model and harness, never unchanged. MiMo v2.6 Flash
+and Pro use model-local `body.thinking.type=disabled` (zero reasoning budget)
+in the isolated child config; the root config and other roles are unchanged.
+An already-disabled or unsupported control is unavailable, not an unchanged retry.
+The failed attempt and its events stay in the record, with `reasoning_retry=1`
+saved before the retry. Tool denial, fresh job isolation and the original review
+wall deadline remain in force. No new retry loop or provider-health booking is added.
+The retry requires more than 30 seconds of remaining wall budget. Base-service launches keep their original shielded monitor cancellation and ownership fields.
+Repeated zero-output exhaustion, an unavailable cap, or no remaining retry budget
+ends the run `failed` with terminal `reason: reasoning_output_limit`; no spare leg
+or writer continuation runs. Cancellation, timeout and kill-incomplete still win.
+Terminal status, reason, attempts and events are saved at the shared launch boundary before either caller returns; routed exhaustion keeps normal failure witness metadata, and both callers finalize `ended` and release monitor registrations in `finally`.
+Normal output, nonzero-output truncation and non-review roles retain existing behavior except that base-service watchdog exits now retain one attempt row, matching routed dispatch; `terminal_record` adds no rows, retries do not duplicate watchdog rows, and cancellation rows are unchanged.
+Hermetic coverage is in `tests/test_spawner_review_tools_inline.py` and
+`tests/test_spawner_runner_answer.py`; the live #768 seat is an after-merge operator check.
+
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:
 - `verdict.json` audits outcomes; `verdict.delivered` stops replay.
@@ -81,6 +140,9 @@ Terminal saves dispatch review verdicts to the keeper:
 - Verifier exit codes govern retries; ambiguous exceptions after invocation skip to prevent duplicate POSTs.
 - Remove both journal and marker explicitly to requeue after repair.
 - Delivery markers stop retries even when the completion field is absent.
+Spawn records take `item_key` (or the legacy `item` alias) from the card, falling back to `PLANGRAPH_SPAWN_ITEM` only when neither card field supplies a value. Python and `pg-spawnd` require an ASCII `project:ID` key (at most 200 characters total and 180 in the ID); invalid explicit values stay null with a warning rather than falling through to another identity. Prompt mentions never supply an item key. Review/judge records without a key retain a `seat_item_missing` warning event. Main's verdict outbox above is the only automatic posting path; record-derived posting refuses a `--key` that differs from a recorded `item_key`, including null. Legacy records without the field retain the manual CLI path.
+The `evidence.json` manual path also refuses any supplied `item_key` or `key` that differs from `--key`, including null or conflicting aliases, before reading reviewer tokens or posting. Missing-seat events are deduplicated against launch events and remain persisted on dry runs and queue refusals.
+Companion records still bind the target when `evidence.json` is present: missing evidence identity cannot override a record's explicit null or different key, and malformed companion records fail closed. Git-config capture refusals also retain validated identity and launch/missing-seat events. The record-only path checks record identity independently of the evidence builder. Manual invocations always require `--key` (including legacy records); omission exits 2 before reading seat files or tokens. Non-dry completed Python dispatch saves also preserve missing-seat and launch events.
 `worker-core::writer_result::check_result` runs the mandatory Rust file-size
 gate before returning a checked result; export rechecks it before content gates,
 bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
@@ -183,8 +245,8 @@ or Temporal service is required for this slice. **Grok and Muse:** `omniroute-gr
 
 **Muse-amber, slice 1 (D-5198/D-5240):** `opencode-console-muse-spark`
 uses `console-meta/muse-spark-1.3-contributor` as a paid review seat and writer.
-The existing subscription writer remains Sol (`omniroute/cx-gpt-6.1-sol`,
-leg ID `cx-gpt-6.1-sol`); Gemini remains a free, review-only leg.
+Main's Sol xhigh default, Gemini fallback and registered utility inputs remain;
+plain Sol stays explicit-only (D-5206/D-5212).
 Muse writes only after no eligible subscription writer remains untried.
 Subscription seats precede paid seats, and Muse precedes paid DeepSeek Flash
 even when DeepSeek has benchmark measurements and Muse does not.
@@ -303,20 +365,27 @@ import `plangraph.spawner` at runtime; the boundary is enforced by
 
 `planner.routing.plan_spawn(card, role="implement"|"review")` applies the
 canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
-D-5198/D-5240 writers try subscription Sol first, then paid Muse; `WRITER_ORDER` lives in `planner/legs.py`. Failure promotion exhausts untried subscription legs before any paid leg, even when Muse is absent; provider failures still rotate within their tier, then wait. Qualified catalog rows cannot reclassify Muse's paid tier or Sol's implement subscription tier. Review cost tiers precede within-tier preferences and measurements, so subscription seats always precede pay-as-you-go legs; banned/off families are skipped for writers too.
-Review seats start with Qoder Qwen, then what the route policy leaves; a no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat; Claude is no default writer or seat. A review without a writer family refuses (D-1533). The `claude` harness (Haiku review leg, D-3605) runs with an allowlisted env (`claude_env.py`: HOME, PATH, PWD, locale, XDG_*, proxies, `CLAUDE_CONFIG_DIR`; every other variable is dropped whatever its case), and a host without the `claude` binary skips the leg as `harness_missing: claude` (D-3649). A finished claude run's stdout (the record's `stdout_tail`) is the final text of its stream-json `result` event (else the last assistant text), so `tools/seat_verdict.py` finds the `VERDICT:` line; the raw stream is kept as `claude-stream.jsonl` beside the run's `live.log`, which still carries the raw activity feed.
+Writers use Sol xhigh then agy Gemini Flash (`WRITER_ORDER`); plain Sol is explicit-only. See [implement route defaults](routing.md); banned/off families are skipped for writers too.
+D-5198/D-5240 adds paid Muse after eligible subscription writers and before paid DeepSeek. Failure promotion exhausts untried subscription legs, even when Muse is absent; provider failures rotate within their tier, then wait. Qualified catalog costs cannot reclassify Muse's paid tier. Review cost tiers precede within-tier preferences and measurements; Muse's paid preference stays within its tier.
+Other roles and the remaining implementation fallbacks put eligible free inputs before subscriptions and paid inputs (D-5092). Catalog cost tiers project onto registered legs without changing their roles, safety exclusions, or family metadata. Sonnet, main's Opus registration, high-effort Opus, gateway DeepSeek/Muse, personal Argon, and Big Pickle remain registered (D-5113). Grok's manual-only gate, both Zen free legs' exact permanent D-4196/D-3828 disables, and Qoder's stop remain enforced; Muse retains main's implementation/review/orchestration admission, and Big Pickle retains its GLM family. Sonnet retains orchestration/review, high-effort Opus review only, and medium-effort Opus review/orchestration. No Claude-family leg may enter an automatic implement route, including custom role-bearing tables; explicitly audited effort-variant writer picks remain available.
+
+`plan_spawn` shares one catalog snapshot for admission and tier projection.
+Callers may supply `catalog_rows` explicitly for deterministic offline planning;
+an empty snapshot uses the registered leg tiers and still rejects unknown models.
+Exact-order tests pin this input and isolate benchmark discovery from host files. Role-neutral keeper routes over the default table retain main's D-3828 readiness admission; S5's implementation fallbacks apply to role-bearing routes, not readiness. Custom tables remain explicit inputs.
+Review ordering preserves main's cost-first, per-leg measurement gate except for Muse's paid preference: measured rows precede missing rows within the same tier; unmeasured rows retain MiMo's existing role preference and Haiku's last-within-tier fallback. Provider-qualified tier identities win over unrelated bare names. Neither Haiku nor a measured paid row crosses a cheaper tier. A no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat. A review without a writer family refuses (D-1533). The `claude` harness (Haiku review leg, D-3605) runs with an allowlisted env (`claude_env.py`: HOME, PATH, PWD, locale, XDG_*, proxies, `CLAUDE_CONFIG_DIR`; every other variable is dropped whatever its case), and a host without the `claude` binary skips the leg as `harness_missing: claude` (D-3649). A finished claude run's stdout (the record's `stdout_tail`) is the final text of its stream-json `result` event (else the last assistant text), so `tools/seat_verdict.py` finds the `VERDICT:` line; the raw stream is kept as `claude-stream.jsonl` beside the run's `live.log`, which still carries the raw activity feed.
 Claude 5.5 and effort-variant legs (operator 2026-11-09): `agy-claude-{sonnet,opus}-5-5-{low,medium,high}`
 (agy harness, review and implement), `agy-gemini-3.8-flash-{low,medium,high}` (review),
 `cx-gpt-6-luna-{low,medium,high,xhigh,max}` (inline-only review) and
 `cx-gpt-6.1-sol-{low,medium,high,xhigh,max}` (implement). The ids are what `agy models` and
 OmniRoute `/v1/models` served that day; agy serves no Sonnet xhigh and cx serves no `-ultra`, so neither is a leg.
-They live in `EXPLICIT_LEGS`, not `DEFAULT_LEGS`: an explicit `--leg` pick (or the model
-override) spawns them, and no route, keeper plan or role order changes (D-3605: Claude is no
-default writer or seat; D-3828: no writer fallback). `SpawnService.route` appends them to
+Except Sol xhigh (automatic, D-5206), these and plain Sol live in `EXPLICIT_LEGS`, not
+`DEFAULT_LEGS`: an audited `--leg` or model override spawns them. Claude never enters
+automatic implement routes. `SpawnService.route` appends explicit-only legs to
 the plan as `explicit_only` skips, so `route` shows them; `plan_spawn` itself does not list them. A Claude leg is claude-family: the fence refuses
 it for a claude writer, given or via `review_of`; with mixed writers the D-3084 per-part rule
 admits a seat that covers another writer part. The Claude and sol-effort writers are
-`EXPLICIT_WRITERS`, which the spawn service admits for `implement`. The catalog spelling
+`EXPLICIT_WRITERS`; explicit implementation admission uses each registered leg's roles. The catalog spelling
 `agy/<model>` (MCP `model_or_combo`) resolves to a seat-capable agy leg holding the bare model, never an orchestrate-only alias. A cx
 effort model is not declared in the AutoOS root opencode config, so `render_gateway_providers`
 adds `providers.omniroute.models["cx-<m>-<effort>"]` (`modelID` `cx/<m>-<effort>`, the base
@@ -336,7 +405,7 @@ say `benchmark data absent` (the legacy `no benchmark p` reason remains compatib
 `SpawnRefused("benchmark rows missing: <legs>")`. This is the routing hook for the
 production CLI's `--require-bench`.
 
-Operator rules and `route_card` tier order come first; U_core only permutes within a tier, and only for review/orchestrate: implement keeps the writer order (D-2683), so a writer route shows `u_core` without applying it.
+Operator safety rules and `route_card` tier order come first; U_core permutes measured inputs within a tier for every role, including implement (D-5092). Same-family review inputs keep table order; free inputs never move behind subscriptions. The generic resolver retains its utility/epsilon-band algorithm without a model-name or post-ranking tier pin.
 CLI route/spawn and MCP load an existing `PLANGRAPH_CATALOG_DB` (default `~/.cache/plangraph/spawner_catalog.db`), unless `--bench-db`/`bench_db` overrides it.
 Route JSON `candidates` exposes each leg's tier, `u_core` (null without a row), `p_source` (`prior`/`measured`), and skip reason/evidence; live limited legs are skipped.
 
@@ -344,8 +413,8 @@ Route JSON `candidates` exposes each leg's tier, `u_core` (null without a row), 
 read-only mode; it never creates a missing database. It accepts `catalog_benchmarks`
 or OmniRoute `model_benchmarks` (catalog takes precedence if both exist).
 `BENCHMARK_COLUMNS` documents the small column alias map. Missing/unreadable files,
-missing tables and malformed model IDs return an empty mapping with explicit errors.
-Duplicate model rows expose `benchmark_row_count`; the first row supplies metrics.
+missing tables and malformed model IDs return an empty mapping with explicit errors. Shared default registrations do not change explicit effort-model alias resolution.
+Duplicate model rows expose `benchmark_row_count`; the first row supplies metrics. Bare harness model ids also resolve exact provider-qualified benchmark rows; explicit bare rows win, missing rows remain gaps, and the Opus high-effort leg maps to `agy/claude-opus-5-5-high`. No probe latency is treated as a benchmark measurement.
 
 ### Required benchmark release/swap gate (D-2576)
 
