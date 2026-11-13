@@ -53,6 +53,9 @@ other suites. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
 literals, manifest-relative reads and paths leaving `rust/`; new repository
 inputs must be added to `RUST_INPUTS`, not inline to the workflow.
 
+Run `cargo test -p <crate>` from `rust/` for each affected crate. Documentation
+mapping for a crate covers its own paths, not shared workspace manifests or locks.
+
 ## Lanes
 
 Completed Rust ports remove only their own Python waiver from

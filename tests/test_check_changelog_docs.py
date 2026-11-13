@@ -1,4 +1,6 @@
-from tests.changelog_docs_util import commit_files, git, run_check, test_repo  # noqa: F401
+import pytest
+
+from tests.changelog_docs_util import ROOT, commit_files, git, run_check, test_repo  # noqa: F401
 
 
 def test_code_change_without_changelog_fails(test_repo):
@@ -152,6 +154,52 @@ def test_base_equal_head_refused(test_repo):
     assert res.returncode == 1
     out = res.stdout + res.stderr
     assert "is HEAD itself" in out
+
+
+@pytest.mark.parametrize("path", ["rust/Cargo.toml", "rust/Cargo.lock"])
+def test_workspace_docs_map_accepts_workspace_documentation(test_repo, path):
+    repo, _ = test_repo
+    base = commit_files(repo, {
+        ".docs-map": "# enforce-after: 2026-11-08\nrust/Cargo.* -> CONTRIBUTING.md\n",
+    }, "use repository docs mapping")
+    commit_files(repo, {
+        path: "# workspace dependency update\n",
+        "CONTRIBUTING.md": "# Contributing\nWorkspace dependency update.\n",
+        "CHANGELOG.md": "## Unreleased\n- Update workspace dependencies.\n",
+    }, "update workspace and workspace documentation")
+    result = run_check(repo, base, "--today", "2026-11-08")
+    assert result.returncode == 0, result.stdout
+    assert "docs-map 0 warning(s)/0 error(s)" in result.stdout
+
+
+@pytest.mark.parametrize("path", ["rust/Cargo.toml", "rust/Cargo.lock"])
+def test_workspace_docs_map_requires_more_than_feature_documentation(test_repo, path):
+    repo, _ = test_repo
+    base = commit_files(repo, {
+        ".docs-map": "# enforce-after: 2026-11-08\nrust/Cargo.* -> CONTRIBUTING.md\n",
+    }, "use repository docs mapping")
+    commit_files(repo, {
+        path: "# workspace dependency update\n",
+        "docs/repo-mirror.md": "# Mirror feature update\n",
+        "docs/context-probes.md": "# Probe feature update\n",
+        "CHANGELOG.md": "## Unreleased\n- Update workspace dependencies.\n",
+    }, "update workspace with only feature documentation")
+    result = run_check(repo, base, "--today", "2026-11-08")
+    assert result.returncode == 1, result.stdout
+    assert "CONTRIBUTING.md" in result.stdout
+    assert "docs-map 0 warning(s)/1 error(s)" in result.stdout
+
+
+def test_repo_mirror_docs_mapping_is_crate_only():
+    from tools.check_changelog_docs import glob_to_regex, parse_docs_map
+
+    _, rules, errors = parse_docs_map((ROOT / ".docs-map").read_text())
+    assert not errors
+    mirror_rules = [(pattern, docs) for _, pattern, docs in rules
+                    if "docs/repo-mirror.md" in docs]
+    assert mirror_rules == [("rust/pg-ctx/**", ["docs/repo-mirror.md"])]
+    for path in ("rust/Cargo.toml", "rust/Cargo.lock", "rust/pg-probe/src/lib.rs"):
+        assert all(not glob_to_regex(pattern).fullmatch(path) for pattern, _ in mirror_rules)
 
 
 def test_writer_docs_map_shared_parity():
