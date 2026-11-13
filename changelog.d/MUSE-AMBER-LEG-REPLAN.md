@@ -1,0 +1,1 @@
+- Add an unwired, pure Amber payment-order core and fixed-input unit tests (slice 1a-1); no behaviour change for any route, registration, readiness, or privacy policy.

@@ -29,6 +29,8 @@ __all__ = ["TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_OR
 
 #: Cost tiers, cheapest first.
 TIERS = ("trial", "free", "subscription", "paid")
+AMBER_LEG_ID = "opencode-console-muse-spark"
+AMBER_MODEL = "console-meta/muse-spark-1.3-contributor"
 #: Harness names a leg may run under.
 HARNESSES = ("qodercli", "opencode", "agy", "claude")
 #: How a review leg reads the change: with its own tools, or only from a diff the
@@ -217,6 +219,10 @@ READINESS_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
     leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)
+# Declared identities, not catalog prices; this does not enable explicit-only legs.
+SUBSCRIPTION_WRITER_IDENTITIES = frozenset(
+    (leg.harness, leg.model) for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS)
+    if leg.tier == "subscription" and "implement" in leg.roles)
 
 
 def spawnable_legs() -> tuple[Leg, ...]:
