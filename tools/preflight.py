@@ -63,6 +63,12 @@ def selected_count(partial):
         return "unknown"
 
 
+def first_error(output):
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    marked = [line for line in lines if re.search(r"FAIL|error|exceeded", line, re.I)]
+    return (marked or lines or ["no output"])[0]
+
+
 def rust_commands(root, base, head):
     try:
         changed = subprocess.check_output(
@@ -160,6 +166,7 @@ def main(argv=None, root=None):
                 family_env = policy_env if family == "policy" else env
                 if family == "tests" and commands:
                     family_env = test_environment(root, env)
+                failed = []  # policy runs every check and reports all failures
                 for command in commands:
                     cwd = root / "rust" if family == "rust" else root
                     code, output = run(command, cwd, family_env)
@@ -171,8 +178,16 @@ def main(argv=None, root=None):
                         print(output, end="", flush=True)
                         infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     status = "PASS" if not code else ("INFRA" if infra else "FAIL")
+                    if code and family == "policy":
+                        failed.append((status, Path(command[1]).name, first_error(output)))
+                        continue
                     if code:
                         break
+                if failed:
+                    status = "FAIL" if any(f[0] == "FAIL" for f in failed) else "INFRA"
+                    print(f"policy: {len(failed)} check(s) failed:", flush=True)
+                    for _, name, line in failed:
+                        print(f"  {name}: {line}", flush=True)
                 if family == "scrub" and not words and status == "PASS":
                     status = "SKIP"
                     print("scrub: private word list missing; public rules passed", flush=True)
