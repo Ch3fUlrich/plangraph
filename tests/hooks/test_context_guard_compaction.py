@@ -18,7 +18,7 @@ class Compaction(GuardCase):
         self.fleet(BOUNDARY, usage_line(inp=1000))
         text = self.ctx_text(self.hook(FLEET_SESSION_NAME=""))
         self.assertIn("HANDOFF-NOW ctx=1k (compaction; handoff required)", text)
-        self.assertIn("ready", text)
+        self.assertIn("then run ready", text)
         state = json.loads(self.state_file().read_text())
         self.assertEqual((state["level"], state["compaction"] > 0), ("handoff", True))
 
@@ -75,8 +75,40 @@ class Compaction(GuardCase):
         self.write("{}")
         self.assertNotIn("fleet", scan(self.transcript, second))
         other = self.tmp / "other.jsonl"
-        other.write_text("{}\n")
-        self.assertNotIn("boundary", scan(other, second))
+        # Span the old cursor so only an identity reset finds this boundary.
+        other.write_bytes((BOUNDARY + " " * second["offset"] + "\n").encode())
+        self.assertGreater(other.stat().st_size, second["offset"])
+        self.assertEqual(scan(other, second)["boundary"], other.stat().st_size)
+
+    def test_scan_oversized_record_between_markers(self):
+        mod = load_module("context_compaction")
+        self.fleet("x" * (mod.LINE_CAP + 10), BOUNDARY)
+        with self.transcript.open("rb") as fh, patch.object(mod.Path, "open", return_value=fh), \
+                patch.object(fh, "readline", wraps=fh.readline) as read:
+            state = mod.scan(self.transcript, None)
+            self.assertTrue(all(args == (mod.LINE_CAP,) for args, _ in read.call_args_list))
+        self.assertTrue(state["fleet"])
+        self.assertEqual(state["boundary"], self.transcript.stat().st_size)
+        self.assertEqual(state["offset"], self.transcript.stat().st_size)
+
+    def test_scan_oversized_partial_record_waits_for_newline(self):
+        mod = load_module("context_compaction")
+        self.write("{}")
+        start = self.transcript.stat().st_size
+        with self.transcript.open("ab") as fh:
+            fh.write(b"x" * (mod.LINE_CAP + 10))
+        first = mod.scan(self.transcript, None)
+        self.assertEqual(first["offset"], start)
+        with self.transcript.open("ab") as fh:
+            fh.write(b"\n")
+        self.assertEqual(mod.scan(self.transcript, first)["offset"], self.transcript.stat().st_size)
+
+    def test_scan_non_dict_cursor_starts_fresh(self):
+        scan = load_module("context_compaction").scan
+        self.fleet(BOUNDARY)
+        for previous in (5, [1, 2]):
+            with self.subTest(previous=previous):
+                self.assertEqual(scan(self.transcript, previous), scan(self.transcript, None))
 
     def test_public_helpers_and_state_fields(self):
         guard = load_module("context_guard")

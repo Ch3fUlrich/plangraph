@@ -3,6 +3,8 @@ import json
 import re
 from pathlib import Path
 
+LINE_CAP = 1 << 20
+
 
 def scan(path, previous):
     """Return a persisted byte cursor, fleet identity, and latest boundary.
@@ -14,7 +16,7 @@ def scan(path, previous):
     p = Path(path)
     stat = p.stat()
     identity = [str(p.resolve()), stat.st_dev, stat.st_ino]
-    state = dict(previous or {})
+    state = dict(previous) if isinstance(previous, dict) else {}
     offset = state.get("offset", 0)
     if (state.get("identity") != identity or not isinstance(offset, int)
             or offset < 0 or offset > stat.st_size):
@@ -23,7 +25,15 @@ def scan(path, previous):
     with p.open("rb") as fh:
         fh.seek(offset)
         while True:
-            line = fh.readline()
+            line = fh.readline(LINE_CAP)
+            if len(line) == LINE_CAP and not line.endswith(b"\n"):
+                # Drain oversized records without decoding or searching them.
+                while line and not line.endswith(b"\n"):
+                    line = fh.readline(LINE_CAP)
+                if not line:
+                    break  # Incomplete record: keep its starting offset.
+                offset = fh.tell()
+                continue
             if not line or not line.endswith(b"\n"):
                 break
             offset = fh.tell()

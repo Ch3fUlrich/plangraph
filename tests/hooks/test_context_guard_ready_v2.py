@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from hookkit import HOOKS, SID, load_module
+from hookkit import HOOKS, SID, load_module, run_script, usage_line
 
 SCRIPT = HOOKS / "context_guard.py"
 
@@ -157,15 +157,23 @@ def test_atomic_marker_and_post_replace_race(ready):
 
 
 def test_checker_timeout_is_loud_but_hook_ignores_broken_checker(ready):
-    handoff, _, checker, env, marker, run = ready
+    handoff, _, checker, env, marker, _ = ready
     guard = load_module("context_guard")
     with patch.dict(os.environ, env, clear=True), patch.object(
             subprocess, "run", side_effect=subprocess.TimeoutExpired("handoff-check", 10)):
         assert guard.cmd_ready([str(handoff)]) == 2
     assert not marker.exists()
     checker.unlink()
-    p = run()
-    assert (p.returncode, p.stdout, p.stderr) == (0, "", "")
+    checker.with_suffix(".cmd").unlink(missing_ok=True)
+    transcript = handoff.with_suffix(".jsonl")
+    transcript.write_text(usage_line(inp=280000) + "\n")
+    payload = {"transcript_path": str(transcript), "session_id": SID, "cwd": str(handoff.parent)}
+    # Hook mode never calls the checker; only ready does. Missing it cannot hide guidance.
+    p = run_script(SCRIPT, payload, env=env, cwd=handoff.parent)
+    assert (p.returncode, p.stderr) == (0, "")
+    assert not marker.exists()
+    assert json.loads(p.stdout)["hookSpecificOutput"]["additionalContext"] == guard.emit_line(
+        "handoff", 280000, 270000)
 
 
 @pytest.mark.parametrize("outcome", ["success", "refused", "failed", "missing", "timeout", "disabled"])
