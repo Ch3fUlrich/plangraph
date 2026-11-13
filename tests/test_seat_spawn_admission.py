@@ -52,8 +52,20 @@ def seat_setup(tmp_path, monkeypatch):
     ('explicit', 'review', None, KEY),
     ('environment', 'review', None, KEY),
     ('equal', 'review', 'empty_diff: base equals head', KEY),
+    ('equal', 'judge', 'empty_diff: base equals head', KEY),
+    ('equal_without_item', 'review', 'empty_diff: base equals head', None),
+    ('equal_without_item', 'judge', 'empty_diff: base equals head', None),
     ('different', 'review', None, KEY),
     ('unresolved', 'review', 'diff_ref git lookup failed', KEY),
+    ('unresolved', 'judge', 'diff_ref git lookup failed', KEY),
+    ('unresolved_without_item', 'review', 'diff_ref git lookup failed', None),
+    ('unresolved_without_item', 'judge', 'diff_ref git lookup failed', None),
+    ('unresolved_head_without_item', 'review', 'diff_ref git lookup failed', None),
+    ('unresolved_head_without_item', 'judge', 'diff_ref git lookup failed', None),
+    ('missing_repo', 'review', 'diff_ref git lookup failed', KEY),
+    ('missing_repo', 'judge', 'diff_ref git lookup failed', KEY),
+    ('missing_repo_without_item', 'review', 'diff_ref git lookup failed', None),
+    ('missing_repo_without_item', 'judge', 'diff_ref git lookup failed', None),
     ('trailer', 'implement', None, None),
     ('equal', 'implement', None, KEY),
 ])
@@ -76,12 +88,16 @@ def test_seat_spawn_prelaunch_identity_and_diff(
     if case == 'alias': card['item'] = KEY
     if case == 'environment':
         monkeypatch.setenv('PLANGRAPH_SPAWN_ITEM', KEY)
-    if case in ('equal', 'different', 'unresolved', 'explicit'):
+    if case in ('equal', 'different', 'unresolved', 'explicit', 'missing_repo'):
         card['item_key'] = KEY
-    if case == 'equal':
+    if case in ('equal', 'equal_without_item'):
         card['diff_ref']['base'] = head[:12]  # distinct spellings resolve to the same commit
-    if case == 'unresolved':
+    if case in ('unresolved', 'unresolved_without_item'):
         card['diff_ref']['base'] = 'absent-ref'
+    if case == 'unresolved_head_without_item':
+        card['diff_ref']['head'] = 'absent-ref'
+    if case in ('missing_repo', 'missing_repo_without_item'):
+        card['diff_ref']['repo'] = str(tmp_path / 'absent-repo')
     runner = _Runner()
     state = tmp_path / 'state'
     service = (SpawnService(runner, state=state) if entry == 'base' else

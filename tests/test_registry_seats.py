@@ -90,7 +90,8 @@ def test_mcp_dispatch_seats_inline_diff(tmp_path, monkeypatch, pre_d3552_policy,
     assert all(c["covers"] == ["anthropic"] for c in out["seat_coverage"])
 
 
-def test_inline_diff_failure_falls_to_next_leg(tmp_path, monkeypatch, pre_d3552_policy, inline_seat_table):
+@pytest.mark.parametrize('failure', ['exception', 'git'])
+def test_inline_diff_failure_falls_to_next_leg(tmp_path, monkeypatch, pre_d3552_policy, inline_seat_table, failure):
     from plangraph.spawner.mcp import MCPSpawnerServer
     runner = _Runner()
     server = MCPSpawnerServer(runner, state=tmp_path / "state")
@@ -100,7 +101,9 @@ def test_inline_diff_failure_falls_to_next_leg(tmp_path, monkeypatch, pre_d3552_
     real_prompt = server.service._leg_prompt
     def fail_inline(prompt, card, role, leg, *args, **kwargs):
         if leg.tool_mode == 'inline-only':
-            raise InlineDiffError('test diff reader failure')
+            if failure == 'exception':
+                raise InlineDiffError('test diff reader failure')
+            card = dict(card, diff_ref=dict(card['diff_ref'], repo=str(tmp_path / 'missing-repo')))
         return real_prompt(prompt, card, role, leg, *args, **kwargs)
     monkeypatch.setattr(server.service, '_leg_prompt', fail_inline)
     out = asyncio.run(server.call_tool("plangraph_agent_spawn", {
@@ -109,6 +112,8 @@ def test_inline_diff_failure_falls_to_next_leg(tmp_path, monkeypatch, pre_d3552_
     inline_run = next(r for r in out["seats"] if r["plan"]["legs"][0]["tool_mode"] == "inline-only")
     first = inline_run["attempts"][0]
     assert first["status"] == "skipped" and first["skip_reason"].startswith("inline_diff_failed")
+    if failure == 'git':
+        assert 'git diff failed' in first['skip_reason']
     inline_model = inline_run["plan"]["legs"][0]["model"]
     assert inline_model not in [c["model_or_combo"] for c in runner.calls]
 
