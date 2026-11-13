@@ -30,3 +30,4 @@ rust/pg-ctx/tests/decidx.rs -> docs/ctx-decisions-index.md
 rust/pg-ctx/src/instr_lint.rs -> rust/pg-ctx/README.md
 rust/pg-ctx/tests/instr_lint.rs -> rust/pg-ctx/README.md
 rust/pg-ctx/src/scopes.rs -> docs/rule-scopes.md
+capabilities*.toml -> docs/dup-gates.md
