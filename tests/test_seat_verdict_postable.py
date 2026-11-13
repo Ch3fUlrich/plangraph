@@ -98,3 +98,35 @@ def test_transport_repost_invalid_argv_preserves_journal_before_apply(run, failu
     assert journal.read_bytes() == before
     assert calls == ([True] if failure == "exit" else [])
     if failure == "reason": assert "journal is not a transport-only retry" in row["reasons"]
+
+def test_transport_repost_send_raising_keeps_retry_journal(run, monkeypatch):
+    argv, seat, calls = run
+    before = (seat / "verdict.json").read_bytes()
+    def boom(*a):
+        calls.append(a)
+        raise OSError("network down")
+    monkeypatch.setattr(sv, "send", boom)
+    assert sv.main(argv) == 1 and len(calls) == 1
+    assert (seat / "verdict.json").read_bytes() == before and not (seat / "verdict.delivered").exists()
+    monkeypatch.setattr(sv, "send", lambda *a: (calls.append(a) or (200, "recorded")))
+    assert sv.main(argv) == 0 and len(calls) == 2
+
+@pytest.mark.parametrize("rc", [0, 1])
+def test_non_repost_apply_backfill_unchanged(run, rc):
+    _, seat, _ = run
+    (seat / "verdict.json").unlink()
+    row = {"reasons": []}
+    args = SimpleNamespace(backfill_apply=True, url="unused", token_dir=seat)
+    assert sb.apply_backfill(args, {"key": "demo:A", "writer_families": ["deepseek"]},
+        {"seat_dir": seat, "head_sha": HEAD_SHA}, lambda _: rc, row) == rc
+    assert row["reasons"] == [] and row["delivery"] == ("failed" if rc else "delivered")
+    assert json.loads((seat / "verdict.json").read_text())["status"] == ("skipped" if rc else "delivered")
+
+def test_non_repost_poster_systemexit_propagates(run):
+    _, seat, _ = run
+    (seat / "verdict.json").unlink()
+    def poster(_): raise SystemExit(2)
+    args = SimpleNamespace(backfill_apply=True, url="unused", token_dir=seat)
+    with pytest.raises(SystemExit):
+        sb.apply_backfill(args, {"key": "demo:A", "writer_families": ["deepseek"]},
+            {"seat_dir": seat, "head_sha": HEAD_SHA}, poster, {"reasons": []})

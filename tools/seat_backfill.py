@@ -88,13 +88,14 @@ def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
                     atomic_write_private(journal, previous_text)
             if type(rc) is not int or rc < 0: raise ValueError("invalid verifier exit")
             row["verifier_exit"] = rc
-            if rc: row["reasons"].append(f"poster exit {rc}")
+            if rc and retry_reason is not None: row["reasons"].append(f"poster exit {rc}")
             phase = "verdict outcome write"
             if retry_reason is None or state.get("started") is not False:
                 _verdict_outcome(directory, "delivered" if rc == 0 else "skipped", "backfill verifier exit " + str(rc))
             row["delivery"] = "failed" if rc else "delivered"
             return int(bool(rc))
     except (Exception, SystemExit) as exc:
+        if retry_reason is None and isinstance(exc, SystemExit): raise
         if phase == "verdict lock" and isinstance(exc, BlockingIOError):
             row["reasons"].append("verdict lock busy")
             return 0

@@ -372,6 +372,7 @@ def main(argv=None):
         if send_state is not None: send_state["started"] = True
         status, reply = send(args.url, token, payload)
     except (OSError, ValueError) as exc:
+        if send_state is not None: send_state["started"] = False
         print(f"seat_verdict: send failed: {type(exc).__name__}", file=sys.stderr)
         return EXIT_IO
     short = " ".join(reply.split())[:120]
