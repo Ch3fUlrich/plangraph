@@ -309,3 +309,5 @@ turn_budget_alert --test turn_budget_watchdog`. Tests never install hooks, read
 live session state, or change permissions/settings files.
 
 For a new remote branch, pre-push selects the nearest known origin branch merge-base for affected tests, falling back to `origin/main`.
+
+Pre-push preflight passes `--base`/`--head` to scrub, which reads changed blobs from the pushed tip even when checkout files differ or are deleted; manual scrub without a range still scans the worktree.

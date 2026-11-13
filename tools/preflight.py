@@ -131,7 +131,8 @@ def main(argv=None, root=None):
     def python(name, *extra):
         return [sys.executable, str(tools / name), *extra]
 
-    scrub = python("split/scrub_check.py", ".", "--rules", str(tools / "split/manifest.toml"),
+    scrub = python("split/scrub_check.py", ".", "--base", args.base, "--head", args.head,
+                   "--rules", str(tools / "split/manifest.toml"),
                    "--rules", str(tools / "split/scrub_ci.toml"))
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS")
     default_words = Path.home() / ".config/plangraph/scrub-words.txt"
