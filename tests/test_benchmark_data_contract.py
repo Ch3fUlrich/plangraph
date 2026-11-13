@@ -1,6 +1,7 @@
 """Offline benchmark admission contract; no scores or publisher evidence authored here."""
 from dataclasses import replace
 from datetime import date
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -82,6 +83,9 @@ FROZEN_PENDING = frozenset(
     {("missing_row", subject, effort) for subject, effort in _LEGACY_MISSING}
     | {(problem, subject, effort) for subject, effort in _LEGACY_UNSOURCED
        for problem in ("source_url", "source_date", "source_identity")})
+# Independent literal anchor: editing either legacy table must fail separately.
+FROZEN_PENDING_COUNT = 108
+FROZEN_PENDING_SHA256 = "b2420c166464ab574b732d3f93fb2a589441a6c3bcda83585ff83c0cce238fd3"
 
 
 def _effort(model_id):
@@ -107,7 +111,8 @@ def _names_model(row):
     if not isinstance(aliases, list) or any(
             not isinstance(alias, str) or not alias.strip() for alias in aliases):
         return False
-    return any(re.search(r"(?<![\w./-])" + re.escape(name) + r"(?![\w./-])",
+    # A terminal period is prose; a period introducing an id suffix is not.
+    return any(re.search(r"(?<![\w./-])" + re.escape(name) + r"(?![\w/-]|\.[\w./-])",
                          text, re.IGNORECASE)
                for name in (row["model_id"], *aliases))
 
@@ -116,7 +121,8 @@ def _violations(rows, models, legs):
     """Issue-specific keys keep a provenance waiver from hiding missing coverage."""
     issues = set()
     keys = {_row_key(row, models) for row in rows}
-    assert len(keys) == len(rows), "duplicate benchmark model x effort"
+    if len(keys) != len(rows):
+        raise AssertionError("duplicate benchmark model x effort")
     for model in models:
         key = model["model_id"], model["parameter_effort"]
         if model["status"] == "active" and key not in keys:
@@ -142,9 +148,10 @@ def _violations(rows, models, legs):
             issues.add(("source_url", model_id, effort))
         source_date = row.get("source_date")
         try:
-            assert isinstance(source_date, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", source_date)
+            if not isinstance(source_date, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", source_date):
+                raise ValueError("source_date must be YYYY-MM-DD")
             date.fromisoformat(source_date)
-        except (AssertionError, ValueError):
+        except ValueError:
             issues.add(("source_date", model_id, effort))
         if not _names_model(row):
             issues.add(("source_identity", model_id, effort))
@@ -172,25 +179,33 @@ def offline_contract(monkeypatch):
 
 
 def _pending_keys(pending):
-    assert isinstance(pending, list), "pending must be one explicit list"
+    if not isinstance(pending, list):
+        raise AssertionError("pending must be one explicit list")
     keys = set()
     for entry in pending:
-        assert set(entry) == {"problems", "subject", "effort", "reason"}
-        assert isinstance(entry["reason"], str) and entry["reason"].strip(), "pending reason required"
-        assert isinstance(entry["problems"], list) and entry["problems"], "pending problems required"
+        if not isinstance(entry, dict) or set(entry) != {"problems", "subject", "effort", "reason"}:
+            raise AssertionError("pending entry fields required")
+        if not isinstance(entry["reason"], str) or not entry["reason"].strip():
+            raise AssertionError("pending reason required")
+        if not isinstance(entry["problems"], list) or not entry["problems"]:
+            raise AssertionError("pending problems required")
         for problem in entry["problems"]:
             key = problem, entry["subject"], entry["effort"]
-            assert key not in keys, "duplicate pending entry"
+            if key in keys:
+                raise AssertionError("duplicate pending entry")
             keys.add(key)
-    assert keys <= FROZEN_PENDING, f"pending list grew: {keys - FROZEN_PENDING}"
+    if not keys <= FROZEN_PENDING:
+        raise AssertionError(f"pending list grew: {keys - FROZEN_PENDING}")
     return keys
 
 
 def _assert_contract(rows, models, legs, pending=()):
     issues = _violations(rows, models, legs)
     allowed = _pending_keys(list(pending))
-    assert not issues - allowed, f"unlisted benchmark violations: {issues - allowed}"
-    assert not allowed - issues, f"remove resolved pending entries: {allowed - issues}"
+    if issues - allowed:
+        raise AssertionError(f"unlisted benchmark violations: {issues - allowed}")
+    if allowed - issues:
+        raise AssertionError(f"remove resolved pending entries: {allowed - issues}")
 
 
 def test_catalog_benchmark_contract(monkeypatch, tmp_path):
@@ -202,6 +217,10 @@ def test_catalog_benchmark_contract(monkeypatch, tmp_path):
 
 
 def test_pending_list_cannot_grow():
+    canonical = json.dumps(sorted(FROZEN_PENDING), separators=(",", ":")).encode("utf-8")
+    if (len(FROZEN_PENDING) != FROZEN_PENDING_COUNT
+            or hashlib.sha256(canonical).hexdigest() != FROZEN_PENDING_SHA256):
+        raise AssertionError("frozen pending ceiling changed; do not rebaseline")
     _pending_keys(json.loads(PENDING_PATH.read_text(encoding="utf-8")))
 
 

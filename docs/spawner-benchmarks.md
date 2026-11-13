@@ -64,7 +64,8 @@ SQLite schema, runtime admission, ranking, or availability.
 - Every `status == "active"` catalog model and every non-permanently-disabled
   spawnable leg requires an exact model-id × effort benchmark row. Availability
   flags do not waive coverage. Temporary pauses do not waive eventual coverage;
-  the test supplies a fixed time rather than reading the clock.
+  the test passes positive infinity to `leg_active`, treating every expiring
+  pause as expired without reading the clock.
 - Bare leg models are qualified with their harness, as in the benchmark reader.
   Effort is the explicit leg/row `effort`, otherwise the catalog's
   `parameter_effort`, otherwise a recognized effort suffix. Null is a distinct
@@ -75,8 +76,9 @@ SQLite schema, runtime admission, ranking, or availability.
   and/or `excerpt` text. That text must name the exact `model_id` or a nonempty
   string explicitly listed in the row's `aliases` array (optional, defaults to
   empty). Matching is case-insensitive and token-bounded: a different release
-  or effort suffix cannot match a shorter id. Record metadata and the URL do
-  not count as publisher text. `updated_at` is not a source date and a generic
+  or effort suffix cannot match a shorter id; sentence-final periods are allowed.
+  Record metadata and the URL do not count as publisher text. `updated_at` is
+  not a source date and a generic
   `benchmark_source` label is not identity evidence.
 
 The **only** pending list is
@@ -86,14 +88,19 @@ the leg id and its qualified model id, so a retargeted leg cannot reuse a waiver
 Its initial 58 entries cover 33 missing-row cases and the three provenance gaps
 on each of 25 existing rows
 (108 individual violations). An independently frozen set in the test bounds
-the exact allowed violations, so additions and same-size substitutions fail.
+the exact allowed violations. Its count and SHA-256 are literal test constants,
+not derived from the pending file or legacy tables; changing those tables also
+fails the fingerprint check. A separate test compares the pending file with that
+ceiling, allowing only removals, so additions and same-size substitutions fail.
 Resolved violations must be removed; provenance debt cannot hide missing rows.
 Do not extend or regenerate the frozen ceiling when fixing data.
 
 All verification is local: the test blocks network and subprocess entry points
 and reads neither Git history nor a live catalog. Synthetic mutations prove
 that missing rows, null/omitted citations, wrong effort, unrelated source text,
-and pending-list growth fail. This is a structural/identity contract, **not**
+and pending-list growth fail, including with Python optimization enabled.
+Contract checks raise explicitly rather than relying on removable `assert`
+statements. This is a structural/identity contract, **not**
 verification that publisher bytes or scores are authentic. Independent source
 collection, review, and any row corrections belong to a later slice; this slice
 does not invent citations, aliases, or evidence for legacy rows.
