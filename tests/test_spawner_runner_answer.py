@@ -324,3 +324,14 @@ def test_terminal_record_never_appends_attempt(status):
     job = SimpleNamespace(status=status, exit_code=124, events=[dict(event='watchdog_' + status)])
     assert terminal_record(record, job) == (status != 'cancelled')
     assert record['attempts'] == [attempt]
+
+
+@pytest.mark.parametrize('count', [0, 12])
+def test_assignment_text_keeps_raw_integer_usage(tmp_path, monkeypatch, count):
+    text = 'MY_' + 'SECRET=V1'
+    output = stream(('text', {'text': text}), ('step_finish', {'reason': 'length', 'tokens': {'output': count, 'reasoning': count}}))
+    job = _monitor(tmp_path, monkeypatch, output, stderr='')
+    step = next(e for e in job.events if e['event'] == 'opencode_step_finish')
+    assert (step['output_tokens'], step['reasoning_tokens']) == (count, count)
+    assert job.stdout == 'MY_' + 'SECRET=[REDACTED]'
+    assert not any(e['event'] == 'opencode_reasoning_exhausted' for e in job.events)

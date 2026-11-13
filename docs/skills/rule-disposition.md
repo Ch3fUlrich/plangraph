@@ -62,6 +62,13 @@ role card.
 | R-orch-28 | delete | - | stand the old session down explicitly |
 | R-orch-29 | code | none (gap) | pin 1M combos for orchestrator seats |
 | R-orch-30 | code | none (gap) | fan out at most 10 seats |
+| R-lead-01 | card | role card: orchestrator | D-5642 take named defaults now |
+| R-lead-02 | card | role card: orchestrator | D-5641 next offered leg, D-1504 no substitute model or route |
+| R-lead-03 | card | role card: orchestrator | D-5658 link each seat to its item |
+| R-lead-04 | card | role card: orchestrator | D-5658 cut smaller after two rounds |
+| R-lead-05 | card | role card: orchestrator | D-5658 prove live fixes with live runs |
+| R-lead-06 | card | role card: orchestrator | D-5658 route before seat family claims |
+| R-lead-07 | card | role card: orchestrator | D-5661 stop spawns on stale bases |
 | R-worker-01 | card | role card: worker | derive cells from registry render |
 | R-worker-02 | card | role card: worker | portable failing-first tests |
 | R-worker-03 | card | role card: worker | keep runs cheap |
