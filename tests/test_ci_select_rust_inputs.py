@@ -138,3 +138,29 @@ def test_unlisted_rust_repository_read_fails_check(tmp_path, read, asset_path):
 ])
 def test_non_rust_inputs_preserve_other_job_selection(path, expected):
     assert {job for job, selected in ci_select.select([path]).items() if selected} == expected
+
+
+@pytest.mark.parametrize("path, expected", [
+    (".docs-map", {"rust"}),
+    ("docs/rust-hooks.md", {"rust"}),
+    ("tests/hooks/parity_payloads.json", {"pytest", "pytest-postgres", "rust"}),
+    ("tools/new_code_allowlist.txt", {"pytest", "pytest-postgres", "rust"}),
+])
+def test_pg_hook_repository_inputs_are_explicitly_selected(path, expected):
+    # policy.rs reads through repo_file(), beyond the literal-path scanner.
+    assert (ROOT / path).is_file()
+    assert path in ci_select.RUST_INPUTS
+    assert {job for job, selected in ci_select.select([path]).items() if selected} == expected
+
+
+def test_pg_hook_runs_in_windows_job():
+    # Keep the regression name while enforcing the D-5579 Unix-only rollback.
+    workflow = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())
+    steps = workflow["jobs"]["rust-windows"]["steps"]
+    assert all("pg-hook" not in step.get("run", "") for step in steps)
+    assert "slice 1 is Unix-only" in (ROOT / "docs/rust-hooks.md").read_text()
+    for source in (ROOT / "rust/pg-hook/tests").glob("*.rs"):
+        assert source.read_text().startswith("#![cfg(unix)]\n"), source
+    for name in ("lib.rs", "main.rs"):
+        source = (ROOT / "rust/pg-hook/src" / name).read_text()
+        assert "#[cfg(all(test, unix))]\nmod tests" in source

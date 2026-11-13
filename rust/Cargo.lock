@@ -2124,6 +2124,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg-hook"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "pg-jail"
 version = "0.1.0"
 dependencies = [

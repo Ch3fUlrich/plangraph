@@ -52,6 +52,9 @@ select both `rust` and `rust-windows` via the shared `rust` output without chang
 other suites. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
 literals, manifest-relative reads and paths leaving `rust/`; new repository
 inputs must be added to `RUST_INPUTS`, not inline to the workflow.
+Include paths passed through read helpers too: `pg-hook` reads `.docs-map`,
+`docs/rust-hooks.md`, `tools/new_code_allowlist.txt` and its parity corpus at
+`tests/hooks/parity_payloads.json`; all four are explicit selector inputs.
 
 Run `cargo test -p <crate>` from `rust/` for each affected crate. Documentation
 mapping for a crate covers its own paths, not shared workspace manifests or locks.
