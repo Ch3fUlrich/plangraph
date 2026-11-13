@@ -47,7 +47,7 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason, redact, redact_output, _redact_prompt
-from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
+from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, refusal_record, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
@@ -1011,7 +1011,7 @@ def spawn_service(*args, **kwargs):
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
                         seats=False, _plan=None, run_worktree=False, _placement=None):
             from .private_io import SAVE_READ_ATTEMPTS
-            from .run_watchdog import terminal_status, thresholds
+            from .run_watchdog import leg_limits, terminal_status, thresholds
             from .question_bridge import rounds_exhausted
             if rounds_exhausted(self, card, role):
                 from plangraph.routing_errors import SpawnRefused
@@ -1072,6 +1072,8 @@ def spawn_service(*args, **kwargs):
                     live_log = str(self._path(run_id).parent / 'live.log')
                     record['live_log'] = live_log
                     for _ in range(len(plan.legs) + 2):
+                        if (watchdog := leg_limits(record, limits)) is None:
+                            self._save(record); return
                         chosen = next((l for l in current.legs if l.id not in tried), None)
                         if chosen is None or current.error:
                             break
@@ -1086,15 +1088,17 @@ def spawn_service(*args, **kwargs):
                             continue
                         from .inline_diff import InlineDiffError
                         try:
-                            leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run, deadline=record['started'] + limits['max_s'] if role == 'review' else None)
+                            leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run, deadline=watchdog.get('deadline'))
                         except InlineDiffError as exc:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
                         worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
+                        if (watchdog := leg_limits(record, limits)) is None:
+                            self._save(record); return
                         job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
-                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
+                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                         if record.get('reason') == 'reasoning_output_limit':
                             return
@@ -1105,7 +1109,7 @@ def spawn_service(*args, **kwargs):
                             return
                         if self._path(run_id).with_name('cancelled').exists():   # D-3505: a CLI cancel from
                             job.status = 'cancelled'   # another process ends the run, never a fall-through leg
-                        stop = self.runner.provider_responses.get(job.job_id)
+                        stop = redact(self.runner.provider_responses.get(job.job_id))
                         if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
                             record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
                                 served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))
@@ -1113,13 +1117,9 @@ def spawn_service(*args, **kwargs):
                                 watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
                                 events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s events
                             return
-                        refusal = next((e for e in job.events if e.get('event') == 'model_refusal'), None)
-                        if refusal is not None:   # terminal safety stop: no booking, reroute, or writer continuation
-                            record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason='model_refusal',
-                                stdout_tail=job.stdout, stderr_tail=job.stderr))
-                            record.update(status='failed', reason='model_refusal', exit_code=job.exit_code,
-                                stop_reason=refusal['stop_reason'], refusal_text_chars=refusal['refusal_text_chars'],
-                                events=record.get('events', []) + job.events)
+                        if refusal_record(record, job):   # no booking, reroute, or writer continuation
+                            record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason=record['reason'],
+                                stdout_tail=job.stdout, stderr_tail=job.stderr, provider_response=stop))
                             return
                         reason = None
                         unavailable = fallthrough_reason(self, chosen, job, record)
@@ -1152,6 +1152,8 @@ def spawn_service(*args, **kwargs):
                             if not dry_run and job.status != 'needs_input':
                                 await self._continue_writer(record, job.stdout)
                             return
+                        if role == 'review': record.update(status='running', exit_code=None)
+                        self._save(record)
                         current = plan if unavailable else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         if hasattr(current, '__dataclass_fields__'):
                             current = restrict(await plan_for_launch_async(replace(current, placement=_placement or current.placement), dry_run=dry_run), tried)
