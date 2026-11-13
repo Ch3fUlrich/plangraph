@@ -78,3 +78,16 @@ Reports and freed file bytes are logged to `disk-hygiene.ndjson`; the latest
 Review a dry run before installing the 30 minute user timer and setting `PG_REPO`,
 `PG_WORKTREES` and `PG_PINS` in `~/.config/plangraph/disk-hygiene.env`.
 Live timer installation and real host cleanup are separate deployment evidence.
+
+`pg-package-host --spawn REQUEST.json --order ID1,ID2,ID3 --allow-workstation`
+starts a package through the existing `pg-spawnd shim` on the chosen host (SSH
+for remote hosts). Each target must already run its configured spawner daemon.
+The request is the existing spawn tool's JSON arguments (`card`, `prompt`, role,
+and optional seat arguments); checkout paths must be valid on the target host.
+Admission uses the same policy as package selection. Overflow tries registry
+order, or the complete explicit `--order`, immediately after each refusal.
+Receipts and all refusals are saved privately under `STATE/overflow/`.
+Exit 5 asks the orchestrator to queue only after all hosts refused. Exit 1 means
+uncertain launch state: inspect the target before retrying to avoid duplicate work.
+An accepted queued daemon receipt is retained as an acknowledged launch.
+The phase-batch caller should use this spawn mode after the readiness check.
