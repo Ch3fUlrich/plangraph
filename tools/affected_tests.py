@@ -92,7 +92,7 @@ def local_control_tests(texts, path):
     return selected
 
 
-def select_tests(root, changed, within=None, *, files_only=False):
+def select_tests(root, changed, within=None, *, files_only=False, local=False):
     root = Path(root)
     paths = sorted(p for folder in ("src", "tests") for p in (root / folder).rglob("*.py"))
     modules = {}
@@ -171,7 +171,7 @@ def select_tests(root, changed, within=None, *, files_only=False):
             # scratch files stay skippable here.
             if not revision_asset(root, path, asset_cache):
                 continue
-        if p.name == "conftest.py" or (path.startswith("tests/") and not p.name.startswith("test_")):
+        if p.name == "conftest.py" or (not local and path.startswith("tests/") and not p.name.startswith("test_")):
             if files_only:
                 selected.update(local_control_tests(texts, path))
                 continue
@@ -216,6 +216,7 @@ def main(root=None):
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
     parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
     parser.add_argument("--maxfail", type=int, default=0)
     parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
@@ -233,8 +234,11 @@ def main(root=None):
             if not (root / w).exists():
                 print(f"unknown --within path: {w}", file=sys.stderr)
                 return 2
-    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, files_only=args.files_only)
+    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, files_only=args.files_only, local=args.local)
     print(json.dumps(plan), flush=True)
+    if args.local and args.run and "tests" in plan["tests"]:
+        print('local preflight refuses the full suite; specify affected test files with --within', file=sys.stderr)
+        return 2
     if args.files_only and (plan.get('error') or any(not (root / path).is_file() for path in plan['tests'])):
         print('FAIL local-selection: cannot determine explicit test files; repair the graph or selection; full collection refused', file=sys.stderr)
         return 1
