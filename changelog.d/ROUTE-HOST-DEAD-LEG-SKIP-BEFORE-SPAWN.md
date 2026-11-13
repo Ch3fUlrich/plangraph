@@ -1,0 +1,2 @@
+- Record the host/deadline pre-spawn admission design and five reduced dell run fixtures for D-5714/D-5722.
+- Round one adds a fixture-shape regression only; runtime filtering waits for the named spawner lanes.
