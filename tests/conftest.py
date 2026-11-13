@@ -326,7 +326,6 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
 
 @pytest.fixture(autouse=True)
 def fake_base_fresh(monkeypatch, request):
-    """Fake harness mechanics opt out once; admission tests keep the real gate."""
     if request.node.get_closest_marker('real_base_fresh') is None:
         from plangraph.spawner import base_fresh
         fresh = lambda *a, **k: dict(ok=True, reason=None, origin_sha='0' * 40, base_sha='0' * 40, behind=0)

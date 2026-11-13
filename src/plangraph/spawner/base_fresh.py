@@ -104,10 +104,8 @@ async def admitted_spawn(service, payload):
     except asyncio.TimeoutError:
         for task in service.tasks.values(): task.cancel()
         await asyncio.gather(*service.tasks.values(), return_exceptions=True)
-        for run_id in list(service.tasks):
-            run = service.result(run_id)
+        for run in map(service.result, list(service.tasks)):
             if run.get('status') == 'running' and not run.get('base_admitted'):
-                run.update(status='failed', reason='base_admission_timeout', error='base_admission_timeout', exit_code=1, ended=time.time())
-                service._save(run)
+                service._save(dict(run, status='failed', reason='base_admission_timeout', error='base_admission_timeout', exit_code=1, ended=time.time()))
         return service.save_refusal(ValueError('base_admission_timeout'), payload.get('role', 'implement'),
                                     card=payload.get('card'), reason='base_admission_timeout')

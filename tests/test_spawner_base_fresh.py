@@ -102,22 +102,17 @@ def test_launch_variants_cannot_bypass(repository, dispatch, hardened, mode):
     card, options = {'estimate_tokens': 100}, {}
     if mode == 'pinned':
         options = dict(leg='cx-gpt-6.1-sol-xhigh', override_reason='hermetic admission test')
-    elif mode == 'seats_plain':
-        card['diff_ref'] = dict(repo=str(repo), base=old, head=old)
-        options.update(seats=True, role='review', writer_families=['deepseek'])
-        route = service._route
-        service._route = lambda *a, **k: replace(route(*a, **k), review_seats=route(*a, **k).legs)
-    else:
+    elif mode != 'seats_plain':
         git(repo, 'fetch', 'origin', 'main')
         git(repo, 'merge', '--ff-only', 'origin/main')
         git(repo, 'branch', 'lane/resume', old)
         card.update(lane_branch='lane/resume', continuation=True)
         options['run_worktree'] = True
-        if mode == 'seats':
-            card['diff_ref'] = dict(repo=str(repo), base=old, head=git(repo, 'rev-parse', 'HEAD'))
-            options.update(seats=True, role='review', writer_families=['deepseek'])
-            route = service._route
-            service._route = lambda *a, **k: replace(route(*a, **k), review_seats=route(*a, **k).legs)
+    if mode in ('seats', 'seats_plain'):
+        card['diff_ref'] = dict(repo=str(repo), base=old, head=old if mode == 'seats_plain' else git(repo, 'rev-parse', 'HEAD'))
+        options.update(seats=True, role='review', writer_families=['deepseek'])
+        route = service._route
+        service._route = lambda *a, **k: replace(route(*a, **k), review_seats=route(*a, **k).legs)
     result = asyncio.run(service.spawn(card, 'Implement a tested change', wait_seconds=None, **options))
     for record in result.get('seats', [result]):
         assert record['status'] == 'failed' and record['reason'] == 'base_stale: behind=2'
@@ -132,9 +127,7 @@ def test_continuation_rechecks_base(repository, dispatch, role, current, diff):
     old = advance(origin, repo)
     git(repo, 'fetch', 'origin', 'main')
     git(repo, 'merge', '--ff-only', 'origin/main')
-    card = dict(estimate_tokens=100, diff_ref=dict(repo=str(repo), base=old,
-        head=git(repo, 'rev-parse', 'HEAD') if current else old))
-    if not diff: card.pop('diff_ref')
+    card = dict(estimate_tokens=100, **({'diff_ref': dict(repo=str(repo), base=old, head=git(repo, 'rev-parse', 'HEAD') if current else old)} if diff else {}))
     service, calls = dispatch[0](False), dispatch[1]
     parent = dict(run_id='run-parent', role=role, status='completed', exit_code=0,
         cwd=str(repo), card=card, chosen_leg=service._route().to_dict()['first_leg'])
@@ -201,6 +194,8 @@ raise SystemExit(cli.main(['--supervise']))
     finally:
         for child in children:
             child.wait(timeout=10)
+class _Out(io.StringIO):
+    def close(self): pass
 def test_supervisor_admission_timeout_fails_closed(dispatch, monkeypatch):
     from plangraph.spawner import cli, base_fresh
     service = dispatch[0](False)
@@ -210,9 +205,7 @@ def test_supervisor_admission_timeout_fails_closed(dispatch, monkeypatch):
     monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
     monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', .01)
     monkeypatch.setattr(cli.sys, 'stdin', io.StringIO(json.dumps(dict(state=str(service.state), card={}))))
-    class Output(io.StringIO):
-        def close(self): pass
-    output = Output()
+    output = _Out()
     monkeypatch.setattr(cli.sys, 'stdout', output)
     assert cli.main(['--supervise']) == 1
     assert json.loads(output.getvalue())['reason'] == 'base_admission_timeout'
@@ -228,18 +221,13 @@ def test_admission_timeout_fails_original_run_records(dispatch, monkeypatch):
     monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
     monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', .3)
     monkeypatch.setattr(cli.sys, 'stdin', io.StringIO(json.dumps(dict(state=str(service.state), card={'estimate_tokens': 100}, prompt='Implement a tested change'))))
-    class Output(io.StringIO):
-        def close(self): pass
-    monkeypatch.setattr(cli.sys, 'stdout', Output())
-    code = cli.main(['--supervise'])
-    assert code == 1
+    monkeypatch.setattr(cli.sys, 'stdout', _Out())
+    assert cli.main(['--supervise']) == 1
     runs = service.ps()['runs']
-    assert len(runs) > 1 and not [r for r in runs if r['status'] == 'running']
+    assert len(runs) > 1 and all(r['status'] != 'running' for r in runs)
 def test_admission_wait_returns_refreshed_record_for_empty_seats(dispatch, monkeypatch):
     from plangraph.spawner.base_fresh import admitted_spawn
     service = dispatch[0](False)
-    async def spawn(**kwargs):
-        return dict(run_id='run-x', status='running', seats=[])
-    monkeypatch.setattr(service, 'spawn', spawn)
+    monkeypatch.setattr(service, 'spawn', lambda **kwargs: asyncio.sleep(0, dict(run_id='run-x', status='running', seats=[])))
     monkeypatch.setattr(service, 'result', lambda run_id: dict(run_id=run_id, status='failed', reason='base_stale: behind=1'))
     assert asyncio.run(admitted_spawn(service, {}))['status'] == 'failed'
