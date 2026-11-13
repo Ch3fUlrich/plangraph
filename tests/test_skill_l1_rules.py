@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
                    "It waits for the router only for GO rows, waivers and router-only keeper verbs.")),
     ("R-lead-02", ("When a route leg fails, the L1 tries the next leg the spawner route offers "
                    "for that role before sending BLOCKED.",
-                   "If the card or order names one model, rule 11 forbids swaps "
+                   "If the card or order names one model, rule 11 forbids any substitute model or route "
                    "and the L1 backs off or sends BLOCKED.")),
     ("R-lead-03", ("Every seat card carries its item key.",)),
     ("R-lead-04", ("After two design rounds with no agreement, the L1 cuts the item smaller.",)),
