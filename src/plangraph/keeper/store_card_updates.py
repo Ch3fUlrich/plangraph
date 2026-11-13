@@ -121,7 +121,7 @@ class CardUpdatesMixin:
                 _text("reason", reason or "", cap=500, key=key), now,
                 lambda project: self._may_write_for(principal, project),
                 run=identity, projected=True, run_ord=run_ord)
-        return self._run(principal, "set_state", key, apply)
+        return self._run(principal, "project_state", key, apply)
 
     def set_state(self, principal, key, state, reason="", run=None, new_run=False,
                   hand_back=False):

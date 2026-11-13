@@ -22,7 +22,8 @@ class ExecMixin:
             return
         # A worker-recorded owner has no proven history order yet. Never let
         # an unrelated/older history retire it just because its watermark lags.
-        holder = item["exec_principal"] if same else (item["delegate"] or item["claimed_by"])
+        holder = item["exec_principal"] if same else (
+            item["delegate"] or item["claimed_by"] or item["exec_principal"])
         if not same and item["exec_run_id"] is not None:
             mark = conn.execute(
                 "SELECT run_id, run_ord FROM projector_watermark WHERE workflow_id=?",

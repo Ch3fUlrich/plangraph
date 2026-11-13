@@ -117,7 +117,8 @@ def test_model_field_order_follows_the_spec():
         "workflow_id", "run_id", "activity_id", "attempt", "scheduled_event_id",
         "closed_event_id", "plan_key", "exit_class", "harness", "model", "combo", "class_",
         "started_at", "ended_at", "tokens_in", "tokens_out", "cost"]
-    assert names(StateRec) == ["workflow_id", "run_id", "event_id", "plan_key", "state", "reason"]
+    assert names(StateRec) == ["workflow_id", "run_id", "event_id", "plan_key", "state", "reason", "attempt"]
+    assert StateRec("wf", "r1", 3, "p:A", "running", None).attempt == 1
     assert names(RunProjection) == ["workflow_id", "run_id", "plan_key", "status", "start_time",
                                     "last_event_id", "attempts", "states", "outcome",
                                     "next_run_id", "shape_issues"]

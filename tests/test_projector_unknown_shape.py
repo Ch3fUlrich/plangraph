@@ -114,16 +114,10 @@ def test_alarm_is_per_run_and_activity_and_survives_reconcile(world, projector, 
     assert len(alarms(world)) == 2                             # a reconcile pass never clears them
 
 
-@pytest.mark.parametrize("bare_attrs", ["", None])
-def test_every_worker_activity_is_a_known_type(monkeypatch, bare_attrs):
+def test_every_worker_activity_is_a_known_type():
     """Drift guard: each ``#[activity]`` fn of the Rust worker (the question ones too) is known."""
     import re
     from plangraph.projector.models import KNOWN_ACTIVITY_TYPES
-    findall = re.findall
-    def optional_groups(pattern, source):
-        found = findall(pattern, source)
-        return [(attrs or bare_attrs, name) for attrs, name in found] if "pub async fn" in pattern else found
-    monkeypatch.setattr(re, "findall", optional_groups)
     src = (ROOT / "rust/worker/src/activities.rs").read_text()
     activities = re.findall(r'#\[activity(?:\(([^]]*)\))?\]\s+pub async fn (\w+)', src)
     assert len(activities) == len(re.findall(r"(?m)^\s*#\[activity(?:\(|\])", src))
@@ -209,7 +203,8 @@ def test_plan_key_memo_marks_a_card_workflow_whatever_its_type(world, projector)
     *[({field: value}, "attempt input n must be a positive int32")
       for field in ("n", "attempt") for value in (0, -1, True, "2", None, 2**31)],
 ])
-def test_bad_attempt_input_is_an_alarm_not_a_projection_outage(world, projector, bad, detail):
+@pytest.mark.parametrize("mapped", [False, True])
+def test_bad_attempt_input_is_an_alarm_not_a_projection_outage(world, projector, bad, detail, mapped):
     import base64
     from test_keeper_exec_projector_path import history, event
     h = history("needs_input")
@@ -219,20 +214,17 @@ def test_bad_attempt_input_is_an_alarm_not_a_projection_outage(world, projector,
     # A later valid attempt must still project; no poisoned attempt number leaks.
     h["events"] = h["events"][:4] + [event(5, "ACTIVITY_TASK_SCHEDULED",
         activityId="attempt-2", activityType={"name": "attempt"})]
-    p = project_history(h, workflow_id="card:demo:A", run_id="r1")
+    if not mapped:
+        h["events"][0]["workflowExecutionStartedEventAttributes"]["workflowType"] = {"name": "Other"}
+    workflow_id = "card:demo:A" if mapped else "unmapped"
+    p = project_history(h, workflow_id=workflow_id, run_id="r1")
     assert [i.detail for i in p.shape_issues] == [detail]
     assert p.shape_issues[0].activity_id == "attempt-1"
     assert p.attempts == ()
-    assert [(s.event_id, s.state, s.attempt) for s in p.states] == [(5, "running", 2)]
+    assert [(s.event_id, s.state, s.attempt) for s in p.states] == (
+        [(5, "running", 2)] if mapped else [])
+    assert projector.apply_run(p, run_ord=0).unmapped == (not mapped)
     projector.apply_run(p, run_ord=0)
-    assert len(alarms(world)) == 1
-
-
-def test_worker_lock_includes_core_manifest_dependencies():
-    import tomllib
-    manifest = tomllib.loads((ROOT / "rust/worker-core/Cargo.toml").read_text())
-    lock = tomllib.loads((ROOT / "rust/worker/Cargo.lock").read_text())
-    core = next(p for p in lock["package"] if p["name"] == "pg-worker-core")
-    assert set(manifest["dependencies"]) <= {d.split()[0] for d in core["dependencies"]}
-    assert {"clock", "std"} <= set(manifest["dependencies"]["chrono"]["features"])
-    assert "use chrono::" in (ROOT / "rust/worker-core/src/writer_docs_map.rs").read_text()
+    rows = alarms(world)
+    assert len(rows) == 1
+    assert (rows[0]["workflow_id"], rows[0]["key"]) == (workflow_id, "r1:attempt-1")

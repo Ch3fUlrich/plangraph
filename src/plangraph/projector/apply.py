@@ -144,7 +144,7 @@ class Projector:
             return False
         if (run_ord, rec.event_id) <= mark:
             result.states_stale += 1
-        elif state not in SETTABLE_STATES and state != "claimed":
+        elif rec.state not in SETTABLE_STATES and rec.state != "claimed":
             result.states_skipped_state += 1
         else:
             try:
@@ -156,11 +156,14 @@ class Projector:
                 # back move the state machine refuses on an OWNED card -- the
                 # card keeps the state its own run left it in, so the stale
                 # event is skipped rather than fatal (and still marked).
+                # ``exec_stale`` is retried without a ledger/watermark write.
                 if exc.code not in ("bad_state", "locked", "bad_transition", "exec_stale"):
                     raise
                 result.states_skipped_state += 1
+                if exc.code == "exec_stale":
+                    return False  # Ordering may become provable after the owner is projected.
             else:
-                if state == "claimed" or rec.state == "claimed":
+                if rec.state == "claimed":
                     result.states_skipped_state += 1
                 elif out["changed"]:
                     result.states_written += 1
@@ -222,7 +225,7 @@ class Projector:
         mark = self._watermark(proj.workflow_id)
         for rec in sorted(proj.states, key=lambda s: s.event_id):
             complete &= self._apply_state(rec, run_ord, mark, result)
-        if complete:                       # a missing item keeps the run re-appliable
+        if complete:                       # missing items/unproven owners keep the run re-appliable
             self._advance_watermark(proj, run_ord)
         return result
 

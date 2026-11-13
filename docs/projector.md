@@ -113,13 +113,15 @@ Tables (migration 3, `ddl.py`, PG and SQLite variants, created only through the 
 * `projector_alarms(id, kind, workflow_id, key, detail, raised_at, cleared_at)`; open = `cleared_at IS NULL`.
 
 Writes go through the keeper `Store` (`record_attempt`, system-only `project_state`), never raw SQL on keeper tables. State writes carry `(workflow_id, run_id, attempt)` from history; the Rust scheduled input carries the same identity behind `projector-run-ids-v1` for replay compatibility. The card attempt is input `attempt`/`n` (legacy fallback: scheduled-attempt ordinal), never the activity retry count. Claim state is preserved while ownership is recorded, so a stale worker arriving before the live worker gets `exec_stale`. Newer projected runs retire prior owners; old watermark events and retired runs cannot reacquire ownership.
-Supersession requires a watermark for the current owner and a strictly greater `run_ord`; an owner recorded by a worker but not yet projected cannot be displaced by an unordered history. A `claimed` projection records ownership only. Mismatched attempt identities and invalid attempt numbers raise an `unknown_shape` alarm and skip that activity, not the workflow.
+Supersession requires a watermark for the current owner and a strictly greater `run_ord`; an owner recorded by a worker but not yet projected cannot be displaced by an unordered history. An `exec_stale` refusal leaves the state unmarked and the watermark unchanged, allowing re-apply after the owner's order is known. Supersession preserves the previous worker principal when there is no claim or delegate. A `claimed` projection records ownership only. Projection audit rows use `project_state`, not `set_state`. Mismatched attempt identities and invalid attempt numbers raise an `unknown_shape` alarm even without a plan key and skip that activity, not the workflow.
 * Attempt `n` = next number for the key in history order, taken from `projector_applied` order; row fields `workflow_id`,
   `run_id`, `log_ref = "temporal:<activity_id>:<attempt>"`. Crash window (attempt row written, applied row not): on `Refused
   conflict` for that n, if the existing row has the same workflow_id/run_id/log_ref, just insert the applied row.
 * State: apply a StateRec only if its (run_ord, event_id) is greater than the stored watermark for the workflow (forward only),
-  only if the item exists and its current state is in `SETTABLE_STATES`; else record it applied with no keeper write and count
-  `skipped_state`. Terminal (`parked`, `failed`) states are not overwritten by a later `running` from an older run.
+  only if the item exists and the target is in `SETTABLE_STATES` or `claimed`; keeper-owned states cannot be overwritten.
+  Unsupported targets and keeper refusals other than `exec_stale` count as `skipped_state` and are marked applied.
+  A non-claim projection preserving a claimed item's state counts as `states_existing`.
+  Terminal (`parked`, `failed`) states are not overwritten by a later `running` from an older run.
 * Watermark row updated after each run is fully applied.
 * `rebuild`: re-run every workflow from history in (start_time, workflow_id) order. On an existing database it is a no-op
   (idempotent); on a fresh keeper it yields attempts rows equal (ignoring `id`) and the same `projector_applied` set.
@@ -145,7 +147,7 @@ Supersession requires a watermark for the current owner and a strictly greater `
 
 ## Tests
 
-The worker lock's `chrono`/clock dependencies are required by the existing `rust/worker-core/Cargo.toml` (writer docs-map dates and turn-budget transcript timestamps), not by projector identity inputs. `test_worker_lock_includes_core_manifest_dependencies` pins this manifest/lock relationship; removing those entries makes locked Cargo resolution stale.
+The worker lock's `chrono`/clock dependencies are required by the existing `rust/worker-core/Cargo.toml`, not by projector identity inputs. With `origin/main`'s worker lock, both `cargo metadata --locked --manifest-path worker/Cargo.toml` and `cargo build --locked --manifest-path worker/Cargo.toml -p pg-worker --tests` (from `rust/`) fail: `cannot update the lock file .../rust/worker/Cargo.lock because --locked was passed to prevent this`. The root workspace's `cargo metadata --locked` succeeds but does not cover the standalone worker. The required worker lock entries are retained without unrelated version updates; their manifest conformance test lives separately in `tests/test_worker_lock.py`.
 
 Hermetic: recorded history fixtures under `tests/fixtures/temporal/` (recorded once from a local dev server by
 `tests/projector_record.py`), parser tests, apply/idempotency/forward-only/rebuild/reconciler tests on SQLite and, when

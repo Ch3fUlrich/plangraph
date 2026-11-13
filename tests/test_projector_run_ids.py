@@ -162,3 +162,46 @@ def test_projected_supersession_keeps_claim_and_principal_consistent(world):
     world.store.worker_alarm(world.p("workerA"), {
         "card": "demo:A", "reason": "live", **identity()})
     assert world.store.verify_integrity() == []
+
+
+def test_refused_r3_retries_after_worker_recorded_r2_is_projected(world):
+    to_claimed(world, "demo:A", "workerA")
+    world.store.worker_park(world.p("workerA"), {
+        "card": "demo:A", "exit_class": "needs_input", **identity()})
+    before = dict(world.store._item("demo:A"))
+    assert before["claimed_by"] is None and before["delegate"] is None
+    assert project(world, "R3", ordinal=2).states_skipped_state == 2
+    assert dict(world.store._item("demo:A")) == before
+    assert world.conn.execute("SELECT 1 FROM projector_watermark").fetchone() is None
+    assert world.conn.execute(
+        "SELECT 1 FROM projector_applied WHERE run_id='R3' AND kind='state'").fetchone() is None
+    project(world, "R2", ordinal=1)
+    assert project(world, "R3", ordinal=2).states_written == 2
+    item = world.store._item("demo:A")
+    assert (item["exec_run_id"], item["exec_principal"]) == ("R3", "workerA")
+    world.store.worker_alarm(world.p("workerA"), {
+        "card": "demo:A", "reason": "live", **identity("R3")})
+    with pytest.raises(Refused) as exc:
+        world.store.worker_alarm(world.p("workerB"), {
+            "card": "demo:A", "reason": "wrong worker", **identity("R3")})
+    assert exc.value.code == "forbidden"
+    assert world.store.verify_integrity() == []
+
+
+@pytest.mark.parametrize("target", ["done", "cancelled", "in_review", "invalid"])
+def test_nonsettable_projection_is_skipped_without_validation_outage(world, target):
+    from dataclasses import replace
+    p = project_history(history("ok"), workflow_id="card:demo:A", run_id="R2")
+    p = replace(p, states=(replace(p.states[0], state=target),))
+    before = dict(world.store._item("demo:A"))
+    result = Projector(world.store, world.p("system")).apply_run(p, run_ord=1)
+    assert (result.states_skipped_state, result.states_written) == (1, 0)
+    assert dict(world.store._item("demo:A")) == before
+
+
+def test_projection_has_distinct_audit_verb(world):
+    project(world)
+    rows = world.conn.execute(
+        "SELECT action FROM audit_log WHERE actor='system' AND key='demo:A'").fetchall()
+    verbs = [row["action"] for row in rows]
+    assert verbs.count("project_state") == 2 and "set_state" not in verbs

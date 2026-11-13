@@ -145,7 +145,7 @@ def project_history(history: dict, *, workflow_id: str, run_id: str) -> RunProje
                       **_dict(memo.get("fields"))}
             started = {**started, "memo": {**_dict(started.get("memo")), "fields": fields}}
     plan_key = _plan_key(started, workflow_id)
-    card = _is_card(started)       # an unrelated workflow in the namespace never raises shape alarms
+    card = _is_card(started)       # Scope unknown activity/result checks to the Card contract.
 
     acts: dict[int, dict] = {}
     open_acts: set[int] = set()
@@ -178,9 +178,8 @@ def project_history(history: dict, *, workflow_id: str, run_id: str) -> RunProje
                 elif type(number) is not int or not 1 <= number <= 2**31 - 1:
                     problem = "attempt input n must be a positive int32"
                 if problem:
-                    if card:
-                        issues.append(ShapeIssue(workflow_id, run_id,
-                                                str(attrs.get("activityId", "")), problem))
+                    issues.append(ShapeIssue(workflow_id, run_id,
+                                             str(attrs.get("activityId", "")), problem))
                     continue
                 attempt_no = number
                 acts[eid] = {"activity_id": str(attrs.get("activityId", "")), "attempt": 1,

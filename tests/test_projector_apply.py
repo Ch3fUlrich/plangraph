@@ -178,7 +178,8 @@ def test_items_the_keeper_owns_are_never_overwritten(world, projector, to):
     to(world, KEY)
     held = item_state(world)
     res = projector.apply_run(proj(states=[state(3, "running")]), run_ord=0)
-    assert (res.states_skipped_state, res.states_written) == (1, 0)
+    assert (res.states_skipped_state, res.states_written, res.states_existing) == (
+        (0, 0, 1) if to is to_claimed else (1, 0, 0))
     assert item_state(world) == held
     assert projector.apply_run(proj(states=[state(3, "running")]), run_ord=0).states_existing == 1
 

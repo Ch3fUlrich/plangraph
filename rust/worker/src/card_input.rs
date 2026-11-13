@@ -58,10 +58,23 @@ pub(crate) fn projector_input(
     ctx: &temporalio_sdk::WorkflowContext<crate::workflow::Card>,
     legacy: crate::attempt::AttemptInput,
 ) -> ProjectorInput {
-    let enabled = ctx.patched("projector-run-ids-v1");
+    projector_input_enabled(
+        ctx.patched("projector-run-ids-v1"),
+        legacy,
+        ctx.workflow_id(),
+        ctx.run_id(),
+    )
+}
+
+fn projector_input_enabled(
+    enabled: bool,
+    legacy: crate::attempt::AttemptInput,
+    workflow_id: &str,
+    run_id: &str,
+) -> ProjectorInput {
     ProjectorInput {
-        workflow_id: enabled.then(|| ctx.workflow_id().to_owned()),
-        run_id: enabled.then(|| ctx.run_id().to_owned()),
+        workflow_id: enabled.then(|| workflow_id.to_owned()),
+        run_id: enabled.then(|| run_id.to_owned()),
         attempt: enabled.then_some(legacy.n),
         legacy,
     }
@@ -80,9 +93,12 @@ mod tests {
         assert_eq!(input.workflow_id, None);
         assert_eq!(input.run_id, None);
         assert_eq!(input.attempt, None);
-        input.workflow_id = Some("card:demo:A".into());
-        input.run_id = Some("R2".into());
-        input.attempt = Some(input.n);
+        let disabled = projector_input_enabled(false, input.legacy.clone(), "card:demo:A", "R2");
+        assert_eq!(
+            serde_json::to_value(disabled).unwrap(),
+            serde_json::to_value(&input.legacy).unwrap()
+        );
+        input = projector_input_enabled(true, input.legacy, "card:demo:A", "R2");
         let value = serde_json::to_value(&input).unwrap();
         assert_eq!(value["workflow_id"], "card:demo:A");
         assert_eq!(value["run_id"], "R2");
