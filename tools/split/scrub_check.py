@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import math
 import re
 import subprocess
@@ -79,6 +80,7 @@ DEFAULTS = {
                          "example", "alice", "bob", "foo", "x"],
     "allow_ipv4_prefixes": ["127.", "0.0.0.0", "255.255.255.255",
                             "192.0.2.", "198.51.100.", "203.0.113."],
+    "allow_ipv6": ["::1/128", "2001:db8::/32"],
     "entropy_min": 4.0,
 }
 
@@ -167,6 +169,7 @@ def build_config(words_file=None, rules_files=(), allow=None, allow_value=None, 
     allow_entries += list(allow or [])
     value_entries += list(allow_value or [])
     cfg.update(over)
+    cfg["_allow_ipv6"] = [ipaddress.IPv6Network(value) for value in cfg["allow_ipv6"]]
     for e in allow_entries:
         bad = set(e.get("rules", [])) - set(RULES)
         if bad or "path" not in e:
@@ -215,6 +218,14 @@ def _ipv6_hits(line):
             + [m.group() for m in _IPV6_COMP.finditer(line) if re.search(r"\d", m.group())])
 
 
+def _ipv6_ok(value, cfg):
+    try:
+        address = ipaddress.IPv6Address(value.strip('[]'))
+    except ValueError:
+        return False
+    return any(address in network for network in cfg["_allow_ipv6"])
+
+
 def scan_line_values(line, cfg, find_shapes):
     """``{rule: [matched text, ...]}`` for one line; an empty list never happens.
 
@@ -225,7 +236,7 @@ def scan_line_values(line, cfg, find_shapes):
     found = {
         "hostname": hosts,
         "ipv4": [m.group() for m in _IPV4.finditer(line) if not _ip_ok(m, cfg)],
-        "ipv6": _ipv6_hits(line),
+        "ipv6": [value for value in _ipv6_hits(line) if not _ipv6_ok(value, cfg)],
         "email": [m.group() for m in _EMAIL.finditer(line) if not _email_ok(m, cfg)],
         "token-shape": [m.group() for p in _TOKENS for m in p.finditer(line)],
         "high-entropy": _entropy_hits(line, cfg),

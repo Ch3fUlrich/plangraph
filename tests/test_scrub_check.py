@@ -20,6 +20,17 @@ IP_B = ".".join(["10", "9", "8", "7"])
 HOME = "/ho" + "me/" + "zol" + "tan"
 
 
+@pytest.mark.parametrize('address', ['::1', '[::1]', '0:0:0:0:0:0:0:1',
+                                     '2001:db8::1', '2001:DB8:ffff::abcd'])
+def test_ipv6_safe_ranges(address):
+    assert 'ipv6' not in sc.scan_line_values(address, sc.build_config(), lambda _: [])
+
+
+def test_ipv6_global_still_refused():
+    address = '2606:4700' + ':' * 2 + '1111'
+    assert 'ipv6' in sc.scan_line_values(address, sc.build_config(), lambda _: [])
+
+
 def sha(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 

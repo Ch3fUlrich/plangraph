@@ -345,3 +345,7 @@ format, clippy and test with their own `--manifest-path`.
 `ci_commit_gate.py package-rules` exports the writer package contract and trailer
 patterns from the gate authority. The Rust `pg-writer-package` renderer consumes
 that contract; its check operation refuses completion until branch policy passes.
+
+Public scrub permits IPv6 loopback (`::1`) and the documentation network
+`2001:db8::/32`, parsed as addresses rather than string prefixes. Other IPv6
+addresses remain subject to the public scrub rule.

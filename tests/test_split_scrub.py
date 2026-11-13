@@ -164,12 +164,13 @@ def test_private_word_in_file_name_is_never_printed(tmp_path, capsys):
 
 def test_ipv6_compressed_forms_detected_times_not(tmp_path):
     cc, dot = ":" * 2, "."
-    for ok in ("fe80" + cc + "1", "2001:db8" + cc + "1", cc + "ffff:" + dot.join("1234"),
-               "addr [" + cc + "1] up", "fe80" + cc, ":".join("12345678")):
+    for ok in ("fe80" + cc + "1", "2001:db9" + cc + "1", cc + "ffff:" + dot.join("1234"),
+               "addr [fe80" + cc + "2] up", "fe80" + cc, ":".join("12345678")):
         assert "ipv6" in _hits(tmp_path, "x = " + ok), ok
     for clean in ("at 12:34:56 today", "a[" + cc + "2]", "a[" + cc + "1]", "std" + cc + "vector",
                   "db" + cc + "add", "Foo" + cc + "bar",
-                  "x = y[1:2]", "ts 2026-10-02T12:34:56"):
+                  "x = y[1:2]", "ts 2026-10-02T12:34:56", "addr [" + cc + "1] up",
+                  "2001:db8" + cc + "1"):
         assert "ipv6" not in _hits(tmp_path, clean), clean
 
 
