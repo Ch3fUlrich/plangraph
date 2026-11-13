@@ -34,7 +34,7 @@ def test_review_lift_and_deferrals_are_documented():
 
 
 @pytest.mark.parametrize("measured", [False, True])
-def test_gpt_review_lists_all_four_free_families_before_every_costlier_leg(measured):
+def test_gpt_review_lists_big_pickle_free_leg_before_every_costlier_leg(measured):
     # Use the real policy, not the suite's neutral policy or an amended leg table.
     benchmark = {leg.id: {"aa_intelligence": 1 if leg.tier == "free" else 100,
                          "cost_per_task_usd": 0, "pool_burn_weight": 0}
@@ -44,6 +44,7 @@ def test_gpt_review_lists_all_four_free_families_before_every_costlier_leg(measu
                       leg_reader=clear_reader, benchmark=benchmark)
     assert plan.error is None
     table = {leg.id: leg for leg in plan.legs}
+    assert DEFERRED.isdisjoint(table)
     assert FREE_REVIEW.keys() <= table.keys()
     for key, (model, family) in FREE_REVIEW.items():
         assert (table[key].model, table[key].family, table[key].tier) == (model, family, "free")
@@ -92,7 +93,7 @@ def test_free_review_availability_and_family_fences_still_apply():
         assert "opencode-big-pickle" not in {leg.id for leg in plan.legs}
 
 
-def test_cli_gpt_review_lists_the_four_free_legs(tmp_path, monkeypatch, capsys):
+def test_cli_gpt_review_lists_big_pickle_and_omits_three_deferred_free_legs(tmp_path, monkeypatch, capsys):
     from functools import partial
     from plangraph.spawner import cli
     from plangraph.spawner.service import SpawnService

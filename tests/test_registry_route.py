@@ -164,10 +164,16 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
     assert "kimi" not in families
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
     if role == "review":
-        # D-5648 lifts Big Pickle; Go stays disabled (historical Zen fixture is active).
+        # without_d4196() explicitly activates Zen here; Go stays disabled.
         assert "deepseek" in families
         assert [leg.id for leg in plan.legs if leg.family == "glm"] == ["opencode-glm-5.3-flash-free", "opencode-big-pickle"]
         assert reasons["opencode-go-glm-5.2"].startswith("disabled:")
+        # The unmodified registrations agree with the live-policy sibling tests.
+        live = plan_spawn(CARD, role=role, writer_families=("mimo",), legs=DEFAULT_LEGS)
+        assert [leg.id for leg in live.legs if leg.family == "glm"] == ["opencode-big-pickle"]
+        live_reasons = {s["leg"]: s["reason"] for s in live.skipped}
+        assert live_reasons["opencode-glm-5.3-flash-free"].startswith("disabled: D-4196")
+        assert live_reasons["opencode-go-glm-5.2"].startswith("disabled: D-3605")
         return
     # implement/orchestrate stay banned/off (D-3552).
     assert not families & {"deepseek", "glm"}

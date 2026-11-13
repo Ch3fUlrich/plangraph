@@ -40,7 +40,7 @@ plan, saved `chosen_leg`, and attempt rows; omitted or explicit `null` effort
 stays `null`. All other validated leg fields are retained too. The per-run
 renderer declares cx effort models; see [SPAWNER.md](SPAWNER.md#card-driven-routing-core).
 
-## Free review legs (D-5743, slice 1)
+## Free review legs (D-5743, slice 1; scope D-5784)
 
 OPERATOR D-5648 (confirmed by D-5768) lifts the GLM review fence for
 `opencode/big-pickle`. The existing `review_allowed_families` exception in
@@ -49,7 +49,7 @@ Other GLM registrations retain their permanent disables. Implement/orchestrate
 remain off, and paused-harness, no-verdict and writer-family fences still apply.
 Eligible free reviews precede subscription and paid legs with or without benchmarks.
 
-Deferred out of slice 1: `opencode-mimo-v2.6-flash-free`,
+Deferred to slice 2 by D-5784: `opencode-mimo-v2.6-flash-free`,
 `opencode-go-longcat-2.5-free`, and `console-openrouter-free`. No sourced benchmark
 rows or independent harness/window/request-limit/tool-mode/note evidence exist
 in the repository for these paths. Their registrations and positive routing
@@ -65,7 +65,20 @@ tags and secret/auth/gateway/site-data paths reject anything other than explicit
 The only runtime reader of `Leg.trains_on_data` in `src` is `route_card`;
 `plan_spawn` uses that same fail-closed check. The strict benchmark contract,
 seed, frozen ceiling and pending list are unchanged. Offline tests do not prove
-serving availability or live verdicts (slice 4). Historical test names are kept.
+serving availability or live verdicts (slice 4). Other historical test names are kept.
+
+`test_gpt_review_lists_big_pickle_free_leg_before_every_costlier_leg` checks
+Big Pickle's free-tier ordering with and without measurements and explicitly
+excludes all three deferred legs from the route.
+`test_cli_gpt_review_lists_big_pickle_and_omits_three_deferred_free_legs` checks
+the same ordering and exclusions in CLI route JSON.
+The registry test's `without_d4196()` fixture deliberately reactivates the old
+Zen GLM leg; its historical expectation is correct only for that fixture.
+`test_route_skips_banned_and_off_families` also checks unmodified `DEFAULT_LEGS`:
+only Big Pickle is offered for GLM, while Zen/Go report D-4196/D-3605 disables,
+matching the live-policy siblings. Before this clarification, all four files
+(`test_review_free_legs`, `test_registry_route`, `test_review_legs_d3552`, and
+`test_route_policy_review_choice`) passed together: `70 passed in 19.01s`.
 
 ## Replan-0438 CI reconciliation
 
