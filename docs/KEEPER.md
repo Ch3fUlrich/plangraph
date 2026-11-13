@@ -276,7 +276,7 @@ Origin-main `decision_ref` closes need no batch file; see [decision-close proof,
 meant for agents (`ready`, `show`, `alerts`) via `?fmt=text` (default text for CLI). The server also runs the reaper every 60 s and rewrites
 `plan.snapshot.json` (path from config) after every committed write. Config file (JSON, mode 600 checked): db path, snapshot path, repos
 {project: path} or {project: {path, ref, non_pr: true}}: router-owned `non_pr` opts into merge-commit-on-target-ref proof instead of a hosted PR association (for non-PR repositories); direct pushes remain refused, green CI is required (`ci: none` cannot use this proof), and principal, trailer, time and floor guards remain. Also runs_dir, decisions_file, ci per project (plus `forgejo_url` + `forgejo_token_file`
-for `forgejo:` values), bind, and positive-integer seconds `default_lease` (7200), `lease_warn_s` (900), `review_overdue_s` (14400). These three values now apply to the Store at daemon start; changing them requires a keeper restart. No config value that is a secret is ever printed.
+for `forgejo:` values), bind, and `default_lease` (7200), `lease_warn_s` (900), `review_overdue_s` (14400), each a JSON integer from 1 to 315360000 seconds. Applied to the daemon's Store at start; restart to change. Secret config values are never printed.
 
 ## CLI `pg`
 `pg ready [--project P] [--all] [-n 10]`, `show KEY`, `claim KEY [--lease 2h]`, `delegate KEY WORKER`, `heartbeat KEY`, `release KEY`,

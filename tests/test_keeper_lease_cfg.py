@@ -1,4 +1,6 @@
 """SU-LEASE-CFG: daemon construction applies loaded lease and alert settings."""
+from unittest.mock import Mock
+
 import pytest
 
 from keeper_util import seed, to_in_review
@@ -17,6 +19,27 @@ def configured_store(w, tmp_path):
         w.store = store
         return store
     return build
+
+
+def test_daemon_run_builds_store_through_make_store(tmp_path, monkeypatch):
+    cfg = config.load_config(write_config(tmp_path, {"default_lease": 600}))
+    conn, lock = Mock(), Mock()
+    marker = RuntimeError("store construction reached")
+    make_store = Mock(side_effect=marker)
+    monkeypatch.setattr(daemon.kdb, "lock_keeper", lambda *a, **kw: lock)
+    monkeypatch.setattr(daemon.kdb, "open_db", lambda *a, **kw: conn)
+    monkeypatch.setattr(daemon, "_make_store", make_store)
+    make_server = Mock(side_effect=AssertionError("server must not start"))
+    monkeypatch.setattr(daemon.api, "make_server", make_server)
+
+    with pytest.raises(RuntimeError, match="^store construction reached$") as exc:
+        daemon.run(cfg)
+
+    assert exc.value is marker
+    make_store.assert_called_once_with(conn, cfg)
+    make_server.assert_not_called()
+    conn.close.assert_called_once_with()
+    lock.release.assert_called_once_with()
 
 
 @pytest.mark.parametrize("data, seconds", [({"default_lease": 600}, 600), ({}, 7200)])

@@ -34,6 +34,8 @@ __all__ = ["Config", "ConfigError", "load_config", "verifier_context",
            "REQUIRED_MODE"]
 
 REQUIRED_MODE = 0o600
+# Ten years keeps lease date arithmetic far below year 9999.
+_MAX_LEASE_SECONDS = 315360000
 _DEFAULT_SNAPSHOT = "plan.snapshot.json"
 _DEFAULT_DB = "keeper.db"
 
@@ -114,8 +116,10 @@ class Config:
     @staticmethod
     def _positive_seconds(data, name, default) -> int:
         value = data.get(name, default)
-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            raise ConfigError(f"{name} must be a positive integer number of seconds")
+        if (isinstance(value, bool) or not isinstance(value, int)
+                or not 1 <= value <= _MAX_LEASE_SECONDS):
+            raise ConfigError(
+                f"{name} must be an integer number of seconds between 1 and {_MAX_LEASE_SECONDS}")
         return value
 
     @staticmethod
