@@ -99,6 +99,7 @@ the base `InlineDiffError` is not itself a context/bound error. Whole-prompt adm
 for oversized instructions/framing, both under the named `prompt_too_large`
 reason regardless of `PLANGRAPH_CONTEXT_STRICT`. Neither truncates;
 missing diff references, empty diffs and failed `git diff` calls fail explicitly.
+Tool-less review/judge seat prompt assembly requires matching nonempty inline material for requested files or fails with `toolless_needs_inline`, while `diff_ref` retains the existing inline-diff transport.
 
 In `opencode_answer.final_answer`, `allow_unfinished=True` accepts pending text
 with no finish frame or after `tool-calls`, unless an earlier finish blocked it.
