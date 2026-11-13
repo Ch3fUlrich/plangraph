@@ -26,15 +26,15 @@ def test_task_marker_never_books(tmp_path, stream, marker):
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize('stopped', [False, True])
-def test_failed_review_keeps_leg_not_banner(tmp_path, monkeypatch, stopped):
+@pytest.mark.parametrize('stopped,status', [(False, 'failed'), (True, 'failed'), (True, 'completed')])
+def test_failed_review_keeps_leg_not_banner(tmp_path, monkeypatch, stopped, status):
     from plangraph.spawner.service import SpawnService
     from plangraph.planner.legs import Leg
     from plangraph.planner.routing import SpawnPlan
     leg = Leg('sample', 'subscription', 'opencode', 'provider/model', 'synthetic', (), 1, False)
     runner = NS(_processes={}, _tasks={}, provider_responses={}, jobs={})
     async def spawn(**kw):
-        job = NS(job_id='sample', status='completed' if stopped else 'failed', exit_code=0 if stopped else 1,
+        job = NS(job_id='sample', status=status, exit_code=0 if status == 'completed' else 1,
                  stdout='VERDICT: CHANGES\nTEST_GAMING: NO\n',
                  stderr='> build · provider/model\nError: transport failed',
                  served_model=None, served_family=None, served_witness_reason=None, events=[])
@@ -50,8 +50,12 @@ def test_failed_review_keeps_leg_not_banner(tmp_path, monkeypatch, stopped):
     record = asyncio.run(service._spawn(card={'title': 'synthetic'}, role='review',
         wait_seconds=None, _plan=SpawnPlan((leg,), (), 'test', (), ())))
     assert record['chosen_leg'] is None
-    if stopped:
+    assert record['status'] == record['attempts'][0]['status'] == status
+    if stopped and status == 'failed':
         assert record['attempts'][0]['skip_reason'] == 'provider_stop'
+    if status == 'completed':
+        assert record['attempts'][0]['skip_reason'] is None
+        assert record.get('reason') is None
     if not stopped:
         assert record['reason'] == 'Error: transport failed'
     assert 'VERDICT: CHANGES' in record['attempts'][0]['stdout_tail']

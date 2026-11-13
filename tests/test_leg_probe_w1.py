@@ -79,10 +79,11 @@ def test_probe_writes_through_the_reader_store(tmp_path):
 
     store = LegStateStore(tmp_path / 'legs.sqlite')
     runner = SpawnerRunner(process_factory=factory)
-    result = asyncio.run(leg_probe.probe(runner, _leg(), timeout_s=.3, store=store))
+    result = asyncio.run(leg_probe.probe(runner, SimpleNamespace(model='gemini-3.8-flash', harness='agy'), timeout_s=.3, store=store))
     assert result['ok'] is False
-    assert store.leg_status('agy/model')['state'] == 'reprobe'
-    assert leg_state.leg_status('agy/model')['state'] == 'ok'
+    assert result['reason'] == 'timeout' and not result['infra']
+    assert store.leg_status('agy/gemini-3.8-flash')['state'] == 'reprobe'
+    assert leg_state.leg_status('agy/gemini-3.8-flash')['state'] == 'ok'
 
 
 def test_harness_limit_stderr_is_error_shaped_or_anchored():
@@ -141,6 +142,7 @@ def test_probe_isolates_git_config_and_hooks(tmp_path, monkeypatch):
     leg = SimpleNamespace(model='gemini-3.8-flash', harness='agy')
     result = asyncio.run(leg_probe.probe(runner, leg, timeout_s=20))
     assert result['ok'] is True, result
+    assert result['infra'] is False and result['reason'] == ''
 
 
 def test_probe_infra_failure_is_not_a_leg_failure(tmp_path, monkeypatch):
@@ -224,6 +226,7 @@ def test_timeout_mid_spawn_still_cancels_child():
     result = asyncio.run(leg_probe.probe(runner, _leg(), timeout_s=0.2))
     assert result['ok'] is False
     assert result['reason'] == 'timeout'
+    assert result['infra'] is False
     assert runner.cancelled == ['slow-spawn']
 
 
@@ -311,11 +314,12 @@ def test_before_launch_skips_a_limited_leg(tmp_path, monkeypatch):
 
 
 def test_probe_many_selection_errors():
+    from plangraph.routing_errors import ParameterRefused
     from plangraph.spawner.leg_probe import probe_many
-    with pytest.raises(ValueError) as nothing:
+    with pytest.raises(ParameterRefused) as nothing:
         asyncio.run(probe_many(None, (), False))
     assert str(nothing.value) == 'select --leg ID or --all-writers'
-    with pytest.raises(ValueError) as unknown:
+    with pytest.raises(ParameterRefused) as unknown:
         asyncio.run(probe_many(None, 'zz/nope', False))
     assert str(unknown.value) == 'unknown legs: zz/nope'
 
@@ -337,7 +341,10 @@ def test_probe_many_skips_a_limited_leg(tmp_path, monkeypatch):
         leg_reader = store
 
         async def spawn(self, **kwargs):
-            raise RuntimeError('spawn refused in tests')
+            return SimpleNamespace(job_id='probe', status='failed', exit_code=1)
+
+        async def cancel(self, job_id):
+            pass
 
     store.record_harness_limit('agy/zz-model-a',
                                'error: quota threshold (reset after 3h 12m 5s)', 'test')

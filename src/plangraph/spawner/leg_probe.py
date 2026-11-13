@@ -1,5 +1,7 @@
 """Bounded commit-task liveness checks, shared by dispatch, CLI and MCP."""
 import asyncio
+import json
+import logging
 import math
 import os
 import shutil
@@ -10,6 +12,7 @@ import tempfile
 import time
 
 from plangraph.routing_support import leg_state
+from plangraph.routing_errors import ParameterRefused
 
 PROMPT = 'Create a file ok.txt containing the single word ok, then git add it and git commit -m probe. Do nothing else.'
 
@@ -31,6 +34,60 @@ GIT_REDIRECT_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE',
 #: expressed as removals -- ``build_child_env`` drops a key whose extra_env
 #: value is None. Every harness child inherits this (D-3465).
 CHILD_ISOLATION = {**GIT_ISOLATION, **dict.fromkeys(GIT_REDIRECT_VARS)}
+LIVE_RUN_WRITE_WINDOW_S = 120
+
+
+def _run_logs(runner):
+    """Read stable running records/log identities only from the owning service."""
+    root = getattr(runner, 'state', None)
+    snapshots = {}
+    if root is None:
+        return snapshots
+    try:
+        paths = list((Path(root) / 'runs').glob('run-*/record.json'))
+    except OSError:
+        return snapshots
+    for path in paths:
+        try:
+            text = path.read_text(encoding='utf-8')
+            record = json.loads(text)
+            if record.get('status') != 'running':
+                continue
+            with path.with_name('live.log').open('rb') as stream:
+                log = os.fstat(stream.fileno())
+            if log != path.with_name('live.log').stat() or text != path.read_text(encoding='utf-8'):
+                continue  # replaced/removed log or concurrent record save: no serving claim
+            snapshots[path] = record, log
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return snapshots
+
+
+def _leg_serving(runner, leg, previous=None):
+    """Observe size growth across the probe; touching an old log is not growth."""
+    now = time.time()
+    for path, (record, log) in _run_logs(runner).items():
+        try:
+            current = record.get('chosen_leg') or record.get('leg')
+            if not current:
+                tried = {a['leg']['id'] if isinstance(a.get('leg'), dict) else a.get('leg')
+                         for a in record.get('attempts', ())}
+                current = next((l for l in record.get('plan', {}).get('legs', ()) if l['id'] not in tried), {})
+            matches = (current.get('model') == leg.model and current.get('harness') == leg.harness
+                       if isinstance(current, dict) else current == getattr(leg, 'id', None))
+            last_growth = log.st_mtime  # first observation of an append log
+            if previous is not None and path in previous:
+                old_record, old = previous[path]
+                if (log.st_dev, log.st_ino) != (old.st_dev, old.st_ino) or log.st_size < old.st_size:
+                    continue
+                last_growth = log.st_mtime if log.st_size > old.st_size else old.st_mtime
+                if log.st_size == old.st_size and record != old_record:
+                    continue
+            if matches and log.st_size > 0 and 0 <= now - last_growth <= LIVE_RUN_WRITE_WINDOW_S:
+                return True
+        except (TypeError, KeyError, AttributeError):
+            continue
+    return False
 
 
 def probe_env(base=None):
@@ -61,19 +118,21 @@ def caller_heads():
     return heads
 
 
-def seconds(name, default, value=None):
-    value = float(os.environ.get(name, default) if value is None else value)
-    if not math.isfinite(value) or value < 0:
-        raise ValueError('invalid ' + name)
+def seconds(name, default, value=None, *, positive=False, parameter=None):
+    label = parameter if value is not None and parameter else name
+    try:
+        value = float(os.environ.get(name, default) if value is None else value)
+    except (TypeError, ValueError):
+        raise ParameterRefused('invalid ' + label) from None
+    if not math.isfinite(value) or value < 0 or (positive and value == 0):
+        raise ParameterRefused('invalid ' + label)
     return value
 
 
 def key(leg):
     """One leg key for probe and quota bookkeeping (Q16/M8).
-
-    'agy/<model>' only for an agy leg's bare model; a model that already names
-    its provider is its own key.  Legs without a harness attribute (legacy
-    record rows) key on the model string alone, keeping historical rows stable.
+    Prefix only bare agy models; provider-qualified models are their own keys.
+    Legacy rows without a harness keep their historical model-only keys.
     """
     return ('agy/' + leg.model if getattr(leg, 'harness', None) == 'agy' and '/' not in leg.model
             else leg.model)
@@ -134,16 +193,12 @@ async def _await_completion(runner, job, deadline):
 
 
 async def probe(runner, leg, *, timeout_s=None, store=None):
-    """One real commit task in a disposable repo.
+    """One real commit task in a disposable repo; infra failures book no leg state.
 
-    Probe infrastructure failures (git/gpg/hooks in the temp repo) are reported
-    with ``infra=True`` and never recorded as leg failures.  After the run the
-    caller's cwd-repo HEAD must be unchanged: a moved HEAD means the writer
-    leaked out of the temp repo into the caller's repo (D-3465) and is
-    reported as ``ok=False`` with reason "probe leaked into caller repo" --
-    the caller's repo is never auto-reset.
+    D-3465: a moved caller HEAD reports ``ok=False``, "probe leaked into caller
+    repo"; the caller's repo is never auto-reset.
     """
-    timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout_s)
+    timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout_s, positive=True, parameter='timeout_s')
     state = store if store is not None else leg_state
     start = time.monotonic()
     # Missing executables describe this host, not the remote leg. Check each
@@ -153,8 +208,10 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
                     reason='host-not-ready: harness missing: ' + leg.harness,
                     infra=True, seconds=time.monotonic() - start)
     deadline = start + timeout
+    previous = await asyncio.to_thread(_run_logs, runner)
     root = tempfile.mkdtemp(prefix='plangraph-leg-probe-')
     job = None
+    stderr = ''
     spawn_task = None
     owned_ids = set()
 
@@ -193,8 +250,9 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
                 job = await asyncio.wait_for(asyncio.shield(spawn_task), max(deadline - time.monotonic(), 0))
             except asyncio.TimeoutError:
                 ok, reason = False, 'timeout'
-            except (ValueError, RuntimeError, OSError):
-                ok, reason = False, 'exit 1'
+            except (ValueError, RuntimeError, OSError) as exc:
+                ok, reason, infra = False, 'probe infra: spawn', True
+                stderr = getattr(exc, 'stderr', '') or ''
         if ok is None:
             try:
                 await _await_completion(runner, job, deadline)
@@ -215,12 +273,27 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
         if leaked:
             # Report the leak; NEVER auto-reset the caller's repo here.
             ok, reason, infra = False, 'probe leaked into caller repo', False
+        excerpt, serving = '', False
+        if not ok and not infra:
+            from .env_redact import redact_output, redact_env_values
+            diagnostic = job or next((j for jid, j in getattr(runner, 'jobs', {}).items() if jid in owned_ids), None)
+            stderr = getattr(diagnostic, 'stderr', '') or stderr
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode('utf-8', 'replace')
+            env = dict(os.environ)
+            env.update(getattr(runner, '_child_envs', {}).get(getattr(diagnostic, 'job_id', None), {}))
+            excerpt = ' '.join(leg_state._redact(redact_output(redact_env_values(stderr, env)), limit=None)[-400:].splitlines())
+            serving = await asyncio.to_thread(_leg_serving, runner, leg, previous)
         if not infra:
             if ok:
                 state.record_probe_pass(key(leg), caller='leg-probe')
             else:
-                state.record_probe_fail(key(leg), reason, caller='leg-probe')
-        return dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start)
+                state.record_probe_fail(key(leg), reason, caller='leg-probe', serving=serving, stderr_excerpt=excerpt)
+        reason += ': ' + excerpt if excerpt and not leaked else ''
+        result = dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start, stderr_excerpt=excerpt)
+        if serving:
+            result['state'] = 'probe_failed_leg_serving'
+        return result
     finally:
         from .probe_cleanup import cleanup
         cleanup_task = asyncio.create_task(cleanup(runner, spawn_task, job, root, owned_ids))
@@ -232,58 +305,79 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
                 continue
         cleanup_task.result()
 
-
 _INFLIGHT = {}
 
-
 async def before_launch(runner, leg, role, dry_run):
+    from .target import quota_paused
+    from .env_redact import redact_output, redact_env_values
+    root = (getattr(runner, 'state', None) or getattr(runner, '_state', None)
+            or getattr(runner, 'state_root', None))
+    if quota_paused(root, role, leg):
+        return 'quota pause'
     if dry_run:
         return None
+    ttl = seconds('PLANGRAPH_LEG_PROBE_TTL_S', 1800)
+    if ttl and role in ('implement', 'fix'):
+        seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, positive=True)
     state = _store_for(runner)
     adapter = state if getattr(state, 'enabled', False) else None
     state = adapter.store if adapter else state
-
-    def admission():
+    root = root or getattr(state, 'state_root', None)
+    if not root and (path := getattr(state, 'path', None)):
+        root = Path(path).parent
+    if quota_paused(root, role, leg):
+        return 'quota pause'
+    def admission(retry=True, probe_ok=False):
         if adapter:
-            status = adapter.leg_status(key(leg), account=getattr(leg, 'account', None),
-                                        combo=getattr(leg, 'combo', None))
+            status = adapter.leg_status(key(leg), account=getattr(leg, 'account', None), combo=getattr(leg, 'combo', None))
+            reason = status.get('reason') or status['state']
+            if reason.startswith('leg_state_snapshot_error:'):
+                logging.getLogger(__name__).warning('%s: %s', key(leg), redact_output(redact_env_values(reason, os.environ)))
+                if retry:
+                    adapter._at = None
+                    return admission(False, probe_ok)
+                return None if probe_ok else reason
             if status['state'] != 'ok':
-                return status.get('reason', status['state'])
+                return 'leg_state_snapshot_error' if reason.strip().lower() == 'unknown' else reason
         return None
-    # D-3685: a leg booked limited is known-unusable until its reset. Skip it
-    # before any freshness or probe logic -- every role, TTL 0 included --
-    # without a probe run or a probe row; a newer success lifts the booking
-    # and leg_status then says ok again.
-    status = state.leg_status(key(leg))
-    if status.get('state') == 'limited':
-        return 'limited until ' + reset_iso((status.get('evidence') or {}).get('reset_at'))
-    ttl = seconds('PLANGRAPH_LEG_PROBE_TTL_S', 1800)
-    if not ttl or role not in ('implement', 'fix'):
-        return admission()
-    ts = state.last_probe_ts(key(leg))  # successes only: a failed probe is not fresh evidence
+    def limit():  # D-3685: booked provider limits win before and after probes.
+        if (status := state.leg_status(key(leg))).get('state') == 'limited':
+            return 'limited until ' + reset_iso((status.get('evidence') or {}).get('reset_at'))
+    if booked := limit():
+        return booked
+    skip = admission()
+    snapshot_error = (skip or '').startswith('leg_state_snapshot_error:')
+    if not snapshot_error and (not ttl or role not in ('implement', 'fix')):
+        return skip
+    ts = None if snapshot_error else state.last_probe_ts(key(leg))
     if ts is not None and time.time() - ts < ttl:
-        return admission()
-    # Single flight per leg: concurrent launches share one in-flight probe and
-    # its verdict, fresh failure included, instead of each paying a model run.
-    pending = _INFLIGHT.get(key(leg))
+        return skip  # Only ordinary admission may reuse pre-failure probe evidence.
+    pending = _INFLIGHT.get(key(leg))  # Share concurrent probes, failures included.
     if pending is None:
         pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state))
         pending.add_done_callback(lambda _: _INFLIGHT.pop(key(leg), None))
     result = await asyncio.shield(pending)
+    reason = result.get('reason')
+    if not reason or reason.strip().lower() == 'unknown':
+        reason = 'host_not_ready' if result.get('state') == 'host-not-ready' else 'leg_probe_failed'
+    if snapshot_error:
+        return limit() or (None if result['ok'] else redact_output(redact_env_values(skip, os.environ)) + '; probe: ' + reason)
     if result.get('state') == 'host-not-ready':
-        return result['reason']
-    return admission() if result['ok'] or result.get('infra') else 'down: ' + result['reason']
-
+        return reason
+    if adapter:
+        adapter._at = None  # Re-read after an ordinary probe.
+    return (limit() or admission(probe_ok=result['ok'])) if result['ok'] or result.get('infra') or result.get('state') == 'probe_failed_leg_serving' else 'down: ' + reason
 
 async def probe_many(runner, legs=(), all_writers=False, timeout=None):
     from plangraph.planner.legs import DEFAULT_LEGS, leg_active, spawnable_legs
     SPAWNABLE_LEGS = spawnable_legs()
     ids = {legs} if isinstance(legs, str) else set(legs or ())
     if not (ids or all_writers):
-        raise ValueError('select --leg ID or --all-writers')
+        raise ParameterRefused('select --leg ID or --all-writers')
     unknown = ids - {leg.id for leg in SPAWNABLE_LEGS}
     if unknown:
-        raise ValueError('unknown legs: ' + ', '.join(sorted(unknown)))
+        raise ParameterRefused('unknown legs: ' + ', '.join(sorted(unknown)))
+    timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout, positive=True, parameter='--timeout')
     # --all-writers means the routed writers; an explicit leg is probed only by name.
     selected = [leg for leg in SPAWNABLE_LEGS if leg_active(leg) and
                 (leg.id in ids or (all_writers and leg in DEFAULT_LEGS and

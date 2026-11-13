@@ -2,23 +2,92 @@
 //! diagnostic output is intentionally not ported; malformed rows are skipped.
 use crate::errors::ToolError;
 use pg_worker_core::run::record::{run_dir, valid_run_id};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::io::Read;
 use std::path::Path;
 
 const MAX_RECORD_BYTES: u64 = 8 * 1024 * 1024;
 
 pub(crate) fn valid_item(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 200
-        && value
+    let Some((project, id)) = value.split_once(':') else {
+        return false;
+    };
+    value.len() <= 200
+        && !project.is_empty()
+        && !id.is_empty()
+        && id.len() <= 180
+        && project
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        && id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+}
+
+pub(crate) fn annotate_item(base: &mut Value, card: &Value, events: &mut Vec<Value>) {
+    let item = [&card["item_key"], &card["item"]]
+        .into_iter()
+        .find(|v| !v.is_null() && v.as_str() != Some(""))
+        .cloned()
+        .or_else(|| {
+            std::env::var("PLANGRAPH_SPAWN_ITEM")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(Value::String)
+        });
+    base["item_key"] = match item {
+        Some(Value::String(s)) if valid_item(&s) => json!(s),
+        Some(_) => {
+            if base.get("warnings").is_none() {
+                base["warnings"] = json!([]);
+            }
+            base["warnings"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("invalid item_key; stored as null"));
+            Value::Null
+        }
+        None => Value::Null,
+    };
+    let missing = json!({"event":"seat_item_missing","level":"warning"});
+    if base["item_key"].is_null()
+        && matches!(base["role"].as_str(), Some("review" | "judge"))
+        && !events.contains(&missing)
+    {
+        events.push(missing);
+    }
 }
 
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn record_item_key_shape() {
+        for key in [
+            "plangraph:D-5047".to_owned(),
+            "plan.graph-1_test:D-5047.part_2:review".to_owned(),
+            format!("p:{}", "x".repeat(180)),
+            format!("{}:{}", "p".repeat(19), "x".repeat(180)),
+        ] {
+            assert!(valid_item(&key), "{key}");
+        }
+        for key in [
+            "garbage".to_owned(),
+            ":x".to_owned(),
+            "plangraph:".to_owned(),
+            "".to_owned(),
+            "bad/item".to_owned(),
+            "plangraph:D-5047\n".to_owned(),
+            "plangraph:D 5047".to_owned(),
+            "plängraph:D-5047".to_owned(),
+            "plangraph:D-５０４７".to_owned(),
+            format!("p:{}", "x".repeat(181)),
+            format!("{}:{}", "p".repeat(20), "x".repeat(180)),
+        ] {
+            assert!(!valid_item(&key), "{key}");
+        }
+    }
 
     #[test]
     fn guarded_open_rejects_fifo_without_blocking() {

@@ -14,5 +14,5 @@ def test_reconcile_leg_key_fixture():
         ('agy', False), ('agy', True), ('opencode', False)]
     for row in rows:
         leg = Leg(**row['leg'])
-        assert asdict(leg) == row['leg']
+        assert asdict(leg) == dict(row['leg'], expires=None)
         assert key(leg) == row['expected']

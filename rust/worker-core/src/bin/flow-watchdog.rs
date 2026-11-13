@@ -1,5 +1,7 @@
 #[path = "flow_watchdog_hosts/mod.rs"]
 mod hosts;
+#[path = "flow_watchdog_quiet/mod.rs"]
+mod quiet;
 #[path = "flow_watchdog_stuck/mod.rs"]
 mod stuck;
 include!("flow_watchdog_stuck/legacy_tests.rs");
@@ -7,7 +9,7 @@ include!("flow_watchdog_stuck/legacy_tests.rs");
 use serde::Deserialize;
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     path::Path,
     process::{Command, Stdio},
 };
@@ -17,6 +19,8 @@ struct Snapshot {
     hosts: Vec<hosts::Host>,
     #[serde(flatten)]
     stuck: stuck::Snapshot,
+    #[serde(flatten)]
+    session_activity: quiet::Reader,
     pace: f64,
     budget: f64,
     ci_failed: u64,
@@ -30,6 +34,18 @@ struct Snapshot {
     host_drift: bool,
     closes_recent: u64,
     closes_previous: u64,
+}
+struct Alert {
+    message: String,
+    active: String,
+}
+impl From<String> for Alert {
+    fn from(message: String) -> Self {
+        Self {
+            active: message.clone(),
+            message,
+        }
+    }
 }
 fn pace(s: &Snapshot) -> bool {
     s.pace > s.budget
@@ -100,6 +116,23 @@ fn deliver(variable: &str, event: &str) -> Result<bool, Box<dyn std::error::Erro
     written?;
     Ok(true)
 }
+fn budget_identity(line: &str) -> Option<(&str, &str)> {
+    let mut parts = line.split_whitespace();
+    (parts.next()? == "TURN-BUDGET").then_some((parts.next()?, parts.next()?))
+}
+fn pending_event(path: &Path) -> Option<serde_json::Value> {
+    const FILE_MAX: u64 = 1024 * 1024;
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(FILE_MAX + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > FILE_MAX {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 3 {
@@ -121,7 +154,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = Path::new(&args[2]);
     fs::create_dir_all(dir)?;
     let pending = dir.join("pending.json");
-    let messages = match &validated {
+    let mut messages = match &validated {
         Ok(s) => {
             let mut messages = s.stuck.messages();
             messages.extend(hosts::messages(&s.hosts));
@@ -129,25 +162,95 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !legacy.is_empty() {
                 messages.insert(0, legacy);
             }
-            messages
+            let mut alerts: Vec<Alert> = messages.into_iter().map(Alert::from).collect();
+            alerts.extend(s.session_activity.alerts());
+            alerts
         }
-        Err(_) => vec!["invalid snapshot".to_owned()],
+        Err(_) => vec![Alert::from("invalid snapshot".to_owned())],
     };
-    let active = messages.join("\n");
+    if let Some(state) = std::env::var_os("PLANGRAPH_TURN_BUDGET_STATE_DIR") {
+        let now = std::env::var("PLANGRAPH_TURN_BUDGET_NOW")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            });
+        messages.extend(
+            pg_worker_core::turn_budget::read_alerts(Path::new(&state), now)
+                .into_iter()
+                .map(Alert::from),
+        );
+    }
+    let previous = fs::read_to_string(dir.join("active")).unwrap_or_default();
+    let active = messages
+        .iter()
+        .map(|alert| alert.active.as_str())
+        // Validation failure is not an observed recovery for quiet sessions.
+        .chain(
+            previous
+                .lines()
+                .filter(|line| validated.is_err() && line.starts_with("busy-quiet ")),
+        )
+        .collect::<Vec<_>>()
+        .join("\n");
     let queue_path = dir.join("queue.json");
     let mut queue: Vec<serde_json::Value> = match fs::read(&queue_path) {
         Ok(bytes) => serde_json::from_slice(&bytes)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e.into()),
     };
-    let previous = fs::read_to_string(dir.join("active")).unwrap_or_default();
     if active != previous {
-        for message in &messages {
-            if previous.lines().any(|line| line == message) {
+        for alert in &messages {
+            let message = &alert.active;
+            if let Some(identity) = budget_identity(message) {
+                if queue.iter().any(|event| {
+                    event["active"].as_str().and_then(budget_identity) == Some(identity)
+                }) {
+                    // Compact any old count-keyed duplicates while preserving
+                    // the oldest event and its per-channel acknowledgements.
+                    let mut seen = false;
+                    queue.retain(|event| {
+                        if event["active"].as_str().and_then(budget_identity) != Some(identity) {
+                            return true;
+                        }
+                        !std::mem::replace(&mut seen, true)
+                    });
+                    let event = queue
+                        .iter_mut()
+                        .find(|event| {
+                            event["active"].as_str().and_then(budget_identity) == Some(identity)
+                        })
+                        .unwrap(); // retain preserves the first matching identity
+                    event["message"] = message.clone().into();
+                    event["active"] = message.clone().into();
+                    atomic(&queue_path, &serde_json::to_string(&queue)?)?;
+                    if let Some(mut event) = pending_event(&pending) {
+                        if event["active"].as_str().and_then(budget_identity) == Some(identity) {
+                            event["message"] = message.clone().into();
+                            event["active"] = message.clone().into();
+                            atomic(&pending, &event.to_string())?;
+                        }
+                    }
+                    continue;
+                }
+            }
+            if previous.lines().any(|line| {
+                line == message
+                    || (budget_identity(message).is_some()
+                        && budget_identity(line) == budget_identity(message))
+            }) {
                 continue;
             }
+            let line = if message.starts_with("TURN-BUDGET ") {
+                message.clone()
+            } else {
+                format!("FLOW-WATCHDOG: {}", alert.message)
+            };
             queue.push(serde_json::json!({"kind":"alert", "recipient":"routing",
-                "message":format!("FLOW-WATCHDOG: {message}"), "active":message}));
+                "message":line, "active":message}));
             atomic(&queue_path, &serde_json::to_string(&queue)?)?;
         }
         atomic(&dir.join("active"), &active)?;
@@ -160,6 +263,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             queue[i]["routing_done"] = true.into();
             atomic(&queue_path, &serde_json::to_string(&queue)?)?;
+            if let Some(mut event) = (i == 0).then(|| pending_event(&pending)).flatten() {
+                let identity = queue[i]["active"].as_str().and_then(budget_identity);
+                if identity.is_some()
+                    && event["active"].as_str().and_then(budget_identity) == identity
+                {
+                    event["routing_done"] = true.into();
+                    atomic(&pending, &event.to_string())?;
+                    atomic(&dir.join("routing.ok"), "ok")?;
+                }
+            }
         }
     }
     // Keep the pending head and the newest transitions; overflow is explicit.
@@ -185,7 +298,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 atomic(&dir.join("routing.ok"), "ok")?;
             }
         }
-        let event = fs::read_to_string(&pending)?;
+        // Preserve unreadable/corrupt pending state for recovery without stopping
+        // independent routing acknowledgements or sending malformed alert bytes.
+        let Some(parsed) = pending_event(&pending) else {
+            break;
+        };
+        let event = parsed.to_string();
         for (marker, variable) in [
             ("routing.ok", "PLANGRAPH_WATCHDOG_DELIVERY"),
             ("push.ok", "PLANGRAPH_FLOW_PUSH"),
@@ -206,4 +324,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     validated.map(|_| ())
+}
+
+#[cfg(test)]
+mod pending_tests {
+    use super::*;
+
+    #[test]
+    fn pending_json_is_bounded_and_oversized_bytes_are_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pending.json");
+        let at_cap = format!("\"{}\"", "x".repeat(1024 * 1024 - 2));
+        fs::write(&path, &at_cap).unwrap();
+        assert!(pending_event(&path).is_some());
+        let over_cap = format!("{at_cap} ");
+        fs::write(&path, &over_cap).unwrap();
+        assert!(pending_event(&path).is_none());
+        assert_eq!(fs::read_to_string(path).unwrap(), over_cap);
+    }
 }

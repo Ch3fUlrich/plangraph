@@ -1,10 +1,6 @@
 //! Replace secret-shaped substrings before text is persisted or replayed.
 //!
-//! Gate/check tails land in workflow history and can carry credentials that
-//! a child process echoed. Redaction runs BEFORE the line cut and the byte cap
-//! in [`redacted_tail`], so a cut can never leave half a secret behind — not
-//! even the tail half of a multi-line PEM block that straddles the cut — and
-//! the cap trims on a `char` boundary so the result is always valid UTF-8.
+//! Scrub before tail truncation so even multi-line secrets are withheld whole.
 
 use std::sync::OnceLock;
 
@@ -36,14 +32,14 @@ fn patterns() -> &'static [regex::Regex] {
             //     only, never CR/LF, so it never crosses a newline. Complete
             //     quoted values are preferred. Both they and the placeholder
             //     consume only a GLUED tail G = [^\s,;"'}\])&]* — directly
-            //     attached, stopping at whitespace, comma, semicolon, quotes,
-            //     `&`, or a closing delimiter — so the rule is idempotent.
+            //     attached (placeholders atomic), stopping at whitespace, comma,
+            //     semicolon, quotes, `&`, or a closing delimiter — so the rule is idempotent.
             //     An unquoted value may not start with `}`, `]`, `)`, or `&`
             //     after either separator. An unterminated quote falls back to
             //     the rest of the line (no closing delimiter semantics). A
             //     backslash before a line feed (or CRLF) continues the value
             //     onto the next line, quoted, unquoted, or unterminated.
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\][^\s,;"'}\])&]*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#,
+            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\](?:\[REDACTED\]|[^\s,;"'}\])&])*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#,
             // 4b. Same assignment rule for `=` only: after `=` an unquoted
             //     value may start with `}`, `]`, or `)` only when at least one
             //     more character follows before the next delimiter. A bare
@@ -70,24 +66,34 @@ fn patterns() -> &'static [regex::Regex] {
     })
 }
 
-/// Replace token-shaped secrets in `text` with `[REDACTED]`.
-///
-/// Patterns 1–2 handle multi-line PEM blocks and are applied first, to the
-/// whole text, as are the remaining patterns; wrapped joins run before pattern 5.
-/// Idempotent: running already-redacted text through again changes nothing.
+/// Replace secret-shaped text, including credential-name assignments.
 pub fn redact(text: &str) -> String {
+    redact_inner(text, true)
+}
+
+/// Spawner-read source only: omit credential-name assignments, not token rules.
+pub fn redact_source(text: &str) -> String {
+    redact_inner(text, false)
+}
+
+fn redact_inner(text: &str, assignments: bool) -> String {
     let rs = patterns();
     let out = rs[0].replace_all(text, REDACTED).into_owned();
     let out = rs[1].replace_all(&out, REDACTED).into_owned();
     let out = rs[2].replace_all(&out, "Bearer [REDACTED]").into_owned();
-    let out = rs[3].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
-    let out = rs[4].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
+    let out = if assignments {
+        let out = super::redact_wrapped::join_shielded_assignments(&out, &rs[3..5]);
+        let out = rs[3].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
+        rs[4].replace_all(&out, "$1$2$3[REDACTED]").into_owned()
+    } else {
+        out
+    };
     let out = super::redact_wrapped::redact_wrapped(&out);
+    let out = super::redact_tokens::redact_url_userinfo(&out);
     let out = rs[5].replace_all(&out, REDACTED).into_owned();
     let out = rs[6].replace_all(&out, REDACTED).into_owned();
     let out = rs[7].replace_all(&out, REDACTED).into_owned();
-    // 8. Long blobs — but only runs mixing digits and letters, so plain long
-    // words and letter-only paths survive.
+    // 8. Long blobs must mix digits and letters; plain words and paths survive.
     rs[8]
         .replace_all(&out, |m: &regex::Captures| {
             let t = m.get(0).unwrap().as_str();
@@ -119,12 +125,6 @@ pub fn cap_tail_bytes(s: &str, max_bytes: usize) -> String {
 /// The tail of `text` that may reach history: the WHOLE text redacted first,
 /// then the last `max_lines` lines, then capped to `max_bytes` bytes (keep the
 /// END, cut on a `char` boundary).
-///
-/// Redacting the whole text BEFORE the line cut is the point of this function:
-/// a multi-line secret (a PEM block) straddling the cut is replaced as a
-/// whole, so no cut can ever leave half of one behind. Redaction is
-/// idempotent, so a caller may run an already-redacted tail through here
-/// again to re-apply the caps.
 pub fn redacted_tail(text: &str, max_lines: usize, max_bytes: usize) -> String {
     let redacted = redact(text);
     let lines: Vec<&str> = redacted.lines().collect();

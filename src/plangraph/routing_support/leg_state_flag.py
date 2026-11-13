@@ -17,7 +17,7 @@ def default_reader():
     original = reader.leg_status
     def status(model, **scope):
         result = original(model, **scope)
-        if result.get('reason') in ('unknown', 'unreachable', 'stale'):
+        if result.get('reason') in ('unknown', 'unreachable', 'stale') or (result.get('reason') or '').startswith('leg_state_snapshot_error:'):
             return dict(reader.store.leg_status(model, **scope), reason=result['reason'])
         return result
     reader.leg_status = status
