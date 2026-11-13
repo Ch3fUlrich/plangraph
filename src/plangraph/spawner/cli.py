@@ -153,8 +153,12 @@ def main(argv=None):
     service = SpawnService(state=args.state)
     try:
         if args.verb == 'probe':
-            from .leg_probe import probe_many, reset_iso
-            result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout))
+            from .leg_probe import ParameterRefused, probe_many, reset_iso
+            try:
+                result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout))
+            except ParameterRefused as exc:
+                print(json.dumps(dict(status='refused', refusal='ParameterRefused', error=str(exc), exit_code=2)))
+                return 2
             if args.json:
                 print(json.dumps(result))
             else:
@@ -231,7 +235,7 @@ def main(argv=None):
                 service.state.mkdir(parents=True, exist_ok=True)
                 log_path = service.state / ('supervisor-' + uuid.uuid4().hex + '.stderr.log')
                 _prune_supervisor_logs(service.state)
-                bootstrap = '''import os, sys, threading
+                bootstrap = '''import os, pathlib, sys, threading
 from plangraph.spawner import cli as supervisor
 from plangraph.spawner.env_redact import redact_env_values
 from plangraph.routing_support.host_keys import redaction_env
@@ -239,9 +243,10 @@ from plangraph.routing_support.host_keys import redaction_env
 # bootstrap top, not per emitted line (D-2759).
 redact_base = redaction_env(os.environ)
 path = sys.argv[1]
-from pathlib import Path
+if sys.platform.startswith("linux"):
+    from plangraph.spawner.proc_kill import _stat
 try:
-    Path(path + ".pid").write_text(str(os.getpid()))
+    pathlib.Path(path + ".pid").write_text(str(os.getpid()))
 except OSError:
     pass
 read_fd, write_fd = os.pipe()
@@ -297,6 +302,7 @@ def service_with_log(*args, **kwargs):
     save = service._save
     def save_with_log(record):
         record["supervisor_stderr_path"] = path
+        record["supervisor_pid_start"] = (_stat(os.getpid()) or (None,) * 5)[4] if sys.platform.startswith("linux") else None
         return save(record)
     service._save = save_with_log
     return service

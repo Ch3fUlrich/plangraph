@@ -310,7 +310,12 @@ def orphaned(record, now):
         return None
     pid = None
     try:
-        pid = int(open(str(path) + '.pid').read())
+        with open(str(path) + '.pid') as stream:
+            pid = int(stream.read())
+        from .proc_kill import _stat
+        current = _stat(pid) if record.get('supervisor_pid_start') is not None else None
+        if current is not None and current[4] != record['supervisor_pid_start']:
+            raise ProcessLookupError   # pid belongs to a replacement, not this supervisor
         os.kill(pid, 0)
         return None
     except PermissionError:
