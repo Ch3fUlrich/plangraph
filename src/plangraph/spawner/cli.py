@@ -205,8 +205,8 @@ def main(argv=None):
                 no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
             from plangraph.settings import admit_review_scope
             try:
-                payload['card'] = args.card = admit_seat(args.card, args.role)
                 payload['role'] = args.role = 'review' if args.role == 'judge' else args.role
+                payload['card'] = args.card = admit_seat(args.card, args.role)
                 admit_review_scope(args.card, args.role, args.review_scope)
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role, card=args.card)

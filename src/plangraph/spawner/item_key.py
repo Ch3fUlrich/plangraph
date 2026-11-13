@@ -5,6 +5,8 @@ import subprocess
 
 from plangraph.routing_errors import SpawnRefused
 
+_TRAILER_WARNING = 'invalid item_key; replaced from Plan-Item trailer'
+
 
 def valid_item(value):
     return (isinstance(value, str) and len(value) <= 200
@@ -21,10 +23,22 @@ def annotate_item(record, card, *, inherit=False):
         record.setdefault('warnings', []).append('invalid item_key; stored as null')
         value = None
     record['item_key'] = value
+    if isinstance(card, dict) and card.get('_item_key_recovered') is True:
+        if _TRAILER_WARNING not in record.setdefault('warnings', []):
+            record['warnings'].append(_TRAILER_WARNING)
     if value is None and record.get('role') in ('review', 'judge'):
         event = dict(event='seat_item_missing', level='warning')
         if event not in record.setdefault('events', []):
             record['events'].append(event)
+
+
+def _git_failure(detail, stderr=''):
+    from .env_redact import redact_env_values, redact_output
+    from plangraph.routing_support.host_keys import redaction_env
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode('utf-8', errors='replace')
+    tail = ' '.join(redact_output(redact_env_values(stderr or '', redaction_env(os.environ))).split())[-240:]
+    return SpawnRefused(f'diff_ref git lookup failed ({detail})' + (': ' + tail if tail else ''))
 
 
 def _git(ref, *args, message=None):
@@ -32,10 +46,12 @@ def _git(ref, *args, message=None):
         result = subprocess.run(['git', '-C', ref['repo'], *args],
             **({'stdin': subprocess.DEVNULL} if message is None else {'input': message}),
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
-        raise SpawnRefused('diff_ref git lookup failed') from None
+    except subprocess.TimeoutExpired as exc:
+        raise _git_failure('timeout=10s', exc.stderr) from None
+    except OSError as exc:
+        raise _git_failure(f'oserror errno={exc.errno}') from None
     if result.returncode:
-        raise SpawnRefused('diff_ref git lookup failed')
+        raise _git_failure(f'exit={result.returncode}', result.stderr)
     return result.stdout.strip()
 
 
@@ -61,7 +77,7 @@ def admit_seat(card, role):
                     if line.partition(':')[0].lower() == 'plan-item'}
             if len(keys) == 1 and valid_item(next(iter(keys))):
                 value = keys.pop()
-                card = dict(card, item_key=value)
+                card = dict(card, item_key=value, _item_key_recovered=bool(identity.get('warnings')))
     if value is None:
         raise SpawnRefused('seat_item_missing: card needs item_key (or item)')
     return card

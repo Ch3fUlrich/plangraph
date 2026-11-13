@@ -154,8 +154,8 @@ class SeatSpawnMixin:
             card = options.get('card')
             from .item_key import admit_seat
             if options.get('role') in ('review', 'judge'):
-                card = options['card'] = await asyncio.to_thread(admit_seat, card, options['role'])
                 options['role'] = 'review'  # judge is a review seat, including routing/family fences
+                card = options['card'] = await asyncio.to_thread(admit_seat, card, options['role'])
                 if len(args) > 2:
                     args = (*args[:2], 'review', *args[3:])
                 else:

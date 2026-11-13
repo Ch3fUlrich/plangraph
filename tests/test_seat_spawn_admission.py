@@ -10,6 +10,7 @@ import pytest
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import SpawnPlan, SpawnRefused
 from plangraph.spawner import cli
+from plangraph.spawner.item_key import _git, admit_seat, annotate_item
 from plangraph.spawner.mcp import MCPSpawnerServer
 from plangraph.spawner.notify import FileInbox
 from plangraph.spawner.runner import spawn_service
@@ -56,6 +57,7 @@ def seat_setup(tmp_path, monkeypatch):
     ('equal_without_item', 'review', 'empty_diff: base equals head', None),
     ('equal_without_item', 'judge', 'empty_diff: base equals head', None),
     ('different', 'review', None, KEY),
+    ('different', 'judge', None, KEY),
     ('unresolved', 'review', 'diff_ref git lookup failed', KEY),
     ('unresolved', 'judge', 'diff_ref git lookup failed', KEY),
     ('unresolved_without_item', 'review', 'diff_ref git lookup failed', None),
@@ -141,8 +143,55 @@ def test_seat_spawn_prelaunch_identity_and_diff(
         assert admissions == []
         refused, = service.ps()['runs']
         assert refused['status'] == 'refused' and error in refused['error']
+        if 'unresolved' in case or 'missing_repo' in case:
+            assert 'exit=128' in refused['error'] and 'fatal:' in refused['error']
+        if role == 'judge':
+            assert refused['role'] == 'review'
     else:
         assert result['status'] == 'dry_run'
+        if role == 'judge':
+            assert result['role'] == 'review'
         assert result['item_key'] == expected
         assert service.result(result['run_id'])['item_key'] == expected
         assert len(runner.calls) == 1
+        if case == 'invalid_with_trailer':
+            assert 'invalid item_key; replaced from Plan-Item trailer' in result['warnings']
+
+
+@pytest.mark.parametrize('field', ['item_key', 'item'])
+def test_trailer_recovery_preserves_invalid_identity_warning(seat_setup, field):
+    repo, base, git = seat_setup
+    git('commit', '--allow-empty', '-qm', 'head\n\nPlan-Item: ' + KEY)
+    card = {field: 'invalid', 'diff_ref': dict(repo=str(repo), base=base, head='HEAD')}
+    original = dict(card)
+    admitted = admit_seat(card, 'review')
+    record = {'role': 'review'}
+    annotate_item(record, admitted)
+    assert card == original and admitted['item_key'] == record['item_key'] == KEY
+    assert record['warnings'] == ['invalid item_key; replaced from Plan-Item trailer']
+
+
+@pytest.mark.parametrize('failure', ['exit', 'timeout', 'oserror'])
+def test_admission_git_failure_detail_is_redacted(monkeypatch, failure):
+    from plangraph.spawner import item_key
+    secret, token = 'test-secret', 'ghp_' + 'a' * 36
+    monkeypatch.setenv('TEST_GIT_SECRET', secret)
+    stderr = ('noise\n' * 300 + secret + ' ' + token + '\nfatal: lookup detail').encode()
+    def fail(*args, **kwargs):
+        assert kwargs['timeout'] == 10
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired(['git', secret], 10, stderr=stderr)
+        if failure == 'oserror':
+            raise OSError(2, secret)
+        return subprocess.CompletedProcess(args[0], 128, '', stderr.decode())
+    monkeypatch.setattr(item_key.subprocess, 'run', fail)
+    with pytest.raises(SpawnRefused) as refused:
+        _git({'repo': '/repo'}, 'rev-parse', 'HEAD')
+    detail = str(refused.value)
+    assert detail.startswith('diff_ref git lookup failed') and len(detail) < 400
+    assert secret not in detail and token not in detail
+    if failure == 'oserror':
+        assert 'oserror errno=2' in detail
+    else:
+        assert ('exit=128' if failure == 'exit' else 'timeout=10s') in detail
+        assert 'fatal: lookup detail' in detail and '[REDACTED]' in detail
