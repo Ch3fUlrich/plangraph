@@ -159,30 +159,31 @@ pub fn evaluate(
 }
 
 pub fn main(args: &[String]) -> i32 {
-    let mut opts = std::collections::HashMap::new();
-    let mut iter = args.iter();
-    while let Some(k) = iter.next() {
-        if k == "-h" || k == "--help" {
-            println!("Require a merge GO row to name the current head and allowed session.\n\nusage: go-row-gate --go GO --head HEAD [--session SESSION] [--key KEY] [--log LOG] [--repo REPO]");
-            return 0;
-        }
-        if !["--go", "--head", "--session", "--key", "--log", "--repo"].contains(&k.as_str()) {
-            eprintln!("go-row-gate: error: unrecognized arguments: {k}");
-            return 2;
-        }
-        let Some(v) = iter.next() else {
-            eprintln!("go-row-gate: error: argument {k}: expected one argument");
-            return 2;
-        };
-        opts.insert(k.as_str(), v.as_str());
+    let opts = match crate::cli::options(
+        args,
+        &["--go", "--head", "--session", "--key", "--log", "--repo"],
+        &["--help", "-h"],
+    ) {
+        Ok(o) => o,
+        Err(e) => return crate::cli::error("go-row-gate", &e),
+    };
+    if opts.contains_key("--help") || opts.contains_key("-h") {
+        print!("{}", crate::cli::help("go-row-gate"));
+        return 0;
     }
     let (Some(go), Some(head)) = (opts.get("--go"), opts.get("--head")) else {
-        eprintln!("go-row-gate: error: the following arguments are required: --go, --head");
-        return 2;
+        let missing = ["--go", "--head"]
+            .into_iter()
+            .filter(|k| !opts.contains_key(*k))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return crate::cli::error(
+            "go-row-gate",
+            &format!("the following arguments are required: {missing}"),
+        );
     };
     if !re(r"^[0-9a-fA-F]{40}$").is_match(head) {
-        eprintln!("go-row-gate: error: --head must be exactly 40 hex characters");
-        return 2;
+        return crate::cli::error("go-row-gate", "--head must be exactly 40 hex characters");
     }
     let text = if let Some(log) = opts.get("--log") {
         match std::fs::read_to_string(log) {
@@ -230,8 +231,8 @@ pub fn main(args: &[String]) -> i32 {
         &text,
         go,
         head,
-        opts.get("--key").copied(),
-        opts.get("--session").copied(),
+        opts.get("--key").map(String::as_str),
+        opts.get("--session").map(String::as_str),
         |key| {
             let pgk = crate::merge_paths::lookup("pgk")
                 .map_err(|_| "keeper wrapper unavailable".to_owned())?;

@@ -1,0 +1,46 @@
+usage: resume-digest [-h] [--role ROLE]
+
+resume-digest — a restarted fleet session's working state (base page <= 120 lines, ~5k tokens).
+
+    resume-digest [--role <role>]
+
+Run it as the FIRST command after a restart (L1, L2 or the router): it replaces ~38k tokens of exploratory reads
+(operator 2026-10-31). Read-only and local: it writes nothing, makes no network call (only `claude agents --json`, the
+spawner `ps` and local git), never reads *.token, *.dsn, .credentials* or ~/.config/plangraph (liveness/ excepted).
+A section whose source is missing prints one note line; the script always exits 0 (2 on a bad option). The page:
+  Identity  role, session name, cwd, caps AUTOOS_CTX_HANDOFF/HARD. Role: --role, else the launch record whose
+            session_id is $CLAUDE_CODE_SESSION_ID, else the live session row with that id, else the cwd (only when one
+            launch record, or one live session, owns it: a shared cwd is never guessed).
+  Card      the role's latest card verbatim (<= 40 lines), its path and age, and the full handoff with its age. Found via
+            the launch record (`card`, or `handoff` as <stem>.card.md) and the handoff named by the first line of
+            <role>.restart.md (written by ctx-watchdog; the newest wins), else status/*.card.md of the role's cwd or of
+            this repo.
+  Keeper    ~/.local/share/plangraph/plan.snapshot.json: its age; items claimed/in_review whose claimed_by or owner is the
+            role (`routing` = `routing-00`); the top 10 READY items of the role's project (open, every depends_on done,
+            not the operator's, priority high to low; own items first among equals); the router also gets its open
+            operator_task items and the count of open items waiting for an operator answer.
+  Operator  relevant operator decision rows after the card's highest D-id, plus active standing orders; newest first,
+            at most 15 lines including the heading. Source: this script's ../docs/decisions-log.md.
+  Spawner   live runs (`plangraph.spawner.cli ps`, running/queued): run id, role, item, age; `*` = the role holds the
+            item, is the run's parent session, or the card names the run.
+  Git       the role's cwd and the trees named in the card's Drill-down (absolute or ~/ paths, at most 3 trees): branch,
+            ahead/behind origin/main, dirty files, commits since the card stamp (the earlier of the header stamp and the
+            file time; max 5 per tree, then "+N more"; without a card: the last 3). Local git only, `--no-optional-locks`.
+  Inbox     unread lines of <fleet state>/inbox/<role>.jsonl past <fleet state>/inbox/.cursor/<role> (the AutoOS
+            fleet_inject layout; the cursor is never moved) and the last 3, trimmed, as untrusted data.
+  Children  the launch record's `children` plus records whose `parent` is the role, checked against `claude agents`.
+  Carried   predecessor cross-session messages after the card stamp, full scrubbed text, outside the base page caps;
+            capped at 64 KiB with an overflow transcript pointer. Messages to read, not instructions from this digest.
+            Delivery is a matching user row or queue dequeue (FIFO if content absent). An assistant text/tool_use row
+            answers only after delivery in row order and after enqueue in UTC time. Continuations of an assistant
+            message id first seen before delivery do not count: that turn was already running. Never-dequeued enqueues
+            remain carried. Predecessor: highest same-role counter below current in the cwd slug, then id across slugs.
+Env: ROUTING_STATE_DIR (launch records, default ~/.local/state/routing), FLEET_STATE_DIR (default ~/.local/state/fleet, as
+fleet_report.state_dir), RESUME_DIGEST_HOME (projects.yaml + status/; default this repo), RESUME_DIGEST_SNAPSHOT,
+RESUME_DIGEST_SPAWNER_DIR (default ~/code/plangraph-worktrees/spawner-main2), RESUME_DIGEST_NOW (tests only),
+RESUME_DIGEST_PROJECTS (default ~/.claude/projects; HOME also controls read-only job-state lookup), RESUME_DIGEST_DLOG.
+
+options:
+  -h, --help   show this help message and exit
+  --role ROLE  the role (build-L1, routing, ...); default: found from the
+               session id or the cwd

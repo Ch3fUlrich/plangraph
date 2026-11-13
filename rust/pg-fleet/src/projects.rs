@@ -35,7 +35,7 @@ pub fn load(path: &std::path::Path) -> Vec<Value> {
 pub fn of_path(path: &str, projects: &[Value]) -> Option<String> {
     for p in projects {
         let base = string(p, "path");
-        if !std::path::Path::new(base).is_absolute() {
+        if !base.starts_with('/') && !std::path::Path::new(base).is_absolute() {
             continue;
         }
         for root in [

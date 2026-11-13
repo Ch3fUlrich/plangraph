@@ -24,6 +24,9 @@ pub fn resolve(path: &Path) -> std::io::Result<PathBuf> {
 }
 
 pub fn secret(path: &Path) -> bool {
+    secret_at(path, &crate::home())
+}
+pub fn secret_at(path: &Path, home: &Path) -> bool {
     let Ok(real) = resolve(path) else { return true };
     for p in [path, real.as_path()] {
         let name = p.file_name().unwrap_or_default().to_string_lossy();
@@ -31,7 +34,7 @@ pub fn secret(path: &Path) -> bool {
             return true;
         }
     }
-    let Ok(config) = resolve(&crate::home().join(".config/plangraph")) else {
+    let Ok(config) = resolve(&home.join(".config/plangraph")) else {
         return true;
     };
     real.strip_prefix(config).is_ok_and(|rel| {

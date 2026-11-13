@@ -1,0 +1,2 @@
+usage: go-row-gate [-h] --go GO --head HEAD [--session SESSION] [--key KEY]
+                   [--log LOG] [--repo REPO]

@@ -103,3 +103,113 @@ rules = ["credential-shape"]
 [[scrub.allow]]
 path = "tools/split/gitleaks.toml"
 rules = ["credential-shape"]
+
+# Reviewed fleet Python parity inputs; exact values only, no file-wide exemptions.
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/src/usage/handoff-check.txt"
+rule = "credential-shape"
+value_sha256 = "9452605f788b5b60f6537db3fb26b21c204ec313e2b9150c5b2e6ccc7a097fbd"
+why = "documentation or refusal-test path near credential vocabulary; not a credential pair"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/src/usage/resume-digest-help.txt"
+rule = "credential-shape"
+value_sha256 = "9452605f788b5b60f6537db3fb26b21c204ec313e2b9150c5b2e6ccc7a097fbd"
+why = "documentation or refusal-test path near credential vocabulary; not a credential pair"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/cli_parity.rs"
+rule = "credential-shape"
+value_sha256 = "af896a5f354b5297fb7dde9efe8f2b1de11e2fc5315fe28ce1d7468c1953b7ab"
+why = "documentation or refusal-test path near credential vocabulary; not a credential pair"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/fixtures/digest.jsonl"
+rule = "home-path"
+value_sha256 = "7074e36a6271dd34d08973536e92556bcf3f7c77d93812984cff47c8fd195ad8"
+why = "placeholder-root path inside a temporary test home; no real user name"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/fixtures/digest.jsonl"
+rule = "high-entropy"
+value_sha256 = "e61508bf284b1118236c60ce09ba8e7c12e74d91826b81a10cf24fddca3806ba"
+why = "synthetic project path in Python parity inputs; not a secret"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/fixtures/digest.jsonl"
+rule = "high-entropy"
+value_sha256 = "79152eac80ec5ff0045c6ceba95ea809daa2161bb320d0832115779542f1cf26"
+why = "synthetic project path in Python parity inputs; not a secret"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/fixtures/digest.jsonl"
+rule = "token-shape"
+value_sha256 = "7d4f03f2eaa8c231b87a218ce6a8546992c6c4126be7e9360f97862adf23fc38"
+why = "synthetic token from the original inbox redaction test; not a usable credential"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/fixtures/digest.jsonl"
+rule = "token-shape"
+value_sha256 = "2dc745c4768fe7e88da51d477245812867a06c51348797a0777569ced2308631"
+why = "synthetic token from the original inbox redaction test; not a usable credential"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/fixtures/summary.jsonl"
+rule = "high-entropy"
+value_sha256 = "68943470eab0734ec6b2b0d92f0bec20471efbbbcd919fb8a830059f0d55db7d"
+why = "commit ID from a temporary local test repository, used for parity deduplication"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/fixtures/summary.jsonl"
+rule = "high-entropy"
+value_sha256 = "d0c065e3f6d61c87e64867b0adab75fb95b1c85b6bba6d41bc285cc5cbedc3c7"
+why = "commit ID from a temporary local test repository, used for parity deduplication"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/fixtures/summary.jsonl"
+rule = "high-entropy"
+value_sha256 = "5ae0f39d4d5a4e2c8264cffa9326797c68b8a75f65e87d9ad9b61d5e0faf12a4"
+why = "commit ID from a temporary local test repository, used for parity deduplication"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/fixtures/summary.jsonl"
+rule = "credential-shape"
+value_sha256 = "719757d466a520c53eb88745366020757510c0b7fa205a2775fb8d4e87e12c3d"
+why = "documentation or refusal-test path near credential vocabulary; not a credential pair"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/fixtures/summary.jsonl"
+rule = "credential-shape"
+value_sha256 = "9452605f788b5b60f6537db3fb26b21c204ec313e2b9150c5b2e6ccc7a097fbd"
+why = "documentation or refusal-test path near credential vocabulary; not a credential pair"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/fixtures/summary.jsonl"
+rule = "home-path"
+value_sha256 = "7c9a6d2a51f804e38ad98dd5677a40bbad06f5d42d3a5b468bf10f7f471869dd"
+why = "placeholder-root path inside a temporary test home; no real user name"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/fixtures/summary.jsonl"
+rule = "home-path"
+value_sha256 = "73e38a42d9013789d7445cb0e629f94a726a476cfb674f265ad725675a9a3506"
+why = "placeholder-root path inside a temporary test home; no real user name"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/fixtures/summary.jsonl"
+rule = "high-entropy"
+value_sha256 = "f8a48a7b13e666a8b058579c8ce66303f13872168d27d1ae0cacb04439d478f3"
+why = "commit ID from a temporary local test repository, used for parity deduplication"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/fixtures/summary.jsonl"
+rule = "high-entropy"
+value_sha256 = "9ebaa2cb9432e9c8ced0af274da4d6e59f712c210260c936eedd343b31b7eb0c"
+why = "commit ID from a temporary local test repository, used for parity deduplication"
+
+[[scrub.allow_value]]
+path = "rust/pg-fleet/tests/summary_helpers.rs"
+rule = "high-entropy"
+value_sha256 = "e1b253bac2829bb2af46250146dab1e0c9265d655b209865cc5d6f4c7228fe71"
+why = "synthetic project path in Python parity inputs; not a secret"

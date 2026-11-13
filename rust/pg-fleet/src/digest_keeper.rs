@@ -48,8 +48,7 @@ fn holder(s: &State, i: &Value) -> bool {
 fn active(s: &State, i: &Value) -> bool {
     ["claimed", "in_review"].contains(&string(i, "state"))
         && holder(s, i)
-        && !(i["state"] == "claimed"
-            && to_dt(string(i, "lease_until")).is_some_and(|t| t < s.config.now))
+        && !to_dt(string(i, "lease_until")).is_some_and(|t| t < s.config.now)
 }
 
 fn project(s: &State) -> Option<String> {

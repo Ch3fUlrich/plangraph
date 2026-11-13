@@ -19,10 +19,37 @@ pub fn options(
             let val = inline
                 .or_else(|| iter.next().map(String::as_str))
                 .ok_or_else(|| format!("argument {name}: expected one argument"))?;
+            if inline.is_none()
+                && val.starts_with('-')
+                && !crate::handoff::re(r"^-\d+(?:\.\d*)?$").is_match(val)
+            {
+                return Err(format!("argument {name}: expected one argument"));
+            }
             out.insert(name.into(), val.into());
         } else {
             return Err(format!("unrecognized arguments: {arg}"));
         }
     }
     Ok(out)
+}
+
+pub fn help(name: &str) -> &'static str {
+    match name {
+        "go-row-gate" => include_str!("usage/go-row-gate-help.txt"),
+        "inreview-backfill" => include_str!("usage/inreview-backfill-help.txt"),
+        "resume-digest" => include_str!("usage/resume-digest-help.txt"),
+        "work-summary" => include_str!("usage/work-summary-help.txt"),
+        _ => "",
+    }
+}
+pub fn error(name: &str, message: &str) -> i32 {
+    let usage = match name {
+        "go-row-gate" => include_str!("usage/go-row-gate-usage.txt"),
+        "inreview-backfill" => include_str!("usage/inreview-backfill-usage.txt"),
+        "resume-digest" => include_str!("usage/resume-digest-usage.txt"),
+        "work-summary" => include_str!("usage/work-summary-usage.txt"),
+        _ => "",
+    };
+    eprintln!("{usage}{name}: error: {message}");
+    2
 }

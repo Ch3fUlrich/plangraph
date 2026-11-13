@@ -42,7 +42,7 @@ pub struct Card {
 }
 impl Card {
     pub fn parse(text: &str) -> Self {
-        let lines: Vec<String> = text.lines().map(str::to_owned).collect();
+        let lines = crate::python_lines(text);
         let header = lines.first().and_then(|s| re(r"^# (?P<role>[^<>·]+?) card · (?P<session>[^<>·]+?) · (?P<ts>\d{4}-\d\d-\d\dT\d\d:\d\dZ)$").captures(s.trim_end())).map(|c| (c["role"].to_owned(), c["session"].to_owned(), c["ts"].to_owned()));
         let mut doc = Self {
             lines,
@@ -228,7 +228,10 @@ pub fn check_text(text: &str) -> Vec<String> {
 }
 
 pub fn read_card(path: &Path) -> Result<String, String> {
-    if crate::paths::secret(path) {
+    read_card_at(path, &crate::home())
+}
+pub fn read_card_at(path: &Path, home: &Path) -> Result<String, String> {
+    if crate::paths::secret_at(path, home) {
         return Err(format!(
             "refusing to read {}: secret-like file",
             path.file_name().unwrap_or_default().to_string_lossy()
@@ -237,7 +240,11 @@ pub fn read_card(path: &Path) -> Result<String, String> {
     let mut raw = vec![];
     let read = fs::File::open(path).and_then(|f| f.take(65537).read_to_end(&mut raw));
     if let Err(e) = read {
-        return Err(format!("cannot read {}: {}", path.display(), e));
+        return Err(format!(
+            "cannot read {}: {}",
+            path.display(),
+            crate::io_reason(&e)
+        ));
     }
     if raw.len() > 65536 {
         return Err("card is larger than 65536 bytes (max 40 lines)".into());
@@ -314,10 +321,7 @@ pub fn log_done(path: &Path, doc: &Card, wl: &Path) -> std::io::Result<usize> {
 pub fn main(args: &[String]) -> i32 {
     let pos: Vec<_> = args.iter().filter(|s| !s.starts_with("--")).collect();
     if pos.len() != 1 || args.iter().any(|s| s.starts_with("--") && s != "--log") {
-        eprintln!(
-            "{}",
-            include_str!("usage/handoff-check.txt").trim_end_matches('\n')
-        );
+        eprint!("{}", include_str!("usage/handoff-check.txt"));
         return 2;
     }
     let path = Path::new(pos[0]);
@@ -344,7 +348,7 @@ pub fn main(args: &[String]) -> i32 {
         match log_done(path, &doc, &wl) {
             Ok(n) => msg += &format!(", {n} new in {}", wl.display()),
             Err(e) => {
-                println!("cannot log to {}: {e}", wl.display());
+                println!("cannot log to {}: {}", wl.display(), crate::io_reason(&e));
                 return 1;
             }
         }

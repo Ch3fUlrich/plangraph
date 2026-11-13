@@ -20,6 +20,49 @@ pub mod path_check;
 pub mod process;
 pub mod projects;
 pub mod question_count;
+pub mod summary;
+pub mod summary_cli;
+pub mod summary_sources;
+
+pub fn python_lines(text: &str) -> Vec<String> {
+    let mut chars = text.chars().peekable();
+    let mut line = String::new();
+    let mut out = vec![];
+    while let Some(c) = chars.next() {
+        if [
+            '\n', '\r', '\u{b}', '\u{c}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}', '\u{2028}',
+            '\u{2029}',
+        ]
+        .contains(&c)
+        {
+            out.push(std::mem::take(&mut line));
+            if c == '\r' && chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+        } else {
+            line.push(c);
+        }
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    out
+}
+
+pub fn io_reason(e: &std::io::Error) -> String {
+    use std::io::ErrorKind;
+    match e.kind() {
+        ErrorKind::NotFound => "No such file or directory".into(),
+        ErrorKind::PermissionDenied => "Permission denied".into(),
+        ErrorKind::AlreadyExists => "File exists".into(),
+        ErrorKind::IsADirectory => "Is a directory".into(),
+        ErrorKind::NotADirectory => "Not a directory".into(),
+        _ => {
+            let text = e.to_string();
+            text.split(" (os error ").next().unwrap_or(&text).into()
+        }
+    }
+}
 
 /// The private data checkout remains the source of operational data during cutover.
 pub fn data_home() -> std::path::PathBuf {

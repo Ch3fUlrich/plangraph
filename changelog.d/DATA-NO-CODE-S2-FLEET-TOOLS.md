@@ -5,3 +5,4 @@
 - Port go-row-gate with 220 recorded receipt cases, shared GO token parsing and absolute wrapper lookup.
 - Port merge-part retries, ordered refusal codes and evidence handoff; add wrapper and hermetic origin/main integration tests.
 - Port inreview-backfill reporting and explicitly authorized apply, with historical binding goldens and native report/apply integration coverage.
+- Port work-summary with 33 recorded source executions, preserve help and usage output, bound inherited subprocess pipes, and document reviewed synthetic parity inputs and deferred host cutover.

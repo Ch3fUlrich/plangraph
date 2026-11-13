@@ -1,0 +1,27 @@
+usage: work-summary [-h] [--since SINCE] [--project PROJECT]
+
+work-summary — what the fleet finished, runs, waits on and plans next, read from what is already on disk (<= 40 lines).
+
+    work-summary [--since 24h|<n>h|<n>d|<ISO>] [--project <id>]
+
+Line 1: counts. Then per project (most done first) up to four lines: `done` (id, sha or PR#n, UTC time; newest first),
+`flight`, `open` (blocked/open questions), `next` (planned). Long lists end in `+N`; projects that do not fit are named in
+the last line (use --project). Notes (a missing keeper export, stale cards, failed repos) follow the header counts.
+Sources, all read-only, no network, no secrets:
+  - worklog: $FLEET_WORKLOG, default ~/.local/state/fleet/worklog.jsonl (`handoff-check <card> --log` appends to it);
+  - the newest card per session (fixed card format): status/*.card.md of this repo, and for every
+    $ROUTING_STATE_DIR/launch/*.json (default ~/.local/state/routing) its `card`, a `handoff` ending .card.md, or the
+    <handoff stem>.card.md next to the handoff. Cards older than the window are stale, old-format cards are skipped; the
+    Done lines of the rest count too, and In flight / Open / Planned come only from them;
+  - `git log --first-parent main --since` in each repo of projects.yaml (absolute `path` holding a .git);
+  - keeper done items (done_at in the window) from the plan page export plangraph/out/plan-cdn.html (the JSON in its
+    `snapshot-data` script tag; WORK_SUMMARY_KEEPER_EXPORT names another export, a snapshot .json also works). kg-export.json
+    has no timestamps and routerctl's live snapshot needs router.token (never used here); without a readable export one
+    note line says so.
+The same item or sha from several sources counts once (worklog, cards, keeper, git: first wins).
+Env: WORK_SUMMARY_HOME (dir with projects.yaml and status/; default this repo).
+
+options:
+  -h, --help         show this help message and exit
+  --since SINCE      24h (default), <n>h, <n>d or an ISO time
+  --project PROJECT  only this project id from projects.yaml

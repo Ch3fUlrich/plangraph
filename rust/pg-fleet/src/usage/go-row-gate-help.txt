@@ -1,0 +1,14 @@
+usage: go-row-gate [-h] --go GO --head HEAD [--session SESSION] [--key KEY]
+                   [--log LOG] [--repo REPO]
+
+Require a merge GO row to name the current head and allowed session.
+
+options:
+  -h, --help         show this help message and exit
+  --go GO
+  --head HEAD
+  --session SESSION
+  --key KEY          item key required when checking a plan block
+  --log LOG          read this file instead of origin/main
+  --repo REPO        repo whose origin/main log is read after a fetch
+                     (default: this checkout)

@@ -23,6 +23,11 @@ checks retain the caller's Git context; test repositories keep their own hooks.
 
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
+Fleet command parity fixtures preserve synthetic source-test inputs. Exact
+path/rule/value hashes in `tools/split/manifest.toml` document the reviewed fake
+tokens, placeholder paths and temporary git IDs; unmatched values still fail
+the scrub gate. Runtime parity tests reconstruct no live fleet data.
+
 ## Setup and tests
 
 Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so there is no

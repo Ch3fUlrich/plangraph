@@ -31,8 +31,14 @@ pub fn capture(cmd: &mut Command, timeout: u64) -> Result<Output, String> {
         let _ = f.read_to_end(&mut buf);
         String::from_utf8_lossy(&buf).replace("\r\n", "\n")
     };
-    let out = std::thread::spawn(move || read(Box::new(out)));
-    let err = std::thread::spawn(move || read(Box::new(err)));
+    let (send, receive) = std::sync::mpsc::channel();
+    let err_send = send.clone();
+    std::thread::spawn(move || {
+        let _ = send.send((false, read(Box::new(out))));
+    });
+    std::thread::spawn(move || {
+        let _ = err_send.send((true, read(Box::new(err))));
+    });
     let start = Instant::now();
     let result = loop {
         match child.try_wait() {
@@ -48,13 +54,26 @@ pub fn capture(cmd: &mut Command, timeout: u64) -> Result<Output, String> {
         let _ = child.kill();
         let _ = child.wait();
     }
-    // A timed-out shell may have children holding the pipes. Dropping the join
-    // handles avoids extending the caller's deadline to those children's lives.
+    // Descendants may retain pipes after their parent exits. Reading both
+    // streams remains subject to the same deadline as waiting for the parent.
     let code = result?;
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    for _ in 0..2 {
+        let remaining = Duration::from_secs(timeout).saturating_sub(start.elapsed());
+        let (is_err, text) = receive
+            .recv_timeout(remaining)
+            .map_err(|_| "TimeoutExpired".to_owned())?;
+        if is_err {
+            stderr = text
+        } else {
+            stdout = text
+        }
+    }
     Ok(Output {
         code,
-        stdout: out.join().unwrap_or_default(),
-        stderr: err.join().unwrap_or_default(),
+        stdout,
+        stderr,
     })
 }
 

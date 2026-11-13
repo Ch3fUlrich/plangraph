@@ -363,14 +363,24 @@ pub fn build(config: Config, arg: Option<&str>, runner: &dyn Runner) -> Vec<Stri
     out
 }
 pub fn main(args: &[String]) -> i32 {
-    let arg = match args {
-        [] => None,
-        [a, b] if a == "--role" && safe(b) => Some(b.as_str()),
-        _ => {
-            eprintln!("usage: resume-digest [-h] [--role ROLE]\nresume-digest: error: bad --role or unrecognized arguments");
-            return 2;
-        }
+    let opts = match crate::cli::options(args, &["--role"], &["--help", "-h"]) {
+        Ok(o) => o,
+        Err(e) => return crate::cli::error("resume-digest", &e),
     };
+    if opts.contains_key("--help") || opts.contains_key("-h") {
+        print!("{}", crate::cli::help("resume-digest"));
+        return 0;
+    }
+    let arg = opts
+        .get("--role")
+        .map(String::as_str)
+        .filter(|s| !s.is_empty());
+    if let Some(arg) = arg.filter(|s| !safe(s)) {
+        return crate::cli::error(
+            "resume-digest",
+            &format!("bad --role {}", crate::summary_sources::py_repr(arg)),
+        );
+    }
     println!("{}", build(Config::environment(), arg, &Local).join("\n"));
     0
 }

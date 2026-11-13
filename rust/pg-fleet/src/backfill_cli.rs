@@ -2,10 +2,7 @@ use crate::executor::{strings, Executor};
 use serde_json::Value;
 use std::path::PathBuf;
 pub fn main(args: &[String]) -> i32 {
-    let error = |message: &str| {
-        eprintln!("inreview-backfill: error: {message}");
-        2
-    };
+    let error = |message: &str| crate::cli::error("inreview-backfill", message);
     let values = [
         "--items",
         "--pgk",
@@ -27,7 +24,7 @@ pub fn main(args: &[String]) -> i32 {
         Err(e) => return error(&e),
     };
     if opts.contains_key("--help") || opts.contains_key("-h") {
-        println!("Report merged in-review items; writes require --apply, --go and --rows.\n\nOptions: {} --apply --dry-run",values.join(" "));
+        print!("{}", crate::cli::help("inreview-backfill"));
         return 0;
     }
     let path = |k: &str, default: PathBuf| opts.get(k).map_or(default, PathBuf::from);
