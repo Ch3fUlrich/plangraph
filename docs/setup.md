@@ -64,3 +64,10 @@ for host namespace cutover. `namespace inventory|check|apply --dry-run` supports
 review without host changes. Explicit `namespace apply` only handles allowlisted
 non-secret/state paths. See `docs/namespace-cutover.md` for operator-only secrets,
 container aliases, conflict reconciliation and rollback.
+
+## Host packages
+
+`install --dry-run|--check|--yes` owns the nine core/agent components listed in
+`deploy/requirements-host.json`. See `docs/host-packages.md` for Linux/WSL2,
+private temporary downloads, user-local npm, skip behavior and remaining host
+validation. Bootstrap calls this installer without reading a legacy checkout.

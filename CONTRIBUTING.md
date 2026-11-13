@@ -308,3 +308,5 @@ live session state, or change permissions/settings files.
 
 The Rust `plangraph-cli` setup contract lives in `docs/setup.md`; manifest changes
 are Rust CI inputs and are tested against disposable user homes.
+Installer host-requirement changes are also Rust CI inputs. Package execution
+tests use disposable command fixtures; run only affected pytest files locally.

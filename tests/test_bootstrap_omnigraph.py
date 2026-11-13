@@ -143,7 +143,7 @@ def test_v6_public_token_refused_before_read(host, monkeypatch):
 def test_v7_launchers_same_order_fail_soft():
     for name in ('bootstrap.sh', 'bootstrap.ps1'):
         text = (ROOT / 'deploy' / name).read_text()
-        assert text.index('init-and-seed') < text.index('"install"') < text.index('omnigraph_step.py') < text.index('bootstrap completed successfully')
+        assert text.index('init-and-seed') < text.index('WATCHDOG_ARGS=' if name.endswith('.sh') else '$watchdogArgs =') < text.index('omnigraph_step.py') < text.index('bootstrap completed successfully')
         assert 'Omnigraph: site config, cache client, session environment, health verification.' in text
         assert 'Omnigraph skipped: helper unavailable' in text
     assert '--dry-run "$DRY_RUN" ||' in (ROOT / 'deploy/bootstrap.sh').read_text()

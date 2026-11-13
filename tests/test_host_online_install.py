@@ -34,10 +34,10 @@ if 'tick' in args:
     sys.exit(int(os.environ.get('COUNT_EXIT', '0')))
 if 'init-and-seed' in args:
     sys.exit(int(os.environ.get('CATALOG_EXIT', '0')))
-if 'install' in args and os.environ.get('REAL_INSTALL'):
+if name in ('python', 'python3') and 'install' in args and os.environ.get('REAL_INSTALL'):
     sys.exit(subprocess.call([os.environ['REAL_PYTHON']] + args))
 '''
-    for name in ('python', 'python3', 'systemctl', 'ssh', 'schtasks', 'powershell.exe', 'AutoOS'):
+    for name in ('python', 'python3', 'systemctl', 'ssh', 'schtasks', 'powershell.exe', 'AutoOS', 'plangraph', 'wsl.exe'):
         path = bin_dir / name
         path.write_text('#!' + sys.executable + '\n' + program)
         path.chmod(0o755)
@@ -79,6 +79,7 @@ def test_default_path_never_calls_autoos(host):
     assert result.returncode == 0
     assert not any('AutoOS' in c or 'setup' in c for c in commands)
     assert 'AutoOS' not in result.stderr
+    assert sum(c.startswith('plangraph install --only ') for c in commands) == 1
 
 
 def test_fake_systemctl_enables_watchdog_only(host, monkeypatch):
@@ -97,7 +98,7 @@ def test_powershell_same_order_and_failure(host, monkeypatch):
     (host[1] / 'commands').unlink()
     result, commands = host[0](ps=True)
     assert result.returncode == 0, result.stderr
-    assert ['tick' in commands[0], 'init-and-seed' in commands[1], 'install --host windows' in commands[2]] == [True] * 3
+    assert ['tick' in commands[0], 'init-and-seed' in commands[1], 'install --only' in commands[2], 'install --host windows' in commands[3]] == [True] * 4
     (host[1] / 'commands').unlink()
     monkeypatch.setenv('COUNT_EXIT', '7')
     result, commands = host[0](ps=True)

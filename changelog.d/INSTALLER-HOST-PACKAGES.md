@@ -1,0 +1,1 @@
+- Move Linux/WSL2 core packages and agent CLI installation into Rust with explicit dry-run/check, verification and repeat-run skips; repoint both bootstrap scripts and separate delegated components from owned requirements.

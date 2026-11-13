@@ -3,6 +3,7 @@ pub mod breaker;
 pub mod cost;
 pub mod cost_cutover;
 pub mod env;
+pub mod install;
 pub mod merge;
 pub mod migrate;
 pub mod namespace;

@@ -51,14 +51,17 @@ or copied into a unit or into `render.env`.
 ## Host Bootstrap & Spawner Setup
 
 `bootstrap.sh` (Linux) and `bootstrap.ps1` (Windows) are the one plangraph-owned worker-online procedure.
-Preconditions: install Python and plangraph, install required runtime and agent packages, sign in and set up trust for SSH yourself.
-AutoOS is optional, only with `--autoos-root` / `-AutoOSRoot`; no discovery or environment dependency.
-`--skip-autoos` / `-SkipAutoOS` remain compatible; `requirements-host.json` lists optional AutoOS components.
+Preconditions: install Python and the pinned plangraph Rust binary; sign in and set up SSH trust yourself.
+`requirements-host.json` lists plangraph-owned host components. Bootstrap calls
+`plangraph install --only ... --yes`; Windows PowerShell uses the default WSL distro
+for these Linux packages. `--skip-install` / `-SkipInstall` skips package installation;
+legacy skip flags remain aliases and legacy root options are ignored. OmniRoute
+and skill links stay with their separate items. See [host packages](../docs/host-packages.md).
 
 First a human runs the worker dry-run below and reviews per-rule counts from `stall_watchdog tick --dry-run`.
 The existing no-findings status means count zero. Bootstrap dry-run only runs that read-only tick and prints
 intended commands: no setup, catalog init, directories, config, units, tasks or systemctl changes.
-Then a human or explicitly pre-authorized agent runs normal bootstrap: count, optional AutoOS, catalog init,
+Then a human or explicitly pre-authorized agent runs normal bootstrap: count, catalog init, Rust package install,
 watchdog install, stopping on failure. Without authorization an agent stops after dry-run and reports the normal command.
 
 Usage:

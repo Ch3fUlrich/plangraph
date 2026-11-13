@@ -46,6 +46,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "deploy/systemd/plangraph-agents-view.timer",
     "setup/placement-rules.schema.toml",
     "setup/manifest.toml",
+    "deploy/requirements-host.json",
     "src/plangraph/web/agents_schema.json",
     "tests/fixtures/doctor_sources.json",
     "tests/fixtures/keeper_mcp_replies.json",
