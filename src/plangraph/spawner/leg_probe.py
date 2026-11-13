@@ -26,8 +26,7 @@ GIT_ISOLATION = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'}
 #: calls -- into the CALLER's worktree (D-3465: probe commits in 3 lanes).
 #: GIT_ISOLATION only sets GIT_CONFIG_*; the redirection vars must be *removed*
 #: from the probe env, never inherited.
-GIT_REDIRECT_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE',
-                     'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY')
+GIT_REDIRECT_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY')
 
 #: extra_env for the writer child: the same isolation as :func:`probe_env`,
 #: expressed as removals -- ``build_child_env`` drops a key whose extra_env
@@ -135,8 +134,7 @@ def key(leg):
     its provider is its own key.  Legs without a harness attribute (legacy
     record rows) key on the model string alone, keeping historical rows stable.
     """
-    return ('agy/' + leg.model if getattr(leg, 'harness', None) == 'agy' and '/' not in leg.model
-            else leg.model)
+    return ('agy/' + leg.model if getattr(leg, 'harness', None) == 'agy' and '/' not in leg.model else leg.model)
 
 
 def reset_iso(reset):
