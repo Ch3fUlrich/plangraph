@@ -321,3 +321,6 @@ New stacked branches select affected tests from the nearest remote merge-base, w
 Pytest uses a session-owned temporary global Git config and disables system Git config; session teardown detects shared or worktree repository config changes without invoking Git on the real checkout.
 
 Event-log seat reviews use completed step text only. A stop answer survives empty trailing steps, but new unfinished text or tool activity cannot supply a verdict; plain-text logs retain their existing path.
+
+The context guard suppresses handoff output for sidechain transcript records,
+including copied parent usage; main-session caps remain enforced.
