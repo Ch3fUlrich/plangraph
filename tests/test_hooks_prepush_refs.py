@@ -229,3 +229,25 @@ def test_sha256_new_branch_and_delete(tmp_path):
     res = run_hook(r, [push_line("feature", zero, head)])
     assert res.returncode == 1
     assert "refused delete" in res.stderr
+
+
+@pytest.mark.parametrize('stacked', ['none', 'behind', 'ahead', 'unrelated'])
+def test_new_branch_preflight_uses_nearest_remote_base(repo, monkeypatch, stacked):
+    import runpy
+    r, main = repo
+    git(r, 'update-ref', 'refs/remotes/origin/main', main)
+    phase = commit_file(r, 'phase.py', 'phase = 1\n')
+    if stacked != 'none':
+        remote = phase
+        if stacked in ('ahead', 'unrelated'):
+            tree = git(r, 'rev-parse', phase + '^{tree}').strip()
+            remote = git(r, 'commit-tree', tree, '-p', phase if stacked == 'ahead' else main,
+                         '-m', 'remote advancement').strip()
+        git(r, 'update-ref', 'refs/remotes/origin/phase/line-green-1', remote)
+    head = commit_file(r, 'feature.py', 'feature = 1\n')
+    monkeypatch.chdir(r)
+    hook = runpy.run_path(str(HOOK))
+    base = hook['base_commit'](ZERO, head)
+    assert base == (phase if stacked in ('behind', 'ahead') else main)
+    paths = git(r, 'diff', '--name-only', base, head).splitlines()
+    assert paths == (['feature.py'] if stacked in ('behind', 'ahead') else ['feature.py', 'phase.py'])

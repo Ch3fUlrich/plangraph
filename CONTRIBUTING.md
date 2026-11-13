@@ -307,3 +307,5 @@ Run its hermetic contracts with `cargo test --manifest-path rust/Cargo.toml -p
 pg-worker-core --test turn_budget_hook --test turn_budget_poll --test
 turn_budget_alert --test turn_budget_watchdog`. Tests never install hooks, read
 live session state, or change permissions/settings files.
+
+For a new remote branch, pre-push selects the nearest known origin branch merge-base for affected tests, falling back to `origin/main`.
