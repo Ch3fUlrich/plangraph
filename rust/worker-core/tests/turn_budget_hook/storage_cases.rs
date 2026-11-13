@@ -67,37 +67,71 @@ fn rejected_over_cap_update_preserves_original_bytes_and_exact_directory_entries
 
 #[test]
 fn concurrent_reader_only_observes_complete_atomic_status_documents() {
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Barrier,
-    };
+    use std::io::{Read, Seek};
+    use std::sync::mpsc;
     let f = Fixture::new();
     f.event("Stop", START);
     let path = f.config.state_dir.join("status/test-session.json");
     let mut document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     document["other"] = json!("x".repeat(128 * 1024));
     fs::write(&path, document.to_string()).unwrap();
-    let start = Barrier::new(2);
-    let done = AtomicBool::new(false);
     std::thread::scope(|scope| {
-        let reader = scope.spawn(|| {
+        let (ready_tx, ready_rx) = mpsc::sync_channel(0);
+        let (written_tx, written_rx) = mpsc::sync_channel(0);
+        let path = &path;
+        let reader = scope.spawn(move || {
             let mut reads = 0;
-            start.wait();
-            while !done.load(Ordering::Acquire) || reads < 100 {
-                let raw = fs::read(&path).unwrap();
-                let value: Value = serde_json::from_slice(&raw).unwrap();
-                assert_eq!(value["other"].as_str().unwrap().len(), 128 * 1024);
-                assert!(value["turn_budget"].is_object());
-                reads += 1;
+            for index in 1..=30 {
+                // Keep the old document open throughout replacement, rather
+                // than hoping the scheduler overlaps a short fs::read handle.
+                let mut held = fs::File::open(path).unwrap();
+                let mut original = Vec::new();
+                held.read_to_end(&mut original).unwrap();
+                let old: Value = serde_json::from_slice(&original).unwrap();
+                assert_eq!(old["turn_budget"]["wake_calls"], index - 1);
+                ready_tx.send(()).unwrap();
+                loop {
+                    match written_rx.try_recv() {
+                        Ok(()) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => panic!("writer disconnected"),
+                        Err(mpsc::TryRecvError::Empty) => (),
+                    }
+                    // Each concurrent observation must parse; neither missing
+                    // nor partial documents are retried or ignored.
+                    let raw = fs::read(path).unwrap();
+                    let value: Value = serde_json::from_slice(&raw).unwrap();
+                    assert_eq!(value["other"].as_str().unwrap().len(), 128 * 1024);
+                    assert!(value["turn_budget"].is_object());
+                    let count = value["turn_budget"]["wake_calls"].as_u64().unwrap();
+                    assert!((index - 1..=index).contains(&count));
+                    reads += 1;
+                }
+                held.rewind().unwrap();
+                let mut retained = Vec::new();
+                held.read_to_end(&mut retained).unwrap();
+                // This also rejects truncate/write or remove/write substitutes:
+                // a held snapshot must never change, even briefly, in place.
+                assert!(
+                    retained == original,
+                    "replacement modified the held snapshot"
+                );
+                for _ in 0..4 {
+                    let raw = fs::read(path).unwrap();
+                    let value: Value = serde_json::from_slice(&raw).unwrap();
+                    assert_eq!(value["other"].as_str().unwrap().len(), 128 * 1024);
+                    assert!(value["turn_budget"].is_object());
+                    assert_eq!(value["turn_budget"]["wake_calls"], index);
+                    reads += 1;
+                }
             }
             reads
         });
-        start.wait();
         for index in 1..=30 {
+            ready_rx.recv().unwrap();
             f.call(&format!("atomic-{index}"), index);
             f.event("Stop", START + index);
+            written_tx.send(()).unwrap();
         }
-        done.store(true, Ordering::Release);
         assert!(reader.join().unwrap() >= 100);
     });
     assert_eq!(f.status()["wake_calls"], 30);

@@ -5,11 +5,8 @@ use std::{
     io::Read,
     path::Path,
     process::Stdio,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
-    },
-    time::Duration,
+    sync::mpsc,
+    time::{Duration, Instant},
 };
 
 pub(crate) fn read_diff(
@@ -55,35 +52,33 @@ fn collect_diff(
     cap: usize,
     timeout: Duration,
 ) -> Result<Vec<u8>, InlineDiffError> {
+    let deadline = Instant::now() + timeout;
     let mut stdout = child.stdout.take().ok_or(InlineDiffError::Git)?;
     let (tx, rx) = mpsc::sync_channel(1);
-    let oversized = Arc::new(AtomicBool::new(false));
-    let reader_oversized = Arc::clone(&oversized);
     let reader = std::thread::spawn(move || {
         let mut bytes = Vec::new();
         let result = stdout
             .by_ref()
             .take(cap.saturating_add(1) as u64)
             .read_to_end(&mut bytes);
-        reader_oversized.store(bytes.len() > cap, Ordering::Release);
         // Git for Windows may be a wrapper. Drain without retaining more bytes
         // so its actual Git child can exit before the checkout is removed.
         let result = result.and_then(|_| std::io::copy(&mut stdout, &mut std::io::sink()));
         drop(stdout);
         let _ = tx.send(result.map(|_| bytes));
     });
-    let result = rx.recv_timeout(timeout);
-    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    let result = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
     let mut exited = child.try_wait().map_err(|_| InlineDiffError::Git)?;
-    while result.is_ok()
-        && {
-            exited = child.try_wait().map_err(|_| InlineDiffError::Git)?;
-            exited.is_none()
+    while result.is_ok() && (exited.is_none() || !reader.is_finished()) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
         }
-        && std::time::Instant::now() < deadline
-    {
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(remaining.min(Duration::from_millis(5)));
+        exited = child.try_wait().map_err(|_| InlineDiffError::Git)?;
     }
+    let completed =
+        result.is_ok() && exited.is_some() && reader.is_finished() && Instant::now() < deadline;
     // This group was created by this invocation; never signal a registry process.
     if exited.is_none()
         && child
@@ -95,22 +90,19 @@ fn collect_diff(
         unsafe {
             libc::kill(-(child.id() as i32), libc::SIGKILL);
         }
-        let _ = child.kill();
+        child.kill().map_err(|_| InlineDiffError::Git)?;
     }
     let status = child.wait().map_err(|_| InlineDiffError::Git)?;
     // A descendant outside our owned group may still hold stdout. Never wait
     // for its EOF on failure; the detached reader exits when that holder closes.
-    if result.is_ok() {
-        let _ = reader.join();
+    if !completed {
+        return Err(InlineDiffError::Git);
     }
+    // is_finished above makes this a nonblocking join, within the same budget
+    // used for pipe draining and child exit, not an additional grace period.
+    reader.join().map_err(|_| InlineDiffError::Git)?;
     let bytes = result
-        .map_err(|_| {
-            if oversized.load(Ordering::Acquire) {
-                InlineDiffError::TooLarge
-            } else {
-                InlineDiffError::Git
-            }
-        })?
+        .map_err(|_| InlineDiffError::Git)?
         .map_err(|_| InlineDiffError::Git)?;
     if bytes.len() > cap {
         return Err(InlineDiffError::TooLarge);

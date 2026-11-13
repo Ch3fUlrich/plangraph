@@ -29,7 +29,23 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         return Err(std::io::Error::other("status too large"));
     }
     let parent = path.parent().unwrap();
+    #[cfg(not(windows))]
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    #[cfg(windows)]
+    let mut file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            DELETE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+        };
+        // Rename by handle needs DELETE access. Unlike NamedTempFile::new_in,
+        // this creates a normal file, without FILE_ATTRIBUTE_TEMPORARY.
+        tempfile::Builder::new().make_in(parent, |name| {
+            fs::OpenOptions::new()
+                .access_mode(DELETE | FILE_GENERIC_READ | FILE_GENERIC_WRITE)
+                .create_new(true)
+                .open(name)
+        })?
+    };
     file.write_all(bytes)?;
     match fs::metadata(path) {
         Ok(metadata) => file.as_file().set_permissions(metadata.permissions())?,
@@ -37,9 +53,56 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         Err(e) => return Err(e),
     }
     file.as_file().sync_all()?;
+    #[cfg(not(windows))]
     file.persist(path).map_err(|e| e.error)?;
+    #[cfg(windows)]
+    replace_status(&mut file, path)?;
     #[cfg(unix)]
     File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_status(file: &mut tempfile::NamedTempFile, path: &Path) -> std::io::Result<()> {
+    use std::{mem, os::windows::ffi::OsStrExt, os::windows::io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileRenameInfoEx, SetFileInformationByHandle, FILE_RENAME_INFO,
+    };
+    let name: Vec<u16> = std::path::absolute(path)?
+        .as_os_str()
+        .encode_wide()
+        .collect();
+    let offset = mem::offset_of!(FILE_RENAME_INFO, FileName);
+    let size = offset + (name.len() + 1) * mem::size_of::<u16>();
+    let size_u32 = u32::try_from(size).map_err(|_| std::io::ErrorKind::InvalidInput)?;
+    // Word storage supplies FILE_RENAME_INFO alignment and the variable tail.
+    let mut storage = vec![0usize; size.div_ceil(mem::size_of::<usize>())];
+    let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    // SAFETY: storage is aligned, zeroed and large enough for the header and
+    // UTF-16 name (including NUL); file owns the handle for the entire call.
+    let result = unsafe {
+        // FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS:
+        // old reader handles remain valid; new opens get the complete new file.
+        (*info).Anonymous.Flags = 0x1 | 0x2;
+        (*info).FileNameLength = (name.len() * mem::size_of::<u16>()) as u32;
+        std::ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            storage.as_mut_ptr().cast::<u8>().add(offset).cast::<u16>(),
+            name.len(),
+        );
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileRenameInfoEx,
+            info.cast(),
+            size_u32,
+        )
+    };
+    if result == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // The temporary name no longer exists; do not let TempPath remove a future
+    // file that happens to reuse it. Errors above retain ordinary temp cleanup.
+    file.disable_cleanup(true);
     Ok(())
 }
 

@@ -39,6 +39,14 @@ are counted; only Bash pre-tool events are candidates for polling refusals.
   Replacement retains an existing status file's permissions; new files keep the
   private tempfile default. The file is synced before rename and, on Unix, the
   parent status directory is synced after rename for crash durability.
+  On Windows, `storage.rs:atomic_write` creates the same-directory temporary
+  file with DELETE access; `storage.rs:replace_status` uses
+  `SetFileInformationByHandle(FileRenameInfoEx)` with REPLACE_IF_EXISTS and
+  POSIX_SEMANTICS instead of tempfile's `MoveFileExW`. Existing reader handles
+  retain the complete old document while new opens see the complete replacement;
+  a held reader does not cause a skipped update. There is no truncate/remove
+  fallback or retry loop; filesystems without this rename support report IO
+  failure without publishing partial state.
 - One model call is one distinct `assistant.message.id` in the session's JSONL
   transcript. Multiple streamed blocks or tool uses from that response count
   once. User/tool-result, progress, sidechain and missing-ID records do not count.
@@ -221,6 +229,11 @@ directory entries (not a tempfile suffix), concurrent readers always parsing
 complete JSON during updates, mode preservation and bounded-history
 recovery; watchdog tests exercise changing counts, delivery and recovery using
 an explicitly injected clock rather than wall time.
+The concurrent-reader test handshakes each of 30 writes while retaining an old
+read handle, verifies that snapshot remains byte-identical, and checks every
+fresh observation and the exact final count. It uses no sleeps or read retries;
+an in-place/partial-write mutation fails rather than merely losing coverage to
+scheduling.
 Storage tests also cover existing over-cap status and rejected over-cap writes.
 The watchdog subprocess suite is Unix-only because its delivery fixtures use
 `/bin/sh` and `/bin/cat`; opt-out children clear both budget environment variables.
