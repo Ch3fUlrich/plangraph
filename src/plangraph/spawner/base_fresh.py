@@ -85,16 +85,29 @@ def _remove_refused_worktree(service, record):
         metadata['removed'] = True
     except (OSError, subprocess.SubprocessError) as exc:
         record['worktree_cleanup_error'] = type(exc).__name__
+def spawn_runs(record):
+    """Flatten seat and writer envelopes while retaining the leaf record objects."""
+    children = record.get('seats') or record.get('writers')
+    return [run for child in children for run in spawn_runs(child)] if children else [record]
+
+def spawn_exit_code(record):
+    for run in spawn_runs(record):
+        if run.get('status') not in ('running', 'dry_run', 'completed'):
+            return run.get('exit_code') or 1
+    return 0
+
 async def admitted_spawn(service, payload):
     """The detached handshake acknowledges admission, not mere task creation."""
     async def wait():
         record = await service.spawn(**payload, wait_seconds=0)
-        runs = record.get('seats') or [record]
+        runs = spawn_runs(record)
         while any(r.get('status') == 'running' and not r.get('base_admitted')
                   and not r.get('overflow_remote') for r in runs):
             await asyncio.sleep(.01)
-            runs[:] = [service.result(r['run_id']) for r in runs]
-        return record if record.get('seats') else runs[0]
+            for run in runs:
+                if run.get('status') == 'running' and not run.get('overflow_remote'):
+                    run.update(service.result(run['run_id']))
+        return record
     try:
         return await asyncio.wait_for(wait(), ADMISSION_TIMEOUT)
     except asyncio.TimeoutError:

@@ -257,3 +257,39 @@ def test_review_checks_worker_checkout_even_with_fresh_diff(tmp_path, monkeypatc
     assert not asyncio.run(base_fresh.admit_base(service, record, card, launch=launch))
     assert record['reason'] == 'base_stale: behind=1'
     assert calls == [(worker, 'HEAD', True)] and saved == [record]
+
+
+@pytest.mark.parametrize('supervisor', [False, True])
+def test_split_writer_refusals_are_waited_and_reported(tmp_path, monkeypatch, capsys, supervisor):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from plangraph.spawner import cli, base_fresh
+    runs = [dict(run_id='run-one', status='running'), dict(run_id='run-two', status='running')]
+    final = {r['run_id']: dict(r, status='failed', exit_code=1, reason='base_stale: behind=1') for r in runs}
+    service = SimpleNamespace(state=tmp_path, spawn=AsyncMock(return_value={'writers': runs}),
+        result=lambda run_id: final[run_id], tasks={})
+    if supervisor:
+        monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
+        monkeypatch.setattr(cli.sys, 'stdin', io.StringIO(json.dumps({'state': str(tmp_path)})))
+        output = _Out()
+        monkeypatch.setattr(cli.sys, 'stdout', output)
+        assert cli.main(['--supervise']) == 1
+        result = json.loads(output.getvalue())
+    else:
+        result = asyncio.run(base_fresh.admitted_spawn(service, {}))
+    assert [r['status'] for r in result['writers']] == ['failed', 'failed']
+    assert all(r['reason'] == 'base_stale: behind=1' for r in result['writers'])
+
+
+def test_detached_cli_split_refusal_exits_nonzero(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    from plangraph.spawner import cli
+    refused = dict(writers=[dict(run_id='run-one', status='failed', exit_code=1, reason='base_stale: behind=1')])
+    service = SimpleNamespace(state=tmp_path, route=lambda *a, **k: None)
+    child = SimpleNamespace(stdin=_Out(), stdout=io.StringIO(json.dumps(refused) + '\n'))
+    monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
+    monkeypatch.setattr(cli, '_start_supervisor', lambda *a, **k: child)
+    assert cli.main(['spawn', '--card', '{"estimate_tokens":1}', 'Implement change']) != 0
+    output = capsys.readouterr()
+    assert json.loads(output.out) == refused
+    assert 'base_stale: behind=1' in output.err

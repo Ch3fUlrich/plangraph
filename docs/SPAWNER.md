@@ -681,3 +681,5 @@ an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
 Freshness admission checks every worker checkout HEAD, including review/judge and pinned document runs; a fresh diff head cannot waive a stale worker checkout.
 
 Only completed implement parents can start fixer continuations; review and judge findings never create implement children. Implement continuations retain both freshness checks.
+
+Detached split-writer admission waits for every local child and preserves each refusal in the writers envelope; the CLI prints per-writer reasons and exits nonzero if any writer is refused.
