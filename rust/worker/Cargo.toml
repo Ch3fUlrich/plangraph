@@ -39,13 +39,5 @@ pg-worker-core = { path = "../worker-core", features = ["test-support"] }
 tempfile = "3"
 sha2 = "0.10"
 
-# Same test and local build profile as the rust/ workspace: optimized
-# dependencies, lightly optimized worker crates, assertions kept.
-[profile.dev]
-opt-level = 1
-
-[profile.dev.package."*"]
-opt-level = 3
-
 [profile.release]
 lto = "thin"
