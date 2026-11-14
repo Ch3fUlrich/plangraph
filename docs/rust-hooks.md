@@ -69,3 +69,5 @@ The binary calls `tools/ci_commit_gate.py commit-message` in the current
 worktree: both CI and Git use `message_violations` for Writer, strict Hand-Edit,
 and `Changelog: skip (<reason>)` validation. Merge commits bypass the hook.
 Missing files, interpreters, and failed Git probes refuse the commit.
+Git editor comments are stripped for validation with `git stripspace --strip-comments`
+(respecting `core.commentChar`); the original message file stays intact.

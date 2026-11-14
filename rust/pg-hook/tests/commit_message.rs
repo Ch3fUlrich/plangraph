@@ -103,3 +103,32 @@ fn missing_policy_fails_closed() {
     .status
     .success());
 }
+
+#[test]
+fn editor_comments_do_not_hide_valid_trailers() {
+    let dir = repo();
+    for comment_char in ["#", ";"] {
+        assert!(
+            git(dir.path(), &["config", "core.commentChar", comment_char])
+                .status
+                .success()
+        );
+        let output = Command::new("git")
+            .current_dir(dir.path())
+            .args([
+                "commit",
+                "--allow-empty",
+                "--edit",
+                "-m",
+                "editor commit\n\nWriter: codex",
+            ])
+            .env("GIT_EDITOR", "true")
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+}

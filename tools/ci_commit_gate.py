@@ -552,7 +552,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == 'commit-message':
         try:
-            message = Path(args.path).read_text(encoding='utf-8')
+            message = (sys.stdin.read() if args.path == '-'
+                       else Path(args.path).read_text(encoding='utf-8'))
         except (OSError, UnicodeError) as exc:
             sys.stderr.write(f'commit-msg: {exc}\n')
             return 2
