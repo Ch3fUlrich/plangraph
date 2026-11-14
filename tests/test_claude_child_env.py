@@ -173,4 +173,5 @@ def test_launch_plan_skips_the_haiku_leg_on_a_host_without_claude(monkeypatch, t
     assert [s['reason'] for s in launch.skipped if s['leg'] == 'claude-sonnet-5-5-high'] == ['harness_missing: claude']
     monkeypatch.setenv('PATH', str(fake_binary(tmp_path / 'bin', 'claude')))
     assert [l.id for l in resolver.plan_for_launch(only).legs] == ['claude-sonnet-5-5-high']
-    assert any(l.id == 'claude-sonnet-5-5-high' for l in DEFAULT_LEGS)
+    from plangraph.planner.legs import spawnable_legs
+    assert any(l.id == 'claude-sonnet-5-5-high' for l in spawnable_legs())
