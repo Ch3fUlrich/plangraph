@@ -106,6 +106,8 @@ def test_json_skip_diagnostics_keep_stdout_pure(monkeypatch, capsys):
 
 
 def test_success_accounts_for_untried_and_policy_skipped_legs(tmp_path, monkeypatch):
+    # This checks attempt accounting, with enough RAM for local admission.
+    monkeypatch.setattr('plangraph.spawner.seat_spawn.resources', lambda service: (0, 16000))
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.routing import SpawnPlan
     from plangraph.spawner.runner import spawn_service
