@@ -31,7 +31,7 @@ def test_writer_live_limit_reset_and_scope(tmp_path, monkeypatch, gemini_tier):
     nxt = next_leg_after_provider_stop(p, p.first_leg.id, 429, "quota exhausted",
                                        {"Retry-After": "60"}, "test", store=store,
                                        now=100, account="A")
-    assert nxt.id == "opencode-deepseek-v4.1-flash-free"  # D-5212: automatic next writer.
+    assert nxt.id == "agy-gemini-4-hydrogen-high"  # D-5212: automatic next writer.
     limited = plan_spawn(dict(CARD, account="A"), role="implement", leg_reader=store, now=101)
     assert limited.first_leg == nxt
     assert next(s for s in limited.skipped if s["leg"] == p.first_leg.id)["evidence"]["status"] == 429
@@ -81,11 +81,11 @@ def test_seats_and_impossible_fence():
 def test_operator_order_and_roles_roundtrip(tmp_path):
     assert [l.id for l in DEFAULT_LEGS if "implement" in l.roles] == [
         "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "openrouter-free",
-        "cx-gpt-6.1-sol-xhigh", "agy-gemini-4-argon", "opencode-big-pickle",
+        "cx-gpt-6.1-sol-xhigh", "agy-gemini-4-hydrogen-high", "agy-gemini-4-argon", "opencode-big-pickle",
         "mimo-v2.6-flash", "mimo-v2.6-pro", "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
-        "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-4-argon", "opencode-big-pickle", "agy-gpt-oss-120b", "mimo-v2.6-flash", "mimo-v2.6-pro",
+        "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-4-hydrogen-medium", "agy-gemini-4-argon", "opencode-big-pickle", "agy-gpt-oss-120b", "mimo-v2.6-flash", "mimo-v2.6-pro",
         "agy-sonnet-5.5", "agy-claude-opus", "agy-opus-5.5", "omniroute-deepseek-flash", "omniroute-muse-spark",
         "agy-opus", "opencode-gemini-4-argon", "opencode-go-gemini-4-argon",
         "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
@@ -104,7 +104,7 @@ def test_benchmark_within_tier_only(monkeypatch):
     p = plan_spawn(CARD, role="implement", benchmark=rows)
     assert p.first_leg.id == "cx-gpt-6.1-sol-xhigh"  # D-5206
     assert [l.id for l in p.legs] == [
-        'cx-gpt-6.1-sol-xhigh', 'opencode-big-pickle',
+        'cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high', 'opencode-big-pickle',
         'openrouter-free', 'opencode-glm-5.3-flash-free', 'opencode-deepseek-v4.1-flash-free',
         'omniroute-muse-spark', 'omniroute-deepseek-flash', 'mimo-v2.6-pro', 'mimo-v2.6-flash',
         'agy-gemini-4-argon', 'deepseek']
@@ -175,7 +175,9 @@ def test_orchestrate_role_routes_opencode_first(tmp_path, capsys):
 def test_agy_leg_models_use_agy_model_ids():
     # `agy models` ids: agy refuses the bare "sonnet-5.5" (workst run-1897ba45, 2026-10-26)
     agy = {l.id: l.model for l in DEFAULT_LEGS if l.harness == "agy"}
-    assert agy == {"agy-gemini-4-argon": "gemini-4-argon-high",
+    assert agy == {"agy-gemini-4-hydrogen-high": "gemini-4-hydrogen-high",
+                   "agy-gemini-4-hydrogen-medium": "gemini-4-hydrogen-medium",
+                   "agy-gemini-4-argon": "gemini-4-argon-high",
                     "agy-gpt-oss-120b": "gpt-oss-120b-medium",
                     "agy-gemini-4-argon": "gemini-4-argon-high",
                     "agy-opus-5.5": "claude-opus-5-5-high", "agy-opus": "claude-opus-5-5-medium",

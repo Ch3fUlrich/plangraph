@@ -21,7 +21,7 @@ DISABLED_FREE = {"opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-fr
 # D-4196: both retained Zen rows stay permanently disabled as on main.
 ACTIVE_FREE = ["openrouter-free"]
 SUBS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-4-argon", "mimo-v2.6-pro", "mimo-v2.6-flash"]
-WRITERS = [SUBS[0], "openrouter-free", "opencode-big-pickle", "agy-gemini-4-argon",
+WRITERS = [SUBS[0], "agy-gemini-4-hydrogen-high", "openrouter-free", "opencode-big-pickle", "agy-gemini-4-argon",
            "mimo-v2.6-flash", "mimo-v2.6-pro", "omniroute-deepseek-flash",
            "omniroute-muse-spark", "deepseek"]
 
@@ -118,7 +118,7 @@ def test_explicit_disabled_qwen_refused(tmp_path):
 def test_writer_order_sol_family_excluded():
     plan = plan_spawn({"estimate_tokens": 20000, "risk_tags": []},
                       role="implement", exclude_families=("gpt",))
-    assert plan.first_leg.id == "openrouter-free"
+    assert plan.first_leg.id == "agy-gemini-4-hydrogen-high"
     assert "gpt" not in {leg.family for leg in plan.legs}
     assert {s["leg"]: s["reason"] for s in plan.skipped}[
         SUBS[0]] == "excluded_family"
@@ -135,7 +135,7 @@ def test_writer_order_privacy_excludes_training_sol():
     assert public.first_leg.id == SUBS[0]
     private = plan_spawn({"estimate_tokens": 20000, "risk_tags": ["secrets"]},
                          role="implement", legs=legs)
-    assert private.first_leg.id == "openrouter-free"
+    assert private.first_leg.id == "agy-gemini-4-hydrogen-high"
     assert SUBS[0] not in {leg.id for leg in private.legs}
     assert {s["leg"]: s["reason"] for s in private.skipped}[
         SUBS[0]] == "trains_on_data"
@@ -307,8 +307,8 @@ def test_fixed_implement_sol_across_tiers():
     from plangraph.planner.legs import DEFAULT_LEGS, TIERS
     from plangraph.planner.routing import route_card
     table = {leg.id: leg for leg in DEFAULT_LEGS}
-    SUBS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-4-hydrogen-medium", "mimo-v2.6-pro", "mimo-v2.6-flash"]
-    table[SUBS[1]] = replace(table["agy-gemini-4-argon"], id=SUBS[1], model="gemini-4-hydrogen-medium")
+    SUBS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-4-hydrogen-high", "mimo-v2.6-pro", "mimo-v2.6-flash"]
+    table[SUBS[1]] = replace(table["agy-gemini-4-argon"], id=SUBS[1], model="gemini-4-hydrogen-high")
     for tier in TIERS:
         legs = (replace(table[FREE[2]], disabled=None), replace(table[SUBS[0]], tier=tier),
                 replace(table[FREE[0]], disabled=None), table[SUBS[2]])
@@ -358,7 +358,7 @@ def test_writer_order_d2683_implement_first_seven(monkeypatch):
     # Explicit mechanics table tests all eight ordering slots; production
     # disabled-leg eligibility is independently asserted above and in Go tests.
     c = {"estimate_tokens": 20000, "risk_tags": []}
-    expected = [SUBS[0], 'opencode-deepseek-v4.1-flash-free',
+    expected = [SUBS[0], 'agy-gemini-4-hydrogen-high', 'opencode-deepseek-v4.1-flash-free',
                 'opencode-glm-5.3-flash-free', 'openrouter-free',
                 'opencode-big-pickle', 'agy-gemini-4-argon',
                 'mimo-v2.6-flash', 'mimo-v2.6-pro', 'omniroute-deepseek-flash',
@@ -367,7 +367,7 @@ def test_writer_order_d2683_implement_first_seven(monkeypatch):
         plan = plan_spawn(c, role="implement", catalog_rows=(
             {"id": "agy/gemini-4-argon-high", "tier": gemini_tier},))
         repriced = [id for id in expected if id != "agy-gemini-4-argon"]
-        slot = {"trial": 1, "free": 4, "subscription": 5, "paid": 9}[gemini_tier]
+        slot = {"trial": 2, "free": 5, "subscription": 6, "paid": 10}[gemini_tier]
         repriced.insert(slot, "agy-gemini-4-argon")
         assert [leg.id for leg in plan.legs] == repriced
 
@@ -390,7 +390,7 @@ def test_main_policy_gpt_first_and_retained_routes():
         assert "deepseek" in {leg.family for leg in review.legs}
         assert "glm" not in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {
-        "qodercli-qwen3.8-flash", *FREE, *SUBS, "cx-gpt-6-luna", "agy-sonnet-5.5", "agy-gemini-4-argon", "opencode-big-pickle",
+        "qodercli-qwen3.8-flash", *FREE, *SUBS, "agy-gemini-4-hydrogen-high", "agy-gemini-4-hydrogen-medium", "cx-gpt-6-luna", "agy-sonnet-5.5", "agy-gemini-4-argon", "opencode-big-pickle",
         "agy-opus", "agy-opus-5.5", "omniroute-deepseek-flash", "omniroute-muse-spark", "opencode-gemini-4-argon",
         "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
         "omniroute-grok-4.7", "opencode-console-muse-spark",

@@ -81,11 +81,51 @@ def test_guard_leg_catalog_and_configuration_data():
 
 
 def test_hydrogen_replaces_writer_position_without_inventing_admission():
-    assert WRITER_ORDER[:2] == ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-medium')
-    hydrogen = next(l for l in EXPLICIT_LEGS if l.id == WRITER_ORDER[1])
-    assert hydrogen.disabled and hydrogen.roles == ()
-    plan = plan_spawn(dict(estimate_tokens=1000), role='implement', catalog_rows=())
-    assert not any('gemini' in l.model and 'flash' in l.model for l in plan.legs)
+    # D-5903 now authorizes the two registrations; telemetry remains unwitnessed.
+    assert WRITER_ORDER[:2] == ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high')
+    for effort, role in (('high', 'implement'), ('medium', 'review')):
+        leg = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-hydrogen-' + effort)
+        assert leg.disabled is None and leg.roles == (role,)
+        assert (leg.tier, leg.harness, leg.family, leg.effort) == ('subscription', 'agy', 'gemini', effort)
+        assert (leg.windows, leg.max_request_tokens, leg.trains_on_data) == (('128k', '256k', '1m'), 900000, False)
+        assert leg.tool_mode == ('inline-only' if role == 'review' else 'tools')
+        assert 'unwitnessed' in leg.note and 'D-5903' in leg.note
+
+
+@pytest.mark.parametrize('writer', ['gpt', 'claude'])
+def test_spawner_review_routes_hydrogen_in_retired_flash_position(tmp_path, monkeypatch, writer):
+    from plangraph.routing_support import resolver
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [])
+    service = SpawnService(state=tmp_path, leg_reader=lambda *a, **kw: dict(state='available', evidence={}))
+    card = dict(estimate_tokens=1000, diff_ref=dict(repo=str(tmp_path), base='HEAD~1', head='HEAD'))
+    plan = service.route(card, role='review', writer_families=(writer,))
+    ids = [leg.id for leg in plan.legs]
+    assert 'agy-gemini-4-hydrogen-medium' in ids
+    assert ids.index('mimo-v2.6-pro') < ids.index('agy-gemini-4-hydrogen-medium')
+    assert ids.index('agy-gemini-4-hydrogen-medium') < ids.index('agy-gemini-4-argon')
+    from plangraph.planner.legs import spawnable_legs
+    from plangraph.planner.review_order import payment_order
+    for tier, first in (('high', 'agy-gemini-4-hydrogen-medium'), ('standard', 'mimo-v2.6-pro')):
+        fixed = payment_order(spawnable_legs(), 'review', order_class=tier,
+                              writer_families=(writer,), diff_tokens=1000)
+        assert fixed[0].id == first
+    assert not any(re.search('gemini.*flash', leg.id + leg.model, re.I) for leg in plan.legs)
+    implement = service.route(dict(estimate_tokens=1000), role='implement')
+    assert [leg.id for leg in implement.legs[:2]] == list(WRITER_ORDER)
+
+
+def test_hydrogen_prompt_uses_stdin_and_seat_stays_unwitnessed():
+    from plangraph.routing_support.clients import build_standalone_fallback_command, launch_stdin_payload
+    from plangraph.spawner.runner import JobInfo
+    from plangraph.spawner.served_telemetry import native_models
+    model = 'gemini-4-hydrogen-medium'
+    prompt = 'inline diff ' * 20000  # Exceeds Linux's single-argument limit.
+    cmd = build_standalone_fallback_command('agy', prompt, model, role='review', tool_mode='inline-only')
+    assert prompt not in cmd and cmd[cmd.index('-p') + 1] == ''
+    assert json.loads(launch_stdin_payload(cmd, prompt, 'agy'))['message']['content'] == prompt
+    assert not native_models('agy', json.dumps(dict(type='result', model=model, text='VERDICT: PASS')))
+    job = JobInfo('test', 'completed', prompt, model, role='review')
+    assert (job.served_model, job.served_family, job.witness_kind) == ('unwitnessed', 'unwitnessed', None)
 
 
 def test_old_record_still_loads(tmp_path):

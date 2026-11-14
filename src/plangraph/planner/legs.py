@@ -106,6 +106,17 @@ DEFAULT_LEGS = (
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
+    *(Leg(f"agy-gemini-4-hydrogen-{effort}", "subscription", "agy",
+          f"gemini-4-hydrogen-{effort}", "gemini", ("128k", "256k", "1m"), 900000, False,
+          roles=(role,), effort=effort, tool_mode="inline-only" if role == "review" else "tools",
+          note="D-5903: enabled; agy models lists Hydrogen low/medium/high/xhigh (2026-11-14); "
+               "agy CLI review verdicts: PR #878 (three heads), #886 (2026-11-14), "
+               "handoffs/plan-order/reviews/{pr878-5ac07d1d,pr886-75c5bd2f}-hydrogen.txt. "
+               "Tier/privacy/windows/request bound inherit agy Claude 5.5: same subscription/harness; "
+               "clients.launch_stdin_payload carries stream JSON on stdin, not prompt argv. "
+               "Review uses inline diff (agy plan, no repository tools). "
+               "Seat unwitnessed: agy emits no served-model telemetry (rule 3.26).")
+      for effort, role in (("high", "implement"), ("medium", "review"))),
     Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-high",
         "gemini", ("128k", "256k", "1m"), 900000, False, roles=("implement", "review")),
     Leg("opencode-big-pickle", "free", "opencode", "opencode/big-pickle",
@@ -170,7 +181,7 @@ READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'i
 # D-5206/D-5212 change writer priority, not the registered fallback roles.
 WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol-xhigh",  # D-5206: effort-qualified default, then agy fallback
-    "agy-gemini-4-hydrogen-medium",
+    "agy-gemini-4-hydrogen-high",
 )
 LEAD_WRITER = WRITER_ORDER[0]
 
@@ -213,8 +224,6 @@ EXPLICIT_LEGS += tuple(
         claude_family=family == 'claude', roles=(), effort=effort,
         disabled='D-5696: capability evidence required')
     for id, harness, model, family, effort in (
-        ('agy-gemini-4-hydrogen-high', 'agy', 'gemini-4-hydrogen-high', 'gemini', 'high'),
-        ('agy-gemini-4-hydrogen-medium', 'agy', 'gemini-4-hydrogen-medium', 'gemini', 'medium'),
         ('cx-gpt-6.1-terra-medium', 'opencode', 'omniroute/cx-gpt-6.1-terra-medium', 'gpt', 'medium'),
         ('cx-gpt-6.1-terra-xhigh', 'opencode', 'omniroute/cx-gpt-6.1-terra-xhigh', 'gpt', 'xhigh'),
         ('muse-ember-max', 'opencode', 'omniroute/muse-ember-max', 'muse', 'max'),

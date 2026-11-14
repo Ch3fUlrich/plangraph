@@ -13,7 +13,7 @@ from plangraph.spawner.cli import main
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 CARD = {"estimate_tokens": 20000, "risk_tags": [],
         "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
-WRITERS = ["cx-gpt-6.1-sol-xhigh", "openrouter-free",
+WRITERS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-4-hydrogen-high", "openrouter-free",
            "opencode-big-pickle", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
            "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
 
@@ -44,7 +44,7 @@ def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card,
                for leg in plan.legs)
     record = asyncio.run(service.spawn(card=card, prompt="Implement public code", dry_run=True))
     assert record["chosen_leg"]["id"] == expected[0]
-    assert record["chosen_leg"]["effort"] == ("xhigh" if state == "available" else None)
+    assert record["chosen_leg"]["effort"] == ("xhigh" if state == "available" else "high")
     assert not (tmp_path / "spawn-overrides.jsonl").exists()
 
 

@@ -88,7 +88,7 @@ the remaining review budget. Invalid, empty or oversized diffs still refuse.
 
 Gemini Flash models are retired by operator order (2026-11-14); requests fail
 with `gemini_flash_retired` and name `agy-gemini-4-hydrogen` as replacement.
-Hydrogen medium remains disabled pending capability and served-model evidence.
+D-5903 enables Hydrogen high for implement and medium for inline-only review; both remain unwitnessed.
 After changing server source or configured environment forwarding, reconnect the
 MCP client before treating a live review as validation of the update. A fresh
 stdio test server and a previously connected client can be running different

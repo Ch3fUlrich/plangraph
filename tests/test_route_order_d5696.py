@@ -42,11 +42,12 @@ def test_implement_order_efforts_and_limited_fallthrough(catalog):
         'cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high', 'agy-claude-sonnet-5-5-high')
     legs = [catalog[id] for id in OPERATOR_ROUTE_ORDERS['implement']]
     assert signature(ordered(legs, 'implement')) == [
-        ('cx-gpt-6.1-sol-xhigh', 'xhigh'), ('agy-claude-sonnet-5-5-high', 'high')]
-    assert ordered(legs[1:], 'implement') == (legs[2],)  # Cannot resurrect absent Sol.
+        ('cx-gpt-6.1-sol-xhigh', 'xhigh'), ('agy-gemini-4-hydrogen-high', 'high'),
+        ('agy-claude-sonnet-5-5-high', 'high')]
+    assert ordered(legs[1:], 'implement') == (legs[1], legs[2])  # Cannot resurrect absent Sol.
     assert not ordered([catalog[id] for id in (
         'mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash')], 'implement')
-    # Synthetic-only positive Hydrogen path; this does not admit its registration.
+    # D-5903 admits Hydrogen high; upstream role projection preserves its order.
     admitted = [replace(leg, roles=('implement',)) for leg in legs]
     assert signature(ordered(admitted, 'implement')) == [(legs[0].id, 'xhigh'),
         (legs[1].id, 'high'), (legs[2].id, 'high')]
@@ -67,11 +68,13 @@ def test_complex_review_sol_terra_hydrogen_and_efforts(catalog, order_class):
     effort, hydrogen = ('xhigh', 'high') if order_class == 'complex' else ('medium', 'medium')
     assert OPERATOR_ROUTE_ORDERS['review'][order_class][:3] == (
         f'cx-gpt-6.1-sol-{effort}', f'cx-gpt-6.1-terra-{effort}', f'agy-gemini-4-hydrogen-{hydrogen}')
+    assert ('review' in catalog[f'agy-gemini-4-hydrogen-{hydrogen}'].roles) == (hydrogen == 'medium')
     assert all('review' not in catalog[id].roles
-               for id in OPERATOR_ROUTE_ORDERS['review'][order_class][:3])
+               for id in OPERATOR_ROUTE_ORDERS['review'][order_class][:2])
     result = ordered(catalog.values(), 'review', order_class=order_class,
                      writer_families=('claude',), diff_tokens=1000)
-    assert signature(result) == [('mimo-v2.6-pro', None),
+    assert signature(result) == ([('agy-gemini-4-hydrogen-medium', 'medium')]
+        if order_class == 'high' else []) + [('mimo-v2.6-pro', None),
         ('opencode-go-deepseek-v4-flash', None), ('mimo-v2.6-flash', None),
         ('omniroute-deepseek-flash', None)]
 
@@ -101,9 +104,9 @@ def test_payment_order_unmodified_registry_names_every_drop(catalog):
     reasons = {
         'role': '''openrouter-free cx-gpt-6.1-sol-xhigh deepseek cx-gpt-6.1-sol
             cx-gpt-6.1-sol-low cx-gpt-6.1-sol-medium cx-gpt-6.1-sol-high cx-gpt-6.1-sol-max
-            agy-gemini-4-hydrogen-high agy-gemini-4-hydrogen-medium cx-gpt-6.1-terra-medium
+            agy-gemini-4-hydrogen-high cx-gpt-6.1-terra-medium
             cx-gpt-6.1-terra-xhigh muse-ember-max claude-fable-5.2-high''',
-        'not_in_order': '''qodercli-qwen3.8-flash opencode-deepseek-v4.1-flash-free
+        'not_in_order': '''agy-gemini-4-hydrogen-medium qodercli-qwen3.8-flash opencode-deepseek-v4.1-flash-free
             opencode-glm-5.3-flash-free cx-gpt-6-luna agy-gemini-4-argon
             opencode-big-pickle agy-gpt-oss-120b agy-sonnet-5.5 agy-claude-opus agy-opus-5.5
             omniroute-muse-spark agy-opus opencode-gemini-4-argon opencode-go-gemini-4-argon
@@ -224,8 +227,7 @@ def test_order_rows_share_the_existing_leg_registry(catalog):
     tables = OPERATOR_ROUTE_ORDERS
     ids = set((*tables['implement'], *tables['planning'], *tables['review']['high'], *tables['review']['complex']))
     assert ids <= catalog.keys()
-    for id in ('agy-gemini-4-hydrogen-high', 'agy-gemini-4-hydrogen-medium',
-               'cx-gpt-6.1-terra-medium', 'cx-gpt-6.1-terra-xhigh', 'muse-ember-max', 'claude-fable-5.2-high'):
+    for id in ('cx-gpt-6.1-terra-medium', 'cx-gpt-6.1-terra-xhigh', 'muse-ember-max', 'claude-fable-5.2-high'):
         leg = catalog[id]
         assert leg.disabled and not leg.roles and (leg.windows, leg.max_request_tokens, leg.trains_on_data) == ((), None, None)
 
@@ -268,12 +270,12 @@ def test_live_legacy_door_keeps_d5696_open(catalog):
 
 def test_unknown_capability_declarations_are_not_live_admissions(catalog):
     unknown = [leg for leg in catalog.values() if not leg.windows]
-    assert len(unknown) == 6
+    assert len(unknown) == 4
     assert all(leg.disabled and leg.expires is None and not leg.roles for leg in unknown)
 
 
 @pytest.mark.parametrize('statement', [
-    'Hydrogen high is table-only until its registration is admitted',
+    'Hydrogen high is enabled by D-5903',
     'positive paths are synthetic-only'])
 def test_order_handoff_distinguishes_tables_from_registry(statement):
     from pathlib import Path

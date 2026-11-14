@@ -1,6 +1,6 @@
 > Historical snapshot: Gemini Flash references below preserve prior decisions and
 > benchmark evidence only. Operator order 2026-11-14 retires every version; none
-> is an available route. Hydrogen medium awaits capability and AGY witness evidence.
+> is an available route. Hydrogen high (implement) and medium (inline-only review) are enabled by D-5903; both seats remain unwitnessed.
 
 # RFF S2-S5 assertion reconciliation
 

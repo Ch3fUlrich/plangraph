@@ -20,23 +20,23 @@ plan_spawn = functools.partial(plan_spawn, catalog_rows=())
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
     "openrouter-free", "cx-gpt-6.1-sol-xhigh", "cx-gpt-6-luna",
-    "agy-gemini-4-argon", "opencode-big-pickle", "agy-gpt-oss-120b",
+    "agy-gemini-4-hydrogen-high", "agy-gemini-4-hydrogen-medium", "agy-gemini-4-argon", "opencode-big-pickle", "agy-gpt-oss-120b",
     "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "agy-claude-opus", "agy-opus-5.5", "omniroute-deepseek-flash", "omniroute-muse-spark", "agy-opus", "opencode-gemini-4-argon",
     "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
     "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek",
     "claude-haiku-5.5",  # D-3605 Haiku leg
 ]
 #: Route order: tiers ascending, so the subscription Haiku leg precedes paid deepseek.
-ROUTE_IDS = [D25_IDS[i] for i in (0, 1, 2, 3, 7, 17, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-                                18, 19, 20, 21, 22, 23, 24, 26, 25)]
-
+ROUTE_IDS = [D25_IDS[i if i < 6 else i + 2] for i in
+             (0, 1, 2, 3, 7, 17, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+              18, 19, 20, 21, 22, 23, 24, 26, 25)]
+ROUTE_IDS[8:8] = ['agy-gemini-4-hydrogen-high', 'agy-gemini-4-hydrogen-medium']
 
 def card(**kw):
     base = {"outcome": "do it", "estimate_tokens": 40000, "risk_tags": [],
             "window_class": None}
     base.update(kw)
     return base
-
 
 def ids(route):
     return [leg.id for leg in route.legs]
@@ -57,7 +57,7 @@ def test_default_legs_exact_d25_order():
     assert "trial" not in {leg.tier for leg in DEFAULT_LEGS}
     # Independent expected tiers catch mis-tiered entries without routing them.
     by_id = {leg.id: leg for leg in DEFAULT_LEGS}
-    assert [by_id[leg_id].tier for leg_id in ROUTE_IDS] == ["free"] * 6 + ["subscription"] * 20 + ["paid"]
+    assert [by_id[leg_id].tier for leg_id in ROUTE_IDS] == ["free"] * 6 + ["subscription"] * 22 + ["paid"]
     ids_ = [leg.id for leg in DEFAULT_LEGS]
     assert ids_.index("cx-gpt-6.1-sol-xhigh") < ids_.index("agy-gemini-4-argon") < ids_.index("mimo-v2.6-flash")
     assert ids_[-2:] == ["deepseek", "claude-haiku-5.5"]  # D-3605 Haiku leg
@@ -153,7 +153,7 @@ def test_90000_goes_256k_and_only_legs_with_that_window():
     r = route_card(card(estimate_tokens=90000))
     assert r.window_class == "256k"
     assert ids(r) == ["qodercli-qwen3.8-flash", "cx-gpt-6.1-sol-xhigh",
-                      "cx-gpt-6-luna", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
+                      "cx-gpt-6-luna", "agy-gemini-4-hydrogen-high", "agy-gemini-4-hydrogen-medium", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
                       "agy-sonnet-5.5", "agy-claude-opus", "agy-opus-5.5", "omniroute-grok-4.7", "claude-haiku-5.5", "deepseek"]
     assert all("256k" in leg.windows for leg in r.legs)
 
@@ -228,7 +228,7 @@ def test_no_estimate_or_no_leg_raises():
     with pytest.raises(RouteError):
         route_card(card(), unavailable=set(D25_IDS))
     with pytest.raises(RouteError, match="estimate too big"):
-        route_card(card(estimate_tokens=900000))
+        route_card(card(estimate_tokens=900001))
     with pytest.raises(ValueError):
         route_card(card(risk_tags=["bogus"]))
 
@@ -381,7 +381,7 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     review = plan_spawn(dict(c, diff_ref={"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}), role="review", writer_families=("gpt",), benchmark=rows, leg_reader=reader)
     assert {s["leg"]: s["reason"] for s in review.skipped}["mimo-v2.6-pro"] == "limited"
     from test_route_free_first import WRITERS, FREE
-    assert [l.id for l in plan.legs] == [WRITERS[0], FREE[0], FREE[1], *WRITERS[1:5], *WRITERS[6:]]
+    assert [l.id for l in plan.legs] == [*WRITERS[:2], FREE[0], FREE[1], *WRITERS[2:6], *WRITERS[7:]]
 
 
 def test_no_implement_plan_leg_has_claude_family():

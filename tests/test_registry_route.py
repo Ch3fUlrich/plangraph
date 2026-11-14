@@ -210,7 +210,7 @@ def test_route_skips_paused_harness_per_role():
     reasons = {s["leg"]: s["reason"] for s in paused.skipped}
     assert {leg_id: reasons[leg_id] for leg_id in paused_ids} == dict.fromkeys(
         paused_ids, "paused_harness")
-    assert [leg.id for leg in paused.legs] == ['agy-gemini-4-argon']
+    assert [leg.id for leg in paused.legs] == ['agy-gemini-4-hydrogen-high', 'agy-gemini-4-argon']
 
 
 def test_explicit_policy_argument_wins():

@@ -304,5 +304,5 @@ def test_keeper_readiness_does_not_enable_implementation_fallbacks(w, repo, entr
     # D-5212 changes worker priority, not S5's registered free/paid fallbacks.
     worker = service.route_for_card(w.store, w.p("router"), key,
                                     legs=DEFAULT_LEGS, role="implement")
-    assert [leg.id for leg in worker.legs[:2]] == ["cx-gpt-6.1-sol-xhigh", "openrouter-free"]
+    assert [leg.id for leg in worker.legs[:2]] == ["cx-gpt-6.1-sol-xhigh", "agy-gemini-4-hydrogen-high"]
     assert worker.legs[-1].id == "deepseek"

@@ -67,8 +67,7 @@ def test_leg_data():
 
 def test_explicit_legs_stay_out_of_every_route():
     """D-5206 promotes only Sol xhigh; every other effort leg stays explicit-only."""
-    declarations = {'agy-gemini-4-hydrogen-high', 'agy-gemini-4-hydrogen-medium',
-                    'cx-gpt-6.1-terra-medium', 'cx-gpt-6.1-terra-xhigh',
+    declarations = {'cx-gpt-6.1-terra-medium', 'cx-gpt-6.1-terra-xhigh',
                     'muse-ember-max', 'claude-fable-5.2-high'}
     assert {leg.id for leg in EXPLICIT_LEGS} == MANUAL | declarations
     assert all(leg.disabled and not leg.roles and leg.expires is None

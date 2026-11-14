@@ -41,13 +41,13 @@ def clean_gateway_env(monkeypatch):
 def test_render_mimo_template_and_base_url_override(tmp_path, monkeypatch):
     """(a) No AutoOS root + OMNIROUTE_BASE_URL gives mimo provider with /v1 and env."""
     monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path / "nonexistent-root"))
-    env = {"OMNIROUTE_BASE_URL": "http://gw:20128"}
+    env = {"OMNIROUTE_BASE_URL": "http://gw:8080"}
     reason = render_gateway_providers(env, "mimo/mimo-v2.6-pro")
     assert reason is None
 
     cfg = json.loads(env["OPENCODE_CONFIG_CONTENT"])
     mimo = cfg["providers"]["mimo"]
-    assert mimo["settings"]["baseURL"] == "http://gw:20128/v1"
+    assert mimo["settings"]["baseURL"] == "http://gw:8080/v1"
     assert mimo["env"] == ["AUTOOS_OMNIROUTE_KEY"]
     assert mimo["package"] == "@opencode/ai/providers/openai-compatible"
     for mid in ACCEPTED_MIMO_IDS:
@@ -88,7 +88,7 @@ def test_render_linux_root_fixture_parity(tmp_path, monkeypatch):
     fake_root.mkdir()
     (fake_root / "providers.json").write_text(json.dumps({"providers": {"mimo": {
         "package": "@opencode/ai/providers/openai-compatible", "name": "MiMo direct gateway legs",
-        "env": ["AUTOOS_OMNIROUTE_KEY"], "settings": {"baseURL": "http://127.0.0.1:20128/v1"},
+        "env": ["AUTOOS_OMNIROUTE_KEY"], "settings": {"baseURL": "http://127.0.0.1:8080/v1"},
         "models": {m.split("/", 1)[1]: {"modelID": m} for m in ACCEPTED_MIMO_IDS},
     }}}))
     monkeypatch.setenv("PLANGRAPH_PROVIDERS_FILE", str(fake_root / "providers.json"))
@@ -108,7 +108,7 @@ def test_sentinel_key_never_leaks(tmp_path, monkeypatch):
     """(d) Sentinel key is absent from config, argv, files under tmp_path, and record."""
     sentinel = "FAKE-KEY-0123456789"
     monkeypatch.setenv("AUTOOS_OMNIROUTE_KEY", sentinel)
-    monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:20128/v1")
+    monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:8080/v1")
     monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path / "absent-root"))
 
     runner = SpawnerRunner()
@@ -145,7 +145,7 @@ def test_render_never_imports_host_keys_or_opens_api_keys(tmp_path, monkeypatch)
     monkeypatch.setattr(
         host_keys, "_zen_key", lambda *a, **k: pytest.fail("render called _zen_key")
     )
-    env = {"OMNIROUTE_BASE_URL": "http://gw:20128"}
+    env = {"OMNIROUTE_BASE_URL": "http://gw:8080"}
     reason = render_gateway_providers(env, "mimo/mimo-v2.6-pro")
     assert reason is None
     render_mod = sys.modules["plangraph.routing_support.opencode_render"]
@@ -183,7 +183,7 @@ def test_render_oversized_config_on_nt():
     big_doc = {"providers": {"mimo": {"dummy": "x" * 31000}}}
     env = {
         "OPENCODE_CONFIG_CONTENT": json.dumps(big_doc),
-        "PLANGRAPH_GATEWAY_URL": "http://127.0.0.1:20128/v1",
+        "PLANGRAPH_GATEWAY_URL": "http://127.0.0.1:8080/v1",
     }
     reason_nt = render_gateway_providers(env, "mimo/mimo-v2.6-pro", is_nt=True)
     assert reason_nt == REFUSAL_TOO_LARGE
@@ -197,7 +197,7 @@ def test_render_oversized_config_on_nt():
 def test_add_host_keys_receives_needs_gateway_for_mimo_without_root(tmp_path, monkeypatch):
     """(h) add_host_keys receives needs_gateway=True for mimo when there is no root."""
     monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path / "absent-root"))
-    monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:20128/v1")
+    monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:8080/v1")
     captured = {}
     orig_add_host_keys = host_keys.add_host_keys
 
@@ -227,7 +227,7 @@ def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch):
     """
     sentinel = "SENTINEL-PARENT-ENV-KEY-999"
     monkeypatch.setenv("AUTOOS_OMNIROUTE_KEY", sentinel)
-    monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:20128/v1")
+    monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:8080/v1")
     monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path / "absent-root"))
 
     from plangraph.spawner import resolver
@@ -284,20 +284,20 @@ def test_root_base_url_normalized_in_fallback(tmp_path, monkeypatch):
     fake_root.mkdir()
     (fake_root / "providers.json").write_text(json.dumps({"providers": {"mimo": {
         "package": "@opencode/ai/providers/openai-compatible",
-        "env": ["AUTOOS_OMNIROUTE_KEY"], "settings": {"baseURL": "http://root:20128"},
+        "env": ["AUTOOS_OMNIROUTE_KEY"], "settings": {"baseURL": "http://root:8080"},
         "models": {m.split("/", 1)[1]: {"modelID": m} for m in ACCEPTED_MIMO_IDS},
     }}}))
     monkeypatch.setenv("PLANGRAPH_PROVIDERS_FILE", str(fake_root / "providers.json"))
     env = overlay_env(build_child_env())
     assert render_gateway_providers(env, "mimo/mimo-v2.6-pro") is None
     cfg = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-    assert cfg["providers"]["mimo"]["settings"]["baseURL"] == "http://root:20128/v1"
+    assert cfg["providers"]["mimo"]["settings"]["baseURL"] == "http://root:8080/v1"
 
 
 def test_render_null_env_treated_as_absent():
     """F2 (H5): a provider with "env": null never raises and counts as absent."""
     env = {
-        "OMNIROUTE_BASE_URL": "http://gw:20128",
+        "OMNIROUTE_BASE_URL": "http://gw:8080",
         "OPENCODE_CONFIG_CONTENT": json.dumps({"providers": {
             "mimo": {"env": None, "settings": {}},
             "omniroute": {"env": {"weird": 1}, "settings": {}},
@@ -310,8 +310,8 @@ def test_render_null_env_treated_as_absent():
     # Gateway providers with a non-list env get the gateway key name filled in.
     assert cfg["providers"]["mimo"]["env"] == ["AUTOOS_OMNIROUTE_KEY"]
     assert cfg["providers"]["omniroute"]["env"] == ["AUTOOS_OMNIROUTE_KEY"]
-    assert cfg["providers"]["mimo"]["settings"]["baseURL"] == "http://gw:20128/v1"
-    assert cfg["providers"]["omniroute"]["settings"]["baseURL"] == "http://gw:20128/v1"
+    assert cfg["providers"]["mimo"]["settings"]["baseURL"] == "http://gw:8080/v1"
+    assert cfg["providers"]["omniroute"]["settings"]["baseURL"] == "http://gw:8080/v1"
     # A non-gateway provider is left untouched.
     assert cfg["providers"]["custom"]["env"] == 7
 
@@ -319,7 +319,7 @@ def test_render_null_env_treated_as_absent():
 def test_render_non_gateway_model_with_null_env_no_raise():
     """F2: the model-prefix gate itself must survive a non-list env block."""
     env = {
-        "OMNIROUTE_BASE_URL": "http://gw:20128",
+        "OMNIROUTE_BASE_URL": "http://gw:8080",
         "OPENCODE_CONFIG_CONTENT": json.dumps({"providers": {"custom": {"env": None}}}),
     }
     assert render_gateway_providers(env, "custom/thing") is None
