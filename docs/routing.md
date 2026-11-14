@@ -1,11 +1,11 @@
-# Implement route defaults (D-5206)
+# Implement route defaults (D-5840; supersedes D-5206)
 
-An implement card uses `cx-gpt-6.1-sol-xhigh` (model `omniroute/cx-gpt-6.1-sol-xhigh`,
-effort `xhigh`), then `agy-gemini-3.8-flash` (agy harness). Quota, cooldown, or a
+An implement card uses `cx-gpt-6.1-sol-medium` (model `omniroute/cx-gpt-6.1-sol-medium`,
+effort `medium`), then `agy-gemini-3.8-flash` (agy harness). Quota, cooldown, or a
 confirmed availability refusal advances without an override; safety refusals,
 cancellation, and guards still stop dispatch. Eligibility and harness policy apply first.
 Both designated writers precede all other cost tiers, even when catalog tiers
-change: Sol xhigh, then Gemini Flash (rule 3.23a / D-5212). Other eligible legs
+change: Sol medium, then Gemini Flash (rule 3.23a / D-5212). Other eligible legs
 retain cost-tier order, with subscriptions before pay-as-you-go.
 Writer and review payment ordering uses one classification function for the
 payment class of raw and catalog-projected legs, treating muse-amber as paid:
@@ -19,7 +19,7 @@ Main's registered implementation fallbacks retain their roles, permanent disable
 expiry/re-probe behavior and benchmark ranking within the remaining cost tiers.
 Exhausting all eligible legs still yields no route; writer priority never bypasses
 availability. Role-neutral keeper readiness retains its narrower admission, using
-the current Sol xhigh id so an unavailable default table cannot resurrect plain Sol.
+the current Sol medium id so an unavailable default table cannot resurrect plain Sol.
 
 Plain Sol and other Sol effort variants remain active, explicit-only catalog legs
 requiring audited overrides. Claude/Fable/Opus/Sonnet/Haiku never enter automatic
@@ -34,11 +34,13 @@ candidate rows; CLI stderr names each skipped leg, including when no route remai
 An opaque alias for a registered model may use that registration's family proof
 (for example, Big Pickle is GLM); a Claude identity still always vetoes admission.
 
-Route JSON and saved `chosen_leg` include `effort` (`xhigh` by default).
+Route JSON and saved `chosen_leg` include `effort` (`medium` by default).
 Operator leg JSON preserves its validated `effort` through the loaded leg, route
 plan, saved `chosen_leg`, and attempt rows; omitted or explicit `null` effort
 stays `null`. All other validated leg fields are retained too. The per-run
 renderer declares cx effort models; see [SPAWNER.md](SPAWNER.md#card-driven-routing-core).
+
+Effort admission reads the declared leg field, never a model-name suffix. Ember Max has null registered effort; its capability-based disable remains unchanged. A disallowed-effort leg is recorded as skipped and later legs are tried; an exhausted route refuses. Explicit higher effort still requires a matching card effort and decision ID.
 
 ## Opt-in order core (D-5696/D-5706)
 

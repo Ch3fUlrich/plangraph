@@ -149,7 +149,7 @@ def test_ember_only_after_two_cheaper_disagreeing_verdicts(catalog, verdicts, em
     assert ('muse-ember-max' in {leg.id for leg in result}) is ember
     expected = [('mimo-v2.6-pro', None), ('opencode-go-deepseek-v4-flash', None),
                 ('mimo-v2.6-flash', None), ('claude-haiku-5.5', None)]
-    assert signature(result) == expected + ([('muse-ember-max', 'max')] if ember else []) + [
+    assert signature(result) == expected + ([('muse-ember-max', None)] if ember else []) + [
         ('omniroute-deepseek-flash', None)]
 
 
