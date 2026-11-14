@@ -218,13 +218,19 @@ def _advance(registry, sha, hosts, go, dry_run, record, log, run):
     return 0
 
 
-def main_ff(repo, keeper_state, *, fetch=True):
+def main_ff(repo, keeper_state, *, fetch=True, keeper_unit='plangraph-keeper.service'):
     """Fast-forward main only when the running keeper's imported code stays fixed."""
     import fcntl
 
     from plangraph.routing_support.private_io import atomic_write_private
 
-    from .drift import keeper_changes, main_ff_status_path, repo_git, running_keeper
+    from .drift import (
+        keeper_changes,
+        keeper_main_pid,
+        main_ff_status_path,
+        repo_git,
+        running_keeper,
+    )
 
     repo = Path(repo).resolve()
     status = main_ff_status_path(repo)
@@ -247,14 +253,23 @@ def main_ff(repo, keeper_state, *, fetch=True):
         current = repo_git(repo, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip()
         if repo_git(repo, 'merge-base', '--is-ancestor', current, target, check=False).returncode:
             return finish(2, 'REFUSED main is not an ancestor of origin/main')
-        try:
-            loaded = running_keeper(keeper_state)
-            changed = keeper_changes(repo, loaded, target) if loaded else []
-        except (OSError, ValueError, SyntaxError, subprocess.SubprocessError):
-            return finish(3, f'HELD keeper state/import analysis unavailable target {target}')
-        if changed:
-            files = ', '.join(path.replace('\n', '?').replace('\r', '?') for path in changed)
-            return finish(3, f'HELD keeper code changed: {files} loaded {loaded} target {target}')
+        def keeper_hold():
+            try:
+                loaded = running_keeper(keeper_state)
+                if loaded is None and keeper_main_pid(keeper_unit):
+                    return f'HELD live keeper has no matching state; restart keeper to bootstrap and verify state path target {target}'
+                changed = keeper_changes(repo, loaded, target) if loaded else []
+            except (OSError, ValueError, SyntaxError, subprocess.SubprocessError):
+                return f'HELD keeper state/import analysis unavailable target {target}'
+            if changed:
+                files = ', '.join(path.replace('\n', '?').replace('\r', '?') for path in changed)
+                return f'HELD keeper code changed: {files} loaded {loaded} target {target}'
+            return None
+        if line := keeper_hold():
+            return finish(3, line)
         if current != target:
+            # A keeper may have restarted/published state during the first check.
+            if line := keeper_hold():
+                return finish(3, line)
             repo_git(repo, 'merge', '--ff-only', target)
         return finish(0, f'UPDATED main {target}' if current != target else f'CURRENT main {target}')

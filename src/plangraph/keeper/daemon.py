@@ -89,11 +89,15 @@ def write_loaded_state(cfg):
 
     try:
         sha = repo_git(CODE_TREE, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip()
+        branch = repo_git(CODE_TREE, 'symbolic-ref', '--short', '-q', 'HEAD', check=False).stdout.strip() or None
+        dirty = bool(repo_git(CODE_TREE, 'status', '--porcelain', '--untracked-files=no').stdout)
+        if dirty:
+            sha = None  # HEAD alone cannot identify modified loaded code.
     except (OSError, subprocess.SubprocessError):
-        sha = None  # A live keeper with unknown provenance must hold updates.
+        sha, branch, dirty = None, None, None  # Unknown provenance holds updates.
     path = Path(cfg.db).with_name(Path(cfg.db).name + '.loaded.json')
     row = {'loaded_sha': sha, 'pid': os.getpid(), 'start_time': time.time(),
-           'pid_start': pid_start(os.getpid())}
+           'pid_start': pid_start(os.getpid()), 'loaded_branch': branch, 'dirty': dirty}
     atomic_write_private(path, json.dumps(row) + '\n')
     return path
 

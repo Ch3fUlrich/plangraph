@@ -16,7 +16,10 @@ def git(repo, *args):
 
 
 @pytest.fixture
-def checkout(tmp_path):
+def checkout(tmp_path, monkeypatch):
+    from plangraph.fleet_sync import drift
+
+    monkeypatch.setattr(drift, 'keeper_main_pid', lambda _unit: 0)
     repo = tmp_path / 'repo'
     repo.mkdir()
     git(repo, 'init', '-b', 'main')
@@ -166,3 +169,97 @@ def test_reused_pid_state_is_not_treated_as_running_keeper(checkout):
     state.write_text(json.dumps(row))
     assert advance.main_ff(repo, state, fetch=False)[0] == 0
     assert git(repo, 'rev-parse', 'HEAD') == sha
+
+
+def test_restart_state_is_rechecked_before_merge(checkout, monkeypatch):
+    from plangraph.fleet_sync import drift
+
+    repo, state, loaded = checkout
+    target(repo, 'src/plangraph/keeper/daemon.py', 'VALUE = 2\n')
+    read = drift.running_keeper
+    calls = []
+
+    def restarting(path):
+        calls.append(path)
+        return None if len(calls) == 1 else read(path)
+
+    monkeypatch.setattr(drift, 'running_keeper', restarting)
+    monkeypatch.setattr(drift, 'keeper_main_pid', lambda _unit: 0, raising=False)
+    assert advance.main_ff(repo, state, fetch=False)[0] == 3
+    assert len(calls) == 2
+    assert git(repo, 'rev-parse', 'HEAD') == loaded
+
+
+@pytest.mark.parametrize('state_kind', ['missing', 'wrong-db'])
+def test_live_unit_without_matching_state_holds(checkout, monkeypatch, state_kind):
+    from plangraph.fleet_sync import drift
+
+    repo, state, loaded = checkout
+    target(repo, 'src/plangraph/keeper/daemon.py', 'VALUE = 2\n')
+    if state_kind == 'missing':
+        state.unlink()
+    else:
+        state = state.with_name('wrong-db.loaded.json')
+    monkeypatch.setattr(drift, 'keeper_main_pid', lambda _unit: os.getpid(), raising=False)
+    code, line = advance.main_ff(repo, state, fetch=False)
+    assert code == 3 and 'restart keeper' in line and 'state' in line
+    assert git(repo, 'rev-parse', 'HEAD') == loaded
+
+
+def test_keeper_unit_pid_uses_existing_service(monkeypatch):
+    from plangraph.fleet_sync import drift
+
+    def run(argv, **kwargs):
+        assert argv == ['systemctl', '--user', 'show', 'plangraph-keeper.service', '--property=MainPID', '--value']
+        return SimpleNamespace(stdout='123\n')
+
+    monkeypatch.setattr(drift.subprocess, 'run', run)
+    assert drift.keeper_main_pid('plangraph-keeper.service') == 123
+
+
+@pytest.mark.parametrize('path', ['src/plangraph/routing_support/catalog_schema.sql',
+    'src/plangraph/planner/route_policy.json', 'configuration/opencode/providers.json'])
+def test_existing_keeper_runtime_data_holds(checkout, path):
+    repo, state, _ = checkout
+    dest = repo / path
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text('old data\n')
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-m', 'loaded data')
+    loaded = git(repo, 'rev-parse', 'HEAD')
+    state.write_text(json.dumps({'loaded_sha': loaded, 'pid': os.getpid(), 'start_time': 1}))
+    target(repo, path, 'new data\n')
+    code, line = advance.main_ff(repo, state, fetch=False)
+    assert code == 3 and path in line
+    assert git(repo, 'rev-parse', 'HEAD') == loaded
+
+
+@pytest.mark.parametrize('kind', ['dirty', 'detached', 'non-git'])
+def test_loaded_state_describes_checkout_provenance(checkout, tmp_path, monkeypatch, kind):
+    repo, _, loaded = checkout
+    if kind == 'dirty':
+        (repo / 'src/plangraph/keeper/daemon.py').write_text('DIRTY = True\n')
+    elif kind == 'detached':
+        git(repo, 'checkout', '--detach')
+    else:
+        repo = tmp_path
+    monkeypatch.setattr(daemon, 'CODE_TREE', repo)
+    row = json.loads(daemon.write_loaded_state(SimpleNamespace(db=tmp_path / 'provenance.db')).read_text())
+    assert row['loaded_branch'] == ('main' if kind == 'dirty' else None)
+    assert row['dirty'] is (True if kind == 'dirty' else False if kind == 'detached' else None)
+    assert row['loaded_sha'] == (loaded if kind == 'detached' else None)
+
+
+def test_absent_state_with_unavailable_unit_query_holds(checkout, monkeypatch):
+    from plangraph.fleet_sync import drift
+
+    repo, state, loaded = checkout
+    target(repo, 'src/plangraph/spawner/unused.py', 'VALUE = 2\n')
+    state.unlink()
+
+    def unavailable(_unit):
+        raise OSError('unit query unavailable')
+
+    monkeypatch.setattr(drift, 'keeper_main_pid', unavailable)
+    assert advance.main_ff(repo, state, fetch=False)[0] == 3
+    assert git(repo, 'rev-parse', 'HEAD') == loaded

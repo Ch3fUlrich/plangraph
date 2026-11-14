@@ -131,3 +131,10 @@ any prior unguarded updater rather than running both. No live config or unit is
 installed by this package. The named earlier main-ff script/routerctl sources
 were absent from this checkout; this command and the existing fleet drift
 surface provide the in-repository implementation and status integration.
+
+The main-ff guard now rechecks keeper state immediately before merging. Missing
+state permits a move only when the configured keeper unit reports MainPID zero;
+a running unit without state holds with a one-time restart/path diagnostic, and
+unit-query failures hold too. `--keeper-unit` defaults to the repository's existing
+`plangraph-keeper.service`. See the keeper state contract for bootstrap, dirty or
+non-Git provenance, exact runtime data dependencies, and manual-update limits.
