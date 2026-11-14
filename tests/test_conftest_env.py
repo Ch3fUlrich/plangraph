@@ -85,3 +85,47 @@ def test_pytest_shards_preserve_groups_and_cover_every_case(shard_selector):
     assert sorted(x.nodeid for shard in shards for x in shard) == ['a', 'b', 'c', 'd']
     assert sum(any(x.nodeid == 'a' for x in shard) and any(x.nodeid == 'b' for x in shard) for shard in shards) == 1
     assert [[x.nodeid for x in shard_selector(list(reversed(items)), f'{n}/3')][::-1] for n in range(3)] == [[x.nodeid for x in shard] for shard in shards]
+
+
+@pytest.mark.parametrize('linked', [False, True])
+@pytest.mark.parametrize('change', ['add', 'remove', 'relocate'])
+def test_guard_detects_worktree_registry_changes(tmp_path, config_guard, linked, change):
+    repo, common = tmp_path / 'repo', tmp_path / 'metadata'
+    repo.mkdir()
+    (common / 'worktrees/old').mkdir(parents=True)
+    (common / 'config').write_text('[core]\n')
+    entry = common / 'worktrees/old/gitdir'
+    entry.write_text(str(tmp_path / 'old/tree/.git') + '\n')
+    if linked:
+        (repo / '.git').write_text('gitdir: ' + str(common / 'worktrees/old') + '\n')
+        (common / 'worktrees/old/commondir').write_text('../..\n')
+    else:
+        (repo / '.git').symlink_to(common, target_is_directory=True)
+    with pytest.raises(AssertionError, match='worktree registry changed'):
+        with config_guard(repo, registry_roots=(tmp_path,)):
+            if change == 'add':
+                (common / 'worktrees/new').mkdir()
+                (common / 'worktrees/new/gitdir').write_text(str(tmp_path / 'new/tree/.git') + '\n')
+            elif change == 'remove':
+                entry.unlink()
+            else:
+                entry.write_text(str(tmp_path / 'moved/tree/.git') + '\n')
+
+
+def test_guard_ignores_other_sessions_worktree_moves(tmp_path, config_guard, monkeypatch):
+    repo = tmp_path / 'repo'
+    metadata = repo / '.git'
+    other = metadata / 'worktrees/other'
+    other.mkdir(parents=True)
+    (metadata / 'config').write_text('[core]\n')
+    (metadata / 'HEAD').write_text('ref: refs/heads/main\n')
+    (other / 'gitdir').write_text(str(tmp_path / 'other/.git'))
+    with config_guard(repo, registry_roots=(tmp_path / 'test-owned',)):
+        (metadata / 'HEAD').write_text('ref: refs/heads/another-session\n')
+        (other / 'HEAD').write_text('b' * 40)
+        (other / 'gitdir').write_text(str(tmp_path / 'elsewhere/.git'))
+        read_text = Path.read_text
+        def disappearing(path, *args, **kwargs):
+            if path == other / 'gitdir': path.unlink()
+            return read_text(path, *args, **kwargs)
+        monkeypatch.setattr(Path, 'read_text', disappearing)

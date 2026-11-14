@@ -324,3 +324,5 @@ Local preflight tests compare the branch against origin/main, follow shared asse
 Local controls run every named consumer plus a bounded smoke set; policy checks use origin/main when available, including inherited stack changes. Preflight clears the complete GIT_CONFIG namespace before selector launch.
 
 The 800-line tracked file budget is authorized by D-5840 (95a9ac34); legacy baseline ratchets still apply.
+
+Checkpoint 5 includes test worktree registry and caller snapshots; run its affected Python checks in an isolated clone.
