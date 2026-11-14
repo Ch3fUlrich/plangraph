@@ -1,6 +1,6 @@
 """Response-side served-model witness from the OmniRoute call log (D-3226).
 
-A review seat on an ``omniroute`` provider sends ``x-omniroute-session-id:
+An OpenCode run on an ``omniroute`` provider sends ``x-omniroute-session-id:
 plangraph-<job_id>``; the gateway stores it as the call log's ``sessionTag``.
 After the child exits, the runner (a trusted in-process adapter) reads the
 call log rows with that tag and records the model the gateway served. The
@@ -15,18 +15,18 @@ import os
 from pathlib import Path
 import stat
 import time
-import types
 import urllib.parse
 import urllib.request
 
 from plangraph.routing_support.opencode_overlay import _strip_jsonc
+from .gateway_models import (  # compatibility re-exports for callers
+    PROVIDER_ALIASES, model_segment, served_family, served_models,
+)
 
 SESSION_HEADER = 'x-omniroute-session-id'
 TOKEN_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN'
 TOKEN_FILE_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN_FILE'
 URL_ENVS = ('OMNIROUTE_BASE_URL', 'PLANGRAPH_GATEWAY_URL')
-# Rows come from the gateway's own call log, so xiaomi-mimo is its connection, never a direct leg.
-PROVIDER_ALIASES = types.MappingProxyType({'xiaomi-mimo': 'mimo'})
 WITNESS_KIND = 'response-side-gateway-call-log'
 
 
@@ -182,27 +182,6 @@ def require_witness(model, env=None, *, secrets=None):
         raise SpawnRefused('witness required: ' + str(exc)) from None
 
 
-def served_models(rows, tag):
-    """Every model the gateway served (2xx rows) for ``tag``, as ``provider/model``."""
-    served = set()
-    for row in rows if isinstance(rows, list) else ():
-        if not isinstance(row, dict) or row.get('sessionTag') != tag:
-            continue
-        try:
-            ok = 200 <= int(row.get('status')) < 300
-        except (TypeError, ValueError):
-            ok = False
-        model = str(row.get('model') or '').strip()
-        if ok and model:
-            provider = str(row.get('provider') or '').strip()
-            provider = PROVIDER_ALIASES.get(provider, provider)
-            head, sep, rest = model.partition('/')
-            if sep and head in PROVIDER_ALIASES:
-                model = PROVIDER_ALIASES[head] + '/' + rest
-            served.add(model if '/' in model or not provider else f'{provider}/{model}')
-    return served
-
-
 def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=None):
     """Call-log rows for ``tag``; raises LookupError naming why they are unreadable.
 
@@ -346,6 +325,9 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
             except ValueError as exc:
                 reason = str(exc)
                 break
+            if model_segment(model) != model_segment(job.model_or_combo):
+                job.events.append(dict(event='served_model_mismatch',
+                                       requested_model=job.model_or_combo, served_model=model))
             job.witness_kind = WITNESS_KIND
             job.served_witness_reason = 'gateway call log (sessionTag) response-side model'
             return
