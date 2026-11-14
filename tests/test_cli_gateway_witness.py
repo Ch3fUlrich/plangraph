@@ -139,3 +139,18 @@ def test_file_endpoint_requires_http_scheme_before_credentials(isolated_config, 
     assert clients.effective_gateway_base_url() is None
     with pytest.raises(LookupError, match='gateway endpoint not configured'):
         gw.fetch_rows('plangraph-job', {}, opener=lambda *_args, **_kwargs: pytest.fail('invalid endpoint opened'))
+
+
+@pytest.mark.parametrize('source', ['OMNIROUTE_BASE_URL', 'PLANGRAPH_GATEWAY_URL', 'config', 'overlay'])
+@pytest.mark.parametrize('endpoint', ['file:///tmp/gateway', 'ftp://gateway.invalid', 'https:///missing-host'])
+def test_management_request_validates_every_endpoint_source(monkeypatch, source, endpoint):
+    if source == 'config':
+        child = clients.build_child_env(config={'gateway_url': endpoint})
+        monkeypatch.setenv('OPENCODE_CONFIG_CONTENT', child['OPENCODE_CONFIG_CONTENT'])
+    elif source == 'overlay':
+        monkeypatch.setenv('OPENCODE_CONFIG_CONTENT', json.dumps({'providers': {'omniroute': {'settings': {'baseURL': endpoint}}}}))
+    else:
+        monkeypatch.setenv(source, endpoint)
+    monkeypatch.setattr(gw, 'load_token', lambda *_: pytest.fail('invalid endpoint read management key'))
+    with pytest.raises(LookupError, match='gateway endpoint must use HTTP'):
+        gw.fetch_rows('plangraph-job', {}, opener=lambda *_args, **_kwargs: pytest.fail('invalid endpoint sent token'))

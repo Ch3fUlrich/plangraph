@@ -43,3 +43,8 @@ The witness endpoint now uses the same effective child-base resolver, including
 an existing `OPENCODE_CONFIG_CONTENT` omniroute settings baseURL. File-derived
 endpoints must have an HTTP(S) scheme and hostname; invalid files stay
 unconfigured and cannot trigger management-key reads or call-log requests.
+
+Before attaching the management Bearer token, `fetch_rows` validates HTTP(S) and
+a hostname for every endpoint source, including env, config mappings and child
+overlays. Invalid endpoints are refused before reading the key; file validation
+remains in the shared resolver as well.

@@ -189,6 +189,13 @@ def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=No
     base = _gateway(secrets)
     if not base:
         raise LookupError('gateway endpoint not configured')
+    try:
+        parsed = urllib.parse.urlsplit(base)
+        valid = parsed.scheme in ('http', 'https') and parsed.hostname
+    except ValueError:
+        valid = False
+    if not valid:
+        raise LookupError('gateway endpoint must use HTTP(S) with a host')
     token = load_token(secrets)
     if base.endswith('/v1'):
         base = base[:-3]
