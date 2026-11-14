@@ -108,13 +108,13 @@ DEFAULT_LEGS = (
         tool_mode="inline-only"),
     *(Leg(f"agy-gemini-4-hydrogen-{effort}", "subscription", "agy",
           f"gemini-4-hydrogen-{effort}", "gemini", ("128k", "256k", "1m"), 900000, False,
-          roles=(role,), effort=effort, tool_mode="inline-only" if role == "review" else "tools",
+          roles=(role,), effort=effort, tool_mode="tools",
           note="D-5903: enabled; agy models lists Hydrogen low/medium/high/xhigh (2026-11-14); "
                "agy CLI review verdicts: PR #878 (three heads), #886 (2026-11-14), "
                "handoffs/plan-order/reviews/{pr878-5ac07d1d,pr886-75c5bd2f}-hydrogen.txt. "
                "Tier/privacy/windows/request bound inherit agy Claude 5.5: same subscription/harness; "
                "clients.launch_stdin_payload carries stream JSON on stdin, not prompt argv. "
-               "Review uses inline diff (agy plan, no repository tools). "
+               "Review plan mode reads the working tree with tools: plan-order file-marker probe 2026-11-14 09:5xZ. "
                "Seat unwitnessed: agy emits no served-model telemetry (rule 3.26).")
       for effort, role in (("high", "implement"), ("medium", "review"))),
     Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-high",

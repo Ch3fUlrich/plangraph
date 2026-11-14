@@ -183,7 +183,7 @@ def test_service_route_lists_explicit_legs(tmp_path):
 def test_agy_command_passes_the_served_model():
     from plangraph.routing_support.clients import build_command, launch_stdin_payload
     cmd = build_command('hi', 'claude-opus-5-5-high', role='review', client='agy')
-    assert cmd == ['agy', '--dangerously-skip-permissions', '--model',
+    assert cmd == ['agy', '--mode', 'plan', '--model',
                    'claude-opus-5-5-high', '-p', '', '--input-format', 'stream-json', '--output-format', 'stream-json']
     assert json.loads(launch_stdin_payload(cmd, 'hi', 'agy')) == {
         'event': 'user', 'message': {'role': 'user', 'content': 'hi'}}

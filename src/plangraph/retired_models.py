@@ -1,6 +1,7 @@
 """Operator retirement enforcement at request and model-list boundaries."""
 import re
 from collections.abc import Mapping
+from dataclasses import asdict, is_dataclass
 from plangraph.routing_errors import SpawnRefused
 
 
@@ -9,11 +10,13 @@ class RetiredModelError(SpawnRefused, ValueError):
 
 
 def is_retired(value):
-    return isinstance(value, str) and bool(re.search(r'gemini[^\s]*flash', value, re.I))
+    return isinstance(value, str) and bool(re.search(r'gemini[\s\S]*flash', value, re.I))
 
 
 def check_retired(value):
     """Inspect target fields only; prompts and historical records remain readable."""
+    if is_dataclass(value) and not isinstance(value, type):
+        value = asdict(value)
     if isinstance(value, Mapping):
         for key in ('id', 'model', 'model_id', 'upstream_id', 'leg', 'model_or_combo',
                     'override', 'overrides', 'model_override', 'leg_override', 'chosen_leg', 'legs'):

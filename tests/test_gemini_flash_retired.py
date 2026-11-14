@@ -88,7 +88,7 @@ def test_hydrogen_replaces_writer_position_without_inventing_admission():
         assert leg.disabled is None and leg.roles == (role,)
         assert (leg.tier, leg.harness, leg.family, leg.effort) == ('subscription', 'agy', 'gemini', effort)
         assert (leg.windows, leg.max_request_tokens, leg.trains_on_data) == (('128k', '256k', '1m'), 900000, False)
-        assert leg.tool_mode == ('inline-only' if role == 'review' else 'tools')
+        assert leg.tool_mode == 'tools'
         assert 'unwitnessed' in leg.note and 'D-5903' in leg.note
 
 
@@ -120,7 +120,7 @@ def test_hydrogen_prompt_uses_stdin_and_seat_stays_unwitnessed():
     from plangraph.spawner.served_telemetry import native_models
     model = 'gemini-4-hydrogen-medium'
     prompt = 'inline diff ' * 20000  # Exceeds Linux's single-argument limit.
-    cmd = build_standalone_fallback_command('agy', prompt, model, role='review', tool_mode='inline-only')
+    cmd = build_standalone_fallback_command('agy', prompt, model, role='review', tool_mode='tools')
     assert prompt not in cmd and cmd[cmd.index('-p') + 1] == ''
     assert json.loads(launch_stdin_payload(cmd, prompt, 'agy'))['message']['content'] == prompt
     assert not native_models('agy', json.dumps(dict(type='result', model=model, text='VERDICT: PASS')))
@@ -180,3 +180,89 @@ def test_deployment_prunes_removed_combos_instead_of_leaving_stale_routes():
     pruned = set(data['retired']) | set(data['omitted'])
     assert not pruned & {row['name'] for row in data['combos']}
     assert not pruned & set(data['d657_combos'])
+
+
+
+def test_no_diff_review_keeps_hydrogen_when_other_seats_unavailable():
+    def reader(model, **kwargs):
+        unavailable = any(name in model for name in ('mimo', 'opencode', 'muse', 'deepseek'))
+        return dict(state='exhausted' if unavailable else 'available', evidence={})
+    plan = plan_spawn(dict(estimate_tokens=1000), role='review',
+                      writer_families=('gpt', 'claude'), leg_reader=reader, catalog_rows=[])
+    assert plan.error is None
+    assert 'agy-gemini-4-hydrogen-medium' in [leg.id for leg in plan.legs]
+
+
+@pytest.mark.parametrize('field', ['leg', 'chosen_leg', 'legs', 'override'])
+def test_nested_leg_object_refused(field):
+    from plangraph.retired_models import check_retired
+    leg = dataclasses.replace(DEFAULT_LEGS[0], model='gemini-3.8-flash-high')
+    with pytest.raises(SpawnRefused, match=CAUSE):
+        check_retired({field: [leg]})
+
+
+@pytest.mark.parametrize('separator', [' ', '\t', '\n', '_', '/', ':', '.'])
+def test_retired_separator_variants_refused_before_target_resolution(separator):
+    from plangraph.spawner.target import resolve_target
+    with pytest.raises(SpawnRefused, match=CAUSE):
+        resolve_target('agy/GEMINI-3.8' + separator + 'FLASH')
+
+
+@pytest.mark.parametrize('role', ['review', 'implement'])
+def test_agy_tools_command_uses_plan_only_for_review(role):
+    from plangraph.routing_support.clients import build_standalone_fallback_command
+    cmd = build_standalone_fallback_command('agy', 'review', 'gemini-4-hydrogen-medium',
+                                            role=role, tool_mode='tools')
+    if role == 'review':
+        assert cmd[cmd.index('--mode') + 1] == 'plan'
+        assert '--dangerously-skip-permissions' not in cmd
+    else:
+        assert '--mode' not in cmd
+        assert '--dangerously-skip-permissions' in cmd
+
+
+def test_hydrogen_tools_review_launches_in_head_checkout(tmp_path, monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+    from plangraph.spawner.runner import SpawnerRunner
+    repo = tmp_path / 'checkout'
+    repo.mkdir()
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(repo), *args], text=True).strip()
+    git('init', '-q')
+    (repo / 'marker.txt').write_text('head marker\n')
+    git('add', 'marker.txt')
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'head')
+    head = git('rev-parse', 'HEAD')
+    calls = []
+    async def factory(*args, **kwargs):
+        calls.append((args, kwargs))
+        assert kwargs['cwd'] == str(repo) and kwargs['env']['PWD'] == str(repo)
+        assert git('rev-parse', 'HEAD') == head
+        return SimpleNamespace(pid=None, returncode=0)
+    async def collect(*args):
+        return json.dumps(dict(event='result', result=dict(status='SUCCESS',
+                          response='VERDICT: ACCEPT\nTEST_GAMING: none'))).encode(), b''
+    async def ready(*args, **kwargs):
+        pass
+    async def launch(plan, **kwargs):
+        return plan
+    monkeypatch.setattr('plangraph.spawner.run_watchdog.collect', collect)
+    monkeypatch.setattr('plangraph.spawner.resolver.host_skip_reason_async', ready)
+    monkeypatch.setattr('plangraph.spawner.resolver.plan_for_launch_async', launch)
+    monkeypatch.setattr('plangraph.spawner.leg_probe.before_launch', ready)
+    runner = SpawnerRunner(default_cwd=str(repo), process_factory=factory)
+    monkeypatch.setattr(runner, '_reap_process', ready)
+    service = SpawnService(runner=runner, state=tmp_path / 'state')
+    record = asyncio.run(service.spawn(dict(estimate_tokens=1000), 'Read marker.txt and review',
+                        role='review', writer_families=('gpt', 'claude'),
+                        leg='agy-gemini-4-hydrogen-medium',
+                        override_reason='hermetic checkout review test', wait_seconds=None))
+    assert len(calls) == 1
+    cmd = calls[0][0]
+    assert Path(cmd[0]).name == 'agy' and cmd[cmd.index('--mode') + 1] == 'plan'
+    assert '--dangerously-skip-permissions' not in cmd
+    assert record['status'] == 'completed', json.dumps(record)
+    job = runner.jobs[record['job_id']]
+    assert job.task_prompt == 'Read marker.txt and review'
+    assert (job.served_model, job.served_family, job.witness_kind) == ('unwitnessed', 'unwitnessed', None)
