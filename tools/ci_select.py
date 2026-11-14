@@ -18,6 +18,7 @@ SUITES: tuple[str, ...] = (
     "rust",
     "rust-worker",
     "rust-spike",
+    "browser",
 )
 
 KNOWN_PREFIXES: tuple[str, ...] = (
@@ -32,6 +33,7 @@ KNOWN_PREFIXES: tuple[str, ...] = (
 # Keep these before the docs-only shortcut; tests/test_ci_select_rust_inputs.py
 # scans Rust sources and rejects repository reads missing from this list.
 RUST_INPUTS: tuple[str, ...] = (
+    ".github/workflows/**",
     "rust-toolchain.toml",
     ".docs-map",
     "docs/schemas/**",
@@ -123,6 +125,8 @@ def select(paths: list[str]) -> dict[str, bool]:
     res["full"] = False
 
     for p in norm_paths:
+        if p.startswith(("src/plangraph/web/", "tests/browser/", "vendor/")) or p in ("tests/conftest.py", "pyproject.toml", "src/plangraph/render.py"):
+            res["browser"] = True
         if any(fnmatchcase(p, pattern) for pattern in RUST_INPUTS):
             res["rust"] = True
         if p.startswith("skills/") and p.endswith(".md"):
@@ -165,8 +169,9 @@ def gate(needs: dict) -> list[str]:
         outputs = {}
 
     problems: list[str] = []
-    for suite in ALWAYS + SUITES:
-        selected = suite in ALWAYS or outputs.get(suite) != "false"
+    for suite in ALWAYS + SUITES + ("rust-windows",):
+        selection = "rust" if suite == "rust-windows" else suite
+        selected = outputs.get("full") == "true" or suite in ALWAYS or outputs.get(selection) != "false"
         if not selected:
             continue
 

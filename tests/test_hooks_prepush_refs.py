@@ -59,7 +59,7 @@ def test_merge_main_scrubs_only_branch_additions(repo, tmp_path, case):
     expected = 1 if case in ("branch-hit", "resolution-hit", "unknown-main") else 0
     assert res.returncode == expected, out
     if expected:
-        assert "private-word" in out
+        assert ("origin/main unavailable" if case == "unknown-main" else "private-word") in out
 
 
 @pytest.mark.parametrize("remote_ref", ["refs/heads/main", "refs/tags/release",
@@ -217,6 +217,7 @@ def test_sha256_new_branch_and_delete(tmp_path):
     git(r, "config", "user.name", "t")
     git(r, "config", "user.email", "t@example.invalid")
     head = commit_file(r, "clean.txt", "clean\n")
+    git(r, "update-ref", "refs/remotes/origin/main", head)
     zero = "0" * len(head)
     res = run_hook(r, [push_line("feature", head, zero)])
     assert res.returncode == 0, res.stderr

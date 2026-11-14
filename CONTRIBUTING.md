@@ -391,3 +391,8 @@ configuration is supplied; explicit jail settings are preserved and other check 
 Rust test builds, including nested admission checks and Python placement fixtures, inherit `CARGO_TARGET_DIR`; keep the host shared target when it is configured.
 
 Local worker preflight runs library and binary unit tests offline. CI runs the full worker suite, including Temporal-dependent integrations, through `ci-temporal`.
+
+The pre-push hook checks commit trailers on `origin/main..head` before scrub and
+preflight, including when `PREFLIGHT_SKIP=1`. It queries open PR heads and checks
+foreign merges when gh/network access is available; offline pushes still run the
+local trailer gate and explicitly report the skipped open-PR check.
