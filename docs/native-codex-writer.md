@@ -11,8 +11,8 @@ Codex under 2 GiB. Targets need the updated Python spawner and `pg-spawnd` binar
 on PATH (or built at `rust/target/release/pg-spawnd`), Git and native Codex auth.
 
 The Rust worker fetches the pushed base into a per-run ref, refuses ancestry
-behind fetched origin/main, and creates a detached worktree inside the
-repository under `.plangraph-worktrees/<run-id>`. It runs gpt-6.1-sol at medium
+behind fetched origin/main, and creates a detached worktree in the
+run state directory under `runs/<run-id>/worktree`, outside the repository. It runs gpt-6.1-sol at medium
 reasoning with the brief on stdin. A review on the final HEAD is mandatory:
 missing reviews resume the same Codex thread at most three times. Review routes
 must use role `review`, writer_families `["openai"]`. The optional `review_dir`

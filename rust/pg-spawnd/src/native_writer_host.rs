@@ -12,6 +12,7 @@ use std::{
 
 struct Host {
     repo: PathBuf,
+    run_id: String,
     cwd: PathBuf,
     reviews: PathBuf,
     record_path: PathBuf,
@@ -32,12 +33,12 @@ impl Host {
         output(Command::new("git").arg("-C").arg(&self.cwd).args(args))
     }
     fn free(&self) -> Result<u64, String> {
-        // The worktree and repository share a filesystem; before creation probe the repository.
-        let path = if self.cwd.exists() {
-            &self.cwd
-        } else {
-            &self.repo
-        };
+        // State and repository may be on different filesystems. Probe the worktree's
+        // nearest existing parent before creation, then the worktree itself.
+        let mut path = self.cwd.as_path();
+        while !path.exists() {
+            path = path.parent().ok_or("worktree filesystem unavailable")?;
+        }
         let text = output(Command::new("df").args(["-Pk", "--"]).arg(path))?;
         text.lines()
             .last()
@@ -62,10 +63,7 @@ impl Driver for Host {
                 .args(["check-ref-format", &self.base_ref]),
         )?;
         // Pin the pushed ref in a per-run namespace: parallel fetches cannot change this base.
-        let pin = format!(
-            "refs/plangraph/native/{}/base",
-            self.cwd.file_name().unwrap().to_string_lossy()
-        );
+        let pin = format!("refs/plangraph/native/{}/base", self.run_id);
         output(Command::new("git").arg("-C").arg(&self.repo).args([
             "fetch",
             "--no-write-fetch-head",
@@ -275,20 +273,25 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
         .as_str()
         .filter(|s| s.starts_with("run-") && s[4..].bytes().all(|b| b.is_ascii_alphanumeric()))
         .ok_or("invalid run id")?;
-    let cwd = repo.join(".plangraph-worktrees").join(id);
+    let record_path = PathBuf::from(
+        request["record_path"]
+            .as_str()
+            .ok_or("record_path missing")?,
+    );
+    let cwd = record_path
+        .parent()
+        .ok_or("record directory missing")?
+        .join("worktree");
     let reviews = request["card"]["review_dir"]
         .as_str()
         .map(PathBuf::from)
         .unwrap_or_else(|| cwd.join("reviews"));
     let mut host = Host {
         repo,
+        run_id: id.into(),
         cwd,
         reviews,
-        record_path: PathBuf::from(
-            request["record_path"]
-                .as_str()
-                .ok_or("record_path missing")?,
-        ),
+        record_path,
         base_ref: record["base_ref"].as_str().unwrap_or("").into(),
     };
     host.save(&record)?;

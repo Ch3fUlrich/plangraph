@@ -98,6 +98,8 @@ async def check():
     assert pathlib.Path(record['cwd']).is_dir(), record
     # A remote ref that is absent must never resolve the local-only branch.
     subprocess = __import__('subprocess')
+    assert not pathlib.Path(record['cwd']).is_relative_to(pathlib.Path(card['repo'])), record
+    assert subprocess.check_output(['git','-C',card['repo'],'status','--porcelain'], text=True) == ''
     subprocess.run(['git','-C',card['repo'],'branch','local-only'], check=True)
     card['base_ref'] = 'refs/heads/local-only'
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
@@ -113,6 +115,8 @@ async def check():
             if pidfile.exists(): break
             await asyncio.sleep(.01)
         assert pidfile.exists(), holding
+        assert holding['cwd'] != record['cwd'], holding
+        assert subprocess.check_output(['git','-C',card['repo'],'status','--porcelain'], text=True) == ''
         codex_pid, tool_pid = map(int, pidfile.read_text().split())
         try:
             service.tasks[holding['run_id']].cancel()
