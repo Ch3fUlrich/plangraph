@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from _spawnd import built_rust_binary
 from plangraph.keeper import placement_rules_bridge as bridge
 from plangraph.keeper.errors import Refused
 
@@ -31,7 +32,7 @@ def rules_binary(tmp_path_factory):
         shared = shared.parent
     with (shared / 'placement-rules-build.lock').open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        binary = root / 'rust/target/debug/pg-placement-rules'
+        binary = built_rust_binary('pg-placement-rules', cargo_cwd=root / 'rust')
         inputs = [* (root / 'rust').rglob('*.rs'),
                   * (root / 'rust').rglob('Cargo.toml'), root / 'rust/Cargo.lock',
                   root / 'setup/placement-rules.schema.toml']
@@ -40,7 +41,7 @@ def rules_binary(tmp_path_factory):
             subprocess.run(['nice', '-n', '10', 'env', 'CARGO_BUILD_JOBS=4', cargo,
                             'build', '-p', 'pg-worker-core', '--bin',
                             'pg-placement-rules'], cwd=root / 'rust', check=True)
-    return root / 'rust/target/debug/pg-placement-rules'
+    return binary
 
 
 def fake(tmp_path, monkeypatch, script):

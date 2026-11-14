@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from _spawnd import require_spawnd
+from _spawnd import built_rust_binary, require_spawnd
 from plangraph import fleet_snapshot as fleet
 from plangraph.keeper.snapshot_io import write_snapshot
 from keeper_util import World
@@ -15,8 +15,13 @@ REGISTRY = [{"id": "a", "aliases": ["alias"], "class": "worker",
 
 
 @pytest.fixture
-def spawnd():
-    return require_spawnd()
+def spawnd(monkeypatch):
+    binary = built_rust_binary('pg-spawnd', 'release')
+    if not binary.is_file():
+        binary = built_rust_binary('pg-spawnd')
+    assert binary.is_file(), f'build pg-spawnd before running fleet tests: {binary}'
+    monkeypatch.setattr(fleet, '_projection_binary', lambda: str(binary))
+    return binary
 
 
 def test_fleet_samples_and_missing_host(spawnd):

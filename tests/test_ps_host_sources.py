@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from _spawnd import built_rust_binary
 from plangraph.spawner import doctor, remote_ps
 
 SOURCE_GOLDENS = json.loads(
@@ -166,7 +167,7 @@ def test_doctor_rust_sources(monkeypatch, mode, detail):
     if isinstance(mode, list):
         rows = mode
     def run(command, **kwargs):
-        assert command[1:] == ['doctor-sources']
+        assert command == [str(built_rust_binary('pg-spawnd')), 'doctor-sources']
         assert kwargs['stdin'] == kwargs['stderr'] == subprocess.DEVNULL
         assert kwargs['stdout'] == subprocess.PIPE
         assert kwargs['timeout'] == doctor.TIMEOUT
@@ -181,7 +182,9 @@ def test_doctor_rust_sources(monkeypatch, mode, detail):
     monkeypatch.setattr(doctor.subprocess, 'run', run)
     monkeypatch.setattr(remote_ps, 'configured_hosts', lambda: [])
     monkeypatch.setattr(doctor, 'mcp', mcp)
-    monkeypatch.setattr(doctor.shutil, 'which', lambda name: None)
+    monkeypatch.setattr(doctor.shutil, 'which',
+                        lambda name: str(built_rust_binary('pg-spawnd'))
+                        if name == 'pg-spawnd' else None)
     result = asyncio.run(doctor.diagnose())['checks'][0]
     assert result == ({key: rows[0][key] for key in ('name', 'status', 'detail')}
         if mode in ('ok', 'extra') else
@@ -192,13 +195,16 @@ def test_doctor_deadline_many_hosts(monkeypatch):
     import asyncio
     monkeypatch.setattr(remote_ps, 'configured_hosts', lambda: [{}] * 65)
     def run(command, **kwargs):
+        assert command == [str(built_rust_binary('pg-spawnd')), 'doctor-sources']
         assert kwargs['timeout'] == 5 * remote_ps.TIMEOUT + doctor.TIMEOUT
         return subprocess.CompletedProcess(command, 0, '[]')
     async def mcp(*args):
         return 'pass', 'ok'
     monkeypatch.setattr(doctor.subprocess, 'run', run)
     monkeypatch.setattr(doctor, 'mcp', mcp)
-    monkeypatch.setattr(doctor.shutil, 'which', lambda name: None)
+    monkeypatch.setattr(doctor.shutil, 'which',
+                        lambda name: str(built_rust_binary('pg-spawnd'))
+                        if name == 'pg-spawnd' else None)
     asyncio.run(doctor.diagnose())
 
 
