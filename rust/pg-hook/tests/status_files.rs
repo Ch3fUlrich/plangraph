@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Exercise the every-PR gate and repository ignore rules through real Git diffs.
 use std::path::Path;
 use std::process::{Command, Output};
