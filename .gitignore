@@ -11,3 +11,6 @@ logs/
 .venv-pg/
 .venv/
 .devstack/
+
+# Built Git hook
+/tools/hooks/commit-msg

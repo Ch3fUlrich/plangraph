@@ -58,3 +58,14 @@ Merge policy tests retain the unique crate-local mapping and its existing doc,
 and preserve all workspace members in main's path order, including `pg-reap`.
 Hook ports, property tests, 14-day zero-diff observation, rollback canary and settings
 integration remain deferred; the production switch belongs to **RUST-HOOKS-SWITCH**.
+
+## Git commit messages
+
+Run `tools/hooks/install_hooks.sh --git` with the host's shared
+`CARGO_TARGET_DIR` set. It builds the Rust `commit-msg` executable, installs it
+into the checkout's `tools/hooks`, and sets `core.hooksPath` to that directory
+(including its existing pre-push). Re-run after changing the Rust entry point.
+The binary calls `tools/ci_commit_gate.py commit-message` in the current
+worktree: both CI and Git use `message_violations` for Writer, strict Hand-Edit,
+and `Changelog: skip (<reason>)` validation. Merge commits bypass the hook.
+Missing files, interpreters, and failed Git probes refuse the commit.

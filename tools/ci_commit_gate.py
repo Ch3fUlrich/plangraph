@@ -369,6 +369,50 @@ def hand_edit_commits(
     return commits
 
 
+def message_violations(message: str) -> list[str]:
+    '''Shared commit-msg and CI trailer validation; no Git state required.'''
+    violations: list[str] = []
+    all_lines = message.splitlines()
+    block_lines = _trailer_block_lines(message)
+    all_writer_values = _trailer_values(all_lines, WRITER_RE)
+    block_writer_values = _trailer_values(block_lines, WRITER_RE)
+    block_hand_edit_values = _trailer_values(block_lines, HAND_EDIT_RE)
+    has_hand_edit = bool(block_hand_edit_values)
+
+    malformed_writer = any(
+        MALFORMED_WRITER_RE.match(line) is not None
+        and WRITER_RE.match(line) is None
+        for line in all_lines
+    )
+    if malformed_writer:
+        violations.append(MALFORMED_WRITER)
+    # A claude-marked value is refused only when it does not name its
+    # run/session id in the accepted shape (shape only, never looked up).
+    if any(
+        marker in value.lower()
+        and CLAUDE_WRITER_RE.fullmatch(value) is None
+        for value in all_writer_values
+        for marker in CLAUDE_MARKERS
+    ):
+        violations.append(CLAUDE_WRITER)
+    if not malformed_writer and not block_writer_values and not has_hand_edit:
+        violations.append(MISSING_WRITER)
+
+    if any(
+        MALFORMED_HAND_EDIT_RE.match(line) is not None
+        and HAND_EDIT_RE.match(line) is None
+        for line in all_lines
+    ):
+        violations.append(MALFORMED_HAND_EDIT)
+
+    for line in message.splitlines():
+        if re.match(r'^\s*changelog\s*:\s*skip', line, re.IGNORECASE):
+            skip = re.fullmatch(r'Changelog: skip \(([^()\n]+)\)', line)
+            if skip is None or not skip.group(1).strip():
+                violations.append('malformed Changelog: skip (<reason>) trailer')
+    return violations
+
+
 def check(
     base: str,
     head: str,
@@ -391,36 +435,8 @@ def check(
 
         all_lines = message.splitlines()
         block_lines = _trailer_block_lines(message)
-        all_writer_values = _trailer_values(all_lines, WRITER_RE)
-        block_writer_values = _trailer_values(block_lines, WRITER_RE)
-        block_hand_edit_values = _trailer_values(block_lines, HAND_EDIT_RE)
-        has_hand_edit = bool(block_hand_edit_values)
-
-        malformed_writer = any(
-            MALFORMED_WRITER_RE.match(line) is not None
-            and WRITER_RE.match(line) is None
-            for line in all_lines
-        )
-        if malformed_writer:
-            violations.append(f'{sha}: {MALFORMED_WRITER}')
-        # A claude-marked value is refused only when it does not name its
-        # run/session id in the accepted shape (shape only, never looked up).
-        if any(
-            marker in value.lower()
-            and CLAUDE_WRITER_RE.fullmatch(value) is None
-            for value in all_writer_values
-            for marker in CLAUDE_MARKERS
-        ):
-            violations.append(f'{sha}: {CLAUDE_WRITER}')
-        if not malformed_writer and not block_writer_values and not has_hand_edit:
-            violations.append(f'{sha}: {MISSING_WRITER}')
-
-        if any(
-            MALFORMED_HAND_EDIT_RE.match(line) is not None
-            and HAND_EDIT_RE.match(line) is None
-            for line in all_lines
-        ):
-            violations.append(f'{sha}: {MALFORMED_HAND_EDIT}')
+        has_hand_edit = bool(_trailer_values(block_lines, HAND_EDIT_RE))
+        violations.extend(f'{sha}: {reason}' for reason in message_violations(message))
 
         touched = _touched_paths(sha, cwd=cwd)
         if has_hand_edit:
@@ -515,6 +531,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest='command')
 
+    message_parser = subparsers.add_parser('commit-message')
+    message_parser.add_argument('path')
+
     check_parser = subparsers.add_parser('check')
     check_parser.add_argument('--base', required=True, help='Base commit SHA')
     check_parser.add_argument('--head', required=True, help='PR head SHA, not GitHub speculative pull_request merge ref (whose second parent is the PR head)')
@@ -530,6 +549,17 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(argv)
     except SystemExit as exc:  # argparse already printed usage; keep main() return-based
         return int(exc.code or 0)
+
+    if args.command == 'commit-message':
+        try:
+            message = Path(args.path).read_text(encoding='utf-8')
+        except (OSError, UnicodeError) as exc:
+            sys.stderr.write(f'commit-msg: {exc}\n')
+            return 2
+        violations = message_violations(message)
+        for violation in violations:
+            sys.stderr.write(f'commit-msg: {violation}\n')
+        return 1 if violations else 0
 
     if args.command != 'check':
         parser.print_help(sys.stderr)

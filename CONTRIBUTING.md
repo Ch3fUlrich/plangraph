@@ -366,3 +366,7 @@ to verify reproducibility and CLI serialization.
 Checkpoint 7 includes review evidence records; run its affected Python checks in an isolated clone.
 Python sessions compare only registrations pointing under their temporary test root, so other sessions may move worktrees concurrently; shared and per-worktree config bytes remain guarded. Worktree tests must create their repositories inside temporary roots; the guard reads metadata directly and never runs Git on the real checkout.
 Checkpoint 13 includes routing and provider contracts; run its affected Python checks in an isolated clone.
+
+Install Git message validation with `tools/hooks/install_hooks.sh --git`
+(using the shared host `CARGO_TARGET_DIR`). Non-merge commits require a strict
+`Writer:` or `Hand-Edit:` trailer. See `docs/rust-hooks.md`.
