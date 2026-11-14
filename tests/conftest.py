@@ -116,8 +116,11 @@ def git_config_guard(root, registry_roots=None):
         paths = [common / 'HEAD'] if registry_roots is None else []
         for entry in sorted((common / 'worktrees').glob('*')):
             if registry_roots is not None:
-                target = entry / 'gitdir'
-                if not target.is_file() or not any(Path(target.read_text().strip()).resolve().is_relative_to(Path(root).resolve()) for root in registry_roots):
+                try:
+                    target = Path((entry / 'gitdir').read_text().strip()).resolve()
+                except FileNotFoundError:
+                    continue  # another session may remove its registration during this scan
+                if not any(target.is_relative_to(Path(root).resolve()) for root in registry_roots):
                     continue
             paths.extend(entry / name for name in ('gitdir', 'HEAD', 'locked'))
         registry = tuple((str(path), path.read_bytes() if path.exists() else None) for path in paths)

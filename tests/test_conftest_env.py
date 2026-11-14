@@ -112,7 +112,7 @@ def test_guard_detects_worktree_registry_changes(tmp_path, config_guard, linked,
                 entry.write_text(str(tmp_path / 'moved/tree/.git') + '\n')
 
 
-def test_guard_ignores_other_sessions_worktree_moves(tmp_path, config_guard):
+def test_guard_ignores_other_sessions_worktree_moves(tmp_path, config_guard, monkeypatch):
     repo = tmp_path / 'repo'
     metadata = repo / '.git'
     other = metadata / 'worktrees/other'
@@ -124,3 +124,8 @@ def test_guard_ignores_other_sessions_worktree_moves(tmp_path, config_guard):
         (metadata / 'HEAD').write_text('ref: refs/heads/another-session\n')
         (other / 'HEAD').write_text('b' * 40)
         (other / 'gitdir').write_text(str(tmp_path / 'elsewhere/.git'))
+        read_text = Path.read_text
+        def disappearing(path, *args, **kwargs):
+            if path == other / 'gitdir': path.unlink()
+            return read_text(path, *args, **kwargs)
+        monkeypatch.setattr(Path, 'read_text', disappearing)
