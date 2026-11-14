@@ -1,0 +1,1 @@
+- Move the single Rust toolchain pin to the repository root so root-level Cargo commands and builds under `rust/` use the same compiler; update the shared CI installer and verify both directories in a Rust integration test.

@@ -32,6 +32,7 @@ KNOWN_PREFIXES: tuple[str, ...] = (
 # Keep these before the docs-only shortcut; tests/test_ci_select_rust_inputs.py
 # scans Rust sources and rejects repository reads missing from this list.
 RUST_INPUTS: tuple[str, ...] = (
+    "rust-toolchain.toml",
     ".docs-map",
     "docs/schemas/**",
     "docs/flow-watchdog.md",
