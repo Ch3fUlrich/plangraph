@@ -1,0 +1,1 @@
+- Add a Linux pg-reap orphan command with recorded start/cwd ownership checks, pidfd signaling, bounded exit verification and per-process logging; document the persistent-inventory prerequisite.

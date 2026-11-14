@@ -717,3 +717,8 @@ Run monitors stop three consecutive tool calls with the same name and canonical 
 `PLANGRAPH_SPAWN_P90_TABLE` optionally names measured JSON data shaped as `{"<card_class>": {"implement": {"stall_min": 30, "max_min": 55}}}`; the numbers here illustrate the format, not measurements. Cards select it with `card_class`. Only positive finite numeric values are accepted, and table values only widen defaults. Unknown classes or malformed configured data refuse launch. No p90 dataset is shipped without evidence.
 
 Freshness admission and refused-worktree cleanup use the shared checkout Git environment, stripping inherited object-store redirects and config injection as well as repository, index, and worktree overrides.
+
+The Linux `pg-reap orphans` primitive consumes previously recorded descendant
+start/cwd evidence. See [pg-reap](pg-reap.md#recorded-orphan-reaping) for the
+ownership boundary and deployment prerequisites; this does not close the Python
+sampler's observation gap or authorize deletion of historical probe directories.

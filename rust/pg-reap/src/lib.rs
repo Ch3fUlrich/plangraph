@@ -251,3 +251,5 @@ pub fn report(repos: &[Repository]) -> Result<String, String> {
     }
     Ok(output)
 }
+
+pub mod orphans;
