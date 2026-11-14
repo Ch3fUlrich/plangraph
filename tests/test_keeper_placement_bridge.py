@@ -31,7 +31,10 @@ def rules_binary(tmp_path_factory):
         shared = shared.parent
     with (shared / 'placement-rules-build.lock').open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        binary = root / 'rust/target/debug/pg-placement-rules'
+        target = Path(os.environ.get('CARGO_TARGET_DIR', root / 'rust/target'))
+        if not target.is_absolute():
+            target = root / 'rust' / target
+        binary = target / 'debug/pg-placement-rules'
         inputs = [* (root / 'rust').rglob('*.rs'),
                   * (root / 'rust').rglob('Cargo.toml'), root / 'rust/Cargo.lock',
                   root / 'setup/placement-rules.schema.toml']
@@ -40,7 +43,7 @@ def rules_binary(tmp_path_factory):
             subprocess.run(['nice', '-n', '10', 'env', 'CARGO_BUILD_JOBS=4', cargo,
                             'build', '-p', 'pg-worker-core', '--bin',
                             'pg-placement-rules'], cwd=root / 'rust', check=True)
-    return root / 'rust/target/debug/pg-placement-rules'
+    return binary
 
 
 def fake(tmp_path, monkeypatch, script):
