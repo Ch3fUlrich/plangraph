@@ -20,6 +20,54 @@ class _Proc:
         self.returncode, self.stdout = code, out
 
 
+@pytest.fixture
+def merge_history(repo):
+    """Nested batch parts and a plain PR refreshed from main before merging."""
+    direct = _commit(repo, "direct", "direct first-parent work")
+    _git(repo, "branch", "batch")
+    parts = []
+    for pr in (895, 896):
+        branch = f"part-{pr}"
+        _git(repo, "checkout", "-q", "-b", branch, "main")
+        parts.append(_commit(repo, branch, f"part {pr}"))
+        _git(repo, "checkout", "-q", "batch")
+        _git(repo, "merge", "-q", "--no-ff", "-m", f"part (#{pr})", branch)
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "batch (#903)", "batch")
+    batch = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "plain")
+    plain = _commit(repo, "plain", "plain PR work")
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "advance", "advance main")
+    _git(repo, "checkout", "-q", "plain")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "refresh from main", "main")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "plain (#899)", "plain")
+    plain_merge = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "unmerged")
+    unmerged = _commit(repo, "unmerged", "not on main")
+    _git(repo, "checkout", "-q", "main")
+    return {
+        "part-895": (parts[0], batch, 903),
+        "part-896": (parts[1], batch, 903),
+        "plain": (plain, plain_merge, 899),
+        "direct": (direct, batch, 903),
+        "unmerged": (unmerged, None, None),
+    }
+
+
+@pytest.mark.parametrize("case", ["part-895", "part-896", "plain", "direct", "unmerged"])
+def test_merge_of_finds_the_oldest_containing_first_parent_merge(w, repo, merge_history, case):
+    from plangraph.keeper.context_sources import _merge_of
+    sha, expected, pr = merge_history[case]
+    merge = _merge_of(w.store.ctx["git"], str(repo), "main", sha)
+    if expected is None:
+        assert merge is None
+    else:
+        assert merge == {"sha": expected, "subject": "plain (#899)" if pr == 899
+                         else "batch (#903)", "pr": pr}
+
+
 def test_a_git_failure_is_unknown_and_never_refuses(w, repo, monkeypatch):
     key, = seed(w, [("A", [])])
     _merge_lane(repo, key)
