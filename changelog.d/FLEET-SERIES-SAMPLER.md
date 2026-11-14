@@ -1,0 +1,1 @@
+- The CI commit gate exempts two commits of the host tools pull request from the trailer rules; CONTRIBUTING states how an exempt row is added (D-5870).
