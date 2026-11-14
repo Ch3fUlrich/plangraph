@@ -51,7 +51,7 @@ python -m pytest -q -n auto tests            # main merge + nightly full suite
 The affected selector falls back to the full suite for shared fixtures and suite
 configuration; unmapped code selects a bounded smoke set (tests naming its directory,
 at most 12, plus `tests/test_affected_tests.py`), and CI/main keep the full suite; documentation, `changelog.d/` fragments,
-status and build artifacts, and `.md`/`.rst`/`.txt` files no test names, select no tests. Do not bypass a conservative fallback on PRs.
+build artifacts, and `.md`/`.rst`/`.txt` files no test names, select no tests. Under `docs/` and `status/` only documentation files (`.md`, `.rst`, images) select no tests; any other file there (`docs/conf.py`, `status/x.toml`) goes through the normal mapping. Do not bypass a conservative fallback on PRs.
 Pass `--head <revision>` for a committed-only comparison, excluding staged,
 worktree and untracked changes; omit it to include checkout changes.
 Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
@@ -347,3 +347,5 @@ The generated example batch declares tier `none` for new decision-only items; th
 
 Gemini retirement regressions preserve historical record reads while checking request
 admission and catalog filtering; AGY capability/witness activation requires evidence.
+
+Python sessions compare only registrations pointing under their temporary test root, so other sessions may move worktrees concurrently; shared and per-worktree config bytes remain guarded. Worktree tests must create their repositories inside temporary roots; the guard reads metadata directly and never runs Git on the real checkout.
