@@ -1,0 +1,1 @@
+- Add the pg-ctx decisions-log parser and deterministic four-column TSV writer, with parameterized operator attribution, rule references, supersession edges and hermetic tests.

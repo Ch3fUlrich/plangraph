@@ -2117,9 +2117,11 @@ version = "0.1.0"
 dependencies = [
  "gix",
  "pg-worker-core",
+ "regex",
  "rustix",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 
