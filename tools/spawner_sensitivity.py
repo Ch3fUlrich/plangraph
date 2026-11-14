@@ -205,7 +205,9 @@ def stability_seeds(catalogs: int, baseline=None) -> dict[str, Any]:
     seeds = list(STABILITY_SEEDS)
     rates: dict[str, dict[str, float]] = {}
     for seed in STABILITY_SEEDS:
-        result = baseline if baseline is not None and seed == baseline['seed'] else run(catalogs, seed)
+        reuse_baseline = (baseline is not None and seed == baseline['seed']
+                          and baseline.get('catalogs') == catalogs)
+        result = baseline if reuse_baseline else run(catalogs, seed)
         intel_pm1 = result["perturbations"]["intel_pm1"]
         rates[str(seed)] = {
             risk: max(

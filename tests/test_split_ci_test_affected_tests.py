@@ -1,4 +1,6 @@
 from pathlib import Path
+import subprocess
+
 import pytest
 from test_affected_tests import selector
 
@@ -88,11 +90,6 @@ def test_local_unreadable_graph_refuses_instead_of_full_collection(tmp_path, mon
     assert 'local-selection' in capsys.readouterr().err
 
 
-import subprocess
-
-MODULE_PATH = Path(__file__).resolve().parents[1] / "tools" / "ci_select.py"
-
-
 def test_three_shards_cover_only_affected_selection(tmp_path, request):
     import inspect
     import os
@@ -121,7 +118,7 @@ def test_three_shards_cover_only_affected_selection(tmp_path, request):
     for index in range(3):
         trace = tmp_path / f'trace-{index}'
         env = dict(os.environ, PYTEST_SHARD=f'{index}/3', PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
-                   PYTHONPATH=os.pathsep.join((str(tmp_path / 'src'), str(MODULE_PATH.parents[1] / 'tests'))), SHARD_TRACE=str(trace))
+                   PYTHONPATH=os.pathsep.join((str(tmp_path / 'src'), str(Path(__file__).resolve().parent))), SHARD_TRACE=str(trace))
         result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-c', str(tmp_path / 'pytest.ini'),
             '--confcutdir', str(tmp_path), *plan['tests']], cwd=tmp_path, env=env,
             capture_output=True, text=True, timeout=20)

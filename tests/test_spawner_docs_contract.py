@@ -113,6 +113,31 @@ def test_sensitivity_cli_serialization(tmp_path):
     assert out.read_bytes() == (json.dumps(expected, indent=2, sort_keys=True) + '\n').encode()
 
 
+@pytest.mark.usefixtures('restore_import_state')
+@pytest.mark.parametrize('baseline_catalogs', (1, 2))
+def test_stability_reuses_only_matching_catalog_count(monkeypatch, baseline_catalogs):
+    module = _load_sweep_module()
+    module.STABILITY_SEEDS = (module.SEED,)
+    baseline = module.run(baseline_catalogs)
+    expected = module.run(2)
+    calls = []
+
+    def run(catalogs, seed):
+        calls.append((catalogs, seed))
+        return expected
+
+    monkeypatch.setattr(module, 'run', run)
+    assert module.stability_seeds(2, baseline) == {
+        'seeds': [module.SEED],
+        'intel_pm1_max_flip_rate': {str(module.SEED): {
+            risk: max(expected['perturbations']['intel_pm1'][f'{risk}/{role}']['flip_rate']
+                      for role in module.ROLES)
+            for risk in ('high', 'critical')
+        }},
+    }
+    assert calls == ([] if baseline_catalogs == 2 else [(2, module.SEED)])
+
+
 def test_sweep_loader_does_not_leak_state() -> None:
     saved_path = list(sys.path)
     with isolated_import_state():
