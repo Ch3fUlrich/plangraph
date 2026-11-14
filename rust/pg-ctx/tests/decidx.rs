@@ -9,7 +9,7 @@ not a row: D-99\n\
 | D-8 | demo | Stable policy; by operator. | operator, router | fixture |\n\
 | D-7 | demo | Notify the operator after a mechanical update. | mechanical | fixture |\n\
 | D-6 | demo | One-off choice; by operator. | operator | fixture |\n\
-| D-4 | demo | Prior route. | routing-00 | fixture |\n\
+| D-4 | demo | Prior route. | routing-example | fixture |\n\
 | D-3 | demo | Prior hold. | mechanical | fixture |\n\
 | D-2 | demo | Prior choice; by operator. | operator | fixture |\n";
 const RULES: &[(&str, &str)] = &[("9.14", "Stable policy (D-8); old choice (D-2).")];
