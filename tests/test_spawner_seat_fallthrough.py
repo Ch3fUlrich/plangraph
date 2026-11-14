@@ -187,15 +187,15 @@ def test_recorded_route_continues_through_limit_and_not_served(replay):
     assert record['status'] == 'completed' and 'reason' not in record
 
 
-@pytest.mark.parametrize('prepare_s,initial_s', [(0, 0), (7, 0), (0, 7)])
-def test_fallthrough_uses_one_run_deadline(replay, prepare_s, initial_s):
-    result = replay.run(duration=4, max_s=6, prepare_s=prepare_s, initial_s=initial_s)
+@pytest.mark.parametrize('role,prepare_s,initial_s', [('review', 0, 0), ('review', 7, 0), ('review', 0, 7), ('implement', 0, 7), ('fix', 0, 7)])
+def test_fallthrough_uses_one_run_deadline(replay, role, prepare_s, initial_s):
+    result = replay.run(role=role, duration=4, max_s=6, prepare_s=prepare_s, initial_s=initial_s)
     record = json.loads(replay.service._path(result['run_id']).read_text())
     assert replay.calls == ([] if prepare_s or initial_s else ['agy-claude-opus', 'agy-opus-5.5'])
     assert replay.budgets == ([] if prepare_s or initial_s else [6, 2])
-    assert record['status'] == 'timed_out' and record['reason'] == 'timeout'
+    assert record['status'] == ('timed_out' if role == 'review' else 'timeout') and record['reason'] == 'timeout'
     assert record['exit_code'] == 124
-    assert ('timed_out', None) in replay.saves
+    assert (record['status'], None) in replay.saves
     assert {'event': 'run_timeout'} in record['events']
     assert record['ended'] is not None and record['live_log'].endswith('/live.log')
     if not (prepare_s or initial_s):

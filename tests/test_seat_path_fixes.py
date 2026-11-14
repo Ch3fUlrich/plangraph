@@ -113,10 +113,12 @@ def test_review_default_wall_cap(monkeypatch, tmp_path):
 
 def test_empty_run_timeout_keeps_default_limits(monkeypatch):
     monkeypatch.setenv("PLANGRAPH_SPAWN_RUN_TIMEOUT", "")
-    for role in ("review", "implement", "orchestrate", None):
+    for role, maximum, hard in (("review", 5400, True), ("implement", 5400, True),
+                                ("fix", 5400, True), ("orchestrate", 5400, False),
+                                (None, 5400, False)):
         limits = thresholds(role=role)
-        assert limits["max_s"] == 5400
-        assert limits["hard_max"] is (role == "review")
+        assert limits["max_s"] == maximum
+        assert limits["hard_max"] is hard
     monkeypatch.delenv("PLANGRAPH_SPAWN_RUN_TIMEOUT")
     limits = thresholds(role="review")
     assert limits["max_s"] == 1500

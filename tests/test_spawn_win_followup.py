@@ -141,7 +141,7 @@ def test_long_prompt_missing_flag_fails_named(harness, tail):
 @pytest.mark.parametrize('closed', [False, True])
 def test_unavailable_stdin_records_failure(closed):
     from types import SimpleNamespace
-    import time
+    from plangraph.spawner.runner import JobInfo
     from plangraph.spawner.run_watchdog import collect
 
     async def run():
@@ -152,8 +152,7 @@ def test_unavailable_stdin_records_failure(closed):
             def close(self):
                 pass
 
-        job = SimpleNamespace(role='review', start_time=time.time(), status='running',
-                              exit_code=None, events=[], stderr='', stdout='')
+        job = JobInfo('test', 'running', '', 'fixture/model', role='review')
         runner = SimpleNamespace(jobs={'test': job}, _child_envs={}, _stdin_payloads={'test': b'prompt'})
         proc = SimpleNamespace(stdin=ClosedPipe() if closed else None,
                                stdout=asyncio.StreamReader(), stderr=asyncio.StreamReader())

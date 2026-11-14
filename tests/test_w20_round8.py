@@ -45,6 +45,8 @@ def test_corrupt_runs_skipped_and_recorded(tmp_path):
     path.write_text('{')
     assert spawn_service(state=tmp_path).ps()['runs'] == []
     assert stall_watchdog.read_runs(tmp_path) == []
+    assert not (tmp_path / 'watchdog/bad-records.json').exists()
+    assert stall_watchdog.sweep_runs(tmp_path) == []
     assert 'run-bad' in (tmp_path / 'watchdog/bad-records.json').read_text()
 
 

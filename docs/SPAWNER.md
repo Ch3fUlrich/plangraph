@@ -708,3 +708,6 @@ Checkpoint 8: MCP source guard snapshots the derived transitive import closure, 
 See [parallel CI isolation](ci-parallel.md) for test pipes and Temporal servers.
 Checkpoint 9: Worker core crate is included in this checkpoint.
 Checkpoint 6: Terminal events and run tree is included in this checkpoint.
+Checkpoint 3: Run watchdog and stall detection is included in this checkpoint.
+
+Review hard walls default to 25 minutes and implement/fix to 90 minutes; progressing runs retain these prior budgets. Read-only git status/diff/log and GitHub run/status polling do not count as tool loops. Queue expiry preserves records owned by live or unobservable supervisors.
