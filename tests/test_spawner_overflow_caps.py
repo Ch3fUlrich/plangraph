@@ -189,7 +189,7 @@ def test_overflow_remote_does_not_forward_local_state(inputs, monkeypatch, capsy
 def test_nonmemory_refusal_reason_and_caller_state(inputs, monkeypatch, capsys, detail):
     root, path, args = inputs
     path.write_text('{}')
-    monkeypatch.setattr(o, 'decide', lambda *a: o.Decision(None, detail))
+    monkeypatch.setattr(o, 'decide', lambda *a, **kw: o.Decision(None, detail))
     monkeypatch.setattr(o, 'memory_refusal', lambda *a: None)
     monkeypatch.setattr(o, 'ready_records', lambda *a: {
         'ash': {'refusal': 'remote spawn failed'}, 'birch': {'refusal': 'remote copy failed'}})
