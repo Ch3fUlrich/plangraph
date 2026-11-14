@@ -104,27 +104,7 @@ with TemporaryDirectory() as tmp:
     gate.candidate(quota, 120)
     assert event.is_set() and gate.job.refusal == quota
 
-import sys
-sys.path.insert(0, str(Path.cwd() / 'tests'))
-from test_spawner_seat_fallthrough import replay, recorded_plan
-import pytest
-for mode in ('base', 'routed'):
-    for pinned in (False, True):
-        with TemporaryDirectory() as tmp, pytest.MonkeyPatch.context() as patch:
-            async def admitted(*args, **kwargs): return True
-            patch.setattr('plangraph.spawner.service.admit_base', admitted)
-            patch.setattr('plangraph.spawner.runner.admit_base', admitted)
-            fixture = replay.__wrapped__(NS(param=mode), Path(tmp), patch, recorded_plan.__wrapped__())
-            first, second = fixture.plan.legs[:2]
-            result = fixture.run(succeed=second.id, no_fallthrough=pinned,
-                                 failures={first.id: quota}, seat=True)
-            assert result['status'] == ('failed' if pinned else 'completed'), result
-            assert len(set(fixture.run_ids)) == 1
-            assert len(fixture.calls) == (1 if pinned else 2)
-            assert any(quota in (a.get('skip_reason') or '') for a in result['attempts'])
-            if not pinned:
-                assert result['served_model'] == second.model
-                assert result['plan']['seat_coverage'][0]['leg'] == second.id
+# The same-run fallthrough replay needs pytest fixtures: tests/test_spawner_seat_fallthrough.py::test_review_quota_on_clean_exit_falls_through_in_the_same_run.
 "#]).output().unwrap();
     assert!(
         out.status.success(),
