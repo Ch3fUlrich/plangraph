@@ -347,3 +347,5 @@ The generated example batch declares tier `none` for new decision-only items; th
 
 Gemini retirement regressions preserve historical record reads while checking request
 admission and catalog filtering; AGY capability/witness activation requires evidence.
+
+Standalone Rust workspaces, including rust/worker, receive manifest-specific preflight checks.
