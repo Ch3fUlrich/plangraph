@@ -154,7 +154,15 @@ def dependency_graph(texts):
         else:
             # Shell scripts may contain Python heredocs as well as -m commands.
             command_text = text
-            names.extend(re.findall(r"^\s*(?:from|import)\s+([\w.]+)", text, re.M))
+            # Shell expansion/operators can make a literal Python body
+            # unparsable before execution. Keep its statically named imports
+            # conservatively, even inside quotes or command substitution.
+            names.extend(re.findall(r"\bfrom\s+([\w.]+)\s+import\b", text))
+            for prefix, imported in re.findall(
+                    r"\b(?:from\s+([\w.]+)\s+)?import\s+\(?\s*"
+                    r"([\w.*]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.*]+(?:\s+as\s+\w+)?)*)", text):
+                names.extend((prefix + "." if prefix else "") + alias.split()[0]
+                             for alias in imported.split(","))
             snippets = re.findall(r"^\s*(?:from\s+[\w.]+\s+import|import)\s+[^\n]+", text, re.M)
             # Parse complete heredocs so parenthesized and continued imports
             # retain their child modules. Non-Python heredocs are ignored.

@@ -579,3 +579,22 @@ def test_shell_literal_python_commands(tmp_path, command):
     })
     assert 'tests/test_process.py' in selector().select_tests(
         tmp_path, ['src/pkg/core.py'])['tests']
+
+
+@pytest.mark.parametrize('command', [
+    "out=$(python3 -c 'import pkg.api; print(1)')",
+    "(python3 -c 'import pkg.api')",
+    "x=`python3 -c 'import pkg.api'`",
+    "python3 -c 'import pkg.api'&&echo",
+    "python3 -c 'import pkg.api'|cat",
+    'echo "$(python3 -c \'import pkg.api\')"',
+    'python3 -c "import pkg.api as m; m.run($ARG)"',
+    'python3 -c "from pkg import api as m; m.run($ARG)"',
+])
+def test_shell_imports_survive_shell_syntax(tmp_path, command):
+    _asset_repo(tmp_path, {
+        'tools/launch.sh': command,
+        'tests/test_process.py': 'SCRIPT = "tools/launch.sh"',
+    })
+    assert 'tests/test_process.py' in selector().select_tests(
+        tmp_path, ['src/pkg/core.py'])['tests']
