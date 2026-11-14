@@ -117,6 +117,150 @@ def test_default_command_fetches_and_advances_from_fixture_origin(checkout, tmp_
     assert 'UPDATED main ' + sha in capsys.readouterr().out
 
 
+def test_reused_pid_state_is_not_treated_as_running_keeper(checkout):
+    repo, state, _ = checkout
+    sha = target(repo, 'src/plangraph/keeper/daemon.py', 'VALUE = 2\n')
+    row = json.loads(state.read_text())
+    row['pid_start'] = 'different-process-start'
+    state.write_text(json.dumps(row))
+    assert advance.main_ff(repo, state, fetch=False)[0] == 0
+    assert git(repo, 'rev-parse', 'HEAD') == sha
+
+
+def test_restart_state_is_rechecked_before_merge(checkout, monkeypatch):
+    from plangraph.fleet_sync import drift
+
+    repo, state, loaded = checkout
+    target(repo, 'src/plangraph/keeper/daemon.py', 'VALUE = 2\n')
+    read = drift.running_keeper
+    calls = []
+
+    def restarting(path):
+        calls.append(path)
+        return None if len(calls) == 1 else read(path)
+
+    monkeypatch.setattr(drift, 'running_keeper', restarting)
+    monkeypatch.setattr(drift, 'keeper_main_pid', lambda _unit: 0, raising=False)
+    assert advance.main_ff(repo, state, fetch=False)[0] == 3
+    assert len(calls) == 2
+    assert git(repo, 'rev-parse', 'HEAD') == loaded
+
+
+@pytest.mark.parametrize('state_kind', ['missing', 'wrong-db'])
+def test_live_unit_without_matching_state_holds(checkout, monkeypatch, state_kind):
+    from plangraph.fleet_sync import drift
+
+    repo, state, loaded = checkout
+    target(repo, 'src/plangraph/keeper/daemon.py', 'VALUE = 2\n')
+    if state_kind == 'missing':
+        state.unlink()
+    else:
+        state = state.with_name('wrong-db.loaded.json')
+    monkeypatch.setattr(drift, 'keeper_main_pid', lambda _unit: os.getpid(), raising=False)
+    code, line = advance.main_ff(repo, state, fetch=False)
+    assert code == 3 and 'restart keeper' in line and 'state' in line
+    assert git(repo, 'rev-parse', 'HEAD') == loaded
+
+
+@pytest.mark.parametrize('path', ['src/plangraph/routing_support/catalog_schema.sql',
+    'src/plangraph/planner/route_policy.json', 'configuration/opencode/providers.json'])
+def test_existing_keeper_runtime_data_holds(checkout, path):
+    repo, state, _ = checkout
+    dest = repo / path
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text('old data\n')
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-m', 'loaded data')
+    loaded = git(repo, 'rev-parse', 'HEAD')
+    state.write_text(json.dumps({'loaded_sha': loaded, 'pid': os.getpid(), 'start_time': 1}))
+    target(repo, path, 'new data\n')
+    code, line = advance.main_ff(repo, state, fetch=False)
+    assert code == 3 and path in line
+    assert git(repo, 'rev-parse', 'HEAD') == loaded
+
+
+@pytest.mark.parametrize('case,process_pid,held,cause', [
+    ('missing-systemctl', 0, False, ''),
+    ('not-found', 0, False, ''),
+    ('bus', 0, True, 'bus unreachable'),
+    ('timeout', 0, True, 'timed out'),
+    ('oserror', 0, True, 'unit query unavailable'),
+    ('bus', 123, True, 'live keeper'),
+    ('not-found', 123, True, 'live keeper'),
+    ('not-found', 'path', True, 'live keeper'),
+    ('loaded-zero', 123, True, 'live keeper'),
+    ('missing-systemctl', 123, True, 'live keeper'),
+    ('system-pid', 0, True, 'live keeper'),
+])
+def test_absent_state_checks_unit_scopes_and_process(checkout, monkeypatch, case, process_pid, held, cause):
+    from plangraph.fleet_sync import drift
+
+    repo, state, loaded = checkout
+    sha = target(repo, 'src/plangraph/spawner/unused.py', 'VALUE = 2\n')
+    state.unlink()
+    monkeypatch.setattr(drift, 'keeper_main_pid', keeper_main_pid)
+    probe = drift.keeper_process_pid
+    monkeypatch.setattr(drift, 'keeper_process_pid', lambda: probe() if process_pid == 'path' else process_pid)
+    run = drift.subprocess.run
+    scopes = []
+
+    def query(argv, **kwargs):
+        if argv[0] == 'ps':
+            return SimpleNamespace(stdout='123 python3 python3 src/plangraph/keeper/daemon.py\n', returncode=0)
+        if argv[0] != 'systemctl':
+            return run(argv, **kwargs)
+        scopes.append('--user' in argv)
+        if case == 'missing-systemctl':
+            raise FileNotFoundError('systemctl')
+        if case == 'oserror':
+            raise PermissionError('fixture unit unreadable')
+        if case == 'timeout':
+            raise subprocess.TimeoutExpired(argv, 5)
+        if case == 'bus':
+            return SimpleNamespace(stdout='', stderr='Failed to connect to bus: unavailable', returncode=1)
+        if case == 'system-pid' and '--user' not in argv:
+            return SimpleNamespace(stdout='LoadState=loaded\nMainPID=123\n', stderr='', returncode=0)
+        load = 'loaded' if case == 'loaded-zero' else 'not-found'
+        return SimpleNamespace(stdout=f'LoadState={load}\nMainPID=0\n', stderr='', returncode=0)
+
+    monkeypatch.setattr(drift.subprocess, 'run', query)
+    code, line = advance.main_ff(repo, state, fetch=False)
+    assert code == (3 if held else 0)
+    assert git(repo, 'rev-parse', 'HEAD') == (loaded if held else sha)
+    assert cause in line
+    if case in ('not-found', 'loaded-zero', 'system-pid'):
+        assert False in scopes  # The system scope was checked as well.
+
+
+@pytest.mark.parametrize('failure,cause', [('missing', 'unavailable'), ('oserror', 'unavailable'),
+    ('timeout', 'timed out'), ('exit', 'failed'), ('malformed', 'unavailable')])
+def test_process_probe_failures_hold_with_fixed_cause(checkout, monkeypatch, failure, cause):
+    from plangraph.fleet_sync import drift
+
+    repo, state, loaded = checkout
+    target(repo, 'src/plangraph/spawner/unused.py', 'VALUE = 2\n')
+    state.unlink()
+    monkeypatch.setattr(drift, 'keeper_main_pid', keeper_main_pid)
+    run = drift.subprocess.run
+
+    def query(command, **kwargs):
+        if command[0] == 'git':
+            return run(command, **kwargs)
+        if command[0] == 'systemctl':
+            return SimpleNamespace(stdout='LoadState=not-found\nMainPID=0\n', returncode=0)
+        if failure == 'missing':
+            raise FileNotFoundError('fixture missing process tool')
+        if failure == 'oserror':
+            raise PermissionError('fixture unreadable process tool')
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired(command, 5)
+        return SimpleNamespace(stdout='bad fixture data' if failure == 'malformed' else '', returncode=2 if failure == 'exit' else 0)
+
+    monkeypatch.setattr(drift.subprocess, 'run', query)
+    code, line = advance.main_ff(repo, state, fetch=False)
+    assert code == 3 and 'keeper process query ' + cause in line
+    assert git(repo, 'rev-parse', 'HEAD') == loaded
+
 
 
 @pytest.mark.parametrize('command', ['symbolic-ref', 'status', 'fetch', 'rev-parse', 'merge-base', 'merge'])

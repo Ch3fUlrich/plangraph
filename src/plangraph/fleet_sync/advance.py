@@ -227,6 +227,7 @@ def main_ff(repo, keeper_state, *, fetch=True, keeper_unit='plangraph-keeper.ser
     from .drift import (
         KeeperProbeError,
         keeper_changes,
+        keeper_main_pid,
         main_ff_status_path,
         repo_git,
         running_keeper,
@@ -270,6 +271,8 @@ def main_ff(repo, keeper_state, *, fetch=True, keeper_unit='plangraph-keeper.ser
             def keeper_hold():
                 try:
                     loaded = running_keeper(keeper_state)
+                    if loaded is None and keeper_main_pid(keeper_unit):
+                        return f'HELD live keeper has no matching state; restart keeper to bootstrap and verify state path target {target}'
                     changed = keeper_changes(repo, loaded, target) if loaded else []
                 except KeeperProbeError as exc:
                     return f'HELD {exc} target {target}'
@@ -282,6 +285,9 @@ def main_ff(repo, keeper_state, *, fetch=True, keeper_unit='plangraph-keeper.ser
             if line := keeper_hold():
                 return finish(3, line)
             if current != target:
+                # A keeper may have restarted/published state during the first check.
+                if line := keeper_hold():
+                    return finish(3, line)
                 checked_git('merge', '--ff-only', target)
             return finish(0, f'UPDATED main {target}' if current != target else f'CURRENT main {target}')
         except GitFailure as error:
