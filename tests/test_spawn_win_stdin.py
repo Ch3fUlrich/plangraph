@@ -103,7 +103,7 @@ def test_hermetic_real_process_stdin_count(tmp_path, monkeypatch):
         bin_dir.mkdir()
         script = bin_dir / "opencode"
         script.write_text(
-            "#!/usr/bin/env python3\n"
+            f"#!{sys.executable}\n"
             "import sys\n"
             "if len(sys.argv) > 1 and sys.argv[1] == 'models':\n"
             "    sys.stdout.write('mimo/mimo-v2.6-flash\\n')\n"

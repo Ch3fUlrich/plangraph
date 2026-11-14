@@ -283,7 +283,7 @@ def private_scrub(repo, added):
     words = repo / 'words'
     words.write_text(word + '\n')
     result = subprocess.run([
-        'python3', str(Path(preflight.__file__).with_name('preflight_private_scrub.py')),
+        sys.executable, str(Path(preflight.__file__).with_name('preflight_private_scrub.py')),
         '--base', 'HEAD~1', '--head', 'HEAD', '--words', str(words)],
         cwd=repo, capture_output=True, text=True)
     assert word not in result.stdout + result.stderr
