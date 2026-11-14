@@ -2,6 +2,7 @@
 use crate::{errors::ToolError, placement::Args};
 use pg_worker_core::{lockfile::LockGuard, run::record::run_dir};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{io::Read, path::Path};
 
 #[cfg(test)]
@@ -117,7 +118,8 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
         return Err(refused("round_exception_invalid"));
     }
     std::fs::create_dir_all(state).map_err(|_| refused("round_history_unavailable"))?;
-    let lock = pg_worker_core::lockfile::try_lock(&state.join("writer-rounds.lock"))
+    let lock_name = format!("writer-rounds-{:x}.lock", Sha256::digest(item.as_bytes()));
+    let lock = pg_worker_core::lockfile::try_lock(&state.join(lock_name))
         .map_err(|_| refused("round_history_unavailable"))?
         .ok_or_else(|| refused("round_admission_busy"))?;
     let mut history = Vec::new();
@@ -129,6 +131,12 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
                 let Some(id) = name.to_str().filter(|s| s.starts_with("run-")) else {
                     continue;
                 };
+                if let Err(error) = std::fs::symlink_metadata(entry.path().join("record.json")) {
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        continue; // Prompt storage precedes creation of the run record.
+                    }
+                    return Err(refused("round_history_unavailable"));
+                }
                 let record = crate::records::read_record(state, &json!(id))
                     .map_err(|_| refused("round_history_unavailable"))?;
                 if record["role"] == "implement"

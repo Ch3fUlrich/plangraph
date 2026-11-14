@@ -752,9 +752,11 @@ counts supplied directly on the card are never trusted.
 
 Before the next writer starts, admission reads prior verdict files and saves
 immutable `runs/<writer-run-id>/round-verdict.json` snapshots. Later edits to
-source verdicts cannot rewrite progress. A state-directory lock covers admission
+source verdicts cannot rewrite progress. A per-item lock in the state directory covers admission
 through run-record creation; overlapping admission refuses `round_admission_busy`,
-and an unfinished writer refuses `round_in_flight`. Runs for an item must use
+and an unfinished writer refuses `round_in_flight`. Different items admit independently.
+Prompt-only directories left by incomplete launches are skipped; malformed existing
+records refuse admission. Runs for an item must use
 one shared state directory. Copying state between hosts is not implemented.
 
 A count must be strictly below every earlier count to reset the miss streak.

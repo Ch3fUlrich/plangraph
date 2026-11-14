@@ -201,3 +201,27 @@ fn final_narrow_round_is_not_a_stop_while_running_or_after_acceptance() {
     assert!(reason(admit(dir.path(), &args)).starts_with("round_accepted"));
     assert!(dir.path().join("runs/run-r4/round-verdict.json").is_file());
 }
+
+#[test]
+fn unrelated_items_do_not_contend_for_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    let args = history(dir.path(), &[], false);
+    let first = admit(dir.path(), &args).ok().unwrap();
+    assert!(reason(admit(dir.path(), &args)).starts_with("round_admission_busy"));
+    let mut other = args.clone();
+    other["card"]["item_key"] = json!("p:OTHER");
+    assert!(admit(dir.path(), &other).is_ok());
+    drop(first);
+}
+#[test]
+fn prompt_only_run_directory_does_not_block_writers() {
+    let dir = tempfile::tempdir().unwrap();
+    let args = history(dir.path(), &[], false);
+    let orphan = dir.path().join("runs/run-orphan");
+    std::fs::create_dir_all(&orphan).unwrap();
+    std::fs::write(orphan.join("prompt.txt"), "launch never started").unwrap();
+    assert!(admit(dir.path(), &args).is_ok());
+    // An existing but malformed record remains a refusal, not silent lost history.
+    std::fs::write(orphan.join("record.json"), "{").unwrap();
+    assert!(reason(admit(dir.path(), &args)).starts_with("round_history_unavailable"));
+}
