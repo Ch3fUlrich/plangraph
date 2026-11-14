@@ -105,3 +105,10 @@ predate this PR.
 
 Keeper startup uses the Git identity and process-start helpers for its
 [loaded-state contract](keeper/main-fast-forward.md).
+
+Process detection now recognizes interpreter module and keeper-file launch
+targets on POSIX/Windows, excludes editors/probes and uses `ps` instead of
+requiring `pgrep`. Positive keeper detection takes precedence over a prior unit
+error in the HELD diagnostic. Headless user-bus failures and unavailable process
+tools remain inconclusive and HELD; no-process alone does not prove an unreadable
+user unit absent. See the state contract for the verified launch inventory.
