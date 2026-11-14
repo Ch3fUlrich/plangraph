@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 def historical_waiver_fixture(world, monkeypatch, *, authority="OPERATOR", date="2026-11-12"):
     world.decision_path.write_text(
-        "| ID | PROJECT | DECISION | CLASS | DATE |\n"
+        "| ID | PROJECT | DECISION | BY | DATE |\n"
         "| --- | --- | --- | --- | --- |\n"
         f"| D-5504 | demo | GO #1; GO-HEAD {HEAD} | ROUTER | {date} |\n"
         f"| D-6000 | demo | Waiver: merged-without-witnesses; Waives-seats: demo:H | {authority} | 2026-11-14 |\n")
@@ -24,7 +24,9 @@ def historical_waiver_fixture(world, monkeypatch, *, authority="OPERATOR", date=
 @pytest.mark.parametrize("decision,authority,cause", [
     ("not-a-decision", "OPERATOR", "decision_id"), ("", "OPERATOR", "decision_id"),
     ("D-9999", "OPERATOR", "unique_row_and_columns"),
-    ("D-6000", "ROUTER", "operator_authority")])
+    ("D-6000", "router", "operator_authority"),
+    ("D-6000", "nonoperator", "operator_authority"),
+    ("D-6000", "router operator", "operator_authority")])
 def test_merged_seat_waiver_refuses_without_operator_authority(unseated_w, monkeypatch, decision, authority, cause):
     world = unseated_w
     historical_waiver_fixture(world, monkeypatch, authority=authority)
@@ -223,3 +225,64 @@ def test_malformed_stored_waiver_is_not_active(w, waiver):
 @pytest.mark.parametrize("waiver", ["D-0", "D-217", "D-0217"])
 def test_canonical_stored_waiver_is_active(w, waiver):
     assert w.store._waiver_active({"review_waiver": waiver})
+
+
+@pytest.mark.parametrize("authority", ["operator", "router, OPERATOR", "router + Operator"])
+@pytest.mark.parametrize("cutoff", ["2026-11-14", "2026-11-14T00:00:00Z", "2026-11-14T00:00:00+00:00"])
+def test_real_header_operator_waiver_with_row_cutoff(unseated_w, monkeypatch, authority, cutoff):
+    world = unseated_w
+    historical_waiver_fixture(world, monkeypatch, authority=authority, date="2026-11-13")
+    world.decision_path.write_text(
+        "| id | project | decision | by | why / evidence |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        f"| D-5504 | demo | GO #1; GO-HEAD {HEAD}; Date: 2026-11-13 | router | fixture |\n"
+        f"| D-6000 | demo | Waiver: merged-without-witnesses; Waives-seats: demo:H; "
+        f"Cutoff: {cutoff}; Date: 2026-11-14 | {authority} | fixture |\n")
+    assert world.store.close_merged(world.p("router"), "demo:H", "D-5504",
+                                    waive_seats="D-6000")["state"] == "done"
+
+
+@pytest.mark.parametrize("cutoff,reason", [
+    ("2026-11-15", "operator_seat_waiver_cutoff_after_row"),
+    ("2026-11-14T00:00:01Z", "operator_seat_waiver_cutoff_after_row"),
+    ("2026-11-13T12:00:00Z", "operator_seat_waiver_merge_at_or_after_cutoff"),
+    ("bad", "operator_seat_waiver_invalid_or_ineligible: historical_cutoff"),
+    ("2026-11-14; Cutoff: 2026-11-14", "operator_seat_waiver_invalid_or_ineligible: historical_cutoff"),
+])
+def test_row_cutoff_refusals(unseated_w, monkeypatch, cutoff, reason):
+    world = unseated_w
+    historical_waiver_fixture(world, monkeypatch, date="2026-11-13")
+    world.decision_path.write_text(world.decision_path.read_text().replace(
+        "Waives-seats: demo:H", f"Waives-seats: demo:H; Cutoff: {cutoff}"))
+    before = world.store._evidence("demo:H")
+    with pytest.raises(Refused, match=reason):
+        world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert world.store._item("demo:H")["state"] == "in_review"
+    assert world.store._evidence("demo:H") == before
+
+
+def test_go_scope_refusal_names_key_and_decision(unseated_w, monkeypatch):
+    world = unseated_w
+    historical_waiver_fixture(world, monkeypatch)
+    world.decision_path.write_text(world.decision_path.read_text().replace(
+        "GO #1;", "GO #1 demo:OTHER;"))
+    with pytest.raises(Refused) as exc:
+        world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert "merged_pr_go_scope_mismatch" in exc.value.msg
+    assert "demo:H" in exc.value.msg and "D-5504" in exc.value.msg
+
+
+@pytest.mark.parametrize("replacement,reason", [
+    ("", "operator_seat_waiver_merge_at_or_after_cutoff"),
+    ("; Cutoff: 2026-11-14", "operator_seat_waiver_invalid_or_ineligible: historical_cutoff"),
+])
+def test_real_header_missing_cutoff_or_row_date_refuses(unseated_w, monkeypatch, replacement, reason):
+    world = unseated_w
+    historical_waiver_fixture(world, monkeypatch, date="2026-11-13")
+    world.decision_path.write_text(
+        "| id | project | decision | by | why / evidence |\n"
+        f"| D-5504 | demo | GO #1; GO-HEAD {HEAD}; Date: 2026-11-12 | router | fixture |\n"
+        f"| D-6000 | demo | Waiver: merged-without-witnesses; Waives-seats: demo:H{replacement} | operator | fixture |\n")
+    with pytest.raises(Refused, match=reason):
+        world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert world.store._item("demo:H")["state"] == "in_review"
