@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 import subprocess
 import shutil
+import shlex
 import sys
 import time
 import tarfile
@@ -160,6 +161,26 @@ def dependency_graph(texts):
             snippets.extend(match.group(3) for match in re.finditer(
                 r"<<-?[ \t]*(['\"]?)([A-Za-z_]\w*)\1[^\n]*\n(.*?)^[ \t]*\2[ \t]*$",
                 text, re.M | re.S))
+            commands, scanned = [text], set()
+            while commands:
+                command = commands.pop()
+                if command in scanned:
+                    continue
+                scanned.add(command)
+                try:
+                    words = shlex.split(command, comments=True)
+                except ValueError:
+                    # Heredoc prose may have shell-unbalanced quotes; valid
+                    # same-line commands elsewhere still carry dependencies.
+                    commands.extend(command.splitlines() if "\n" in command else [])
+                    continue
+                for index, word in enumerate(words):
+                    body = (words[index + 1] if word == "-c" and index + 1 < len(words)
+                            else word[2:] if word.startswith("-c") and len(word) > 2 else "")
+                    if body:
+                        snippets.append(body)
+                        if "-c" in body:
+                            commands.append(body)  # Literal nested shell command.
             for snippet in snippets:
                 try:
                     statements = ast.walk(ast.parse(snippet.strip()))

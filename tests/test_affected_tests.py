@@ -563,3 +563,19 @@ def test_real_hook_rules_select_implicit_importers():
     for path in ['tools/hooks/bash_guard_rules.py', 'tools/hooks/hook_common.py']:
         plan = selector().select_tests(root, [path])
         assert {'tests/hooks/test_bash_guard_allow.py', 'tests/hooks/test_bash_guard_deny.py'} <= set(plan['tests'])
+
+
+@pytest.mark.parametrize('command', [
+    "python3 -c 'from pkg.core import VALUE; print(VALUE)'",
+    'PYTHONPATH=src python3 -c "import pkg.core"',
+    'python3 -c "from pkg import (\n    api,\n)"',
+    "bash -c 'python3 -c \"import pkg.core\"'",
+    "python3 - <<-'PY'\n\tfrom pkg import (\n\t    api,\n\t)\nPY\n",
+])
+def test_shell_literal_python_commands(tmp_path, command):
+    _asset_repo(tmp_path, {
+        'tools/launch.sh': command,
+        'tests/test_process.py': 'SCRIPT = "tools/launch.sh"',
+    })
+    assert 'tests/test_process.py' in selector().select_tests(
+        tmp_path, ['src/pkg/core.py'])['tests']
