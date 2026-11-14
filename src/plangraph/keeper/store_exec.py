@@ -9,6 +9,35 @@ from .errors import Refused
 class ExecMixin:
     """Transactional exec ownership and retired-run fencing."""
 
+    def _exec_project(self, conn, item, run, principal, now, run_ord=None):
+        """Install only a history-ordered owner, in the state transaction."""
+        from .store_cards import _exec_parts, _load_list
+        self._require_role(principal, "system")
+        wf, run_id, attempt = _exec_parts(item["key"], run)
+        same = (wf, run_id) == (item["exec_workflow_id"], item["exec_run_id"])
+        retired = _load_list(item["exec_retired_runs"])
+        if any((r.get("workflow_id"), r.get("run_id")) == (wf, run_id) for r in retired):
+            raise Refused("exec_stale", "projected run has been retired")
+        if same and attempt <= item["exec_attempt"]:
+            return
+        holder = item["exec_principal"] if same else (
+            item["delegate"] or item["claimed_by"] or item["exec_principal"])
+        if not same and item["exec_run_id"] is not None:
+            mark = conn.execute(
+                "SELECT run_id, run_ord FROM projector_watermark WHERE workflow_id=?", (wf,)).fetchone()
+            # A worker-recorded owner has no proven history order until projected.
+            if (wf != item["exec_workflow_id"] or mark is None
+                    or mark["run_id"] != item["exec_run_id"] or run_ord is None
+                    or run_ord <= mark["run_ord"]):
+                raise Refused("exec_stale", "projected run is not proven newer than owner")
+            self._exec_clear(conn, item["key"], principal, now)
+        conn.execute("UPDATE items SET exec_workflow_id=?, exec_run_id=?, exec_attempt=?,"
+                     " exec_principal=?, updated_at=? WHERE key=?",
+                     (wf, run_id, attempt, holder, self._iso(now), item["key"]))
+        self._append(principal, item["key"], "exec_owner_changed",
+                     {"action": "advance" if same else "record", "workflow_id": wf,
+                      "run_id": run_id, "attempt": attempt}, now)
+
     def _exec_clear(self, conn, key, principal, now):
         """Free the exec owner inside the caller's keeper transaction.
 
