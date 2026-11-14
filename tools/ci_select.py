@@ -58,6 +58,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "tests/fixtures/redact_parity.json",
     "tests/fixtures/writer_docs_map.json",
     "tests/hooks/parity_payloads.json",
+    "tools/changelog_fold.py",
     "tools/check_changelog_docs.py",
     "tools/check_file_size.py",
     "tools/check_new_code_lang.py",

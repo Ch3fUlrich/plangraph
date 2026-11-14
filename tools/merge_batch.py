@@ -13,7 +13,8 @@
             stacked on a PR outside the batch is refused) and the plan rules apply to the set (red CI,
             needs-update, HIGH with standard PRs, caps) unless --force-set, which is logged in the
             state and the batch PR. A conflict stops with exit 3 (resolve, commit, run `continue`) or,
-            with --skip-conflicts, skips the PR and labels it needs-update. --union GLOB merges an
+            with --skip-conflicts, skips the PR and labels it needs-update. Root .gitattributes sets default
+            union paths; --union GLOB adds an
             append-only ledger (CHANGELOG.md) line by line instead; build warns when a PR changed old
             lines of such a path, because a union keeps the old text beside the new.
   continue  resume after the resolution commit, or after a crash: the state is saved before the
@@ -112,7 +113,7 @@ def parser():
                           "logged in the state and the batch PR")
     cmd.add_argument("--worktree", help="worktree path (default: <repo>-worktrees/batch-NAME)")
     cmd.add_argument("--union", action="append", default=[], metavar="GLOB",
-                     help="merge this path line by line (git merge=union) instead of conflicting, "
+                     help="add to the fetched base .gitattributes union defaults; merge this path line by line (git merge=union) instead of conflicting, "
                           "for append-only ledgers such as CHANGELOG.md (repeatable)")
     cmd = add("continue", build.cmd_continue, "resume after a conflict resolution commit")
     cmd.add_argument("--name", required=True)
