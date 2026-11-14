@@ -94,14 +94,14 @@ def commit_symlink(repo, rel, target):
     return git(repo, "rev-parse", "HEAD").strip()
 
 
-def run_hook(repo, lines, env_extra=None):
+def run_hook(repo, lines, env_extra=None, remote="origin"):
     env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
     env["HOME"] = str(Path(repo).parent / "home")
     env.pop("PLANGRAPH_SCRUB_WORDS", None)
     env.pop("PLANGRAPH_SCRUB_RULES", None)
     env.update(env_extra or {})
     stdin = "".join(l + "\n" for l in lines)
-    command = [sys.executable, str(HOOK), "origin", "https://example.invalid/r.git"]
+    command = [sys.executable, str(HOOK), remote, "https://example.invalid/r.git"]
     result = subprocess.run(command,
                           cwd=str(repo), input=stdin, capture_output=True, text=True,
                           env=env, timeout=120)
@@ -425,6 +425,94 @@ def test_identity_gate_accepts_noreply_email(repo, monkeypatch):
     git(r, 'commit', '--allow-empty', '-qm', 'identity fixture')
     assert runpy.run_path(str(HOOK))['identity_gate'](base, git(r, 'rev-parse', 'HEAD').strip()) == 0
 
+
+
+def _identity_commit(repo, monkeypatch, *, author=FIXTURE_EMAIL, committer=FIXTURE_EMAIL):
+    with monkeypatch.context() as patch:
+        for prefix, email in [('GIT_AUTHOR', author), ('GIT_COMMITTER', committer)]:
+            patch.setenv(prefix + '_NAME', 'Fixture')
+            patch.setenv(prefix + '_EMAIL', email)
+        git(repo, 'commit', '--allow-empty', '-qm', 'identity fixture')
+    return git(repo, 'rev-parse', 'HEAD').strip()
+
+
+def _merged_identity_history(repo, monkeypatch, remote='origin', bad_role=None):
+    r, base = repo
+    git(r, 'checkout', '-qb', 'lane')
+    bad = 'writer@' + 'fixture.invalid'
+    branch = _identity_commit(r, monkeypatch, **({bad_role: bad} if bad_role else {}))
+    git(r, 'checkout', '-q', 'main')
+    git(r, 'checkout', '-qb', 'upstream')
+    _identity_commit(r, monkeypatch)
+    git(r, 'checkout', '-q', 'main')
+    with monkeypatch.context() as patch:
+        patch.setenv('GIT_AUTHOR_NAME', 'Fixture')
+        patch.setenv('GIT_AUTHOR_EMAIL', FIXTURE_EMAIL)
+        patch.setenv('GIT_COMMITTER_NAME', 'GitHub')
+        patch.setenv('GIT_COMMITTER_EMAIL', '@'.join(('noreply', 'github.com')))
+        git(r, 'merge', '--no-ff', 'upstream', '-m', 'upstream merge')
+    upstream = git(r, 'rev-parse', 'HEAD').strip()
+    git(r, 'update-ref', f'refs/remotes/{remote}/main', upstream)
+    git(r, 'checkout', '-q', 'lane')
+    git(r, 'merge', '--no-ff', 'main', '-m', 'merge published main')
+    return r, base, branch, upstream, git(r, 'rev-parse', 'HEAD').strip()
+
+
+@pytest.mark.parametrize('remote', ['origin', 'publish'])
+def test_identity_gate_accepts_merge_of_published_main(repo, monkeypatch, remote):
+    r, base, _, upstream, head = _merged_identity_history(repo, monkeypatch, remote)
+    assert len(git(r, 'show', '-s', '--format=%P', upstream).split()) == 2
+    result = run_hook(r, [push_line('lane', head, base)], remote=remote)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('role', ['author', 'committer'])
+def test_identity_gate_refuses_new_bad_identity_behind_main_merge(repo, monkeypatch, role):
+    r, base, branch, _, head = _merged_identity_history(repo, monkeypatch, bad_role=role)
+    result = run_hook(r, [push_line('lane', head, base)])
+    assert result.returncode == 1
+    assert f'{branch[:12]} {role} email outside noreply allowlist' in result.stderr
+
+
+def test_identity_gate_missing_remote_main_keeps_strict_span(repo, monkeypatch):
+    r, base, _, upstream, head = _merged_identity_history(repo, monkeypatch)
+    git(r, 'update-ref', 'refs/remotes/origin/phase/published', upstream)
+    git(r, 'update-ref', '-d', 'refs/remotes/origin/main')
+    result = run_hook(r, [push_line('lane', head, base)])
+    assert result.returncode == 1
+    assert f'{upstream[:12]} committer email outside noreply allowlist' in result.stderr
+
+
+@pytest.mark.parametrize('tracking_remote', ['origin', 'other'])
+def test_identity_gate_only_excludes_pushed_remotes_published_phase(repo, monkeypatch, tracking_remote):
+    r, base = repo
+    git(r, 'update-ref', 'refs/remotes/origin/main', base)
+    git(r, 'checkout', '-qb', 'published')
+    published = _identity_commit(r, monkeypatch, committer='writer@' + 'fixture.invalid')
+    git(r, 'update-ref', f'refs/remotes/{tracking_remote}/phase/published', published)
+    git(r, 'checkout', '-qb', 'lane', base)
+    _identity_commit(r, monkeypatch)
+    git(r, 'merge', '--no-ff', 'published', '-m', 'merge phase')
+    head = git(r, 'rev-parse', 'HEAD').strip()
+    result = run_hook(r, [push_line('lane', head, base)])
+    assert result.returncode == (0 if tracking_remote == 'origin' else 1), result.stderr
+    if tracking_remote == 'other':
+        assert f'{published[:12]} committer email outside noreply allowlist' in result.stderr
+
+
+def test_identity_gate_still_checks_new_merge_commit(repo, monkeypatch):
+    r, base, _, _, _ = _merged_identity_history(repo, monkeypatch)
+    git(r, 'checkout', '-qb', 'fresh-side')
+    _identity_commit(r, monkeypatch)
+    git(r, 'checkout', '-q', 'lane')
+    with monkeypatch.context() as patch:
+        patch.setenv('GIT_COMMITTER_NAME', 'GitHub')
+        patch.setenv('GIT_COMMITTER_EMAIL', '@'.join(('noreply', 'github.com')))
+        git(r, 'merge', '--no-ff', 'fresh-side', '-m', 'new merge')
+    head = git(r, 'rev-parse', 'HEAD').strip()
+    result = run_hook(r, [push_line('lane', head, base)])
+    assert result.returncode == 1
+    assert f'{head[:12]} committer email outside noreply allowlist' in result.stderr
 
 def test_pushed_tree_cap_overrides_older_hook_checkout(repo, tmp_path):
     import shutil

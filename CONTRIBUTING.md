@@ -33,6 +33,13 @@ pytest session clears inherited bindings before collection and test fixtures.
 Discovery failures refuse to launch tests. The hook's own Git and policy calls
 retain the caller's context; temporary test repositories keep their own hooks.
 
+Commit identity checks inspect the pushed span after excluding history reachable
+from the pushed remote's cached `refs/remotes/<remote>/main` and its other
+remote-tracking refs. A missing remote main keeps the strict original span,
+even if other tracking refs exist. New commits, including new merge commits,
+still require the existing noreply author and committer identities. The hook
+does not fetch these refs; refresh them separately before checking a push.
+
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
 ## Setup and tests

@@ -142,11 +142,20 @@ def scan_blob(rel, local_sha, cfg, find_shapes, hits, baselines=()):
                 hits.append(sc.Hit(rel, n, rule))
 
 
-def identity_gate(base, head):
-    """Refuse guessed author and committer identities in newly pushed commits."""
+def identity_gate(base, head, remote="origin"):
+    """Check only newly introduced commits; unknown remote main keeps the strict span."""
     allowed = re.compile(r'(?:[0-9]+\+)?[A-Za-z0-9._\[\]-]+@users\.noreply\.github\.com')
     span = f'{base}..{head}' if git_out('cat-file', '-t', base) == 'commit' else head
-    result = git('log', '--format=%H%x00%ae%x00%ce', span)
+    exclusions = []
+    main = git_out('rev-parse', '--verify', '-q', f'refs/remotes/{remote}/main^{{commit}}')
+    if main:
+        known = git('for-each-ref', '--format=%(objectname)', f'refs/remotes/{remote}/')
+        if known.returncode:
+            print('pre-push: cannot inspect remote identity baselines: push refused', file=sys.stderr)
+            return 1
+        published = sorted({main, *known.stdout.decode('ascii').splitlines()})
+        exclusions = ['--not', *published]
+    result = git('log', '--format=%H%x00%ae%x00%ce', span, *exclusions)
     if result.returncode:
         print('pre-push: cannot inspect commit identity: push refused', file=sys.stderr)
         return 1
@@ -334,7 +343,7 @@ def push_main():
     for rec in refs:
         _, local_sha, _, remote_sha = rec
         base = base_commit(remote_sha, local_sha)
-        if identity_gate(affected_base_commit(remote_sha, local_sha), local_sha):
+        if identity_gate(affected_base_commit(remote_sha, local_sha), local_sha, remote=remote):
             return 1
         baselines = main_baselines(local_sha)
         changelog_docs_warn(base, local_sha)
