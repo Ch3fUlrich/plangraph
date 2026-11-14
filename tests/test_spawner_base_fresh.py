@@ -214,21 +214,24 @@ def test_supervisor_admission_timeout_fails_closed(dispatch, monkeypatch):
     assert cli.main(['--supervise']) == 1
     assert json.loads(output.getvalue())['reason'] == 'base_admission_timeout'
     assert not dispatch[1]
-def test_admission_timeout_fails_original_run_records(dispatch, monkeypatch):
-    from plangraph.spawner import cli, base_fresh, service as service_module
-    service = dispatch[0](False)
+@pytest.mark.parametrize('hardened', [False, True])
+def test_admission_timeout_fails_original_run_records(dispatch, monkeypatch, hardened):
+    from plangraph.spawner import cli, base_fresh, service as service_module, runner as runner_module
+    service = dispatch[0](hardened)
     admit = service_module.admit_base
     async def hang(*args, launch=False, **kwargs):
         if not launch: return await admit(*args, **kwargs)
         await asyncio.Event().wait()
     monkeypatch.setattr(service_module, 'admit_base', hang)
+    monkeypatch.setattr(runner_module, 'admit_base', hang)
     monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
     monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', .3)
     monkeypatch.setattr(cli.sys, 'stdin', io.StringIO(json.dumps(dict(state=str(service.state), card={'estimate_tokens': 100}, prompt='Implement a tested change'))))
     monkeypatch.setattr(cli.sys, 'stdout', _Out())
     assert cli.main(['--supervise']) == 1
     runs = service.ps()['runs']
-    assert len(runs) > 1 and all(r['status'] != 'running' for r in runs)
+    assert len(runs) > 1
+    assert all(r['status'] == 'failed' and r['reason'] == 'base_admission_timeout' for r in runs)
 def test_admission_wait_returns_refreshed_record_for_empty_seats(dispatch, monkeypatch):
     from plangraph.spawner.base_fresh import admitted_spawn
     service = dispatch[0](False)
