@@ -175,14 +175,18 @@ jobs:
         run: b=$(git rev-parse --verify --end-of-options "HEAD^1^{commit}") && git show "$b":tests/test_workflow_archive.py > .git/workflow_archive_base.py && python .git/workflow_archive_base.py "$b"
       - name: Check nonempty collection
         if: matrix.shard == 0
+        timeout-minutes: 12
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
+          rc=0
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            PYTEST_SHARD= PYTEST_ADDOPTS="-q -o faulthandler_timeout=180" timeout 600 python tools/affected_tests.py --base "$BASE_SHA" --run --collect-only < /dev/null
+            PYTEST_SHARD= PYTEST_ADDOPTS="-q -o faulthandler_timeout=180" timeout -k 15 600 python tools/affected_tests.py --base "$BASE_SHA" --run --collect-only < /dev/null > "$RUNNER_TEMP/collect.log" 2>&1 || rc=$?
           else
-            PYTEST_SHARD= timeout 600 python -m pytest -q --collect-only tests < /dev/null
+            PYTEST_SHARD= timeout -k 15 600 python -m pytest -q -o faulthandler_timeout=180 --collect-only tests < /dev/null > "$RUNNER_TEMP/collect.log" 2>&1 || rc=$?
           fi
+          cat "$RUNNER_TEMP/collect.log"
+          exit $rc
       - name: pytest
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

@@ -41,7 +41,7 @@ def test_unsharded_collection_check_rejects_empty_suite(tmp_path, job):
         assert '--collect-only ' + within in step['run']
         assert step['run'].split('if [', 1)[0].strip() in run
     command = step['run'].replace('${{ github.event_name }}', 'push')
-    env = dict(os.environ, PYTEST_SHARD='0/3')
+    env = dict(os.environ, PYTEST_SHARD='0/3', RUNNER_TEMP=str(tmp_path))
     result = subprocess.run(['bash', '-e', '-c', command], cwd=tmp_path, env=env,
                             capture_output=True, text=True)
     assert result.returncode == 5, result.stdout + result.stderr
@@ -92,7 +92,10 @@ def test_preflight_timeout_kills_pytest_descendants(tmp_path, monkeypatch):
         # A killed orphan can briefly remain a zombie until init reaps it.
         for _ in range(100):
             status = Path(f'/proc/{pid}/stat')
-            if not status.exists() or status.read_text().split()[2] == 'Z':
+            try:
+                if not status.exists() or status.read_text().split()[2] == 'Z':
+                    break
+            except (FileNotFoundError, ProcessLookupError):
                 break
             time.sleep(.01)
         else:
