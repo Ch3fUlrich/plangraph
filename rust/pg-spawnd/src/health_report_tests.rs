@@ -235,3 +235,29 @@ fn witnessed_share_collapse_is_reported_per_leg() {
         }
     }
 }
+
+#[test]
+fn witnessed_share_strict_boundaries_and_minimum_five_runs() {
+    let until = 100_000;
+    // Exactly 80% before or 20% recent is quiet; five runs suffice, four do not.
+    for (before, before_total, recent, recent_total, expected) in [
+        (4, 5, 0, 5, 0),
+        (5, 5, 1, 5, 0),
+        (5, 5, 0, 5, 1),
+        (4, 4, 0, 5, 0),
+        (5, 5, 0, 4, 0),
+    ] {
+        let mut records = Vec::new();
+        for (window, total, witnessed) in [(0, before_total, before), (1, recent_total, recent)] {
+            for index in 0..total {
+                records.push(json!({"run_id":format!("run-{window}-{index}"),
+                    "status":"completed", "ended":until - if window == 0 { 32400 } else { 10800 },
+                    "chosen_leg":{"id":"boundary-fixture"},
+                    "served_model":if index < witnessed { "mimo/mimo-v2.6-pro" } else { "unwitnessed" },
+                    "witness_kind":if index < witnessed { "response-side-gateway-call-log" } else { "" }}));
+            }
+        }
+        let report = build_report(&records, &[], 0, until).unwrap();
+        assert_eq!(report["witness_alerts"].as_array().unwrap().len(), expected);
+    }
+}

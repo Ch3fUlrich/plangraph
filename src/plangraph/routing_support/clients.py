@@ -17,6 +17,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from plangraph.routing_support.claude_seat import claude_access_args
 from plangraph.routing_support.review_mode import leg_tool_mode, prompt_only_command, review_prompt
@@ -76,8 +77,10 @@ def effective_gateway_base_url(env: Mapping[str, str] | None = None,
     home = Path(source.get('HOME') or Path.home())
     root = Path(source.get('XDG_CONFIG_HOME') or home / '.config') / 'plangraph'
     try:
-        return (root / 'omniroute-base-url').read_text(encoding='utf-8').strip() or None
-    except (OSError, UnicodeError):
+        value = (root / 'omniroute-base-url').read_text(encoding='utf-8').strip()
+        parsed = urlsplit(value)
+        return value if parsed.scheme in ('http', 'https') and parsed.hostname else None
+    except (OSError, UnicodeError, ValueError):
         return None
 
 

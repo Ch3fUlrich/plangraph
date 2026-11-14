@@ -333,3 +333,8 @@ strictly below 20%. Runs are deduplicated per leg, and dry runs / unlaunched
 attempts are excluded. Served model witnesses count; child-writable session
 store identity does not. JSON mode remains one JSON document with the alert
 array. The check is advisory and does not change routing.
+
+Witness-collapse boundaries are strict: exactly 80% in the older window or 20%
+in the recent window is quiet. Each window needs at least five runs; five qualify,
+while four in either window suppress the alert. Rust health-report tests cover
+these exact boundaries.

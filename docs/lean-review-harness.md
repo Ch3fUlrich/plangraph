@@ -38,3 +38,8 @@ reads: OMNIROUTE_BASE_URL, then PLANGRAPH_GATEWAY_URL / the existing gateway_url
 config mapping, then plangraph/omniroute-base-url in XDG_CONFIG_HOME (else
 HOME/.config). This file fallback supports plain-shell spawn CLI runs without
 launcher exports. File read failures mean unconfigured; no URL or key is logged.
+
+The witness endpoint now uses the same effective child-base resolver, including
+an existing `OPENCODE_CONFIG_CONTENT` omniroute settings baseURL. File-derived
+endpoints must have an HTTP(S) scheme and hostname; invalid files stay
+unconfigured and cannot trigger management-key reads or call-log requests.

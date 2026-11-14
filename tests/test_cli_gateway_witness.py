@@ -102,3 +102,40 @@ def test_environment_overrides_file(isolated_config, monkeypatch):
     monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'https://environment.invalid/v1')
     assert gw._gateway(dict(__import__('os').environ)) == clients.effective_gateway_base_url()
     assert clients.effective_gateway_base_url() == 'https://environment.invalid/v1'
+
+
+def test_overlay_only_endpoint_is_shared_by_child_and_witness(monkeypatch):
+    endpoint = 'https://overlay.invalid/v1'
+    cfg = {'providers': {'omniroute': {'settings': {'baseURL': endpoint}}}}
+    gw.tag_session(cfg, 'job')
+    monkeypatch.setenv('OPENCODE_CONFIG_CONTENT', json.dumps(cfg))
+    monkeypatch.setenv(gw.TOKEN_ENV, 'fixture-management-key')
+    env = clients.build_child_env()
+    assert gw._gateway(env) == clients.effective_child_base_url(env) == endpoint
+    witness = job('omniroute')
+
+    def opener(request, **kwargs):
+        assert request.full_url.startswith('https://overlay.invalid/api/usage/call-logs?')
+        return io.BytesIO(json.dumps([{'sessionTag': 'plangraph-job', 'status': 200, 'model': 'mimo-v2.6-pro', 'provider': 'mimo'}]).encode())
+
+    def fetch(tag, _env):
+        return gw.fetch_rows(tag, _env, opener=opener)
+
+    class Runner:
+        def __init__(self):
+            self._adapter_tokens = {}
+
+        def served_witness(self, _job, model, **kwargs):
+            witness.served_model = model
+
+    gw.witness(Runner(), 'job', witness, env, attempts=1, fetch=fetch)
+    assert witness.witness_kind == gw.WITNESS_KIND
+
+
+@pytest.mark.parametrize('endpoint', ['file:///tmp/gateway', 'ftp://gateway.invalid', 'gateway.invalid', 'https:///missing-host'])
+def test_file_endpoint_requires_http_scheme_before_credentials(isolated_config, monkeypatch, endpoint):
+    (isolated_config / 'omniroute-base-url').write_text(endpoint)
+    monkeypatch.setattr(gw, 'load_token', lambda *_: pytest.fail('invalid endpoint read management key'))
+    assert clients.effective_gateway_base_url() is None
+    with pytest.raises(LookupError, match='gateway endpoint not configured'):
+        gw.fetch_rows('plangraph-job', {}, opener=lambda *_args, **_kwargs: pytest.fail('invalid endpoint opened'))

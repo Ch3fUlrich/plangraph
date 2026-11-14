@@ -87,8 +87,8 @@ def _config(content):
 
 
 def _gateway(env):
-    from plangraph.routing_support.clients import effective_gateway_base_url
-    value = effective_gateway_base_url(env)
+    from plangraph.routing_support.clients import effective_child_base_url
+    value = effective_child_base_url(env)
     return value.rstrip('/') if value else None
 
 
