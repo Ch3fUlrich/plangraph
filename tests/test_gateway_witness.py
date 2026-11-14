@@ -13,6 +13,13 @@ from plangraph.spawner import gateway_witness as gw
 from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
 
 
+@pytest.fixture(autouse=True)
+def _no_host_gateway_file(monkeypatch, tmp_path):
+    # The endpoint lookup falls back to a file in the user's config directory; tests never read the host's.
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'home' / '.config'))
+
+
 class _Runner:
     def __init__(self, job_id):
         self._adapter_tokens = {job_id: object()}
@@ -111,10 +118,10 @@ def test_fetch_rows_needs_spawner_token_and_sends_it(tmp_path):
     def opener(request, timeout):
         sent.append(request)
         return io.BytesIO(b'[{"sessionTag": "plangraph-job-1"}]')
-    rows = gw.fetch_rows('plangraph-job-1', {'OMNIROUTE_BASE_URL': 'https://gw:20128/v1'},
-                         opener=opener, secrets={gw.TOKEN_ENV: 'tok', 'OMNIROUTE_BASE_URL': 'https://gw:20128/v1'})
+    rows = gw.fetch_rows('plangraph-job-1', {'OMNIROUTE_BASE_URL': 'https://gw:8443/v1'},
+                         opener=opener, secrets={gw.TOKEN_ENV: 'tok', 'OMNIROUTE_BASE_URL': 'https://gw:8443/v1'})
     assert rows == [{'sessionTag': 'plangraph-job-1'}]
-    assert sent[0].full_url.startswith('https://gw:20128/api/usage/call-logs?sessionTag=plangraph-job-1')
+    assert sent[0].full_url.startswith('https://gw:8443/api/usage/call-logs?sessionTag=plangraph-job-1')
     assert sent[0].get_header('Authorization') == 'Bearer tok'
 
 

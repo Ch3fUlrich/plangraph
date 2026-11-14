@@ -1,6 +1,7 @@
 """Plain-shell gateway witnesses use file configuration and retain real reasons."""
 import io
 import json
+from ipaddress import IPv6Address
 
 import pytest
 
@@ -156,7 +157,7 @@ def test_management_request_validates_every_endpoint_source(monkeypatch, source,
         gw.fetch_rows('plangraph-job', {}, opener=lambda *_args, **_kwargs: pytest.fail('invalid endpoint sent token'))
 
 
-@pytest.mark.parametrize('endpoint', ['http://127.0.0.1:20128/v1', 'http://[::1]:20128/v1', 'http://localhost:20128/v1'])
+@pytest.mark.parametrize('endpoint', ['http://127.0.0.1:8443/v1', f'http://[{IPv6Address(1)}]:8443/v1', 'http://localhost:8443/v1'])
 def test_loopback_http_file_supports_management_requests(isolated_config, monkeypatch, endpoint):
     (isolated_config / 'omniroute-base-url').write_text(endpoint)
     monkeypatch.setenv(gw.TOKEN_ENV, 'fixture-management-key')
