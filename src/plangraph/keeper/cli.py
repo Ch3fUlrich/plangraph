@@ -285,6 +285,17 @@ def build_parser():
     _add_reads(sub)
     _add_writes(sub)
     _add_admin(sub)
+    plan = sub.add_parser("plan", help="offline plan tools")
+    commands = plan.add_subparsers(dest="plan_command", required=True)
+    convert = commands.add_parser("convert", help="generate and check one atomic batch offline")
+    convert.add_argument("plan_dir")
+    convert.add_argument("--cards", required=True, help="local JSON snapshot with items and seq")
+    convert.add_argument("--project", default="plangraph")
+    convert.add_argument("--principal", default="plan-convert")
+    convert.add_argument("--base-seq", type=int)
+    convert.add_argument("--batch")
+    convert.add_argument("--data", action="append", help="plan YAML filename; repeat for followups")
+    convert.add_argument("--output", required=True, help="fresh directory for batch and manifest")
     sync = sub.add_parser("sync", help="D-818: refresh this host's signed local plan copy")
     sync.add_argument("sync_command", choices=["pull"])
     return parser
@@ -311,6 +322,9 @@ def _cmd_sync(args) -> int:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "plan":
+        from ..planner.service import convert_plan
+        return convert_plan(args)
     if args.command == "admin":
         from . import cli_admin
         return cli_admin.dispatch(args)

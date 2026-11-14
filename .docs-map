@@ -33,6 +33,9 @@ rust/worker-core/src/operator_owner_gate.rs -> docs/keeper-operator-owner-gate.m
 rust/worker-core/src/bin/pg-operator-owner-gate.rs -> docs/keeper-operator-owner-gate.md
 rust/worker-core/tests/operator_owner_gate.rs -> docs/keeper-operator-owner-gate.md
 tests/test_keeper_operator_owner_gate.py -> docs/keeper-operator-owner-gate.md
+rust/worker-core/src/plan_convert* -> docs/convert-plans.md
+rust/worker-core/src/bin/pg-plan-convert.rs -> docs/convert-plans.md
+tests/test_plan_convert.py -> docs/convert-plans.md
 src/plangraph/routing_support/opencode_render.py -> docs/opencode-gateway.md
 src/plangraph/routing_support/opencode_overlay.py -> docs/opencode-gateway.md
 src/plangraph/planner/** -> docs/routing.md
