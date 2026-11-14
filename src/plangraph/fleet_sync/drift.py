@@ -151,26 +151,57 @@ class KeeperProbeError(RuntimeError):
     """Fixed public diagnostics for inconclusive keeper liveness checks."""
 
 
+def _keeper_launch(executable, command, *, windows=False):
+    """Recognize an interpreter's launch target, never an incidental argument."""
+    executable = re.split(r'[/\\]', executable)[-1]
+    if not re.fullmatch(r'(?:pythonw?|pypy)[0-9.]*t?(?:[.]exe)?', executable, re.IGNORECASE):
+        return False
+    lexer = shlex.shlex(command, posix=not windows)
+    lexer.whitespace_split, lexer.commenters = True, ""
+    args = (part.strip('"') for part in lexer)
+    next(args, None)
+    for arg in args:
+        if arg in ('-c', '-'):
+            return False
+        if arg == '-m':
+            return next(args, '') in ('plangraph.keeper.daemon', 'plangraph.keeper')
+        if arg in ('-X', '-W'):
+            next(args, None)
+        elif arg == '--':
+            return bool(re.fullmatch(r'(?:.*[/\\])?plangraph[/\\]keeper[/\\]daemon[.]py', next(args, '')))
+        elif not arg.startswith('-'):
+            return bool(re.fullmatch(r'(?:.*[/\\])?plangraph[/\\]keeper[/\\]daemon[.]py', arg))
+    return False
+
+
 def keeper_process_pid(*, platform=None):
-    """Use the repository's pgrep approach independently of unit ownership."""
-    if (platform or os.name) == 'nt':
-        command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
-                   ("Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^python.*' "
-                   "-and $_.CommandLine -match 'plangraph[.]keeper[.]daemon' } | "
-                   'Select-Object -ExpandProperty ProcessId')]
-    else:
-        command = ['pgrep', '-f', '--', '[p]langraph[.]keeper[.]daemon']
+    """Inspect interpreter launch targets independently of unit ownership."""
+    windows = (platform or os.name) == 'nt'
+    command = (['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                'Get-CimInstance Win32_Process | Select-Object ProcessId,Name,CommandLine | ConvertTo-Json -Compress']
+               if windows else ['ps', '-A', '-o', 'pid=', '-o', 'comm=', '-o', 'args='])
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=5)
-        if result.returncode not in (0, 1) or (command[0] == 'powershell.exe' and result.returncode):
+        if result.returncode:
             raise KeeperProbeError('keeper process query failed')
-        pids = [int(value) for value in result.stdout.split()]
-        if any(pid <= 0 for pid in pids):
-            raise ValueError('invalid PID')
-        return next(iter(pids), 0)
+        if windows:
+            rows = json.loads(result.stdout or '[]')
+            rows = [rows] if isinstance(rows, dict) else rows
+            entries = [(row['ProcessId'], row['Name'], row['CommandLine']) for row in rows]
+        else:
+            entries = [line.split(None, 2) for line in result.stdout.splitlines() if line.strip()]
+        for pid, executable, args in entries:
+            pid = int(pid)
+            if pid == 0:  # Windows exposes the non-interpreter idle process as PID 0.
+                continue
+            if pid < 0:
+                raise ValueError('invalid PID')
+            if pid != os.getpid() and _keeper_launch(executable, args or '', windows=windows):
+                return pid
+        return 0
     except subprocess.TimeoutExpired:
         raise KeeperProbeError('keeper process query timed out') from None
-    except (OSError, ValueError):
+    except (OSError, ValueError, KeyError, TypeError):
         raise KeeperProbeError('keeper process query unavailable') from None
 
 
@@ -207,6 +238,8 @@ def keeper_main_pid(unit):
         if pid:
             return pid
     pid = keeper_process_pid()
+    if pid:
+        return pid
     if errors:
         raise KeeperProbeError('; '.join(errors))
     return pid

@@ -39,20 +39,37 @@ An absent/stale state file checks both user and system scopes of the existing
 keeper unit (`plangraph-keeper.service`, override with `--keeper-unit`), reading
 `LoadState` and `MainPID`. Missing `systemctl` or `LoadState=not-found` is a missing
 unit, not an unreadable installed unit. When no unit PID is found, independently
-look for the keeper daemon using the existing pgrep approach (Windows uses a
-Python-process command-line query through PowerShell/CIM). Thus a standalone
-keeper or one outside the queried unit scope still holds without matching state.
-A host with no unit and no keeper process may fast-forward normally.
+inspect interpreter processes using POSIX `ps` (no `pgrep` dependency) or Windows
+PowerShell/CIM. Match the actual launch target: `python`/`pythonw`/`pypy`, optional
+versions, `-m plangraph.keeper.daemon`, or a path ending in
+`plangraph/keeper/daemon.py` (Windows separators too). Interpreter flags are
+accepted; an editor with that file open, a probe, `-c`, or an unrelated Python
+script with the keeper path as an argument is not a keeper launch. A matching
+process takes diagnostic precedence over earlier unit errors: HELD recommends
+restarting the keeper to publish matching state.
+
+`pyproject.toml` defines no console scripts, and keeper has no package `__main__`;
+there is no installed keeper console entry point to name or test. A metadata
+regression requires revisiting the launch inventory if one is added. The probe
+also recognizes the package `-m plangraph.keeper` shape conservatively, though it
+is not currently executable. Path matching does not change daemon import setup.
+Arbitrary renamed/frozen wrappers cannot be inferred from their command lines;
+use the configured unit or published loaded state for those deployments.
+A host with conclusive no-unit/no-process results may fast-forward normally.
 
 An inconclusive unit query holds and names its cause: bus unreachable, timed out,
-query failed, or unreadable unit state. A missing/unreadable process-query tool or
+query failed, or unreadable unit state. A missing/unreadable `ps`/CIM process-query tool or
 a failed process query also holds with a fixed diagnostic. Tool stderr, command
 lines and config values are not copied into logs. A live unit/process without
 matching state holds with a bootstrap/path diagnostic. After deployment, restart
 the keeper once, then verify the updater's state path is the configured DB filename
 plus `.loaded.json` before enabling the timer. This covers older running keepers
 and accidentally pointing the updater at a different DB. Custom unit names must
-set the same `--keeper-unit` in the template.
+set the same `--keeper-unit` in the template. An unreachable user bus plus a
+not-found system unit and no detected process still holds: the user unit is
+unknown, not proven absent. Do not treat a failed process scan as an empty scan.
+Repair the bus/session or query-tool installation and rerun; this remaining
+operator-recoverable hold is deliberate, including on headless cron hosts.
 
 The startup flock is still not shared with the daemon. Keeper modules are loaded
 at daemon module import time, before `main()`/`run()` or state publication. A lock

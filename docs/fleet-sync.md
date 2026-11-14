@@ -133,9 +133,16 @@ were absent from this checkout; this command and the existing fleet drift
 surface provide the in-repository implementation and status integration.
 
 The main-ff guard now rechecks keeper state immediately before merging. Missing
-state permits a move when no keeper unit/process is present. Both user and system
+state permits a move when conclusive probes show no keeper unit/process. Both user and system
 unit scopes and standalone keeper processes are checked; a running keeper without
 state holds with a restart/path diagnostic. Bus/timeouts and inconclusive probes
 hold with a named cause, while missing systemctl/not-found units alone do not. `--keeper-unit` defaults to the repository's existing
 `plangraph-keeper.service`. See the keeper state contract for bootstrap, dirty or
 non-Git provenance, exact runtime data dependencies, and manual-update limits.
+
+Process detection now recognizes interpreter module and keeper-file launch
+targets on POSIX/Windows, excludes editors/probes and uses `ps` instead of
+requiring `pgrep`. Positive keeper detection takes precedence over a prior unit
+error in the HELD diagnostic. Headless user-bus failures and unavailable process
+tools remain inconclusive and HELD; no-process alone does not prove an unreadable
+user unit absent. See the state contract for the verified launch inventory.

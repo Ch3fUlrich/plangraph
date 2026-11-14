@@ -256,8 +256,10 @@ def test_loaded_state_describes_checkout_provenance(checkout, tmp_path, monkeypa
     ('not-found', 0, False, ''),
     ('bus', 0, True, 'bus unreachable'),
     ('timeout', 0, True, 'timed out'),
-    ('bus', 123, True, 'bus unreachable'),
+    ('oserror', 0, True, 'unit query unavailable'),
+    ('bus', 123, True, 'live keeper'),
     ('not-found', 123, True, 'live keeper'),
+    ('not-found', 'path', True, 'live keeper'),
     ('loaded-zero', 123, True, 'live keeper'),
     ('missing-systemctl', 123, True, 'live keeper'),
     ('system-pid', 0, True, 'live keeper'),
@@ -269,16 +271,21 @@ def test_absent_state_checks_unit_scopes_and_process(checkout, monkeypatch, case
     sha = target(repo, 'src/plangraph/spawner/unused.py', 'VALUE = 2\n')
     state.unlink()
     monkeypatch.setattr(drift, 'keeper_main_pid', keeper_main_pid)
-    monkeypatch.setattr(drift, 'keeper_process_pid', lambda: process_pid, raising=False)
+    probe = drift.keeper_process_pid
+    monkeypatch.setattr(drift, 'keeper_process_pid', lambda: probe() if process_pid == 'path' else process_pid)
     run = drift.subprocess.run
     scopes = []
 
     def query(argv, **kwargs):
+        if argv[0] == 'ps':
+            return SimpleNamespace(stdout='123 python3 python3 src/plangraph/keeper/daemon.py\n', returncode=0)
         if argv[0] != 'systemctl':
             return run(argv, **kwargs)
         scopes.append('--user' in argv)
         if case == 'missing-systemctl':
             raise FileNotFoundError('systemctl')
+        if case == 'oserror':
+            raise PermissionError('fixture unit unreadable')
         if case == 'timeout':
             raise subprocess.TimeoutExpired(argv, 5)
         if case == 'bus':
@@ -297,26 +304,96 @@ def test_absent_state_checks_unit_scopes_and_process(checkout, monkeypatch, case
         assert False in scopes  # The system scope was checked as well.
 
 
-@pytest.mark.parametrize('pid', [0, 123])
-def test_keeper_process_probe_uses_existing_pgrep_pattern(monkeypatch, pid):
+
+@pytest.mark.parametrize('exe,argv,expected', [
+    ('python3', 'python3 -m plangraph.keeper.daemon --config fixture.json', 123),
+    ('python3', 'python3 -u /repo/src/plangraph/keeper/daemon.py --config fixture.json', 123),
+    ('pypy3', 'pypy3 -X dev src/plangraph/keeper/daemon.py', 123),
+    ('python3', 'python3 -m plangraph.keeper --config fixture.json', 123),
+    ('vim', 'vim /repo/src/plangraph/keeper/daemon.py', 0),
+    ('ps', 'ps -A -o pid= -o comm= -o args=', 0),
+    ('python3', 'python3 editor.py /repo/src/plangraph/keeper/daemon.py', 0),
+    ('python3', 'python3 -c "print(123)" /repo/src/plangraph/keeper/daemon.py', 0),
+    ('python3', 'python3 -m plangraph.keeper.cli --help', 0),
+    ('python3', 'python3 -c "unterminated', 0),
+])
+def test_keeper_probe_matches_interpreter_launch_target(monkeypatch, exe, argv, expected):
     from plangraph.fleet_sync import drift
 
-    def run(argv, **kwargs):
-        assert argv == ['pgrep', '-f', '--', '[p]langraph[.]keeper[.]daemon']
-        return SimpleNamespace(stdout=f'{pid}\n' if pid else '', returncode=0 if pid else 1)
+    def run(command, **kwargs):
+        assert command == ['ps', '-A', '-o', 'pid=', '-o', 'comm=', '-o', 'args=']
+        return SimpleNamespace(stdout=f'123 {exe} {argv}\n', returncode=0)
 
     monkeypatch.setattr(drift.subprocess, 'run', run)
-    assert drift.keeper_process_pid() == pid
+    assert drift.keeper_process_pid() == expected
 
 
-@pytest.mark.parametrize('pid', [0, 123])
-def test_keeper_process_probe_without_unix_tools(monkeypatch, pid):
+def test_no_keeper_process_needs_no_pgrep(monkeypatch):
     from plangraph.fleet_sync import drift
 
-    def run(argv, **kwargs):
-        assert argv[:4] == ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command']
-        assert 'Get-CimInstance Win32_Process' in argv[4]
-        return SimpleNamespace(stdout=f'{pid}\n' if pid else '', returncode=0)
+    def run(command, **kwargs):
+        if command[0] == 'pgrep':
+            raise FileNotFoundError('fixture pgrep missing')
+        assert command[0] == 'ps'
+        return SimpleNamespace(stdout='123 vim vim daemon.py\n', returncode=0)
 
     monkeypatch.setattr(drift.subprocess, 'run', run)
-    assert drift.keeper_process_pid(platform='nt') == pid
+    assert drift.keeper_process_pid() == 0
+
+
+@pytest.mark.parametrize('exe,argv,expected', [
+    ('pypy3.exe', r'pypy3.exe C:\repo\plangraph\keeper\daemon.py', 123),
+    ('python.exe', 'python.exe -m plangraph.keeper.daemon', 123),
+    ('notepad.exe', r'notepad.exe C:\repo\plangraph\keeper\daemon.py', 0),
+    ('powershell.exe', 'powershell.exe probe plangraph.keeper.daemon', 0),
+    ('System Idle Process', '', 0),
+])
+def test_windows_keeper_launch_targets(monkeypatch, exe, argv, expected):
+    from plangraph.fleet_sync import drift
+
+    def run(command, **kwargs):
+        assert command[:4] == ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command']
+        assert 'Get-CimInstance Win32_Process' in command[4]
+        return SimpleNamespace(stdout=json.dumps([{'ProcessId': 0 if exe == 'System Idle Process' else 123, 'Name': exe, 'CommandLine': argv}]), returncode=0)
+
+    monkeypatch.setattr(drift.subprocess, 'run', run)
+    assert drift.keeper_process_pid(platform='nt') == expected
+
+
+@pytest.mark.parametrize('failure,cause', [('missing', 'unavailable'), ('oserror', 'unavailable'),
+    ('timeout', 'timed out'), ('exit', 'failed'), ('malformed', 'unavailable')])
+def test_process_probe_failures_hold_with_fixed_cause(checkout, monkeypatch, failure, cause):
+    from plangraph.fleet_sync import drift
+
+    repo, state, loaded = checkout
+    target(repo, 'src/plangraph/spawner/unused.py', 'VALUE = 2\n')
+    state.unlink()
+    monkeypatch.setattr(drift, 'keeper_main_pid', keeper_main_pid)
+    run = drift.subprocess.run
+
+    def query(command, **kwargs):
+        if command[0] == 'git':
+            return run(command, **kwargs)
+        if command[0] == 'systemctl':
+            return SimpleNamespace(stdout='LoadState=not-found\nMainPID=0\n', returncode=0)
+        if failure == 'missing':
+            raise FileNotFoundError('fixture missing process tool')
+        if failure == 'oserror':
+            raise PermissionError('fixture unreadable process tool')
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired(command, 5)
+        return SimpleNamespace(stdout='bad fixture data' if failure == 'malformed' else '', returncode=2 if failure == 'exit' else 0)
+
+    monkeypatch.setattr(drift.subprocess, 'run', query)
+    code, line = advance.main_ff(repo, state, fetch=False)
+    assert code == 3 and 'keeper process query ' + cause in line
+    assert git(repo, 'rev-parse', 'HEAD') == loaded
+
+
+def test_keeper_console_entry_points_match_verified_launch_inventory():
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    scripts = tomllib.loads((root / 'pyproject.toml').read_text()).get('project', {}).get('scripts', {})
+    assert not {name: value for name, value in scripts.items() if 'keeper' in name or 'keeper' in value}, 'Extend keeper launch detection for new console entry points'
