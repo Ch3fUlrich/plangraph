@@ -193,3 +193,33 @@ def test_git_config_is_isolated_before_collection(monkeypatch):
     session_env._clear_inherited_git_environment()
     assert os.environ['GIT_CONFIG_GLOBAL'] == os.devnull
     assert os.environ['GIT_CONFIG_NOSYSTEM'] == '1'
+
+
+@pytest.mark.parametrize('configured,expected', [
+    ({}, {'PG_JAIL': 'off', 'PG_TEST_ALLOW_UNJAILED': '1'}),
+    ({'PG_JAIL': 'off'}, {'PG_JAIL': 'off', 'PG_TEST_ALLOW_UNJAILED': '1'}),
+    ({'PG_JAIL': 'on'}, {'PG_JAIL': 'on'}),
+    ({'PG_JAIL_BIN': '/configured/jail'}, {'PG_JAIL_BIN': '/configured/jail'}),
+    ({'PG_JAIL_BIN': ''}, {'PG_JAIL_BIN': ''}),
+    ({'PG_TEST_ALLOW_UNJAILED': '0'}, {'PG_JAIL': 'off', 'PG_TEST_ALLOW_UNJAILED': '0'}),
+])
+def test_worker_test_environment_defaults_are_scoped(repo, monkeypatch, configured, expected):
+    names = ('PG_JAIL', 'PG_JAIL_BIN', 'PG_TEST_ALLOW_UNJAILED')
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in configured.items():
+        monkeypatch.setenv(name, value)
+    target = ['--manifest-path', str(repo / 'rust/worker/Cargo.toml')]
+    commands = [['cargo', 'fmt', *target, '--check'],
+                ['cargo', 'clippy', *target, '--all-targets', '--', '-D', 'warnings'],
+                ['cargo', 'test', *target], ['cargo', 'test', '-p', 'pg-worker-core'],
+                ['cargo', 'test', '--manifest-path',
+                 str(repo / 'rust/spikes/temporal-spike/Cargo.toml'), '--test', 'replay']]
+    calls = fake_runner(monkeypatch)
+    monkeypatch.setattr(preflight, 'rust_commands', lambda *a: commands)
+    assert preflight.main(['--base', 'HEAD', '--fast'], repo) == 0
+    worker = next(env for command, _, env in calls if command == commands[2])
+    assert {key: worker[key] for key in names if key in worker} == expected
+    others = [env for command, _, env in calls if command != commands[2]]
+    assert all({key: env[key] for key in names if key in env} == configured for env in others)
+    assert {key: os.environ[key] for key in names if key in os.environ} == configured

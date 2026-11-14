@@ -351,3 +351,6 @@ admission and catalog filtering; AGY capability/witness activation requires evid
 Standalone Rust workspaces, including rust/worker, receive manifest-specific preflight checks.
 Preflight selects changed crates and their transitive path dependents across workspaces;
 the Temporal spike keeps its CI replay-only check and is skipped for unrelated workspace changes.
+
+Worker preflight tests default to the CI test-only unjailed environment when no jail
+configuration is supplied; explicit jail settings are preserved and other check commands are unaffected.

@@ -284,12 +284,23 @@ def main(argv=None, root=None):
                 failed = []  # policy runs every check and reports all failures
                 for command in commands:
                     cwd = root / "rust" if family == "rust" else root
-                    code, output = run(command, cwd, family_env)
+                    command_env = family_env
+                    if (family == "rust" and command[:2] == ["cargo", "test"]
+                            and "--manifest-path" in command
+                            and command[command.index("--manifest-path") + 1]
+                            == str((root / "rust/worker/Cargo.toml").resolve())
+                            and "PG_JAIL_BIN" not in family_env
+                            and family_env.get("PG_JAIL", "off") == "off"):
+                        # Match rust-worker CI for this test child only.
+                        command_env = dict(family_env)
+                        command_env.setdefault("PG_JAIL", "off")
+                        command_env.setdefault("PG_TEST_ALLOW_UNJAILED", "1")
+                    code, output = run(command, cwd, command_env)
                     print(output, end="", flush=True)
                     infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     if infra:
                         print(f"{family}: INFRA HTTP 5xx; rerun once", flush=True)
-                        code, output = run(command, cwd, family_env)
+                        code, output = run(command, cwd, command_env)
                         print(output, end="", flush=True)
                         infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     status = "PASS" if not code else ("INFRA" if infra else "FAIL")
