@@ -392,3 +392,73 @@ def test_gate_cancelled_selected_suite_is_a_problem():
     needs = {"select": {"result": "success", "outputs": outs}, "pytest": {"result": "cancelled"}}
     needs.update({j: {"result": "success"} for j in ci_select.ALWAYS})
     assert gate(needs) == ["pytest: cancelled"]
+
+
+def test_fast_path_profiles_shards_and_failure_limit():
+    import tomllib
+    import yaml
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    manifest = tomllib.loads((root / 'rust/Cargo.toml').read_text())
+    assert manifest['profile']['dev']['package']['*']['opt-level'] == 3
+    assert manifest['profile']['dev']['package']['pg-worker-core']['opt-level'] == 3
+    jobs = yaml.safe_load((root / '.github/workflows/tests.yml').read_text())['jobs']
+    for name in ('pytest', 'pytest-postgres'):
+        assert jobs[name]['strategy']['matrix']['shard'] == [0, 1, 2]
+        assert jobs[name]['strategy']['fail-fast'] is True
+        text = '\n'.join(step.get('run', '') for step in jobs[name]['steps'])
+        assert '--dist loadgroup' in text and '--maxfail 10' in text
+    assert 'cancel-on-failure' not in jobs
+
+
+def test_three_shards_cover_only_affected_selection(tmp_path, shard_selector):
+    import inspect
+    import os
+    import sys
+    spec = importlib.util.spec_from_file_location('shard_affected', MODULE_PATH.with_name('affected_tests.py'))
+    affected = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(affected)
+    package = tmp_path / 'src/pkg'
+    package.mkdir(parents=True)
+    (package / '__init__.py').write_text('')
+    (package / 'one.py').write_text('VALUE = 1\n')
+    tests = tmp_path / 'tests'
+    tests.mkdir()
+    (tests / 'test_selected.py').write_text('from pkg.one import VALUE\ndef test_selected():\n    assert VALUE == 1\n')
+    (tests / 'test_unselected.py').write_text('raise RuntimeError("unaffected file must never be collected")\n')
+    plan = affected.select_tests(tmp_path, ['src/pkg/one.py'])
+    assert plan['tests'] == ['tests/test_selected.py']
+    hooks = shard_selector.__globals__
+    source = 'import os, sys, hashlib, pytest\nfrom pathlib import Path\n_PG = False\n'
+    source += '\n'.join(inspect.getsource(hooks[name]) for name in (
+        'shard_items', 'pytest_collection_modifyitems', 'pytest_sessionfinish') if name in hooks)
+    source += '\ndef pytest_runtest_logreport(report):\n    if report.when == "call":\n        with Path(os.environ["SHARD_TRACE"]).open("a") as stream:\n            stream.write(report.nodeid + "\\n")\n'
+    (tmp_path / 'conftest.py').write_text(source)
+    (tmp_path / 'pytest.ini').write_text('[pytest]\n')
+    executed, empty = [], 0
+    for index in range(3):
+        trace = tmp_path / f'trace-{index}'
+        env = dict(os.environ, PYTEST_SHARD=f'{index}/3', PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
+                   PYTHONPATH=os.pathsep.join((str(tmp_path / 'src'), str(MODULE_PATH.parents[1] / 'tests'))), SHARD_TRACE=str(trace))
+        result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-c', str(tmp_path / 'pytest.ini'),
+            '--confcutdir', str(tmp_path), *plan['tests']], cwd=tmp_path, env=env,
+            capture_output=True, text=True, timeout=20)
+        assert result.returncode == 0, result.stdout + result.stderr
+        ran = trace.read_text().splitlines() if trace.exists() else []
+        empty += not ran
+        executed.extend(ran)
+    assert empty == 2
+    assert executed == ['tests/test_selected.py::test_selected']
+
+
+@pytest.mark.parametrize('shard', ['0/3', '1/3', '2/3'])
+def test_empty_affected_selection_never_invokes_default_collection(tmp_path, monkeypatch, capsys, shard):
+    import sys
+    spec = importlib.util.spec_from_file_location('empty_affected', MODULE_PATH.with_name('affected_tests.py'))
+    affected = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(affected)
+    monkeypatch.setenv('PYTEST_SHARD', shard)
+    monkeypatch.setattr(affected, 'select_tests', lambda *a, **k: {'tests': []})
+    monkeypatch.setattr(affected.subprocess, 'run', lambda *a, **k: pytest.fail('empty selection started pytest'))
+    monkeypatch.setattr(sys, 'argv', ['affected_tests.py', '--base', 'HEAD', '--changed', 'docs/a.md', '--run'])
+    assert affected.main(root=tmp_path) == 0

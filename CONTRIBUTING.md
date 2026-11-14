@@ -332,3 +332,5 @@ Checkpoint 7 includes review evidence records; run its affected Python checks in
 Standalone Rust workspaces, including rust/worker, receive manifest-specific preflight checks.
 
 Checkpoint 13 includes routing and provider contracts; run its affected Python checks in an isolated clone.
+
+Checkpoint 14 includes remaining policy and sensitivity contracts; run its affected Python checks in an isolated clone.
