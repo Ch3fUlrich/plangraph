@@ -165,7 +165,7 @@ def _git_snapshot(repo):
     return {p.relative_to(metadata).as_posix(): p.read_bytes() for p in files if p.is_file()}
 
 
-@pytest.mark.parametrize('boundary', ['hook', 'selector', 'pytest'])
+@pytest.mark.parametrize('boundary', ['hook', 'selector', 'pytest', 'pytest-xdist'])
 def test_hook_binding_never_mutates_caller_repository(tmp_path, boundary):
     """Every repository and every deliberately leaked variable belongs to this fixture."""
     import shutil
@@ -194,15 +194,25 @@ def test_hook_binding_never_mutates_caller_repository(tmp_path, boundary):
     incoming['PYTHONPATH'] = os.pathsep.join((str(source / 'src'), str(suite / 'tests')))
     incoming.pop('PYTEST_ADDOPTS', None)
     incoming.pop('PYTEST_SHARD', None)
+    incoming.pop('PYTEST_XDIST_WORKER', None)
+    incoming.pop('PYTEST_XDIST_WORKER_COUNT', None)
+    if boundary == 'pytest-xdist': incoming['FIXTURE_XDIST'] = '1'
     mutation = (
         "import os, subprocess\n"
         "def test_fixture():\n"
-        "    os.chdir(os.environ['FIXTURE_CHECKOUT'])\n"
+        "    binding = os.environ.get('GIT_DIR')\n"
+        "    assert binding is None\n"
+        "    target = os.path.join(os.environ['FIXTURE_CHECKOUT'], os.environ.get('PYTEST_XDIST_WORKER', 'controller')) if os.environ.get('FIXTURE_XDIST') else os.environ['FIXTURE_CHECKOUT']\n"
+        "    os.makedirs(target, exist_ok=True)\n"
+        "    os.chdir(target)\n"
         "    subprocess.run(['git', 'init', '-qb', 'main'], check=True)\n"
         "    subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', "
         "'commit', '--allow-empty', '-qm', 'fixture mutation'], check=True)\n"
         "    subprocess.run(['git', 'config', 'user.name', 'Child fixture'], check=True)\n"
     )
+    if boundary == 'pytest-xdist':
+        for index in range(1, 4):
+            mutation += f'\ndef test_fixture_{index}():\n    test_fixture()\n'
     if boundary == 'hook':
         tools = suite / 'tools'
         tools.mkdir()
@@ -227,10 +237,15 @@ def test_hook_binding_never_mutates_caller_repository(tmp_path, boundary):
             for name in ('conftest.py', 'pgtest_shm.py', '_keeper_threads.py', 'win_skips.py'):
                 shutil.copy2(source / 'tests' / name, tests / name)
             command = [sys.executable, '-m', 'pytest', '-q', 'tests/test_binding.py']
+            if boundary == 'pytest-xdist': command += ['-n', '2']
     result = subprocess.run(command, cwd=suite, env=incoming, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     assert _git_snapshot(victim) == before, 'caller refs, HEAD or config changed'
-    assert (checkout / '.git/HEAD').is_file()
+    if boundary == 'pytest-xdist':
+        assert {p.name for p in checkout.iterdir()} == {'gw0', 'gw1'}
+        assert all((checkout / worker / '.git/HEAD').is_file() for worker in ('gw0', 'gw1'))
+    else:
+        assert (checkout / '.git/HEAD').is_file()
 
 
 @pytest.mark.parametrize('boundary', ['hook', 'selector', 'pytest', 'preflight'])
