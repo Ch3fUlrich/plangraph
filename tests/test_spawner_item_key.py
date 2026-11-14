@@ -294,6 +294,8 @@ def test_spawn_missing_seat_identity_is_persisted(tmp_path, monkeypatch, dispatc
 @pytest.mark.parametrize('positional', [False, True])
 def test_refusal_item_key(tmp_path, monkeypatch, positional):
     service = _service(tmp_path, monkeypatch)
+    # Exercise routing refusal independently of host admission/registry state.
+    monkeypatch.setattr(service, 'admit_spawn', lambda *args, **kwargs: None)
 
     def refuse(*args, **kwargs):
         raise SpawnRefused('test refusal')

@@ -359,3 +359,5 @@ Checkpoint 14 covers remaining policy and sensitivity contracts. The sensitivity
 uses synthetic leg state and checks all five stability seeds independently; run
 `python3 -m pytest -q -p no:cacheprovider tests/test_spawner_docs_contract.py`
 to verify reproducibility and CLI serialization.
+
+Checkpoint 7 includes review evidence records; run its affected Python checks in an isolated clone.
