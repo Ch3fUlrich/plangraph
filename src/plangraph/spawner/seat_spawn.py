@@ -14,9 +14,13 @@ import uuid
 from pathlib import Path
 
 from .seat_artifact import reserve_seat_families, seat_reasons, sync_seat, sync_seat_group
+
+
 def resources(service):
     from .overflow import available_memory_mb
     return 0, available_memory_mb()
+
+
 def admit(service, options, *, card=None, preview=False):
     """Enforce RAM admission even without an overflow configuration."""
     if options.get('dry_run'):
@@ -110,12 +114,18 @@ def admit(service, options, *, card=None, preview=False):
     if remote_first:
         record.update(host=placement['host'], placement=placement)
     return record
+
+
 # These children expose skill tools, but no repository/shell tools (D-4681).
 INLINE_DIFF_HARNESSES = frozenset({'opencode'})
+
+
 def _needs_inline_diff(leg, card):
     return (getattr(leg, 'tool_mode', 'tools') == 'inline-only'
             or (getattr(leg, 'harness', None) in INLINE_DIFF_HARNESSES
                 and card.get('diff_ref') is not None))
+
+
 def annotate_review_warning(record):
     from plangraph.planner.legs import REVIEW_UNFIT_SEATS
     model = (record.get('chosen_leg') or {}).get('model')
@@ -124,12 +134,16 @@ def annotate_review_warning(record):
         warning = 'review_unfit: ' + model
         if warning not in record.setdefault('warnings', []):
             record['warnings'].append(warning)
+
+
 def _refuse_oversized_diff(exc, leg):
     from .context_pack import PromptBoundError
     if exc.chars is not None:
         raise PromptBoundError(
             f'prompt_too_large: inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
             f'max_request_tokens {leg.max_request_tokens}') from None
+
+
 class SeatSpawnMixin:
 
     _seat_reasons = staticmethod(seat_reasons)
