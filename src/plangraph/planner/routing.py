@@ -359,7 +359,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
             reason = "inline_only_needs_diff"
         elif native_review and leg.id not in REVIEW_ORDER:
-            reason = "explicit_only"
+            reason = "review_route_excluded"
         else:
             try:
                 route_card(card, legs=(leg,), role=role, exclude_families=excluded, now=now)
@@ -379,7 +379,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         candidate_details.append(detail)
     skipped.extend(disabled_skips)
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
-        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat", "explicit_only")}
+        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat", "review_route_excluded")}
     try:
         route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
                            exclude_families=excluded, role=role, now=now)
