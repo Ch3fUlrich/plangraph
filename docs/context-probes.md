@@ -92,3 +92,6 @@ systemctl --user enable --now pg-context-probes.timer
 
 Install `rust/target/release/pg-probe` as `$HOME/.local/bin/pg-probe` first. No
 units were installed or live agents launched by the hermetic runner tests.
+
+The external-launch knowledge probe scores the documented router entry-point
+path, so the proposed inventory does not depend on a private repository name.

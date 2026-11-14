@@ -111,7 +111,7 @@ boundaries (including boundary-only transcripts), preserving hard-cap guidance
 when applicable. The spawner launch default remains
 `CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000`.
 
-The external `plangraph-data/router/bin/fleet-launch` source is outside this
+The external `router/bin/fleet-launch` source is outside this
 worktree. Read-only inspection in the adjacent data checkout confirms that its
 default and invalid-value fallback already use `400000`; that part of the D3
 triage is stale and needs no source change. Fresh-shell inheritance still needs
