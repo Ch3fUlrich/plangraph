@@ -15,7 +15,7 @@ fn hydrogen_and_argon_limits_are_independent_and_exposed() {
             "-c",
             r#"
 import json
-from plangraph.routing_support.leg_state import _default_store
+from plangraph.routing_support.leg_state import _default_store, LegStateStore
 from plangraph.planner.routing import plan_spawn
 store = _default_store()
 card = dict(estimate_tokens=1000, paths=['rust/pg-spawnd/src/spawn.rs'], has_tests=True)
@@ -31,7 +31,14 @@ store.record_harness_limit('agy/gemini-4-argon-medium',
 argon = route()
 store.record_harness_limit('agy/claude-sonnet-5-5-high',
     'Individual quota reached. Resets in 1h.', 'fixture')
-print(json.dumps(dict(initial=initial, hydrogen=hydrogen, argon=argon, final=route())))
+legacy = LegStateStore(store.path.with_name('legacy.sqlite'))
+with legacy._connect() as db:
+    db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)",
+               ('agy/gemini-4-hydrogen-high', None, None, 429, 'old quota', 36000, 36010, 10, 'fixture', 'harness-stderr'))
+legacy_state = legacy.leg_status('agy:gemini-4-hydrogen', now=7*3600)
+sonnet_only = plan_spawn(card, role='review', writer_families=['openai'], catalog_rows=[],
+    leg_reader=lambda model, **kw: dict(state='ok' if model == 'claude-sonnet-5-5-high' else 'limited', evidence=None)).to_dict()
+print(json.dumps(dict(legacy=legacy_state, sonnet_only=sonnet_only, initial=initial, hydrogen=hydrogen, argon=argon, final=route(), later=store.leg_status('agy:gemini-4-hydrogen', now=store.leg_status('agy:gemini-4-hydrogen')['evidence']['ts'] + 7*3600))))
 "#,
         ])
         .output()
@@ -54,6 +61,13 @@ print(json.dumps(dict(initial=initial, hydrogen=hydrogen, argon=argon, final=rou
         result["argon"]["first_leg"]["model"],
         "console-deepseek/deepseek-flash"
     );
+    assert_eq!(result["later"]["state"], "limited");
+    assert_eq!(result["legacy"]["state"], "limited");
+    assert_eq!(
+        result["sonnet_only"]["first_leg"]["model"],
+        "claude-sonnet-5-5-high"
+    );
+    assert!(result["sonnet_only"]["error"].is_null());
     let states = &result["hydrogen"]["agy_quota_states"];
     assert_eq!(states["agy:gemini-4-hydrogen"]["state"], "limited");
     assert_eq!(states["agy:gemini-4-argon"]["state"], "ok");

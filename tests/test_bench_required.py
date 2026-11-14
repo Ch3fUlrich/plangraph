@@ -185,16 +185,15 @@ def test_gate_import_guard():
 
 
 def test_review_gaps_include_filtered_policy_legs():
-    from plangraph.planner.legs import REVIEW_ORDER
-    reviewers = tuple(l for l in POLICY if l.id in REVIEW_ORDER)
+    reviewers = tuple(l for l in POLICY if "review" in l.roles)
     missing = next(leg for leg in reviewers if leg.disabled is None)
     p = routing.plan_spawn({"estimate_tokens": 1000}, role="review",
-                           writer_families=(missing.family,), benchmark=rows(tuple(l for l in reviewers if l != missing)),
+                           legs=reviewers, writer_families=(missing.family,), benchmark=rows(tuple(l for l in reviewers if l != missing)),
                            leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
     assert p.gaps == ({"leg": missing.id, "model": missing.model, "reason": "no benchmark row"},)
     with pytest.raises(routing.SpawnRefused, match=missing.id):
         routing.plan_spawn({"estimate_tokens": 1000}, role="review", strict=True,
-                           writer_families=(missing.family,), benchmark=rows(tuple(l for l in reviewers if l != missing)))
+                           legs=reviewers, writer_families=(missing.family,), benchmark=rows(tuple(l for l in reviewers if l != missing)))
 
 
 def test_duplicate_rows_counted(tmp_path):

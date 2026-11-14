@@ -5,9 +5,7 @@ _AMBER_LEG_ID = 'opencode-console-muse-spark'
 
 def review_key(leg, tier_idx, pos, *, measured=False):
     from .route_policy import review_priority
-    from .legs import REVIEW_ORDER
-    return (REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER else len(REVIEW_ORDER),
-            tier_idx, not measured, 0 if measured else review_priority(leg), pos)
+    return (tier_idx, not measured, 0 if measured else review_priority(leg), pos)
 
 
 def catalog_tiers(legs, rows):
@@ -90,11 +88,6 @@ def payment_order(legs, role, *, order_class=None, writer_families=(), diff_toke
             if len(votes) < 2 or len(set(votes.values())) < 2:
                 by_id.pop('muse-ember-max', None)
         return tuple(by_id[id] for id in table if id in by_id)
-    if role == 'review':
-        from .legs import REVIEW_ORDER
-        if any(leg.id in REVIEW_ORDER for leg in ordered):
-            return tuple(sorted(ordered, key=lambda leg: REVIEW_ORDER.index(leg.id)
-                                if leg.id in REVIEW_ORDER else len(REVIEW_ORDER)))
     if role not in ('implement', 'review'):
         return tuple(ordered)
     prefix_slots = set()

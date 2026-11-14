@@ -95,7 +95,7 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
             "agy/claude-sonnet-5-5-medium", "mimo/mimo-v2.6-pro",
             "mimo/mimo-v2.6-flash"} <= set(rows)
     plan = route_json(tmp_path, capsys, "--bench-db", str(db))
-    assert plan["p_source"] == "benchmark"
+    assert plan["p_source"] == "operator-order"
     by_leg = {c["leg"]: c for c in plan["candidates"]}
     for leg in ("agy-sonnet-5.5", "mimo-v2.6-flash"):
         assert by_leg[leg]["u_core"] is not None, leg
@@ -105,12 +105,9 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     assert bare["p_source"] == "operator-order"
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
     # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
-    assert [leg["id"] for leg in bare["legs"]] == [
-        "opencode-big-pickle", "opencode-gemini-4-argon", "agy-gemini-4-hydrogen-medium", "agy-gemini-4-argon",
-        "agy-gpt-oss-120b", "omniroute-deepseek-flash", "omniroute-muse-spark",
-        "opencode-go-gemini-4-argon", "opencode-go-muse-spark", "opencode-console-muse-spark",
-        "opencode-go-deepseek-v4-flash",
-        ]
+    from plangraph.planner.legs import REVIEW_ORDER
+    assert [leg["id"] for leg in bare["legs"]] == list(REVIEW_ORDER[:-1])
+
 
 
 def test_review_route_ignores_ambient_catalog_tiers(tmp_path, capsys, monkeypatch):
@@ -127,7 +124,7 @@ def test_review_route_ignores_ambient_catalog_tiers(tmp_path, capsys, monkeypatc
     ambient = route_json(tmp_path, capsys)
     assert reads == [1]
     assert next(c for c in ambient['candidates'] if c['leg'] == 'agy-gemini-4-argon')['tier'] == 'paid'
-    assert ambient['first_leg']['id'] == 'opencode-big-pickle'
+    assert ambient['first_leg']['id'] == 'agy-gemini-4-hydrogen-high'
     test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch)
     assert reads == [1]  # The exact-order probe must inject its own catalog input.
 

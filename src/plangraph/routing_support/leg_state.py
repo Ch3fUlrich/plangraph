@@ -237,6 +237,12 @@ class LegStateStore:
 
     def leg_status(self, leg, now=None, account=None, combo=None):
         leg = quota_key(leg)
+        agy = isinstance(leg, str) and leg.startswith("agy:")
+        ttl = RESET_CAP_S if agy else EVIDENCE_TTL_S
+        keys = [leg]
+        if agy:
+            base = "agy/" + leg[4:]
+            keys += [base, *(base + "-" + e for e in ("low", "medium", "high", "xhigh", "max"))]
         now = time.time() if now is None else now
         if not self.path.exists() or self.path.stat().st_size == 0:
             return {"state": "ok", "evidence": None}
@@ -244,8 +250,8 @@ class LegStateStore:
             with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
                 db.row_factory = sqlite3.Row
                 rows = db.execute(
-                    "SELECT * FROM leg_events WHERE leg_key=? AND " + _SCOPE + " AND ts<=? ORDER BY ts DESC,id DESC",
-                    (leg, account, combo, now))
+                    "SELECT * FROM leg_events WHERE leg_key IN (" + ",".join("?" for _ in keys) + ") AND " + _SCOPE + " AND ts<=? ORDER BY ts DESC,id DESC",
+                    (*keys, account, combo, now))
                 rows = list(rows)
                 # Serving evidence supersedes older probe failures, NEVER provider limits.
                 serving = next((i for i, r in enumerate(rows) if r['source'] == 'probe_failed_leg_serving'), len(rows))
@@ -256,7 +262,7 @@ class LegStateStore:
                     return {"state": "ok", "evidence": None}
                 evidence = {k: row[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                 evidence["event_id"] = row["id"]
-                if now >= row['ts'] + EVIDENCE_TTL_S:
+                if now >= row['ts'] + ttl:
                     return {'state': 'reprobe', 'evidence': evidence}
                 if row['source'] == 'liveness-probe':
                     # Two consecutive failures book down; serving evidence breaks the streak.
@@ -266,13 +272,13 @@ class LegStateStore:
                         if older['source'] == 'liveness-probe' and older['status'] == 503:
                             # A live predecessor must exist when this failure books
                             # the streak; its later expiry cannot unbook that down window.
-                            streak += int(row['ts'] < min(older['ts'] + EVIDENCE_TTL_S, older['reset_at'] or older['ts']))
+                            streak += int(row['ts'] < min(older['ts'] + ttl, older['reset_at'] or older['ts']))
                         else:
                             behind = older
                             break
                     # Probe failures never hide an older provider limit with a future reset (D-3685).
                     if (behind is not None and behind['source'] in ('harness-stderr', 'provider-response')
-                            and behind['reset_at'] is not None and now < min(behind['reset_at'], behind['ts'] + EVIDENCE_TTL_S)):
+                            and behind['reset_at'] is not None and now < min(behind['reset_at'], behind['ts'] + ttl)):
                         evidence = {k: behind[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                         evidence["event_id"] = behind["id"]
                         return {"state": "limited", "evidence": evidence}

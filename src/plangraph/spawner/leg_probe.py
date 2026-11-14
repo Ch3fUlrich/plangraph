@@ -134,8 +134,8 @@ def key(leg):
     Prefix only bare agy models; provider-qualified models are their own keys.
     Legacy rows without a harness keep their historical model-only keys.
     """
-    return leg_state.quota_key('agy/' + leg.model if getattr(leg, 'harness', None) == 'agy' and '/' not in leg.model
-                               else leg.model)
+    return ('agy/' + leg.model if getattr(leg, 'harness', None) == 'agy' and '/' not in leg.model
+            else leg.model)
 
 
 def reset_iso(reset):

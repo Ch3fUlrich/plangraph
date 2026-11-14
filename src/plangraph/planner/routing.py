@@ -259,9 +259,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
     """
-    if role == "review" and legs is DEFAULT_LEGS:
-        from .legs import REVIEW_ORDER
-        legs = tuple(l for l in legs if l.id in REVIEW_ORDER)
+    native_review = role == "review" and legs is DEFAULT_LEGS
+    from .legs import REVIEW_ORDER, REVIEW_FALLBACK_LEGS
+    if native_review:
+        legs = (*legs, *REVIEW_FALLBACK_LEGS)
     check_route_targets(card, legs)
     placement = dict(placement) if placement is not None else dict(host=None, reason='placement_not_evaluated', free_mb=None)
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
@@ -309,7 +310,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             not assessment.review_exempt or card.get('risk', 'normal') in ('high', 'critical')
             ):
         raise SpawnRefused('zero reviewers requires low/normal review_exempt')
-    from plangraph.routing_support.leg_state import leg_status, quota_key
+    from plangraph.routing_support.leg_state import leg_status
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
     from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS, get_catalog_models
     catalog_rows = tuple(get_catalog_models() if catalog_rows is None else catalog_rows)
@@ -336,7 +337,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     def _leg_status(leg_obj):
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         if leg_obj.harness == "agy" and not unavailable(st) and "/" not in leg_obj.model:
-            alt = reader(quota_key("agy/" + leg_obj.model), now=now, account=card.get("account"), combo=card.get("combo"))
+            alt = reader("agy/" + leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
             if unavailable(alt):
                 return alt
         return st
@@ -357,6 +358,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             reason = "excluded_family"
         elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
             reason = "inline_only_needs_diff"
+        elif native_review and leg.id not in REVIEW_ORDER:
+            reason = "explicit_only"
         else:
             try:
                 route_card(card, legs=(leg,), role=role, exclude_families=excluded, now=now)
@@ -376,7 +379,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         candidate_details.append(detail)
     skipped.extend(disabled_skips)
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
-        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat")}
+        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat", "explicit_only")}
     try:
         route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
                            exclude_families=excluded, role=role, now=now)
@@ -422,6 +425,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         table_order = {leg.id: i for i, leg in enumerate(ordered)}
         ordered.sort(key=lambda leg: review_key(leg, TIERS.index(leg.tier), table_order[leg.id],
                      measured=rows.get(leg.model, rows.get(leg.id)) is not None))
+    if native_review:
+        ordered.sort(key=lambda leg: REVIEW_ORDER.index(leg.id))
+        source = "operator-order"
     ordered.sort(key=lambda leg: role == "orchestrate" and leg.claude_family)  # D-4812/D-297: Claude last
     seats, coverage, open_parts = [], (), []
     if role == "review":
@@ -429,8 +435,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         seat_order = {leg.id: i for i, leg in enumerate(route.legs)}
         seats, coverage, open_parts = pick_seats(
             sorted(ordered, key=lambda leg: seat_order.get(leg.id, len(seat_order))), writer_set, high=high)
+    if native_review:
+        seats, coverage, open_parts = pick_seats(ordered, writer_set, high=high)
     error = None
-    if role == "review" and len(seats) < 2:
+    if role == "review" and len(seats) < (1 if native_review and not high else 2):
         error = "two distinct review families unavailable"
     elif open_parts:
         error = "seat coverage unmet for writer parts: " + ", ".join(open_parts)

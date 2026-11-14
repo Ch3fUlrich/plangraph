@@ -107,3 +107,6 @@ ordinary successes and failures omit the key, rather than returning null.
 D-5966 agy quotas use agy:<model>, shared across effort variants of that model.
 Hydrogen, Argon and Sonnet limits are independent. Gateway aggregate antigravity
 quota snapshots do not suppress these native CLI models.
+Legacy agy/<model>-<effort> events remain readable under the canonical key.
+Explicit agy resets survive the generic six-hour evidence TTL, up to the existing
+24-hour booking cap.
