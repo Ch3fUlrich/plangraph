@@ -77,6 +77,7 @@ fn sync(repo: &Path) -> Result<(), String> {
 
 fn run() -> Result<bool, &'static str> {
     let mut repos = Vec::new();
+    let mut excludes = Vec::new();
     let mut roots = Vec::new();
     let mut policy = drift::Policy::default();
     let mut check_config = false;
@@ -86,6 +87,9 @@ fn run() -> Result<bool, &'static str> {
         match arg.to_str() {
             Some("--repo") => repos.push(PathBuf::from(args.next().ok_or("missing repo")?)),
             Some("--root") => roots.push(PathBuf::from(args.next().ok_or("missing root")?)),
+            Some("--exclude") => excludes.push(
+                PathBuf::from(args.next().ok_or("missing exclude")?)
+                    .canonicalize().map_err(|_| "invalid exclude")?),
             Some("--sync") => also_sync = true,
             Some("--check-config") => check_config = true,
             Some("--host") => policy.host = args.next().ok_or("missing host")?.to_string_lossy().into(),
@@ -127,6 +131,12 @@ fn run() -> Result<bool, &'static str> {
     };
     let mut alerts = false;
     for repo in repos {
+        if fs::symlink_metadata(repo.join(".repo-sync-pin")).is_ok()
+            || repo.canonicalize().is_ok_and(|p| excludes.contains(&p))
+        {
+            println!("SKIP {:?} excluded or pinned", repo.display().to_string());
+            continue;
+        }
         if !drift::is_checkout(&repo) {
             println!("ALERT {:?} reason=fetch-failed", repo.display().to_string());
             alerts = true;

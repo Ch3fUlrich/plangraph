@@ -256,3 +256,22 @@ fn live_unit_checkout_is_reported_and_unchanged() {
         before
     );
 }
+#[test]
+fn excluded_alias_or_pinned_checkout_is_reported_without_fetch() {
+    for pin in [false, true] {
+        let tmp = fixture();
+        let repo = tmp.path().join("checkout");
+        let before = git(&repo, &["rev-parse", "origin/main"]);
+        let mut args = vec!["--repo", "checkout"];
+        if pin {
+            fs::write(repo.join(".repo-sync-pin"), "operator pin").unwrap();
+        } else {
+            args.extend(["--exclude", "./checkout"]);
+        }
+        let out = run(tmp.path(), &args);
+        assert!(out.status.success());
+        assert!(String::from_utf8(out.stdout).unwrap().contains("SKIP"));
+        assert_eq!(git(&repo, &["rev-parse", "origin/main"]), before);
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]), before);
+    }
+}

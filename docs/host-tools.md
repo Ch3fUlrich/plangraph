@@ -18,3 +18,6 @@ run, regardless of disk usage; there is no `--apply` mode in this tool.
 Running system and user service WorkingDirectory paths (including descendants
 of a checkout) protect it from sync. Missing or unreadable unit information
 fails closed with a `SKIP` report. Config-only inspection remains read-only.
+Repeat `--exclude PATH` to skip a checkout (canonical paths match symlink aliases),
+or create `.repo-sync-pin` in it. Both report `SKIP` before any Git operation.
+No sync timer is installed or enabled by this change; deployment remains separate.

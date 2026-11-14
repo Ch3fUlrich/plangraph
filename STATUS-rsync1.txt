@@ -1,0 +1,6 @@
+Implemented REPOS-IN-SYNC-RS-S1; failing-first Rust discovery/reason tests.
+Implemented HOSTS-RUST-S4-REPO-SYNC; parent, drift, bounded Git and live-unit protection.
+Implemented REPO-SYNC-EXCLUDE-LIVE-CHECKOUTS; exclusion and pin tests.
+Validation and review evidence: plan-order reviews/rsync1-<head8>-{hydrogen,sonnet}.txt.
+No push, timer installation, timer enablement or live host step performed.
+RSYNC-1 DONE
