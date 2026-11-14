@@ -44,7 +44,7 @@ def test_review_spawn_skips_edit_baseline_and_hides_console(monkeypatch, tmp_pat
     async def run():
         runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
         job = await runner.spawn('review a tiny fixture', role='review',
-            model_or_combo='agy/gemini-3.8-flash-tiered-high', client='agy', wait_seconds=1)
+            model_or_combo='agy/gemini-4-argon-high', client='agy', wait_seconds=1)
         assert job.status == 'completed'
         assert job._watchdog_baseline is None
         assert factory.await_count == 1
@@ -70,7 +70,7 @@ def test_writer_spawn_keeps_edit_baseline(monkeypatch, tmp_path):
     async def run():
         runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
         job = await runner.spawn('write a fixture', role='implement',
-            model_or_combo='agy/gemini-3.8-flash-tiered-high', client='agy', wait_seconds=1)
+            model_or_combo='agy/gemini-4-argon-high', client='agy', wait_seconds=1)
         assert job._watchdog_baseline == baseline
 
     asyncio.run(run())
@@ -136,11 +136,11 @@ def test_model_probe_uses_closed_stdin_and_hidden_windows_console(monkeypatch):
 def test_gemini_route_uses_the_served_agy_effort_variant():
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.routing_support.clients import build_standalone_fallback_command
-    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'agy-gemini-3.8-flash')
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'agy-gemini-4-argon')
     argv = build_standalone_fallback_command('agy', 'review', leg.model, role='review')
-    assert argv[argv.index('--model') + 1] == 'gemini-3.8-flash-high'
-    explicit = build_standalone_fallback_command('agy', 'review', 'gemini-3.8-flash-medium', role='review')
-    assert explicit[explicit.index('--model') + 1] == 'gemini-3.8-flash-medium'
+    assert argv[argv.index('--model') + 1] == 'gemini-4-argon-high'
+    explicit = build_standalone_fallback_command('agy', 'review', 'gemini-4-argon-high-medium', role='review')
+    assert explicit[explicit.index('--model') + 1] == 'gemini-4-argon-high-medium'
 
 
 def test_prompt_packaging_does_not_block_the_event_loop(tmp_path):

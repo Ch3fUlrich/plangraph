@@ -11,6 +11,8 @@ import time
 
 from plangraph.keeper.schema import EXIT_CLASSES, RISK_TAGS, WINDOW_CLASSES
 from plangraph.routing_errors import RouteError, SpawnRefused
+from plangraph.retired_models import check_route_targets
+from plangraph.model_admission import validate_model  # compatibility re-export
 
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
                          BenchRequired, benchmark_rows_from_db)
@@ -111,6 +113,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
     from .route_policy import implement_family_excluded
+    check_route_targets(card, legs)
     effective_role = role if role is not None else card.get("role")
     exclude_fams = set(exclude_families)
     legs = tuple(READINESS_LEGS if effective_role is None and legs is DEFAULT_LEGS else legs)
@@ -253,6 +256,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
     """
+    check_route_targets(card, legs)
     placement = dict(placement) if placement is not None else dict(host=None, reason='placement_not_evaluated', free_mb=None)
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
         raise SpawnRefused("card required" + (": missing estimate_tokens" if isinstance(card, Mapping) and card else ""))
@@ -435,25 +439,6 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     groups = split_findings(card.get('findings', ()), limit=threshold) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
                      tuple(candidate_details), groups, coverage, placement)
-
-
-def validate_model(model, *, allow_inactive=False, catalog_rows=None):
-    """The resolver catalog and registered legs are the exact admission door."""
-    from plangraph.routing_support.resolver import (get_catalog_models, catalog_row_admitted,
-                                           OPERATOR_REMOVED_MODELS)
-    from plangraph.mimo_policy import check_mimo_path
-    from . import legs as _legs   # read at call time: explicit legs are registered too
-    if not isinstance(model, str) or not model:
-        raise SpawnRefused('model must be a nonempty string')
-    check_mimo_path(model)
-    rows = get_catalog_models() if catalog_rows is None else catalog_rows
-    inactive = {row['id'] for row in rows if not catalog_row_admitted(row)} if not allow_inactive else set()
-    allowed = ({row['id'] for row in rows if catalog_row_admitted(row)} |
-               {leg.model for leg in (*_legs.DEFAULT_LEGS, *_legs.EXPLICIT_LEGS)}
-               ) - inactive - OPERATOR_REMOVED_MODELS
-    if model not in allowed:
-        raise SpawnRefused('unknown model: ' + str(model))
-    return model
 
 
 def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller=None):

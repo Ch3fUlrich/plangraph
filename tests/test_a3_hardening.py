@@ -51,8 +51,8 @@ def test_adapter_witness_rejects_combo_alias():
         runner.served_witness('j', 'agy/l2-worker', adapter_token=token)
     assert job.served_model == job.served_family == 'unwitnessed'
     # An admitted id is witnessed after the refused aliases.
-    runner.served_witness('j', 'agy/gemini-3.8-flash', adapter_token=token)
-    assert (job.served_model, job.served_family) == ('agy/gemini-3.8-flash', 'gemini')
+    runner.served_witness('j', 'agy/gemini-4-argon-high', adapter_token=token)
+    assert (job.served_model, job.served_family) == ('agy/gemini-4-argon-high', 'gemini')
 
 
 def test_adapter_witness_derives_family_and_requires_identity():
@@ -61,10 +61,10 @@ def test_adapter_witness_derives_family_and_requires_identity():
     token = object()
     runner._adapter_tokens['j'] = token
     with pytest.raises(ValueError):
-        runner.served_witness('j', 'agy/gemini-3.8-flash', adapter_token=object())
-    runner.served_witness('j', 'agy/gemini-3.8-flash', adapter_token=token)
+        runner.served_witness('j', 'agy/gemini-4-argon-high', adapter_token=object())
+    runner.served_witness('j', 'agy/gemini-4-argon-high', adapter_token=token)
     assert runner.jobs['j'].served_family == 'gemini'
-    assert runner.jobs['j'].served_model == 'agy/gemini-3.8-flash'
+    assert runner.jobs['j'].served_model == 'agy/gemini-4-argon-high'
 
 
 def test_business_refusal_is_not_invalid_params(tmp_path, monkeypatch):

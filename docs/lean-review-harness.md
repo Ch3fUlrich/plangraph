@@ -32,3 +32,6 @@ Live startup-token savings: not measured. No live measurement run IDs exist in
 the repository's records, so a fixed 25k saving is not claimed.
 Open step: three-run before/after token probe with recorded run IDs and token
 counts for each run. Runner structure is unchanged.
+
+Direct CLI command rendering refuses operator-retired Gemini Flash targets before
+constructing argv; D-5903 enables Hydrogen high for implement and medium for read-only tools review (agy plan mode), both unwitnessed.

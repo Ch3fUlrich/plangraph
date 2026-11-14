@@ -75,9 +75,9 @@ def test_route_free_first_keys():
 
 
 def test_catalog_tiers_preserve_roles():
-    rows = [{'id': 'agy/gemini-3.8-flash', 'tier': 'free'}]
+    rows = [{'id': 'agy/gemini-4-argon-high', 'tier': 'free'}]
     updated = catalog_tiers(DEFAULT_LEGS, rows)
-    assert next(l for l in updated if l.id == 'agy-gemini-3.8-flash').tier == 'free'
+    assert next(l for l in updated if l.id == 'agy-gemini-4-argon').tier == 'free'
     assert [l.roles for l in updated] == [l.roles for l in DEFAULT_LEGS]
     assert next(l for l in updated if l.id == 'deepseek').tier == 'paid'
 
@@ -113,7 +113,7 @@ def test_registered_pool_seats_exclude_claude_writers():
 @pytest.mark.parametrize('tier', ['free', 'subscription', 'paid'])
 @pytest.mark.parametrize('source', ['id', 'model_id', 'provider_id'])
 def test_catalog_tier_identity_and_route_output(tier, source):
-    leg = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-3.8-flash')
+    leg = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-argon')
     # Provider-qualified catalog identity must win over an unrelated bare name.
     rows = [{source: 'agy/' + leg.model, 'tier': tier},
             {source: leg.model, 'tier': 'paid' if tier != 'paid' else 'free'}]

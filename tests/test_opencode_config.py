@@ -22,9 +22,9 @@ def test_gateway_gemini_seat_bounds_silent_requests(settings, expected):
     from plangraph.routing_support.opencode_render import render_gateway_providers
     env = {"OMNIROUTE_BASE_URL": "http://gateway.invalid",
            "OPENCODE_CONFIG_CONTENT": json.dumps({"providers": {
-               "omniroute": {"settings": settings, "models": {"agy/gemini-3.8-flash-high": {}}},
+               "omniroute": {"settings": settings, "models": {"agy/gemini-4-argon-high": {}}},
                "other": {"settings": {"headerTimeout": False}}}})}
-    assert render_gateway_providers(env, "omniroute/agy/gemini-3.8-flash-high") is None
+    assert render_gateway_providers(env, "omniroute/agy/gemini-4-argon-high") is None
     providers = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]
     rendered = providers["omniroute"]["settings"]
     for key, want in zip(("headerTimeout", "chunkTimeout"), expected):
@@ -41,7 +41,7 @@ def test_gateway_gemini_exact_leg_model_sets_both_bounds():
     # Isolate timeout rendering from endpoint validation.
     from unittest.mock import patch
     with patch("plangraph.routing_support.opencode_render._is_valid_url", return_value=True):
-        assert render_gateway_providers(env, "omniroute/agy/gemini-3.8-flash-high") is None
+        assert render_gateway_providers(env, "omniroute/agy/gemini-4-argon-high") is None
     settings = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]["omniroute"]["settings"]
     assert settings["headerTimeout"] == 60000
     assert settings["chunkTimeout"] == 60000

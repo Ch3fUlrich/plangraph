@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from .release import git
+from plangraph._loaded_identity import repo_git
 
 
 def _local_git(repo, *args, check=True):
@@ -261,3 +262,10 @@ def rows(registry, release, query=transport, count=None):
             behind = 'unknown'
         result.append({'host': host['id'], 'live_sha': live, 'release_sha': release, 'behind': behind})
     return result
+
+
+def pid_start(pid):
+    try:
+        return (Path('/proc') / str(pid) / 'stat').read_text().rsplit(')', 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None

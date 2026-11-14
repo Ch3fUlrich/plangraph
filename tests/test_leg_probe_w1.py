@@ -79,11 +79,11 @@ def test_probe_writes_through_the_reader_store(tmp_path):
 
     store = LegStateStore(tmp_path / 'legs.sqlite')
     runner = SpawnerRunner(process_factory=factory)
-    result = asyncio.run(leg_probe.probe(runner, SimpleNamespace(model='gemini-3.8-flash', harness='agy'), timeout_s=.3, store=store))
+    result = asyncio.run(leg_probe.probe(runner, SimpleNamespace(model='gemini-4-argon-high', harness='agy'), timeout_s=.3, store=store))
     assert result['ok'] is False
     assert result['reason'] == 'timeout' and not result['infra']
-    assert store.leg_status('agy/gemini-3.8-flash')['state'] == 'reprobe'
-    assert leg_state.leg_status('agy/gemini-3.8-flash')['state'] == 'ok'
+    assert store.leg_status('agy/gemini-4-argon-high')['state'] == 'reprobe'
+    assert leg_state.leg_status('agy/gemini-4-argon-high')['state'] == 'ok'
 
 
 def test_harness_limit_stderr_is_error_shaped_or_anchored():
@@ -139,7 +139,7 @@ def test_probe_isolates_git_config_and_hooks(tmp_path, monkeypatch):
 
     runner = SpawnerRunner(process_factory=factory)
     # a model the runner's catalog accepts: the probe must reach the child commit
-    leg = SimpleNamespace(model='gemini-3.8-flash', harness='agy')
+    leg = SimpleNamespace(model='gemini-4-argon-high', harness='agy')
     result = asyncio.run(leg_probe.probe(runner, leg, timeout_s=20))
     assert result['ok'] is True, result
     assert result['infra'] is False and result['reason'] == ''
