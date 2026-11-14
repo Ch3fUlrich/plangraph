@@ -165,7 +165,7 @@
   function refreshQA(vm, local) {
     local = local || {};
     var ops = (vm.needsYou || []).filter(function (e) { return e.text === undefined; });
-    var ny = ops.concat((vm.questions || []).filter(function (q) { return qaEffectiveStatus(q, local) === "open"; }));
+    var ny = ops.concat((vm.questions || []).filter(function (q) { return qaEffectiveStatus(q, local) === "open" && !(vm.items && vm.items.get(q.item || q.key) || {}).needs_you_hidden; }));
     ny.sort(function (a, b) {
       return num(b.priority) - num(a.priority) ||
         (b.unblocks ? b.unblocks.length : 0) - (a.unblocks ? a.unblocks.length : 0);
@@ -293,7 +293,7 @@
         createdAt: it.created_at || earliestEvidence(it) || "",
         phase: it.phase || it.track || "", phaseIdx: phaseIdxOf[it.key] || 0,
         kind: it.kind, state: it.state, display: display[it.key],
-        owner: it.owner, operator: !!it.operator, priority: num(it.priority),
+        needs_you_hidden: !!it.needs_you_hidden, owner: it.owner, operator: !!it.operator, priority: num(it.priority),
         estimate_h: G.estimate(it), deps: depsOf(it), unblocks: waiters[it.key] || [],
         critical: !!critSet[it.key],
         slack: G.isTerminal(it) ? 0 : (slack[it.key] || 0),
@@ -308,7 +308,7 @@
         wait: waitKind(it)   // D-677
       };
       items.set(it.key, record);
-      if (record.operator && !G.isTerminal(it)) needsItems.push(record);
+      if ((record.operator || record.owner === "operator" || record.kind === "operator_task") && !it.needs_you_hidden && !G.isTerminal(it)) needsItems.push(record);
     });
 
     var waitByKey = {};                       // D-677 waits roll-up + blocked-on-operator
@@ -351,7 +351,7 @@
     /* needsYou = operator items (non-terminal) first, then open questions,
      * stably sorted by (-priority, -unblocks); question rows rank (0,0). */
     var needsYou = needsItems.concat(questions.filter(function (q) {
-      return q.status === "open";
+      return q.status === "open" && !(items.get(q.item || q.key) || {}).needs_you_hidden;
     }));
     needsYou.sort(function (a, b) {
       return num(b.priority) - num(a.priority) ||

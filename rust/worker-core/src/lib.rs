@@ -13,6 +13,8 @@ pub mod cpu;
 #[cfg(target_os = "linux")]
 pub mod cpu_linux;
 pub mod diffscan;
+pub mod entropy;
+pub mod entropy_git;
 pub mod events;
 pub mod exit_class;
 pub mod exports;
@@ -56,6 +58,9 @@ pub mod redact;
 mod redact_tokens;
 /// Minimum body length redacted for the `gh[pousr]_` token family.
 pub const GITHUB_TOKEN_BODY_FLOOR: usize = redact_tokens::SPECS[1].floor;
+pub mod operator_owner_gate;
+pub mod plan_convert;
+pub mod plan_lint;
 mod redact_wrapped;
 pub mod reset;
 pub mod run;
@@ -66,6 +71,7 @@ pub mod seat_pool;
 pub mod slots;
 pub mod stall;
 pub mod turn_budget;
+pub mod usage_census;
 pub mod watch;
 pub mod workspace;
 pub mod workspace_bundle;

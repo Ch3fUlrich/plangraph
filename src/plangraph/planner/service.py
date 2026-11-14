@@ -200,3 +200,140 @@ def import_batch(store: Any, principal: Any, path: Path | str,
         with open(path, encoding="utf-8") as handle:
             cards = card_mod.cards_from_batch(yaml.safe_load(handle), default_project)
     return card_mod.apply_cards(store, principal, cards)
+
+
+def _plan_convert_check(snapshot, batch):
+    """Replay on disposable SQLite with the keeper's real validators and verbs."""
+    import tempfile
+    from ..keeper import auth, db
+    from ..keeper.errors import Refused
+    from ..keeper.store import Store
+    from ..keeper.store_create import check_seat_clause_tier
+    from ..keeper.events import event_hash, canonical
+    seq = snapshot.get("head_seq", snapshot.get("seq", snapshot.get("last_seq")))
+    base = batch["base_seq"]
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 0:
+        raise Refused("input", "cards snapshot needs a non-negative seq")
+    if not isinstance(base, int) or isinstance(base, bool) or base < 0:
+        raise Refused("input", "base_seq must be a non-negative integer")
+    if seq > base and "item_seqs" not in snapshot:
+        raise Refused("conflict", "cards snapshot is newer than base_seq; item_seqs required")
+    if seq < base:
+        raise Refused("conflict", "cards snapshot predates base_seq")
+    if seq > base and any(item.get("key", f"{item['project']}:{item['id']}")
+                          not in snapshot["item_seqs"] for item in snapshot["items"]):
+        raise Refused("conflict", "item_seqs must cover every card when snapshot is newer than base_seq")
+    with tempfile.TemporaryDirectory(prefix="pg-plan-convert-") as directory:
+        conn = db.open_db(Path(directory) / "scratch.db", create=True, backend="sqlite")
+        try:
+            principal = auth.authenticate(conn, auth.add_principal(
+                conn, batch["principal"], "router", []))
+            store = Store(conn)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(items)")}
+            for item in snapshot["items"]:
+                row = {k: (canonical(v) if isinstance(v, (dict, list)) else v)
+                       for k, v in item.items() if k in columns and v is not None}
+                row.setdefault("key", f"{item['project']}:{item['id']}")
+                names = list(row)
+                conn.execute(f"INSERT INTO items({','.join(names)}) VALUES"
+                             f"({','.join('?' for _ in names)})", tuple(row[k] for k in names))
+            for item in snapshot["items"]:
+                key = item.get("key", f"{item['project']}:{item['id']}")
+                for dep in item.get("depends_on") or []:
+                    conn.execute("INSERT INTO edges(src,dst,rel) VALUES(?,?,'depends_on')", (key, dep))
+            # Only event ordering is needed by the real optimistic precondition.
+            # Snapshots at base need no synthetic mutations; newer snapshots must
+            # provide their per-key event high-water marks, never timestamps.
+            for key, changed_seq in sorted(snapshot.get("item_seqs", {}).items(), key=lambda p: p[1]):
+                if type(changed_seq) is not int or changed_seq < 0 or changed_seq > seq:
+                    raise Refused("input", "item_seqs outside snapshot seq")
+                if changed_seq <= base:
+                    continue
+                body = dict(ts="2000-01-01T00:00:00Z", actor=principal.name,
+                            role="router", model=None, key=key, type="item_defined", payload={})
+                conn.execute("INSERT INTO events(seq,ts,actor,role,model,key,type,payload,prev_hash,hash)"
+                             " VALUES(?,?,?,?,?,?,?,?,?,?)", (changed_seq, body["ts"], principal.name,
+                             "router", None, key, "item_defined", "{}", "", event_hash("", body)))
+            # DONE locks depend on completion events, not the cached state alone.
+            # Negative sequences preserve that history without inventing changes
+            # after the snapshot base. No event-chain proof is claimed here.
+            for index, item in enumerate(snapshot["items"]):
+                if item.get("state") != "done":
+                    continue
+                key = item.get("key", f"{item['project']}:{item['id']}")
+                conn.execute("INSERT INTO events(seq,ts,actor,role,key,type,payload,prev_hash,hash)"
+                             " VALUES(?,?,?,?,?,'review_passed','{}','','offline-lock')",
+                             (-index - 1, "2000-01-01T00:00:00Z", principal.name, "router", key))
+            conn.commit()
+            for op in batch["ops"]:
+                if op["op"] == "edit":
+                    before = store._item(op["key"])
+                    if before and any(k in op["fields"] for k in ("done_criteria", "review_tier")):
+                        check_seat_clause_tier(op["fields"].get("done_criteria", before["done_criteria"]),
+                                               op["fields"].get("review_tier", before["review_tier"]))
+            result = store.apply_ops(principal, batch["ops"], base_seq=base, dry_run=True)
+            for entry in result["results"]:
+                for warning in entry.get("warnings", []):
+                    if warning.startswith("dropped cancelled dependency "):
+                        raise Refused("depends_on_cancelled", warning)
+        finally:
+            conn.close()
+
+
+def convert_plan(args):
+    """Thin YAML/CLI adapter to Rust generation and offline keeper replay."""
+    import hashlib
+    import os
+    import subprocess
+    import sys
+    import tempfile
+    import yaml
+    from ..keeper.errors import Refused
+    root = Path(__file__).resolve().parents[3]
+    sys.path.insert(0, str(root / "tools"))
+    from apply_batch import _DupLoader, BatchError
+    try:
+        directory = Path(args.plan_dir).resolve()
+        cards = Path(args.cards).resolve()
+        files = [directory / name for name in (args.data or ["items.yaml", "changes.yaml"])]
+        # Reuse the batch loader's duplicate-key refusal for every plan document.
+        inputs = {str(path.resolve()): path.read_bytes() for path in [*files, cards]}
+        documents = [{"path": str(path.resolve()), "data": yaml.load(
+            inputs[str(path.resolve())].decode("utf-8"), Loader=_DupLoader)} for path in files]
+        snapshot = json.loads(inputs[str(cards)])
+        request = dict(project=args.project, principal=args.principal,
+                       batch=args.batch or directory.name, snapshot=snapshot,
+                       base_seq=args.base_seq if args.base_seq is not None else snapshot.get("head_seq", snapshot.get("seq")),
+                       documents=documents, input_files=list(inputs),
+                       input_hashes={p: hashlib.sha256(b).hexdigest() for p, b in inputs.items()})
+        binary = os.environ.get("PG_PLAN_CONVERT_BIN")
+        command = [binary] if binary else ["cargo", "run", "--offline", "--quiet", "--manifest-path",
+            str(root / "rust/Cargo.toml"), "-p", "pg-worker-core", "--bin", "pg-plan-convert"]
+        result = subprocess.run(command, input=json.dumps(request), text=True, capture_output=True)
+        if result.returncode:
+            print(result.stderr.strip(), file=sys.stderr)
+            return 2
+        generated = json.loads(result.stdout)
+        _plan_convert_check(snapshot, generated["batch"])
+        # Rust canonical serialization is the exact byte format hashed by the batch.
+        manifest = json.dumps(generated["manifest"], sort_keys=True, separators=(",", ":"),
+                              ensure_ascii=False).encode()
+        if hashlib.sha256(manifest).hexdigest() != generated["batch"]["source_sha256"]:
+            raise Refused("manifest", "Rust/Python canonical serialization mismatch")
+        output = Path(args.output).resolve()
+        if output.exists():
+            raise Refused("output_exists", "output directory already exists; choose a fresh path")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".plan-convert-", dir=output.parent) as temporary:
+            staging = Path(temporary) / "result"
+            staging.mkdir()
+            (staging / "manifest.json").write_bytes(manifest)
+            (staging / "batch.yaml").write_text(yaml.safe_dump(generated["batch"], sort_keys=False), encoding="utf-8")
+            staging.rename(output)
+        print(json.dumps({"batch": str(output / "batch.yaml"),
+                          "manifest": str(output / "manifest.json"),
+                          "ops": len(generated["batch"]["ops"]), "offline": "passed"}))
+        return 0
+    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError, BatchError, Refused) as exc:
+        print(f"{getattr(exc, 'code', 'input')}: {getattr(exc, 'msg', str(exc))}", file=sys.stderr)
+        return 2

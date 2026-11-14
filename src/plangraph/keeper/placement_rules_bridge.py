@@ -4,21 +4,15 @@ import os
 import subprocess
 import threading
 import time
-
 from .errors import Refused
-
 _MAX = 1024 * 1024
 _TIMEOUT = 5
-
-
 def _bin_env():
     return os.environ
-
-
-def call_rules(request: dict) -> dict:
+def call_rules(request: dict, binary=None) -> dict:
     """Send data only on stdin; never inherit credentials or invoke a shell."""
     unavailable = Refused("rules_unavailable", "placement rules helper unavailable")
-    binary = _bin_env().get("PG_PLACEMENT_RULES_BIN", "/usr/local/bin/pg-placement-rules")
+    binary = binary or _bin_env().get("PG_PLACEMENT_RULES_BIN", "/usr/local/bin/pg-placement-rules")
     if not os.path.isabs(binary):
         raise unavailable
     try:
@@ -36,7 +30,6 @@ def call_rules(request: dict) -> dict:
         raise unavailable from None
     output = bytearray()
     failed = threading.Event()
-
     def read():
         try:
             while True:
@@ -50,14 +43,12 @@ def call_rules(request: dict) -> dict:
                 output.extend(chunk)
         except OSError:
             failed.set()
-
     def write():
         try:
             child.stdin.write(body + b"\n")
             child.stdin.close()
         except (OSError, ValueError):
             failed.set()
-
     reader = threading.Thread(target=read)
     writer = threading.Thread(target=write)
     reader.start()
@@ -85,3 +76,12 @@ def call_rules(request: dict) -> dict:
             or set(result) != {"ok"} or not isinstance(result["ok"], dict)):
         raise unavailable
     return result["ok"]
+def call_operator(request):
+    mode = os.environ.get("PG_OPERATOR_OWNER_GATE_MODE", "warn")
+    try:
+        return call_rules(dict(request, mode=mode), binary=os.environ.get(
+            "PG_OPERATOR_OWNER_GATE_BIN", "/usr/local/bin/pg-operator-owner-gate"))
+    except Refused:
+        if mode != "warn":
+            raise Refused("operator_owner_gate", "operator_owner_gate: helper unavailable") from None
+        return {"warnings": ["operator_owner_gate: helper unavailable (warn mode)"], "hidden": []}

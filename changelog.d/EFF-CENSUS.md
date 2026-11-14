@@ -1,0 +1,1 @@
+- Add Rust Claude census accounting through the existing usage CLI, with transcript identity deduplication, explicit unknown provenance, merged-PR rates and the three-day throughput guard.

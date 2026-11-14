@@ -1,0 +1,1 @@
+- Apply D-5881 to the entropy checker: report PR size without enforcing G1, allow test files through 800 lines, and retain G2-G4 with regression fixtures.

@@ -60,6 +60,7 @@ Include paths passed through read helpers too: `pg-hook` reads `.docs-map`,
 
 Run `cargo test -p <crate>` from `rust/` for each affected crate. Documentation
 mapping for a crate covers its own paths, not shared workspace manifests or locks.
+For Claude accounting, build `pg-usage-census` and use `python tools/claude_usage.py --census --since 7d --json` (see `docs/usage-census.md`).
 
 ### Rust builds and toolchain bumps
 

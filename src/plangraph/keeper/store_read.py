@@ -150,7 +150,7 @@ class ReadMixin:
         info = {
             "key": key, "title": item["title"],
             "description": item["description"], "host": item["host"],
-            "wait": item.get("wait"),
+            "wait": item.get("wait"), "risk_tag": item.get("risk_tag"), "until": item.get("until"),
             **{name: item.get(name) for name in MODEL_FIELDS},
             "choices": parse_choices(item.get("choices")),
             "kg_refs": parse_kg_refs(item.get("kg_refs")),

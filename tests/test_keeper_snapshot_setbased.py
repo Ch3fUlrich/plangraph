@@ -32,7 +32,7 @@ def _legacy_snapshot(store, now):
         out.append({
             "project": item["project"], "id": item["id"], "key": item["key"],
             "title": item["title"], "description": item["description"],
-            "host": item["host"], "wait": item.get("wait"),
+            "host": item["host"], "wait": item.get("wait"), "risk_tag": item.get("risk_tag"), "until": item.get("until"), "needs_you_hidden": False,
             **{name: item.get(name) for name in MODEL_FIELDS},
             "choices": parse_choices(item.get("choices")),
             "kg_refs": parse_kg_refs(item.get("kg_refs")),

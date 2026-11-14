@@ -28,12 +28,11 @@ from .store_create import default_review_tier, validated_review_tier
 
 __all__ = ["load_dir", "export_yaml"]
 
-#: The item fields the importer emits and the exporter writes, in output order.
 _FIELD_ORDER = (
     "project", "id", "key", "title", "description", "host", "wait", "layer", "role",
     "agent_id", "phase_kind", "fixes", "kind", "track", "owner", "state",
     "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
-    "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
+    "evidence_kinds", "operator", "priority", "review_tier", "source", "note", "risk_tag", "until", "choices",
 )
 _FIELDS = frozenset(_FIELD_ORDER)
 _IMPORT_STATES = ("open", "claimed", "in_review")
@@ -145,6 +144,7 @@ def _normalise_item(raw, where):
         "title": title, "description": description, "host": host,
         "wait": wait, "fixes": fixes, **{name: raw.get(name) for name in MODEL_FIELDS},
         "kind": kind, "track": track,
+        "risk_tag": raw.get("risk_tag"), "until": raw.get("until"), "choices": raw.get("choices"),
         "owner": _string(raw, "owner", key), "state": state,
         "estimate_h": estimate, "estimate_src": _string(raw, "estimate_src", key),
         "depends_on": depends, "corrects": corrects,
@@ -244,7 +244,7 @@ def export_yaml(conn_or_store, dir):
     Only importable states are exported (``open``/``claimed``/``in_review``):
     ``done`` and ``cancelled`` are never accepted by :func:`load_dir`, so
     emitting them would make the export impossible to round-trip.  Ordering is
-    fully deterministic — tracks sorted, items sorted by key.
+    fully deterministic â€” tracks sorted, items sorted by key.
     """
     out = Path(dir)
     out.mkdir(parents=True, exist_ok=True)

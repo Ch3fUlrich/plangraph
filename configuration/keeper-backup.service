@@ -1,0 +1,5 @@
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/plangraph/backup.env
+ExecStart=%h/.local/bin/keeper-backup dump %h/.local/share/plangraph/backups
+UMask=0077

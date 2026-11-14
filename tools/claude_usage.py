@@ -9,9 +9,11 @@ from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 import json
 import math
+import os
 from pathlib import Path
 import re
 import statistics
+import subprocess
 import sys
 
 UNSEEN = "cannot see: the Claude meter, billed money, other hosts' transcripts"
@@ -265,6 +267,17 @@ def parser():
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--census" in argv:
+        binary = os.environ.get("PG_USAGE_CENSUS_BIN", "/usr/local/bin/pg-usage-census")
+        try:
+            if not Path(binary).is_absolute():
+                raise ValueError("census helper must be absolute")
+            return subprocess.run([binary, *(a for a in argv if a != "--census")],
+                                  timeout=300, check=False).returncode
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            print("census unavailable: install pg-usage-census or set PG_USAGE_CENSUS_BIN", file=sys.stderr)
+            return 3
     args = parser().parse_args(argv)
     stats = dict(malformed_lines=0, empty_files=0, unreadable_files=0)
     try:

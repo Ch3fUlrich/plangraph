@@ -22,12 +22,8 @@ __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL"
            "METRICS_DDL", "LOCKS_DDL", "JEV_DDL", "OVERSIGHT_DDL", "STATES", "EXIT_CLASSES",
            "JEV_KINDS", "JEV_STATUSES", "WINDOW_CLASSES", "RISK_TAGS"]
 
-#: Code-level schema version.  Fence (build-L1 #164 vs RT-P1-BUS): main's
-#: oversight step reached main first and keeps v14 (``OVERSIGHT_SCHEMA_VERSION``,
-#: installed presence-based); the bus steps renumber after it: v15 durable
-#: messages, v16 message nonces/envelopes, v17 placement rules.  Every step past v12 installs
-#: presence-based in ``db._upgrade``; nothing keys off this number at runtime.
-SCHEMA_VERSION = 17
+#: SQLite v18 adds operator risk and parking columns; upgrades are presence-based.
+SCHEMA_VERSION = 18
 
 #: RT-OVERSIGHT-KEEPER-SCOPE: the schema step this feature adds on top of main's
 #: v13 -- the v13 -> v14 step: ``OVERSIGHT_DDL`` (SQLite) alone, mirrored by
@@ -59,7 +55,7 @@ JEV_STATUSES = ("ok", "timeout", "unavailable", "error")
 ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner", "oversight", "phase-worker")
 
 EVENT_TYPES = (
-    "item_created", "item_defined", "claimed", "delegated", "released",
+    "question_answered", "item_created", "item_defined", "claimed", "delegated", "released",
     "lease_expired", "evidence_added", "submitted", "changes_requested",
     "review_verdict", "review_passed", "closed_on_decision", "cancelled",
     "priority_set", "heartbeat",
@@ -290,7 +286,9 @@ CREATE TABLE items (
     exec_principal   TEXT,
     exec_retired_runs TEXT,
     created_at     TEXT,
-    updated_at     TEXT
+    updated_at     TEXT,
+    risk_tag       TEXT,
+    until          TEXT
 );
 
 CREATE TABLE edges (

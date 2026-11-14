@@ -3,7 +3,7 @@
 An implement card uses `cx-gpt-6.1-sol-xhigh` (model `omniroute/cx-gpt-6.1-sol-xhigh`,
 effort `xhigh`), then `agy-gemini-3.8-flash` (agy harness). Quota, cooldown, or a
 confirmed availability refusal advances without an override; safety refusals,
-cancellation, and guards still stop dispatch. Eligibility and harness policy apply first.
+cancellation, and guards still stop dispatch. Eligibility and harness policy apply first. Offline [plan lint](lint-plans.md) reports quality scores; [plan conversion](convert-plans.md) generates one atomic batch and replays the keeper's validators against a local cards snapshot before publishing outputs.
 Both designated writers precede all other cost tiers, even when catalog tiers
 change: Sol xhigh, then Gemini Flash (rule 3.23a / D-5212). Other eligible legs
 retain cost-tier order, with subscriptions before pay-as-you-go.

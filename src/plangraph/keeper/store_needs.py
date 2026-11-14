@@ -7,9 +7,6 @@ import re
 from .. import views
 from . import auth
 
-# One operator-token rule for both paths (D-2458/2): a wait names the operator
-# ("operator", "operator-123") or an OS work key ("OS-12", "OS-123-B"), while a
-# hyphen or underscore joined to anything but digits (operator-sync,
 # team-operator-sync, operator_x) is an identifier and never a wait.  The
 # ``waiting_on:`` form and the IDLE/prose form both read this one pattern, so
 # they agree on every token; the rule is stated in CHANGELOG too.
@@ -62,7 +59,8 @@ class NeedsMixin:
 
     def _needs_you(self, project, principal):
         items = self._all_items()
-        rows = views.needs_you(items, project=project)
+        hidden = self._operator_hidden(items)
+        rows = [row for row in views.needs_you(items, project=project) if row["key"] not in hidden]
         # D-2458/5, the single precedence rule: a genuine row for a key -- of
         # any kind, a question included -- beats the diagnostic flag.  It is
         # applied once here, to the rows the view supplied, and once below to
@@ -75,6 +73,8 @@ class NeedsMixin:
                 or row.get("key") not in genuine]
         by_key = {item["key"]: item for item in items}
         for item in items:
+            if item["key"] in hidden:
+                continue
             if item["state"] not in ("claimed", "in_review"):
                 continue
             if project is not None and item.get("project") != project:

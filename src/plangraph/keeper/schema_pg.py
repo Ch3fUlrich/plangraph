@@ -38,7 +38,6 @@ class Migration:
     sql: str
 
 
-#: Created by the runner itself before any migration.
 BOOTSTRAP = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version    INTEGER PRIMARY KEY,
@@ -47,14 +46,12 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 )
 """
 
-# The reviewed/cancelled test shared by every locking trigger (see schema._LOCKED).
 
 def _in(values):
     return ",".join(f"'{v}'" for v in values)
 
 
-# Design-3 tables (SQLite schema v10, ``schema.DESIGN3_DDL``).  Same columns in the
-# same order; INTEGER -> BIGINT, REAL -> DOUBLE PRECISION; ids are assigned by the
+# Design-3 preserves SQLite column order; ids are assigned by the
 # store (MAX(id)+1 inside the write lock), like ``run_tokens``.
 _V2 = f"""
 CREATE TABLE cards (
@@ -296,7 +293,10 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(8, "oversight: tokens, ops audit", _V8),
               Migration(9, "bus: durable messages", MESSAGES_DDL), Migration(10, "federation jobs", SPAWNER_DDL),
               Migration(11, "placement rules", PLACEMENT_RULES_DDL),
-              Migration(12, "host samples", HOST_SAMPLES_DDL))
+              Migration(12, "host samples", HOST_SAMPLES_DDL),
+              Migration(13, "operator ownership risk and parking",
+                        "ALTER TABLE items ADD COLUMN IF NOT EXISTS risk_tag TEXT;"
+                        "ALTER TABLE items ADD COLUMN IF NOT EXISTS until TEXT;"))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)

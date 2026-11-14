@@ -1,37 +1,22 @@
-"""Request-shape checks and normalisation for item definitions.
-
-Split out of ``store.py`` (size budget): the text caps, the credential guard,
-the host check and the ``_normalise`` that turns one raw create/import dict into
-the definition shape.  Dependency and ``corrects`` keys are resolved through the
-alias table, so a definition may still name a key that has since been rehomed.
-"""
+"""Normalise item definitions and transport requests to the Rust owner gate."""
 from __future__ import annotations
-
+import os
 from . import auth
+from .placement_rules_bridge import call_operator
 from .credential_guard import GUARDED_FIELDS, guard
 from .errors import Refused
 from .item_fields import (MODEL_FIELDS, check_choices, check_host, check_kg_refs, check_kind, check_model_fields,
                           check_wait, kind_defaults)
 from .note_fold import DESCRIPTION_CAP, NOTE_CAP
-
-# Request-shape caps.  A field named in the refusal lets the caller fix it.
-# ``estimate_src`` is the audit-meta provenance marker (PG-ESTIMATE-SRC-EDIT):
-# a short label naming where the number came from, never a credential.
 _TEXT_CAPS = {"title": 200, "note": NOTE_CAP, "done_criteria": 600,
               "description": DESCRIPTION_CAP, "owner": 100, "track": 100,
               "estimate_src": 64}
 _MAX_DEPS = 200
-
-
 class InputMixin:
     """``_check_text``, ``_normalise`` and ``_qualify`` for :class:`Store`."""
-
     @staticmethod
     def _check_text(fields, key=None):
-        """Refuse oversize, non-string or credential-shaped text, naming the field.
-
-        *key* (when known) prefixes a credential refusal so a batch can tell
-        which item failed (PL-33)."""
+        """Validate text caps and credentials, identifying the item."""
         for field in GUARDED_FIELDS:
             guard(field, fields.get(field), key)
         for field, cap in _TEXT_CAPS.items():
@@ -46,12 +31,9 @@ class InputMixin:
             check_host(fields["host"])
         if "wait" in fields:
             check_wait(fields["wait"])
-
     def _normalise(self, raw):
         project = raw.get("project")
         identifier = raw.get("id")
-        # The item key is known before any check: name it in a credential
-        # refusal so a batch of 40 items says which one failed (PL-33).
         key = f"{project}:{identifier}" if project and identifier else None
         self._check_text(raw, key)
         if not project or not identifier:
@@ -81,9 +63,6 @@ class InputMixin:
             if not isinstance(fixes, str) or not fixes:
                 raise Refused("validation", f"{key}: fixes must be a key string or null")
             fixes = self._qualify(project, fixes)
-        # ``under`` is create-only (``import_items`` refuses it): the gate the
-        # new item is attached under, resolved like any other key reference and
-        # kept on the definition -- never a column, never folded into ``note``.
         under = raw.get("under")
         if under is not None:
             if not isinstance(under, str) or not under:
@@ -93,6 +72,7 @@ class InputMixin:
             "key": key, "project": project, "id": identifier,
             "title": raw.get("title", ""), "description": raw.get("description"),
             "host": raw.get("host"), "wait": wait, "kind": kind,
+            "risk_tag": raw.get("risk_tag"), "until": raw.get("until"),
             **{name: raw.get(name) for name in MODEL_FIELDS},
             "track": raw.get("track"), "owner": raw.get("owner"),
             "owner_family": auth.norm_family(raw.get("owner_family")),
@@ -108,7 +88,27 @@ class InputMixin:
             "kg_refs": check_kg_refs(raw.get("kg_refs"), key),
             "state": raw.get("state", "open"),
         }
-
     def _qualify(self, project, dep):
         """``project:dep`` for a bare id, then through the alias table."""
         return self.resolve_key(dep if ":" in dep else f"{project}:{dep}")
+    def _operator_owner_gate(self, after, before=None, now=None):
+        if not any(item and (item.get("operator") or item.get("owner") == "operator"
+                             or item.get("risk_tag") or item.get("until"))
+                   for item in (after, before)):
+            return []
+        events = [] if before is None else [dict(row) for row in self.conn.execute(
+            "SELECT seq,type,actor,role,payload FROM events WHERE key=? ORDER BY seq DESC LIMIT 200",
+            (before["key"],))]
+        result = call_operator({"after": after, "before": before, "events": events,
+            "operator_principal": os.environ.get("PG_OPERATOR_PRINCIPAL", "operator")})
+        warnings = result.get("warnings", [])
+        if result.get("refused"):
+            raise Refused("operator_owner_gate", "; ".join(warnings))
+        return warnings
+
+    def _operator_hidden(self, items, now=None):
+        if not any(item.get("until") for item in items):
+            return set()
+        result = call_operator({"items": [{"key": i["key"], "until": i.get("until")} for i in items], "today": self._iso(
+            self.clock() if now is None else now)[:10]})
+        return set(result.get("hidden", []))

@@ -61,7 +61,7 @@ def _kind_events(w, key):
 @pytest.mark.parametrize("kind,wait", [("question", "answer"), ("operator_task", "task")])
 def test_router_sets_kind_with_operator_defaults_and_chained_event(w, kind, wait):
     out = w.store.set_kind(w.p("router"), "demo:A", kind)
-    assert out == {"key": "demo:A", "kind": kind, "was": "lane"}
+    assert {k: v for k, v in out.items() if k != "warnings"} == {"key": "demo:A", "kind": kind, "was": "lane"}
     row = _row(w, "demo:A")
     assert (row["kind"], row["operator"], row["wait"], row["state"]) == (kind, 1, wait, "open")
     (event,) = _kind_events(w, "demo:A")
