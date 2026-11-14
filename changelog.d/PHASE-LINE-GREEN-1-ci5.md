@@ -1,0 +1,1 @@
+- Isolate test Git configuration and read shared/worktree config bytes and worktree registration metadata directly; object, ref and working-tree mutation coverage is outside this part.

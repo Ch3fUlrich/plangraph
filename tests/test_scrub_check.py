@@ -199,6 +199,16 @@ def test_git_checkout_scans_tracked_files_only(tree):
     assert [h.path for h in sc.scan_tree(tree, sc.build_config())] == ["tracked.txt"]
 
 
+def test_git_ignored_untracked_secret_is_not_scanned(tree):
+    _git(tree, "init", "-q")
+    (tree / ".gitignore").write_text("scratch.txt\n")
+    (tree / "tracked.txt").write_text("addr " + IP_A + "\n")
+    (tree / "scratch.txt").write_text("addr " + IP_A + "\n")
+    _git(tree, "add", ".gitignore", "tracked.txt")
+    _git(tree, "commit", "-qm", "x")
+    assert [h.path for h in sc.scan_tree(tree, sc.build_config())] == ["tracked.txt"]
+
+
 def test_file_removed_from_index_but_in_head_is_still_scanned(tree):
     _git(tree, "init", "-q")
     _leaky(tree)
@@ -213,3 +223,56 @@ def test_checkout_without_commit_fails_closed_and_scans_everything(tree):
     _leaky(tree)
     paths = sorted(h.path for h in sc.scan_tree(tree, sc.build_config()))
     assert paths == [".pytest_cache/nodeids", "tracked.txt"]
+
+
+@pytest.mark.parametrize('local', ['clean', 'deleted', 'later-commit'])
+def test_pushed_blob_is_scanned_independently_of_worktree(tmp_path, local):
+    import subprocess
+    from test_hooks_prepush import commit_file, git
+    root = tmp_path / 'repo'
+    root.mkdir()
+    git(root, 'init', '-q')
+    base = commit_file(root, 'leak.txt', 'clean\n')
+    secret = 'gh' + 'p_' + 'A' * 36
+    tip = commit_file(root, 'leak.txt', secret + '\n')
+    if local == 'deleted':
+        (root / 'leak.txt').unlink()
+    elif local == 'later-commit':
+        commit_file(root, 'leak.txt', 'clean\n')
+    else:
+        (root / 'leak.txt').write_text('clean\n')
+    command = [sys.executable, str(ROOT / 'tools/split/scrub_check.py'), str(root)]
+    assert subprocess.run(command, capture_output=True).returncode == 0
+    result = subprocess.run(command + ['--base', base, '--head', tip],
+                            capture_output=True, text=True)
+    assert result.returncode == 1, result.stderr
+    assert 'leak.txt:1: token-shape' in result.stdout
+    assert secret not in result.stdout + result.stderr
+
+
+def test_committed_scan_ignores_dirty_unpushed_content(tmp_path):
+    import subprocess
+    from test_hooks_prepush import commit_file, git
+    root = tmp_path / 'repo'
+    root.mkdir()
+    git(root, 'init', '-q')
+    base = commit_file(root, 'file.txt', 'before\n')
+    tip = commit_file(root, 'file.txt', 'after\n')
+    (root / 'file.txt').write_text('gh' + 'p_' + 'A' * 36)
+    command = [sys.executable, str(ROOT / 'tools/split/scrub_check.py'), str(root)]
+    assert subprocess.run(command, capture_output=True).returncode == 1
+    assert subprocess.run(command + ['--base', base, '--head', tip], capture_output=True).returncode == 0
+
+
+def test_preflight_scrub_receives_pushed_range(tmp_path, monkeypatch):
+    from test_hooks_prepush import commit_file, git
+    from test_preflight import preflight, fake_runner
+    git(tmp_path, 'init', '-q')
+    base = commit_file(tmp_path, 'file.txt', 'before\n')
+    tip = commit_file(tmp_path, 'file.txt', 'after\n')
+    calls = fake_runner(monkeypatch)
+    assert preflight.main(['--base', base, '--head', tip, '--fast'], tmp_path) == 0
+    command = calls[0][0]
+    assert Path(command[1]).name == 'scrub_check.py'
+    assert command[command.index('--base') + 1] == base
+    assert command[command.index('--head') + 1] == tip
