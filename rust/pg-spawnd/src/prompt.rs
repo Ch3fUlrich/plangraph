@@ -30,7 +30,7 @@ impl std::fmt::Display for InlineDiffError {
         })
     }
 }
-fn config_root() -> PathBuf {
+pub(crate) fn config_root() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| {
