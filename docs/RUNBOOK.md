@@ -13,6 +13,7 @@ Write `$KEEPER/keeper.json`; any mode other than **600** is refused:
     {"db": "/path/to/keeper/keeper.db",
      "snapshot": "/path/to/keeper/plan.snapshot.json",
      "bind": "127.0.0.1:8765",
+     "repos": {"decisions": {"path": "/path/to/decisions-checkout", "ref": "origin/main"}},
      "reap_interval": 60}
 
     chmod 600 "$KEEPER/keeper.json"
@@ -26,9 +27,19 @@ A full config, with the verifier paths and the legacy/decision-close settings
      "snapshot": "/path/to/keeper/plan.snapshot.json",
      "bind": "127.0.0.1:8765",
      "reap_interval": 60,
-     "repos": {"server": "/path/to/Server", "autoos": "/path/to/AutoOS"},
+     "repos": {"server": "/path/to/Server", "autoos": "/path/to/AutoOS",
+               "decisions": {"path": "/path/to/decisions-checkout", "ref": "origin/main"}},
      "decisions_file": "/path/to/routing/docs/decisions-log.md",
      "batch_roots": ["/path/to/routing/docs/plan"]}
+
+Set `repos.decisions.path` to the decisions repository checkout, with ref
+`origin/main`; this is separate from the legacy `decisions_file` setting.
+The daemon logs one warning naming missing `repos.decisions` at startup and
+continues serving; decision closes will still refuse until it is configured.
+The devstack config writer (`tools/devstack.sh keeper`) requires
+`PLANGRAPH_DECISIONS_REPO` and writes that path with ref `origin/main` into
+the private generated config. For example, export it to your decisions checkout
+before running the keeper command. These instructions do not update live config.
 
 `batch_roots` is the **only** place `close_on_decision` may read a batch file from.
 Empty (the default) means the verb always refuses, so leave it unset until the

@@ -444,18 +444,15 @@ cmd_status() {
 cmd_keeper() {
   pg_running || { echo "keeper: postgres is not up — run devstack.sh start first" >&2; exit 3; }
   local file="$DEVSTACK_STATE/keeper.json"
-  # umask 077 before the redirect: the file embeds the trust-auth dsn, keep it owner-only.
+  # The config embeds the trust-auth dsn; the shared writer replaces it privately.
   (
     umask 077
-    DEVSTACK_STATE="$DEVSTACK_STATE" KEEPER_PORT="$KEEPER_PORT" python3 - "$file" "$PG_DSN" <<'PY'
-import json, os, sys
-with open(sys.argv[1], "w") as fh:
-    fh.write(json.dumps({
-        "backend": "postgres",
-        "dsn": sys.argv[2],
-        "bind": f"127.0.0.1:{os.environ['KEEPER_PORT']}",
-        "snapshot": f"{os.environ['DEVSTACK_STATE']}/plan.snapshot.json",
-    }))
+    PYTHONPATH="$REPO_ROOT/src" PLANGRAPH_DECISIONS_REPO="${PLANGRAPH_DECISIONS_REPO:?set the decisions repository checkout}" DEVSTACK_STATE="$DEVSTACK_STATE" KEEPER_PORT="$KEEPER_PORT" python3 - "$file" "$PG_DSN" <<'PY'
+import os, sys
+from plangraph.keeper.config import write_devstack_config
+write_devstack_config(sys.argv[1], sys.argv[2], state=os.environ['DEVSTACK_STATE'],
+                      port=int(os.environ['KEEPER_PORT']),
+                      decisions_repo=os.environ['PLANGRAPH_DECISIONS_REPO'])
 PY
   )
   chmod 600 "$file"
