@@ -1255,6 +1255,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg-reap"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pg-worker"
 version = "0.1.0"
 dependencies = [
@@ -1283,6 +1291,7 @@ dependencies = [
  "chrono",
  "globset",
  "libc",
+ "pg-reap",
  "rand 0.9.5",
  "regex",
  "serde",
