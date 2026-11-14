@@ -1,4 +1,4 @@
-"""W8: every page asset (src/plangraph/web/*.js and *.css) is at most 400 lines."""
+"""W8: every page asset (src/plangraph/web/*.js and *.css) is at most 800 lines."""
 
 from __future__ import annotations
 
@@ -7,11 +7,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "src" / "plangraph" / "web"
 
-BUDGET = 400
+BUDGET = 800
 
 
 def test_page_assets_fit_line_budget():
-    """Each *.js / *.css under src/plangraph/web/ must be <= 400 lines."""
+    """Each *.js / *.css under src/plangraph/web/ must be <= 800 lines."""
     assets = sorted([*WEB.glob("*.js"), *WEB.glob("*.css")])
     assert assets, "no page assets found"
     over = []

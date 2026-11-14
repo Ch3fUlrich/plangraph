@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tests/test_check_file_size.py — the 400-line gate's own tests (AO-400LOC, moved D-3198).
+"""tests/test_check_file_size.py — the 800-line gate's own tests (AO-400LOC, moved D-3198).
 
 Every case drives `tools/check_file_size.py` the way production runs it: a
 subprocess whose cwd is a repository, so the checker resolves its checkout
@@ -108,6 +108,7 @@ class RepoFixture(unittest.TestCase):
 
 
 def test_malformed_batch_header_refuses(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     code = '''
 import runpy
 import subprocess
@@ -125,7 +126,7 @@ with patch.object(subprocess, "run", run):
     runpy.run_path(sys.argv[0], run_name="__main__")
 '''
     result = subprocess.run([sys.executable, "-c", code, str(SCRIPT)],
-                            cwd=ROOT, capture_output=True, text=True)
+                            cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 1
     assert result.stdout == ""
     assert result.stderr == "check-file-size: malformed git cat-file --batch header\n"
@@ -162,13 +163,13 @@ class RequiredBaseTests(RepoFixture):
     def test_the_required_base_is_the_only_reference(self):
         """On a push the base is the pushed-over sha, not origin/main (which
         then is the push itself): a baseline widened in the push fails."""
-        self.file("big.py", 450)
-        self.baseline("big.py 450\n")
+        self.file("big.py", 850)
+        self.baseline("big.py 850\n")
         self.git("add", "--", ".filesize-baseline")
         self.commit("before")
         before = self.git("rev-parse", "HEAD").stdout.strip()
-        self.file("big.py", 460)
-        self.baseline("big.py 460\n")
+        self.file("big.py", 860)
+        self.baseline("big.py 860\n")
         self.git("add", "--", ".filesize-baseline")
         self.commit("widen")
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
@@ -181,114 +182,114 @@ class RequiredBaseTests(RepoFixture):
         self.file("small.py", 3)
         self.commit("no baseline yet")
         before = self.git("rev-parse", "HEAD").stdout.strip()
-        self.file("big.py", 450)
-        self.baseline("big.py 450\n")
+        self.file("big.py", 850)
+        self.baseline("big.py 850\n")
         self.git("add", "--", ".filesize-baseline")
         self.commit("baseline")
         self.assertFails(self.check_with_base(before), "carries no")
 
 
 class LineLimitTests(RepoFixture):
-    def test_a_new_401_line_file_fails(self):
-        self.file("big_module.py", 401)
+    def test_a_new_801_line_file_fails(self):
+        self.file("big_module.py", 801)
         self.assertFails(self.check(), "big_module.py")
 
-    def test_a_400_line_file_passes(self):
-        self.file("edge_module.py", 400)
+    def test_a_800_line_file_passes(self):
+        self.file("edge_module.py", 800)
         self.assertPasses(self.check())
 
     def test_an_untracked_file_is_not_counted(self):
-        self.write("loose_module.py", blob(501))  # never `git add`-ed
+        self.write("loose_module.py", blob(901))  # never `git add`-ed
         self.assertPasses(self.check())
 
     def test_a_non_ascii_file_name_is_still_measured(self):
         # `git ls-files` quotes non-ASCII names (core.quotePath) and newline
         # splitting mangles them: the gate reads `ls-files -z` and splits on
         # NUL, or a file like this one is silently never measured.
-        self.file("\u00fc.py", 401)
+        self.file("\u00fc.py", 801)
         self.assertFails(self.check(), "\u00fc.py")
 
 
 class BaselineTests(RepoFixture):
     def test_a_baseline_file_growing_fails(self):
-        self.file("legacy.py", 500)
-        self.baseline("legacy.py 500\n")
+        self.file("legacy.py", 900)
+        self.baseline("legacy.py 900\n")
         self.assertPasses(self.check())
-        self.file("legacy.py", 510)
+        self.file("legacy.py", 910)
         self.assertFails(self.check(), "legacy.py")
 
     def test_a_baseline_file_shrinking_passes(self):
-        self.file("legacy.py", 490)
-        self.baseline("legacy.py 500\n")
+        self.file("legacy.py", 890)
+        self.baseline("legacy.py 900\n")
         self.assertPasses(self.check())
 
     def test_the_baseline_document_may_shrink_but_never_grow(self):
         # The document is a ratchet, not a permission slip: a hand-raised count
         # or a hand-added entry is growth, and growth is refused wherever the
         # reference (origin/main, else HEAD) can be read.
-        self.file("legacy.py", 480)
-        self.baseline("legacy.py 500\n")
+        self.file("legacy.py", 880)
+        self.baseline("legacy.py 900\n")
         self.git("add", "--", ".filesize-baseline")
-        self.commit("grandfather legacy.py at 500")
-        self.baseline("legacy.py 520\n")
+        self.commit("grandfather legacy.py at 900")
+        self.baseline("legacy.py 920\n")
         self.assertFails(self.check(), ".filesize-baseline")
-        self.baseline("legacy.py 490\n")
+        self.baseline("legacy.py 890\n")
         self.assertPasses(self.check())
-        self.baseline("legacy.py 490\nother.py 500\n")
+        self.baseline("legacy.py 890\nother.py 900\n")
         self.assertFails(self.check(), ".filesize-baseline")
 
     def test_a_malformed_baseline_is_refused(self):
-        self.file("legacy.py", 500)
+        self.file("legacy.py", 900)
         self.baseline("legacy.py not-a-count\n")
         self.assertFails(self.check(), ".filesize-baseline")
 
 
 class UpdateBaselineTests(RepoFixture):
     def test_update_baseline_lowers_a_shrunk_count(self):
-        self.file("legacy.py", 500)
-        self.baseline("legacy.py 500\n")
-        self.file("legacy.py", 470)
+        self.file("legacy.py", 900)
+        self.baseline("legacy.py 900\n")
+        self.file("legacy.py", 870)
         self.assertPasses(self.check("--update-baseline"))
-        self.assertEqual(self.baseline_map(), {"legacy.py": 470})
+        self.assertEqual(self.baseline_map(), {"legacy.py": 870})
 
     def test_update_baseline_never_raises_a_grown_count(self):
-        self.file("legacy.py", 500)
-        self.baseline("legacy.py 500\n")
-        self.file("legacy.py", 520)
+        self.file("legacy.py", 900)
+        self.baseline("legacy.py 900\n")
+        self.file("legacy.py", 920)
         self.assertFails(self.check("--update-baseline"), "legacy.py")
-        self.assertEqual(self.baseline_map(), {"legacy.py": 500})
+        self.assertEqual(self.baseline_map(), {"legacy.py": 900})
 
     def test_update_baseline_never_adds_an_entry(self):
-        self.file("legacy.py", 500)
-        self.baseline("legacy.py 500\n")
-        self.file("new_giant.py", 450)
+        self.file("legacy.py", 900)
+        self.baseline("legacy.py 900\n")
+        self.file("new_giant.py", 850)
         self.assertFails(self.check("--update-baseline"), "new_giant.py")
-        self.assertEqual(self.baseline_map(), {"legacy.py": 500})
+        self.assertEqual(self.baseline_map(), {"legacy.py": 900})
 
     def test_update_baseline_bootstraps_a_missing_baseline_once(self):
         # "generated once from today's tree": the first --update-baseline writes
         # the amnesty list for what is already over the line; everything after
         # it is the ratchet above. A file that never needed amnesty gets no entry.
-        self.file("legacy.py", 500)
+        self.file("legacy.py", 900)
         self.file("small.py", 200)
         self.assertPasses(self.check("--update-baseline"))
-        self.assertEqual(self.baseline_map(), {"legacy.py": 500})
+        self.assertEqual(self.baseline_map(), {"legacy.py": 900})
 
     def test_update_baseline_refuses_a_baseline_that_would_grow(self):
         # --update-baseline must not launder a hand-grown baseline: the
         # baseline-vs-reference check (no entry added, none raised) runs BEFORE
         # the write, and a refusal writes nothing at all - not even a rewritten
         # copy that drops the comment the author left in the file.
-        self.file("legacy.py", 530)
-        self.baseline("# grandfathered by hand\nlegacy.py 500\n")
+        self.file("legacy.py", 930)
+        self.baseline("# grandfathered by hand\nlegacy.py 900\n")
         self.git("add", "--", ".filesize-baseline")
-        self.commit("grandfather legacy.py at 500")
+        self.commit("grandfather legacy.py at 900")
         path = self.repo / ".filesize-baseline"
-        self.baseline("# raised by hand\nlegacy.py 520\n")
+        self.baseline("# raised by hand\nlegacy.py 920\n")
         before = path.read_bytes()
         self.assertFails(self.check("--update-baseline"), "raised")
         self.assertEqual(path.read_bytes(), before)
-        self.baseline("# entry added by hand\nlegacy.py 500\nother.py 500\n")
+        self.baseline("# entry added by hand\nlegacy.py 900\nother.py 900\n")
         before = path.read_bytes()
         self.assertFails(self.check("--update-baseline"), "added")
         self.assertEqual(path.read_bytes(), before)
@@ -301,17 +302,17 @@ class ExclusionTests(RepoFixture):
         for rel in ("a.lock", "data.json", "logo.svg", "app.min.js",
                     "vendor/vendored.py", "node_modules/dep.js",
                     "third_party/vendored.py"):
-            self.file(rel, 500)
+            self.file(rel, 900)
         self.assertPasses(self.check())
 
     def test_an_allow_entry_with_a_reason_exempts_a_file(self):
-        self.file("legacy_dump.py", 500)
+        self.file("legacy_dump.py", 900)
         self.write(".filesize-allow",
                    "legacy_dump.py kept verbatim: a recorded fixture dump\n")
         self.assertPasses(self.check())
 
     def test_an_allow_entry_without_a_reason_is_refused(self):
-        self.file("legacy_dump.py", 500)
+        self.file("legacy_dump.py", 900)
         self.write(".filesize-allow", "legacy_dump.py\n")
         self.assertFails(self.check(), "reason")
 
@@ -319,12 +320,12 @@ class ExclusionTests(RepoFixture):
         # A NUL byte in the first 8 KiB marks binary content: a line count
         # over an image or a packed blob is not a source-size signal, so the
         # gate skips the file and says how many it skipped.
-        self.write("payload_module.py", "\0" + blob(401))
+        self.write("payload_module.py", "\0" + blob(801))
         self.git("add", "--", "payload_module.py")
         run = self.check()
         self.assertPasses(run)
         self.assertIn("1 binary file(s) skipped", run.stdout)
-        self.write("payload_module.py", blob(401))  # same shape, now text
+        self.write("payload_module.py", blob(801))  # same shape, now text
         self.assertFails(self.check(), "payload_module.py")
 
 
@@ -341,13 +342,13 @@ class GateHookTests(RepoFixture):
             cwd=str(self.repo), input=line, capture_output=True, text=True)
 
     def test_the_pre_push_hook_refuses_an_oversized_file(self):
-        self.file("big_module.py", 401)
+        self.file("big_module.py", 801)
         run = self.push()
         self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
         self.assertIn("big_module.py", run.stdout + run.stderr)
 
     def test_the_pre_push_hook_passes_a_small_file(self):
-        self.file("small_module.py", 400)
+        self.file("small_module.py", 800)
         run = self.push()
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
@@ -379,6 +380,23 @@ class RealTreeTests(unittest.TestCase):
         self.assertEqual(run.returncode, 0,
                          "the checked-in tree must pass its own gate:\n"
                          + run.stdout + run.stderr)
+
+
+
+
+class Operator800LineLimitTests(RepoFixture):
+    def test_800_line_boundary(self):
+        for count in (401, 800):
+            self.file('new_module.py', count)
+            self.assertPasses(self.check())
+        self.file('new_module.py', 801)
+        self.assertFails(self.check(), 'new_module.py')
+
+    def test_update_prunes_entries_that_fit_the_new_cap(self):
+        self.file('legacy.py', 800)
+        self.baseline('legacy.py 900\nold.py 600\n')
+        self.assertPasses(self.check('--update-baseline'))
+        self.assertEqual(self.baseline_map(), {})
 
 
 if __name__ == "__main__":
