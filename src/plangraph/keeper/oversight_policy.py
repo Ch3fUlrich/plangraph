@@ -87,6 +87,7 @@ _CODES = {
     "field_unknown": "validation",
     "kind_denied": "forbidden",
     "tier_denied": "validation",
+    "decision_only": "forbidden",
     "criteria_missing": "validation",
     "tier_below_default": "forbidden",
     "malformed": "validation",
@@ -244,6 +245,8 @@ def _check_create(index, op, items, projects):
                 or frozenset(kinds) not in _DECISION_EVIDENCE \
                 or len(kinds) != len(set(kinds)):
             return [_verdict(index, "create", key, "tier_denied")]
+    if raw.get("evidence_kinds") == ["decision"]:
+        return [_verdict(index, "create", key, "decision_only")]
     criteria = raw.get("done_criteria")
     if not isinstance(criteria, str) or not criteria.strip():
         return [_verdict(index, "create", key, "criteria_missing")]
@@ -257,10 +260,7 @@ def _check_create(index, op, items, projects):
         reason = _scope_reason(items, dep, projects)
         if reason:
             return [_verdict(index, "create", key, reason)]
-    # Raise-only tiers (R1): the last word on an otherwise legal create is the
-    # project default.  It runs LAST so every specific denial above keeps its
-    # own reason, and it mirrors the store's own ``creation_tier`` refusal --
-    # a below-default tier is refused here, never clamped to the default.
+    # Apply the same raise-only default-tier refusal as creation_tier, last.
     # ``none`` is the policy's own question carve-out, not a lowering.
     if tier != "none" and _tier_order(tier) < _tier_order(_create_default(raw)):
         return [_verdict(index, "create", key, "tier_below_default")]

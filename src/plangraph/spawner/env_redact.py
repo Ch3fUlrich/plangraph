@@ -164,7 +164,7 @@ class OutputLines:
         except Exception:
             return '[autoos:redaction failed; output withheld]\n'
 
-IDENTIFIER_KEYS = frozenset({'run_id', 'job_id', 'id', 'head_sha', 'branch', 'idempotency_key'})
+IDENTIFIER_KEYS = frozenset({'run_id', 'job_id', 'id', 'head_sha', 'branch', 'tree_sha', 'tree_branch', 'idempotency_key'})
 
 #: Credit/auth refusals (D-3605 a): the leg is as unusable as a rate-limited one.
 #: No bare HTTP 401/402/403 alternative: a run that merely prints those codes

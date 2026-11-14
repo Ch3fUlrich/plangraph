@@ -91,7 +91,7 @@ def test_verdict_ok_race_state_change_refused(w):
 
 
 def test_verdict_ok_race_evidence_set_change_refused(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     to_in_review(w, key)
     store2, conn2 = _second(w)
     other = auth.authenticate(conn2, w.tok("router"))
@@ -146,7 +146,7 @@ def test_delegate_race_refused(w):
 
 
 def test_add_evidence_race_refused_and_no_row(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     epoch = to_claimed(w, key)
     store2, conn2 = _second(w)
     other = auth.authenticate(conn2, w.tok("l1main"))

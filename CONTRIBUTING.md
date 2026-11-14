@@ -25,6 +25,11 @@ plangraph is public; the plans it tracks usually are not. Keep that difference c
 
 ## Setup and tests
 
+New devstack keeper configs require `PLANGRAPH_DECISIONS_REPO` naming a decisions
+checkout; existing valid configs are reused when it is unset. Explicit setup
+adds missing `repos.decisions` at `origin/main` privately and preserves all existing values.
+See the [keeper install config](docs/RUNBOOK.md#1-init-and-config).
+
 Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so there is no
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
@@ -321,3 +326,8 @@ Local preflight tests compare the branch against origin/main, follow shared asse
 
 The standalone fresh-base admission carry is listed as D-5848 in
 `tools/new_code_allowlist.txt` until the spawner Rust port.
+
+The K1-R1 HEAD audit runtime is explicitly stdlib Python so the installer can copy
+it outside the changing checkout; its narrow allowlist entry covers that requirement.
+
+The generated example batch declares tier `none` for new decision-only items; the example builder preserves historical imported plan definitions and their stored tiers.

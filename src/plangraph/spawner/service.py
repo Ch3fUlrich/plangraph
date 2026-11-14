@@ -3,7 +3,7 @@ from __future__ import annotations
 from .env_redact import first_reason, harness_limit_line, redact, unavailable_reason
 from .gateway_witness import witness_order, witness_gate_legs
 from .exit_outcome import failure_reason, fallthrough_reason, refusal_record, release_attempts, terminal_reason
-from .git_guard import prepare_worktree, selected_checkout, writer_launch
+from .git_guard import annotate_tree, prepare_worktree, selected_checkout, writer_launch
 from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
 from dataclasses import asdict, replace
@@ -40,12 +40,12 @@ class SpawnService(SeatSpawnMixin):
 
     def _save(self, record):
         self._sync_seat(record)
+        if not self._path(record['run_id']).exists(): annotate_tree(record)
         from .private_io import atomic_write_private
         from .runner import redact
         from .seat_artifact import publish
         from .env_redact import IDENTIFIER_KEYS, redact_env_values
-        # Host identity of the writing machine (C1): only PLANGRAPH_HOST may
-        # override it; setdefault keeps a re-saved record's original host.
+        # Only PLANGRAPH_HOST overrides host identity; preserve it on re-save.
         record.setdefault('host', os.environ.get('PLANGRAPH_HOST') or socket.gethostname())
         record.setdefault('served_model', 'unwitnessed')
         record.setdefault('served_family', 'unwitnessed')

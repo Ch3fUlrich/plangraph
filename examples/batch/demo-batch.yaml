@@ -15,6 +15,7 @@ ops:
       estimate_h: 2
       depends_on: [orchard:O-3]
       done_criteria: Trays are labelled.
+      review_tier: none
       evidence_kinds: [decision]
       operator: false
   - {op: priority, key: "orchard:O-3", priority: 2}

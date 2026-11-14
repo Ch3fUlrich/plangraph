@@ -1,0 +1,1 @@
+Production checkout alarms recover invalid state to an unsent baseline and atomically checkpoint delivery; concurrent HEAD audit writers serialize rotation and append each JSON line with one O_APPEND write under the existing one-second runtime limit. Claimed-item non-router declaration refusals gain explicit regression coverage.
