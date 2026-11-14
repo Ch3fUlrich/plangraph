@@ -3,6 +3,8 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
+- **MERGED-WORKTREE-BRANCH-SWEEP:** Add bounded PR-aware dry-run/apply cleanup with clean/origin/process/unit guards, pre-deletion restore TSVs and opt-in leased remote deletion; preserve quoted paths in the shared unit scanner.
+- **PROD-FROM-MAIN-ONLY:** Add read-only Rust `prod-paths` inventory of user units/drop-ins, environment files, Git hooks paths and cron, with configurable allowed production roots and JSON findings.
 - **SPAWNER-PROBE-HOST-NOT-READY:** Report missing probe harness binaries as host-not-ready without attempting the leg or recording shared leg events.
 - **KEEPER-SNAP-S1-FILTERS S1b:** Scope decision text to selected evidence before field projection; keep progress over all items with independent columns, preserve legacy snapshots, and close S1a validation/docs LOWs.
 - **PG-CHANGELOG-FRAGMENTS (D-3732):** Add changelog fragments and a fold tool so open PRs no longer conflict on CHANGELOG.md.

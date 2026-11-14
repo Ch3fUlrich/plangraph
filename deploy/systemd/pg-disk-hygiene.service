@@ -1,0 +1,7 @@
+[Unit]
+Description=Check worker disk and clean idle rebuildable state
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/plangraph/disk-hygiene.env
+ExecStart=%h/.local/bin/pg-disk-hygiene --repo ${PG_REPO} --root ${PG_WORKTREES} --pins ${PG_PINS} --apply

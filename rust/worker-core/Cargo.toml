@@ -27,6 +27,7 @@ rand = "0.9"
 regex = "1"
 sha2 = "0.10"
 tempfile = "3"
+toml = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

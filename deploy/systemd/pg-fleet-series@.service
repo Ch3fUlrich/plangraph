@@ -1,0 +1,7 @@
+[Unit]
+Description=Fleet minute sample
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/plangraph/fleet-%i.env
+ExecStart=%h/.local/bin/pg-fleet-series sample
