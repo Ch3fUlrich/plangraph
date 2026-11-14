@@ -7,7 +7,8 @@ from .env_redact import first_reason, harness_limit_line, unavailable_reason
 
 #: Verdicts a guard or a cancel owns.  No later fallthrough outcome may stomp
 #: them and terminal_reason never pops them (M9/M15, Q14).
-TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled', 'reasoning_output_limit', 'tool_loop', 'stuck')
+TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled', 'reasoning_output_limit',
+                    'tool_loop', 'stuck', 'disk_run_stopped')
 
 
 def without_progress(text):
@@ -44,6 +45,14 @@ def failure_reason(job, stop=None, *, harness=None):
 
 def refusal_record(record, job):
     """Persist a safety stop at dispatch, not in the fallthrough classifier."""
+    disk = next((e for e in getattr(job, 'events', ()) if e.get('event') == 'disk_run_stopped'), None)
+    if disk is not None and job.status not in ('cancelled', 'stalled', 'timeout'):
+        record.update(status='failed', exit_code=job.exit_code or 7,
+                      reason='kill_incomplete' if getattr(job, 'survivors', ()) else 'disk_run_stopped',
+                      disk_refusal=disk['reason'], events=record.get('events', []) + job.events)
+        if getattr(job, 'survivors', ()):
+            record['survivors'] = job.survivors
+        return True
     refusal = next((e for e in getattr(job, 'events', ()) if e.get('event') == 'model_refusal'), None)
     if refusal is None and job.status != 'model_refusal' and record.get('reason') != 'model_refusal':
         return False
@@ -188,6 +197,9 @@ def tool_call_only(job, record):
 
 
 def fallthrough_reason(service, chosen, job, record):
+    if any(e.get('event') == 'disk_run_stopped' for e in getattr(job, 'events', ())):
+        refusal_record(record, job)
+        return None  # host capacity never books a provider down or launches another leg
     from .question_bridge import question_exit
     if question_exit(job, record):
         return None
@@ -281,7 +293,7 @@ def terminal_reason(record, job=None):
         return   # survivors outrank every other verdict: the run failed
     events = record.get('events') or ()
     special = next((e['event'] for e in events
-                    if e.get('event') in ('git_config_mutated', 'writer_no_changes')), None)
+                    if e.get('event') in ('disk_run_stopped', 'git_config_mutated', 'writer_no_changes')), None)
     if special is not None:
         record['reason'] = special
         return
