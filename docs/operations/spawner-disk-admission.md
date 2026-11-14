@@ -22,4 +22,18 @@ verification and lease release before collection returns.
 Shared leases cover spawned processes and exclude cleanup, even before
 the run record is saved (POSIX flock; Windows shared read handles).
 Use a dedicated cache directory, never a source directory.
-The Rust worktree sweep also removes legacy `rust/target` before removal.
+The shared lock contract is a sibling file named `<target>.plangraph-lock`,
+where `<target>` is the expanded, absolute shared target path. Both
+`host_ready.py:cargo_lease` and `pg-disk-hygiene` use this exact name and POSIX
+flock: runs hold shared leases; reclaim holds a nonblocking exclusive lease
+through scanning and deletion. Hygiene reports and skips a root when its lease
+is held. The lock file stays in place after release.
+
+Hygiene resolves `PLANGRAPH_CARGO_TARGET_DIR` with the same home expansion and
+absolute-path rules as `host_ready.shared_cargo_target`, defaulting to
+`~/.cache/plangraph/cargo-target`; it also checks `~/.cache/pg-target-po`.
+Its alarm and cleanup defaults are 5 GiB and 10 GB (decimal) respectively.
+`pg-disk-hygiene` reclaims ignored `target`, `rust/target`, `node_modules`, and
+nested `__pycache__` / `.pytest_cache` directories in eligible idle worktrees.
+Other ignored data, tracked cache files, dirty trees and protection records
+prevent reclaim. Worktree removal remains a separate `pg-worktree-sweep` step.

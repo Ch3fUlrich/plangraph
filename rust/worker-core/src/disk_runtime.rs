@@ -136,6 +136,14 @@ fn shared_cache_using(
     if guards.protects(path) || guards.protects(&canonical) {
         return Ok(());
     }
+    // Hold the sibling lease through every scan, process probe and deletion.
+    // See the cross-language contract in spawner-disk-admission.md.
+    let Some(_lease) = crate::cargo_cache::try_exclusive_lease(path)? else {
+        report
+            .skipped
+            .push(format!("{}: cache lease held", path.display()));
+        return Ok(());
+    };
     let (cwds, building) = process_reader()?;
     if building || cwds.iter().any(|p| p.starts_with(&canonical)) {
         return Ok(());

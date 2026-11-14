@@ -382,3 +382,92 @@ fn disk_hygiene_large_ignored_cache_does_not_overflow_git_probe() {
     assert!(!root.join("clean/target").exists(), "{:?}", report.skipped);
     assert_eq!(report.freed_bytes, 16192);
 }
+
+#[test]
+fn legacy_and_nested_python_caches_are_reclaimed() {
+    let (_tmp, repo, root) = fixture();
+    fs::write(
+        repo.join(".git/info/exclude"),
+        "__pycache__/\n.pytest_cache/\n",
+    )
+    .unwrap();
+    let caches = [
+        "rust/target",
+        "src/pkg/__pycache__",
+        ".pytest_cache",
+        "tests/.pytest_cache",
+    ];
+    for cache in caches {
+        let path = root.join("clean").join(cache);
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("cache"), [0u8; 42]).unwrap();
+    }
+    for apply in [false, true] {
+        let report = sweep(
+            &repo,
+            &root,
+            &Guards::default(),
+            SystemTime::now() + Duration::from_secs(90000),
+            0,
+            Thresholds::default(),
+            apply,
+        )
+        .unwrap();
+        assert!(
+            report.skipped.iter().all(|s| !s.contains("clean")),
+            "{:?}",
+            report.skipped
+        );
+        for cache in caches {
+            assert_eq!(root.join("clean").join(cache).exists(), !apply);
+            assert!(report.actions.iter().any(|s| s.contains(cache)));
+        }
+    }
+}
+
+#[test]
+fn alarm_uses_the_spawner_five_gib_floor() {
+    let (_tmp, repo, root) = fixture();
+    let floor = 5 * 1024 * 1024 * 1024;
+    assert_eq!(Thresholds::default().alarm_free_bytes, floor);
+    for (free, alarm) in [(5_100_000_000, true), (floor - 1, true), (floor, false)] {
+        let report = sweep(
+            &repo,
+            &root,
+            &Guards::default(),
+            SystemTime::now(),
+            free,
+            Thresholds::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(report.alarm, alarm);
+    }
+}
+
+#[test]
+fn tracked_python_cache_is_protected_even_with_pathspec_characters() {
+    let (_tmp, repo, root) = fixture();
+    let tree = root.join("clean");
+    let cache = tree.join("src/[pkg]/__pycache__");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(cache.join("tracked"), "keep").unwrap();
+    git(&tree, &["add", "--", "."]);
+    git(&tree, &["commit", "-qm", "tracked fixture"]);
+    let report = sweep(
+        &repo,
+        &root,
+        &Guards::default(),
+        SystemTime::now() + Duration::from_secs(90000),
+        0,
+        Thresholds::default(),
+        true,
+    )
+    .unwrap();
+    assert!(cache.join("tracked").exists());
+    assert!(tree.join("target/cache").exists());
+    assert!(report
+        .skipped
+        .iter()
+        .any(|s| s.contains("clean") && s.contains("tracked cache")));
+}

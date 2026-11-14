@@ -78,11 +78,9 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
             .push("build running: cache cleanup deferred".into());
     }
     {
-        let home = env::var_os("HOME")
-            .ok_or_else(|| io::Error::other("HOME required for shared caches"))?;
-        for name in [".cache/plangraph/cargo-target", ".cache/pg-target-po"] {
+        for cache in pg_worker_core::cargo_cache::shared_cache_roots()? {
             if let Err(error) = disk_runtime::shared_cache_capped(
-                &PathBuf::from(&home).join(name),
+                &cache,
                 &guards,
                 building,
                 cap,

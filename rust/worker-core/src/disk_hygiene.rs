@@ -23,7 +23,7 @@ pub struct Report {
     pub skipped: Vec<String>,
     pub error: Option<String>,
 }
-/// Decimal GB; no filesystem-size-dependent thresholds.
+/// Absolute byte thresholds; the alarm matches the spawner floor in GiB.
 #[derive(Clone, Copy)]
 pub struct Thresholds {
     pub alarm_free_bytes: u64,
@@ -32,7 +32,7 @@ pub struct Thresholds {
 impl Default for Thresholds {
     fn default() -> Self {
         Self {
-            alarm_free_bytes: 5_000_000_000,
+            alarm_free_bytes: 5 * 1024 * 1024 * 1024,
             cleanup_free_bytes: 10_000_000_000,
         }
     }
@@ -154,6 +154,27 @@ fn available_or_skip<T>(result: io::Result<T>, tree: &Path, report: &mut Report)
         }
     }
 }
+// Stop at cache roots, and never walk directory symlinks.
+fn collect_caches(root: &Path, path: &Path, caches: &mut Vec<PathBuf>) -> io::Result<()> {
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let child = entry.path();
+        let relative = child.strip_prefix(root).unwrap();
+        let name = entry.file_name();
+        if relative == Path::new("target")
+            || relative == Path::new("node_modules")
+            || relative == Path::new("rust/target")
+            || name == "__pycache__"
+            || name == ".pytest_cache"
+        {
+            caches.push(child);
+        } else if name != ".git" && entry.file_type()?.is_dir() {
+            collect_caches(root, &child, caches)?;
+        }
+    }
+    Ok(())
+}
+
 fn clean_caches(
     path: &Path,
     guards: &Guards,
@@ -161,10 +182,11 @@ fn clean_caches(
     apply: bool,
     report: &mut Report,
 ) -> io::Result<()> {
-    let caches: Vec<_> = [path.join("target"), path.join("node_modules")]
-        .into_iter()
-        .filter(|p| p.exists() || p.is_symlink())
-        .collect();
+    let mut caches = Vec::new();
+    collect_caches(path, path, &mut caches)?;
+    if caches.is_empty() {
+        return Ok(());
+    }
     if caches.iter().any(|p| {
         fs::symlink_metadata(p).map_or(true, |m| m.file_type().is_symlink() || !m.is_dir())
     }) {
@@ -173,12 +195,21 @@ fn clean_caches(
             .push(format!("{}: unsafe cache path", path.display()));
         return Ok(());
     }
+    let mut tracked_args = vec!["--literal-pathspecs", "ls-files", "--"];
+    let relative: Vec<_> = caches
+        .iter()
+        .map(|p| {
+            p.strip_prefix(path)
+                .unwrap()
+                .to_str()
+                .ok_or_else(|| io::Error::other("non-UTF8 cache path"))
+        })
+        .collect::<io::Result<_>>()?;
+    tracked_args.extend(relative.iter().copied());
     if !git(path, &["status", "--porcelain=v1", "--untracked-files=all"])?
         .trim()
         .is_empty()
-        || !git(path, &["ls-files", "--", "target", "node_modules"])?
-            .trim()
-            .is_empty()
+        || !git(path, &tracked_args)?.trim().is_empty()
     {
         report
             .skipped
@@ -203,7 +234,7 @@ fn clean_caches(
     if ignored
         .split('\0')
         .filter(|s| !s.is_empty())
-        .any(|s| !s.starts_with("target/") && !s.starts_with("node_modules/"))
+        .any(|s| !relative.iter().any(|cache| Path::new(s).starts_with(cache)))
     {
         report
             .skipped

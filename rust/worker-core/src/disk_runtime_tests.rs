@@ -226,3 +226,90 @@ fn shared_cap_evicts_old_build_variants_and_rechecks_live_cargo() {
     assert_eq!(report.freed_bytes, 84);
     assert_eq!(report.actions.len(), 2);
 }
+
+#[test]
+#[cfg(unix)]
+fn shared_cache_honors_run_and_cleanup_leases_through_reclaim() {
+    use std::os::fd::AsRawFd;
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cargo-target");
+    let candidate = cache.join("debug/incremental/old-session");
+    fs::create_dir_all(&candidate).unwrap();
+    let object = candidate.join("object");
+    fs::write(&object, [0u8; 42]).unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(90000);
+    for path in [&object, &candidate] {
+        fs::File::open(path).unwrap().set_modified(old).unwrap();
+    }
+    // Use host_ready.py's literal sibling name and flock API independently
+    // of the production Rust lock helper, including an idle pre-spawn lease.
+    let lock = fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(tmp.path().join("cargo-target.plangraph-lock"))
+        .unwrap();
+    let mut report = Report {
+        free_bytes: 0,
+        alarm: true,
+        dry_run: false,
+        freed_bytes: 0,
+        actions: vec![],
+        skipped: vec![],
+        error: None,
+    };
+    for mode in [libc::LOCK_SH, libc::LOCK_EX] {
+        // SAFETY: lock owns the descriptor.
+        assert_eq!(
+            unsafe { libc::flock(lock.as_raw_fd(), mode | libc::LOCK_NB) },
+            0
+        );
+        for apply in [false, true] {
+            shared_cache_using(
+                &cache,
+                &Guards::default(),
+                false,
+                0,
+                true,
+                apply,
+                &mut report,
+                || panic!("held lease must skip before probing"),
+            )
+            .unwrap();
+            assert!(object.exists());
+            assert!(report.actions.is_empty());
+            assert_eq!(report.freed_bytes, 0);
+            assert!(report.skipped.last().unwrap().contains("cache lease held"));
+        }
+        // SAFETY: lock owns the descriptor.
+        assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) }, 0);
+    }
+    let mut probes = 0;
+    shared_cache_using(
+        &cache,
+        &Guards::default(),
+        false,
+        0,
+        true,
+        true,
+        &mut report,
+        || {
+            probes += 1;
+            // A run cannot acquire a shared lease while hygiene owns reclaim.
+            // SAFETY: lock owns the descriptor.
+            assert_eq!(
+                unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) },
+                -1
+            );
+            assert_eq!(io::Error::last_os_error().kind(), io::ErrorKind::WouldBlock);
+            Ok((vec![], false))
+        },
+    )
+    .unwrap();
+    assert_eq!(probes, 2);
+    assert!(!candidate.exists());
+    assert_eq!(report.freed_bytes, 42);
+    assert!(crate::cargo_cache::try_exclusive_lease(&cache)
+        .unwrap()
+        .is_some());
+    assert!(tmp.path().join("cargo-target.plangraph-lock").exists());
+}
