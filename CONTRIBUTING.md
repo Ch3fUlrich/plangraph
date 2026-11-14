@@ -30,7 +30,7 @@ install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
 with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
 The D-5504/D-5506 `mcp_tools.py` exception only splits schema data out of the full Python MCP transport; it also retires with MCP-RUST.
-Interim (operator D-5830): `**/*.py` and `**/*.sh` are allowlisted, so new Python and shell files pass the new-code gate; Rust stays the preferred language for new code, and the gate, its CI job and its tests stay in place for the other blocked extensions.
+Interim (operator D-5830): `**/*.py` and `**/*.sh` are allowlisted, so new Python and shell files pass the new-code gate; Rust stays the preferred language for new code, and the gate, its CI job and its tests stay in place for the other blocked extensions. Keep both OOM diagnostic regression and quota snapshot module/test entries in `tools/new_code_allowlist.txt` when merging these concurrent in-flight changes.
 
 ```bash
 python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
@@ -175,6 +175,10 @@ Plan-Item: plangraph:<KEY>
 Co-Authored-By: <author> <noreply@example.com>
 ```
 
+A merged commit whose trailers fail the CI commit gate is never rewritten. A router decision adds its full sha to
+`tools/ci_commit_exempt.txt` in a commit that carries `Gate-Edit: D-<id>` in the same trailer paragraph. The gate reads
+the list from the base commit, so the row has to merge to `main` before the pull request that holds the commit can pass.
+
 ## No secrets in the history
 
 This repo is public: never commit a password, token, hostname, IP address, e-mail address
@@ -311,7 +315,7 @@ The Rust `plangraph-cli` setup contract lives in `docs/setup.md`; manifest chang
 are Rust CI inputs and are tested against disposable user homes.
 Installer host-requirement changes are also Rust CI inputs. Package execution
 tests use disposable command fixtures; run only affected pytest files locally.
-Package R Python files already in flight are individually listed in
-`tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
+Python files already in flight are individually listed in
+`tools/new_code_allowlist.txt` with reason `D-5847 in-flight`, including Package R.
 
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
