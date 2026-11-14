@@ -121,7 +121,7 @@ def git_config_guard(root, registry_roots=None):
                 try:
                     target = Path((entry / 'gitdir').read_text().strip()).resolve()
                 except FileNotFoundError:
-                    continue
+                    continue  # another session may remove its registration during this scan
                 if not any(target.is_relative_to(Path(base).resolve()) for base in registry_roots):
                     continue
             paths.extend(entry / name for name in ('gitdir', 'HEAD', 'locked'))

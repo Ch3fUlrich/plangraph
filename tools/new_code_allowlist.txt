@@ -1,4 +1,6 @@
 # Exceptions for Python regression tests of existing modules and the thin gate.
+src/plangraph/keeper/quota_alarms.py | D-5847 in-flight
+tests/test_quota_alarms.py | D-5847 in-flight
 tests/test_spawner_run_worktree.py | RUN-WORKTREE regression coverage (D-5062), retired by SPAWNER-RUST-PORT
 # A single * matches only within a directory; ** matches recursively.
 tests/test_*.py | Regression tests for existing Python modules
@@ -32,4 +34,13 @@ tests/test_keeper_mcp_snapshot.py | MCP schema/reply parity guard (D-5062), reti
 src/plangraph/spawner/redact_tokens.py | Python scrubber parity helper required by D-5279 option A; retired by SPAWNER-RUST-PORT
 tools/seat_backfill.py | D-5062 rule 9.14: responsibility-only extraction of existing seat_record/seat_verdict backfill helpers to meet the 400-line gate; no new behaviour
 src/plangraph/keeper/mcp_tools.py | D-5504/D-5506 rule 9.14: schema-only split required to add close_merged without growing the 400-line Python MCP transport; retired by MCP-RUST
+
+**/*.py | OPERATOR D-5830 interim: Rust preferred, Python accepted
+**/*.sh | OPERATOR D-5830 interim: Rust preferred, shell accepted
+
+tests/test_spawner_oom_reason.py | D-5847 in-flight
+src/plangraph/routing_support/quota_snapshots.py | D-5847 in-flight
+tests/test_spawner_quota_failfast.py | D-5847 in-flight
+tests/test_keeper_origin_git_env.py | D-5847 in-flight
+src/plangraph/spawner/gateway_models.py | D-5840 rule 9.14: responsibility-only extraction of existing gateway model admission and row parsing below the 400-line gate; no new behaviour
 src/plangraph/spawner/base_fresh.py | in flight before D-5847

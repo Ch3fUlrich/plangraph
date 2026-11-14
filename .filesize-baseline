@@ -7,7 +7,8 @@ rust/worker/src/workflow.rs 2314
 rust/worker/tests/e2e.rs 2885
 src/plangraph/routing_support/catalog_seed.py 1048
 src/plangraph/routing_support/resolver.py 1247
-src/plangraph/spawner/runner.py 1222
+src/plangraph/spawner/runner.py 1157
+src/plangraph/views.py 440
 tests/browser/assets/elk.bundled.js 6696
 tests/test_ci_commit_gate.py 1057
 tests/test_keeper_oversight_scope.py 2804

@@ -187,9 +187,10 @@ def test_workflow_requires_language_job():
     assert "new-code-lang" in workflow["jobs"]["ci-gate"]["needs"]
 
 
-@pytest.mark.parametrize('path,expected', [('src/new_module.py', 1), ('tools/new_tool.sh', 1),
+@pytest.mark.parametrize('path,expected', [('src/new_module.py', 0), ('tools/new_tool.sh', 0),
+                                          ('src/new_module.js', 1),
                                           ('tests/nested/test_regression.py', 0)])
-def test_operator_d5847_project_allowlist_refuses_new_python_and_shell(repo, path, expected):
+def test_project_allowlist_retains_main_operator_interim_policy(repo, path, expected):
     rules = CHECKER.with_name('new_code_allowlist.txt').read_text()
     result = check(repo, {'tools/new_code_allowlist.txt': rules, path: 'new content\n'})
     assert result.returncode == expected, result.stdout

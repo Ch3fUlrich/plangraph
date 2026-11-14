@@ -411,7 +411,7 @@ def test_d1_measured_card_class_widens_defaults(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('cpu', [0, 1, None])
 def test_d1_stuck_requires_silent_stdout_and_proven_zero_cpu_delta(cpu):
-    w = Watchdog(thresholds(role='review'), 0, None, writer=False)
+    w = Watchdog(thresholds({'stuck_min': 3}, role='review'), 0, None, writer=False)
     assert w.decide(0, None, None, 0, stdout_activity=0) is None
     event = w.decide(180, None, 179, cpu, stdout_activity=0)
     if cpu == 0:
@@ -426,11 +426,14 @@ def test_d1_tool_loop_deduplicates_updates_and_hashes_arguments():
     gate = ToolLoop()
     def call(call_id, args, name='bash'):
         return json.dumps({'type': 'tool_use', 'part': {'callID': call_id, 'tool': name,
-            'state': {'status': 'running', 'input': args}}})
+            'state': {'status': 'completed', 'input': args, 'output': 'same'}}})
     assert not gate.feed(call('a', {'x': 1, 'y': 2}))
     assert not gate.feed(call('a', {'y': 2, 'x': 1}))
     assert not gate.feed(call('b', {'y': 2, 'x': 1}))
-    assert gate.feed(call('c', {'x': 1, 'y': 2}))
+    assert not gate.feed(call('c', {'x': 1, 'y': 2}))
+    assert not gate.feed(call('d', {'x': 1, 'y': 2}))
+    assert not gate.feed(call('e', {'x': 1, 'y': 2}))
+    assert gate.feed(call('f', {'x': 1, 'y': 2}))
     other = ToolLoop()
     assert not other.feed(call('a', {'x': 1}))
     assert not other.feed(call('b', {'x': 2}))
@@ -447,15 +450,17 @@ def test_d1_tool_loop_reaps_fake_harness_within_five_seconds(tmp_path, monkeypat
         runner, job = _job(tmp_path, {'max_min': 45})
         proc = SimpleNamespace(stdout=asyncio.StreamReader(), stderr=asyncio.StreamReader(),
                                pid=None, returncode=None)
-        for n in range(3):
-            call = dict(type='tool_call', id=str(n), name='read', arguments={'path': 'same'})
+        for n in range(6):
+            call = dict(type='tool_call', id=str(n), name='read', arguments={'path': 'same'}, result='same')
             if transport == 'opencode':
-                call = dict(type='tool_use', part=dict(callID=str(n), tool='read', state=dict(input={'path': 'same'})))
+                call = dict(type='tool_use', part=dict(callID=str(n), tool='read', state=dict(status='completed', input={'path': 'same'}, output='same')))
             elif transport == 'claude':
                 call = dict(type='assistant', message=dict(content=[dict(type='tool_use', id=str(n), name='read', input={'path': 'same'})]))
             elif transport == 'codex':
                 call = dict(type='item.completed', item=call)
             proc.stdout.feed_data((json.dumps(call) + '\n').encode())
+            if transport == 'claude':
+                proc.stdout.feed_data((json.dumps(dict(type='user', message=dict(content=[dict(type='tool_result', tool_use_id=str(n), content='same')]))) + '\n').encode())
         async def reap(*args):
             proc.returncode = -15
             proc.stdout.feed_eof()

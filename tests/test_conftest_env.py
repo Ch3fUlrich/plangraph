@@ -124,6 +124,7 @@ def test_session_registry_guard_ignores_unrelated_moves_and_removals(tmp_path, c
     with config_guard(repo, registry_roots=(tmp_path / 'test-owned',)):
         (metadata / 'HEAD').write_text('ref: refs/heads/other-session\n')
         (other / 'HEAD').write_text('b' * 40)
+        (other / 'gitdir').write_text(str(tmp_path / 'elsewhere/.git'))
         read_text = Path.read_text
         def disappearing(path, *args, **kwargs):
             if path == other / 'gitdir': path.unlink()

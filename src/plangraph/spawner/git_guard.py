@@ -98,10 +98,6 @@ def run_tree(state, repo=None):
             if path.is_symlink() or (path.exists() and not valid(path)):
                 raise RuntimeError('run_tree_invalid')
             if not path.exists():
-                from .base_fresh import fresh_worktree_base
-                if stale:
-                    raise SpawnRefused('base_stale: ' + stale)
-                fresh_worktree_base(repo, base=sha, fetch=False)
                 # Reuse only this missing registration; never prune other trees.
                 git('worktree', 'add', '--detach', '--force', '--force', path, sha)
             if not (path / '.git').is_file():

@@ -128,6 +128,15 @@ def python_interpreter(root):
     configured = os.environ.get('PREFLIGHT_PYTHON')
     return str(Path(configured).expanduser().absolute()) if configured else shutil.which('python3') or 'python3'
 
+def test_baseline(root, fallback):
+    """Local tests cover this branch's changes, excluding inherited upstream commits."""
+    try:
+        subprocess.check_output(['git', 'rev-parse', '--verify', 'origin/main^{commit}'],
+                                cwd=root, stderr=subprocess.DEVNULL, timeout=CHECK_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return fallback
+    return 'origin/main'
+
 
 def main(argv=None, root=None):
     parser = argparse.ArgumentParser(description=__doc__)
@@ -170,8 +179,8 @@ def main(argv=None, root=None):
     if words:
         scrubs.append(python("preflight_private_scrub.py", "--base", args.scrub_base or args.base,
                              "--head", args.head, "--words", words))
-    tests = python("affected_tests.py", "--base", args.base, "--head", args.head,
-                   "--root", str(root), "--files-only", "--run")
+    tests = python("affected_tests.py", "--base", test_baseline(root, args.base), "--head", args.head,
+                   "--root", str(root), "--files-only", "--local", "--run")
     if importlib.util.find_spec("xdist") is not None:
         tests += ["--workers", "2"]
     families = [("scrub", scrubs),

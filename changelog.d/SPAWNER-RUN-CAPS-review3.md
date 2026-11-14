@@ -1,0 +1,1 @@
+- Keep persistent child processes from renewing writer activity/progress stall timers while retaining CPU-stuck deferral and quota fail-fast polling; clarify Linux-only child visibility and remove stale contributor policy wording.

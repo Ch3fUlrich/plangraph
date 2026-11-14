@@ -96,7 +96,7 @@ def local_control_tests(texts, path, reverse, *, global_control=False):
             and Path(name).name.startswith('test_')}
 
 
-def select_tests(root, changed, within=None, *, files_only=False, max_files=LOCAL_FILE_CAP):
+def select_tests(root, changed, within=None, *, files_only=False, max_files=LOCAL_FILE_CAP, local=False):
     root = Path(root)
     changed = {Path(path).as_posix() for path in changed}
     if files_only and not 1 <= max_files <= LOCAL_FILE_CAP:
@@ -184,7 +184,7 @@ def select_tests(root, changed, within=None, *, files_only=False, max_files=LOCA
             # scratch files stay skippable here.
             if not revision_asset(root, path, asset_cache):
                 continue
-        if p.name == "conftest.py" or (path.startswith("tests/") and not p.name.startswith("test_")):
+        if p.name == "conftest.py" or (not local and path.startswith("tests/") and not p.name.startswith("test_")):
             if files_only:
                 coverage = local_control_tests(texts, path, reverse)
                 record(path, coverage)
@@ -264,6 +264,7 @@ def main(root=None):
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
     parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
     parser.add_argument("--max-files", type=int, default=LOCAL_FILE_CAP,
                         help="base local bound, 1..40; source coverage floors may grow it")
@@ -285,13 +286,16 @@ def main(root=None):
             if not (root / w).exists():
                 print(f"unknown --within path: {w}", file=sys.stderr)
                 return 2
-    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, files_only=args.files_only, max_files=args.max_files)
+    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, files_only=args.files_only, max_files=args.max_files, local=args.local)
     print(json.dumps(plan), flush=True)
     if plan.get('deferred'):
         reduced = ', '.join(plan.get('floor_only', ())) or 'none'
         print(f"affected tests: {plan['deferred']} files left to CI "
               f"(local cap: {args.max_files} files; effective bound: {plan.get('limit', args.max_files)} files; "
               f"coverage reduced to floor: {reduced})", file=sys.stderr)
+    if args.local and args.run and "tests" in plan["tests"]:
+        print('local preflight refuses the full suite; specify affected test files with --within', file=sys.stderr)
+        return 2
     if args.files_only and (plan.get('error') or any(not (root / path).is_file() for path in plan['tests'])):
         print('FAIL local-selection: cannot determine explicit test files; repair the graph or selection; full collection refused', file=sys.stderr)
         return 1

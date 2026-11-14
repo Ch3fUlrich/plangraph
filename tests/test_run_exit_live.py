@@ -108,7 +108,8 @@ def test_real_exit_http_marker_retry(tmp_path, monkeypatch, script, rc):
     monkeypatch.setattr('plangraph.spawner.runner.build_command',
                         lambda **kw: [sys.executable, '-c', script])
     if rc == 124:
-        monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', '.03')
+        # The shared run budget includes admission; leave time to launch the child.
+        monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', '2')
     from plangraph.spawner import private_io
     original = private_io.atomic_write_private
     fail = [True]
@@ -119,12 +120,12 @@ def test_real_exit_http_marker_retry(tmp_path, monkeypatch, script, rc):
         return original(path, data)
 
     monkeypatch.setattr(private_io, 'atomic_write_private', write)
-    service = spawn_service(runner=SpawnerRunner(), state=tmp_path)
+    service = spawn_service(runner=SpawnerRunner(default_cwd=str(tmp_path)), state=tmp_path)
 
     async def run():
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='tiny', model='omniroute/cx-gpt-6.1-sol',
                                      override_reason='HTTP completion regression', wait_seconds=5)
-        assert record['exit_code'] == rc
+        assert record['exit_code'] == rc, record
         marker = service._path(record['run_id']).parent / 'keeper.delivered'
         assert not marker.exists()
         assert len(events) == 1

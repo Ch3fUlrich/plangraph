@@ -152,3 +152,16 @@ def test_spawner_size_and_prompt_rules_pointer():
                      'python3 tools/affected_tests.py --base origin/main --run',
                      'COMMIT before finishing'):
         assert contract in rules
+
+
+def test_spawner_merge_retains_package_and_runtime_contracts_once():
+    text = (ROOT / 'docs/SPAWNER.md').read_text()
+    for contract in (
+        'D-5840: implementer and reviewer reasoning defaults to medium.',
+        'Package sessions use `plangraph_package_launch',
+        'Freshness admission and refused-worktree cleanup use the shared checkout Git environment',
+        'Quota polling considers only the newest request of a session',
+        'The live-descendant sampling flag is observed only on Linux.',
+        'OOM wrapper lines are recognized by their known event shape',
+    ):
+        assert text.count(contract) == 1, contract

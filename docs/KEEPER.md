@@ -212,7 +212,7 @@ code and `owner/repo` only. Each `CommitStatus` (`id`, `status`, `context`, `cre
 `warning`→`neutral`, `skipped`→`skipped`, an unknown status → `failure`), keeping only the
 newest status per `context` (`updated_at`, ties by higher `id`) so the stale failure of a
 rerun cannot block a green sha; no statuses is the verifier's existing "no CI check-runs"
-failure. Proposed, not applied: `docs/proposals/keeper-ci-config.md`.
+failure. Proposed, not applied: `docs/proposals/keeper-ci-config.md`. The decisions-origin fetch in `evidence_decisions.py` runs in an isolated git env (no system or global config). It re-injects only the caller's global `credential.helper` and `credential.<url>.helper` entries through `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`, so a private https origin authenticates; values are never logged and a failed read injects nothing. Includes are explicitly disabled while reading helpers; helper order and empty reset entries are preserved. Other credential settings, core, URL, HTTP and include entries stay isolated. A timed-out reader is killed and reaped. The door is `src/plangraph/keeper/evidence_decisions.py` function `_origin_git_env`; regression coverage uses an authenticated loopback smart-HTTP origin and a fixture-only helper.
 
 ## Legacy and decision closes
 
@@ -603,6 +603,6 @@ Keep application writers stopped during rollback and restore: fixed tables and
 indexes become `*_retired_v11` under migration and exclusive table locks.
 Preserve audit rows; reapplication requires an explicit restore plan.
 SQLite rollback retains tables; C4 owns forward audit events, not item events.
-Mandatory ephemeral PostgreSQL CI must pass before merge; storage is not closure.
+Mandatory ephemeral PostgreSQL CI must pass before merge; storage is not closure. `quota_alarms.py` (systemd timer, deploy/systemd) reads gateway quota snapshots (sqlite opened read-only via `QUOTA_SNAPSHOT_DB`, else `docker exec`) and sends one routing line per 50/75/90 % threshold per window, deduped in a pruned state file with poll checkpoints and last null-reset observations to recover refills across downtime; timestamp formats are normalized and read-only database paths are URI-escaped; a window with no snapshot for 3 h, or no fresh snapshot at all, sends a `quota-alarm-stale` or `quota-alarm-blind` line (daily while it lasts) instead of exiting silent. Quota alarm polls skip malformed snapshot rows independently and include their count as `malformed=N` in the stale/blind notice; healthy windows continue to alarm. Corrupt JSON state is moved to a timestamped `.corrupt-*` sibling, and the poll starts empty with a recovery notice (dry runs leave the file unchanged). Docker reads require an explicit `QUOTA_GATEWAY_CONTAINER`; prefer the read-only `--db` source. The example systemd unit requires a checkout at `%h/code/plangraph` and `/usr/bin/python3` version 3.11 or newer; override WorkingDirectory, PYTHONPATH and ExecStart for a different checkout or virtualenv.
 
 Priority is an integer from 0 to 10: 0 is optional and 10 is most important. Define, edits and priority operations refuse values outside this range, including atomic batches. Operator stale-step oversight treats priority 9-10 as high priority.

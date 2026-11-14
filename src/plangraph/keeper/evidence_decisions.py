@@ -64,11 +64,48 @@ class DecisionsOriginUnreadable(OSError):
     """The configured repository or origin/main decisions blob is unreadable."""
 
 
+def _global_credential_entries() -> list[tuple[str, str]]:
+    """The caller's global credential helpers, read without following includes.
+
+    Only these keys cross into the isolated fetch env; values are never logged.
+    """
+    try:
+        proc = subprocess.Popen(
+            ["git", "config", "--global", "--no-includes", "--null", "--get-regexp", r"^credential\..*helper$"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            out, _ = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            return []
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    entries = []
+    for record in out.decode("utf-8", "replace").split("\0"):
+        key, sep, value = record.partition("\n")
+        if sep and key.startswith('credential.') and key.endswith('.helper'):
+            entries.append((key, value))
+    return entries
+
+
 def _origin_git_env() -> dict[str, str]:
-    """Ignore caller repository/config overrides; retain transport safety guards."""
+    """Ignore caller repository/config overrides; retain transport safety guards.
+
+    The caller's global credential helpers are re-injected via GIT_CONFIG_COUNT so a
+    private https origin can still authenticate.
+    """
     env = {name: value for name, value in os.environ.items()
            if not name.startswith("GIT_") or name in {"GIT_ALLOW_PROTOCOL", "GIT_TERMINAL_PROMPT"}}
     env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    entries = _global_credential_entries()
+    if entries:
+        env["GIT_CONFIG_COUNT"] = str(len(entries))
+        for index, (key, value) in enumerate(entries):
+            env[f"GIT_CONFIG_KEY_{index}"] = key
+            env[f"GIT_CONFIG_VALUE_{index}"] = value
     return env
 
 

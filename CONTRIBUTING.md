@@ -42,6 +42,7 @@ install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 The MCP snapshot guard and D-5661 Python freshness gate have path-specific `tools/new_code_allowlist.txt` entries
 with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
 The D-5504/D-5506 `mcp_tools.py` exception only splits schema data out of the full Python MCP transport; it also retires with MCP-RUST.
+Interim (operator D-5830): `**/*.py` and `**/*.sh` are allowlisted, so new Python and shell files pass the new-code gate; Rust stays the preferred language for new code, and the gate, its CI job and its tests stay in place for the other blocked extensions. Keep both OOM diagnostic regression and quota snapshot module/test entries in `tools/new_code_allowlist.txt` when merging these concurrent in-flight changes.
 
 ```bash
 python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
@@ -102,6 +103,7 @@ SHA explicitly in a reviewed PR when needed, not the shared Rust release pin.
 
 Completed Rust ports remove only their own Python waiver from
 `tools/new_code_allowlist.txt`; preserve unrelated exceptions when merging main.
+Merge in-flight test entries additively so each active lane retains its own coverage.
 SPAWNER-RUST-PORT slice 2 also removes the stale doctor-source waiver retired by
 slice 1; its changelog fragment accounts for all four named Python waivers.
 Doctor source-filter goldens live in `tests/fixtures/doctor_sources.json` and run
@@ -168,6 +170,7 @@ The file-size gate refuses malformed Git batch headers with a single reason line
 New Python source outside tests needs a `path | reason (D-id)` line in
 `tools/new_code_allowlist.txt`, which `python3 tools/check_new_code_lang.py` reads; for
 example the keeper's host-sample store stays Python because the keeper is Python (D-5038).
+The `spawner/gateway_models.py` entry covers a responsibility-only extraction of existing Python model admission and row parsing; `gateway_witness.py` keeps compatible re-exports.
 
 ## Changelog and documentation
 
@@ -185,6 +188,10 @@ Every commit message ends with one trailer paragraph — no blank lines inside i
 Plan-Item: plangraph:<KEY>
 Co-Authored-By: <author> <noreply@example.com>
 ```
+
+A merged commit whose trailers fail the CI commit gate is never rewritten. A router decision adds its full sha to
+`tools/ci_commit_exempt.txt` in a commit that carries `Gate-Edit: D-<id>` in the same trailer paragraph. The gate reads
+the list from the base commit, so the row has to merge to `main` before the pull request that holds the commit can pass.
 
 ## No secrets in the history
 
@@ -326,7 +333,7 @@ Pre-push and preflight prepend an existing `~/.cargo/bin` to PATH. Missing Cargo
 
 Test fixtures set a Git discovery ceiling at their temporary root; settings discovery honors that ceiling so temporary policies remain isolated even when TMPDIR is inside the checkout.
 
-Operator D-5847 restores the Rust-only new-code gate: Python and shell exceptions are per-file, including `src/plangraph/spawner/base_fresh.py` already in flight before D-5847; recursive Python test exceptions remain.
+Operator D-5830 keeps Rust preferred while accepting Python and shell through `**/*.py` and `**/*.sh` in `tools/new_code_allowlist.txt`.
 
 New stacked branches select affected tests from the nearest remote merge-base, while scrub starts at `origin/main` (the whole tip when main is unknown); the hook passes a separate `--scrub-base` to preflight.
 
@@ -338,7 +345,7 @@ CI runs pytest in three deterministic `PYTEST_SHARD=INDEX/COUNT` shards while ke
 
 CI timing measurements and pending PR-run evidence are tracked in `docs/ci-performance.csv`. Sensitivity reproducibility runs one case per seed so all five seeds retain coverage across workers.
 
-Python sessions check shared/worktree config bytes and registrations under their own temporary roots, tolerating unrelated sessions moving worktrees. Rust workspace/writer fixtures compare the real checkout’s worktree registry metadata before and after tests. Worktree tests must create their repositories inside temporary roots; the guard reads metadata directly and never runs Git on the real checkout.
+Python sessions compare only registrations pointing under their temporary test root, so other sessions may move worktrees concurrently; shared and per-worktree config bytes remain guarded. Rust workspace/writer fixtures compare the real checkout’s worktree registry metadata before and after tests. Worktree tests must create their repositories inside temporary roots; the guard reads metadata directly and never runs Git on the real checkout.
 
 The pre-push hook and preflight print their Python interpreter. They prefer `.venv/bin/python` (or `.venv/Scripts/python.exe`), then `PREFLIGHT_PYTHON`, then `python3` on PATH. Set `PREFLIGHT_PYTHON` to an absolute environment interpreter when the checkout shares another repository environment. A selected test run without pytest reports `FAIL pytest-missing` and its install command.
 
@@ -349,3 +356,9 @@ Local preflight invokes `affected_tests.py --files-only`: changed test files and
 Hook, selector, preflight, and pytest entry share `tools/affected_tests.py::test_environment`; Git discovery failure refuses test launch, and the hook's own Git calls retain their original context.
 
 The hook starts its affected selector in a separate process group. Timeout or interruption kills the group (Windows uses `taskkill /T`) and reaps the selector, so pytest/xdist workers cannot outlive a refused push.
+
+Python files already in flight are individually listed in
+`tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
+Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
+
+Local preflight combines `--local` shared-asset consumer traversal with `--files-only` bounded suite-control checks, using `origin/main` for test selection when available. Scrub and policy retain their pushed-range baselines.

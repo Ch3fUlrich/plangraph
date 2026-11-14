@@ -66,3 +66,26 @@ def test_docs_status_only_documentation_files_skip(tmp_path, changed, expected):
         "tests/test_affected_tests.py": "",
     })
     assert selector().select_tests(tmp_path, changed)["tests"] == expected
+
+@pytest.mark.parametrize('asset', ['tests/shared.py', 'tests/fixtures/capture.json'])
+def test_local_shared_asset_selects_its_consumers(tmp_path, asset):
+    _repo(tmp_path, {asset: '', 'tests/test_consumer.py':
+                    'import shared\n# capture.json', 'tests/test_unrelated.py': ''})
+    assert selector().select_tests(tmp_path, [asset], local=True)['tests'] == ['tests/test_consumer.py']
+
+
+def test_local_run_refuses_full_suite_fallback(tmp_path, monkeypatch, capsys):
+    module = selector()
+    _repo(tmp_path)
+    monkeypatch.setattr('sys.argv', ['affected', '--base', 'HEAD', '--run', '--local', '--changed', 'pyproject.toml'])
+    monkeypatch.setattr(module.subprocess, 'run', lambda *a, **kw: pytest.fail('full suite launched'))
+    assert module.main(tmp_path) == 2
+    assert 'full suite' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('asset', ['tests/shared.py', 'tests/fixtures/capture.json'])
+def test_local_file_only_mode_keeps_shared_asset_consumers(tmp_path, asset):
+    _repo(tmp_path, {asset: '', 'tests/test_consumer.py':
+                    'import shared\n# capture.json', 'tests/test_unrelated.py': ''})
+    plan = selector().select_tests(tmp_path, [asset], local=True, files_only=True)
+    assert plan['tests'] == ['tests/test_consumer.py']

@@ -7,8 +7,8 @@ import time
 
 ADMISSION_TIMEOUT = 180
 def _git_env():
-    return {k: v for k, v in os.environ.items()
-            if k not in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR')}
+    from .prompt_input import checkout_env
+    return checkout_env()
 def _check(repo, default=None, fetch=True, timeout=60, ref='HEAD'):
     repo = os.fspath(repo)
     def git(*args, check=True):
@@ -112,7 +112,9 @@ async def admit_base(service, record, card, *, launch=False):
             and check['reason'] == f"base_stale: behind={check['behind']}")
     diff = card.get('diff_ref') if record.get('role') in ('review', 'judge') else None
     if accepted(result) and diff is not None:
-        reviewed = await asyncio.to_thread(_check, diff.get('repo') or repo, fetch=False, ref=diff.get('head', ''))
+        diff_repo = diff.get('repo') or repo
+        same_repo = os.path.normcase(os.path.realpath(diff_repo)) == os.path.normcase(os.path.realpath(repo))
+        reviewed = await asyncio.to_thread(_check, diff_repo, fetch=not same_repo, ref=diff.get('head', ''))
         if not accepted(reviewed):
             result = reviewed
     if accepted(result):
