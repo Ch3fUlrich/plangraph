@@ -709,3 +709,6 @@ Cancellation waits for an in-flight worktree creation thread before returning;
 new unlaunched attempts are removed, and normal Git branch deletion removes the
 new lane only when it is unoccupied and merged into the fetched origin/main.
 Continuation evidence remains protected from automatic removal.
+
+Launch-admission refusals apply the same safe branch cleanup to owned new
+attempts, so a named lane can retry after origin advances during creation.

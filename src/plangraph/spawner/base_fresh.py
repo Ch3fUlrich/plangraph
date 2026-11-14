@@ -155,7 +155,7 @@ async def admit_base(service, record, card, *, launch=False):
     annotate_item(record, card)
     record.update(status='failed', reason=result['reason'], error=result['reason'],
                   behind=result['behind'], exit_code=1, ended=time.time())
-    if record.get('run_worktree'): await asyncio.to_thread(_remove_refused_worktree, service, record)
+    if record.get('run_worktree'): await asyncio.to_thread(_remove_refused_worktree, service, record, remove_branch=True)
     service._save(record)
     return False
 def _remove_refused_worktree(service, record, *, remove_branch=False):
@@ -173,7 +173,7 @@ def _remove_refused_worktree(service, record, *, remove_branch=False):
             subprocess.run(['git', '-C', repo, 'worktree', 'remove', metadata['path']],
                 env=_git_env(), check=True, capture_output=True, timeout=30)
         metadata['removed'] = True
-        if remove_branch:
+        if remove_branch and metadata.get('branch'):
             branch = metadata['branch']
             # Normal branch deletion protects occupied/unmerged refs. Use the
             # fetched upstream as merge authority even with a detached caller.
@@ -217,7 +217,7 @@ async def admitted_spawn(service, payload):
                 run = service.result(run_id)
                 if run.get('reason') != 'kill_incomplete':
                     if run.get('run_worktree') and not run.get('base_admitted'):
-                        await asyncio.to_thread(_remove_refused_worktree, service, run)
+                        await asyncio.to_thread(_remove_refused_worktree, service, run, remove_branch=True)
                     service._save(dict(run, status='failed', reason='base_admission_timeout', error='base_admission_timeout', exit_code=1, ended=time.time()))
             if not task.done(): task.cancel()
         await asyncio.gather(*owned.values(), return_exceptions=True)

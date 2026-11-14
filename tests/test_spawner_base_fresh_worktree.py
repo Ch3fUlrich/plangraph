@@ -80,3 +80,31 @@ def test_cancel_during_creation_waits_and_cleans_owned_attempt(repository, dispa
         metadata = await git_guard.prepare_worktree(service, {'run_id': 'run-retry', 'cwd': str(repo)}, card, True)
         assert git(metadata['cwd'], 'rev-parse', 'HEAD') == git(origin, 'rev-parse', 'main')
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize('hardened', [False, True])
+def test_refused_owned_lane_is_reusable_after_origin_advances(repository, dispatch, monkeypatch, hardened):
+    from pathlib import Path
+    from plangraph.spawner import service as service_module, runner as runner_module
+    origin, repo = repository
+    service, calls = dispatch[0](hardened), dispatch[1]
+    admit = service_module.admit_base
+    raced = False
+    async def advance_before_launch(*args, launch=False, **kwargs):
+        nonlocal raced
+        if launch and not raced:
+            raced = True
+            advance(origin, repo)
+        return await admit(*args, launch=launch, **kwargs)
+    monkeypatch.setattr(service_module, 'admit_base', advance_before_launch)
+    monkeypatch.setattr(runner_module, 'admit_base', advance_before_launch)
+    card = {'estimate_tokens': 100, 'lane_branch': 'lane/retry-race'}
+    first = asyncio.run(service.spawn(card, 'Implement a tested change', run_worktree=True, wait_seconds=None))
+    assert first['status'] == 'failed' and first['reason'] == 'base_stale: behind=2'
+    assert not Path(first['run_worktree']['path']).exists()
+    assert not git(repo, 'branch', '--list', card['lane_branch'])
+    assert not calls
+    retry = asyncio.run(service.spawn(card, 'Implement a tested change', run_worktree=True, wait_seconds=None))
+    assert retry['status'] == 'completed', retry
+    assert retry['run_worktree']['base_sha'] == git(origin, 'rev-parse', 'main')
+    assert len(calls) == 1
