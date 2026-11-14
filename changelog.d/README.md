@@ -5,3 +5,5 @@ Add one entry line per PR as `changelog.d/<ITEM-KEY>.md` (several parts of one i
 Fragments must be direct children, not nested files; README.md (any case) is excluded. New or edited fragments must add an entry line against the merge-base; whitespace changes and removals do not count.
 
 Fold orders uncommitted fragments first by newest mtime, then committed fragments by newest first-commit date, with filename ties. Only fragments with folded entry lines are deleted. Empty, whitespace-only and heading-only fragments are retained and reported. `--check` writes nothing and exits 1 when fragments remain; normal folds exit 0.
+
+Ordinary PRs must not edit `CHANGELOG.md`. Fold only in a release commit with a nonempty `Release: <version or description>` trailer in the final trailer paragraph; see [CONTRIBUTING.md](../CONTRIBUTING.md).

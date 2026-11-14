@@ -62,6 +62,11 @@ python tools/affected_tests.py --base origin/main --run -n auto  # writers / PR 
 python -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
 
+The selector follows static Python module launches (`-m`) and calls through
+`tools/*.sh`, including imports in shell Python heredocs. Deleted Python modules
+use the base revision’s importer graph; unresolved importers select the full suite,
+including deleted leaf tests. Deleted `conftest.py` files select the full suite for
+implicit fixture consumers. Local preflight refuses these full-suite selections.
 The affected selector falls back to the full suite for shared fixtures and suite
 configuration; unmapped code selects a bounded smoke set (tests naming its directory,
 at most 12, plus `tests/test_affected_tests.py`), and CI/main keep the full suite; documentation, `changelog.d/` fragments,
@@ -190,7 +195,7 @@ The `spawner/gateway_models.py` entry covers a responsibility-only extraction of
 
 ## Changelog and documentation
 
-Every change touching non-documentation paths requires an entry (rule D-653), either as a new or edited fragment that adds an entry line against the merge-base in `changelog.d/<ITEM-KEY>.md` (several parts of one item: `<ITEM-KEY>-<n>.md`) holding the entry line, or as a new non-heading line under `## Unreleased` in `CHANGELOG.md`. Fragment PRs keep open lanes mergeable because each PR adds its own file; `python3 tools/changelog_fold.py` folds all fragments under `## Unreleased` newest first, then deletes only fragments whose entry lines were folded. Fragments must be direct children (no nested paths); README.md is excluded. Uncommitted fragments sort newest by mtime with filename ties, before committed fragments ordered by first-commit date. Empty or heading-only fragments remain in place and are reported; `--check` writes nothing and exits 1 while fragments remain. An empty fragment or deleting the changelog or editing whitespace does not count. A non-doc change may waive this only when every commit that touches non-doc paths carries its own `Changelog: skip (<reason>)` line in its trailer block (last paragraph; merge commits do not count), with a non-empty reason (for typos or format-only edits). Furthermore, repository documentation mappings in `.docs-map` pair path globs with their corresponding doc files; changes touching a mapped path must update at least one of its listed docs. Globs: `*` stays inside one path segment, `**` spans segments; the `# enforce-after:` date is the first day the mapping is an error (earlier days warn). `python3 tools/check_changelog_docs.py` (range `merge-base(base, --head)..head`) verifies this in CI and runs with `--warn-only` on each pushed sha in the pre-push hook.
+Every PR records its changelog only in `changelog.d/<ITEM-KEY>.md` (several parts of one item: `<ITEM-KEY>-<n>.md`). Add a non-heading entry line against the merge-base; fragments must be direct children and README.md is excluded. Do not edit `CHANGELOG.md` in an ordinary PR, including doc-only edits, deletions or edits later reverted in the range. The gate checks each commit; merges may inherit parent ledger edits, but must preserve additions and cannot invent ledger lines or discard common base lines (unless a parent already deleted them) without a release trailer. A release commit is recognized only by a nonempty `Release: <version or release description>` trailer in its final trailer paragraph (case-insensitive); body prose and empty trailers do not qualify. Release maintainers run `python3 tools/changelog_fold.py`, then commit the folded changelog and fragment deletions with that trailer. `--check` writes nothing and exits 1 while fragments remain; empty and heading-only fragments remain with a warning. A release trailer permits the CHANGELOG edit but does not waive the fragment requirement for code changes. Non-doc changes may instead carry `Changelog: skip (<reason>)` on every non-doc commit, with a nonempty reason for typos or format-only edits; merge commits do not count. Neither skip trailers nor fragments excuse a non-release CHANGELOG edit. Furthermore, repository documentation mappings in `.docs-map` pair path globs with their corresponding doc files; changes touching a mapped path must update at least one of its listed docs. Globs: `*` stays inside one path segment, `**` spans segments; the `# enforce-after:` date is the first day the mapping is an error (earlier days warn). `python3 tools/check_changelog_docs.py` (range `merge-base(base, --head)..head`) verifies this in CI and runs with `--warn-only` on each pushed sha in the pre-push hook.
 
 `tests/fixtures/writer_docs_map.json` is the shared glob/parser case table for Rust writer finalization and `test_writer_docs_map_shared_parity` in `tests/test_check_changelog_docs.py`; run the latter with `python3 -m pytest -q -n 2 tests/test_check_changelog_docs.py`. Rust reads the head map; CI additionally retains merge-base rules (see [writer finalization](docs/SPAWNER.md#writer-result-finalization)).
 
@@ -370,16 +375,7 @@ admission and catalog filtering; AGY capability/witness activation requires evid
 
 The 800-line tracked file budget is authorized by D-5840 (95a9ac34); legacy baseline ratchets still apply.
 
-Checkpoint 5 includes test worktree registry and caller snapshots; run its affected Python checks in an isolated clone.
-
-Checkpoint 14 covers remaining policy and sensitivity contracts. The sensitivity sweep
-uses synthetic leg state and checks all five stability seeds independently; run
-`python3 -m pytest -q -p no:cacheprovider tests/test_spawner_docs_contract.py`
-to verify reproducibility and CLI serialization.
-
-Checkpoint 7 includes review evidence records; run its affected Python checks in an isolated clone.
-Python sessions compare only registrations pointing under their temporary test root, so other sessions may move worktrees concurrently; shared and per-worktree config bytes remain guarded. Worktree tests must create their repositories inside temporary roots; the guard reads metadata directly and never runs Git on the real checkout.
-Checkpoint 13 includes routing and provider contracts; run its affected Python checks in an isolated clone.
+[Per-item checkpoint and status notes](docs/checkpoints/). Add new notes there, one file per item, rather than appending here.
 
 Standalone Rust workspaces, including rust/worker, receive manifest-specific preflight checks.
 Preflight selects changed crates and their transitive path dependents across workspaces;
@@ -391,3 +387,11 @@ configuration is supplied; explicit jail settings are preserved and other check 
 Rust test builds, including nested admission checks and Python placement fixtures, inherit `CARGO_TARGET_DIR`; keep the host shared target when it is configured.
 
 Local worker preflight runs library and binary unit tests offline. CI runs the full worker suite, including Temporal-dependent integrations, through `ci-temporal`.
+
+Review prompt builders use `src/plangraph/review/review_brief.md` through
+`plangraph.review.prompt.render_brief`. Supply item context explicitly (the judge
+CLI accepts `--context` JSON); missing fields remain visible as unavailable.
+Fixed brief rules and output contracts precede `=== ITEM CONTEXT`; item-specific
+content follows it so different items reuse the same prompt cache prefix.
+
+Append-only ledger paths are declared once using `merge=union` in the root `.gitattributes` (currently the historical `CHANGELOG.md` ledger, retained for historical merges and releases; current PRs still need fragments). `tools/merge_batch.py build` reads these defaults from the fetched base and persists them for continue/recovery; `--union GLOB` adds extra paths. Union can preserve both old and reworded entries, so review its warnings. Do not apply union to reference docs: edit substantive documentation in place, and put checkpoint/status records in `docs/checkpoints/<ITEM>.md` without updating a central list. See the [append audit](docs/checkpoints/LE-APPEND-ONLY-DOCS-CONFLICT.md).

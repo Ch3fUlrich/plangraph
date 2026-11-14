@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -24,8 +25,31 @@ def default_worktree(name):
     return main.parent / f"{main.name}-worktrees" / f"batch-{name}"
 
 
+def default_union(base):
+    """Root .gitattributes at the fetched base is the single ledger policy source.
+
+    Preserve quoted patterns when copying them into the batch attributes file.
+    Persist the result in state so crash recovery uses the same policy.
+    """
+    listed = git("ls-tree", "--name-only", base, "--", ".gitattributes").stdout
+    if not listed.strip():
+        return []
+    patterns = []
+    for line in git("show", f"{base}:.gitattributes").stdout.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        fields = shlex.split(line, comments=False, posix=False)
+        if not fields or fields[0].startswith("[attr]"):
+            continue
+        merge = next((a for a in reversed(fields[1:])
+                      if a in ("merge", "-merge", "!merge") or a.startswith("merge=")), None)
+        if merge == "merge=union":
+            patterns.append(fields[0])
+    return patterns
+
+
 def attrs_args(st):
-    """git -c args that merge the --union paths line by line (an append-only ledger such as
+    """git -c args for the saved .gitattributes defaults plus explicit --union paths (an append-only ledger such as
     CHANGELOG.md conflicts in every pair of PRs that each add a line at the same spot)."""
     if not st.get("union"):
         return []
@@ -258,7 +282,7 @@ def cmd_build(args):
           "base_head": git("rev-parse", f"{REMOTE}/{base}").stdout.strip(),
           "plan": args.plan, "deviations": args.deviations,
           "status": "creating", "created": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-          "skip_conflicts": bool(args.skip_conflicts), "union": list(args.union), "pending": order,
+          "skip_conflicts": bool(args.skip_conflicts), "union": list(dict.fromkeys(default_union(f"{REMOTE}/{base}") + list(args.union))), "pending": order,
           "current": None, "merging": None, "merged": [], "skipped": [], "forced": forced, "head": None, "pr": None,
           "url": None, "prs": {str(n): {k: infos[n][k] for k in ("title", "head", "ref", "base")} for n in order}}
     save_state(st)  # before the worktree exists: a crash during `worktree add` leaves a state that abort cleans up

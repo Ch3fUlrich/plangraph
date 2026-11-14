@@ -33,6 +33,7 @@ class SeatSpec:
     title: str | None = None
     limit: int = 60_000
     diff: str | None = None  # when set, split by module instead of `files`
+    context: dict | None = None
 
 
 @dataclass
@@ -168,10 +169,11 @@ def run_seat(spec: SeatSpec, *, gateway_call=gateway.call,
     """
     first = family.pick_legs(spec.writer_family, need=spec.need,
                              down=spec.down, fleet_busy=spec.fleet_busy)
+    context = dict(spec.context or {}, item_key=spec.key)
     if spec.diff is not None:
-        prompts = prompt.assemble_diff(spec.vectors, spec.diff, spec.limit)
+        prompts = prompt.assemble_diff(spec.vectors, spec.diff, spec.limit, context=context)
     else:
-        prompts = prompt.assemble_all(spec.vectors, spec.files, spec.limit)
+        prompts = prompt.assemble_all(spec.vectors, spec.files, spec.limit, context=context)
     calls = {"gateway": gateway_call, "qoder": qoder_run,
              "opencode": opencode_run}
     down = set(spec.down)

@@ -47,7 +47,7 @@ def test_every_non_doc_commit_skipping_is_ok(test_repo):
 def test_changelog_entry_in_range_covers_commits_without_skip(test_repo):
     repo, base = test_repo
     commit_files(repo, {"src/a.py": "a = 1\n"}, "add a")
-    commit_files(repo, {"CHANGELOG.md": "## Unreleased\n- add a\n"}, "changelog")
+    commit_files(repo, {"changelog.d/TEST.md": "- add a\n"}, "changelog")
     res = run_check(repo, base)
     assert res.returncode == 0, res.stdout
     assert "changelog yes" in res.stdout
@@ -102,7 +102,7 @@ def test_whitespace_only_or_outside_unreleased_changelog_edit_fails(test_repo, c
     commit_files(repo, {"src/a.py": "a = 1\n", "CHANGELOG.md": changelog}, "edit")
     res = run_check(repo, base2)
     assert res.returncode == 1, res.stdout
-    assert "changelog no" in res.stdout
+    assert "outside a release" in res.stdout
 
 
 def test_deleting_changelog_does_not_satisfy_the_rule(test_repo):
@@ -118,7 +118,7 @@ def test_deleting_changelog_does_not_satisfy_the_rule(test_repo):
 def test_double_star_matches_nested_paths(test_repo):
     repo, _ = test_repo
     base2 = docs_map_repo(repo, "src/foo/** -> docs/FOO.md")
-    commit_files(repo, {"src/foo/a/b/c.py": "x = 1\n", "CHANGELOG.md": "## Unreleased\n- x\n"}, "nested")
+    commit_files(repo, {"src/foo/a/b/c.py": "x = 1\n", "changelog.d/TEST.md": "- x\n"}, "nested")
     res = run_check(repo, base2, "--today", "2026-11-08")
     assert res.returncode == 1, res.stdout
     assert "docs-map 0 warning(s)/1 error(s)" in res.stdout
@@ -127,7 +127,7 @@ def test_double_star_matches_nested_paths(test_repo):
 def test_single_star_does_not_cross_a_slash(test_repo):
     repo, _ = test_repo
     base2 = docs_map_repo(repo, "lib/*.py -> docs/LIB.md")
-    commit_files(repo, {"lib/sub/x.py": "x = 1\n", "CHANGELOG.md": "## Unreleased\n- x\n"}, "nested")
+    commit_files(repo, {"lib/sub/x.py": "x = 1\n", "changelog.d/TEST.md": "- x\n"}, "nested")
     res = run_check(repo, base2, "--today", "2026-11-08")
     assert res.returncode == 0, res.stdout
     assert "docs-map 0 warning(s)/0 error(s)" in res.stdout
@@ -139,7 +139,7 @@ def test_single_star_does_not_cross_a_slash(test_repo):
 def test_enforcement_boundary_day_before_warns_and_the_day_enforces(test_repo):
     repo, _ = test_repo
     base2 = docs_map_repo(repo, "src/foo/** -> docs/FOO.md")
-    commit_files(repo, {"src/foo/a.py": "x = 1\n", "CHANGELOG.md": "## Unreleased\n- x\n"}, "foo")
+    commit_files(repo, {"src/foo/a.py": "x = 1\n", "changelog.d/TEST.md": "- x\n"}, "foo")
     before = run_check(repo, base2, "--today", "2026-11-07")
     assert before.returncode == 0 and "docs-map 1 warning(s)/0 error(s)" in before.stdout
     on = run_check(repo, base2, "--today", "2026-11-08")
@@ -186,7 +186,7 @@ TODAY = ("--today", "2026-11-09")
 
 
 def _foo_change(repo):
-    commit_files(repo, {"src/foo/a.py": "x = 1\n", "CHANGELOG.md": "## Unreleased\n- x\n"}, "foo")
+    commit_files(repo, {"src/foo/a.py": "x = 1\n", "changelog.d/TEST.md": "- x\n"}, "foo")
 
 
 def test_range_deleting_docs_map_still_enforces_the_base_rules(test_repo):
@@ -235,7 +235,7 @@ def test_range_adding_a_rule_enforces_it(test_repo):
     commit_files(
         repo,
         {".docs-map": f"# enforce-after: 2026-11-08\n{RULE}\n", "src/foo/a.py": "x = 1\n",
-         "CHANGELOG.md": "## Unreleased\n- x\n"},
+         "changelog.d/TEST.md": "- x\n"},
         "add rule and touch it",
     )
     res = run_check(repo, base, *TODAY)
@@ -249,7 +249,7 @@ def test_range_adding_a_second_rule_keeps_base_rule_and_enforces_new_one(test_re
     commit_files(
         repo, {".docs-map": f"# enforce-after: 2026-11-08\n{RULE}\nlib/** -> docs/LIB.md\n"}, "add rule"
     )
-    commit_files(repo, {"lib/y.py": "y = 1\n", "CHANGELOG.md": "## Unreleased\n- y\n"}, "lib")
+    commit_files(repo, {"lib/y.py": "y = 1\n", "changelog.d/TEST.md": "- y\n"}, "lib")
     res = run_check(repo, base2, *TODAY)
     assert res.returncode == 1, res.stdout
     assert "docs-map 0 warning(s)/1 error(s)" in res.stdout
@@ -349,3 +349,72 @@ def test_git_failure_reading_docs_map_fails(test_repo, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert code == 1
     assert "injected failure" in out and ".docs-map at merge-base" in out
+
+
+@pytest.mark.parametrize("message,allowed", [
+    ("docs edit", False),
+    ("release\n\nRelease: 1.2.3", True),
+    ("release\n\nrelease: maintenance fold", True),
+    ("release\n\nRelease:", False),
+    ("release\n\nRelease: 1.2.3\n\nBody prose follows.", False),
+    ("docs edit\n\nChangelog: skip (docs)", False),
+])
+def test_direct_changelog_edit_requires_release_trailer(test_repo, message, allowed):
+    repo, base = test_repo
+    commit_raw(repo, {"CHANGELOG.md": "## Unreleased\n- direct edit\n",
+                      "changelog.d/TEST.md": "- fragment does not excuse direct edit\n"}, message)
+    result = run_check(repo, base)
+    assert result.returncode == (0 if allowed else 1), result.stdout
+    if not allowed:
+        assert "outside a release" in result.stdout
+
+
+def test_later_release_does_not_excuse_earlier_direct_edit(test_repo):
+    repo, base = test_repo
+    bad = commit_files(repo, {"CHANGELOG.md": "- ordinary PR edit\n"}, "bad edit")
+    commit_files(repo, {"CHANGELOG.md": "- folded release\n"}, "release", trailers=["Release: 1.0"])
+    result = run_check(repo, base)
+    assert result.returncode == 1 and bad[:8] in result.stdout
+
+
+def test_merge_resolution_cannot_bypass_release_rule(test_repo):
+    repo, base = test_repo
+    git(repo, "checkout", "-b", "feature")
+    commit_files(repo, {"docs/a.md": "a\n"}, "feature docs")
+    git(repo, "checkout", "main")
+    commit_files(repo, {"docs/b.md": "b\n"}, "main docs")
+    assert git(repo, "merge", "--no-ff", "--no-commit", "feature").returncode == 0
+    commit_files(repo, {"CHANGELOG.md": "- sneaked into merge\n"}, "merge docs")
+    result = run_check(repo, base)
+    assert result.returncode == 1 and "outside a release" in result.stdout
+
+
+@pytest.mark.parametrize("resolution,release,passes", [
+    ("preserve", False, True), ("ours", False, False),
+    ("theirs", False, False), ("drop_common", False, False),
+    ("invent", False, False), ("ours", True, True),
+])
+def test_merge_inherits_release_lines_but_cannot_discard_them(test_repo, resolution, release, passes):
+    repo, _ = test_repo
+    ledger = "## Unreleased\n- existing\n"
+    base = commit_files(repo, {"CHANGELOG.md": ledger, ".gitattributes": "CHANGELOG.md merge=union\n"},
+                        "seed", trailers=["Release: seed"])
+    git(repo, "checkout", "-b", "feature", base)
+    commit_files(repo, {"CHANGELOG.md": ledger + "- feature\n"}, "feature release", ["Release: 1.0"])
+    git(repo, "checkout", "main")
+    commit_files(repo, {"CHANGELOG.md": ledger + "- main\n"}, "main release", ["Release: 2.0"])
+    assert git(repo, "merge", "--no-ff", "--no-commit", "feature").returncode == 0
+    merged = (repo / "CHANGELOG.md").read_text()
+    assert "- main\n" in merged and "- feature\n" in merged
+    if resolution in ("ours", "theirs"):
+        git(repo, "checkout", "HEAD" if resolution == "ours" else "feature", "--", "CHANGELOG.md")
+    elif resolution == "drop_common":
+        (repo / "CHANGELOG.md").write_text(merged.replace("- existing\n", ""))
+    elif resolution == "invent":
+        (repo / "CHANGELOG.md").write_text(merged + "- invented\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "merge releases" + ("\n\nRelease: 3.0" if release else ""))
+    result = run_check(repo, base)
+    assert result.returncode == (0 if passes else 1), result.stdout
+    if not passes:
+        assert "outside a release" in result.stdout
