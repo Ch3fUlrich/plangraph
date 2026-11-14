@@ -49,11 +49,11 @@ _keeper_unconfigured_last_warned = None
 from .env_redact import first_reason, redact, redact_output, _redact_prompt
 from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, refusal_record, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
+from . import opencode_isolation as _opencode_isolation
 from .opencode_isolation import (
     _DENIED_TOOLS,
     _REVIEW_OPENCODE_ENV_ALLOW,
     _opencode_managed_dir,
-    _opencode_tools_denied as _isolation_tools_denied,
 )
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
@@ -136,11 +136,10 @@ class JobInfo:
         return mismatch_flag(asdict(self))
 
 
-# Preserve the runner-managed directory override used by existing callers and tests.
-
-
 def _opencode_tools_denied(config_json, env) -> bool:
-    return _isolation_tools_denied(config_json, env, managed_dir=_opencode_managed_dir)
+    return _opencode_isolation._opencode_tools_denied(config_json, env,
+        managed_dir=_opencode_managed_dir, denied_tools=_DENIED_TOOLS,
+        env_allow=_REVIEW_OPENCODE_ENV_ALLOW)
 
 
 class NonceCapacity(RuntimeError):
