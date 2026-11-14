@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .clients import effective_gateway_base_url
-from .opencode_render import gateway_management_base_url
+from .opencode_render import gateway_management_base_url, valid_gateway_endpoint
 from .host_keys import _gateway_key
 from .liveness import unavailable
 from .omniroute_state import _default_fetch
@@ -100,7 +100,10 @@ def fetch_snapshot_rows(env=None, *, fetch=None):
                 db.close()
         except Exception:
             raise LookupError('quota snapshots unreadable') from None
-    base = gateway_management_base_url(effective_gateway_base_url(source) or '')
+    endpoint = effective_gateway_base_url(source) or ''
+    if not valid_gateway_endpoint(endpoint):
+        raise LookupError('gateway not configured')
+    base = gateway_management_base_url(endpoint)
     try:
         key = _gateway_key(source)
     except (Exception, SystemExit):

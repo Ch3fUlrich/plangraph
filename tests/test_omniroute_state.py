@@ -139,8 +139,8 @@ def test_from_env_injected_resolution():
     with pytest.raises(OmniRouteUnreachable, match="no_endpoint"):
         reader.snapshot()
     assert not calls
-    reader = from_env({"OMNIROUTE_BASE_URL": "injected-endpoint/v1"},
+    reader = from_env({"OMNIROUTE_BASE_URL": "https://gw.example/v1"},
                       key_resolver=resolve, fetch=lambda *a: pytest.fail("fetch"))
-    assert reader.base_url == "injected-endpoint"
+    assert reader.base_url == "https://gw.example"
     with pytest.raises(OmniRouteUnreachable, match="no_key"):
         reader.snapshot()
