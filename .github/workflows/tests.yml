@@ -96,12 +96,12 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        shard: [0, 1, 2]
+        shard: ${{ fromJSON(vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '[0,1,2,3]' || '[0,1,2]') }}
     env:
-      PYTEST_SHARD: ${{ matrix.shard }}/3
+      PYTEST_SHARD: ${{ matrix.shard }}/${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 4 || 3 }}
     needs: select
     if: needs.select.outputs.pytest == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -320,7 +320,7 @@ jobs:
   rust:
     needs: select
     if: needs.select.outputs.rust == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
     defaults:
       run:
         working-directory: rust
@@ -356,7 +356,7 @@ jobs:
   rust-windows:
     needs: select
     if: needs.select.outputs.rust == 'true'
-    runs-on: windows-latest
+    runs-on: ${{ vars.CI_SELF_HOSTED_WIN == '1' && vars.CI_WIN_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_WIN_RUNNER_LABELS) || 'windows-latest' }}
     timeout-minutes: 45
     defaults:
       run:
@@ -380,7 +380,7 @@ jobs:
   rust-worker:
     needs: select
     if: needs.select.outputs.rust-worker == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
     timeout-minutes: 45
     defaults:
       run:
@@ -437,7 +437,7 @@ jobs:
   rust-spike:
     needs: select
     if: needs.select.outputs.rust-spike == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4

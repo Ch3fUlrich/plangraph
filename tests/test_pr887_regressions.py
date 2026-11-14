@@ -1,7 +1,9 @@
 """Regression coverage for the first split CI review."""
+import ast
 import importlib
 import json
 import os
+import re
 from pathlib import Path
 import runpy
 import signal
@@ -13,6 +15,71 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+FORK_GUARD = ("(github.event_name != 'pull_request' || "
+              "github.event.pull_request.head.repo.full_name == github.repository)")
+LINUX_CONDITION = ("vars.CI_SELF_HOSTED == '1' && "
+                   "vars.CI_LINUX_RUNNER_LABELS != '' && " + FORK_GUARD)
+WIN_CONDITION = ("vars.CI_SELF_HOSTED_WIN == '1' && "
+                 "vars.CI_WIN_RUNNER_LABELS != '' && " + FORK_GUARD)
+
+
+def test_workstation_runners_require_opt_in_and_trusted_pr_with_hosted_fallback():
+    workflow = yaml.safe_load((ROOT / '.github/workflows/tests.yml').read_text())
+    expected = {'pytest', 'rust', 'rust-worker', 'rust-spike', 'rust-windows'}
+    actual = set()
+    for name, job in workflow['jobs'].items():
+        runner = job['runs-on']
+        if name in expected:
+            actual.add(name)
+            windows = name == 'rust-windows'
+            labels = 'CI_WIN_RUNNER_LABELS' if windows else 'CI_LINUX_RUNNER_LABELS'
+            fallback = 'windows-latest' if windows else 'ubuntu-24.04'
+            condition = WIN_CONDITION if windows else LINUX_CONDITION
+            assert runner == (f"${{{{ {condition} && fromJSON(vars.{labels}) "
+                              f"|| '{fallback}' }}}}"), name
+        else:
+            assert runner == 'ubuntu-24.04', name
+    assert actual == expected
+
+
+def test_workflows_and_tests_keep_runner_labels_in_repository_variables():
+    workflows = list((ROOT / '.github/workflows').glob('*.y*ml'))
+    generic = {'self-hosted', 'linux', 'windows', 'x64'}
+    for path in workflows:
+        for job in yaml.safe_load(path.read_text()).get('jobs', {}).values():
+            runner = job.get('runs-on')
+            if runner is None:
+                continue
+            if isinstance(runner, list):
+                assert set(runner) <= generic, path
+            elif runner.startswith('${{'):
+                windows = 'vars.CI_WIN_RUNNER_LABELS' in runner
+                labels = 'CI_WIN_RUNNER_LABELS' if windows else 'CI_LINUX_RUNNER_LABELS'
+                condition = WIN_CONDITION if windows else LINUX_CONDITION
+                fallback = 'windows-latest' if windows else 'ubuntu-24.04'
+                assert runner == (f"${{{{ {condition} && fromJSON(vars.{labels}) "
+                                  f"|| '{fallback}' }}}}"), path
+            else:
+                assert runner in generic or re.fullmatch(
+                    r'(?:ubuntu|windows|macos)-(?:latest|[0-9.]+)', runner), path
+    # Check embedded label lists without recording any host label in the test.
+    for path in workflows + list((ROOT / 'tests').rglob('*.py')):
+        for match in re.finditer(r"\[[^\]\n]*['\"]self-hosted['\"][^\]\n]*\]",
+                                 path.read_text()):
+            labels = ast.literal_eval(match.group())
+            assert set(labels) <= generic, path
+
+
+def test_workstation_pytest_shard_matrix_matches_count_and_preserves_postgres():
+    jobs = yaml.safe_load((ROOT / '.github/workflows/tests.yml').read_text())['jobs']
+    assert jobs['pytest']['strategy']['matrix']['shard'] == (
+        f"${{{{ fromJSON({LINUX_CONDITION} && '[0,1,2,3]' || '[0,1,2]') }}}}")
+    assert jobs['pytest']['env']['PYTEST_SHARD'] == (
+        '${{ matrix.shard }}/' + f'${{{{ {LINUX_CONDITION} && 4 || 3 }}}}')
+    assert jobs['pytest-postgres']['strategy']['matrix']['shard'] == [0, 1, 2]
+    assert jobs['pytest-postgres']['env']['PYTEST_SHARD'] == '${{ matrix.shard }}/3'
 
 
 @pytest.mark.parametrize('job', ['pytest', 'pytest-postgres'])

@@ -375,7 +375,7 @@ def test_ci_scrub_job_yaml_parses_and_calls_the_scrub():
     cmds = [s["run"] for s in scrub[0]["steps"] if "scrub_check.py" in (s.get("run") or "")]
     assert "--words" not in cmds[0], "CI runs public patterns only, no words list"
     assert "--rules" in cmds[0]
-    assert scrub[0]["runs-on"] == jobs["pytest"]["runs-on"]
+    assert scrub[0]["runs-on"] == "ubuntu-24.04"
 
 
 def test_prepush_runs_changelog_docs_warn_only(repo):
