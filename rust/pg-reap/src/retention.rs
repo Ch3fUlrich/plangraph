@@ -168,6 +168,12 @@ pub fn execute(request: &Request) -> std::io::Result<Action> {
         request.live_claim,
         dirty,
     );
+    if action != Action::Retain
+        && exists
+        && crate::process_use::tree_in_use(std::path::Path::new("/proc"), &path)?
+    {
+        return Err(io::Error::other("worktree_in_use_by_process"));
+    }
     match action {
         Action::Retain => return Ok(action),
         Action::BackupRequired => {
@@ -211,6 +217,17 @@ pub fn execute(request: &Request) -> std::io::Result<Action> {
         request.live_claim,
         false,
     );
+    if action == Action::RemoveAndDeleteBranch {
+        let remote = git(&[
+            "for-each-ref",
+            "--format=%(refname)",
+            &format!("--contains={head}"),
+            "refs/remotes/",
+        ])?;
+        if remote.iter().all(u8::is_ascii_whitespace) {
+            return Err(io::Error::other("worktree_unpushed_commits"));
+        }
+    }
     if action == Action::PushAndRetain {
         git(&["push", "origin", &format!("{branch_ref}:{branch_ref}")])?;
     }
@@ -220,6 +237,9 @@ pub fn execute(request: &Request) -> std::io::Result<Action> {
         return Err(refuse());
     }
     if exists {
+        if crate::process_use::tree_in_use(std::path::Path::new("/proc"), &path)? {
+            return Err(io::Error::other("worktree_in_use_by_process"));
+        }
         git(&["worktree", "remove", "--force", path_text])?;
     }
     if action == Action::RemoveAndDeleteBranch {

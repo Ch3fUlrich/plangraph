@@ -132,3 +132,127 @@ fn executes_outcomes_and_backs_up_dirty_attempts() {
         }
     }
 }
+
+fn attempt(
+    outcome: pg_reap::retention::Outcome,
+) -> (tempfile::TempDir, pg_reap::retention::Request) {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let repo = root.join("repo");
+    let remote = root.join("origin.git");
+    fs::create_dir(&repo).unwrap();
+    fs::create_dir(&remote).unwrap();
+    git(root, &remote, &["init", "--bare", "--initial-branch=main"]);
+    git(root, &repo, &["init", "--initial-branch=main"]);
+    git(root, &repo, &["commit", "--allow-empty", "-m", "base"]);
+    git(
+        root,
+        &repo,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(root, &repo, &["push", "origin", "main"]);
+    let host = root.join("attempts");
+    fs::create_dir(&host).unwrap();
+    let path = host.join("attempt-review");
+    git(
+        root,
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "lane/review",
+            path.to_str().unwrap(),
+        ],
+    );
+    (
+        temp,
+        pg_reap::retention::Request {
+            repo,
+            root: host,
+            path,
+            branch: "lane/review".into(),
+            outcome,
+            age_seconds: 14 * 86400,
+            open_pr: false,
+            live_claim: false,
+        },
+    )
+}
+
+#[test]
+fn expired_unpushed_commit_is_refused_but_pushed_tip_can_be_deleted() {
+    use pg_reap::retention::{execute, Action, Outcome};
+    for outcome in [Outcome::Failed, Outcome::Cancelled] {
+        let (temp, req) = attempt(outcome);
+        git(
+            temp.path(),
+            &req.path,
+            &["commit", "--allow-empty", "-m", "unpublished"],
+        );
+        let tip = git(temp.path(), &req.repo, &["rev-parse", "lane/review"]);
+        let error = execute(&req).expect_err("unpublished tip must survive expiry");
+        assert!(error.to_string().contains("unpushed"));
+        assert!(req.path.exists());
+        assert_eq!(
+            git(temp.path(), &req.repo, &["rev-parse", "lane/review"]),
+            tip
+        );
+        git(temp.path(), &req.repo, &["push", "origin", "lane/review"]);
+        assert_eq!(execute(&req).unwrap(), Action::RemoveAndDeleteBranch);
+        assert!(!req.path.exists());
+        assert_eq!(
+            git(
+                temp.path(),
+                &temp.path().join("origin.git"),
+                &["rev-parse", "lane/review"]
+            ),
+            tip
+        );
+    }
+}
+
+#[test]
+fn live_child_in_nested_cwd_refuses_terminal_cleanup() {
+    use pg_reap::retention::{execute, Outcome};
+    let (_temp, req) = attempt(Outcome::Failed);
+    let nested = req.path.join("nested");
+    fs::create_dir(&nested).unwrap();
+    let mut child = Command::new("sleep")
+        .arg("30")
+        .current_dir(&nested)
+        .spawn()
+        .unwrap();
+    // spawn() has completed the child's chdir before returning.
+    let result = execute(&req);
+    let alive = child.try_wait().unwrap().is_none();
+    child.kill().ok();
+    child.wait().unwrap();
+    assert!(alive);
+    let error = result.expect_err("live cwd must protect a terminal attempt");
+    assert!(error.to_string().contains("in_use"));
+    assert!(req.path.exists());
+}
+
+#[test]
+fn branch_only_expiry_still_requires_a_published_tip() {
+    use pg_reap::retention::{execute, Action, Outcome};
+    let (temp, mut req) = attempt(Outcome::Failed);
+    git(
+        temp.path(),
+        &req.path,
+        &["commit", "--allow-empty", "-m", "unpublished"],
+    );
+    let tip = git(temp.path(), &req.repo, &["rev-parse", "lane/review"]);
+    req.age_seconds = 1;
+    assert_eq!(execute(&req).unwrap(), Action::RemoveAndKeepBranch);
+    assert!(!req.path.exists());
+    req.age_seconds = 14 * 86400;
+    assert!(execute(&req).unwrap_err().to_string().contains("unpushed"));
+    assert_eq!(
+        git(temp.path(), &req.repo, &["rev-parse", "lane/review"]),
+        tip
+    );
+    git(temp.path(), &req.repo, &["push", "origin", "lane/review"]);
+    assert_eq!(execute(&req).unwrap(), Action::RemoveAndDeleteBranch);
+}

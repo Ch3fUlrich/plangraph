@@ -60,3 +60,12 @@ retain the worktree. Backups are under `root/backups/<attempt>` and never reused
 The caller must quiesce the run and collect fresh PR/claim/age facts; the command
 trusts those explicit facts. Automatic run-end invocation and fleet facts
 collection remain unwired. No deployment has been performed.
+
+Before deleting any expired branch, the executor requires its exact tip to be
+reachable from a remote-tracking ref. An unpushed tip refuses cleanup and keeps
+the branch, including when its worktree was already removed. Backup archives
+are not substitutes for this commit-history witness.
+Terminal outcomes do not prove idleness: immediately before backup and again
+before removal, Linux procfs scans compare process start tokens around cwd reads
+and protect processes anywhere inside the tree. The scan covers procfs-visible
+processes; the worker must have permission to inspect every writer process.
