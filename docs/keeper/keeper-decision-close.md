@@ -57,6 +57,7 @@ token revocation and fold of a passed review. Only the router may call it:
 ```sh
 pg close-merged demo:A D-5504 --family google
 pg close-merged demo:H D-5504 --family google --family deepseek
+pg close-merged demo:H D-5504  # recover seats from cited mirrored review runs
 ```
 
 HTTP `POST /v1/close_merged` and MCP `close_merged` take
@@ -101,3 +102,14 @@ second call on DONE, refuse `bad_state`; all other roles refuse `forbidden`.
 This is not a batch op and changes no `verdict`, `claim`, `evidence`, or `close`
 rule. The Python MCP schema table lives in `mcp_tools.py` so the stdio
 transport stays below its 400-line limit without unrelated formatting churn.
+
+Omit `families` (CLI: omit `--family`) to recover review seats from the
+keeper-owned `spawner_records_dir` mirror. Run ids come from the item's `run_ids`
+or `run-...` citations in the GO cell. Every cited record must exist uniquely
+and bind to this item. Review records must witness a served model, an unpinned,
+single-attempt completed review with integer exit zero, the exact merged head,
+recorded stop/end_turn, `TEST_GAMING: no` and a final passing verdict.
+Implementation records supply no seats. Missing, ambiguous, invalid or
+unwitnessed records refuse `NO-WITNESS <key>` without changing state or events.
+The close rechecks witnesses under its transaction and records the recovered
+run bundle and each family verdict before passing the item atomically.

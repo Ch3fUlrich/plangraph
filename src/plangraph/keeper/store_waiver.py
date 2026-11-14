@@ -40,7 +40,7 @@ def _known_family(value):
 class WaiverMixin:
     """Router decision verbs for reviews: waive a family or close merged work."""
 
-    def close_merged(self, principal, key, decision_id, families):
+    def close_merged(self, principal, key, decision_id, families=None):
         audit_key = key if isinstance(key, str) else None
         return self._run(principal, "close_merged", audit_key,
                          lambda now: self._close_merged(principal, key, decision_id,
@@ -110,7 +110,7 @@ class WaiverMixin:
             raise Refused("evidence_unverified", "go_row_head_mismatch")
         return matched.pop(), result
 
-    def _merged_seats(self, item, families, now):
+    def _merged_seats(self, item, families, now, witnessed=()):
         if not isinstance(families, list):
             raise Refused("validation", "families must be a list")
         seats = []
@@ -143,7 +143,7 @@ class WaiverMixin:
             peer = auth.get_principal(self.conn, name)
             if peer is not None:
                 writers.append(peer.family)
-        recorded_seats = set()
+        recorded_seats = {model_family(s["model"]) for s in witnessed}
         for row in self.conn.execute(
                 "SELECT payload FROM events WHERE key=? AND type='run_recorded'",
                 (item["key"],)):
@@ -165,6 +165,13 @@ class WaiverMixin:
         if not set(seats).issubset(recorded_seats - {None}):
             raise Refused("coverage", "seat_family_not_recorded")
         return seats
+
+    def _merged_backfill(self, item, decision_id, head, now):
+        try:
+            text = self._ctx(item, now).decisions.text(decision_id)
+            return self._adapter("spawner_records").review_seats(item, head, text)
+        except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+            raise Refused("evidence_unverified", f"NO-WITNESS {item['key']}: cited review unavailable or unwitnessed") from None
 
     def _card_requires_non_anthropic_seats(self, item):
         """Shared risk gate for merged closes and high-tier verdicts."""
@@ -193,7 +200,10 @@ class WaiverMixin:
         if not isinstance(decision_id, str) or not re.fullmatch(r"D-[0-9]+", decision_id):
             raise Refused("validation", "decision_id must look like D-NNN")
         head, _ = self._merged_go_proof(item, decision_id, now)
-        seats = self._merged_seats(item, families, now)
+        backfill = families is None
+        witnessed = self._merged_backfill(item, decision_id, head, now) if backfill else []
+        families = list(dict.fromkeys(model_family(s["model"]) for s in witnessed)) if backfill else families
+        seats = self._merged_seats(item, families, now, witnessed)
         with self._write():
             fresh = self._get_or_refuse(key)
             self._merged_review_state(fresh)
@@ -207,7 +217,18 @@ class WaiverMixin:
             current_head, result = self._merged_go_proof(fresh, decision_id, now)
             if current_head != head:
                 raise Refused("conflict", "merged_on_default_changed")
-            seats = self._merged_seats(fresh, seats, now)
+            if backfill:
+                current = self._merged_backfill(fresh, decision_id, head, now)
+                if current != witnessed:
+                    raise Refused("conflict", "review_witness_changed")
+            seats = self._merged_seats(fresh, seats, now, witnessed)
+            if witnessed:
+                self._record_merged_seats(principal, fresh, decision_id, witnessed, now)
+                for family in seats:
+                    self._append(principal, key, "review_verdict", {
+                        "reviewer": principal.name, "family": family, "ok": True,
+                        "epoch": fresh["epoch"], "round": fresh["round"],
+                        "source": "cited-run-backfill"}, now)
             ref = {"id": decision_id, "families": seats,
                    "merged_head": head, "caller": principal.name}
             self._record_evidence(principal, fresh, "decision", ref, now,

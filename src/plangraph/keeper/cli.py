@@ -170,8 +170,8 @@ def _add_writes(sub):
     merged = _p(sub, "close-merged", help="router: close one merged review on a GO decision")
     merged.add_argument("key")
     merged.add_argument("decision_id", metavar="D-NNN")
-    merged.add_argument("--family", dest="families", action="append", required=True,
-                        help="seat family; repeat for high tier (keeper validates)")
+    merged.add_argument("--family", dest="families", action="append",
+                        help="recorded seat family; omit to backfill cited witnessed reviews")
 
     close = _p(sub, "close", help="claimant/router: close tier-none or decision/operator_task items on proof")
     close.add_argument("key")

@@ -98,6 +98,17 @@ def normalise_run(run) -> dict:
 class RunsMixin:
     """The spawner-only ``record_run`` verb."""
 
+    def _record_merged_seats(self, principal, item, decision_id, seats, now):
+        """Mirror a verified historical seat bundle while holding the close lock."""
+        run_id = f"merged-{decision_id}"
+        self._append(principal, item["key"], "run_recorded", {
+            "run_id": run_id, "phase": "finished", "rc": 0, "seats": seats}, now)
+        ids = json.loads(item.get("run_ids") or "[]")
+        ids = list(dict.fromkeys([*ids, run_id, *(s["run_id"] for s in seats)]))
+        models = [{"model": s["model"], "verdict": s["verdict"]} for s in seats]
+        self.conn.execute("UPDATE items SET run_ids=?, seat_models=? WHERE key=?",
+                          (_dump(ids), _dump(models), item["key"]))
+
     def record_run(self, principal, key, run):
         return self._run(principal, "record_run", key,
                          lambda now: self._record_run(principal, key, run, now))

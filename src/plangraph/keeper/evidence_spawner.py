@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import stat
 from contextlib import ExitStack
 from pathlib import Path
@@ -27,6 +28,55 @@ class SpawnerRecordAdapter:
             raise ValueError("record component has wrong file type")
         if not directory and info.st_size > MAX_RECORD_BYTES:
             raise ValueError("record exceeds size limit")
+
+    def review_seats(self, item, head, decision_text):
+        """Read cited mirrored review witnesses, never infer a served model."""
+        from ..review.family import model_family
+        from ..review.verdict import parse_verdict
+        ids = json.loads(item.get("run_ids") or "[]")
+        if not isinstance(ids, list) or any(not isinstance(r, str) for r in ids):
+            raise ValueError("invalid item run citations")
+        ids = set(ids) | set(re.findall(r"(?<![\w-])run-[A-Za-z0-9._-]+", decision_text))
+        if not ids or self.directory is None:
+            raise ValueError("no cited records or record mirror")
+        seats = []
+        for run_id in sorted(ids):
+            if not RunRecordAdapter(None).valid_run_id(run_id):
+                raise ValueError("invalid cited run id")
+            hosts = [p.name for p in self.directory.iterdir()
+                     if (p / run_id).exists()]
+            if len(hosts) != 1:
+                raise ValueError(f"{run_id}: missing or ambiguous record")
+            record = self.record(hosts[0], run_id)
+            if (record.get("run_id") != run_id or record.get("host") != hosts[0]
+                    or record.get("item_key") != item["key"]):
+                raise ValueError(f"{run_id}: record identity mismatch")
+            if record.get("role") != "review":
+                continue  # implementation runs are not review witnesses
+            model = record.get("served_model")
+            family = model_family(model) if isinstance(model, str) else None
+            completion = record.get("completion")
+            attempts = record.get("attempts")
+            text = record.get("stdout_tail")
+            finish = record.get("finish_reason") or (
+                completion.get("finish_reason") if isinstance(completion, dict) else None)
+            pinned = any(isinstance(part, dict) and any(
+                k in part and part[k] is not False for k in ("pin", "pinned", "spawn_pin"))
+                for part in (record, record.get("plan"), record.get("chosen_leg")))
+            if (not family or model == "unwitnessed" or pinned or record.get("override_reason")
+                    or record.get("status") != "completed"
+                    or type(record.get("exit_code")) is not int or record["exit_code"] != 0
+                    or not isinstance(completion, dict) or completion.get("head_sha") != head
+                    or finish not in ("stop", "end_turn")
+                    or not isinstance(attempts, list) or len(attempts) != 1
+                    or not isinstance(text, str) or parse_verdict(text) != "pass"
+                    or not re.search(r"(?im)^TEST[_-]GAMING:\s*no\s*$", text)
+                    or record.get("served_family", family) != family):
+                raise ValueError(f"{run_id}: review is not a passing witnessed seat")
+            seats.append({"model": model, "verdict": "pass", "run_id": run_id})
+        if not seats:
+            raise ValueError("no cited review witnesses")
+        return seats
 
     def record(self, host, run_id):
         if self.directory is None:

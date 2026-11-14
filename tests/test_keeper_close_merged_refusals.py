@@ -135,10 +135,15 @@ def test_unrelated_hex_in_decision_cell_cannot_bind_head(w):
 def test_router_http_malformed_body_is_audited_refusal(w, doors, body):
     before = _counts(w)
     status, response = doors.http("router", "POST", "/v1/close_merged", body)
-    assert status == 400 and response["error"] == "validation"
+    automatic = body.get("key") == KEY and body.get("decision_id") == "D-5504" \
+        and body.get("families") is None
+    assert status == 400
+    assert response["error"] == ("evidence_unverified" if automatic else "validation")
+    if automatic:
+        assert "NO-WITNESS" in response["msg"]
     assert _counts(w) == (before[0], before[1], before[2] + 1)
     row = w.conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
-    assert (row["action"], row["ok"], row["code"]) == ("close_merged", 0, "validation")
+    assert (row["action"], row["ok"], row["code"]) == ("close_merged", 0, response["error"])
     assert row["key"] == (body.get("key") if isinstance(body.get("key"), str) else None)
     assert w.store._item(KEY)["state"] == "in_review"
 
