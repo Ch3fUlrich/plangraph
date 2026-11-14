@@ -153,9 +153,9 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False):
                 selected.update(local_control_tests(texts, path))
                 continue
             return fallback("suite configuration")
-        # docs/status trees and root files cannot affect tests; untracked scratch outside the
+        # Most docs/status and root files cannot affect tests; untracked scratch outside the
         # source roots is skipped; tracked files elsewhere map to tests naming them or full suite.
-        if not p.parts or (len(p.parts) == 1 and p.name != "conftest.py"):
+        if not p.parts or (len(p.parts) == 1 and p.name not in {"conftest.py", "rust-toolchain.toml"}):
             continue
         if p.parts[0] not in {"src", "tests", "tools"}:
             if p.name != "conftest.py":

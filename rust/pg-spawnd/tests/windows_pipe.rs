@@ -13,7 +13,18 @@ use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
 };
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
-static PIPE_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+thread_local! {
+    static PIPE_NAMESPACE: tempfile::TempDir = tempfile::Builder::new()
+        .prefix("pg-pipe-").tempdir().unwrap();
+}
+fn namespace() -> String {
+    PIPE_NAMESPACE.with(|dir| dir.path().file_name().unwrap().to_str().unwrap().to_owned())
+}
+fn command() -> std::process::Command {
+    let mut command = std::process::Command::new(bin());
+    command.env("PG_SPAWND_PIPE_NAMESPACE", namespace());
+    command
+}
 // Declared locally: the windows-sys feature that carries it reads as
 // high-entropy to the public-repo scrub (as in worker-core stall/windows.rs).
 #[link(name = "advapi32")]
@@ -35,7 +46,7 @@ fn user_name() -> String {
 }
 
 fn pipe_name() -> String {
-    format!(r"\\.\pipe\plangraph-spawnd-{}", user_name())
+    format!(r"\\.\pipe\plangraph-spawnd-{}-{}", namespace(), user_name())
 }
 
 struct ChildGuard {
@@ -50,7 +61,7 @@ impl Drop for ChildGuard {
 }
 
 fn spawn_serve() -> ChildGuard {
-    let child = std::process::Command::new(bin())
+    let child = command()
         .args(["serve"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -119,7 +130,6 @@ fn initialize(file: &mut std::fs::File) -> serde_json::Value {
 
 #[test]
 fn pipe_name_includes_user_name_and_serves() {
-    let _lock = PIPE_TEST.lock().unwrap_or_else(|e| e.into_inner());
     let name = pipe_name();
     assert!(name.starts_with(r"\\.\pipe\plangraph-spawnd-"), "{name}");
     assert!(name.ends_with(&user_name()), "{name}");
@@ -135,11 +145,10 @@ fn pipe_name_includes_user_name_and_serves() {
 
 #[test]
 fn second_serve_on_live_pipe_exits_two() {
-    let _lock = PIPE_TEST.lock().unwrap_or_else(|e| e.into_inner());
     let name = pipe_name();
     let _guard = spawn_serve();
     let _file = wait_connect(&name);
-    let output = output(std::process::Command::new(bin()).args(["serve"]));
+    let output = output(command().args(["serve"]));
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).expect("utf-8");
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
@@ -147,7 +156,6 @@ fn second_serve_on_live_pipe_exits_two() {
 
 #[test]
 fn pipe_dacl_grants_only_current_user() {
-    let _lock = PIPE_TEST.lock().unwrap_or_else(|e| e.into_inner());
     let name = pipe_name();
     let _guard = spawn_serve();
     let file = wait_connect(&name);
@@ -201,7 +209,6 @@ fn pipe_dacl_grants_only_current_user() {
 
 #[test]
 fn disconnected_pipe_probe_leaves_server_alive() {
-    let _lock = PIPE_TEST.lock().unwrap_or_else(|e| e.into_inner());
     let _guard = spawn_serve();
     let name = pipe_name();
     drop(wait_connect(&name));
@@ -215,7 +222,7 @@ fn disconnected_pipe_probe_leaves_server_alive() {
 #[test]
 fn socket_flag_is_rejected_for_per_user_pipe() {
     for verb in ["serve", "shim"] {
-        let output = output(std::process::Command::new(bin()).args([verb, "--socket", "unused"]));
+        let output = output(command().args([verb, "--socket", "unused"]));
         assert_eq!(output.status.code(), Some(2));
         let error = String::from_utf8(output.stderr).unwrap();
         assert_eq!(error.lines().count(), 1);

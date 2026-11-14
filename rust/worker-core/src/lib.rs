@@ -90,3 +90,7 @@ pub mod fleet_foundation_hysteresis;
 pub mod fleet_foundation_seats;
 #[cfg(test)]
 pub(crate) mod testutil;
+
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod git_test_support;

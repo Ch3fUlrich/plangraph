@@ -1,0 +1,1 @@
+- Run test Python stubs and local subprocesses with the test interpreter; provision SHA-256-pinned gitleaks 8.30.1 for Linux/WSL2 runners with `bash deploy/bootstrap.sh --ci-tools-only`, and name that command when the public PEM gate cannot find gitleaks.
