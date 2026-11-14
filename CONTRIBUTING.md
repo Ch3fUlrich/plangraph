@@ -377,15 +377,6 @@ The 800-line tracked file budget is authorized by D-5840 (95a9ac34); legacy base
 
 [Per-item checkpoint and status notes](docs/checkpoints/). Add new notes there, one file per item, rather than appending here.
 
-Checkpoint 14 covers remaining policy and sensitivity contracts. The sensitivity sweep
-uses synthetic leg state and checks all five stability seeds independently; run
-`python3 -m pytest -q -p no:cacheprovider tests/test_spawner_docs_contract.py`
-to verify reproducibility and CLI serialization.
-
-Checkpoint 7 includes review evidence records; run its affected Python checks in an isolated clone.
-Python sessions compare only registrations pointing under their temporary test root, so other sessions may move worktrees concurrently; shared and per-worktree config bytes remain guarded. Worktree tests must create their repositories inside temporary roots; the guard reads metadata directly and never runs Git on the real checkout.
-Checkpoint 13 includes routing and provider contracts; run its affected Python checks in an isolated clone.
-
 Standalone Rust workspaces, including rust/worker, receive manifest-specific preflight checks.
 Preflight selects changed crates and their transitive path dependents across workspaces;
 the Temporal spike keeps its CI replay-only check and is skipped for unrelated workspace changes.
