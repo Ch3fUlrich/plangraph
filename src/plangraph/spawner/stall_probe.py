@@ -91,62 +91,91 @@ def probe_run(state, record, now, *, dry_run=False, hung=None):
 
 
 class ToolLoop:
-    """Three consecutive tool invocations with identical names and arguments.
+    """Six consecutive completed calls with identical arguments AND results.
 
-    Tool IDs deduplicate streaming updates; only the digest is retained.
-    Text and tool results are never interpreted as invocations.
+    Streaming call IDs deduplicate completions. Pending calls and results retain
+    only digests; id-less lifecycle starts never count as completed invocations.
     """
+    MISSING = object()
+    REPEATS = 6
+
     def __init__(self):
         from collections import deque
-        self.seen = set()
-        self.order = deque()
+        self.seen, self.order, self.pending = set(), deque(), {}
         self.last, self.count = None, 0
 
-    def feed(self, line):
+    def _observe(self, identity, name=None, arguments=MISSING, result=MISSING):
         import hashlib
+        identity = identity if isinstance(identity, str) and identity else None
+        call = self.pending.get(identity)
+        if isinstance(name, str) and name and arguments is not self.MISSING:
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except ValueError:
+                    pass
+            call = hashlib.sha256(json.dumps([name, arguments], sort_keys=True).encode()).digest()
+        if result is self.MISSING:
+            if identity and call:
+                self.pending[identity] = call
+                if len(self.pending) > 1024:
+                    self.pending.pop(next(iter(self.pending)))
+            return False
+        if call is None or identity in self.seen:
+            return False
+        if identity:
+            self.pending.pop(identity, None)
+            self.seen.add(identity)
+            self.order.append(identity)
+            if len(self.order) > 1024:
+                self.seen.remove(self.order.popleft())
+        digest = hashlib.sha256(call + json.dumps(result, sort_keys=True).encode()).digest()
+        self.count = self.count + 1 if digest == self.last else 1
+        self.last = digest
+        return self.count >= self.REPEATS
+
+    def feed(self, line):
         try:
             frame = json.loads(line)
         except (ValueError, TypeError):
             return False
         if not isinstance(frame, dict):
             return False
+        def result(part):
+            for key in ('output', 'result', 'aggregated_output', 'content'):
+                if key in part:
+                    return [part[key], part.get('exit_code'), part.get('is_error')]
+            return self.MISSING
         kind = frame.get('type')
-        calls = []
+        observations = []
         if kind == 'tool_use' and isinstance(frame.get('part'), dict):
             part = frame['part']
             state = part.get('state')
-            if isinstance(state, dict) and 'input' in state:
-                calls = [(part.get('callID'), part.get('tool'), state['input'])]
+            if isinstance(state, dict):
+                observations = [(part.get('callID'), part.get('tool'), state.get('input', self.MISSING),
+                                 result(state) if state.get('status') in ('completed', 'error') else self.MISSING)]
         elif kind in ('tool_call', 'function_call'):
-            calls = [(frame.get('id'), frame.get('name'), frame.get('arguments'))]
-        elif kind == 'assistant' and isinstance(frame.get('message'), dict):
+            observations = [(frame.get('id'), frame.get('name'), frame.get('arguments', self.MISSING), result(frame))]
+        elif kind == 'tool_result':
+            observations = [(frame.get('tool_call_id') or frame.get('call_id') or frame.get('id'),
+                             None, self.MISSING, result(frame))]
+        elif kind in ('assistant', 'user') and isinstance(frame.get('message'), dict):
             content = frame['message'].get('content')
-            calls = [(part.get('id'), part.get('name'), part.get('input'))
-                     for part in content if isinstance(part, dict) and part.get('type') == 'tool_use'] if isinstance(content, list) else []
+            for part in content if isinstance(content, list) else []:
+                if not isinstance(part, dict):
+                    continue
+                if part.get('type') == 'tool_use':
+                    observations.append((part.get('id'), part.get('name'), part.get('input', self.MISSING), self.MISSING))
+                elif part.get('type') == 'tool_result':
+                    observations.append((part.get('tool_use_id'), None, self.MISSING, result(part)))
         elif kind in ('item.started', 'item.completed') and isinstance(frame.get('item'), dict):
             item = frame['item']
-            if item.get('type') in ('tool_call', 'function_call'):
-                calls = [(item.get('id'), item.get('name'), item.get('arguments'))]
-            elif item.get('type') == 'command_execution':
-                calls = [(item.get('id'), 'command_execution', item.get('command'))]
+            if item.get('type') in ('tool_call', 'function_call', 'command_execution'):
+                command = item.get('type') == 'command_execution'
+                observations = [(item.get('id'), 'command_execution' if command else item.get('name'),
+                                 item.get('command' if command else 'arguments', self.MISSING),
+                                 result(item) if kind == 'item.completed' else self.MISSING)]
         found = False
-        for identity, name, arguments in calls:
-            if not isinstance(name, str) or not name:
-                continue
-            if isinstance(identity, str) and identity:
-                if identity in self.seen:
-                    continue
-                self.seen.add(identity)
-                self.order.append(identity)
-                if len(self.order) > 1024:
-                    self.seen.remove(self.order.popleft())
-            if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments)
-                except ValueError:
-                    pass
-            digest = hashlib.sha256(json.dumps([name, arguments], sort_keys=True, separators=(',', ':')).encode()).digest()
-            self.count = self.count + 1 if digest == self.last else 1
-            self.last = digest
-            found |= self.count >= 3
+        for observation in observations:
+            found = self._observe(*observation) or found
         return found
