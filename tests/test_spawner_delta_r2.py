@@ -58,6 +58,7 @@ def test_failed_review_keeps_leg_not_banner(tmp_path, monkeypatch, stopped, stat
         assert record.get('reason') is None
     if not stopped:
         assert record['reason'] == 'Error: transport failed'
+        assert record['attempts'][0]['skip_reason'] == 'Error: transport failed'
     assert 'VERDICT: CHANGES' in record['attempts'][0]['stdout_tail']
 
 

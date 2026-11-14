@@ -28,6 +28,10 @@ def record_steps(job, stdout, stderr, env):
         elif event.get('type') == 'error':
             error = event.get('error')
             if isinstance(error, dict):
+                if isinstance(error.get('message'), str):
+                    from .env_redact import redact_env_values, redact_output
+                    job.events.append(dict(event='opencode_error', message=redact_output(
+                        redact_env_values(error['message'], env))[:1000]))
                 output_limit |= (error.get('type') == 'output-limit' or error.get('code') == 'output-limit'
                     or 'Response still truncated after two output token limit continuations' in str(error.get('message', '')))
     output_limit |= any('output-limit' in normalize(line) or
