@@ -8,6 +8,7 @@ import pytest
 
 from plangraph.fleet_sync import advance
 from plangraph.fleet_sync.__main__ import main
+from plangraph.fleet_sync.drift import keeper_main_pid
 from plangraph.keeper import daemon
 
 
@@ -210,8 +211,8 @@ def test_keeper_unit_pid_uses_existing_service(monkeypatch):
     from plangraph.fleet_sync import drift
 
     def run(argv, **kwargs):
-        assert argv == ['systemctl', '--user', 'show', 'plangraph-keeper.service', '--property=MainPID', '--value']
-        return SimpleNamespace(stdout='123\n')
+        assert argv == ['systemctl', '--user', 'show', 'plangraph-keeper.service', '--property=LoadState', '--property=MainPID']
+        return SimpleNamespace(stdout='LoadState=loaded\nMainPID=123\n', returncode=0)
 
     monkeypatch.setattr(drift.subprocess, 'run', run)
     assert drift.keeper_main_pid('plangraph-keeper.service') == 123
@@ -250,16 +251,72 @@ def test_loaded_state_describes_checkout_provenance(checkout, tmp_path, monkeypa
     assert row['loaded_sha'] == (loaded if kind == 'detached' else None)
 
 
-def test_absent_state_with_unavailable_unit_query_holds(checkout, monkeypatch):
+@pytest.mark.parametrize('case,process_pid,held,cause', [
+    ('missing-systemctl', 0, False, ''),
+    ('not-found', 0, False, ''),
+    ('bus', 0, True, 'bus unreachable'),
+    ('timeout', 0, True, 'timed out'),
+    ('bus', 123, True, 'bus unreachable'),
+    ('not-found', 123, True, 'live keeper'),
+    ('loaded-zero', 123, True, 'live keeper'),
+    ('missing-systemctl', 123, True, 'live keeper'),
+    ('system-pid', 0, True, 'live keeper'),
+])
+def test_absent_state_checks_unit_scopes_and_process(checkout, monkeypatch, case, process_pid, held, cause):
     from plangraph.fleet_sync import drift
 
     repo, state, loaded = checkout
-    target(repo, 'src/plangraph/spawner/unused.py', 'VALUE = 2\n')
+    sha = target(repo, 'src/plangraph/spawner/unused.py', 'VALUE = 2\n')
     state.unlink()
+    monkeypatch.setattr(drift, 'keeper_main_pid', keeper_main_pid)
+    monkeypatch.setattr(drift, 'keeper_process_pid', lambda: process_pid, raising=False)
+    run = drift.subprocess.run
+    scopes = []
 
-    def unavailable(_unit):
-        raise OSError('unit query unavailable')
+    def query(argv, **kwargs):
+        if argv[0] != 'systemctl':
+            return run(argv, **kwargs)
+        scopes.append('--user' in argv)
+        if case == 'missing-systemctl':
+            raise FileNotFoundError('systemctl')
+        if case == 'timeout':
+            raise subprocess.TimeoutExpired(argv, 5)
+        if case == 'bus':
+            return SimpleNamespace(stdout='', stderr='Failed to connect to bus: unavailable', returncode=1)
+        if case == 'system-pid' and '--user' not in argv:
+            return SimpleNamespace(stdout='LoadState=loaded\nMainPID=123\n', stderr='', returncode=0)
+        load = 'loaded' if case == 'loaded-zero' else 'not-found'
+        return SimpleNamespace(stdout=f'LoadState={load}\nMainPID=0\n', stderr='', returncode=0)
 
-    monkeypatch.setattr(drift, 'keeper_main_pid', unavailable)
-    assert advance.main_ff(repo, state, fetch=False)[0] == 3
-    assert git(repo, 'rev-parse', 'HEAD') == loaded
+    monkeypatch.setattr(drift.subprocess, 'run', query)
+    code, line = advance.main_ff(repo, state, fetch=False)
+    assert code == (3 if held else 0)
+    assert git(repo, 'rev-parse', 'HEAD') == (loaded if held else sha)
+    assert cause in line
+    if case in ('not-found', 'loaded-zero', 'system-pid'):
+        assert False in scopes  # The system scope was checked as well.
+
+
+@pytest.mark.parametrize('pid', [0, 123])
+def test_keeper_process_probe_uses_existing_pgrep_pattern(monkeypatch, pid):
+    from plangraph.fleet_sync import drift
+
+    def run(argv, **kwargs):
+        assert argv == ['pgrep', '-f', '--', '[p]langraph[.]keeper[.]daemon']
+        return SimpleNamespace(stdout=f'{pid}\n' if pid else '', returncode=0 if pid else 1)
+
+    monkeypatch.setattr(drift.subprocess, 'run', run)
+    assert drift.keeper_process_pid() == pid
+
+
+@pytest.mark.parametrize('pid', [0, 123])
+def test_keeper_process_probe_without_unix_tools(monkeypatch, pid):
+    from plangraph.fleet_sync import drift
+
+    def run(argv, **kwargs):
+        assert argv[:4] == ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command']
+        assert 'Get-CimInstance Win32_Process' in argv[4]
+        return SimpleNamespace(stdout=f'{pid}\n' if pid else '', returncode=0)
+
+    monkeypatch.setattr(drift.subprocess, 'run', run)
+    assert drift.keeper_process_pid(platform='nt') == pid

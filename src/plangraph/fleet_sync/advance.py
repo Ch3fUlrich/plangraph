@@ -225,6 +225,7 @@ def main_ff(repo, keeper_state, *, fetch=True, keeper_unit='plangraph-keeper.ser
     from plangraph.routing_support.private_io import atomic_write_private
 
     from .drift import (
+        KeeperProbeError,
         keeper_changes,
         keeper_main_pid,
         main_ff_status_path,
@@ -259,6 +260,8 @@ def main_ff(repo, keeper_state, *, fetch=True, keeper_unit='plangraph-keeper.ser
                 if loaded is None and keeper_main_pid(keeper_unit):
                     return f'HELD live keeper has no matching state; restart keeper to bootstrap and verify state path target {target}'
                 changed = keeper_changes(repo, loaded, target) if loaded else []
+            except KeeperProbeError as exc:
+                return f'HELD {exc} target {target}'
             except (OSError, ValueError, SyntaxError, subprocess.SubprocessError):
                 return f'HELD keeper state/import analysis unavailable target {target}'
             if changed:

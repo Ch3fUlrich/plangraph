@@ -35,14 +35,31 @@ The updater rechecks loaded state and the changed-file closure immediately befor
 must use this guarded command: an independent manual `git pull` does not take its
 lock or run its checks. It cannot serialize an arbitrary Git writer.
 
-An absent/stale state file now also checks the existing user unit's `MainPID`
-(`plangraph-keeper.service`, override with `--keeper-unit`). A live unit with no
-matching state holds with a bootstrap/path diagnostic. A failed unit query also
-holds; only a confirmed zero PID permits an absent state. After deploying this
-writer, restart the keeper once, then verify the updater's state path is the
-configured DB filename plus `.loaded.json` before enabling the timer. This covers
-older running keepers and accidentally pointing the updater at a different DB.
-Units with a custom name must configure the same `--keeper-unit` in the template.
+An absent/stale state file checks both user and system scopes of the existing
+keeper unit (`plangraph-keeper.service`, override with `--keeper-unit`), reading
+`LoadState` and `MainPID`. Missing `systemctl` or `LoadState=not-found` is a missing
+unit, not an unreadable installed unit. When no unit PID is found, independently
+look for the keeper daemon using the existing pgrep approach (Windows uses a
+Python-process command-line query through PowerShell/CIM). Thus a standalone
+keeper or one outside the queried unit scope still holds without matching state.
+A host with no unit and no keeper process may fast-forward normally.
+
+An inconclusive unit query holds and names its cause: bus unreachable, timed out,
+query failed, or unreadable unit state. A missing/unreadable process-query tool or
+a failed process query also holds with a fixed diagnostic. Tool stderr, command
+lines and config values are not copied into logs. A live unit/process without
+matching state holds with a bootstrap/path diagnostic. After deployment, restart
+the keeper once, then verify the updater's state path is the configured DB filename
+plus `.loaded.json` before enabling the timer. This covers older running keepers
+and accidentally pointing the updater at a different DB. Custom unit names must
+set the same `--keeper-unit` in the template.
+
+The startup flock is still not shared with the daemon. Keeper modules are loaded
+at daemon module import time, before `main()`/`run()` or state publication. A lock
+around `write_loaded_state()` would falsely imply those imports were protected.
+Protecting them requires a pre-import bootstrap/launcher for CLI and embedded
+entry points; that is deferred from this narrow review round. The immediate
+pre-merge recheck remains, with a residual race after that check.
 
 Loaded state includes `loaded_branch` (null for detached HEAD) and `dirty`.
 A clean detached checkout has an exact SHA and can be compared normally. Tracked

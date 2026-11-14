@@ -133,8 +133,9 @@ were absent from this checkout; this command and the existing fleet drift
 surface provide the in-repository implementation and status integration.
 
 The main-ff guard now rechecks keeper state immediately before merging. Missing
-state permits a move only when the configured keeper unit reports MainPID zero;
-a running unit without state holds with a one-time restart/path diagnostic, and
-unit-query failures hold too. `--keeper-unit` defaults to the repository's existing
+state permits a move when no keeper unit/process is present. Both user and system
+unit scopes and standalone keeper processes are checked; a running keeper without
+state holds with a restart/path diagnostic. Bus/timeouts and inconclusive probes
+hold with a named cause, while missing systemctl/not-found units alone do not. `--keeper-unit` defaults to the repository's existing
 `plangraph-keeper.service`. See the keeper state contract for bootstrap, dirty or
 non-Git provenance, exact runtime data dependencies, and manual-update limits.

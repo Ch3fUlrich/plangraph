@@ -147,13 +147,68 @@ def running_keeper(path):
     return sha
 
 
+class KeeperProbeError(RuntimeError):
+    """Fixed public diagnostics for inconclusive keeper liveness checks."""
+
+
+def keeper_process_pid(*, platform=None):
+    """Use the repository's pgrep approach independently of unit ownership."""
+    if (platform or os.name) == 'nt':
+        command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                   ("Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^python.*' "
+                   "-and $_.CommandLine -match 'plangraph[.]keeper[.]daemon' } | "
+                   'Select-Object -ExpandProperty ProcessId')]
+    else:
+        command = ['pgrep', '-f', '--', '[p]langraph[.]keeper[.]daemon']
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=5)
+        if result.returncode not in (0, 1) or (command[0] == 'powershell.exe' and result.returncode):
+            raise KeeperProbeError('keeper process query failed')
+        pids = [int(value) for value in result.stdout.split()]
+        if any(pid <= 0 for pid in pids):
+            raise ValueError('invalid PID')
+        return next(iter(pids), 0)
+    except subprocess.TimeoutExpired:
+        raise KeeperProbeError('keeper process query timed out') from None
+    except (OSError, ValueError):
+        raise KeeperProbeError('keeper process query unavailable') from None
+
+
 def keeper_main_pid(unit):
-    """Use the existing daemon unit to catch pre-bootstrap/mispointed state."""
-    result = subprocess.run(['systemctl', '--user', 'show', unit, '--property=MainPID', '--value'],
-                            capture_output=True, text=True, check=True, timeout=5)
-    pid = int(result.stdout.strip())
-    if pid < 0:
-        raise ValueError('invalid keeper MainPID')
+    """Check user/system units, then the keeper process outside unit scopes."""
+    errors = []
+    for scope in ('user', 'system'):
+        command = ['systemctl', *(['--user'] if scope == 'user' else []), 'show', unit,
+                   '--property=LoadState', '--property=MainPID']
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=5)
+        except FileNotFoundError:
+            break  # No service manager: still check for a standalone keeper.
+        except subprocess.TimeoutExpired:
+            errors.append(f'keeper {scope} unit query timed out')
+            continue
+        except OSError:
+            errors.append(f'keeper {scope} unit query unavailable')
+            continue
+        fields = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+        if fields.get('LoadState') == 'not-found':
+            continue
+        if result.returncode:
+            cause = 'bus unreachable' if 'bus' in result.stderr.lower() else 'query failed'
+            errors.append(f'keeper {scope} unit {cause}')
+            continue
+        try:
+            pid = int(fields['MainPID'])
+            if fields.get('LoadState') != 'loaded' or pid < 0:
+                raise ValueError('invalid unit state')
+        except (KeyError, ValueError):
+            errors.append(f'keeper {scope} unit state unreadable')
+            continue
+        if pid:
+            return pid
+    pid = keeper_process_pid()
+    if errors:
+        raise KeeperProbeError('; '.join(errors))
     return pid
 
 
