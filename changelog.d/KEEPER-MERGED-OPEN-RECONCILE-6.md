@@ -1,0 +1,1 @@
+- Harden merged closes with refreshed complete PR history, scoped additional GO rows, exactly one negative TEST_GAMING line and consistent recorded completion finishes; audit historical seat-rule overrides with tier/risk context, reject families with waivers, and exclude synthetic bundles from later run citations. Restore exact malformed-body and waiver-authority regressions.
