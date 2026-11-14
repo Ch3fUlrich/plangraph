@@ -17,7 +17,7 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
   HIGH survives a fix round, the same host or tooling failure twice in a shift,
   a replan, or an operator audit): cuts packages, briefs writers, folds, runs
   CI waits and reviews, sends one GO request, merges with its own keeper token.
-- **Package writer**: Codex `gpt-6.1-sol` high in its native CLI does the bulk;
+- **Package writer**: Codex `gpt-6.1-sol` medium (rule 3.36, D-5858; higher effort only with an operator D-id) in its native CLI does the bulk;
   a Claude Sonnet subagent only small fixes.
 - **Reviewer**: at least one review per checkpoint. Codex reviews Claude-written
   code; a cheap reviewer of another family or Claude Sonnet reviews Sol-written code.
@@ -86,7 +86,7 @@ Command details and timer setup: [Rust host tools](../../docs/host-tools.md).
 ## Codex
 
 - Start: `herdr workspace create --cwd <worktree> --label <name>`, then
-  `herdr agent start <name> --kind codex --pane <pane> -- -m gpt-6.1-sol -c model_reasoning_effort="high" -c approval_policy="never" --sandbox danger-full-access`,
+  `herdr agent start <name> --kind codex --pane <pane> -- -m gpt-6.1-sol -c model_reasoning_effort="medium" -c approval_policy="never" --sandbox danger-full-access`,
   then `herdr agent prompt <name> "<read PACKAGE-x.md and carry it out>"`.
   The sandboxed modes failed on our hosts (no commits, or no start at all).
 - Review: `codex exec ... --json -o <file> - < prompt`, read-only by instruction.
