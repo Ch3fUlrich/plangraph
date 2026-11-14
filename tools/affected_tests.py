@@ -111,15 +111,22 @@ def dependency_graph(texts):
         if p.parts[0] == "tests":
             modules.setdefault(p.stem, rel)
     reverse = {}
-    scripts = [rel for rel in texts if rel.startswith("tools/") and rel.endswith(".sh")]
+    tool_paths = [rel for rel in texts if rel.startswith("tools/")]
     for rel, text in texts.items():
         names = []
+        launches = []
         if rel.endswith(".py"):
             tree = ast.parse(text)
             module = next(k for k, v in modules.items() if v == rel)
             package = module if Path(rel).name == "__init__.py" else module.rpartition(".")[0]
             strings = []
+            tool_commands = []
             for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and node.args and (
+                        getattr(node.func, "attr", None) or getattr(node.func, "id", None)) in {
+                            "run", "Popen", "call", "check_output", "check_call", "run_path"}:
+                    tool_commands.extend(child.value for child in ast.walk(node.args[0])
+                                         if isinstance(child, ast.Constant) and isinstance(child.value, str))
                 if isinstance(node, ast.Import):
                     names.extend(a.name for a in node.names)
                 elif isinstance(node, ast.ImportFrom):
@@ -132,21 +139,37 @@ def dependency_graph(texts):
                 elif isinstance(node, ast.Constant) and isinstance(node.value, str):
                     strings.append(node.value)
             # Literal argv entries, runpy module names, and shell command strings.
-            names.extend(value for value in strings if value in modules)
+            launches.extend(value for value in strings
+                            if value in modules or value + ".__main__" in modules)
             command_text = "\n".join(strings)
         else:
             # Shell scripts may contain Python heredocs as well as -m commands.
             command_text = text
             names.extend(re.findall(r"^\s*(?:from|import)\s+([\w.]+)", text, re.M))
-        names.extend(re.findall(r"(?<!\w)-m\s+['\"]?([\w.]+)", command_text))
+            for line in re.findall(r"^\s*(?:from\s+[\w.]+\s+import|import)\s+[^\n]+", text, re.M):
+                try:
+                    statement = ast.parse(line.strip()).body[0]
+                except SyntaxError:
+                    continue  # A multiline import still has its prefix above.
+                if isinstance(statement, ast.ImportFrom):
+                    names.extend((statement.module or "") + "." + alias.name
+                                 for alias in statement.names)
+                elif isinstance(statement, ast.Import):
+                    names.extend(alias.name for alias in statement.names)
+        launches.extend(re.findall(r"(?<!\w)-m\s+['\"]?([\w.]+)", command_text))
+        names.extend(launches)
+        names.extend(name + ".__main__" for name in launches if name + ".__main__" in modules)
         for name in names:
             # Importing or launching a child also executes package __init__ modules.
             for end in range(1, len(name.split(".")) + 1):
                 dep = modules.get(".".join(name.split(".")[:end]))
                 if dep:
                     reverse.setdefault(dep, set()).add(rel)
-        for script in scripts:
-            if script in text or Path(script).name in text:
+        for script in tool_paths:
+            # Production prose may recommend a Python tool without executing it.
+            references = ("\n".join(tool_commands) if script.endswith(".py")
+                          and rel.endswith(".py") and not rel.startswith("tests/") else text)
+            if script in references or Path(script).name in references:
                 reverse.setdefault(script, set()).add(rel)
     return reverse
 
@@ -219,6 +242,8 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False,
             if not revision_asset(root, path, asset_cache):
                 continue
         if p.parts[0] in {"src", "tests", "tools"} and path not in texts and p.suffix == ".py":
+            if p.name == "conftest.py":
+                return fallback("deleted shared fixture")
             try:
                 if base_reverse is None:
                     base_reverse = base_dependency_graph(root, base, head)
@@ -235,6 +260,9 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False,
                     todo.extend(reverse.get(current, ()))
             hits = {s for s in seen if s in texts and s.startswith("tests/")
                     and Path(s).name.startswith("test_") and not s.startswith("tests/browser/")}
+            hits.update(s for s, text in texts.items() if s.startswith("tests/")
+                        and Path(s).name.startswith("test_") and not s.startswith("tests/browser/")
+                        and (p.name in text or path in text))
             if not hits:
                 return fallback("deleted module importers unresolved")
             selected.update(hits)

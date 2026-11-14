@@ -417,9 +417,12 @@ def test_subprocess_consumers_follow_import_graph(tmp_path, launch):
     assert 'tests/test_other.py' not in plan['tests']
 
 
-def test_shell_inline_python_consumer(tmp_path):
+@pytest.mark.parametrize('statement', [
+    'from pkg.api import VALUE', 'from pkg import api', 'from pkg import api as renamed',
+])
+def test_shell_inline_python_consumer(tmp_path, statement):
     _asset_repo(tmp_path, {
-        'tools/smoke.sh': "python3 - <<'PY'\nfrom pkg.api import VALUE\nPY\n",
+        'tools/smoke.sh': f"python3 - <<'PY'\n{statement}\nPY\n",
         'tests/test_process.py': 'SCRIPT = "tools/smoke.sh"',
     })
     assert 'tests/test_process.py' in selector().select_tests(
@@ -459,3 +462,70 @@ def test_deleted_unresolved_module_falls_back_to_suite(tmp_path):
     _asset_repo(tmp_path, {'src/pkg/deleted.py': 'VALUE = 1'})
     (tmp_path / 'src/pkg/deleted.py').unlink()
     assert selector().select_tests(tmp_path, ['src/pkg/deleted.py'])['tests'] == ['tests']
+
+
+@pytest.mark.parametrize('launch', [
+    'subprocess.run([sys.executable, "-m", "pkg"])',
+    'subprocess.run("python3 -m pkg", shell=True)',
+    'SCRIPT = "tools/launch.sh"',
+])
+def test_package_launch_follows_main(tmp_path, launch):
+    _asset_repo(tmp_path, {
+        'src/pkg/__main__.py': 'from .core import VALUE',
+        'tools/launch.sh': 'python3 -m pkg',
+        'tests/test_process.py': launch,
+    })
+    for changed in ['src/pkg/core.py', 'src/pkg/__main__.py']:
+        assert 'tests/test_process.py' in selector().select_tests(tmp_path, [changed])['tests']
+
+
+def test_shell_calls_python_tool_transitively(tmp_path):
+    _asset_repo(tmp_path, {
+        'tools/entry.py': 'from pkg.core import VALUE',
+        'tools/launch.sh': 'python3 tools/entry.py',
+        'tests/test_process.py': 'SCRIPT = "tools/launch.sh"',
+    })
+    assert 'tests/test_process.py' in selector().select_tests(
+        tmp_path, ['src/pkg/core.py'])['tests']
+
+
+def test_deleted_module_keeps_literal_consumers(tmp_path):
+    _asset_repo(tmp_path, {
+        'tools/entry.py': '',
+        'tests/test_importer.py': 'from tools import entry',
+        'tests/test_process.py': 'subprocess.run(["python3", "tools/entry.py"])',
+        'src/pkg/direct.py': '',
+        'tests/test_direct.py': 'subprocess.run(["python3", "src/pkg/direct.py"])',
+    })
+    (tmp_path / 'tools/entry.py').unlink()
+    (tmp_path / 'src/pkg/direct.py').unlink()
+    plan = selector().select_tests(tmp_path, ['tools/entry.py', 'src/pkg/direct.py'])
+    assert plan['tests'] == ['tests/test_direct.py', 'tests/test_importer.py', 'tests/test_process.py']
+
+
+@pytest.mark.parametrize('path', ['tests/test_removed.py', 'tests/conftest.py'])
+def test_unresolved_deleted_tests_require_suite(tmp_path, path):
+    _asset_repo(tmp_path, {path: ''})
+    (tmp_path / path).unlink()
+    # The brief requires importer coverage or the whole suite for *every*
+    # deleted Python file under tests, including leaf tests and conftest.
+    for files_only in [False, True]:
+        assert selector().select_tests(tmp_path, [path], files_only=files_only)['tests'] == ['tests']
+
+
+def test_deleted_conftest_keeps_implicit_fixture_consumers(tmp_path):
+    _asset_repo(tmp_path, {
+        'tests/conftest.py': 'VALUE = 1',
+        'tests/test_importer.py': 'from conftest import VALUE',
+        'tests/test_implicit.py': 'def test_implicit(fixture): pass',
+    })
+    (tmp_path / 'tests/conftest.py').unlink()
+    assert selector().select_tests(tmp_path, ['tests/conftest.py'])['tests'] == ['tests']
+
+
+def test_python_tool_in_production_prose_is_not_a_call(tmp_path):
+    _asset_repo(tmp_path, {
+        'tools/check.py': '',
+        'src/pkg/api.py': 'PROMPT = "Run python3 tools/check.py"',
+    })
+    assert selector().select_tests(tmp_path, ['tools/check.py'])['tests'] == []
