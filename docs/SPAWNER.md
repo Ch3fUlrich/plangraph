@@ -683,7 +683,7 @@ Haiku is the existing `claude-haiku-5.5` leg (review only, Claude family,
 subscription harness `claude -p`). Explicit picks use normal run records/stdout
 and host admission. Any Claude/Anthropic writer part fences it, including mixed
 writer families and `review_of` evidence. Its review command always sets
-`--tools ""` and strict empty MCP config, including explicit tool-mode requests.
+`--tools ""` and strict empty MCP config, including explicit tool-mode requests. Explicit picks must support the requested role; tests of family exclusions or orchestrator behavior use role-compatible fixture legs.
 
 Dry-run combo admission resolves before cost admission, so an unadmitted combo
 retains its routing refusal. Valid paid previews still require budget admission.

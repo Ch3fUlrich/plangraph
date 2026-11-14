@@ -1,0 +1,1 @@
+- Align explicit-spawn fixtures with registered review/orchestrator roles while preserving the role admission check introduced by Haiku hardening; retain family overlap and reasoning-retry coverage.

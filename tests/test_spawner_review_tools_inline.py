@@ -119,6 +119,8 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     chosen = next(l for l in DEFAULT_LEGS if l.id == 'mimo-v2.6-flash')
     if scenario == 'no-cap':
         chosen = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6-luna')
+    if scenario == 'non-review':
+        chosen = next(l for l in DEFAULT_LEGS if l.id == 'mimo-v2.6-pro')
     role = 'orchestrate' if scenario == 'non-review' else 'review'
     good = 'Review complete\nTEST-GAMING: no - searched tests\nVERDICT: ACCEPT'
     exhausted = json.dumps({'type': 'step_finish', 'part': {

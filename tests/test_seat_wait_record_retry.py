@@ -71,7 +71,7 @@ def test_given_family_and_review_of_review(tmp_path, monkeypatch, dispatch):
     monkeypatch.setattr(routing, 'plan_spawn', lambda *a, **kw: seen.extend(kw['writer_families']) or plan)
     SpawnService._route(service, CARD, role='review', review_of=record['run_id'])
     assert seen == ['gpt']
-    gpt = next(l for l in DEFAULT_LEGS if l.family == 'gpt' and l.tool_mode == 'tools')
+    gpt = next(l for l in DEFAULT_LEGS if l.family == 'gpt' and 'review' in l.roles)
     with pytest.raises(SpawnRefused, match='excluded writer family'):
         asyncio.run(service._spawn(card=CARD, role='review', review_of=record['run_id'], leg=gpt.id, dry_run=True))
 
@@ -119,7 +119,7 @@ def test_review_family_overlap_and_empty_fallback(tmp_path, monkeypatch, dispatc
     monkeypatch.setattr(routing, 'plan_spawn', lambda *a, **kw: seen.append(kw['writer_families']) or plan)
     SpawnService._route(service, CARD, role='review', review_of=record['run_id'])
     assert seen.pop() == (families or ['gpt'])
-    gpt = next(l for l in DEFAULT_LEGS if l.family == 'gpt' and l.tool_mode == 'tools')
+    gpt = next(l for l in DEFAULT_LEGS if l.family == 'gpt' and 'review' in l.roles)
     if families:
         allowed = asyncio.run(service._spawn(card=CARD, role='review', review_of=source['run_id'], leg=gpt.id, dry_run=True, override_reason='verify subset family exclusion'))
         assert allowed['given_writer_families'] == families

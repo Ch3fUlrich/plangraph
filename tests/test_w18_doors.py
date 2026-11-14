@@ -117,7 +117,7 @@ def test_admission_entry_matrix(tmp_path, monkeypatch, capsys, entry, kind):
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
         dict(id=model, **({'available': 0} if kind.startswith('cxa-') else
                          {'active': kind != 'inactive', 'available': 1}))])
-    chosen = replace(legs.DEFAULT_LEGS[0], model=model, disabled=None, roles=('implement',))
+    chosen = replace(legs.DEFAULT_LEGS[0], model=model, disabled=None, roles=('implement', 'review'))
     monkeypatch.setattr(legs, 'DEFAULT_LEGS', (chosen,))
     card = {'estimate_tokens': 100}
     options = dict(card=card, prompt='test', role='review', writer_families=('gpt',), override_reason='explicit operator selection', dry_run=True)
