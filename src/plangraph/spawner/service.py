@@ -11,6 +11,7 @@ from pathlib import Path
 import asyncio, hashlib, json, os, socket, time, uuid
 from .runner import SpawnerRunner
 from .cancel_recorded import cancel_recorded
+from .remote_ps import native_receipt
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
@@ -34,12 +35,15 @@ class SpawnService(SeatSpawnMixin):
     def result(self, run_id, **read_retry):
         """Read one run record; retry options forward to read_text_retry."""
         try:
-            return json.loads(read_text_retry(self._path(run_id), **read_retry))
+            record = json.loads(read_text_retry(self._path(run_id), **read_retry))
+            if record.get('run_kind') == 'native-codex' and record.get('overflow_remote') and record.get('status') == 'running':
+                from .remote_ps import native_result
+                record = native_result(record); self._save(record)
+            return record
         except FileNotFoundError:
             raise ValueError('unknown run id') from None
-
     def _save(self, record):
-        self._sync_seat(record)
+        native_receipt(record); self._sync_seat(record)
         if not self._path(record['run_id']).exists(): annotate_tree(record)
         from .private_io import atomic_write_private
         from .runner import redact
@@ -110,11 +114,9 @@ class SpawnService(SeatSpawnMixin):
         publish(self._path(record['run_id']).parent, record, getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
-
     def ps(self):
         from .stall_watchdog import read_runs
         return {'runs': sorted(read_runs(self.state), key=lambda r: r.get('started', 0), reverse=True)}
-
     def route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
         try:
             plan = self._route(card, role, writer_families, review_of,
@@ -180,7 +182,6 @@ class SpawnService(SeatSpawnMixin):
         finally:
             child['ended'] = time.time()
             self._save(child)
-
     def save_refusal(self, exc, role='implement', *, card=None, placement=None, **extra):
         """Persist pre-service refusals using the same record contract (``extra``: seat fields)."""
         from plangraph.planner.routing import SpawnRefused, BenchmarkError, BenchRequired
@@ -384,7 +385,6 @@ class SpawnService(SeatSpawnMixin):
                 terminal_reason(record)
                 release_attempts(self, record)
                 self._save(record)
-
         task = asyncio.create_task(execute())
         self.tasks[record['run_id']] = task
         if dry_run or wait_seconds is None:

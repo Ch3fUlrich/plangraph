@@ -189,6 +189,49 @@ def list_runs(local, *, transport=query_host):
                                   reason='host query failed') for h in hosts]
 
 
+def native_receipt(record):
+    """A target PID is evidence, never an origin-side process identity."""
+    if record.get('run_kind') == 'native-codex' and record.get('overflow_remote'):
+        identity = {key: record.pop(key) for key in list(record)
+                    if key in ('pid', 'pid_start', 'job_id', 'job_name', 'escapees')
+                    or key.startswith('supervisor_')}
+        if identity:
+            record['remote_process'] = dict(record.get('remote_process') or {}, **identity)
+    return record
+
+
+def native_result(record, *, verb='result'):
+    """Refresh a native overflow receipt with target-host terminal evidence."""
+    from .private_io import read_text_retry
+    from plangraph.keeper.credential_guard import mask
+    try:
+        if verb not in ('result', 'cancel'):
+            raise ValueError('unsupported native control verb')
+        config_path = Path(os.environ.get('PLANGRAPH_OVERFLOW_HOSTS',
+                          '~/.config/plangraph/overflow-hosts.json')).expanduser()
+        host = json.loads(read_text_retry(config_path))['hosts'][record['host']]
+        run_id = record['run_id']
+        if not re.fullmatch(r'run-[A-Za-z0-9]+', run_id):
+            raise ValueError('invalid run id')
+        command = 'cd ' + shlex.quote(host['repo']) + ' && '
+        if host.get('env_file'):
+            command += 'set -a && . ' + shlex.quote(host['env_file']) + ' && set +a && '
+        command += ('PYTHONPATH=' + shlex.quote(host['spawner_src']) +
+                    ' python3 -m plangraph.spawner.cli ' + verb + ' ' + shlex.quote(run_id))
+        reply = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
+                                '--', host['ssh'], command], capture_output=True,
+                               text=True, timeout=10)
+        # A terminal nonzero exit is the writer's exit, with a valid JSON record.
+        text, _ = mask(reply.stdout)
+        remote = json.loads(text)
+        if remote.get('run_id') != run_id or remote.get('run_kind') != 'native-codex':
+            raise ValueError('receipt mismatch')
+        return native_receipt(dict(remote, host=record['host'], overflow_remote=True,
+                    overflow_reason=record.get('overflow_reason')))
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        return native_receipt(dict(record, remote_query_error='host query failed'))
+
+
 def collect_local(state):
     # Local-only protocol endpoint: never invoke ps (which would fan out again).
     from .stall_watchdog import read_runs

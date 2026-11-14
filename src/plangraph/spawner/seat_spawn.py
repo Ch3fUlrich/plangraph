@@ -14,13 +14,9 @@ import uuid
 from pathlib import Path
 
 from .seat_artifact import reserve_seat_families, seat_reasons, sync_seat, sync_seat_group
-
-
 def resources(service):
     from .overflow import available_memory_mb
     return 0, available_memory_mb()
-
-
 def admit(service, options, *, card=None, preview=False):
     """Enforce RAM admission even without an overflow configuration."""
     if options.get('dry_run'):
@@ -37,24 +33,32 @@ def admit(service, options, *, card=None, preview=False):
     role = options.get('role', 'implement')
     registry = overflow.registry_caps()
     local, remote_first = overflow.placement_policy(registry, config)
-    if preview and not remote_first:
+    native = (card or {}).get('run_kind') == 'native-codex'
+    if preview and not remote_first and not native:
         return None
     role_mb, floor = overflow.local_limits(registry, role)
     _, memory = resources(service)
-    if not remote_first and not overflow.memory_refusal(memory, role_mb, floor):
+    repo = Path((card or {}).get('repo') or getattr(service.runner, 'default_cwd', None) or os.getcwd())
+    disk_low = native and __import__('shutil').disk_usage(repo).free < 5 * 1024 ** 3
+    if not remote_first and not disk_low and not overflow.memory_refusal(memory, role_mb, floor):
+        if native: options['_placement'] = dict(host=local, reason='local room', free_mb=memory)
         return None
     repo = Path(options.get('cwd') or (card or {}).get('cwd') or
                 ((card or {}).get('diff_ref') or {}).get('repo') or
-                getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
+                (card or {}).get('repo') or getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
     public = overflow.repos_public(config, repo, (card or {}).get('diff_ref'))
     benchmark_local = remote_first and options.get('benchmark') is not None
     if benchmark_local:
         public = False  # A local-only database makes every remote ineligible.
     rows = overflow.ready_records(config, role)
+    if native:
+        for row in rows.values():
+            if type(row.get('disk_free_gb')) is not int or row['disk_free_gb'] < 5:
+                row['refusal'] = 'disk_low: need 5 GB free to start'
     if remote_first:
         rows = {name: row for name, row in rows.items()
                 if name != local and overflow.host_config(registry, name).get('id') != local}
-    health = overflow.local_health_refusal(config, memory) if remote_first else None
+    health = 'disk_low: need 5 GB free to start' if disk_low else (overflow.local_health_refusal(config, memory) if remote_first else None)
     flags = []
     for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope'):
         if options.get(key) is not None:
@@ -98,25 +102,20 @@ def admit(service, options, *, card=None, preview=False):
         except (OSError, ValueError, KeyError, TypeError) as exc:
             result, refusal = None, overflow.failure_reason(exc)
         if result is not None:
-            record = dict(result, host=name, overflow_reason=decision.reason, overflow_remote=True)
+            from .remote_ps import native_receipt
+            record = native_receipt(dict(result, host=name, overflow_reason=decision.reason, overflow_remote=True))
             record.setdefault('status', 'unknown')
             break
         rows[name]['refusal'] = refusal
     if remote_first:
         record.update(host=placement['host'], placement=placement)
     return record
-
-
 # These children expose skill tools, but no repository/shell tools (D-4681).
 INLINE_DIFF_HARNESSES = frozenset({'opencode'})
-
-
 def _needs_inline_diff(leg, card):
     return (getattr(leg, 'tool_mode', 'tools') == 'inline-only'
             or (getattr(leg, 'harness', None) in INLINE_DIFF_HARNESSES
                 and card.get('diff_ref') is not None))
-
-
 def annotate_review_warning(record):
     from plangraph.planner.legs import REVIEW_UNFIT_SEATS
     model = (record.get('chosen_leg') or {}).get('model')
@@ -125,16 +124,12 @@ def annotate_review_warning(record):
         warning = 'review_unfit: ' + model
         if warning not in record.setdefault('warnings', []):
             record['warnings'].append(warning)
-
-
 def _refuse_oversized_diff(exc, leg):
     from .context_pack import PromptBoundError
     if exc.chars is not None:
         raise PromptBoundError(
             f'prompt_too_large: inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
             f'max_request_tokens {leg.max_request_tokens}') from None
-
-
 class SeatSpawnMixin:
 
     _seat_reasons = staticmethod(seat_reasons)
@@ -168,6 +163,9 @@ class SeatSpawnMixin:
             admitted = await asyncio.to_thread(self.admit_spawn, options, card=card)
             if admitted is not None:
                 return admitted
+            if (card or {}).get('run_kind') == 'native-codex':
+                from .overflow import native_spawn
+                return await native_spawn(self, card, options)
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief
                 from plangraph.settings import admit_fixer_threshold

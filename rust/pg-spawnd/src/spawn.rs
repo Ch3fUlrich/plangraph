@@ -124,6 +124,12 @@ pub(crate) fn spawn(
     host: &str,
     runs: &crate::runs::Runs,
 ) -> Result<Value, ToolError> {
+    if args
+        .get("card")
+        .is_some_and(|card| card["run_kind"] == "native-codex")
+    {
+        return placement::native_spawn(state, args);
+    }
     let role = args.get("role").cloned().unwrap_or(json!("implement"));
     let admitted = crate::leg_ref::admit(&crate::leg_ref::AdapterCatalog::new(state), args)
         .and_then(|a| validate(&a).map(|()| a));
