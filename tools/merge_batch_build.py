@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -22,6 +23,27 @@ def default_worktree(name):
     common = state_dir().parent  # the git common dir
     main = common.parent if common.name == ".git" else common
     return main.parent / f"{main.name}-worktrees" / f"batch-{name}"
+
+
+def default_union(base):
+    """Root .gitattributes at the fetched base is the single ledger policy source.
+
+    Preserve quoted patterns when copying them into the batch attributes file.
+    Persist the result in state so crash recovery uses the same policy.
+    """
+    listed = git("ls-tree", "--name-only", base, "--", ".gitattributes").stdout
+    if not listed.strip():
+        return []
+    patterns = []
+    for line in git("show", f"{base}:.gitattributes").stdout.splitlines():
+        fields = shlex.split(line, comments=True, posix=False)
+        if not fields or fields[0].startswith("[attr]"):
+            continue
+        merge = next((a for a in reversed(fields[1:])
+                      if a in ("merge", "-merge", "!merge") or a.startswith("merge=")), None)
+        if merge == "merge=union":
+            patterns.append(fields[0])
+    return patterns
 
 
 def attrs_args(st):
@@ -256,7 +278,7 @@ def cmd_build(args):
     path.parent.mkdir(parents=True, exist_ok=True)
     st = {"version": 1, "name": name, "repo": repo, "base": base, "branch": branch, "worktree": str(path.resolve()),
           "status": "creating", "created": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-          "skip_conflicts": bool(args.skip_conflicts), "union": list(args.union), "pending": order,
+          "skip_conflicts": bool(args.skip_conflicts), "union": list(dict.fromkeys(default_union(f"{REMOTE}/{base}") + list(args.union))), "pending": order,
           "current": None, "merging": None, "merged": [], "skipped": [], "forced": forced, "head": None, "pr": None,
           "url": None, "prs": {str(n): {k: infos[n][k] for k in ("title", "head", "ref", "base")} for n in order}}
     save_state(st)  # before the worktree exists: a crash during `worktree add` leaves a state that abort cleans up

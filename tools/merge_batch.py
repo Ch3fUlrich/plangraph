@@ -108,7 +108,7 @@ def parser():
                           "logged in the state and the batch PR")
     cmd.add_argument("--worktree", help="worktree path (default: <repo>-worktrees/batch-NAME)")
     cmd.add_argument("--union", action="append", default=[], metavar="GLOB",
-                     help="merge this path line by line (git merge=union) instead of conflicting, "
+                     help="add to the fetched base .gitattributes union defaults; merge this path line by line (git merge=union) instead of conflicting, "
                           "for append-only ledgers such as CHANGELOG.md (repeatable)")
     cmd = add("continue", build.cmd_continue, "resume after a conflict resolution commit")
     cmd.add_argument("--name", required=True)

@@ -1,0 +1,1 @@
+- **LE-APPEND-ONLY-DOCS-CONFLICT:** require per-item changelog fragments outside release commits, move checkpoint notes to directory-indexed records, and derive batch union defaults from .gitattributes.

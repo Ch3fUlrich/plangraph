@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """check_changelog_docs.py - Changelog and docs gate (rule D-653).
 
-Guards that changes touching non-doc paths add a line under '## Unreleased' in
-CHANGELOG.md, or that every commit touching non-doc paths carries its own
-'Changelog: skip (<reason>)' trailer (in the commit's trailer block, merge
-commits excluded), and that changes to paths mapped in .docs-map touch at
-least one of their documentation files. The range is <merge-base(base, head)>..head.
+Non-release commits may only write changelog.d/<ITEM>.md, never CHANGELOG.md.
+A release is recognized by a nonempty Release: trailer in the final trailer block.
+Non-doc changes require a fragment or per-commit Changelog: skip (<reason>).
+Mapped source changes must also touch their docs. Range: merge-base(base, head)..head.
 """
 from __future__ import annotations
 
@@ -280,6 +279,20 @@ def main(argv: list[str] | None = None) -> int:
     if revs.returncode != 0:
         return bail(f"check-changelog-docs: git rev-list failed: {revs.stderr.strip()}", warn_only)
     commits = revs.stdout.split()
+    # Include merges: combined diff names paths changed relative to every parent,
+    # catching direct conflict-resolution edits without blaming inherited entries.
+    try:
+        for sha in git_checked(root, "rev-list", f"{merge_base}..{head_sha}").split():
+            paths = git_checked(root, "diff-tree", "--root", "--no-commit-id", "--name-only",
+                                "-r", "--cc", "--no-renames", sha).splitlines()
+            if "CHANGELOG.md" not in paths:
+                continue
+            trailers = git_checked(root, "log", "-1", "--format=%(trailers:only,unfold)", sha)
+            if not re.search(r"^Release:[ \t]*\S.*$", trailers, re.IGNORECASE | re.MULTILINE):
+                return bail(f"check-changelog-docs: commit {sha[:8]} edits CHANGELOG.md outside a release; "
+                            "write changelog.d/<ITEM>.md or use a nonempty Release: trailer", warn_only)
+    except GitFailure as exc:
+        return bail(f"check-changelog-docs: {exc}", warn_only)
 
     problems: list[str] = []
     warnings: list[str] = []
@@ -288,7 +301,8 @@ def main(argv: list[str] | None = None) -> int:
     for sha in commits:
         try:
             reasons, empty = commit_skips(root, sha)
-            touches_non_doc = any(not is_doc_path(p) for p in commit_paths(root, sha))
+            paths = commit_paths(root, sha)
+            touches_non_doc = any(not is_doc_path(p) for p in paths)
         except GitFailure as exc:
             return bail(f"check-changelog-docs: {exc} (commit {sha[:8]})", warn_only)
         if not touches_non_doc:
@@ -304,8 +318,7 @@ def main(argv: list[str] | None = None) -> int:
 
     has_non_doc = any(not is_doc_path(p) for p in raw_paths)
     entry_added = (
-        changelog_entry_added(root, merge_base, head_sha)
-        or fragment_entry_added(root, raw_paths, merge_base, head_sha)
+        fragment_entry_added(root, raw_paths, merge_base, head_sha)
     )
 
     if entry_added:
@@ -318,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
     if has_non_doc and changelog_status == "no":
         which = f" (commits without their own skip: {', '.join(uncovered)})" if uncovered else ""
         problems.append(
-            "non-doc change requires a line added under '## Unreleased' in CHANGELOG.md, "
+            "non-doc change requires an entry in changelog.d/<ITEM>.md, "
             f"or a 'Changelog: skip (<reason>)' trailer on every such commit{which}"
         )
 
