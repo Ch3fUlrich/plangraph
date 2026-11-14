@@ -147,7 +147,7 @@ fn prod_paths_preserves_quoted_and_escaped_path_whitespace() {
         "/home/user/my repo/worktrees/a/lib",
     ] {
         assert!(
-            refs.iter().any(|r| r.path == PathBuf::from(path)),
+            refs.iter().any(|r| r.path == std::path::Path::new(path)),
             "{path}: {refs:?}"
         );
     }
