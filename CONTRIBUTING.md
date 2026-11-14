@@ -146,7 +146,7 @@ New Python files require a reasoned rule 9.14 entry in `tools/new_code_allowlist
 
 ## File size
 
-A tracked source, test, script or doc file stays at or under 400 lines; over 400, split it
+A tracked source, test, script or doc file stays at or under 800 lines; over 800, split it
 by responsibility before adding more. `python3 tools/check_file_size.py` enforces this in CI
 and in the pre-push hook. Files that were larger when the gate landed are listed in
 `.filesize-baseline`: such a file may shrink, never grow, and the baseline itself only
@@ -322,3 +322,5 @@ Python files already in flight are individually listed in
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
 
 Local controls run every named consumer plus a bounded smoke set; policy checks use origin/main when available, including inherited stack changes. Preflight clears the complete GIT_CONFIG namespace before selector launch.
+
+The 800-line tracked file budget is authorized by D-5840 (95a9ac34); legacy baseline ratchets still apply.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-push gate: public scrub (D-1751) + 400-line file size (AO-400LOC, D-3198).
+"""Pre-push gate: public scrub (D-1751) + 800-line file size (AO-400LOC, D-3198).
 
 Runs scrub rules over committed blobs in the pushed range, including preflight;
 new branches scrub from origin/main and select affected test files from their nearest remote base.

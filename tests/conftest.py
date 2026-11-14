@@ -28,6 +28,7 @@ if str(_SRC) not in sys.path:
 
 _TOOLS = Path(__file__).resolve().parents[1] / "tools"
 
+
 def _oom_worker_count(count, meminfo=Path('/proc/meminfo')):
     override = os.environ.get('PYTEST_XDIST_AUTO_NUM_WORKERS')
     try:
@@ -40,9 +41,11 @@ def _oom_worker_count(count, meminfo=Path('/proc/meminfo')):
         return min(count, 4)  # Unknown capacity is not permission for unbounded workers.
     return max(1, min(count, 4, total // (1024 * 1024)))
 
+
 @pytest.hookimpl(optionalhook=True)
 def pytest_xdist_auto_num_workers(config):
     return _oom_worker_count(os.cpu_count() or 1)
+
 
 @pytest.hookimpl(specname='pytest_configure')
 def pytest_oom_configure(config):
@@ -52,6 +55,7 @@ def pytest_oom_configure(config):
         event = raise_oom_score()
         if event['event'] == 'oom_score_adj_denied':
             warnings.warn('oom_score_adj_denied: EACCES raising pytest worker to 500')
+
 
 @pytest.fixture
 def bounded_shutdown_cleanup(monkeypatch):
@@ -80,10 +84,12 @@ def bounded_shutdown_cleanup(monkeypatch):
     monkeypatch.setattr(daemon, "run", run)
     yield
 
+
 @pytest.fixture
 def keeper_thread_guard():
     from _keeper_threads import guard_new_threads
     return guard_new_threads
+
 
 @pytest.fixture(autouse=True)
 def no_leaked_keeper_threads(request, no_leaked_keeper_fixture_threads):
@@ -93,8 +99,77 @@ def no_leaked_keeper_threads(request, no_leaked_keeper_fixture_threads):
     with thread_scope(request):
         yield
 
-from _split_ci_environment import (git_config_guard, _test_environment, _clear_inherited_git_environment,
-    pytest_sessionstart, detached_git_environment, isolated_git_session, config_guard)
+
+@contextmanager
+def git_config_guard(root, registry_roots=None):
+    """Watch shared/worktree config bytes without invoking Git on the checkout."""
+    def snapshot():
+        entry = Path(root) / '.git'
+        metadata = entry
+        if entry.is_file():
+            metadata = (Path(root) / entry.read_text().removeprefix('gitdir:').strip()).resolve()
+        common = metadata
+        if (metadata / 'commondir').is_file():
+            common = (metadata / (metadata / 'commondir').read_text().strip()).resolve()
+        configs = tuple((str(path), path.read_bytes() if path.exists() else None)
+                        for path in (common / 'config', metadata / 'config.worktree'))
+        return configs, ()
+    before = snapshot()
+    try:
+        yield
+    finally:
+        after = snapshot()
+        if after[0] != before[0]:
+            raise AssertionError('repository .git/config changed during pytest session')
+        if after[1] != before[1]:
+            raise AssertionError('repository worktree registry changed during pytest session')
+
+
+def _test_environment(root, env):
+    """Detach test subprocesses from every Git-advertised repository binding."""
+    local = set(subprocess.check_output(
+        ['git', 'rev-parse', '--local-env-vars'], cwd=root, env=env,
+        text=True, stderr=subprocess.DEVNULL, timeout=30).upper().splitlines())
+    local.add('GIT_PREFIX')
+    return {key: value for key, value in env.items()
+            if key.upper() not in local and not key.upper().startswith('GIT_CONFIG')}
+
+
+def _clear_inherited_git_environment():
+    clean = _test_environment(tempfile.gettempdir(), dict(os.environ))
+    for key in set(os.environ) - clean.keys():
+        del os.environ[key]
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_sessionstart(session):
+    # Collection can import fixtures that invoke Git before session fixtures run.
+    _clear_inherited_git_environment()
+
+
+@pytest.fixture(scope='session', autouse=True)
+def detached_git_environment():
+    _clear_inherited_git_environment()
+
+
+@pytest.fixture(scope='session', autouse=True)
+def isolated_git_session(tmp_path_factory, detached_git_environment):
+    config = tmp_path_factory.mktemp('git-session') / 'global.gitconfig'
+    config.touch(mode=0o600)
+    patch = pytest.MonkeyPatch()
+    patch.setenv('GIT_CONFIG_GLOBAL', str(config))
+    patch.setenv('GIT_CONFIG_NOSYSTEM', '1')
+    try:
+        with git_config_guard(Path(__file__).resolve().parents[1], (tmp_path_factory.getbasetemp(),)):
+            yield
+    finally:
+        patch.undo()
+
+
+@pytest.fixture
+def config_guard():
+    return git_config_guard
+
 
 @pytest.fixture(scope="session", autouse=True)
 def no_leaked_keeper_fixture_threads(request):
@@ -105,12 +180,14 @@ def no_leaked_keeper_fixture_threads(request):
     with guard.guard_new_threads(scope=lambda: guard.current_scope(request)) as watch_scope:
         yield watch_scope
 
+
 @pytest.fixture
 def w(tmp_path):
     from keeper_util import World
     world = World(tmp_path / "keeper")
     yield world
     world.close()
+
 
 @pytest.fixture
 def tools_importable():
@@ -138,6 +215,7 @@ _policy_dir = tempfile.mkdtemp(prefix="pg-route-policy-")
 atexit.register(shutil.rmtree, _policy_dir, True)
 Path(_policy_dir, "route-policy.json").write_text(_NEUTRAL_POLICY)
 os.environ["PLANGRAPH_ROUTE_POLICY"] = str(Path(_policy_dir, "route-policy.json"))
+
 
 def _use_tmpfs_tempdir() -> None:
     # The suite is fsync-bound (SQLite commits); tmpfs avoids slow-disk stalls.
@@ -170,7 +248,9 @@ def _use_tmpfs_tempdir() -> None:
     os.environ["TMPDIR"] = path
     tempfile.tempdir = path
 
+
 _use_tmpfs_tempdir()
+
 
 @pytest.fixture(autouse=True)
 def hermetic_writer_env(monkeypatch):
@@ -186,6 +266,7 @@ def hermetic_writer_env(monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
 
+
 @pytest.fixture
 def short_socket_dir():
     """Bound Unix sockets avoid pytest's long per-test directory names."""
@@ -197,6 +278,7 @@ def short_socket_dir():
 
 from plangraph.spawner import resolver as _resolver
 _real_served_models = getattr(_resolver, '_served_models_real', _resolver.served_models)
+
 
 def _remove_windows_basetemp(root):
     """Retry transient child-process handles as well as read-only git objects."""
@@ -225,6 +307,7 @@ def _remove_windows_basetemp(root):
                 raise  # report the leftover rather than silently leaking it
             time.sleep(1)
 
+
 def pytest_configure(config):
     if sys.platform == "win32" and config.option.basetemp is None:
         # Avoid numbered-root/pytest-current symlink cleanup on Windows mounts
@@ -237,9 +320,11 @@ def pytest_configure(config):
     config.addinivalue_line('markers', 'writer_change_check: keep the D-3236 writer no-change check live')
     config.addinivalue_line('markers', 'real_base_fresh: use real admission against a local origin')
 
+
 @pytest.fixture
 def real_served_models():
     return _real_served_models
+
 
 @pytest.fixture
 def fixed_catalog_rows(monkeypatch):
@@ -247,9 +332,11 @@ def fixed_catalog_rows(monkeypatch):
     from plangraph.planner.routing import plan_spawn
     monkeypatch.setitem(plan_spawn.__kwdefaults__, 'catalog_rows', ())
 
+
 @pytest.fixture(autouse=True)
 def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     """UNKNOWN host; tests opt into providers with PLANGRAPH_PROVIDERS_FILE."""
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path_factory.getbasetemp()))
     root = tmp_path_factory.mktemp('empty-autoos')
     monkeypatch.setenv('AUTOOS_ROOT', str(root))
     providers = tmp_path_factory.mktemp('empty-providers') / 'providers.json'
@@ -322,12 +409,14 @@ _READS_SQLITE_FILE = {
     "tests/contract/test_events.py::test_admin_verify_passes_and_flags_tampering",
 }
 
+
 def _targets_browser_dir(config) -> bool:
     """True when the invocation explicitly points at tests/browser (path or -m)."""
     args = list(getattr(config.option, "file_or_dir", None) or [])
     if any("browser" in str(a) for a in args):
         return True
     return "browser" in (getattr(config.option, "markexpr", "") or "")
+
 
 def pytest_ignore_collect(collection_path, config):
     # UI-BROWSER-TESTS W1: tests/browser needs Playwright and runs in its own CI
@@ -345,7 +434,24 @@ def pytest_ignore_collect(collection_path, config):
                 return True
     return None
 
-from _split_ci_environment import shard_items, shard_selector
+
+def shard_items(items, shard):
+    try:
+        index, count = map(int, shard.split('/'))
+        if not 0 <= index < count:
+            raise ValueError
+    except (ValueError, AttributeError):
+        raise pytest.UsageError('PYTEST_SHARD must be INDEX/COUNT with 0 <= INDEX < COUNT') from None
+    def bucket(item):
+        group = item.get_closest_marker('xdist_group')
+        key = str(group.kwargs.get('name', group.args[0] if group.args else 'default')) if group else item.nodeid
+        return int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], 'big') % count
+    return [item for item in items if bucket(item) == index]
+
+@pytest.fixture
+def shard_selector():
+    return shard_items
+
 
 def pytest_collection_modifyitems(config, items):
     if os.environ.get('PYTEST_SHARD'):
@@ -368,6 +474,7 @@ def pytest_collection_modifyitems(config, items):
         config.hook.pytest_deselected(items=dropped)
         items[:] = kept
 
+
 @pytest.fixture
 def fake_ownership(monkeypatch):
     """r3 V3: stub pids are "ours" (fixed token) and invisible in /proc, so no test depends on which
@@ -380,6 +487,7 @@ def fake_ownership(monkeypatch):
     born = real_stat(os.getpid())[4]   # only processes started after this test session exist for the stubbed view
     monkeypatch.setattr(proc_kill, '_stat', lambda pid, root='/proc': (lambda st: st if st and st[4] >= born else None)(real_stat(pid, root)))
     monkeypatch.setattr(SpawnerRunner, 'identity_provider', staticmethod(lambda pid, **k: real_identity(pid, **k) or 'fake-token'))
+
 
 def pytest_sessionfinish(session, exitstatus):
     # An affected selection can legitimately assign no items to this shard.
