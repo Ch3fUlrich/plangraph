@@ -1,0 +1,1 @@
+- Add a Rust PR entropy gate and CI job covering changed/net LOC, weekly class growth, test additions and ratio, test file size, new plan/report Markdown, and a baseline that only shrinks.

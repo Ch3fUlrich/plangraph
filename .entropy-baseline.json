@@ -1,0 +1,7 @@
+{
+  "class_growth_fraction": 0.03,
+  "max_changed_lines": 400,
+  "max_test_addition_ratio": 1.0,
+  "max_test_file_lines": 400,
+  "test_source_ratio": 1.724141293144274
+}

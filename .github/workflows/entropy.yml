@@ -1,0 +1,27 @@
+name: entropy
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  entropy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+      - name: Build entropy checker
+        working-directory: rust
+        run: cargo build --locked -p pg-worker-core --bin pg-entropy
+      - name: Enforce entropy ratchet
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/entropy-body"
+          rust/target/debug/pg-entropy --base "$BASE" --head "$HEAD" --body-file "$RUNNER_TEMP/entropy-body"

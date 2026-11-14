@@ -24,6 +24,8 @@ src/plangraph/routing_support/leg_state.py -> docs/spawner-leg-state.md
 rust/worker-core/src/bin/keeper-backup.rs -> docs/keeper-backup.md
 rust/worker-core/src/usage_census* -> docs/usage-census.md
 rust/worker-core/src/bin/pg-usage-census.rs -> docs/usage-census.md
+rust/worker-core/src/entropy* -> docs/entropy-gate.md
+rust/worker-core/src/bin/pg-entropy.rs -> docs/entropy-gate.md
 src/plangraph/routing_support/opencode_render.py -> docs/opencode-gateway.md
 src/plangraph/routing_support/opencode_overlay.py -> docs/opencode-gateway.md
 src/plangraph/planner/** -> docs/routing.md

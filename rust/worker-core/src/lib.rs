@@ -14,6 +14,8 @@ pub mod cpu;
 pub mod cpu_linux;
 pub mod diffscan;
 pub mod events;
+pub mod entropy;
+pub mod entropy_git;
 pub mod exit_class;
 pub mod exports;
 pub mod finalize;
