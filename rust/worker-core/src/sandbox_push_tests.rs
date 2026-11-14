@@ -68,7 +68,9 @@ fn pilot_credentials_absent_with_parent_positive_control() {
         ["https://pilot:", "fixture@example.invalid\n"].concat(),
     )
     .unwrap();
-    let lookup = "printf 'protocol=https\nhost=example.invalid\n\n' | GIT_TERMINAL_PROMPT=0 git -c credential.interactive=false credential fill";
+    // Supply the public username so every Git version fails at the missing
+    // password, while the parent positive control still requires its secret.
+    let lookup = "printf 'protocol=https\nhost=example.invalid\nusername=pilot\n\n' | GIT_TERMINAL_PROMPT=0 git -c credential.interactive=false credential fill";
     let parent = Command::new("sh")
         .args(["-c", lookup])
         .env_clear()
@@ -137,7 +139,9 @@ fn pilot_credentials_absent_with_parent_positive_control() {
         assert!(!out.status.success());
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
-            stderr.contains("fatal: unable to get password from user"),
+            stderr.contains("fatal: unable to get password from user")
+                || (stderr.contains("fatal: could not read Password for")
+                    && stderr.contains("terminal prompts disabled")),
             "{stderr}"
         );
         assert!(!String::from_utf8_lossy(&out.stdout).contains("fixture"));
