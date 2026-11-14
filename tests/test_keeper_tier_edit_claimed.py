@@ -161,7 +161,7 @@ def test_router_edit_voids_the_current_rounds_verdicts(tmp_path):
     assert w.store.verify_integrity() == []
 
     w.store.add_evidence_router(w.p("router"), KEY, "run-record", {"run_id": "fixture"})
-    # (it would close it only if the stale one still tallied), a second closes.
+    # The voided seat must not count: one new verdict keeps review open; two close it.
     second = w.store.verdict(w.p("reviewer2"), KEY, True, "ok")
     assert second["state"] == "in_review"
     third = w.store.verdict(w.p("reviewer"), KEY, True, "ok")

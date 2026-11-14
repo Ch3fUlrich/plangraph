@@ -91,7 +91,7 @@ def tier_needs_router(tier: str) -> bool:
     return tier == _DECISION_TIER
 
 
-def validated_decision_tier(tier: str, evidence_kinds: Any) -> str:
+def validated_decision_tier(tier: str, evidence_kinds: Any, *, principal=None, previous_evidence=None) -> str:
     """Return *tier*; a ``none`` item must have evidence_kinds == ['decision']
     or ['decision', 'commit'] (order-insensitive), or it is refused.
     """
@@ -100,6 +100,9 @@ def validated_decision_tier(tier: str, evidence_kinds: Any) -> str:
     if tier != _DECISION_TIER and kinds_set == {'decision'}:
         raise Refused('validation', "decision-only evidence requires review_tier='none'; "
                       "set review_tier='none' or add the implementation evidence kinds")
+    if (principal is not None and principal.role != 'router'
+            and kinds_list == ['decision'] and list(previous_evidence or []) != ['decision']):
+        raise Refused('forbidden', 'only the router may declare decision-only evidence')
     if tier == _DECISION_TIER and (
             len(kinds_list) != len(kinds_set) or kinds_set not in _ALLOWED_DECISION_KINDS):
         raise Refused("validation",

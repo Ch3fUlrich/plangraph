@@ -75,3 +75,43 @@ def test_mixed_evidence_does_not_bypass_lane_guard(w):
                        (json.dumps(['decision', 'commit']),))
     with pytest.raises(Refused, match='evidence_kinds.*decision'):
         w.store.close_on_decision(w.p('workerA'), 'demo:A', decision_ref='D-5024', epoch=w.epoch)
+
+
+@pytest.mark.parametrize('who', ['l1main', 'workerA', 'reviewer', 'reader', 'system'])
+def test_non_router_cannot_create_decision_only_item(w, who):
+    with pytest.raises(Refused) as exc:
+        w.store.create_items(w.p(who), [
+            defn('NEW', review_tier='none', evidence_kinds=['decision']),
+            defn('NEW-GOAL', ['NEW'], kind='goal')])
+    assert exc.value.code == 'forbidden'
+    assert not w.conn.execute("SELECT 1 FROM items WHERE key='demo:NEW'").fetchone()
+
+
+@pytest.mark.parametrize('who', ['l1main', 'workerA', 'reviewer', 'reader', 'system'])
+@pytest.mark.parametrize('include_tier', [False, True])
+def test_non_router_cannot_declare_decision_only_on_open_none_item(w, who, include_tier):
+    w.store.create_items(w.p('router'), [
+        defn('NEW', review_tier='none', evidence_kinds=['decision', 'commit']),
+        defn('NEW-GOAL', ['NEW'], kind='goal')])
+    fields = {'evidence_kinds': ['decision']}
+    if include_tier:
+        fields['review_tier'] = 'none'
+    with pytest.raises(Refused) as exc:
+        w.store.edit_definition(w.p(who), 'demo:NEW', fields)
+    assert exc.value.code == 'forbidden'
+    assert w.store._get_or_refuse('demo:NEW')['evidence_kinds'] == ['decision', 'commit']
+    assert w.store.verify_integrity() == []
+
+
+def test_oversight_cannot_declare_decision_only_on_create(w, monkeypatch):
+    from test_keeper_oversight_scope import fresh, live, op
+
+    from plangraph.keeper import oversight_policy
+
+    _, principal = live(w, monkeypatch, projects=('demo',))
+    item = dict(fresh('NEW', kind='question', tier='none', evidence=['decision']), project='demo')
+    with pytest.raises(Refused) as exc:
+        w.store._normalise_create(item, principal)
+    assert exc.value.code == 'forbidden' and 'router' in exc.value.msg
+    verdicts = oversight_policy.check_batch({}, [op('create', item=item)], principal.projects)
+    assert any(v.code == 'forbidden' and v.reason == 'decision_only' for v in verdicts)

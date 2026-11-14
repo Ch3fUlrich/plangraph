@@ -45,7 +45,7 @@ Two plan-graph item kinds per layer: a **phase item** (kind `planning` or `work`
 Keeper definitions store kind `lane`, `gate`, `goal`, `question`, `decision`,
 `operator_task` or `loop`; these stored kinds are separate from phase roles.
 For a decision-only done branch, declare `evidence_kinds: [decision]` and
-`review_tier: none` together. Creating or editing decision-only evidence with
+`review_tier: none` together. Only the router may make that declaration on create or edit. Creating or editing decision-only evidence with
 `standard` or `high` is refused; set tier `none` or require implementation evidence.
 A legacy item already declaring only `[decision]` can close on a verified exact
 `CLOSE <key>` decision row regardless of kind or tier. Ordinary lane items without

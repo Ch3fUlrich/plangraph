@@ -127,8 +127,8 @@ def creation_tier(raw, definition, principal):
                 raise Refused(
                     "forbidden",
                     "only the router may lower review_tier below its default")
-        return validated_decision_tier(tier, definition["evidence_kinds"])
-    return validated_decision_tier(default, definition["evidence_kinds"])
+        return validated_decision_tier(tier, definition["evidence_kinds"], principal=principal)
+    return validated_decision_tier(default, definition["evidence_kinds"], principal=principal)
 
 
 class CreateMixin:
@@ -434,7 +434,7 @@ class CreateMixin:
             raise Refused("forbidden", "only the router may set review_tier='none'")
         validated_decision_tier(
             resulting_tier,
-            edit_fields.get("evidence_kinds", item["evidence_kinds"]))
+            edit_fields.get("evidence_kinds", item["evidence_kinds"]), principal=principal, previous_evidence=item["evidence_kinds"])
         before = self._all_items()
         candidate = self._all_items()
         me = next(it for it in candidate if it["key"] == key)
@@ -495,7 +495,7 @@ class CreateMixin:
                    for value in renamed):
                 edit_fields["review_tier"] = "high"
                 me["review_tier"] = "high"
-        validated_decision_tier(me["review_tier"], me["evidence_kinds"])
+        validated_decision_tier(me["review_tier"], me["evidence_kinds"], principal=principal, previous_evidence=item["evidence_kinds"])
         if any(field in edit_fields and edit_fields[field] != item.get(field)
                for field in ("done_criteria", "review_tier")):
             resulting_tier = edit_fields.get(
@@ -535,7 +535,7 @@ class CreateMixin:
             # Re-check tier/evidence under the lock, including open-item edits.
             validated_decision_tier(
                 edit_fields.get("review_tier", fresh["review_tier"]),
-                edit_fields.get("evidence_kinds", fresh["evidence_kinds"]))
+                edit_fields.get("evidence_kinds", fresh["evidence_kinds"]), principal=principal, previous_evidence=fresh["evidence_kinds"])
             if tier_edit:
                 # Bump the round like ``submit`` does: earlier verdicts stop
                 # matching ``_round_verdicts`` -- no stale count under the new tier.

@@ -8,7 +8,7 @@ The item must be `claimed` or `in_review`, and either have tier `none` or kind
 That declaration permits legacy decision-only lanes of any tier to close;
 claimants still cannot close `operator_task` (router or operator answer only).
 Create/edit refuses decision-only evidence with a non-`none` review tier: set
-`review_tier: none` or add the required implementation evidence kinds. Without
+`review_tier: none` or add the required implementation evidence kinds. Only the router may declare decision-only evidence, including by editing an existing `none` item. Without
 the declaration ordinary `standard`/`high` lanes retain the refusal, which names
 the missing declaration and tier fix. Mixed `[decision, commit]` evidence does
 not confer this lane exception. The `batch_ref` form remains a router-only fallback.
