@@ -22,13 +22,13 @@ def selector():
     (["unknown.txt"], []),
     (["docs/guide.md", "status/card", "build/generated.py", "scratch.py"], []),
     (["tests/notes.md", "src/pkg/README.md"], []),
-    (["src/pkg/missing.py"], ["tests"]),
-    (["tools/new_tool.py"], ["tests"]),
+    (["src/pkg/missing.py"], []),  # unmapped code: bounded smoke, no full suite
+    (["tools/new_tool.py"], []),  # unmapped code: bounded smoke, no full suite
     (["out/generated.py", "docs/example.py", "status/card.md"], []),
     (["docs/guide.md", "src/pkg/core.py", "status/card"], ["tests/test_api.py"]),
     (["conftest.py"], ["tests"]),
     (["tests/helper.py"], ["tests"]),
-    (["src/pkg/orphan.py"], ["tests"]),
+    (["src/pkg/orphan.py"], []),  # unmapped code: bounded smoke, no full suite
     ([], []),
 ])
 def test_selection(tmp_path, changed, expected):
@@ -113,8 +113,7 @@ def test_tracked_non_python_src_asset_falls_back_to_full_suite(tmp_path):
     """A tracked src/*.sql change runs no Python AST, yet production code reads it."""
     _asset_repo(tmp_path)
     plan = selector().select_tests(tmp_path, ["src/pkg/asset.sql"])
-    assert plan["tests"] == ["tests"]
-    assert plan["reason"].startswith("no mapped tests")
+    assert plan["tests"] == []  # smoke contract: no test names src/pkg, none is the selector's own
 
 
 def test_tracked_non_python_src_asset_maps_to_tests_naming_it(tmp_path):
@@ -153,8 +152,7 @@ def test_tracked_deploy_unnamed_falls_back_to_full_suite(tmp_path):
         "deploy/x.service": "[Service]\nExecStart=/bin/true",
     })
     plan = selector().select_tests(tmp_path, ["deploy/x.service"])
-    assert plan["tests"] == ["tests"]
-    assert plan["reason"].startswith("no mapped tests")
+    assert plan["tests"] == []  # top-level dir is too broad to name tests; smoke is empty here
 
 
 def test_docs_and_status_markdown_skipped_when_changed(tmp_path):
