@@ -6,12 +6,9 @@
 
 ### QUOTA-PAUSE-GATE
 
-The usage owner creates `quota-pause` in the spawner state directory at usage
->=95% and unlinks it at reset. Presence alone (including a dangling symlink)
-pauses admission: no second meter, expiry or automatic clearing. Flag read errors
-also pause admission.
-An empty/unset state falls back to `PLANGRAPH_SPAWN_STATE`, then `$XDG_STATE_HOME/plangraph`; an empty/unset XDG root uses
-`~/.local/state/plangraph`.
+The usage owner creates `quota-pause` in the spawner state directory at usage >=95% and unlinks it at reset.
+Presence alone (including a dangling symlink) pauses admission: no second meter, expiry or automatic clearing. Flag read errors also pause admission.
+An empty/unset state falls back to `PLANGRAPH_SPAWN_STATE`, then `$XDG_STATE_HOME/plangraph`; an empty/unset XDG root uses `~/.local/state/plangraph`.
 Session `launch` and `relaunch` refuse with `quota pause` before invoking the
 action or stopping an existing session, without a model filter. Dry runs do not
 bypass the quota check or write audit records.
