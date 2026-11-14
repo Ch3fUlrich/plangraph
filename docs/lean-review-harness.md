@@ -52,3 +52,6 @@ remains in the shared resolver as well.
 
 Management call-log requests refuse redirects, so the Bearer token cannot be
 forwarded to another endpoint after the initial URL validation.
+
+Required-witness preflight applies the management endpoint policy before reading
+the key or launching a seat, so unusable endpoints refuse before work starts.

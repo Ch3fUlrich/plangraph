@@ -56,10 +56,11 @@ def test_required_refusal(monkeypatch, tmp_path, model, reason):
     from plangraph.planner.routing import SpawnRefused
     monkeypatch.delenv(gw.TOKEN_ENV, raising=False)
     monkeypatch.setenv(gw.TOKEN_FILE_ENV, str(tmp_path / 'missing'))
+    env = {'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME'],
+           'OMNIROUTE_BASE_URL': 'https://gateway.invalid/v1'}
     with pytest.raises(SpawnRefused, match=reason):
-        gw.require_witness(model, {'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']},
-                           secrets={gw.TOKEN_FILE_ENV: str(tmp_path / 'missing'),
-                                    'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']})
+        gw.require_witness(model, env,
+                           secrets={**env, gw.TOKEN_FILE_ENV: str(tmp_path / 'missing')})
 
 
 def test_route_gateway_first(monkeypatch, tmp_path):
@@ -82,7 +83,7 @@ def test_route_gateway_first(monkeypatch, tmp_path):
 
 def test_required_uses_pinned_secrets(monkeypatch):
     monkeypatch.setenv(gw.TOKEN_ENV, 'ambient')
-    secrets = {gw.TOKEN_ENV: 'pinned', 'OMNIROUTE_BASE_URL': 'http://gateway/v1'}
+    secrets = {gw.TOKEN_ENV: 'pinned', 'OMNIROUTE_BASE_URL': 'https://gateway.invalid/v1'}
     gw.require_witness('omniroute/model', secrets, secrets=secrets)
     from plangraph.planner.routing import SpawnRefused
     with pytest.raises(SpawnRefused, match='gateway endpoint not configured'):
@@ -93,9 +94,9 @@ def test_required_uses_pinned_secrets(monkeypatch):
 @pytest.mark.parametrize('model', [None, 'direct/model', 'omniroute/model', 'mimo/model'])
 def test_gateway_predicate_matches_requirement(model):
     from plangraph.planner.routing import SpawnRefused
-    env = {'OMNIROUTE_BASE_URL': 'http://gateway/v1',
+    env = {'OMNIROUTE_BASE_URL': 'https://gateway.invalid/v1',
            'OPENCODE_CONFIG_CONTENT': json.dumps({'providers': {'mimo': {'settings': {}}}})}
-    secrets = {gw.TOKEN_ENV: 'synthetic', 'OMNIROUTE_BASE_URL': 'http://gateway/v1'}
+    secrets = {gw.TOKEN_ENV: 'synthetic', 'OMNIROUTE_BASE_URL': 'https://gateway.invalid/v1'}
     if gw.gateway_leg(model, env):
         gw.require_witness(model, env, secrets=secrets)
     else:
@@ -105,7 +106,7 @@ def test_gateway_predicate_matches_requirement(model):
 
 def test_gate_uses_leg_env_and_skips_other_roles():
     from plangraph.planner.routing import SpawnRefused
-    secrets = {gw.TOKEN_ENV: 'synthetic', 'OMNIROUTE_BASE_URL': 'http://gateway/v1'}
+    secrets = {gw.TOKEN_ENV: 'synthetic', 'OMNIROUTE_BASE_URL': 'https://gateway.invalid/v1'}
     card = {'witness_required': True}
     gw.witness_gate(None, 'review', None, {}, secrets=secrets)
     gw.witness_gate(card, 'implement', None, {}, secrets=secrets)
@@ -113,7 +114,7 @@ def test_gate_uses_leg_env_and_skips_other_roles():
         gw.witness_gate(card, 'review', 'mimo/model',
                         {'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']}, secrets=secrets)
     env = dict(secrets, OPENCODE_CONFIG_CONTENT=json.dumps(
-        {'providers': {'mimo': {'settings': {'baseURL': 'http://gateway/v1'}}}}))
+        {'providers': {'mimo': {'settings': {'baseURL': 'https://gateway.invalid/v1'}}}}))
     gw.witness_gate(card, 'review', 'mimo/model', env, secrets=secrets)
 
 
@@ -127,7 +128,7 @@ def test_required_plan_refused_before_run_artifacts(tmp_path, monkeypatch):
     direct = replace(gateway, id='direct', model='direct/model')
     plan = SpawnPlan((direct,), (), 'test', (), ())
     monkeypatch.setenv(gw.TOKEN_ENV, 'synthetic')
-    monkeypatch.setenv('OMNIROUTE_BASE_URL', 'http://gateway/v1')
+    monkeypatch.setenv('OMNIROUTE_BASE_URL', 'https://gateway.invalid/v1')
     service = SpawnService(state=tmp_path)
     monkeypatch.setattr(service, '_annotate_spawn', lambda *a: pytest.fail('annotation before gate'))
     with pytest.raises(SpawnRefused, match='not a gateway leg'):
@@ -139,10 +140,10 @@ def test_required_plan_refused_before_run_artifacts(tmp_path, monkeypatch):
 
 def test_mixed_gate_retains_all_capable_legs(monkeypatch):
     monkeypatch.setenv(gw.TOKEN_ENV, 'synthetic')
-    monkeypatch.setenv('OMNIROUTE_BASE_URL', 'http://gateway/v1')
-    env = {'OMNIROUTE_BASE_URL': 'http://gateway/v1',
+    monkeypatch.setenv('OMNIROUTE_BASE_URL', 'https://gateway.invalid/v1')
+    env = {'OMNIROUTE_BASE_URL': 'https://gateway.invalid/v1',
            'OPENCODE_CONFIG_CONTENT': json.dumps({'provider': {'mimo': {
-               'options': {'baseURL': 'http://gateway/v1'}}}})}
+               'options': {'baseURL': 'https://gateway.invalid/v1'}}}})}
     monkeypatch.setattr(gw, 'review_child_env', lambda: env)
     direct, mimo, gateway = [SimpleNamespace(id=p, model=p + '/model', disabled=None)
                              for p in ('direct', 'mimo', 'omniroute')]
@@ -167,9 +168,9 @@ def test_nonrequired_never_builds_env(monkeypatch, card, role):
 
 def test_child_endpoint_must_match_witness_endpoint():
     from plangraph.planner.routing import SpawnRefused
-    secrets = {gw.TOKEN_ENV: 'synthetic', 'OMNIROUTE_BASE_URL': 'http://gateway/v1'}
+    secrets = {gw.TOKEN_ENV: 'synthetic', 'OMNIROUTE_BASE_URL': 'https://gateway.invalid/v1'}
     with pytest.raises(SpawnRefused, match='differs from witness endpoint'):
-        gw.require_witness('omniroute/model', {'OMNIROUTE_BASE_URL': 'http://direct/v1'},
+        gw.require_witness('omniroute/model', {'OMNIROUTE_BASE_URL': 'https://direct.invalid/v1'},
                            secrets=secrets)
 
 

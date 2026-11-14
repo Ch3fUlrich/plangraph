@@ -209,3 +209,22 @@ def test_management_request_refuses_redirects(monkeypatch, status):
         server.server_close()
         thread.join(timeout=5)
         assert not thread.is_alive()
+
+
+@pytest.mark.parametrize('endpoint', ['http://gateway.invalid/v1', 'ftp://gateway.invalid/v1',
+                                     'https://ops:secret@gateway.invalid/v1'])
+def test_required_witness_validates_before_key_read(monkeypatch, endpoint):
+    from plangraph.planner.routing import SpawnRefused
+    env = {'OMNIROUTE_BASE_URL': endpoint, gw.TOKEN_ENV: 'fixture-management-key'}
+    monkeypatch.setattr(gw, 'load_token', lambda *_: pytest.fail('invalid endpoint read management key'))
+    with pytest.raises(SpawnRefused, match='gateway endpoint must use HTTP'):
+        gw.require_witness('omniroute/model', env, secrets=env)
+
+
+def test_required_witness_invalid_file_never_reads_key(isolated_config, monkeypatch):
+    import os
+    from plangraph.planner.routing import SpawnRefused
+    (isolated_config / 'omniroute-base-url').write_text('ftp://gateway.invalid/v1')
+    monkeypatch.setattr(gw, 'load_token', lambda *_: pytest.fail('invalid file read management key'))
+    with pytest.raises(SpawnRefused, match='gateway endpoint not configured'):
+        gw.require_witness('omniroute/model', dict(os.environ), secrets=dict(os.environ))

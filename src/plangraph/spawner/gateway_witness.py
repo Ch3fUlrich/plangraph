@@ -19,6 +19,7 @@ import urllib.parse
 import urllib.request
 
 from plangraph.routing_support.opencode_overlay import _strip_jsonc
+from plangraph.routing_support.opencode_render import valid_gateway_endpoint
 from .gateway_models import (  # compatibility re-exports for callers
     PROVIDER_ALIASES, model_segment, served_family, served_models,
 )
@@ -170,11 +171,14 @@ def require_witness(model, env=None, *, secrets=None):
     try:
         if reason:
             raise LookupError(reason)
-        load_token(secrets)
-        if not _gateway(env) or not _gateway(secrets):
+        child, parent = _gateway(env), _gateway(secrets)
+        if not child or not parent:
             raise LookupError('gateway endpoint not configured')
-        if _gateway(env).rstrip('/').removesuffix('/v1') != _gateway(secrets).rstrip('/').removesuffix('/v1'):
+        if child.rstrip('/').removesuffix('/v1') != parent.rstrip('/').removesuffix('/v1'):
             raise LookupError('child gateway endpoint differs from witness endpoint')
+        if not valid_gateway_endpoint(parent):
+            raise LookupError('gateway endpoint must use HTTP(S) with a host and HTTPS outside loopback')
+        load_token(secrets)
     except LookupError as exc:
         raise SpawnRefused('witness required: ' + str(exc)) from None
 
@@ -195,7 +199,6 @@ def fetch_rows(tag, env, *, timeout=5, opener=None, secrets=None):
     base = _gateway(secrets)
     if not base:
         raise LookupError('gateway endpoint not configured')
-    from plangraph.routing_support.opencode_render import valid_gateway_endpoint
     if not valid_gateway_endpoint(base):
         raise LookupError('gateway endpoint must use HTTP(S) with a host and HTTPS outside loopback')
     token = load_token(secrets)
