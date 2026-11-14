@@ -154,3 +154,121 @@ def test_rust_checks_receive_no_hook_git_environment(repo, monkeypatch):
     assert preflight.main(['--base', 'HEAD', '--fast'], repo) == 0
     rust_env = next(env for command, _, env in calls if command[0] == 'cargo')
     assert not any(key.upper().startswith('GIT_') for key in rust_env)
+
+
+def _git_snapshot(repo):
+    metadata = repo / '.git'
+    return {p.relative_to(metadata).as_posix(): p.read_bytes()
+            for p in metadata.rglob('*') if p.is_file()}
+
+
+
+@pytest.mark.parametrize('boundary', ['hook', 'selector', 'pytest'])
+def test_hook_binding_never_mutates_caller_repository(tmp_path, boundary):
+    """Every repository and every deliberately leaked variable belongs to this fixture."""
+    import shutil
+    source = Path(__file__).resolve().parents[1]
+    victim, suite, checkout = (tmp_path / name for name in ('caller', 'suite', 'checkout'))
+    victim.mkdir()
+    suite.mkdir()
+    checkout.mkdir()
+    home = tmp_path / 'home'
+    home.mkdir()
+    clean = {key: value for key, value in os.environ.items() if not key.upper().startswith('GIT_')}
+    clean.update(HOME=str(home), GIT_CONFIG_NOSYSTEM='1')
+    subprocess.run(['git', 'init', '-qb', 'protected', str(victim)], env=clean, check=True)
+    subprocess.run(['git', '-C', str(victim), '-c', 'user.name=Fixture', '-c',
+                    'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'original'],
+                   env=clean, check=True)
+    before = _git_snapshot(victim)
+    metadata = victim / '.git'
+    incoming = dict(clean, GIT_DIR=str(metadata), GIT_WORK_TREE=str(victim),
+                    GIT_COMMON_DIR=str(metadata), GIT_INDEX_FILE=str(metadata / 'index'),
+                    GIT_OBJECT_DIRECTORY=str(metadata / 'objects'),
+                    GIT_ALTERNATE_OBJECT_DIRECTORIES=str(metadata / 'objects'),
+                    GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='fixture.inherited',
+                    GIT_CONFIG_VALUE_0='caller', GIT_PREFIX='caller/',
+                    FIXTURE_CHECKOUT=str(checkout))
+    incoming['PYTHONPATH'] = os.pathsep.join((str(source / 'src'), str(suite / 'tests')))
+    incoming.pop('PYTEST_ADDOPTS', None)
+    incoming.pop('PYTEST_SHARD', None)
+    mutation = (
+        "import os, subprocess\n"
+        "def test_fixture():\n"
+        "    os.chdir(os.environ['FIXTURE_CHECKOUT'])\n"
+        "    subprocess.run(['git', 'init', '-qb', 'main'], check=True)\n"
+        "    subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', "
+        "'commit', '--allow-empty', '-qm', 'fixture mutation'], check=True)\n"
+        "    subprocess.run(['git', 'config', 'user.name', 'Child fixture'], check=True)\n"
+    )
+    if boundary == 'hook':
+        tools = suite / 'tools'
+        tools.mkdir()
+        (tools / 'affected_tests.py').write_text(mutation + '\ntest_fixture()\n')
+        driver = suite / 'driver.py'
+        driver.write_text(
+            'import runpy\nfrom pathlib import Path\n'
+            f'hook = runpy.run_path({str(source / "tools/hooks/pre-push")!r})\n'
+            f'raise SystemExit(hook["affected_gate"](Path({str(suite)!r}), "unused", "HEAD"))\n')
+        command = [sys.executable, str(driver)]
+    else:
+        tests = suite / 'tests'
+        tests.mkdir()
+        (tests / 'test_binding.py').write_text(mutation)
+        if boundary == 'selector':
+            command = [sys.executable, str(source / 'tools/affected_tests.py'), '--root', str(suite),
+                       '--base', 'HEAD', '--changed', 'tests/test_binding.py', '--run', '--workers', '0']
+        else:
+            for name in ('conftest.py', 'pgtest_shm.py', '_keeper_threads.py', 'win_skips.py'):
+                shutil.copy2(source / 'tests' / name, tests / name)
+            command = [sys.executable, '-m', 'pytest', '-q', 'tests/test_binding.py']
+    result = subprocess.run(command, cwd=suite, env=incoming, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _git_snapshot(victim) == before, 'caller refs, HEAD or config changed'
+    assert (checkout / '.git/HEAD').is_file()
+
+
+@pytest.mark.parametrize('boundary', ['hook', 'selector', 'pytest'])
+def test_test_environment_uses_git_discovery_and_removes_config_prefix(tmp_path, monkeypatch, boundary):
+    import conftest
+    import runpy
+    from test_affected_tests import selector
+    root = Path(__file__).resolve().parents[1]
+    helper = (runpy.run_path(str(root / 'tools/hooks/pre-push'))['test_environment'] if boundary == 'hook'
+              else selector().test_environment if boundary == 'selector' else conftest._test_environment)
+    inherited = dict(GIT_DIR='caller', GIT_FUTURE_BINDING='caller', GIT_PREFIX='prefix/',
+                     GIT_CONFIG='caller', GIT_CONFIG_GLOBAL='caller', GIT_CONFIG_NOSYSTEM='1',
+                     GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_7='caller', GIT_CONFIG_VALUE_7='caller',
+                     git_config_future='caller', PATH='preserved', GIT_SSH_COMMAND='preserved')
+    before = dict(inherited)
+    def discover(command, **kwargs):
+        assert command == ['git', 'rev-parse', '--local-env-vars']
+        assert kwargs['env'] == inherited
+        return 'GIT_DIR\nGIT_FUTURE_BINDING\n'
+    monkeypatch.setattr(subprocess, 'check_output', discover)
+    assert helper(tmp_path, inherited) == {'PATH': 'preserved', 'GIT_SSH_COMMAND': 'preserved'}
+    assert inherited == before  # Hook-owned Git calls retain their original context.
+
+
+@pytest.mark.parametrize('boundary', ['hook', 'selector'])
+def test_git_discovery_failure_never_launches_tests(tmp_path, monkeypatch, boundary):
+    import runpy
+    from test_affected_tests import selector
+    (tmp_path / 'tools').mkdir()
+    (tmp_path / 'tools/affected_tests.py').touch()
+    (tmp_path / 'tests').mkdir()
+    (tmp_path / 'tests/test_fixture.py').touch()
+    monkeypatch.setenv('PREFLIGHT_SKIP', '1')
+    def unavailable(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, args[0])
+    monkeypatch.setattr(subprocess, 'check_output', unavailable)
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: pytest.fail('test process launched'))
+    if boundary == 'hook':
+        hook = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'tools/hooks/pre-push'))
+        assert hook['affected_gate'](tmp_path, 'base', 'head') == 1
+    else:
+        module = selector()
+        monkeypatch.setattr(module, 'select_tests', lambda *a, **k: {'tests': ['tests/test_fixture.py']})
+        monkeypatch.setattr(sys, 'argv', ['affected_tests', '--base', 'HEAD', '--changed',
+                                       'tests/test_fixture.py', '--run'])
+        assert module.main(root=tmp_path) == 1

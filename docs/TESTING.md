@@ -75,3 +75,10 @@ pass through. Direct systemd-run commands selecting that slice remain allowed.
 Python interpreter option values, Cargo toolchain selectors, and wrapper option
 values are skipped before checking the test command; quoted option values are
 not commands. An unresolvable home directory counts as an absent marker.
+
+Git hook callers must not bind tests to their repository. The pre-push gate
+passes a clean environment to the selector, which cleans it again for pytest;
+the session guard also removes inherited bindings before collection and fixtures.
+Each boundary removes Git-advertised local variables, `GIT_CONFIG*` and
+`GIT_PREFIX`. Environment-discovery errors stop test launches. Regression tests
+use throwaway caller repositories and verify refs, HEAD and config byte for byte.
