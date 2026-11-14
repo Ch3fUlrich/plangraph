@@ -20,6 +20,7 @@ import os
 import shutil
 import difflib
 import re
+import runpy
 import subprocess
 import sys
 import time
@@ -198,13 +199,8 @@ def python_interpreter(root):
 
 
 def test_environment(root, env):
-    """Detach test subprocesses from every Git-advertised repository binding."""
-    local = set(subprocess.check_output(
-        ['git', 'rev-parse', '--local-env-vars'], cwd=root, env=env,
-        text=True, stderr=subprocess.DEVNULL, timeout=30).upper().splitlines())
-    local.add('GIT_PREFIX')
-    return {key: value for key, value in env.items()
-            if key.upper() not in local and not key.upper().startswith('GIT_CONFIG')}
+    """Use the selector's canonical scrub without changing hook-owned Git calls."""
+    return runpy.run_path(str(TOOLS / 'affected_tests.py'))['test_environment'](root, env)
 
 
 def affected_gate(root, base, head, timeout=240):

@@ -435,6 +435,7 @@ def test_pushed_tree_cap_overrides_older_hook_checkout(repo, tmp_path):
     (old / 'hooks').mkdir(parents=True)
     shutil.copy2(HOOK, old / 'hooks/pre-push')
     shutil.copytree(ROOT / 'tools/split', old / 'split')
+    shutil.copy2(ROOT / 'tools/affected_tests.py', old / 'affected_tests.py')
     (old / 'check_file_size.py').write_text((ROOT / 'tools/check_file_size.py').read_text().replace('LIMIT = 800', 'LIMIT = 400'))
     result = subprocess.run([sys.executable, str(old / 'hooks/pre-push')], cwd=r,
         input=push_line('phase/fixture', head, base) + '\n', capture_output=True, text=True,

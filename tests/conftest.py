@@ -9,6 +9,7 @@ re-checks the chain over HTTP (head after each write == sha256(previous head + e
 head against SQLite through the adapter.
 """
 import re
+import runpy
 import hashlib
 import atexit
 import os
@@ -131,13 +132,8 @@ def git_config_guard(root):
 
 
 def _test_environment(root, env):
-    """Detach test subprocesses from every Git-advertised repository binding."""
-    local = set(subprocess.check_output(
-        ['git', 'rev-parse', '--local-env-vars'], cwd=root, env=env,
-        text=True, stderr=subprocess.DEVNULL, timeout=30).upper().splitlines())
-    local.add('GIT_PREFIX')
-    return {key: value for key, value in env.items()
-            if key.upper() not in local and not key.upper().startswith('GIT_CONFIG')}
+    """Use the selector's canonical scrub before test collection and fixtures."""
+    return runpy.run_path(str(_TOOLS / 'affected_tests.py'))['test_environment'](root, env)
 
 
 def _clear_inherited_git_environment():

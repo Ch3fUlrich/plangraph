@@ -221,6 +221,9 @@ def test_hook_binding_never_mutates_caller_repository(tmp_path, boundary):
             command = [sys.executable, str(source / 'tools/affected_tests.py'), '--root', str(suite),
                        '--base', 'HEAD', '--changed', 'tests/test_binding.py', '--run', '--workers', '0']
         else:
+            shared = suite / 'tools/affected_tests.py'
+            shared.parent.mkdir(exist_ok=True)
+            shutil.copy2(source / 'tools/affected_tests.py', shared)
             for name in ('conftest.py', 'pgtest_shm.py', '_keeper_threads.py', 'win_skips.py'):
                 shutil.copy2(source / 'tests' / name, tests / name)
             command = [sys.executable, '-m', 'pytest', '-q', 'tests/test_binding.py']
@@ -230,14 +233,14 @@ def test_hook_binding_never_mutates_caller_repository(tmp_path, boundary):
     assert (checkout / '.git/HEAD').is_file()
 
 
-@pytest.mark.parametrize('boundary', ['hook', 'selector', 'pytest'])
+@pytest.mark.parametrize('boundary', ['hook', 'selector', 'pytest', 'preflight'])
 def test_test_environment_uses_git_discovery_and_removes_config_prefix(tmp_path, monkeypatch, boundary):
     import conftest
     import runpy
     from test_affected_tests import selector
     root = Path(__file__).resolve().parents[1]
     helper = (runpy.run_path(str(root / 'tools/hooks/pre-push'))['test_environment'] if boundary == 'hook'
-              else selector().test_environment if boundary == 'selector' else conftest._test_environment)
+              else selector().test_environment if boundary == 'selector' else preflight.test_environment if boundary == 'preflight' else conftest._test_environment)
     inherited = dict(GIT_DIR='caller', GIT_FUTURE_BINDING='caller', GIT_PREFIX='prefix/',
                      GIT_CONFIG='caller', GIT_CONFIG_GLOBAL='caller', GIT_CONFIG_NOSYSTEM='1',
                      GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_7='caller', GIT_CONFIG_VALUE_7='caller',

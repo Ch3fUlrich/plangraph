@@ -332,3 +332,5 @@ The pre-push hook and preflight print their Python interpreter. They prefer `.ve
 Rust Git fixtures share `pg_worker_core::git_test_support` (unit tests or the `test-support` feature). It clears inherited and preconfigured `GIT_*` controls before setting a null global/system config, fixture HOME/XDG paths and test identity. Test consumers enable the feature through dev-dependencies; fixture helpers must not construct unprotected Git commands.
 
 Local preflight invokes `affected_tests.py --files-only`: changed test files and reverse-import consumers remain explicit files, while workflow/config/shared-fixture changes add bounded smoke coverage instead of selecting `tests/`. An unreadable graph refuses local selection. CI keeps the conservative full-suite fallback. The affected-test limit remains 240 seconds; Rust checks also receive an environment without inherited `GIT_*` controls.
+
+Hook, selector, preflight, and pytest entry share `tools/affected_tests.py::test_environment`; Git discovery failure refuses test launch, and the hook's own Git calls retain their original context.

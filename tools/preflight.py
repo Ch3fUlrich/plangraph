@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import re
+import runpy
 from pathlib import Path
 import shutil
 import subprocess
@@ -113,13 +114,8 @@ def rust_commands(root, base, head, env=None):
 
 
 def test_environment(root, env):
-    """A pre-push caller's Git context must not select a fixture's repository."""
-    local = set(subprocess.check_output(
-        ["git", "rev-parse", "--local-env-vars"], cwd=root, env=env,
-        text=True, stderr=subprocess.DEVNULL, timeout=CHECK_TIMEOUT).splitlines())
-    return {key: value for key, value in env.items()
-            if key not in local
-            and not key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
+    """Use the selector's canonical scrub for selected test subprocesses."""
+    return runpy.run_path(str(Path(__file__).with_name('affected_tests.py')))['test_environment'](root, env)
 
 
 def python_interpreter(root):
