@@ -18,11 +18,16 @@ pub(crate) fn tools() -> Vec<Tool> {
     static TOOLS: OnceLock<Vec<Tool>> = OnceLock::new();
     TOOLS
         .get_or_init(|| {
-            let mut catalogue: serde_json::Value = serde_json::from_str(TOOLS_JSON).expect("tool catalogue");
+            let mut catalogue: serde_json::Value =
+                serde_json::from_str(TOOLS_JSON).expect("tool catalogue");
             for tool in catalogue.as_array_mut().expect("tool array") {
-                if matches!(tool["name"].as_str(), Some("plangraph_agent_route" | "plangraph_agent_spawn")) {
+                if matches!(
+                    tool["name"].as_str(),
+                    Some("plangraph_agent_route" | "plangraph_agent_spawn")
+                ) {
                     tool["inputSchema"]["properties"]["leg"] = serde_json::json!({
-                        "type":"string", "description":"Registered leg reference; native review kinds: agy-cli or claude-cli"
+                        "type":"string", "enum":["agy-cli", "claude-cli"],
+                        "description":"Native review kind (role=review): agy-cli or claude-cli"
                     });
                 }
             }
@@ -345,6 +350,7 @@ mod tests {
                     .remove("leg")
                     .unwrap();
                 assert_eq!(leg["type"], "string");
+                assert_eq!(leg["enum"], serde_json::json!(["agy-cli", "claude-cli"]));
                 assert!(leg["description"].as_str().unwrap().contains("agy-cli"));
             }
         }
