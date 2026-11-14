@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Pre-push gate: public scrub (D-1751) + 400-line file size (AO-400LOC, D-3198).
 
-Runs the tools/split/scrub_check rules over the files changed in the commits being
-pushed (diff vs the remote sha; for a new branch, vs the merge-base with origin/main).
+Runs scrub rules over committed blobs in the pushed range, including preflight;
+new branches scrub from origin/main and select affected test files from their nearest remote base.
+Missing preflight refuses main pushes; topic and tag pushes retain the other gates.
+Preflight uses file-only local selection; suite-control smoke checks stay bounded, with full coverage in CI.
 When origin/main is available, identical upstream/base blobs and inherited lines
 are excluded; without it the stricter whole-file scan remains in effect.
 PLANGRAPH_SCRUB_WORDS overrides ~/.config/plangraph/scrub-words.txt; an explicit
@@ -16,12 +18,14 @@ Install: git config core.hooksPath tools/hooks (see CONTRIBUTING.md).
 from __future__ import annotations
 
 import os
+import shutil
 import difflib
 import re
 import subprocess
 import sys
 from pathlib import Path
 
+PYTHON = sys.executable
 TOOLS = Path(__file__).resolve().parent.parent
 SPLIT = TOOLS / "split"
 FILE_SIZE = TOOLS / "check_file_size.py"
@@ -47,9 +51,9 @@ def git_out(*args):
     return r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
 
 
-def base_commit(remote_sha, local_sha):
+def affected_base_commit(remote_sha, local_sha):
     """What the pushed commits add: the remote sha when the push fast-forwards,
-    else a merge-base; a new branch diffs against origin/main's merge-base, and
+    else a merge-base; a new branch uses its nearest remote merge-base, and
     with no usable base at all, everything in the pushed commits is checked."""
     if not is_zero(remote_sha) and git("cat-file", "-e", remote_sha + "^{commit}").returncode == 0:
         if git("merge-base", "--is-ancestor", remote_sha, local_sha).returncode == 0:
@@ -58,11 +62,30 @@ def base_commit(remote_sha, local_sha):
         if mb:
             return mb
     else:
-        if git_out("rev-parse", "--verify", "-q", "origin/main"):
-            mb = git_out("merge-base", "origin/main", local_sha)
-            if mb:
-                return mb
+        best, distance = "", None
+        # A stacked branch inherits its phase history. Choose the closest known
+        # remote merge-base so affected tests cover only the branch's changes.
+        refs = git_out("for-each-ref", "--format=%(refname)", "refs/remotes/origin").splitlines()
+        refs.sort(key=lambda ref: (ref != "refs/remotes/origin/main", ref))
+        for ref in refs:
+            if ref.endswith("/HEAD"):
+                continue
+            mb = git_out("merge-base", ref, local_sha)
+            count = git_out("rev-list", "--count", f"{mb}..{local_sha}") if mb else ""
+            if count.isdigit() and (distance is None or int(count) < distance):
+                best, distance = mb, int(count)
+        if best:
+            return best
     return git_out("hash-object", "-t", "tree", "--stdin")
+
+
+def base_commit(remote_sha, local_sha):
+    """Public scrub must cover inherited stacked history on a new remote branch."""
+    if not is_zero(remote_sha):
+        return affected_base_commit(remote_sha, local_sha)
+    main = git_out('rev-parse', '--verify', '-q', 'refs/remotes/origin/main^{commit}')
+    base = git_out('merge-base', main, local_sha) if main else ''
+    return base or git_out('hash-object', '-t', 'tree', '--stdin')
 
 
 def main_baselines(local_sha):
@@ -119,7 +142,7 @@ def scan_blob(rel, local_sha, cfg, find_shapes, hits, baselines=()):
 
 def file_size_gate():
     """tools/check_file_size.py on the pushing checkout: 0 clean, 1 refuse."""
-    r = subprocess.run([sys.executable, str(FILE_SIZE)], capture_output=True, text=True, timeout=60)
+    r = subprocess.run([PYTHON, str(FILE_SIZE)], capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         sys.stderr.write(r.stdout + r.stderr)
         print("pre-push: file-size gate failed: push refused (split the file, "
@@ -133,7 +156,7 @@ def changelog_docs_warn(base, head):
     if not CHANGELOG_DOCS.is_file():
         return
     r = subprocess.run(
-        [sys.executable, str(CHANGELOG_DOCS), "--base", base, "--head", head, "--warn-only"],
+        [PYTHON, str(CHANGELOG_DOCS), "--base", base, "--head", head, "--warn-only"],
         capture_output=True,
         text=True,
         timeout=60,
@@ -142,6 +165,17 @@ def changelog_docs_warn(base, head):
         sys.stderr.write(r.stdout)
     if r.stderr:
         sys.stderr.write(r.stderr)
+
+
+def python_interpreter(root):
+    """Prefer this checkout's venv, then PREFLIGHT_PYTHON, then PATH python3."""
+    root = Path(root)
+    for relative in ('.venv/bin/python', '.venv/Scripts/python.exe'):
+        candidate = root / relative
+        if candidate.is_file():
+            return str(candidate.absolute())
+    configured = os.environ.get('PREFLIGHT_PYTHON')
+    return str(Path(configured).expanduser().absolute()) if configured else shutil.which('python3') or 'python3'
 
 
 def main():
@@ -153,6 +187,10 @@ def main():
 
 
 def push_main():
+    global PYTHON
+    cargo_bin = Path.home() / '.cargo/bin'
+    if cargo_bin.is_dir():
+        os.environ['PATH'] = str(cargo_bin) + os.pathsep + os.environ.get('PATH', '')
     refs = [rec.split(maxsplit=3) for rec in sys.stdin.read().splitlines()]
     if not refs:
         return 0
@@ -188,6 +226,8 @@ def push_main():
     refs = [rec for rec in refs if not is_zero(rec[1])]
     if not refs:
         return 0
+    PYTHON = python_interpreter(Path(git_out("rev-parse", "--show-toplevel")))
+    print(f"pre-push Python: {PYTHON}", flush=True)
     if file_size_gate():
         return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
@@ -248,8 +288,9 @@ def push_main():
     preflight = root / "tools/preflight.py"
     if os.environ.get("PREFLIGHT_SKIP") != "1" and preflight.is_file():
         for _, local_sha, _, remote_sha in refs:
-            command = [sys.executable, str(preflight),
-                       "--base", base_commit(remote_sha, local_sha), "--head", local_sha]
+            command = [PYTHON, str(preflight),
+                       "--base", affected_base_commit(remote_sha, local_sha),
+                       "--scrub-base", base_commit(remote_sha, local_sha), "--head", local_sha]
             if os.environ.get("PREFLIGHT_FAST") == "1":
                 command.append("--fast")
             # Per-check deadlines govern, including the possible INFRA retry.
