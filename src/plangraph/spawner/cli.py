@@ -206,7 +206,7 @@ def main(argv=None):
                 service.save_refusal(exc, args.role)
                 raise
             # Explicit model/leg overrides intentionally bypass routing, not admission.
-            if not args.model and not args.leg:
+            if not args.model and not args.leg and args.card.get('run_kind') != 'native-codex':
                 # service.route saves the refusal record itself (one record per route error).
                 service.route(args.card, args.role, args.writer_family, args.review_of, **options)
             if args.dry_run:

@@ -11,6 +11,7 @@ from pathlib import Path
 import asyncio, hashlib, json, os, socket, time, uuid
 from .runner import SpawnerRunner
 from .cancel_recorded import cancel_recorded
+from .remote_ps import native_receipt
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
@@ -34,12 +35,16 @@ class SpawnService(SeatSpawnMixin):
     def result(self, run_id, **read_retry):
         """Read one run record; retry options forward to read_text_retry."""
         try:
-            return json.loads(read_text_retry(self._path(run_id), **read_retry))
+            record = json.loads(read_text_retry(self._path(run_id), **read_retry))
+            if record.get('run_kind') == 'native-codex' and record.get('overflow_remote') and record.get('status') == 'running':
+                from .remote_ps import native_result
+                record = native_result(record); self._save(record)
+            return record
         except FileNotFoundError:
             raise ValueError('unknown run id') from None
 
     def _save(self, record):
-        self._sync_seat(record)
+        native_receipt(record); self._sync_seat(record)
         if not self._path(record['run_id']).exists(): annotate_tree(record)
         from .private_io import atomic_write_private
         from .runner import redact
