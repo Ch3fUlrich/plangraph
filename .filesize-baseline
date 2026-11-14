@@ -9,7 +9,7 @@ rust/worker-core/src/diffscan.rs 480
 rust/worker-core/src/exit_class.rs 452
 rust/worker-core/src/redact.rs 752
 rust/worker-core/src/sandbox_env.rs 570
-rust/worker/src/activities.rs 3565
+rust/worker/src/activities.rs 471
 rust/worker/src/attempt.rs 1972
 rust/worker/src/harness.rs 1523
 rust/worker/src/keeper.rs 2345
@@ -17,7 +17,7 @@ rust/worker/src/mergelock.rs 696
 rust/worker/src/phase.rs 631
 rust/worker/src/phase_workflow.rs 406
 rust/worker/src/question.rs 417
-rust/worker/src/workflow.rs 2314
+rust/worker/src/workflow.rs 722
 rust/worker/tests/e2e.rs 2885
 rust/worker/tests/replay.rs 413
 src/plangraph/catalog_data.py 558
