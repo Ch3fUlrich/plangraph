@@ -199,7 +199,8 @@ def test_default_root_is_script_relative(repo, monkeypatch):
                for _, cwd, _ in calls)
 
 
-def test_rust_selection(repo, monkeypatch):
+@pytest.mark.parametrize("pin_only", [False, True])
+def test_rust_selection(repo, monkeypatch, pin_only):
     crate = repo / "rust/one"
     crate.mkdir(parents=True)
     (crate / "Cargo.toml").write_text('[package]\nname = "one"\n')
@@ -207,6 +208,11 @@ def test_rust_selection(repo, monkeypatch):
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                     "commit", "-qm", "rust"], cwd=repo, check=True)
+    if pin_only:
+        (repo / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.100.0"\n')
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                        "commit", "-qm", "pin"], cwd=repo, check=True)
     monkeypatch.setattr(preflight.shutil, "which", lambda _: "/fake/cargo")
     commands = preflight.rust_commands(repo, "HEAD~1", "HEAD")
     assert commands[1] == ["cargo", "clippy", "-p", "one", "--all-targets", "--", "-D", "warnings"]

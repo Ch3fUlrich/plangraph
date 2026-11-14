@@ -191,8 +191,10 @@ def test_untracked_deploy_asset_is_skipped(tmp_path):
 
 
 def test_root_level_file_is_skipped(tmp_path):
-    _asset_repo(tmp_path, {"README.txt": "hello\n"})
+    _asset_repo(tmp_path, {"README.txt": "hello\n", "rust-toolchain.toml": "[toolchain]",
+                           "tests/test_pin.py": "PIN = 'rust-toolchain.toml'"})
     assert selector().select_tests(tmp_path, ["README.txt"])["tests"] == []
+    assert selector().select_tests(tmp_path, ["rust-toolchain.toml"])["tests"] == ["tests/test_pin.py"]
 
 
 def test_real_repo_deploy_watchdog_selects_w36_regressions():
