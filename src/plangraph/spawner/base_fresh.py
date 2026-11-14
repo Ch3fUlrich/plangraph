@@ -55,7 +55,7 @@ def fresh_worktree_base(repo, *, base='origin/main', default='main', fetch=True)
     from plangraph.routing_errors import SpawnRefused
     def git(*args, check=True):
         return subprocess.run(['git', '-C', os.fspath(repo), *map(str, args)],
-            env=_git_env(), capture_output=True, text=True, check=check, timeout=30)
+            env=_git_env(), capture_output=True, text=True, encoding='utf-8', errors='replace', check=check, timeout=30)
     step = 'worktree_git_failed'
     repo = os.path.abspath(repo)
     try:
