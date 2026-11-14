@@ -52,7 +52,7 @@ def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card,
                and not any(name in leg.model.lower() for name in ("claude", "fable", "opus", "sonnet", "haiku"))
                for leg in plan.legs)
     chosen = next(l for l in DEFAULT_LEGS if l.id == expected[0])
-    if chosen.model.endswith(('-high', '-xhigh', '-max')):
+    if chosen.effort in ('high', 'xhigh', 'max'):
         from plangraph.routing_errors import SpawnRefused
         with pytest.raises(SpawnRefused, match='explicit card effort and D-id'):
             asyncio.run(service.spawn(card=card, prompt="Implement public code", dry_run=True))

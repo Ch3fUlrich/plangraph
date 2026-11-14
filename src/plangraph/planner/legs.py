@@ -236,7 +236,7 @@ EXPLICIT_LEGS += tuple(
         ('agy-gemini-4-hydrogen-medium', 'agy', 'gemini-4-hydrogen-medium', 'gemini', 'medium'),
         ('cx-gpt-6.1-terra-medium', 'opencode', 'omniroute/cx-gpt-6.1-terra-medium', 'gpt', 'medium'),
         ('cx-gpt-6.1-terra-xhigh', 'opencode', 'omniroute/cx-gpt-6.1-terra-xhigh', 'gpt', 'xhigh'),
-        ('muse-ember-max', 'opencode', 'omniroute/muse-ember-max', 'muse', 'max'),
+        ('muse-ember-max', 'opencode', 'omniroute/muse-ember-max', 'muse', None),
         ('claude-fable-5.2-high', 'claude', 'claude-fable-5-2', 'claude', 'high')))
 
 

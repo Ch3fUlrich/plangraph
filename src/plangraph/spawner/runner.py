@@ -1073,6 +1073,7 @@ def spawn_service(*args, **kwargs):
                     limits = thresholds(card, role=role)
                     live_log = str(self._path(run_id).parent / 'live.log')
                     record['live_log'] = live_log
+                    from .target import skip_effort, refuse_effort_exhausted
                     for _ in range(len(plan.legs) + 2):
                         if (watchdog := leg_limits(record, limits)) is None:
                             self._save(record); return
@@ -1080,6 +1081,7 @@ def spawn_service(*args, **kwargs):
                         if chosen is None or current.error:
                             break
                         tried.add(chosen.id)
+                        if skip_effort(record, chosen, card): continue
                         from .leg_probe import before_launch
                         probe_skip = await before_launch(self.runner, chosen, role, dry_run)
                         if probe_skip:
@@ -1170,6 +1172,7 @@ def spawn_service(*args, **kwargs):
                         record.update(status='failed', exit_code=1, error='attempt iteration limit exceeded')
                         return
                     if not any(a.get('status') != 'skipped' for a in record['attempts']):
+                        refuse_effort_exhausted(record)
                         record.update(status='failed', exit_code=1, error='; '.join(
                             a['skip_reason'] for a in record['attempts'] if a.get('skip_reason')) or 'no leg launched')
                     elif any(a.get('skip_reason') and any(m in a['skip_reason'].lower() for m in ('model unavailable', 'not served', 'unknown model', 'not_served_on_host', 'harness_missing')) for a in record['attempts']):

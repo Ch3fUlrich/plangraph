@@ -79,10 +79,28 @@ def resolve_target(target, *, chosen=None):
 
 
 def admit_effort(model, card, effort=None):
-    """D-5840: elevated reasoning requires a card field and operator decision."""
-    suffix = next((e for e in ('xhigh', 'high', 'max') if model.endswith('-' + e)), None)
-    for selected in (effort, suffix):
+    """Elevated declared effort needs explicit authorization; names are not effort."""
+    for selected in (effort, card.get('effort')):
         if selected in ('high', 'xhigh', 'max') and not (
                 card.get('effort') == selected and
                 re.fullmatch(r'D-[0-9]+', str(card.get('effort_decision', '')))):
             raise SpawnRefused('higher effort requires explicit card effort and D-id (effort_decision)')
+
+
+def skip_effort(record, leg, card):
+    """Persist a policy skip without preventing later routed legs from launching."""
+    from dataclasses import asdict
+    try:
+        admit_effort(leg.model, card, leg.effort)
+    except SpawnRefused as exc:
+        record['attempts'].append(dict(leg=asdict(leg), status='skipped',
+            skip_reason='effort_not_allowed: ' + str(exc)))
+        return True
+    return False
+
+
+def refuse_effort_exhausted(record):
+    attempts = record['attempts']
+    if attempts and all(a.get('status') == 'skipped' for a in attempts) and any(
+            a.get('skip_reason', '').startswith('effort_not_allowed:') for a in attempts):
+        raise SpawnRefused('; '.join(a.get('skip_reason', '') for a in attempts))
