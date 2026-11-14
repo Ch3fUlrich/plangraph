@@ -107,12 +107,15 @@ fn missing_policy_fails_closed() {
 #[test]
 fn editor_comments_do_not_hide_valid_trailers() {
     let dir = repo();
-    for comment_char in ["#", ";"] {
-        assert!(
-            git(dir.path(), &["config", "core.commentChar", comment_char])
-                .status
-                .success()
-        );
+    for (key, comment_char) in [
+        ("core.commentChar", "#"),
+        ("core.commentChar", ";"),
+        ("core.commentChar", "auto"),
+        ("core.commentString", "//"),
+    ] {
+        assert!(git(dir.path(), &["config", key, comment_char])
+            .status
+            .success());
         std::fs::write(dir.path().join("staged.txt"), comment_char).unwrap();
         assert!(git(dir.path(), &["add", "staged.txt"]).status.success());
         let output = Command::new("git")
@@ -123,7 +126,7 @@ fn editor_comments_do_not_hide_valid_trailers() {
                 "--edit",
                 "--verbose",
                 "-m",
-                "editor commit\n\nWriter: codex",
+                "editor commit\n\n# body forces auto to choose another prefix\n\nWriter: codex",
             ])
             .env("GIT_EDITOR", "true")
             .env("GIT_AUTHOR_NAME", "Test")

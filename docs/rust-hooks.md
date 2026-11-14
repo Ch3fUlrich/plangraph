@@ -63,14 +63,14 @@ integration remain deferred; the production switch belongs to **RUST-HOOKS-SWITC
 
 Run `tools/hooks/install_hooks.sh --git` with the host's shared
 `CARGO_TARGET_DIR` set. It builds the Rust `commit-msg` executable, installs it
-into the checkout's `tools/hooks`, and sets `core.hooksPath` to that directory
+into the checkout's `tools/hooks`, and sets worktree-scoped `core.hooksPath` to that directory
 (including its existing pre-push). Re-run after changing the Rust entry point.
-The binary calls `tools/ci_commit_gate.py commit-message` beside the installed binary
-(in `tools/ci_commit_gate.py`): both CI and Git use `message_violations` for Writer, strict Hand-Edit,
+The binary calls `tools/ci_commit_gate.py commit-message` from the installing
+checkout (resolved relative to the installed binary): both CI and Git use `message_violations` for Writer, strict Hand-Edit,
 and `Changelog: skip (<reason>)` validation. An active merge (`MERGE_HEAD`) bypasses the hook.
 Missing files, interpreters, and failed Git probes refuse the commit.
 Git editor comments are stripped for validation with `git stripspace --strip-comments`
-(respecting `core.commentChar`); the original message file stays intact.
+(respecting `core.commentChar` and `core.commentString`); the original message file stays intact.
 Verbose editor scissors sections are excluded too.
 
 Git does not tell commit-msg whether the invocation is `--amend`. Once
@@ -78,3 +78,9 @@ Git does not tell commit-msg whether the invocation is `--amend`. Once
 or using Git's explicit `--no-verify` override. Inferring an amendment from
 HEAD or matching messages would also exempt new non-merge commits after a merge;
 the hook keeps those guarded. CI still exempts all actual merge objects.
+
+The installer enables `extensions.worktreeConfig` and writes only the current
+worktree's hook path. Removing that worktree leaves other worktrees' hooks intact.
+The existing `check_push_gate.py --install` accepts the equivalent absolute path
+and also preserves worktree scope. Scissors detection supports Git's automatic
+comment-character selection.

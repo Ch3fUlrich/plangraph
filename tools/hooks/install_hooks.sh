@@ -70,10 +70,7 @@ case ${1:-} in
         git_root=$(CDPATH= cd -- "$SELF_DIR/../.." && pwd -P)
         : "${CARGO_TARGET_DIR:?set the shared host CARGO_TARGET_DIR before installing Git hooks}"
         cargo build --manifest-path "$git_root/rust/Cargo.toml" -p pg-hook --bin commit-msg
-        cp -- "$CARGO_TARGET_DIR/debug/commit-msg" "$SELF_DIR/commit-msg"
-        chmod +x "$SELF_DIR/commit-msg"
-        git -C "$git_root" config core.hooksPath "$SELF_DIR"
-        echo "Git hooks installed: $SELF_DIR"
+        "$CARGO_TARGET_DIR/debug/commit-msg" --install "$git_root"
         exit 0
         ;;
     -h|--help)

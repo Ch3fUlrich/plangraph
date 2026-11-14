@@ -1,9 +1,49 @@
 //! Git entry point. Trailer policy lives exclusively in ci_commit_gate.py.
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
+
+fn install(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
+    let root = root.canonicalize()?;
+    let hooks = root.join("tools/hooks");
+    if !root.join("tools/ci_commit_gate.py").is_file() {
+        return Err("checkout has no commit gate".into());
+    }
+    let executable = std::env::current_exe()?;
+    let destination = hooks.join("commit-msg");
+    if destination.canonicalize().ok().as_ref() != Some(&executable) {
+        std::fs::copy(&executable, &destination)?;
+    }
+    std::fs::set_permissions(&destination, std::fs::metadata(&executable)?.permissions())?;
+    for args in [
+        vec!["config", "extensions.worktreeConfig", "true"],
+        vec![
+            "config",
+            "--worktree",
+            "core.hooksPath",
+            hooks.to_str().ok_or("non-UTF-8 hooks path")?,
+        ],
+    ] {
+        if !Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .status()?
+            .success()
+        {
+            return Err("cannot configure worktree Git hooks".into());
+        }
+    }
+    println!("Git hooks installed: {}", hooks.display());
+    Ok(0)
+}
 
 fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let message = std::env::args_os().nth(1).ok_or("missing message file")?;
+    if message == "--install" {
+        let root = std::env::args_os().nth(2).ok_or("missing checkout path")?;
+        return install(Path::new(&root));
+    }
     let root = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .output()?;
@@ -31,28 +71,33 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     // Git removes editor comments after this hook runs. Validate that same
     // message, honoring core.commentChar, without rewriting the user's file.
     let raw = std::fs::read(message)?;
-    let comment = Command::new("git")
-        .args(["config", "--get", "core.commentChar"])
-        .output()?;
-    if !comment.status.success() && comment.status.code() != Some(1) {
-        return Err("cannot inspect Git comment prefix".into());
-    }
-    let prefix = if comment.status.success() {
-        String::from_utf8(comment.stdout)?.trim_end().to_owned()
-    } else {
-        "#".to_owned()
-    };
-    let scissors = format!("{prefix} ------------------------ >8 ------------------------");
-    let cut = raw
+    // Git chooses the prefix for commentString/auto. The scissors suffix is
+    // fixed; do not second-guess its choice by reading only commentChar.
+    let scissors = b" ------------------------ >8 ------------------------";
+    let marker = raw
         .split_inclusive(|b| *b == b'\n')
         .scan(0, |offset, line| {
             let start = *offset;
             *offset += line.len();
             Some((start, line))
         })
-        .find(|(_, line)| line.strip_suffix(b"\n").unwrap_or(line) == scissors.as_bytes())
-        .map_or(raw.len(), |(offset, _)| offset);
-    let mut cleaner = Command::new("git")
+        .find(|(_, line)| line.strip_suffix(b"\n").unwrap_or(line).ends_with(scissors));
+    let cut = marker.map_or(raw.len(), |(offset, _)| offset);
+    let mut command = Command::new("git");
+    if let Some((_, line)) = marker {
+        let line = line.strip_suffix(b"\n").unwrap_or(line);
+        let prefix = std::str::from_utf8(&line[..line.len() - scissors.len()])?;
+        // auto may choose a different prefix because the message contains '#'.
+        if !prefix.is_empty() {
+            command
+                .arg("-c")
+                .arg(format!("core.commentString={prefix}"));
+            if prefix.len() == 1 {
+                command.arg("-c").arg(format!("core.commentChar={prefix}"));
+            }
+        }
+    }
+    let mut cleaner = command
         .args(["stripspace", "--strip-comments"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

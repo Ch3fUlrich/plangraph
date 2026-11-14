@@ -56,6 +56,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "tests/hooks/parity_payloads.json",
     "tools/check_changelog_docs.py",
     "tools/ci_commit_gate.py",
+    "tools/check_push_gate.py",
+    "tools/hooks/pre-push",
     "tools/dell_ci_jobs.py",
     "tools/new_code_allowlist.txt",
     "tools/probe_admission_policy_guard.py",
