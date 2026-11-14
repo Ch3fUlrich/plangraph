@@ -88,3 +88,5 @@ Keeper ready-file startup code and its contract harness predate this round and
 are not mirror wiring. The startup regression allows benign health retries while
 checking every probe's child-owned endpoint (including non-200 and OSError
 retries). Keeper mirror wiring remains a later slice.
+
+The context crate exports rule-scope validation alongside mirroring; see [Rule scopes](rule-scopes.md).
