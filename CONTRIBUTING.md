@@ -366,3 +366,8 @@ to verify reproducibility and CLI serialization.
 Checkpoint 7 includes review evidence records; run its affected Python checks in an isolated clone.
 Python sessions compare only registrations pointing under their temporary test root, so other sessions may move worktrees concurrently; shared and per-worktree config bytes remain guarded. Worktree tests must create their repositories inside temporary roots; the guard reads metadata directly and never runs Git on the real checkout.
 Checkpoint 13 includes routing and provider contracts; run its affected Python checks in an isolated clone.
+
+The pre-push hook checks commit trailers on `origin/main..head` before scrub and
+preflight, including when `PREFLIGHT_SKIP=1`. It queries open PR heads and checks
+foreign merges when gh/network access is available; offline pushes still run the
+local trailer gate and explicitly report the skipped open-PR check.

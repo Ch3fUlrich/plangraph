@@ -18,6 +18,8 @@ Install: git config core.hooksPath tools/hooks (see CONTRIBUTING.md).
 from __future__ import annotations
 
 import os
+import json
+import tempfile
 import shutil
 import difflib
 import re
@@ -151,6 +153,40 @@ def file_size_gate():
     return 0
 
 
+def commit_gate(head):
+    """Refuse bad trailers before expensive checks; only the network probe is optional."""
+    base = git_out("rev-parse", "--verify", "refs/remotes/origin/main^{commit}")
+    if not base:
+        print("pre-push: origin/main unavailable: commit gate refused", file=sys.stderr)
+        return 1
+    command = [PYTHON, str(TOOLS / "ci_commit_gate.py"), "check", "--base", base, "--head", head]
+    result = subprocess.run(command, capture_output=True, text=True)
+    sys.stderr.write(result.stdout + result.stderr)
+    if result.returncode:
+        return result.returncode
+    try:
+        probe = subprocess.run(
+            ["gh", "pr", "list", "--state", "open", "--limit", "10000", "--json", "headRefOid"],
+            capture_output=True, text=True, timeout=15)
+        if probe.returncode:
+            raise OSError("open PR query unavailable")
+        heads = [pr["headRefOid"] for pr in json.loads(probe.stdout)]
+        for sha in heads:
+            if not re.fullmatch(r"[0-9a-f]{40}", sha):
+                raise ValueError("invalid open PR head")
+            if git("cat-file", "-e", sha + "^{commit}").returncode:
+                if git("fetch", "--quiet", "origin", sha).returncode:
+                    raise OSError("open PR head fetch unavailable")
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+        print("pre-push: open PR merge check skipped (network/gh unavailable); local trailer gate passed",
+              file=sys.stderr)
+        return 0
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "open-heads"
+        path.write_text("\n".join(heads), encoding="utf-8")
+        return subprocess.run([*command, "--open-heads", str(path)]).returncode
+
+
 def changelog_docs_warn(base, head):
     """tools/check_changelog_docs.py --warn-only on base..head (the pushed sha): never refuses (D-653)."""
     if not CHANGELOG_DOCS.is_file():
@@ -228,6 +264,9 @@ def push_main():
         return 0
     PYTHON = python_interpreter(Path(git_out("rev-parse", "--show-toplevel")))
     print(f"pre-push Python: {PYTHON}", flush=True)
+    for _, local_sha, _, _ in refs:
+        if commit_gate(local_sha):
+            return 1
     if file_size_gate():
         return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
