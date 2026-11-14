@@ -179,6 +179,8 @@ Co-Authored-By: <author> <noreply@example.com>
 A merged commit whose trailers fail the CI commit gate is never rewritten. A router decision adds its full sha to
 `tools/ci_commit_exempt.txt` in a commit that carries `Gate-Edit: D-<id>` in the same trailer paragraph. The gate reads
 the list from the base commit, so the row has to merge to `main` before the pull request that holds the commit can pass.
+A row for a test-removal failure is added only after the branch asserts the removed behaviour again; the comment line
+above the row names the decision, the pull request and that test.
 
 ## No secrets in the history
 
