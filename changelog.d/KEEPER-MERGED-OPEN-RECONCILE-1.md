@@ -1,0 +1,1 @@
+- Accept `(HH:MMZ)` and `(HH:MxZ)` prefixes in merged GO closes (hours 00–23, minute tens 0–5), with optional `~` before HH and/or `, date -u` before `)`, while retaining non-GO refusal and exact PR-head binding.

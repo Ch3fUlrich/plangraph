@@ -1,6 +1,7 @@
 """Hermetic D-5558 follow-up: real GO authority clauses and D-5529 seats."""
 import socket
 import subprocess
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,68 @@ import pytest
 from test_keeper_close_merged import (HEAD, KEY, _at_write_lock, _close,
                                       _ConnectionProxy, _refused, unseated_w, w)
 from plangraph.keeper import auth
+from plangraph.keeper.errors import Refused
+from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
+
+
+def mirrored_reviews(w, tmp_path):
+    root = tmp_path / "mirror"
+    for run, model in [("run-one", "gemini-test"), ("run-two", "deepseek-test")]:
+        path = root / "fixture" / run / "record.json"
+        path.parent.mkdir(parents=True, mode=0o700)
+        for parent in (root, root / "fixture"):  # mkdir applies the mode to the leaf only
+            parent.chmod(0o700)
+        path.write_text(json.dumps({
+            "run_id": run, "host": "fixture", "item_key": "demo:H",
+            "role": "review", "status": "completed", "exit_code": 0,
+            "served_model": model, "finish_reason": "stop", "attempts": [{}],
+            "completion": {"head_sha": HEAD},
+            "stdout_tail": "TEST_GAMING: no\nVERDICT: PASS\n"}), encoding="utf-8")
+        path.chmod(0o600)
+    w.store.ctx["spawner_records"] = SpawnerRecordAdapter(root)
+    w.decision_path.write_text(
+        f"| D-5504 | demo | GO {HEAD}; Review-Runs: run-one, run-two |\n",
+        encoding="utf-8")
+    return root
+
+
+def test_cited_witnessed_review_runs_backfill_and_close(unseated_w, tmp_path):
+    w = unseated_w
+    mirrored_reviews(w, tmp_path)
+    assert w.store.close_merged(w.p("router"), "demo:H", "D-5504", None)["state"] == "done"
+    rows = w.conn.execute("SELECT payload FROM events WHERE key='demo:H' "
+                          "AND type='review_verdict'").fetchall()
+    assert {json.loads(r[0])["family"] for r in rows} == {"google", "deepseek"}
+    assert w.store.verify_integrity() == []
+
+
+@pytest.mark.parametrize("fault", ["missing", "unwitnessed", "wrong-head", "wrong-item",
+                                  "failed", "pinned", "fix", "ambiguous", "conflicting",
+                                  "after-verdict", "gaming-yes", "override"])
+def test_cited_review_without_witness_stays_in_review(unseated_w, tmp_path, fault):
+    w = unseated_w
+    root = mirrored_reviews(w, tmp_path)
+    path = root / "fixture" / "run-two" / "record.json"
+    record = json.loads(path.read_text())
+    if fault == "missing":
+        path.unlink()
+    else:
+        changes = {"unwitnessed": {"served_model": "unwitnessed"},
+                   "wrong-head": {"completion": {"head_sha": "f" * 40}},
+                   "wrong-item": {"item_key": KEY}, "failed": {"exit_code": 1},
+                   "pinned": {"pinned": True}, "fix": {"stdout_tail": "VERDICT: FIX"},
+                   "ambiguous": {"attempts": [{}, {}]},
+                   "conflicting": {"stdout_tail": "VERDICT: FIX\nTEST_GAMING: no\nVERDICT: PASS"},
+                   "after-verdict": {"stdout_tail": "TEST_GAMING: no\nVERDICT: PASS\nmore prose"},
+                   "gaming-yes": {"stdout_tail": "TEST_GAMING: no\nTEST_GAMING: yes\nVERDICT: PASS"},
+                   "override": {"plan": {"p_source": "override"}}}
+        record.update(changes[fault])
+        path.write_text(json.dumps(record))
+    before = w.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    with pytest.raises(Refused, match="NO-WITNESS"):
+        w.store.close_merged(w.p("router"), "demo:H", "D-5504", None)
+    assert w.store._item("demo:H")["state"] == "in_review"
+    assert w.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == before
 
 
 @pytest.fixture(autouse=True)
@@ -21,6 +84,20 @@ def no_external_io(monkeypatch):
 
 
 PR_FORMS = ["#786", "#786,", "`#786`", "`#786`,"]
+
+
+@pytest.mark.parametrize("stamp", ["(18:30Z, date -u)", "(18:30Z)",
+                                  "(18:3xZ)", "(18:3xZ, date -u)",
+                                  "(~18:30Z)", ""])
+@pytest.mark.parametrize("verdict", ["GO", "NO GO"])
+def test_all_log_stamp_forms_preserve_go_authority(w, stamp, verdict):
+    w.decision_path.write_text(
+        f"| D-5504 | demo | {stamp} {verdict} #786; GO-HEAD {HEAD} |\n",
+        encoding="utf-8")
+    if verdict == "GO":
+        assert _close(w)["state"] == "done"
+    else:
+        _refused(w, "evidence_unverified", "go_row_not_go")
 
 
 # Verbatim authority clauses from the router decision log on origin/main,
