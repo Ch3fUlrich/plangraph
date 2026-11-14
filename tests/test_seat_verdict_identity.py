@@ -1,10 +1,12 @@
 """Record identity binds posting independently of derived evidence."""
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from test_seat_record_fixes import argv_for, rec_dir, sv
+from test_seat_verdict_record import record_dir, seat_record
 
 
 KEY = 'plangraph:D-5047'
@@ -59,7 +61,7 @@ def test_unreadable_identity_cannot_be_laundered_by_evidence_builder(
     monkeypatch.setattr(sv, 'send', forbidden)
     assert sv.main(['--key', OTHER_KEY, '--seat-dir', str(tmp_path),
                     '--writer-family', 'xiaomi', '--token-dir', str(tmp_path),
-                    '--url', 'http://keeper.invalid']) == sv.EXIT_REFUSED
+                    '--url', 'http://keeper.invalid'], record_wait=0) == sv.EXIT_REFUSED
     assert 'cannot read record identity' in capsys.readouterr().err
 
 
@@ -88,3 +90,111 @@ def test_omitted_key_is_required_before_any_seat_or_token_read(
     output = capsys.readouterr()
     assert 'required: --key' in output.err
     assert output.out == ''
+
+@pytest.fixture
+def posting(tmp_path, monkeypatch):
+    argv = record_dir(tmp_path, "run-" + "1" * 32)
+    argv.remove("--dry-run")
+    argv.extend(["--url", "http://keeper.invalid"])
+    sent = []
+
+    def send(url, token, payload):
+        assert url == "http://keeper.invalid" and token == "dummy"
+        assert payload["key"] == "demo:A" and payload["ok"] is True
+        sent.append(payload)
+        return 200, "ok"
+
+    monkeypatch.setattr(sv, "send", send)
+    return argv, tmp_path / ("run-" + "1" * 32), sent
+
+
+@pytest.mark.parametrize("has_getuid", [False, True])
+def test_windows_record_skips_posix_owner_and_mode(posting, monkeypatch, has_getuid):
+    argv, seat, sent = posting
+    (seat / "record.json").chmod(0o777)
+
+    def forbidden():
+        pytest.fail("Windows must not call getuid")
+
+    platform = SimpleNamespace(name="nt", **({"getuid": forbidden} if has_getuid else {}))
+    monkeypatch.setattr(seat_record, "os", platform)
+    assert sv.main(argv) == 0
+    assert len(sent) == 1
+
+
+def test_drive_mount_still_requires_linux_owner(posting, monkeypatch, capsys):
+    argv, seat, sent = posting
+    uid = (seat / "record.json").stat().st_uid
+    # Compare the same foreign owner on Windows and POSIX, including drive mounts.
+    monkeypatch.setattr(seat_record, "os", SimpleNamespace(name="nt", getuid=lambda: uid + 1))
+    assert sv.main(argv) == 0
+    capsys.readouterr()
+    monkeypatch.setattr(seat_record, "os", SimpleNamespace(name="posix", getuid=lambda: uid + 1))
+    monkeypatch.setattr(Path, "resolve", lambda self: Path("/mnt/c") / seat.name / self.name)
+    assert sv.main(argv) == sv.EXIT_REFUSED
+    assert "owned by the current uid" in capsys.readouterr().err
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize("mode", [0o620, 0o602], ids=["group", "other"])
+@pytest.mark.parametrize("root", ["/native", "/mnt/data"])
+def test_posix_record_group_or_other_writable_refused(posting, monkeypatch, capsys, mode, root):
+    argv, seat, sent = posting
+    path = seat / "record.json"
+    path.chmod(mode)
+    uid = path.stat().st_uid
+    monkeypatch.setattr(seat_record, "os", SimpleNamespace(name="nt"))
+    assert sv.main(argv) == 0
+    capsys.readouterr()
+    monkeypatch.setattr(seat_record, "os", SimpleNamespace(name="posix", getuid=lambda: uid))
+    monkeypatch.setattr(Path, "resolve", lambda self: Path(root) / seat.name / self.name)
+    assert sv.main(argv) == sv.EXIT_REFUSED
+    assert "not group/world-writable" in capsys.readouterr().err
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize("drive", ["c", "Z"])
+def test_native_record_link_into_drive_mount_keeps_mode_checks(
+        posting, tmp_path, monkeypatch, capsys, drive):
+    argv, seat, sent = posting
+    path, target = seat / "record.json", tmp_path / "target.json"
+    path.rename(target)
+    target.chmod(0o666)
+    path.symlink_to(target)
+    uid = target.stat().st_uid
+    monkeypatch.setattr(seat_record, "os", SimpleNamespace(name="posix", getuid=lambda: uid))
+    mounted = Path("/mnt") / drive / seat.name / path.name
+    monkeypatch.setattr(Path, "absolute", lambda self: mounted)
+    monkeypatch.setattr(Path, "resolve", lambda self: mounted)
+    # The real target is on the drive, including a native lexical alias.
+    assert sv.main(argv) == 0
+    capsys.readouterr()
+    monkeypatch.setattr(Path, "absolute", lambda self: Path("/native") / seat.name / self.name)
+    assert sv.main(argv) == 0
+    assert not capsys.readouterr().err
+    assert len(sent) == 2
+
+
+def test_mnt_prefix_with_dotdot_is_not_a_drive_path(posting, monkeypatch, capsys):
+    argv, seat, sent = posting
+    path = seat / "record.json"
+    path.chmod(0o666)
+    uid = path.stat().st_uid
+    monkeypatch.setattr(seat_record, "os", SimpleNamespace(name="posix", getuid=lambda: uid))
+    monkeypatch.setattr(Path, "resolve", lambda self: Path("/mnt/c/../../home") / seat.name / self.name)
+    assert sv.main(argv) == sv.EXIT_REFUSED
+    assert "not group/world-writable" in capsys.readouterr().err
+    assert not sent
+
+
+def test_drive_alias_to_native_record_enforces_real_mode(posting, monkeypatch, capsys):
+    argv, seat, sent = posting
+    path = seat / 'record.json'
+    path.chmod(0o666)
+    uid = path.stat().st_uid
+    monkeypatch.setattr(seat_record, 'os', SimpleNamespace(name='posix', getuid=lambda: uid))
+    monkeypatch.setattr(Path, 'absolute', lambda self: Path('/mnt/c/link') / seat.name / self.name)
+    monkeypatch.setattr(Path, 'resolve', lambda self: Path('/native/records') / seat.name / self.name)
+    assert sv.main(argv) == sv.EXIT_REFUSED
+    assert 'not group/world-writable' in capsys.readouterr().err
+    assert not sent
