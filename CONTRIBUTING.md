@@ -374,3 +374,5 @@ Install Git message validation with `tools/hooks/install_hooks.sh --git`
 Writer handoffs named `STATUS-*.txt` are ignored at every depth. Keep them
 outside the checkout; the changelog/docs PR gate also rejects added status
 notes, including forced additions and renames into that naming pattern.
+The status-note check also inspects additions in every non-merge commit, so
+adding and then deleting a note within the PR still fails.

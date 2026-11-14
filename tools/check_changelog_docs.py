@@ -295,6 +295,13 @@ def main(argv: list[str] | None = None) -> int:
     skipped: list[str] = []
     uncovered: list[str] = []
     for sha in commits:
+        added_in_commit = git(root, "diff-tree", "--root", "--no-commit-id", "--name-only",
+                              "-r", "--no-renames", "--diff-filter=A", "-z", sha)
+        if added_in_commit.returncode != 0:
+            return bail(f"check-changelog-docs: git diff-tree failed (commit {sha[:8]})", warn_only)
+        for path in added_in_commit.stdout.split("\0"):
+            if re.fullmatch(r"STATUS-[^/]*\.txt", path.rsplit("/", 1)[-1]):
+                problems.append(f"commit {sha[:8]}: writer status file must not be committed: {path}")
         try:
             reasons, empty = commit_skips(root, sha)
             touches_non_doc = any(not is_doc_path(p) for p in commit_paths(root, sha))

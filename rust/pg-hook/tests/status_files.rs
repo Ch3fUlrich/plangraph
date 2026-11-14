@@ -72,5 +72,13 @@ fn ignored_notes_and_forced_or_renamed_additions() {
             .output()
             .unwrap();
         assert!(result.status.success(), "{result:?}");
+        let full_range = Command::new("python3")
+            .arg(source.join("tools/check_changelog_docs.py"))
+            .args(["--base", "base", "--cwd", root.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(!full_range.status.success());
+        assert!(String::from_utf8_lossy(&full_range.stdout)
+            .contains(&format!("writer status file must not be committed: {name}")));
     }
 }
