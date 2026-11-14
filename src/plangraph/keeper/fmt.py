@@ -224,6 +224,8 @@ def blocked_text(blocked: dict) -> str:
 
 def alerts_text(alerts: dict) -> str:
     lines = []
+    if alerts.get("force_stale_claims"):
+        lines.append(f"force_stale_claims {alerts['force_stale_claims']}")
     for row in alerts.get("lease_expiring") or []:
         lines.append(f"lease {row['key']} by {row.get('claimed_by')} "
                      f"until {row.get('lease_until')}")

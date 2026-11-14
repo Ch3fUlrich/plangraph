@@ -15,6 +15,11 @@ def cmd_close_merged(args, session):
                  "decision_id": args.decision_id, "families": args.families})
 
 
+def cmd_reconfirm(args, session):
+    from .cli_verbs import write
+    return write(session, "reconfirm", {"key": args.key, "decision_id": args.decision_id})
+
+
 def cmd_legacy(args, session):
     from .cli_verbs import write
     return write(session, "set_legacy_state",

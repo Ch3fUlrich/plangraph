@@ -1,0 +1,2 @@
+- Distinguish unchanged operator orders and attributable logging delay from scope changes; add audited pg reconfirm without description edits and expose force-stale claim counts in alerts.
+- Treat an item's explicit source decision as its premise, invalidate retired reconfirmations, and audit unavailable-authority refusals.

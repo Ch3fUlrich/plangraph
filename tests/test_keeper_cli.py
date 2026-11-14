@@ -82,6 +82,17 @@ def test_cli_refusal_exits_2(live, capsys):
     assert "forbidden" in err
 
 
+def test_cli_reconfirm_routes_and_audits(live, tmp_path, capsys):
+    from plangraph.keeper.evidence_decisions import DecisionsAdapter
+    _, w, tokens, _, _ = live
+    path = tmp_path / "decisions.md"
+    path.write_text("| D-9 | demo | demo:A changed scope |\n")
+    w.store.ctx = {"decisions": DecisionsAdapter(path)}
+    assert run(tokens["l1main"], "reconfirm", "demo:A", "D-9", "--json") == 0
+    assert out_json(capsys)["decision_id"] == "D-9"
+    assert w.store.verify_integrity() == []
+
+
 def test_cli_unreachable_read_falls_back(live, capsys):
     server, w, tokens, cfg, _ = live
     snap = w.store.snapshot(w.p("router"))

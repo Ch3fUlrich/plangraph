@@ -31,6 +31,7 @@ HANDLERS = {
     "ready": cli_verbs.cmd_ready,
     "show": cli_verbs.cmd_show,
     "claim": cli_verbs.cmd_claim,
+    "reconfirm": cli_output_verbs.cmd_reconfirm,
     "delegate": cli_verbs.cmd_delegate,
     "heartbeat": cli_verbs.cmd_heartbeat,
     "release": cli_verbs.cmd_release,
@@ -116,6 +117,9 @@ def _add_reads(sub):
 
 
 def _add_writes(sub):
+    reconfirm = _p(sub, "reconfirm", help="record that an item's premise was checked")
+    reconfirm.add_argument("key")
+    reconfirm.add_argument("decision_id", metavar="D-NNN")
     claim = _p(sub, "claim", help="claim a ready item")
     claim.add_argument("key")
     claim.add_argument("--lease", help="lease, e.g. 2h")

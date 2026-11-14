@@ -60,6 +60,7 @@ def test_force_stale_without_open_lane(multipart):
         "reason": "checked", "overrode": [MERGED]}
     world.store.claim(world.p("l1main"), "demo:A", force_stale="checked")
     assert world.store._item("demo:A")["state"] == "claimed"
+    assert world.store.alerts(world.p("reader"))["force_stale_claims"] == 1
 
 
 def test_ready_excludes_merged_and_outdated(multipart):

@@ -2,8 +2,6 @@
 
 Sessions started work that was already merged, cancelled or overtaken by a
 later decision because ``ready``/``show``/``claim`` handed them a thin record.
-This mixin adds, per item:
-
 * ``dep_states`` / ``dependents``: every dependency and dependent with its
   state and, when terminal or replaced, why (cancel reason, ``corrected by``);
 * ``linked_decisions``: D-ids cited in the item text or naming its key in the
@@ -19,8 +17,7 @@ This mixin adds, per item:
 ``claim`` refuses an item with a merged ``Plan-Item`` commit or one a newer
 decision names, unless ``force_stale`` carries a reason, which is recorded on
 the ``claimed`` event.  A cancelled item or dependency is refused as before,
-now with its cancel reason.  Unknown facts (no repo, git failure, no
-decisions file) never refuse.  The guard reads git and the decisions log
+now with its cancel reason. The guard reads git and the decisions log
 before the write lock: both are outside the keeper, so no lock could hold
 them still, and the state checks are repeated under the lock as before.
 """
@@ -85,8 +82,11 @@ class ContextMixin:
     # ------------------------------------------------------------ inputs
     def _inputs(self, index, *, fresh=False):
         """Per-request shared inputs: decision rows, retirements, graph, clock."""
+        reconfirms = {}
+        for row in self.conn.execute("SELECT key,payload FROM events WHERE type='premise_reconfirmed' ORDER BY seq"):
+            reconfirms[row["key"]] = _payload(row["payload"])
         return {"book": src.decision_book(self._adapter("decisions"), fresh=fresh),
-                "graph": _graph(index), "clock": self._decision_clock()}
+                "graph": _graph(index), "clock": self._decision_clock(), "reconfirms": reconfirms}
 
     def _last_activity_map(self):
         out = {}
@@ -134,10 +134,10 @@ class ContextMixin:
         clock = getattr(self, "_ctx_clock", None)
         if clock is not None and clock["stamp"] == stamp:
             return clock
-        clock = {"seqs": [], "marks": [], "last": {}, "stamp": stamp}
+        clock = {"seqs": [], "marks": [], "last": {}, "stamp": stamp, "definitions": {}}
         mark = -1
         for row in self.conn.execute(
-                "SELECT seq, key, payload FROM events WHERE type IN (?,?)"
+                "SELECT seq, key, payload, ts, actor FROM events WHERE type IN (?,?)"
                 " ORDER BY seq", _DEF_TYPES):
             raw = row["payload"]
             ids = src.decision_ids(raw if isinstance(raw, str) else json.dumps(raw))
@@ -146,16 +146,12 @@ class ContextMixin:
             clock["seqs"].append(row["seq"])
             clock["marks"].append(mark)
             clock["last"][row["key"]] = row["seq"]
+            clock["definitions"][row["key"]] = dict(row)
         self._ctx_clock = clock
         return clock
 
     def _watermark(self, item, clock, cited=None):
-        """The newest decision the item's premise knew of, as a number.
-
-        The highest D-id cited in the item text; failing that, the decision
-        clock at its last definition (the highest D-id any definition had
-        cited by then).  ``None`` = unknown, which never refuses.
-        """
+        """Newest cited/source D-id, else the definition clock; None is unknown."""
         cited = src.decision_ids(*self._texts(item)) if cited is None else cited
         if cited:
             return _num(cited[-1])
@@ -168,7 +164,7 @@ class ContextMixin:
     @staticmethod
     def _texts(item):
         return [item.get(name) for name in
-                ("title", "description", "done_criteria", "note")]
+                ("title", "description", "done_criteria", "note", "source")]
 
     def _work(self, item, fetch):
         gitad = self._adapter("git")
@@ -219,8 +215,17 @@ class ContextMixin:
         cited = src.decision_ids(*self._texts(item))
         naming = src.decisions_naming(inputs["book"], key)
         mark = self._watermark(item, inputs["clock"], cited)
+        definition = inputs["clock"]["definitions"].get(key, {})
+        confirmation = inputs["reconfirms"].get(key, {})
+        did = confirmation.get("decision_id")
+        metadata = inputs["book"].get("metadata", {}).get(did, {})
+        if (metadata and did not in inputs["book"]["superseded"]
+                and confirmation.get("definition_seq") == definition.get("seq")
+                and confirmation.get("digest") == metadata.get("digest")):
+            mark = max(mark if mark is not None else -1, _num(did))
         newer = [d for d in naming if d not in cited
-                 and mark is not None and _num(d) > mark]
+                 and mark is not None and _num(d) > mark
+                 and not src.premise_unchanged(inputs["book"], d, definition, self._parse_iso)]
         superseded = inputs["book"]["superseded"]
         ctx = {
             "dep_states": [entry(k) for k in deps],
@@ -301,6 +306,31 @@ class ContextMixin:
         return ready_context_rows(rows, views.unblocks(self._all_items()))
 
     # -------------------------------------------------------------- claim
+    def reconfirm(self, principal, key, decision_id):
+        return self._run(principal, "reconfirm", key,
+                         lambda now: self._reconfirm(principal, key, decision_id, now))
+
+    def _reconfirm(self, principal, key, decision_id, now):
+        item = self._get_or_refuse(key)
+        self._may_manage(principal, item["project"])
+        self._assert_unlocked(item)
+        expected = self._decision_clock()["last"].get(key)
+        try:
+            book = src.decision_book(self._adapter("decisions"), fresh=True)
+        except src.DecisionsUnreadable:
+            raise Refused("evidence_unverified", "decisions authority unavailable") from None
+        if decision_id not in book["rows"] or decision_id in book["superseded"]:
+            raise Refused("evidence_unverified", "reconfirm requires a current recorded decision")
+        with self._write():
+            self._assert_unlocked(self._get_or_refuse(key))
+            seq = self._decision_clock()["last"].get(key)
+            if seq != expected:
+                raise Refused("conflict", "definition changed while reconfirming")
+            payload = {"decision_id": decision_id, "definition_seq": seq,
+                       "digest": book["metadata"][decision_id]["digest"]}
+            self._append(principal, key, "premise_reconfirmed", payload, now)
+        return {"key": key, **payload}
+
     @staticmethod
     def _force_stale_reason(value):
         """``None`` or the stripped reason; anything else is a validation refusal."""

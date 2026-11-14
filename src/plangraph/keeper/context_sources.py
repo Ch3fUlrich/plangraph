@@ -1,13 +1,7 @@
 """Outside facts for an item's task context (TASK-CONTEXT-GUARD, D-3215).
 
-Two read-only sources, both best effort (a failure means "not known", never a
-crash, and an unknown never refuses a claim):
-
-* git: commits on the project's target ref whose ``Plan-Item`` trailer names
-  the key, the merge (PR) that brought the newest one in, and unmerged
-  branches whose name carries the item id (open lanes / PR heads).
-* decisions: the D-NNN rows of the configured decisions log that name the key,
-  and which decisions a later row supersedes, corrects or withdraws.
+Git supplies merged trailers and local lanes; decisions supply naming,
+retirements and indexed order/session metadata for the premise guard.
 
 The git side reuses :class:`GitAdapter`'s argument-list runner (bounded
 timeout, no shell), ref validation and rate-limited fetch.  Keys are checked
@@ -16,6 +10,7 @@ against a strict character set before they reach a git argument.
 from __future__ import annotations
 
 import os
+import hashlib
 import re
 import threading
 import time
@@ -335,7 +330,35 @@ def _build_book(rows):
                 token = token.strip(".:")
                 if "-" in token or ":" in token:     # key-like only
                     index.setdefault(token, set()).add(did)
-    return {"rows": rows, "superseded": superseded_map(rows), "index": index}
+    metadata = {}
+    for did, lines in rows.items():
+        cell = " ".join(_decision_cell(line) for line in lines).strip()
+        order = re.search(r"(?i)^(?:\([^)]*\)\s*)?(?:ORDER(?:ED)?|GO|DEFINED?)\b|\bClass:\s*(?:ordered|go|defined)\b", cell)
+        scope = re.sub(r"(?i)\b(?:scope unchanged|no scope change|without changing scope)\b", "", cell)
+        changed = bool(re.search(r"(?i)\b(?:chang\w*\s+scope|scope\s+chang\w*|supersed\w*|replac\w*|cancel\w*|instead|NO\s+GO)\b", scope))
+        session = re.search(r"\bSession:\s*([^\s;|]+)", cell)
+        at = re.search(r"\bAt:\s*([^\s;|]+)", cell)
+        metadata[did] = {"order": bool(order), "changed": changed,
+                         "session": session[1] if session else None,
+                         "at": at[1] if at else None,
+                         "digest": hashlib.sha256(cell.encode()).hexdigest()}
+    return {"rows": rows, "superseded": superseded_map(rows), "index": index,
+            "metadata": metadata}
+
+
+def premise_unchanged(book, did, definition, parse_iso):
+    """Only indexed orders or an attributable two-hour logging delay are exempt."""
+    row = book.get("metadata", {}).get(did, {})
+    if row.get("changed"):
+        return False
+    if row.get("order"):
+        return True
+    at, defined = parse_iso(row.get("at")), parse_iso(definition.get("ts"))
+    try:
+        return (row.get("session") is not None and row["session"] == definition.get("actor")
+                and at is not None and defined is not None and 0 <= (at - defined).total_seconds() <= 7200)
+    except (TypeError, ValueError):
+        return False
 
 
 def decisions_naming(book, key):

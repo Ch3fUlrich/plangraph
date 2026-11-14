@@ -1,4 +1,4 @@
-# Keeper contract (M2a) — store, state machine, evidence, API, CLI, MCP ([repository truth](keeper/repository-truth.md))
+# Keeper contract (M2a) — store, state machine, evidence, API, CLI, MCP ([repository truth](keeper/repository-truth.md), [premise precision](keeper/premise-precision.md))
 
 Store snapshot filters (S1): `open=1` / `closed=1`, UTC `since`, item `fields` (always `key`), and `blocks`; nonblank filters add selection/returned counts in `filter`. Activity uses only `since`; aliases and progress stay full; decision text follows selected evidence before field projection. No filters preserves legacy bytes; HTTP wiring is S2. Signed snapshots, serve and pull stay full.
 Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12 **stdlib only** (sqlite3, http.server, hashlib, secrets, json, graphlib, subprocess, urllib); PyYAML only in the importer. Package `src/plangraph/keeper/`. Every file ≤ 400 lines, tests first (pytest), no network in tests (fakes), no secrets in code/logs/tests. M2a = per-principal tokens; M2b (later) adds run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not build them.

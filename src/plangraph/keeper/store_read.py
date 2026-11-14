@@ -318,7 +318,12 @@ class ReadMixin:
                         " WHERE ok=0 AND key IS NOT NULL"
                         " GROUP BY key HAVING COUNT(*) >= 2 ORDER BY key")
                     if row["key"] in keys]
-        return {"lease_expiring": sorted(lease_expiring, key=lambda x: x["key"]),
+        overrides = sum(bool((json.loads(r["payload"]) if isinstance(r["payload"], str)
+                              else r["payload"]).get("force_stale"))
+                        for r in self.conn.execute("SELECT key,payload FROM events WHERE type='claimed'")
+                        if r["key"] in keys)
+        return {"force_stale_claims": overrides,
+                "lease_expiring": sorted(lease_expiring, key=lambda x: x["key"]),
                 "review_overdue": sorted(review_overdue),
                 "findings": findings, "refusals": refusals, "stalled": stalled,
                 "warnings": views.warnings(scope)}
