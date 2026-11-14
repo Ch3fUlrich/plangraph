@@ -1,5 +1,5 @@
 //! These tests need a server reachable at `PG_TEMPORAL_ADDR` (for example
-//! `http://127.0.0.1:17233`). When that variable is unset every test returns
+//! `http://127.0.0.1:7233`). When that variable is unset every test returns
 //! early, so a checkout without a server still passes (under `CI` a missing address panics, D6); CI
 //! variable exercises the whole path: workflow, activities, git worktrees and
 //! merges.

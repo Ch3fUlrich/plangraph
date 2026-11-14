@@ -123,3 +123,5 @@ Notes (workstation dev check, 2026-10-18):
   the seven spike scenarios.
 
 Outcome: recorded as decision D-1321 (adopt with workarounds, pending the live Temporal check).
+
+CI picks the Temporal port from the OS and uses a private temporary directory; the fixed ports above are manual examples only.

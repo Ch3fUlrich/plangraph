@@ -1,10 +1,12 @@
 [package]
 name = "pg-spawnd"
+default-run = "pg-spawnd"
 version = "0.1.0"
 edition = "2021"
 description = "Host capacity probe CLI"
 
 [dependencies]
+tempfile = "3"
 pg-worker-core = { path = "../worker-core" }
 rmcp = { version = "2.2", default-features = false, features = ["server", "transport-async-rw"] }
 serde_json = { version = "1", features = ["preserve_order"] }
