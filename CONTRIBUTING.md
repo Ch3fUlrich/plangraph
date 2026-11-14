@@ -314,7 +314,7 @@ Pre-push and preflight prepend an existing `~/.cargo/bin` to PATH. Missing Cargo
 
 Test fixtures set a Git discovery ceiling at their temporary root; settings discovery honors that ceiling so temporary policies remain isolated even when TMPDIR is inside the checkout.
 
-Operator D-5847 restores the Rust-only new-code gate: Python and shell exceptions are per-file, including `src/plangraph/spawner/base_fresh.py` already in flight before D-5847; recursive Python test exceptions remain.
+Operator D-5830 keeps Rust preferred while accepting Python and shell through `**/*.py` and `**/*.sh` in `tools/new_code_allowlist.txt`.
 
 New stacked branches select affected tests from the nearest remote merge-base, while scrub starts at `origin/main` (the whole tip when main is unknown); the hook passes a separate `--scrub-base` to preflight.
 
