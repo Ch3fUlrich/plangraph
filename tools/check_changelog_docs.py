@@ -175,6 +175,39 @@ def commit_paths(root: str, sha: str) -> list[str]:
     return [p.strip().replace("\\", "/") for p in out.splitlines() if p.strip()]
 
 
+def changelog_edited(root: str, sha: str) -> bool:
+    """A merge may inherit ledger lines, but cannot invent or discard them.
+
+    Account for parent deletions from their common base and preserve additions.
+    A multiset avoids treating an ordinary union merge as a new ledger edit.
+    """
+    changed = git_checked(root, "diff-tree", "--root", "--no-commit-id", "--name-only",
+                          "-r", "-m", "--no-renames", sha, "--", "CHANGELOG.md")
+    if not changed.strip():
+        return False
+    parents = git_checked(root, "rev-list", "--parents", "-n", "1", sha).split()[1:]
+    if len(parents) < 2:
+        return True
+
+    def read(rev: str) -> collections.Counter[str]:
+        listed = git_checked(root, "ls-tree", "--name-only", rev, "--", "CHANGELOG.md")
+        return collections.Counter(git_checked(root, "show", f"{rev}:CHANGELOG.md").split("\n")) if listed.strip() else collections.Counter()
+
+    base = read(git_checked(root, "merge-base", "--octopus", *parents).strip())
+    inherited = [read(parent) for parent in parents]
+    merged = read(sha)
+    for line in set(base).union(merged, *inherited):
+        counts = [parent[line] for parent in inherited]
+        added = [max(0, count - base[line]) for count in counts]
+        # Keep common base lines unless a parent deleted them; keep every
+        # distinct parent addition. Duplicated additions may combine or coalesce.
+        lower = min(base[line], *counts) + max(added)
+        upper = min(base[line], max(counts)) + sum(added)
+        if not lower <= merged[line] <= upper:
+            return True
+    return False
+
+
 def bail(msg: str, warn_only: bool) -> int:
     print(f"warning: {msg}" if warn_only else msg)
     return 0 if warn_only else 1
@@ -254,13 +287,10 @@ def main(argv: list[str] | None = None) -> int:
         return bail(f"check-changelog-docs: git rev-list failed: {revs.stderr.strip()}", warn_only)
     commits = revs.stdout.split()
     problems: list[str] = []
-    # Include merges: combined diff names paths changed relative to every parent,
-    # catching direct conflict-resolution edits without blaming inherited entries.
+    # Include merges while distinguishing inherited lines from resolution edits.
     try:
         for sha in git_checked(root, "rev-list", f"{merge_base}..{head_sha}").split():
-            paths = git_checked(root, "diff-tree", "--root", "--no-commit-id", "--name-only",
-                                "-r", "--cc", "--no-renames", sha).splitlines()
-            if "CHANGELOG.md" not in paths:
+            if not changelog_edited(root, sha):
                 continue
             trailers = git_checked(root, "log", "-1", "--format=%(trailers:only,unfold)", sha)
             if not re.search(r"^Release:[ \t]*\S.*$", trailers, re.IGNORECASE | re.MULTILINE):

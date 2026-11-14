@@ -279,3 +279,78 @@ fn parity_merge_resolution_cannot_bypass_release_rule() {
     record(&f, &[("CHANGELOG.md", "- sneaked into merge")], "");
     assert_python_parity(&f, false);
 }
+
+#[test]
+fn parity_merge_inherits_release_lines_but_cannot_discard_them() {
+    for (resolution, release, passes) in [
+        ("preserve", false, true),
+        ("ours", false, false),
+        ("theirs", false, false),
+        ("drop_common", false, false),
+        ("invent", false, false),
+        ("ours", true, true),
+    ] {
+        let mut f = Fixture::new();
+        let ledger = "## Unreleased\n- existing\n";
+        record(
+            &f,
+            &[
+                ("CHANGELOG.md", ledger),
+                (".gitattributes", "CHANGELOG.md merge=union\n"),
+            ],
+            "Release: seed",
+        );
+        f.ws.base_sha = Some(git(&f.tree, &["rev-parse", "HEAD"]).unwrap());
+        f.ws.revision_sha = f.ws.base_sha.clone();
+        git(&f.tree, &["checkout", "-b", "feature"]).unwrap();
+        record(
+            &f,
+            &[("CHANGELOG.md", &format!("{ledger}- feature\n"))],
+            "Release: 1.0",
+        );
+        git(&f.tree, &["checkout", f.ws.branch.as_ref().unwrap()]).unwrap();
+        record(
+            &f,
+            &[("CHANGELOG.md", &format!("{ledger}- main\n"))],
+            "Release: 2.0",
+        );
+        git(&f.tree, &["merge", "--no-ff", "--no-commit", "feature"]).unwrap();
+        let merged = std::fs::read_to_string(f.tree.join("CHANGELOG.md")).unwrap();
+        assert!(merged.contains("- main\n") && merged.contains("- feature\n"));
+        match resolution {
+            "ours" | "theirs" => {
+                git(
+                    &f.tree,
+                    &[
+                        "checkout",
+                        if resolution == "ours" {
+                            "HEAD"
+                        } else {
+                            "feature"
+                        },
+                        "--",
+                        "CHANGELOG.md",
+                    ],
+                )
+                .unwrap();
+            }
+            "drop_common" => std::fs::write(
+                f.tree.join("CHANGELOG.md"),
+                merged.replace("- existing\n", ""),
+            )
+            .unwrap(),
+            "invent" => {
+                std::fs::write(f.tree.join("CHANGELOG.md"), format!("{merged}- invented\n"))
+                    .unwrap()
+            }
+            _ => {}
+        }
+        git(&f.tree, &["add", "."]).unwrap();
+        f.commit(if release {
+            "merge\n\nRelease: 3.0\nWriter: test"
+        } else {
+            "merge\n\nWriter: test"
+        });
+        assert_python_parity(&f, passes);
+    }
+}

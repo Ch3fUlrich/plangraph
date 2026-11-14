@@ -387,3 +387,34 @@ def test_merge_resolution_cannot_bypass_release_rule(test_repo):
     commit_files(repo, {"CHANGELOG.md": "- sneaked into merge\n"}, "merge docs")
     result = run_check(repo, base)
     assert result.returncode == 1 and "outside a release" in result.stdout
+
+
+@pytest.mark.parametrize("resolution,release,passes", [
+    ("preserve", False, True), ("ours", False, False),
+    ("theirs", False, False), ("drop_common", False, False),
+    ("invent", False, False), ("ours", True, True),
+])
+def test_merge_inherits_release_lines_but_cannot_discard_them(test_repo, resolution, release, passes):
+    repo, _ = test_repo
+    ledger = "## Unreleased\n- existing\n"
+    base = commit_files(repo, {"CHANGELOG.md": ledger, ".gitattributes": "CHANGELOG.md merge=union\n"},
+                        "seed", trailers=["Release: seed"])
+    git(repo, "checkout", "-b", "feature", base)
+    commit_files(repo, {"CHANGELOG.md": ledger + "- feature\n"}, "feature release", ["Release: 1.0"])
+    git(repo, "checkout", "main")
+    commit_files(repo, {"CHANGELOG.md": ledger + "- main\n"}, "main release", ["Release: 2.0"])
+    assert git(repo, "merge", "--no-ff", "--no-commit", "feature").returncode == 0
+    merged = (repo / "CHANGELOG.md").read_text()
+    assert "- main\n" in merged and "- feature\n" in merged
+    if resolution in ("ours", "theirs"):
+        git(repo, "checkout", "HEAD" if resolution == "ours" else "feature", "--", "CHANGELOG.md")
+    elif resolution == "drop_common":
+        (repo / "CHANGELOG.md").write_text(merged.replace("- existing\n", ""))
+    elif resolution == "invent":
+        (repo / "CHANGELOG.md").write_text(merged + "- invented\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "merge releases" + ("\n\nRelease: 3.0" if release else ""))
+    result = run_check(repo, base)
+    assert result.returncode == (0 if passes else 1), result.stdout
+    if not passes:
+        assert "outside a release" in result.stdout
