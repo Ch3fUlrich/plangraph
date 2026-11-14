@@ -185,7 +185,8 @@ def test_gate_import_guard():
 
 
 def test_review_gaps_include_filtered_policy_legs():
-    reviewers = tuple(l for l in POLICY if "review" in l.roles)
+    from plangraph.planner.legs import REVIEW_ORDER
+    reviewers = tuple(l for l in POLICY if l.id in REVIEW_ORDER)
     missing = next(leg for leg in reviewers if leg.disabled is None)
     p = routing.plan_spawn({"estimate_tokens": 1000}, role="review",
                            writer_families=(missing.family,), benchmark=rows(tuple(l for l in reviewers if l != missing)),
