@@ -95,13 +95,6 @@ def test_missing_cached_directory_is_created_before_use(cached_tree, registered,
     assert (path.parent / (previous['tree_sha'] + '.lease')).exists()
     if offline:
         git(repo, 'remote', 'set-url', 'origin', str(repo / 'missing'))
-    if offline:
-        from plangraph.routing_errors import SpawnRefused
-        with pytest.raises(SpawnRefused, match='base_stale: fetch_failed'):
-            with git_guard.run_tree(state, repo):
-                pytest.fail('offline worktree was created')
-        assert not path.exists()
-        return
     with git_guard.run_tree(state, repo) as tree:
         assert tree['tree_sha'] == previous['tree_sha']
         assert tree['tree_path'] == previous['tree_path']
@@ -283,7 +276,7 @@ def test_windows_selection_disables_reaping_without_importing_fcntl(cached_tree,
         name='nt', environ=os.environ, utime=os.utime, fstat=os.fstat))
     with git_guard.run_tree(state, repo) as tree:
         assert tree['tree_sha'] == main and Path(tree['tree_path']).is_dir() and Path(a['tree_path']).is_dir()
-    assert calls == [1, 0, 1, 1, 0, 0]
+    assert calls == [1, 0, 1, 0]  # fetch and creation locks; detached trees never lock local main
 
 
 def test_cached_directory_cannot_be_an_unregistered_subdirectory(trees):
@@ -294,3 +287,20 @@ def test_cached_directory_cannot_be_an_unregistered_subdirectory(trees):
     with pytest.raises(RuntimeError, match='run_tree_invalid'):
         with git_guard.run_tree(state, repo):
             pytest.fail('plain directory was admitted as a worktree')
+
+
+@pytest.mark.parametrize('damage', ['dirty', 'diverged'])
+def test_detached_tree_leaves_local_main_alone(cached_tree, damage):
+    origin, repo, state, cached = cached_tree
+    git(repo, 'worktree', 'remove', cached['tree_path'])
+    git(repo, 'switch', 'main')
+    if damage == 'dirty':
+        (repo / 'version').write_text('local edit')
+    else:
+        git(repo, 'commit', '--allow-empty', '-m', 'local divergence')
+    before = git(repo, 'rev-parse', 'HEAD'), git(repo, 'status', '--porcelain')
+    expected = advance(origin)
+    with git_guard.run_tree(state, repo) as tree:
+        assert tree['tree_sha'] == expected
+        assert (Path(tree['tree_path']) / 'version').read_text() == 'B'
+    assert (git(repo, 'rev-parse', 'HEAD'), git(repo, 'status', '--porcelain')) == before
