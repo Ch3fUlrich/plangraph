@@ -17,3 +17,10 @@ are ignored; malformed/duplicate entries error. Counts suppress that many hits;
 additional hits fail, and excess budgets produce `stale-allowlist` findings at
 the allowlist line. Remove or lower stale entries: the linter never rewrites them.
 Returned failures sort by path, 1-based line, check and message, without root paths.
+
+The crate also exposes `decidx::{parse, write_tsv}` for deterministic decision
+indexes (see `docs/ctx-decisions-index.md`), `scopes::RuleScopes` for parsing,
+validating and matching rule scopes (see `docs/rule-scopes.md`), and
+`dup_gates::{parse, scan, check}` for capability ownership and duplication checks
+(see `docs/dup-gates.md`). These library APIs use synthetic fixtures and temporary
+trees in their tests; CLI and CI wiring belong to later slices.
