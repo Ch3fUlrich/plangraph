@@ -122,7 +122,10 @@ pub(crate) fn route_args(args: &Args) -> Result<Vec<String>, ToolError> {
 }
 pub(crate) fn route(state: &Path, args: &Args) -> Result<String, ToolError> {
     let args = &crate::leg_ref::admit(&crate::leg_ref::AdapterCatalog::new(state), args)?;
-    run(state, route_args(args)?, Duration::from_secs(30), false)
+    crate::cli_review::select(
+        args,
+        run(state, route_args(args)?, Duration::from_secs(30), false)?,
+    )
 }
 pub(crate) fn probe(state: &Path, args: &Args) -> Result<String, ToolError> {
     crate::leg_ref::check_review_role(args)?;

@@ -83,9 +83,17 @@ impl Runs {
         }
         crate::prompt::prepare_review(&review_args, &leg, &mut launch, &repos, mode == "on")
             .map_err(|e| internal(&e.to_string()))?;
+        let review_head = if role == "review" && crate::cli_review::eligible(&leg) && !dry {
+            crate::cli_review::prepare(args, &mut launch)?
+        } else {
+            None
+        };
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
+        if let Some(head) = review_head {
+            base["head_sha"] = json!(head);
+        }
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
@@ -296,6 +304,7 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         record.set("attempts_error", json!("unknown or invalid attempt id"));
         return;
     };
+    crate::cli_review::finish(record, status, leg);
     let (dry, unwitnessed) = (status == Status::DryRun, json!("unwitnessed"));
     let completion = json!({"leg":leg,"status":status.as_str(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },
@@ -306,6 +315,18 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         "request_side_model":null,"witness_kind":null,
         "skip_reason":if status == Status::Completed || dry { None } else { record.get("reason") },
         "provider_response":null,"stdout_tail":record.get("stdout_tail"),"stderr_tail":record.get("stderr_tail")});
+    let mut completion = completion;
+    if record.get("witness_kind").and_then(Value::as_str) == Some("cli_reported") {
+        for key in [
+            "served_model",
+            "served_family",
+            "witness_kind",
+            "finish_reason",
+            "verdict",
+        ] {
+            completion[key] = record.get(key).cloned().unwrap_or(Value::Null);
+        }
+    }
     attempt
         .as_object_mut()
         .unwrap()

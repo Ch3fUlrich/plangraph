@@ -44,7 +44,7 @@ class SpawnerRecordAdapter:
         if not directory and info.st_size > MAX_RECORD_BYTES:
             raise ValueError("record exceeds size limit")
 
-    def review_seats(self, item, head, decision_text):
+    def review_seats(self, item, head, decision_text, *, allow_cli_reported=False):
         """Read cited mirrored review witnesses, never infer a served model."""
         from ..review.family import model_family
         ids = json.loads(item.get("run_ids") or "[]")
@@ -79,6 +79,13 @@ class SpawnerRecordAdapter:
             pinned = any(isinstance(part, dict) and any(
                 k in part and part[k] is not False for k in ("pin", "pinned", "spawn_pin"))
                 for part in (record, record.get("plan"), record.get("chosen_leg")))
+            cli = record.get("witness_kind") == "cli_reported"
+            if (cli and (not allow_cli_reported or record.get("head_sha") != (completion or {}).get("head_sha")
+                         or record.get("verdict") != "pass" or record.get("test_gaming") is not False
+                         or not isinstance(attempts, list) or len(attempts) != 1
+                         or attempts[0].get("witness_kind") != "cli_reported"
+                         or attempts[0].get("served_model") != model)):
+                raise ValueError(f"{run_id}: CLI seat is not permitted or complete")
             if (not family or model == "unwitnessed" or pinned or record.get("override_reason")
                     or isinstance(record.get("plan"), dict) and record["plan"].get("p_source") == "override"
                     or record.get("status") != "completed"

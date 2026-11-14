@@ -28,6 +28,8 @@ _SCOPE = "((account IS ? AND combo IS ?) OR (account IS NULL AND combo IS NULL A
 
 def quota_key(leg):
     """D-5966: effort variants share one quota within each agy model, never across models."""
+    if not isinstance(leg, str):
+        return leg
     return re.sub(r'^agy[/:]((?:gemini-4-(?:hydrogen|argon)|claude-sonnet-5-5))(?:-(?:low|medium|high|xhigh|max))?$',
                   r'agy:\1', leg)
 
@@ -195,6 +197,7 @@ class LegStateStore:
 
     def last_probe_ts(self, leg):
         """Successful probe evidence only: a failed probe is not fresh evidence."""
+        leg = quota_key(leg)
         if not self.path.exists():
             return None
         try:
@@ -205,6 +208,7 @@ class LegStateStore:
 
     def last_probe_attempt_ts(self, leg):
         """The newest probe attempt (pass or fail); single-flight reuse only."""
+        leg = quota_key(leg)
         if not self.path.exists():
             return None
         try:
@@ -284,6 +288,7 @@ class LegStateStore:
 
     def last_probe_outcome(self, leg):
         """Newest probe attempt as a reusable single-flight outcome, else None."""
+        leg = quota_key(leg)
         if not self.path.exists():
             return None
         try:
@@ -379,7 +384,7 @@ class LegAdapter:
             self.leg_status(leg)
             self._served.discard(self.identity(leg))
     def leg_status(self, leg, **kwargs):
-        if not self.enabled or leg.startswith(("agy:", "agy/")) or "/" not in leg:
+        if not self.enabled or leg.startswith(("agy:", "agy/")) or leg.startswith(("gemini-4-hydrogen-", "gemini-4-argon-", "claude-sonnet-5-5")):
             return self.store.leg_status(leg, **kwargs)
         from .resolver import OPERATOR_REMOVED_MODELS
         if leg in OPERATOR_REMOVED_MODELS:

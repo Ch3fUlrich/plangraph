@@ -717,3 +717,11 @@ console-deepseek/deepseek-flash and opencode-go/beam-free, then claude-sonnet-5-
 No mimo review legs. CLI RESOURCE_EXHAUSTED/quota-reached responses use the existing
 leg-state store, keyed agy:<model> without effort. Each model has an independent
 reset; route JSON exposes all three agy_quota_states including reset_at evidence.
+
+Native review kinds `agy-cli` and `claude-cli` select only admitted review legs.
+Hydrogen high and Argon medium use agy plan mode; Sonnet uses Claude plan mode
+and high effort. Rust requires a clean worktree and its exact HEAD fast-checks
+stamp, binds head_sha, and records verdict/findings plus cli_reported provenance.
+For agy this is the CLI-selected model, not authenticated provider telemetry;
+Claude must report a single Sonnet model in its stream. Repository HEAD and
+tracked cleanliness are rechecked at completion. Failed/quota streams never count.

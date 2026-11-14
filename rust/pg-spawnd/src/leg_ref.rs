@@ -272,6 +272,15 @@ pub(crate) fn admit(
     args: &crate::placement::Args,
 ) -> Result<crate::placement::Args, crate::errors::ToolError> {
     check_review_role(args)?;
+    if crate::cli_review::kind(args).is_some() {
+        if args.get("role").and_then(|v| v.as_str()) != Some("review") || args.contains_key("model")
+        {
+            return Err(crate::placement::parameter(
+                "CLI review kinds require role review and no model selector",
+            ));
+        }
+        return Ok(args.clone());
+    }
     let role = args
         .get("role")
         .and_then(|v| v.as_str())
