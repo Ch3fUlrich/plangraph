@@ -16,6 +16,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import subprocess
@@ -28,7 +29,7 @@ BURN_HOURS = 6
 STALE_HOURS = 3  # snapshots are hourly; allow two missed ones plus jitter
 STALE_REMIND_HOURS = 24
 ROLLOVER_RISE = 10  # remaining% rising this much within a null-reset series = refill
-CONTAINER = os.environ.get("QUOTA_GATEWAY_CONTAINER", "autoos-omniroute")
+CONTAINER = os.environ.get("QUOTA_GATEWAY_CONTAINER")
 SQL = ("SELECT provider,connection_id,window_key,remaining_percentage,is_exhausted,"
        "next_reset_at,created_at FROM quota_snapshots WHERE julianday(created_at)>=julianday(?) OR id IN "
        "(SELECT max(id) FROM quota_snapshots GROUP BY provider,connection_id,window_key) "
@@ -39,6 +40,8 @@ JS = ('const D=require("better-sqlite3");'
 
 
 def fetch_rows(since_iso, container=CONTAINER):
+    if not container:
+        raise ValueError("set QUOTA_GATEWAY_CONTAINER or use --db")
     out = subprocess.run(
         ["docker", "exec", "-i", "-w", "/app", container, "node", "-", since_iso],
         input=JS, capture_output=True, text=True, check=True, timeout=60).stdout
@@ -64,10 +67,32 @@ def _gid(provider, conn, window):
     return "|".join([provider, conn or "", window])
 
 
+def _valid_rows(rows):
+    """Isolate malformed snapshots so one bad row cannot silence other windows."""
+    valid, bad = [], 0
+    for r in rows:
+        try:
+            if not all(isinstance(r[k], str) and r[k] for k in ('provider', 'window_key')):
+                raise ValueError('missing window identity')
+            if r['connection_id'] is not None and not isinstance(r['connection_id'], str):
+                raise ValueError('invalid connection')
+            _ts(r['created_at'])
+            if r['next_reset_at'] is not None:
+                _ts(r['next_reset_at'])
+            level = r['remaining_percentage']
+            if level is not None and (type(level) not in (int, float) or not math.isfinite(level)):
+                raise ValueError('invalid level')
+        except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+            bad += 1
+        else:
+            valid.append(r)
+    return valid, bad
+
+
 def _groups(rows):
     """Series per (provider, connection, window), each sorted oldest to newest."""
     groups = {}
-    for r in rows:
+    for r in _valid_rows(rows)[0]:
         groups.setdefault((r["provider"], r["connection_id"], r["window_key"]), []).append(r)
     for series in groups.values():
         series.sort(key=lambda r: _ts(r["created_at"]))  # stable: ties keep id order
@@ -118,13 +143,15 @@ def evaluate(rows, now):
     return result
 
 
-def reader_notice(rows, now):
+def reader_notice(rows, now, malformed=0):
     """(key, line) when a live window has no snapshot for STALE_HOURS or no snapshot is fresh.
 
     "blind" means nothing at all is fresh (writer stopped, table empty); "stale" means only
     some live windows lost their snapshots. Stale windows are skipped by evaluate(), so this
     line is what keeps them from going silent.
     """
+    rows, bad = _valid_rows(rows)
+    malformed += bad
     stale = []
     for (provider, conn, window), series in _groups(rows).items():
         last = series[-1]
@@ -132,14 +159,15 @@ def reader_notice(rows, now):
             stale.append((_gid(provider, conn, window), f"{provider}/{window}", last["created_at"]))
     newest = max((r["created_at"] for r in rows), key=_ts, default=None)
     blind = newest is None or _ts(newest) < now - STALE_HOURS * 3600
-    if not stale and not blind:
+    if not stale and not blind and not malformed:
         return None
     stale.sort()
     detail = ", ".join(f"{name} last={at}" for _, name, at in stale[:6]) or "no live window"
     line = (f"quota-alarm-{'blind' if blind else 'stale'} {len(stale)} window(s) without a "
             f"snapshot in {STALE_HOURS}h: {detail}; newest snapshot={newest}; "
-            "their thresholds are not evaluated")
+            f"their thresholds are not evaluated; malformed={malformed} row(s) skipped")
     ident = "|".join(f"{g}@{at}" for g, _, at in stale) or f"blind@{newest}"
+    ident += f"|malformed={malformed}"
     return "stale|" + hashlib.sha1(ident.encode()).hexdigest()[:12], line
 
 
@@ -183,11 +211,24 @@ def _save(path, state):
     os.replace(tmp, path)
 
 
+def _read_state(path, dry_run):
+    try:
+        state = json.loads(path.read_text()) if path.exists() else {}
+        if not isinstance(state, dict):
+            raise ValueError('state must be an object')
+        return state
+    except (ValueError, UnicodeError):
+        if not dry_run:
+            path.rename(path.with_name(path.name + f'.corrupt-{time.time_ns()}'))
+        return {'_state_notice': 'quota-alarm-state-recovered corrupt state; starting empty'}
+
+
 def run(rows, state_path, send, *, now=None, dry_run=False):
     """Emit one line per newly crossed threshold (and stale notice); save state per delivery."""
     now = time.time() if now is None else now
     path = Path(state_path)
-    state = json.loads(path.read_text()) if path.exists() else {}
+    state = _read_state(path, dry_run)
+    rows, malformed = _valid_rows(rows)
     state.setdefault("sent", {})
     state.setdefault("epochs", {})
     before = json.dumps(state, sort_keys=True)
@@ -200,6 +241,9 @@ def run(rows, state_path, send, *, now=None, dry_run=False):
             send(line)
             state["sent"][key] = {"at": datetime.fromtimestamp(now, UTC).isoformat(), **meta}
             _save(path, state)
+
+    if recovery := state.pop('_state_notice', None):
+        emit('state-recovered', recovery, {})
 
     # Carry the last null-reset observation across polls, including long outages.
     history = list(rows)
@@ -221,7 +265,7 @@ def run(rows, state_path, send, *, now=None, dry_run=False):
             if w["used"] >= th and key not in state["sent"]:
                 emit(key, format_line({**w, "threshold": th}),
                      {"wid": wid, "gid": _gid(w["provider"], w["connection"], w["window"])})
-    notice = reader_notice(rows, now)
+    notice = reader_notice(rows, now, malformed)
     if notice and notice[0] not in state["sent"]:
         emit(notice[0], notice[1], {})
     _prune(state, now)
@@ -251,7 +295,7 @@ def main(argv=None):
     with lock.open("a") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)  # same lock for dry-run and real runs
         state_path = Path(a.state)
-        state = json.loads(state_path.read_text()) if state_path.exists() else {}
+        state = _read_state(state_path, True)
         # Old state has no checkpoint: recover from its earliest remembered epoch.
         checkpoint = state.get("last_read")
         stamps = [checkpoint] if checkpoint else list(state.get("epochs", {}).values())

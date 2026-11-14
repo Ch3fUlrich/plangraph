@@ -242,3 +242,68 @@ def test_contribution_notes_use_existing_section():
     text = (Path(__file__).resolve().parents[1] / 'CONTRIBUTING.md').read_text()
     assert '# In-flight language exceptions' not in text
     assert 'Package R Python' not in text
+
+
+def test_malformed_rows_do_not_hide_valid_window_alarms(tmp_path):
+    rows = [row(0, 5)]
+    for field, value in [('created_at', None), ('window_key', None), ('provider', None),
+                         ('next_reset_at', 42), ('created_at', 'bad timestamp'),
+                         ('remaining_percentage', 'bad number'), ('connection_id', [])]:
+        rows.append({**row(0, 5), field: value})
+    sent = []
+    lines = run(rows, tmp_path / 'state.json', sent.append, now=now(0))
+    assert sum(line.startswith('quota-alarm codex/weekly') for line in lines) == 3
+    assert any('malformed=7' in line for line in lines)
+    assert sent == lines
+    assert len(evaluate(rows, now(0))) == 1
+    assert run(rows, tmp_path / 'state.json', sent.append, now=now(0)) == []
+
+
+def test_all_malformed_rows_are_blind_notice(tmp_path):
+    lines = run([{**row(0, 5), 'created_at': None}], tmp_path / 'state.json',
+                lambda _: None, now=now(0))
+    assert len(lines) == 1 and lines[0].startswith('quota-alarm-blind')
+    assert 'malformed=1' in lines[0]
+
+
+def test_corrupt_state_is_retained_and_poll_continues(tmp_path):
+    state = tmp_path / 'state.json'
+    state.write_text('{broken')
+    sent = []
+    lines = run([row(0, 5)], state, sent.append, now=now(0))
+    assert len([line for line in lines if line.startswith('quota-alarm codex')]) == 3
+    assert any('state-recovered' in line for line in lines)
+    backup, = tmp_path.glob('state.json.corrupt-*')
+    assert backup.read_text() == '{broken'
+    assert json.loads(state.read_text())['sent']
+
+
+def test_corrupt_state_preview_does_not_move_or_write_state(tmp_path):
+    state = tmp_path / 'state.json'
+    state.write_text('{broken')
+    lines = run([row(0, 5)], state, lambda _: None, now=now(0), dry_run=True)
+    assert any('state-recovered' in line for line in lines)
+    assert state.read_text() == '{broken'
+    assert list(tmp_path.iterdir()) == [state]
+
+
+def test_main_recovers_corrupt_checkpoint_before_reading(tmp_path, monkeypatch, capsys):
+    from plangraph.fleet_bus import client
+    from types import SimpleNamespace
+    sent = []
+    state = tmp_path / 'state.json'
+    state.write_text('{broken')
+    monkeypatch.setattr(quota_alarms, 'fetch_rows', lambda since: [row(0, 5)])
+    monkeypatch.setattr(quota_alarms.time, 'time', lambda: now(0))
+    monkeypatch.setattr(client, 'build_client', lambda: SimpleNamespace(send=lambda routing, line: sent.append(line)))
+    assert quota_alarms.main(['--state', str(state)]) == 0
+    assert len(sent) == 4
+    assert 'state-recovered' in capsys.readouterr().out
+    assert len(list(tmp_path.glob('state.json.corrupt-*'))) == 1
+
+
+def test_docker_reader_requires_explicit_container(monkeypatch):
+    import pytest
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: pytest.fail('missing container ran docker'))
+    with pytest.raises(ValueError, match='QUOTA_GATEWAY_CONTAINER'):
+        quota_alarms.fetch_rows('2026-11-13T00:00:00Z', container=None)
