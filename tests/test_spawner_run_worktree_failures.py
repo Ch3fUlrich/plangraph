@@ -41,7 +41,7 @@ def test_full_sha_formats_reach_ancestry_check(repository, monkeypatch, length):
         return run(args, **kwargs)
     monkeypatch.setattr(git_guard.subprocess, 'run', observed)
     git_guard.create(root, repo, 'lane/full-sha', finished_dependencies=[sha])
-    assert checked == [sha]
+    assert checked[-1] == sha and checked.count(sha) == 1
 
 
 @pytest.mark.parametrize('branch', ['bad branch', '-bad', 'bad..branch'])
@@ -65,14 +65,14 @@ def test_missing_remote_main_is_coded_refusal(repository):
     origin, repo, root = repository
     git(origin, 'symbolic-ref', 'HEAD', 'refs/heads/other')
     git(origin, 'update-ref', '-d', 'refs/heads/main')
-    with pytest.raises(SpawnRefused, match='^run_worktree_fetch_failed$'):
+    with pytest.raises(SpawnRefused, match='^base_stale: worktree_fetch_failed$'):
         git_guard.create(root, repo, 'lane/no-main')
     assert not list(root.glob('attempt-*'))
 
 
 @pytest.mark.parametrize('command,exception,code', [
-    ('fetch', FileNotFoundError(), 'run_worktree_fetch_failed'),
-    ('rev-parse', subprocess.CalledProcessError(128, 'git'), 'run_worktree_base_unavailable'),
+    ('fetch', FileNotFoundError(), 'base_stale: worktree_fetch_failed'),
+    ('rev-parse', subprocess.CalledProcessError(128, 'git'), 'base_stale: worktree_git_failed'),
     ('worktree', subprocess.CalledProcessError(128, 'git'), 'run_worktree_create_failed'),
     ('worktree', subprocess.TimeoutExpired('git', 30), 'run_worktree_git_timeout'),
 ])
@@ -80,7 +80,7 @@ def test_other_git_failures_are_coded_refusals(repository, monkeypatch, command,
     _, repo, root = repository
     run = subprocess.run
     def observed(args, **kwargs):
-        if args[3] == command:
+        if args[3] == command and (command != 'worktree' or args[4] == 'add'):
             raise exception
         return run(args, **kwargs)
     monkeypatch.setattr(git_guard.subprocess, 'run', observed)
@@ -111,7 +111,7 @@ def test_fetch_timeout_does_not_hold_host_lock(repository, monkeypatch):
             raise subprocess.TimeoutExpired(args, kwargs['timeout'])
         return run(args, **kwargs)
     monkeypatch.setattr(git_guard.subprocess, 'run', observed)
-    with pytest.raises(SpawnRefused, match='^run_worktree_fetch_timeout$'):
+    with pytest.raises(SpawnRefused, match='^base_stale: worktree_fetch_timeout$'):
         git_guard.create(root, repo, 'lane/timeout')
     assert not list(root.glob('attempt-*'))
 

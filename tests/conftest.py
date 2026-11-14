@@ -399,6 +399,14 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     yield
     probe.cache_clear()
 
+@pytest.fixture(autouse=True)
+def fake_base_fresh(monkeypatch, request):
+    if request.node.get_closest_marker('real_base_fresh') is None:
+        from plangraph.spawner import base_fresh
+        fresh = lambda *a, **k: dict(ok=True, reason=None, origin_sha='0' * 40, base_sha='0' * 40, behind=0)
+        monkeypatch.setattr(base_fresh, 'base_fresh', fresh)
+        monkeypatch.setattr(base_fresh, '_check', fresh)
+
 _PG = os.environ.get("PG_KEEPER_BACKEND") == "postgres"
 #: tests that read the SQLite file itself (contract: dump/copy ``keeper.db`` via stdlib sqlite3).
 _READS_SQLITE_FILE = {
