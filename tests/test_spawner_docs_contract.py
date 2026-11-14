@@ -85,15 +85,22 @@ def _load_sweep_module():
 @pytest.mark.usefixtures("restore_import_state")
 @pytest.mark.parametrize('seed', (20261022, 11, 22, 33, 44))
 def test_sensitivity_json_reproducible(seed: int) -> None:
-    committed = json.loads((ROOT / "docs" / "spawner-sensitivity.json").read_bytes())
+    committed_bytes = (ROOT / "docs" / "spawner-sensitivity.json").read_bytes()
+    committed = json.loads(committed_bytes)
+    assert committed_bytes == (json.dumps(committed, indent=2, sort_keys=True) + '\n').encode()
     module = _load_sweep_module()
     result = module.run(200, seed)
     stability = committed.pop('stability_seeds')
+    assert set(stability) == {'seeds', 'intel_pm1_max_flip_rate'}
     assert list(module.STABILITY_SEEDS) == stability['seeds']
+    assert set(stability['intel_pm1_max_flip_rate']) == {str(value) for value in module.STABILITY_SEEDS}
     if seed == module.SEED:
         assert result == committed
     module.STABILITY_SEEDS = (seed,)
-    assert module.stability_seeds(200, result)['intel_pm1_max_flip_rate'][str(seed)] == stability['intel_pm1_max_flip_rate'][str(seed)]
+    assert module.stability_seeds(200, result) == {
+        'seeds': [seed],
+        'intel_pm1_max_flip_rate': {str(seed): stability['intel_pm1_max_flip_rate'][str(seed)]},
+    }
 
 
 @pytest.mark.usefixtures('restore_import_state')
