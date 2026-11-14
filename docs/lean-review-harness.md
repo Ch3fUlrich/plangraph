@@ -32,3 +32,19 @@ Live startup-token savings: not measured. No live measurement run IDs exist in
 the repository's records, so a fixed 25k saving is not claimed.
 Open step: three-run before/after token probe with recorded run IDs and token
 counts for each run. Runner structure is unchanged.
+
+Gateway URL resolution is shared by child configuration and response-side witness
+reads: OMNIROUTE_BASE_URL, then PLANGRAPH_GATEWAY_URL / the existing gateway_url
+config mapping, then plangraph/omniroute-base-url in XDG_CONFIG_HOME (else
+HOME/.config). This file fallback supports plain-shell spawn CLI runs without
+launcher exports. File read failures mean unconfigured; no URL or key is logged.
+
+The witness endpoint now uses the same effective child-base resolver, including
+an existing `OPENCODE_CONFIG_CONTENT` omniroute settings baseURL. File-derived
+endpoints use the shared URL validator (no userinfo, query or fragment; HTTPS
+except for loopback HTTP) and require a hostname; invalid files stay
+unconfigured and cannot trigger management-key reads or call-log requests.
+
+Before attaching the management Bearer token, `fetch_rows` uses that same validator for every endpoint source, including env, config mappings and child
+overlays. Invalid endpoints are refused before reading the key; file validation
+remains in the shared resolver as well.

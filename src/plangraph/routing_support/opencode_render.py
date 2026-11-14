@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.parse
+from ipaddress import ip_address
 from typing import Any
 
 from plangraph.mimo_policy import ACCEPTED_MIMO_IDS
@@ -51,6 +52,21 @@ def _is_valid_url(url: str) -> bool:
     if "@" in p.netloc or p.username or p.password or p.query or p.fragment:
         return False
     return True
+
+
+def valid_gateway_endpoint(value):
+    """Shared credential endpoint policy: TLS, or HTTP on loopback only."""
+    if not _is_valid_url(value):
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        if not parsed.hostname or parsed.port == 0:
+            return False
+        if parsed.scheme == 'https' or parsed.hostname == 'localhost':
+            return True
+        return ip_address(parsed.hostname).is_loopback
+    except ValueError:
+        return False
 
 
 def _normalize_gateway_url(url: str) -> str:

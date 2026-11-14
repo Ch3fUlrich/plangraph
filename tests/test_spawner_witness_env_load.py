@@ -8,7 +8,7 @@ from plangraph.spawner import gateway_witness as gw
 
 @pytest.mark.parametrize('provider,served,tagged,reason', [
     ('direct', None, True, 'not a gateway leg: provider direct'),
-    ('mimo', None, True, 'mimo leg not routed through gateway'),
+    ('mimo', None, True, 'gateway endpoint not configured'),
     ('omniroute', 'other/model', True, 'served_model already set'),
     ('omniroute', None, False, 'final config carries no session tag'),
     ('omniroute', None, True, 'no ' + gw.TOKEN_ENV),
@@ -28,7 +28,7 @@ def test_token_file(tmp_path):
     path = tmp_path / 'synthetic-key'
     path.write_text('synthetic-test-credential\n')
     path.chmod(0o600)
-    secrets = {gw.TOKEN_FILE_ENV: str(path), 'OMNIROUTE_BASE_URL': 'http://invalid/v1'}
+    secrets = {gw.TOKEN_FILE_ENV: str(path), 'OMNIROUTE_BASE_URL': 'https://invalid/v1'}
     class Response:
         def __enter__(self):
             return self
