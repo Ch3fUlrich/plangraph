@@ -103,3 +103,7 @@ Missing, empty or older logs retain normal cooldown behaviour. Provider and
 probe records serving evidence; this override applies only to probe failures.
 The probe result adds `state` only for serving failures (or `host-not-ready`);
 ordinary successes and failures omit the key, rather than returning null.
+
+D-5966 agy quotas use agy:<model>, shared across effort variants of that model.
+Hydrogen, Argon and Sonnet limits are independent. Gateway aggregate antigravity
+quota snapshots do not suppress these native CLI models.

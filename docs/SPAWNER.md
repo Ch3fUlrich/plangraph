@@ -711,3 +711,9 @@ Checkpoint 6: Terminal events and run tree is included in this checkpoint.
 Checkpoint 3: Run watchdog and stall detection is included in this checkpoint.
 
 Review hard walls default to 25 minutes and implement/fix to 90 minutes; progressing runs retain these prior budgets. Read-only git status/diff/log and GitHub run/status polling do not count as tool loops. Queue expiry preserves records owned by live or unobservable supervisors.
+
+D-5966 review route: gemini-4-hydrogen-high, gemini-4-argon-medium, free
+console-deepseek/deepseek-flash and opencode-go/beam-free, then claude-sonnet-5-5-high.
+No mimo review legs. CLI RESOURCE_EXHAUSTED/quota-reached responses use the existing
+leg-state store, keyed agy:<model> without effort. Each model has an independent
+reset; route JSON exposes all three agy_quota_states including reset_at evidence.

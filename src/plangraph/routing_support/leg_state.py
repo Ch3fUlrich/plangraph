@@ -26,6 +26,12 @@ EVIDENCE_TTL_S = 6 * 60 * 60
 _SCOPE = "((account IS ? AND combo IS ?) OR (account IS NULL AND combo IS NULL AND source != 'provider-response'))"
 
 
+def quota_key(leg):
+    """D-5966: effort variants share one quota within each agy model, never across models."""
+    return re.sub(r'^agy[/:]((?:gemini-4-(?:hydrogen|argon)|claude-sonnet-5-5))(?:-(?:low|medium|high|xhigh|max))?$',
+                  r'agy:\1', leg)
+
+
 def _down_seconds(down_s):
     """Validated PLANGRAPH_LEG_DOWN_S, capped at RESET_CAP_S; never raises.
 
@@ -151,6 +157,7 @@ class LegStateStore:
         return db
 
     def record_provider_response(self, leg, status, body, headers, caller, now=None, account=None, combo=None):
+        leg = quota_key(leg)
         now = time.time() if now is None else now
         headers = {str(k).lower(): v for k, v in (headers or {}).items()}
         if type(status) is not int or status not in (429, 402) or not caller or not str(caller).strip():
@@ -168,6 +175,7 @@ class LegStateStore:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, status, _redact(body), None if reset is None else reset - now, reset, now, caller, "provider-response"))
 
     def record_probe_pass(self, leg, caller, now=None, account=None, combo=None):
+        leg = quota_key(leg)
         if not caller:
             raise LegStateError("requires successful provider response caller")
         with self._connect() as db:
@@ -176,6 +184,7 @@ class LegStateStore:
     def record_probe_fail(self, leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt=''):
         if not leg or not caller or not reason:
             raise LegStateError('requires leg, reason and caller')
+        leg = quota_key(leg)
         now = time.time() if now is None else now
         down_s = None if serving else _down_seconds(down_s)  # capped at RESET_CAP_S
         with self._connect() as db:
@@ -210,6 +219,7 @@ class LegStateStore:
         # An elapsed cooldown permits neither a fallback booking nor a reset-less limit.
         if _elapsed_cooldown({}, line):
             return
+        leg = quota_key(leg)
         now = time.time() if now is None else now
         reset = _reset({}, line, now)
         if reset is None and down_s is not None:
@@ -222,6 +232,7 @@ class LegStateStore:
                         None if reset is None else reset - now, reset, now, caller, 'harness-stderr'))
 
     def leg_status(self, leg, now=None, account=None, combo=None):
+        leg = quota_key(leg)
         now = time.time() if now is None else now
         if not self.path.exists() or self.path.stat().st_size == 0:
             return {"state": "ok", "evidence": None}
@@ -368,7 +379,7 @@ class LegAdapter:
             self.leg_status(leg)
             self._served.discard(self.identity(leg))
     def leg_status(self, leg, **kwargs):
-        if not self.enabled:
+        if not self.enabled or leg.startswith(("agy:", "agy/")) or "/" not in leg:
             return self.store.leg_status(leg, **kwargs)
         from .resolver import OPERATOR_REMOVED_MODELS
         if leg in OPERATOR_REMOVED_MODELS:

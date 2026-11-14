@@ -108,7 +108,7 @@ DEFAULT_LEGS = (
         tool_mode="inline-only"),
     *(Leg(f"agy-gemini-4-hydrogen-{effort}", "subscription", "agy",
           f"gemini-4-hydrogen-{effort}", "gemini", ("128k", "256k", "1m"), 900000, False,
-          roles=(role,), effort=effort, tool_mode="tools",
+          roles=("implement", "review") if effort == "high" else (role,), effort=effort, tool_mode="tools",
           note="D-5903: enabled; agy models lists Hydrogen low/medium/high/xhigh (2026-11-14); "
                "agy CLI review verdicts: PR #878 (three heads), #886 (2026-11-14), "
                "handoffs/plan-order/reviews/{pr878-5ac07d1d,pr886-75c5bd2f}-hydrogen.txt. "
@@ -169,6 +169,21 @@ DEFAULT_LEGS = (
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
         tool_mode="prompt-only",
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
+)
+
+# Operator 2026-11-14 / D-5966: independent agy model quotas, no mimo seats.
+REVIEW_ORDER = ("agy-gemini-4-hydrogen-high", "agy-gemini-4-argon-medium",
+                "console-deepseek-flash", "opencode-go-beam-free", "claude-sonnet-5-5-high")
+DEFAULT_LEGS += (
+    Leg(REVIEW_ORDER[1], "subscription", "agy", "gemini-4-argon-medium", "gemini",
+        ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="medium"),
+    Leg(REVIEW_ORDER[2], "free", "opencode", "console-deepseek/deepseek-flash", "deepseek",
+        ("128k",), 100000, False, roles=("review",)),
+    Leg(REVIEW_ORDER[3], "free", "opencode", "opencode-go/beam-free", "beam",
+        ("128k",), 100000, False, roles=("review",)),
+    Leg(REVIEW_ORDER[4], "subscription", "claude", "claude-sonnet-5-5-high", "claude",
+        ("128k", "256k", "1m"), 900000, False, claude_family=True,
+        roles=("review",), effort="high"),
 )
 
 # Preserve role-neutral keeper admission before applying implement-only policy.

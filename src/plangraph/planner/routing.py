@@ -239,6 +239,9 @@ class SpawnPlan:
         for field in ('writer_groups', 'seat_coverage'):
             if not getattr(self, field): result.pop(field)
         result["first_leg"] = asdict(self.first_leg) if self.first_leg else None
+        from plangraph.routing_support.leg_state import leg_status
+        result["agy_quota_states"] = {"agy:" + model: leg_status("agy:" + model)
+            for model in ("gemini-4-hydrogen", "gemini-4-argon", "claude-sonnet-5-5")}
         return result
 
 
@@ -256,6 +259,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
     """
+    if role == "review" and legs is DEFAULT_LEGS:
+        from .legs import REVIEW_ORDER
+        legs = tuple(l for l in legs if l.id in REVIEW_ORDER)
     check_route_targets(card, legs)
     placement = dict(placement) if placement is not None else dict(host=None, reason='placement_not_evaluated', free_mb=None)
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
@@ -303,7 +309,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             not assessment.review_exempt or card.get('risk', 'normal') in ('high', 'critical')
             ):
         raise SpawnRefused('zero reviewers requires low/normal review_exempt')
-    from plangraph.routing_support.leg_state import leg_status
+    from plangraph.routing_support.leg_state import leg_status, quota_key
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
     from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS, get_catalog_models
     catalog_rows = tuple(get_catalog_models() if catalog_rows is None else catalog_rows)
@@ -330,7 +336,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     def _leg_status(leg_obj):
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         if leg_obj.harness == "agy" and not unavailable(st) and "/" not in leg_obj.model:
-            alt = reader("agy/" + leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
+            alt = reader(quota_key("agy/" + leg_obj.model), now=now, account=card.get("account"), combo=card.get("combo"))
             if unavailable(alt):
                 return alt
         return st
