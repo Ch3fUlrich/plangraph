@@ -34,6 +34,7 @@ KNOWN_PREFIXES: tuple[str, ...] = (
 RUST_INPUTS: tuple[str, ...] = (
     "rust-toolchain.toml",
     ".docs-map",
+    ".gitignore",
     "docs/schemas/**",
     "docs/flow-watchdog.md",
     "docs/placement-rules.md",
@@ -54,6 +55,9 @@ RUST_INPUTS: tuple[str, ...] = (
     "tests/fixtures/writer_docs_map.json",
     "tests/hooks/parity_payloads.json",
     "tools/check_changelog_docs.py",
+    "tools/ci_commit_gate.py",
+    "tools/check_push_gate.py",
+    "tools/hooks/pre-push",
     "tools/dell_ci_jobs.py",
     "tools/new_code_allowlist.txt",
     "tools/probe_admission_policy_guard.py",
