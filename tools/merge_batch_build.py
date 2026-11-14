@@ -255,6 +255,8 @@ def cmd_build(args):
         raise
     path.parent.mkdir(parents=True, exist_ok=True)
     st = {"version": 1, "name": name, "repo": repo, "base": base, "branch": branch, "worktree": str(path.resolve()),
+          "base_head": git("rev-parse", f"{REMOTE}/{base}").stdout.strip(),
+          "plan": args.plan, "deviations": args.deviations,
           "status": "creating", "created": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
           "skip_conflicts": bool(args.skip_conflicts), "union": list(args.union), "pending": order,
           "current": None, "merging": None, "merged": [], "skipped": [], "forced": forced, "head": None, "pr": None,

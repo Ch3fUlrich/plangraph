@@ -20,6 +20,8 @@
             worktree and before each merge, so a merge that was made is recorded, not lost.
   push      push batch/NAME, open the batch PR (table of PRs, Plan-Item values, skipped PRs,
             resolution commits), print its number. Run again after a fix to update it.
+  review    record a part review ending in HEAD: <full part sha> and VERDICT: ACCEPT.
+  go-req    print the batch GO request from saved reviews, CI and PLAN evidence.
   land      merge the batch PR only if its head is the pushed head, every required check is
             green and --approval ends in `HEAD: <sha>` (the batch head in full, all 40 hex
             digits) and `VERDICT: PASS` lines, with
@@ -101,6 +103,8 @@ def parser():
     cmd = add("build", build.cmd_build, "merge PRs into batch/NAME", repo=True)
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--prs", required=True, help="comma separated PR numbers, in merge order")
+    cmd.add_argument("--plan", help="keeper key for the batch PLAN block")
+    cmd.add_argument("--deviations", default="none", help="batch plan deviations (default: none)")
     cmd.add_argument("--skip-conflicts", action="store_true", help="skip a conflicting PR and label it needs-update")
     set_options(cmd)
     cmd.add_argument("--force-set", action="store_true",
@@ -113,7 +117,14 @@ def parser():
     cmd = add("continue", build.cmd_continue, "resume after a conflict resolution commit")
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--skip-conflicts", action="store_true")
-    add("push", land.cmd_push, "push batch/NAME and open the batch PR").add_argument("--name", required=True)
+    cmd = add("push", land.cmd_push, "push batch/NAME and open the batch PR")
+    cmd.add_argument("--name", required=True)
+    cmd.add_argument("--ci-run", type=positive, help="full batch CI run id; repeat push after CI completes")
+    cmd = add("review", land.cmd_review, "record a review on a part's full head")
+    cmd.add_argument("--name", required=True)
+    cmd.add_argument("--pr", required=True, type=positive)
+    cmd.add_argument("--file", required=True)
+    add("go-req", land.cmd_go_req, "print the batch GO request").add_argument("--name", required=True)
     cmd = add("land", land.cmd_land, "merge the batch PR and report the included PRs")
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--batch-pr", required=True, type=int)

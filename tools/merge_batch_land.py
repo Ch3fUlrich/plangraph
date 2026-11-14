@@ -9,7 +9,8 @@ import time
 from pathlib import Path
 
 from merge_batch_util import (NEEDS_UPDATE, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
-                              gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees)
+                              gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
+                              batch_workflow_gate, part_review)
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
@@ -91,8 +92,18 @@ def cmd_push(args):
             if not found:
                 raise MergeBatchError(f"gh pr create printed no PR url: {first_line(out)}")
             st.update(pr=int(found.group(1)), url=found.group(0))
+    previous_head = st.get("head")
     st.update(status="pushed", head=head)
+    run_id = args.ci_run or ((st.get("ci") or {}).get("id") if previous_head == head else None)
+    st["ci"] = None  # never keep CI evidence across a new pushed head or a failed lookup
     save_state(st)
+    if run_id:
+        ci = gh_json("run", "view", str(run_id), "--repo", st["repo"], "--json",
+                     "databaseId,headSha,status,conclusion")
+        if ci.get("headSha") != head or ci.get("databaseId") != run_id:
+            raise MergeBatchError(f"CI run {run_id} does not name pushed head {head}")
+        st["ci"] = {"id": run_id, "head": head, "state": ci.get("status"), "conclusion": ci.get("conclusion")}
+        save_state(st)
     print(f"pushed {st['branch']} {head}; {st['url']}; land needs an approval ending in 'HEAD: {head}' and "
           "'VERDICT: PASS'", file=sys.stderr)
     print(st["pr"])
@@ -280,4 +291,56 @@ def cmd_status(args):
     for orphan in orphans:
         print(f"{orphan['name']}  orphan  no state file, but a build left its PR-head refs ({orphan['branch']}, "
               f"worktree {orphan['worktree']}): merge_batch.py abort --name {orphan['name']}")
+    return 0
+
+
+def cmd_review(args):
+    st = load_state(args.name)
+    rec = next((r for r in st["merged"] if r["pr"] == args.pr), None)
+    if rec is None:
+        raise MergeBatchError(f"PR #{args.pr} is not an included part")
+    rec["review"] = part_review(args.file, rec["head"])
+    save_state(st)
+    return 0
+
+
+def cmd_go_req(args):
+    st = load_state(args.name)
+    if st["status"] != "pushed" or not st.get("pr") or not st.get("base_head"):
+        raise MergeBatchError("go-req needs a pushed batch with a recorded base head")
+    wt, head = st["worktree"], st["head"]
+    if git("rev-parse", "HEAD", cwd=wt).stdout.strip() != head:
+        raise MergeBatchError("batch head moved since push; push again and refresh CI")
+    live = gh_json("pr", "view", str(st["pr"]), "--repo", st["repo"], "--json", "state,headRefOid")
+    if live.get("state") != "OPEN" or live.get("headRefOid") != head:
+        raise MergeBatchError("batch PR is not open on the saved pushed head; push again")
+    plan = st.get("plan") or ""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", plan):
+        raise MergeBatchError("build needs --plan <keeper key> for the batch PLAN block")
+    parts = []
+    if not st["merged"]:
+        raise MergeBatchError("batch has no included parts")
+    for rec in st["merged"]:
+        review = rec.get("review") or {}
+        if review.get("verdict") != "ACCEPT" or review.get("head") != rec["head"]:
+            raise MergeBatchError(f"part #{rec['pr']} lacks ACCEPT on its own head {rec['head']}")
+        if part_review(review.get("file", ""), rec["head"])["verdict"] != "ACCEPT":
+            raise MergeBatchError(f"part #{rec['pr']} review file no longer says ACCEPT")
+        if git("merge-base", "--is-ancestor", rec["head"], head, cwd=wt, ok=(0, 1)).returncode:
+            raise MergeBatchError(f"part #{rec['pr']} is not in batch head")
+        parts.append(f"#{rec['pr']} sha={rec['head']} review={review['file']} verdict=ACCEPT")
+    ci = st.get("ci") or {}
+    if (ci.get("head") != head or not ci.get("id") or ci.get("state") != "completed" or
+            ci.get("conclusion") != "success"):
+        raise MergeBatchError("batch CI is not green on pushed head; push --ci-run ID after full CI completes")
+    batch_workflow_gate(st)
+    stat = git("diff", "--shortstat", st["base_head"], head, cwd=wt).stdout.strip()
+    declared = st.get("deviations", "none").strip() or "none"
+    deviations = [declared] if declared != "none" else []
+    deviations += st.get("forced", [])
+    deviation = "; ".join(deviations) or "none"
+    line = (f"GO-REQ #{st['pr']} {st['repo']} head {head}; diff stat: {stat}; parts: " + "; ".join(parts) +
+            f"; CI run {ci['id']} state={ci['state']} conclusion={ci['conclusion']}; "
+            f"PLAN {plan} conforms={'no' if deviations else 'yes'} deviations={deviation}")
+    print(" ".join(line.split()))
     return 0

@@ -259,3 +259,70 @@ def test_status_and_abort(env):
     assert env.run("abort", "--name", "x1").returncode == 0
     assert not wt.exists() and not env.state_file("x1").exists() and env.git("branch", "--list", "batch/x1") == ""
     assert env.run("continue", "--name", "x1").returncode == 1
+
+
+@pytest.mark.parametrize("trailer,accepted", [("", False), ("\n\nGate-Edit: D-5952", True),
+                                            ("\n\nGate-Edit: yes", False)])
+def test_go_req_checks_each_workflow_touching_commit(env, trailer, accepted):
+    from test_merge_batch_land import go_ready
+
+    st = go_ready(env)
+    wt = Path(st["worktree"])
+    workflow = wt / ".github/workflows/other.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("jobs: {}\n")
+    env.git("add", ".github", cwd=wt)
+    env.git("commit", "-qm", "workflow change" + trailer, cwd=wt)
+    # A later unrelated trailer cannot authorize the touching commit.
+    env.git("commit", "--allow-empty", "-qm", "unrelated\n\nGate-Edit: D-5952", cwd=wt)
+    head = env.git("rev-parse", "HEAD", cwd=wt)
+    env.load()["runs"]["42"]["headSha"] = head
+    env.save()
+    assert env.run("push", "--name", "g1", "--ci-run", "42").returncode == 0
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == (0 if accepted else 1), result.stderr
+    if not accepted:
+        assert "Gate-Edit" in result.stderr and result.stdout == ""
+
+
+@pytest.mark.parametrize("text", ["HEAD: {head}\nVERDICT: PASS\n", "HEAD: {batch}\nVERDICT: ACCEPT\n",
+                                  "VERDICT: REQUEST_CHANGES\nHEAD: {head}\nVERDICT: ACCEPT\n",
+                                  "HEAD: {head}\nVERDICT: ACCEPT\nextra\n"])
+def test_review_requires_accept_on_the_part_head(env, text):
+    from test_merge_batch_land import go_ready
+
+    st = go_ready(env)
+    path = env.tmp / "bad-review.txt"
+    path.write_text(text.format(head=st["merged"][0]["head"], batch=st["head"]))
+    result = env.run("review", "--name", "g1", "--pr", "1", "--file", str(path))
+    assert result.returncode == 1 and "VERDICT: ACCEPT" in result.stderr
+    assert env.run("review", "--name", "g1", "--pr", "3", "--file", str(path)).returncode == 1
+
+
+@pytest.mark.parametrize("trailer,accepted", [("", False), ("\n\nGate-Edit: D-5952", True)])
+def test_go_req_checks_workflow_edits_introduced_by_merge(env, trailer, accepted):
+    from test_merge_batch_land import go_ready
+
+    st = go_ready(env)
+    wt = Path(st["worktree"])
+    env.git("checkout", "-qb", "merge-side", cwd=wt)
+    (wt / "side.txt").write_text("side\n")
+    env.git("add", ".", cwd=wt)
+    env.git("commit", "-qm", "side", cwd=wt)
+    env.git("checkout", "-q", st["branch"], cwd=wt)
+    (wt / "left.txt").write_text("left\n")
+    env.git("add", ".", cwd=wt)
+    env.git("commit", "-qm", "left", cwd=wt)
+    env.git("merge", "--no-ff", "--no-commit", "merge-side", cwd=wt)
+    workflow = wt / ".github/workflows/tests.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("jobs: {}\n")
+    env.git("add", ".", cwd=wt)
+    env.git("commit", "-qm", "merge introduces workflow" + trailer, cwd=wt)
+    env.load()["runs"]["42"]["headSha"] = env.git("rev-parse", "HEAD", cwd=wt)
+    env.save()
+    assert env.run("push", "--name", "g1", "--ci-run", "42").returncode == 0
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == (0 if accepted else 1), result.stderr
+    if not accepted:
+        assert "Gate-Edit" in result.stderr and result.stdout == ""
