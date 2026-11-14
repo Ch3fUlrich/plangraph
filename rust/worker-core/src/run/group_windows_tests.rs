@@ -169,15 +169,14 @@ fn descendants_and_stop() {
     let (mut g, _dir) = launch("pg-win-tree", "spawn-sleep", false, false).unwrap();
     let (grandchild, output) = wait::tree_ready(&mut g.child);
     let pids = g.group.members().unwrap();
-    assert_eq!(pids.len(), 2);
-    assert!(pids.contains(&g.child.id()));
-    assert!(pids.contains(&grandchild));
-    wait::assert_stop_requires_kill(&*g.group, &pids);
+    let names = wait::assert_tree_members(&pids, g.child.id(), grandchild);
+    wait::assert_stop_requires_kill(&*g.group, &pids, &names);
     assert_eq!(
         stop_group(&*g.group, Duration::ZERO, Duration::from_secs(2)),
-        StopOutcome::Empty
+        StopOutcome::Empty,
+        "job members before stop: {names}"
     );
-    assert!(pids.iter().all(|&pid| gone(pid)));
+    assert!(pids.iter().all(|&pid| gone(pid)), "job members: {names}");
     g.child.wait().unwrap();
     output.join().unwrap();
 }
