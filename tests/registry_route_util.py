@@ -123,3 +123,14 @@ def _repo(tmp_path):
     run("commit", "-qam", "head")
     head = run("rev-parse", "HEAD").stdout.strip()
     return repo, base, head
+
+
+def live_claim(monkeypatch, key, name='worker'):
+    """Make the keeper answer that `key` is claimed by `name` with a live lease; returns monkeypatch."""
+    from time import time
+    from plangraph.keeper.cli_verbs import Session
+
+    monkeypatch.setattr(Session, 'call', lambda self, method, verb, *a, **kw:
+        dict(key=key, state='claimed', claimed_by=name, lease_until=time() + 3600)
+        if verb == 'show' else dict(name=name))
+    return monkeypatch

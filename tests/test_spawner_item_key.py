@@ -8,7 +8,7 @@ import pytest
 from plangraph.planner.routing import SpawnRefused
 from plangraph.spawner.item_key import annotate_item, valid_item
 from plangraph.spawner.runner import spawn_service
-from registry_route_util import _Runner, _service
+from registry_route_util import _Runner, _service, live_claim
 
 
 KEY = 'plangraph:D-5047'
@@ -293,14 +293,7 @@ def test_spawn_missing_seat_identity_is_persisted(tmp_path, monkeypatch, dispatc
 
 @pytest.mark.parametrize('positional', [False, True])
 def test_refusal_item_key(tmp_path, monkeypatch, positional):
-    from time import time
-    from plangraph.keeper.cli_verbs import Session
-
-    # Reach the routing refusal with an authoritative, live admission claim.
-    monkeypatch.setattr(Session, 'call', lambda self, method, verb, *a, **kw:
-        dict(key=KEY, state='claimed', claimed_by='worker', lease_until=time() + 3600)
-        if verb == 'show' else dict(name='worker'))
-    service = _service(tmp_path, monkeypatch)
+    service = _service(tmp_path, live_claim(monkeypatch, KEY))
 
     def refuse(*args, **kwargs):
         raise SpawnRefused('test refusal')
