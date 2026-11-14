@@ -22,7 +22,7 @@ def test_catalog_missing_role_metadata_is_not_inferred(monkeypatch, capsys):
 
 
 @pytest.mark.parametrize('lid,model', [
-    ('omniroute-deepseek-flash', 'omniroute/deepseek-flash'),
+    ('omniroute-deepseek-flash', 'omniroute/deepseek-v4.1-flash'),
     ('omniroute-muse-spark', 'omniroute/muse-spark-1.3-contributor'),
     ('agy-sonnet-5.5', 'claude-sonnet-5-5-medium'),
     ('agy-opus-5.5', 'claude-opus-5-5-high'),
