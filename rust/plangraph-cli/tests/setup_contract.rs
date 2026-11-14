@@ -116,14 +116,17 @@ fn inline_pat_and_key_credentials_are_refused_without_leaking_values() {
         let result = env::parse(&format!("{key}=sensitive-fixture"));
         assert!(result.is_err(), "accepted inline {key}");
         assert!(!result.unwrap_err().contains("sensitive-fixture"));
-        assert!(env::parse(&format!("{key}_FILE=/private/credential")).is_ok());
+        assert!(env::parse(&format!("{key}_FILE=/private/key")).is_ok());
     }
 }
 
 #[test]
 fn setup_documentation_does_not_claim_windows_test_execution() {
-    assert!(!include_str!("../../../docs/setup.md")
-        .contains("contract tests run on Linux and Windows CI"));
+    let documentation = include_str!("../../../docs/setup.md");
+    assert!(!documentation.contains("contract tests run on Linux and Windows CI"));
+    assert!(documentation.contains(
+        "CI builds and tests this crate on Linux only; Windows CI does not compile or run it."
+    ));
 }
 
 #[test]
@@ -169,4 +172,30 @@ fn secret_manifest_default_is_refused_even_when_existing_key_would_win() {
     assert_eq!(result.0, 2);
     assert!(!result.1.join("\n").contains("sensitive-fixture"));
     assert!(!root.path().join("settings.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_above_home_is_allowed_but_home_and_descendants_must_not_be_links() {
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("real");
+    fs::create_dir_all(real.join("home")).unwrap();
+    let alias = root.path().join("alias");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let home = alias.join("home");
+    let text = manifest("text", "fixture");
+    assert_eq!(run(&home, &text, Mode::Apply).0, 0);
+    assert_eq!(run(&home, &text, Mode::Check).0, 0);
+    assert_eq!(
+        fs::read_to_string(real.join("home/settings.json")).unwrap(),
+        "fixture"
+    );
+
+    let outside = root.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, home.join("link")).unwrap();
+    let escaped = text.replace("settings.json", "link/settings.json");
+    assert_eq!(run(&home, &escaped, Mode::Apply).0, 2);
+    assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+    assert_eq!(run(&alias, &text, Mode::Apply).0, 2);
 }

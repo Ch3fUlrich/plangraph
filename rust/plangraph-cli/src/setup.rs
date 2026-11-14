@@ -50,7 +50,7 @@ pub fn run(home: &Path, manifest: &str, mode: Mode) -> (i32, Vec<String>) {
             continue;
         }
         let path = home.join(target);
-        let result = apply(&path, &entry, mode);
+        let result = apply(home, &path, &entry, mode);
         match result {
             Ok(status) => {
                 if status != "skipped" {
@@ -84,11 +84,14 @@ pub fn run(home: &Path, manifest: &str, mode: Mode) -> (i32, Vec<String>) {
     (code, rows)
 }
 
-fn apply(path: &Path, entry: &Entry, mode: Mode) -> Result<&'static str, String> {
-    // Reject symlink ancestors so a manifest cannot escape its supplied home.
+fn apply(home: &Path, path: &Path, entry: &Entry, mode: Mode) -> Result<&'static str, String> {
+    // Reject symlinks from the target through home; ancestors above home may be links.
     for ancestor in path.ancestors() {
         if std::fs::symlink_metadata(ancestor).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err("symlink ancestor".into());
+        }
+        if ancestor == home {
+            break;
         }
     }
     let _lock = if mode == Mode::Apply {

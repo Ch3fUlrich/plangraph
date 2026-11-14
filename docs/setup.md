@@ -26,7 +26,7 @@ Setup preserves existing env values and comments and adds only missing defaults.
 
 The setup contract supports `env` and `text` entries with home-relative targets;
 JSON/hook merging is deferred. Unknown fields/formats, invalid env content,
-unsafe paths, symlinks and non-file targets are refused. Optional `platforms`
+unsafe paths, symlinks at or below home and non-file targets are refused. Optional `platforms`
 limits an entry to the named Rust operating systems. Each target produces an
 action line. Exit codes: 0 success, 1 check drift, 2 usage/refusal, 3 partial failure.
 
@@ -43,4 +43,4 @@ ancestor replacement.
 Run `cargo test -p plangraph-cli` and
 `cargo clippy -p plangraph-cli --all-targets -- -D warnings` from `rust/`.
 The contract has portable Rust tests plus Unix-specific filesystem tests.
-Windows CI currently checks compilation; it does not execute these contract tests.
+CI builds and tests this crate on Linux only; Windows CI does not compile or run it.
