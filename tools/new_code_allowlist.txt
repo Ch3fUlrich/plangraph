@@ -35,6 +35,7 @@ src/plangraph/keeper/mcp_tools.py | D-5504/D-5506 rule 9.14: schema-only split r
 **/*.py | OPERATOR D-5830 interim: Rust preferred, Python accepted
 **/*.sh | OPERATOR D-5830 interim: Rust preferred, shell accepted
 
+tests/test_spawner_oom_reason.py | D-5847 in-flight
 src/plangraph/routing_support/quota_snapshots.py | D-5847 in-flight
 tests/test_spawner_quota_failfast.py | D-5847 in-flight
 tests/test_keeper_origin_git_env.py | D-5847 in-flight
