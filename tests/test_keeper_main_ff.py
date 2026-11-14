@@ -84,6 +84,17 @@ def test_no_keeper_state_allows_move(checkout):
     assert git(repo, 'rev-parse', 'HEAD') == sha
 
 
+def test_held_is_visible_in_existing_drift_output(checkout, tmp_path, capsys):
+    repo, state, _ = checkout
+    target(repo, 'src/plangraph/keeper/daemon.py', 'VALUE = 2\n')
+    _, line = advance.main_ff(repo, state, fetch=False)
+    registry = tmp_path / 'hosts.json'
+    registry.write_text(json.dumps({'hosts': [{'id': 'fixture', 'transport': 'local',
+        'repos': {'plangraph': {'live_dir': str(repo)}}}]}))
+    assert main(['drift', '--registry', str(registry)]) == 0
+    assert line in capsys.readouterr().out
+
+
 def test_unreadable_loaded_state_holds_instead_of_assuming_stopped(checkout):
     repo, state, loaded = checkout
     target(repo, 'src/plangraph/keeper/daemon.py', 'VALUE = 2\n')

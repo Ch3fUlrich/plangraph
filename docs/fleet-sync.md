@@ -103,8 +103,42 @@ and exercise reads after changing to an unrelated directory. The imports at
 `tests/test_fleet_sync.py:4` (`Path`) and `tests/test_fleet_sync.py:9` (`drift`)
 predate this PR.
 
-Keeper startup uses the Git identity and process-start helpers for its
-[loaded-state contract](keeper/main-fast-forward.md).
+## Keeper-aware production main fast-forward
+
+`python3 -m plangraph.fleet_sync main-ff --repo CHECKOUT --keeper-state STATE`
+fetches origin/main and fast-forwards a clean attached main only. Before a move,
+it compares the keeper's loaded SHA with the target using static import closure
+from the existing keeper package at both revisions. Existing changed/deleted
+keeper files and imported repository modules hold the move, including lazy,
+relative and literal import-module dependencies. Unimported additions and
+unrelated spawner changes pass; no loaded-state file means no running keeper.
+Stale PID/start-token state is ignored; unreadable state or failed analysis holds.
+`--no-fetch` checks locally known refs for offline fixture/manual diagnosis.
+
+A hold exits 3 and prints one line:
+`HELD keeper code changed: <files> loaded <sha> target <sha>`.
+Branch/dirt/non-fast-forward refusals exit 2; success/current exits 0. The last
+line is stored privately as `plangraph-main-ff.status` in the checkout's Git dir.
+Existing `drift` text output includes that line for local hosts; `drift --json`
+adds `main_ff` when a status is present. No status file preserves earlier output.
+
+`deploy/systemd/plangraph-main-ff.{service,timer}` are uninstalled hourly templates.
+Adapt their paths and supply `main-ff.env` with PLANGRAPH_MAIN_TREE and
+PLANGRAPH_KEEPER_STATE (the DB filename plus `.loaded.json`; see the
+[keeper state contract](keeper/main-fast-forward.md)). Restart the keeper from
+known code to publish its state before activating the guarded job. Stop/replace
+any prior unguarded updater rather than running both. No live config or unit is
+installed by this package. The named earlier main-ff script/routerctl sources
+were absent from this checkout; this command and the existing fleet drift
+surface provide the in-repository implementation and status integration.
+
+The main-ff guard now rechecks keeper state immediately before merging. Missing
+state permits a move when conclusive probes show no keeper unit/process. Both user and system
+unit scopes and standalone keeper processes are checked; a running keeper without
+state holds with a restart/path diagnostic. Bus/timeouts and inconclusive probes
+hold with a named cause, while missing systemctl/not-found units alone do not. `--keeper-unit` defaults to the repository's existing
+`plangraph-keeper.service`. See the keeper state contract for bootstrap, dirty or
+non-Git provenance, exact runtime data dependencies, and manual-update limits.
 
 Process detection now recognizes interpreter module and keeper-file launch
 targets on POSIX/Windows, excludes editors/probes and uses `ps` instead of
@@ -112,9 +146,3 @@ requiring `pgrep`. Positive keeper detection takes precedence over a prior unit
 error in the HELD diagnostic. Headless user-bus failures and unavailable process
 tools remain inconclusive and HELD; no-process alone does not prove an unreadable
 user unit absent. See the state contract for the verified launch inventory.
-
-The `main-ff --repo CHECKOUT --keeper-state STATE` command holds clean main
-updates when existing keeper imports change; unreadable state holds, Git failures refuse.
-
-Missing state now requires conclusive unit/process absence; recheck before merging.
-Changes to existing keeper runtime data also hold main updates.
