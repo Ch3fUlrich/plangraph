@@ -10,10 +10,12 @@ R-batch-02: Every brief names the goal, Plan-Item keys, scope files, checks, com
   (why: fixed fields let the driver check completion; source: briefs-0511/SKILLMODES-1.md, plangraph:BATCH-PORT-WRITER-DRIVER)
 R-batch-03: Run fast checks on the exact head before review; require its fast-checks stamp before starting the seat.
   (why: review and CI must not find gate failures first; source: plan-order/bin/fast-checks.sh and agy-review.sh)
-R-batch-04: Start an other-family review with repository access on the exact head, fix confirmed HIGH/MED findings and repeat to ACCEPT or round 5.
-  At the cap, close the PR unmerged and have the strongest available planner define slices <=300 lines with all open findings verbatim.
+R-batch-04: Start an other-family review with repository access on the exact head, fix confirmed HIGH/MED findings and repeat while progress permits.
+  Native spawner admission: `rust/pg-spawnd/src/round_progress.rs` records confirmed HIGH+MED per writer round. Two consecutive counts not below the earlier best refuse the next writer with `no_progress`; round 5 refuses with `round_cap`, and round 6 always refuses.
+  See `docs/SPAWNER.md` for verdict-file binding and the single narrow fix exception.
+  At the cap, close the PR unmerged and have the strongest available planner define slices <=800 changed lines (excluding Cargo.lock and generated files) with all open findings verbatim.
   Exception: one or two confirmed MED findings with clear fixes permit one narrow fix round. A HIGH, three or more MED, or a second miss closes and replans.
-  (why: an in-session fix loop avoids relaunch cost; source: routing DECISIONS 3.35, D-5909, D-5927)
+  (why: an in-session fix loop avoids relaunch cost; source: routing DECISIONS 3.35, D-5909, D-5927, D-5964)
 R-batch-05: Use Hydrogen high first; on quota try authorized free legs (deepseek-flash, mimo free, beam-free), Sonnet high last, without waiting.
   Credential, auth, access and secrets reviews require witnessed Sonnet high; every seat's family differs from all writers and its verdict names the exact head.
   The current plan-order/bin/agy-review.sh and free-seat.sh wrappers provide repository access, including free-leg runs.
