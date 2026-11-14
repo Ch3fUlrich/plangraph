@@ -15,9 +15,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let row = match result {
             Ok(watermark) => serde_json::json!({"repo":repo,"watermark":watermark,"alarm":null}),
             Err(alarm) => {
-                failed = true;
+                failed |= !matches!(alarm, Alarm::FetchDeferred);
                 serde_json::json!({"repo":repo,"alarm":match alarm {
-                    Alarm::ForcePush => "force_push", Alarm::FetchFailed => "fetch_failed", Alarm::FetchTimedOut => "fetch_timed_out"
+                    Alarm::ForcePush => "force_push", Alarm::FetchFailed => "fetch_failed", Alarm::FetchTimedOut => "fetch_timed_out", Alarm::FetchDeferred => "fetch_deferred"
                 }})
             }
         };

@@ -19,6 +19,7 @@ pub enum Alarm {
     ForcePush,
     FetchFailed,
     FetchTimedOut,
+    FetchDeferred,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,12 +92,77 @@ impl Mirror {
                 .unwrap_or_else(|| PathBuf::from("pg-repo-mirror")),
         })
     }
-    /// Attempt every repository with its own killable native fetch worker.
+    /// Attempt repositories using killable native fetch workers.
     pub fn fetch_all(&self) -> BTreeMap<String, Result<Watermark, Alarm>> {
-        let count = u32::try_from(self.repos.len()).unwrap_or(u32::MAX).max(1);
-        // Keep a normal inventory within the outer 55-second service envelope.
-        let timeout = Duration::from_secs(5).min(Duration::from_secs(45) / count);
-        self.fetch_all_with_timeout(timeout)
+        let started = Instant::now();
+        self.fetch_all_with(
+            || started.elapsed(),
+            |name, timeout| worker::fetch(self, name, timeout),
+        )
+    }
+    fn fetch_all_with(
+        &self,
+        elapsed: impl FnMut() -> Duration,
+        fetch: impl FnMut(&str, Duration) -> Result<Watermark, Alarm>,
+    ) -> BTreeMap<String, Result<Watermark, Alarm>> {
+        self.fetch_tick(
+            Duration::from_secs(5),
+            Duration::from_secs(45),
+            elapsed,
+            fetch,
+        )
+    }
+    fn fetch_tick(
+        &self,
+        timeout: Duration,
+        budget: Duration,
+        mut elapsed: impl FnMut() -> Duration,
+        mut fetch: impl FnMut(&str, Duration) -> Result<Watermark, Alarm>,
+    ) -> BTreeMap<String, Result<Watermark, Alarm>> {
+        let failed = || {
+            self.repos
+                .keys()
+                .map(|name| (name.clone(), Err(Alarm::FetchFailed)))
+                .collect()
+        };
+        if fs::create_dir_all(&self.root).is_err() {
+            return failed();
+        }
+        let _lock = match lockfile::try_lock(&self.root.join(".fetch-all.lock")) {
+            Ok(Some(lock)) => lock,
+            _ => return failed(),
+        };
+        let cursor = self.root.join(".fetch-next");
+        let saved = match fs::read_to_string(&cursor) {
+            Ok(name) => name,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(_) => return failed(),
+        };
+        let names: Vec<_> = self.repos.keys().collect();
+        let start = names
+            .iter()
+            .position(|name| name.as_str() >= saved.as_str())
+            .unwrap_or(0);
+        let mut results: BTreeMap<_, _> = names
+            .iter()
+            .map(|name| ((*name).clone(), Err(Alarm::FetchDeferred)))
+            .collect();
+        for offset in 0..names.len() {
+            if elapsed().saturating_add(timeout) > budget {
+                break;
+            }
+            let index = (start + offset) % names.len();
+            let name = names[index];
+            // Persist the successor before starting a worker so interruption cannot
+            // let a repeatedly stuck repository starve its successors next tick.
+            let next = names[(index + 1) % names.len()];
+            if atomic_write_private(&cursor, next.as_bytes()).is_err() {
+                results.insert(name.clone(), Err(Alarm::FetchFailed));
+                break;
+            }
+            results.insert(name.clone(), fetch(name, timeout));
+        }
+        results
     }
     /// Library callers may pin the installed worker path explicitly.
     pub fn with_fetch_worker(mut self, worker: impl Into<PathBuf>) -> Self {
@@ -107,10 +173,13 @@ impl Mirror {
         &self,
         timeout: Duration,
     ) -> BTreeMap<String, Result<Watermark, Alarm>> {
-        self.repos
-            .keys()
-            .map(|name| (name.clone(), worker::fetch(self, name, timeout)))
-            .collect()
+        let started = Instant::now();
+        self.fetch_tick(
+            timeout,
+            Duration::from_secs(45).max(timeout),
+            || started.elapsed(),
+            |name, timeout| worker::fetch(self, name, timeout),
+        )
     }
     /// Internal worker entry point: fetches with the native backend, without recursion.
     pub fn run_fetch_worker(request: &Path, result: &Path) -> io::Result<()> {
@@ -344,3 +413,7 @@ fn publish_with(
 #[cfg(test)]
 #[path = "mirror_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "mirror_schedule_tests.rs"]
+mod schedule_tests;

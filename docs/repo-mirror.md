@@ -94,19 +94,28 @@ Mirror test fixtures use worker-core’s shared Git test helper, including integ
 ## Complete inventory refresh
 
 `pg-repo-mirror REPOS.json MIRROR_ROOT` invokes `Mirror::fetch_all`, refreshing
-every configured repository in stable name order even if an earlier fetch fails.
+repositories in stable rotating name order even if an earlier fetch fails.
 Each JSONL output row contains its repo and accepted watermark or `force_push`,
-`fetch_failed`, or `fetch_timed_out` alarm. Any failure makes the command exit 1 after attempting the
-whole inventory. Per-repo quarantine, locks and monotonicity remain unchanged.
+`fetch_failed`, `fetch_timed_out`, or `fetch_deferred` alarm. Any fetch failure
+makes the command exit 1; deferral alone does not. Repositories left unfinished
+by the tick budget are reported as deferred and start the next tick. Per-repo
+quarantine, locks and monotonicity remain unchanged.
 
 The user timer in `deploy/systemd/pg-repo-mirror.{service,timer}` schedules this
 command every minute. It reads `~/.config/plangraph/repos.json` and stores under
 `~/.local/state/plangraph/mirrors`. Each fetch runs in a separate Rust worker using the same native gix backend.
 A per-repository deadline kills and reaps a stuck worker (its process group on
 Linux), records `fetch_timed_out`, and proceeds to the next repository. The default
-limit is the smaller of five seconds and 45 seconds divided by inventory size;
-`fetch_all_with_timeout` permits an explicit per-repository bound. The outer
-55-second service deadline remains a final guard. Monitor service errors and
+allowance is always five seconds per repository, regardless of inventory size.
+A tick starts another fetch only if its full allowance fits within 45 seconds.
+The private `.fetch-next` cursor in the mirror root records the successor before
+each worker starts; a new invocation resumes there, including after interruption.
+The `.fetch-all.lock` serializes cursor updates across invocations. Fast fetches
+can complete the whole inventory in one tick; slow inventories rotate across
+ticks without reducing any worker's allowance. `fetch_all_with_timeout` permits
+an explicit per-repository bound with a tick budget of at least that bound or
+45 seconds. The outer 55-second service deadline remains a final guard for the
+default command. Monitor service errors and
 per-repository watermark age. Systemd never overlaps this oneshot with itself.
 Installing/enabling the timer is a live operator step:
 
