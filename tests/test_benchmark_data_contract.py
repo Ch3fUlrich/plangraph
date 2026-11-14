@@ -45,7 +45,7 @@ _LEGACY_MISSING = {
     ("leg:cx-gpt-6.1-sol-medium@omniroute/cx-gpt-6.1-sol-medium", "medium"),
     ("leg:cx-gpt-6.1-sol-xhigh@omniroute/cx-gpt-6.1-sol-xhigh", "xhigh"),
     ("leg:deepseek@omniroute/deepseek-direct-flash", None),
-    ("leg:omniroute-deepseek-flash@omniroute/deepseek-flash", None),
+    ("leg:omniroute-deepseek-flash@omniroute/deepseek-v4.1-flash", None),
     ("leg:omniroute-grok-4.7@omniroute/gc/grok-4.7", None),
     ("leg:omniroute-muse-spark@omniroute/muse-spark-1.3-contributor", None),
     ("leg:opencode-big-pickle@opencode/big-pickle", None),
