@@ -122,6 +122,32 @@ class SpawnService(SeatSpawnMixin):
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
 
+    async def wait(self, run_id, timeout=None):
+        if timeout is not None and timeout < 0:
+            raise ValueError('timeout must be nonnegative')
+        deadline = None if timeout is None else time.monotonic() + timeout
+        next_refresh = 0
+        while True:
+            record = self.result(run_id)
+            if (record.get('run_kind') == 'native-codex' and record.get('overflow_remote')
+                    and record.get('status') == 'running' and time.monotonic() >= next_refresh):
+                remaining = None if deadline is None else max(0, deadline - time.monotonic())
+                try:
+                    record = await asyncio.wait_for(self.refresh_result(run_id), remaining)
+                except TimeoutError:
+                    raise TimeoutError('run wait timed out: ' + run_id) from None
+                next_refresh = time.monotonic() + 1
+            if record.get('ended') is not None and record['status'] != 'running':
+                return record
+            from .exit_outcome import orphaned
+            gone = orphaned(record, time.time())
+            if gone is not None:
+                self._save(gone)
+                return gone
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError('run wait timed out: ' + run_id)
+            await asyncio.sleep(.02)
+
     def ps(self):
         from .stall_watchdog import read_runs
         return {'runs': sorted(read_runs(self.state), key=lambda r: r.get('started', 0), reverse=True)}
