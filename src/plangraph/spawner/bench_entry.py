@@ -9,7 +9,6 @@ from plangraph.planner.routing import benchmark_rows_from_db, BenchDataError
 #: mapped id without a row, keeps today's "no benchmark p" (never invent one).
 LEG_BENCHMARK_MODEL = {
     "qodercli-qwen3.8-flash": "qoder/qwen3.8-flash-next",
-    "agy-gemini-3.8-flash": "agy/gemini-3.8-flash-tiered-high",
     "agy-sonnet-5.5": "agy/claude-sonnet-5-5-medium",
     "mimo-v2.6-pro": "mimo/mimo-v2.6-pro",
     "mimo-v2.6-flash": "mimo/mimo-v2.6-flash",

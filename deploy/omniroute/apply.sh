@@ -1233,7 +1233,7 @@ echo "Resilience:"
 # so every spark request died with "Request exceeded OmniRoute's local
 # rate-limit execution expiration", the chain fell through to a dead free leg,
 # and the client saw the last leg's error (2026-09-22; it surfaced in opencode
-# as "gemini-3.7-flash is cooling down"). 180000 sits under
+# as "upstream model is cooling down"). 180000 sits under
 # comboCooldownWait.budgetMs (300s) so a dead leg still hops.
 # providerBreaker.apikey.failureThreshold 12 -> 2 (operator 2026-09-23): the
 # zen free promo stays FIRST (free when it works), but a 403 is a permanent

@@ -47,7 +47,7 @@ Binding on every level. Each line names its source; read the source, never a cop
 8. CI runs only on the workstation or ci.vm; no GitHub billing [D-1436].
 9. Judge reviews only HIGH risk: secrets/auth/access, keeper and plan-graph engine or live keeper changes, live deploys/migrations (D-825 GO steps), data-mutating live steps. Seat selection follows D-2488/D-2654 via `seats_for`.
 10. A harness or classifier refusal is never worked around or relayed to another agent: stop and send the router the verbatim refusal, which the router turns into an OS-NN line the operator types in that session [routing DECISIONS 2.7].
-11. A named model runs only over its own path, never a substitute model or route [D-1504]. qwen3.8-flash = qodercli ACP only; gemini-3.8-flash = antigravity (agy) ACP or Google AI Studio (both rate-limited: back off or send BLOCKED, never swap); muse-spark-1.3 = opencode ACP.
+11. A named model runs only over its own path, never a substitute model or route [D-1504]. qwen3.8-flash = qodercli ACP only; all Gemini Flash versions are retired by operator order 2026-11-14: never spawn them; D-5903 enables replacement agy-gemini-4-hydrogen-high for implement and -medium for inline-only review, both unwitnessed; muse-spark-1.3 = opencode ACP.
 
 ## How work runs
 

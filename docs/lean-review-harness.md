@@ -55,3 +55,6 @@ forwarded to another endpoint after the initial URL validation.
 
 Required-witness preflight applies the management endpoint policy before reading
 the key or launching a seat, so unusable endpoints refuse before work starts.
+
+Direct CLI command rendering refuses operator-retired Gemini Flash targets before
+constructing argv; D-5903 enables Hydrogen high for implement and medium for read-only tools review (agy plan mode), both unwitnessed.

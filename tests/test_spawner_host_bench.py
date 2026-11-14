@@ -97,7 +97,7 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     plan = route_json(tmp_path, capsys, "--bench-db", str(db))
     assert plan["p_source"] == "benchmark"
     by_leg = {c["leg"]: c for c in plan["candidates"]}
-    for leg in ("agy-gemini-3.8-flash", "mimo-v2.6-flash"):
+    for leg in ("agy-sonnet-5.5", "mimo-v2.6-flash"):
         assert by_leg[leg]["u_core"] is not None, leg
         assert by_leg[leg]["p_source"] == "measured", leg
     # Without a DB: no p anywhere and the order is today's operator order.
@@ -106,7 +106,7 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
     # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
     assert [leg["id"] for leg in bare["legs"]] == [
-        "agy-gemini-3.8-flash", "opencode-big-pickle", "opencode-gemini-4-argon", "agy-gemini-4-argon",
+        "opencode-big-pickle", "opencode-gemini-4-argon", "agy-gemini-4-hydrogen-medium", "agy-gemini-4-argon",
         "agy-gpt-oss-120b", "omniroute-deepseek-flash", "omniroute-muse-spark",
         "opencode-go-gemini-4-argon", "opencode-go-muse-spark", "opencode-console-muse-spark",
         "opencode-go-deepseek-v4-flash",
@@ -120,13 +120,13 @@ def test_review_route_ignores_ambient_catalog_tiers(tmp_path, capsys, monkeypatc
     reads = []
     def ambient_catalog():
         reads.append(1)
-        return [{'id': 'agy/gemini-3.8-flash', 'tier': 'paid', 'available': 1, 'active': True}]
+        return [{'id': 'agy/gemini-4-argon-high', 'tier': 'paid', 'available': 1, 'active': True}]
 
     monkeypatch.setattr(resolver, 'get_catalog_models', ambient_catalog)
     # Positive control: an unpinned CLI route reads this snapshot and changes order.
     ambient = route_json(tmp_path, capsys)
     assert reads == [1]
-    assert next(c for c in ambient['candidates'] if c['leg'] == 'agy-gemini-3.8-flash')['tier'] == 'paid'
+    assert next(c for c in ambient['candidates'] if c['leg'] == 'agy-gemini-4-argon')['tier'] == 'paid'
     assert ambient['first_leg']['id'] == 'opencode-big-pickle'
     test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch)
     assert reads == [1]  # The exact-order probe must inject its own catalog input.
@@ -142,7 +142,7 @@ def test_unmapped_leg_no_p(tmp_path, capsys, monkeypatch):
     from dataclasses import replace
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.routing import plan_spawn
-    control = next(leg for leg in DEFAULT_LEGS if leg.id == 'agy-gemini-3.8-flash')
+    control = next(leg for leg in DEFAULT_LEGS if leg.id == 'agy-sonnet-5.5')
     synthetic = replace(control, id='synthetic-unmapped-review', model='synthetic/no-row')
     from plangraph.routing_support import resolver
     catalog_models = resolver.get_catalog_models
@@ -155,7 +155,7 @@ def test_unmapped_leg_no_p(tmp_path, capsys, monkeypatch):
     for leg in (synthetic.id,):
         assert leg not in LEG_BENCHMARK_MODEL
         assert by_leg[leg]["u_core"] is None and by_leg[leg]["p_source"] == "prior"
-    assert by_leg["agy-gemini-3.8-flash"]["p_source"] == "measured"
+    assert by_leg["agy-sonnet-5.5"]["p_source"] == "measured"
 
 
 def test_implement_order_unchanged_by_benchmark(tmp_path):
@@ -169,7 +169,7 @@ def test_implement_order_unchanged_by_benchmark(tmp_path):
     assert {leg["id"] for leg in with_bench["legs"]} == {leg["id"] for leg in bare["legs"]}
     from plangraph.planner.legs import TIERS
     for plan in (with_bench, bare):
-        assert [l["id"] for l in plan["legs"][:2]] == ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash"]
+        assert [l["id"] for l in plan["legs"][:2]] == ["cx-gpt-6.1-sol-xhigh", "agy-gemini-4-hydrogen-high"]
         assert plan["first_leg"]["effort"] == "xhigh"
         tiers = [TIERS.index(l["tier"]) for l in plan["legs"][2:]]
         assert tiers == sorted(tiers)
