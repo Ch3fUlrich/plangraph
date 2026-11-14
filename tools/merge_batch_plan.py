@@ -26,11 +26,9 @@ def high_patterns(extra=()):
 
 
 def high_hits(pr, patterns):
-    """The paths of ``pr`` (gh's list plus the old paths of renames git found) that match a HIGH glob; a
-    file list gh cut short counts as a hit."""
+    """Match the full Git file list, including the old paths of renames."""
     paths = [*pr["files"], *pr.get("extra", ())]
-    hits = [path for path in paths if any(fnmatch.fnmatchcase(path, pat) for pat in patterns)]
-    return hits + ["(file list truncated by gh)"] if pr["truncated"] else hits
+    return [path for path in paths if any(fnmatch.fnmatchcase(path, pat) for pat in patterns)]
 
 
 def stack_parents(prs):
@@ -141,6 +139,8 @@ def plan_batches(prs, base, max_prs=6, max_lines=1200, patterns=()):
     rows = [{"number": n, "title": by_num[n]["title"], "head": by_num[n]["head"], "ref": by_num[n]["ref"],
              "base": by_num[n]["base"], "draft": by_num[n]["draft"], "ci": by_num[n]["ci"],
              "files": len(by_num[n]["files"]), "lines": by_num[n]["lines"], "paths": by_num[n]["files"],
+             "generated_lines": by_num[n].get("generated_lines", 0),
+             "generated_files": by_num[n].get("generated_files", []),
              "high": bool(high_hits(by_num[n], patterns)),
              "high_paths": high_hits(by_num[n], patterns)[:5], "batch": placed.get(n, (None, None))[0],
              "tier": placed.get(n, (None, None))[1], "after": parent.get(n), "reason": why.get(n)}
@@ -164,7 +164,7 @@ def set_problems(plan):
 
 
 def render_table(plan):
-    head = ("B", "TIER", "PR", "HEAD", "CI", "DRAFT", "FILES", "LINES", "BASE", "TITLE / NOTE")
+    head = ("B", "TIER", "PR", "HEAD", "CI", "DRAFT", "FILES", "LINES", "GENERATED", "BASE", "TITLE / NOTE")
     table = [head]
     for row in plan["prs"]:
         note = row["title"][:50]
@@ -175,7 +175,7 @@ def render_table(plan):
         if row["high_paths"]:
             note = f"HIGH via {row['high_paths'][0]} | {note}"
         table.append((str(row["batch"] or "-"), row["tier"] or "-", f"#{row['number']}", row["head"][:8],
-                      row["ci"], "yes" if row["draft"] else "no", str(row["files"]), str(row["lines"]),
+                      row["ci"], "yes" if row["draft"] else "no", str(row["files"]), str(row["lines"]), str(row["generated_lines"]),
                       row["base"], note))
     widths = [max(len(line[i]) for line in table) for i in range(len(head))]
     out = ["  ".join(cell.ljust(w) for cell, w in zip(line, widths)).rstrip() for line in table]

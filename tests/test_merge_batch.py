@@ -62,6 +62,52 @@ def test_plan_cli_label_json_and_table(env):
     assert env.run("plan", "--max-prs", "0").returncode == 2
 
 
+def test_plan_and_build_use_refreshed_git_sizes_and_full_paths(env):
+    keeper = "src/plangraph/keeper/late.py"
+    env.branch_pr(912, {keeper: "x\n" * 1056}, lines=3278)
+    env.seed({"main-only.txt": "main\n" * 2222})
+    env.git("checkout", "-q", "lane/p912")
+    env.git("merge", "--no-ff", "-qm", "refresh main", "origin/main")
+    head = env.git("rev-parse", "HEAD")
+    env.git("push", "-q", "origin", "lane/p912", f"+{head}:refs/pull/912/head")
+    env.git("checkout", "-q", "main")
+    env.state["prs"]["912"]["headRefOid"] = head
+    env.save()
+    env.branch_pr(921, {"src/plangraph/keeper/b.py": "b\n" * 478}, lines=2722)
+    files = {f"docs/{i:03}.md": "d\n" for i in range(100)}
+    files.update({keeper: "c\n" * 2755})
+    env.branch_pr(928, files, lines=5101)
+    # A truncated gh list hides the only HIGH path, beyond its first 100 files.
+    env.state["prs"]["928"]["files"] = env.state["prs"]["928"]["files"][:100]
+    env.save()
+    fresh = env.fresh_clone()
+    result = env.run("plan", "--max-lines", "6000", "--json", cwd=fresh)
+    assert result.returncode == 0, result.stderr
+    plan = json.loads(result.stdout)
+    rows = {row["number"]: row for row in plan["prs"]}
+    assert [rows[n]["lines"] for n in (912, 921, 928)] == [1056, 478, 2855]
+    assert rows[928]["files"] == 101 and rows[928]["high_paths"] == [keeper]
+    assert [(b["tier"], b["prs"], b["lines"]) for b in plan["batches"]] == [
+        ("HIGH", [912, 921, 928], 4389)]
+    table = env.run("plan", "--max-lines", "6000", cwd=fresh).stdout
+    assert "batch 1 HIGH: --prs 912,921,928" in table and "batch 2" not in table
+    # The first two merge cleanly; build must apply the same corrected caps.
+    result = env.run("build", "--name", "real", "--prs", "912,921", "--max-lines", "6000", cwd=fresh)
+    assert result.returncode == 0, result.stderr
+
+
+def test_plan_counts_generated_churn_separately_inside_total(env):
+    env.branch_pr(1, {"src/a.rs": "a\n", "rust/Cargo.lock": "lock\n" * 3,
+                      "ui/generated/a.js": "generated\n" * 2})
+    plan = json.loads(env.run("plan", "--json").stdout)
+    row = plan["prs"][0]
+    assert row["lines"] == 6 and row["generated_lines"] == 5
+    assert row["generated_files"] == ["rust/Cargo.lock", "ui/generated/a.js"]
+    assert "GENERATED" in env.run("plan").stdout
+    result = env.run("build", "--name", "generated", "--prs", "1", "--max-lines", "5")
+    assert result.returncode == 1 and "over the caps" in result.stderr
+
+
 def test_plan_high_by_the_old_path_of_a_rename(env):
     keeper = "src/plangraph/keeper/store.py"
     env.seed({keeper: "x = 1\n"})

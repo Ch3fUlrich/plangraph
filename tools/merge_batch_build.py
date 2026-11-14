@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 from merge_batch_plan import high_patterns, plan_batches, set_problems, stack_parents, stack_sorted
-from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, add_extra_paths,
+from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, refresh_diff,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
                               orphan_names, parse_prs, repo_info, save_state, short, state_dir, state_path,
                               worktrees)
@@ -214,7 +214,7 @@ def fetch_heads(name, base, order, infos, repo):
 def rule_problems(args, base, prs, heads):
     """Apply the plan rules (red CI, needs-update, HIGH apart from standard PRs, the caps) to the PRs of this
     build. They refuse it unless --force-set; then they are returned, to be logged in the state and the batch PR."""
-    add_extra_paths(base, prs, heads)  # the old paths of renames count for the HIGH tier
+    refresh_diff(base, prs, heads)  # use the same fetched diff metadata as plan
     problems = set_problems(plan_batches(prs, base, args.max_prs, args.max_lines, high_patterns(args.high_path)))
     if problems and not args.force_set:
         raise MergeBatchError("the PRs break the plan rules: " + "; ".join(problems) + " (merge_batch.py plan "

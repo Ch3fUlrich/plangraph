@@ -1,0 +1,1 @@
+Use fetched Git diffs for merge-batch plan and build sizes and complete HIGH path checks, avoiding stale GitHub totals after refresh merges and truncated file lists. Report Cargo.lock and generated-file churn separately within the total line cap.
