@@ -98,6 +98,7 @@ def local_control_tests(texts, path):
 def dependency_graph(texts):
     """Reverse imports plus static module launches and tool-script consumers."""
     modules = {}
+    tool_aliases = {}
     for rel in texts:
         p = Path(rel)
         if p.suffix != ".py":
@@ -110,6 +111,10 @@ def dependency_graph(texts):
         modules[".".join(parts)] = rel
         if p.parts[0] == "tests":
             modules.setdefault(p.stem, rel)
+        elif p.parts[0] == "tools":
+            # Executable tools add their own directory to sys.path. A bare
+            # import may name several tools; retaining all candidates is safe.
+            tool_aliases.setdefault(p.stem, set()).add(rel)
     reverse = {}
     tool_paths = [rel for rel in texts if rel.startswith("tools/")]
     for rel, text in texts.items():
@@ -122,11 +127,14 @@ def dependency_graph(texts):
             strings = []
             tool_commands = []
             for node in ast.walk(tree):
-                if isinstance(node, ast.Call) and node.args and (
+                if isinstance(node, ast.Call) and (
                         getattr(node.func, "attr", None) or getattr(node.func, "id", None)) in {
                             "run", "Popen", "call", "check_output", "check_call", "run_path"}:
-                    tool_commands.extend(child.value for child in ast.walk(node.args[0])
-                                         if isinstance(child, ast.Constant) and isinstance(child.value, str))
+                    arguments = node.args[:1] + [kw.value for kw in node.keywords
+                                                 if kw.arg in {"args", "path_name"}]
+                    for argument in arguments:
+                        tool_commands.extend(child.value for child in ast.walk(argument)
+                                             if isinstance(child, ast.Constant) and isinstance(child.value, str))
                 if isinstance(node, ast.Import):
                     names.extend(a.name for a in node.names)
                 elif isinstance(node, ast.ImportFrom):
@@ -146,24 +154,35 @@ def dependency_graph(texts):
             # Shell scripts may contain Python heredocs as well as -m commands.
             command_text = text
             names.extend(re.findall(r"^\s*(?:from|import)\s+([\w.]+)", text, re.M))
-            for line in re.findall(r"^\s*(?:from\s+[\w.]+\s+import|import)\s+[^\n]+", text, re.M):
+            snippets = re.findall(r"^\s*(?:from\s+[\w.]+\s+import|import)\s+[^\n]+", text, re.M)
+            # Parse complete heredocs so parenthesized and continued imports
+            # retain their child modules. Non-Python heredocs are ignored.
+            snippets.extend(match.group(3) for match in re.finditer(
+                r"<<-?[ \t]*(['\"]?)([A-Za-z_]\w*)\1[^\n]*\n(.*?)^[ \t]*\2[ \t]*$",
+                text, re.M | re.S))
+            for snippet in snippets:
                 try:
-                    statement = ast.parse(line.strip()).body[0]
+                    statements = ast.walk(ast.parse(snippet.strip()))
                 except SyntaxError:
-                    continue  # A multiline import still has its prefix above.
-                if isinstance(statement, ast.ImportFrom):
-                    names.extend((statement.module or "") + "." + alias.name
-                                 for alias in statement.names)
-                elif isinstance(statement, ast.Import):
-                    names.extend(alias.name for alias in statement.names)
+                    continue
+                for statement in statements:
+                    if isinstance(statement, ast.ImportFrom):
+                        prefix = statement.module or ""
+                        names.append(prefix)
+                        names.extend(prefix + "." + alias.name for alias in statement.names)
+                    elif isinstance(statement, ast.Import):
+                        names.extend(alias.name for alias in statement.names)
         launches.extend(re.findall(r"(?<!\w)-m\s+['\"]?([\w.]+)", command_text))
         names.extend(launches)
         names.extend(name + ".__main__" for name in launches if name + ".__main__" in modules)
         for name in names:
             # Importing or launching a child also executes package __init__ modules.
             for end in range(1, len(name.split(".")) + 1):
-                dep = modules.get(".".join(name.split(".")[:end]))
-                if dep:
+                prefix = ".".join(name.split(".")[:end])
+                deps = set(tool_aliases.get(prefix, ()))
+                if prefix in modules:
+                    deps.add(modules[prefix])
+                for dep in deps:
                     reverse.setdefault(dep, set()).add(rel)
         for script in tool_paths:
             # Production prose may recommend a Python tool without executing it.

@@ -419,6 +419,7 @@ def test_subprocess_consumers_follow_import_graph(tmp_path, launch):
 
 @pytest.mark.parametrize('statement', [
     'from pkg.api import VALUE', 'from pkg import api', 'from pkg import api as renamed',
+    'from pkg import (\n    api,\n)',
 ])
 def test_shell_inline_python_consumer(tmp_path, statement):
     _asset_repo(tmp_path, {
@@ -529,3 +530,36 @@ def test_python_tool_in_production_prose_is_not_a_call(tmp_path):
         'src/pkg/api.py': 'PROMPT = "Run python3 tools/check.py"',
     })
     assert selector().select_tests(tmp_path, ['tools/check.py'])['tests'] == []
+
+
+@pytest.mark.parametrize('deleted', [False, True])
+def test_tool_bare_imports_follow_all_candidates(tmp_path, deleted):
+    _asset_repo(tmp_path, {
+        'tools/hooks/rules.py': 'VALUE = 1',
+        'tools/other/rules.py': 'VALUE = 2',
+        'tools/hooks/entry.py': 'import rules',
+        'tests/test_bare.py': 'import entry',
+        'tests/test_rules.py': 'from rules import VALUE',
+    })
+    path = 'tools/hooks/rules.py'
+    if deleted:
+        (tmp_path / path).unlink()
+    assert {'tests/test_bare.py', 'tests/test_rules.py'} <= set(
+        selector().select_tests(tmp_path, [path])['tests'])
+
+
+@pytest.mark.parametrize('call', ['run', 'Popen', 'check_output'])
+def test_python_tool_keyword_argv(tmp_path, call):
+    _asset_repo(tmp_path, {
+        'tools/entry.py': 'from pkg.core import VALUE',
+        'src/pkg/api.py': f'subprocess.{call}(args=["python3", "tools/entry.py"])',
+    })
+    assert 'tests/test_api.py' in selector().select_tests(
+        tmp_path, ['src/pkg/core.py'])['tests']
+
+
+def test_real_hook_rules_select_implicit_importers():
+    root = Path(__file__).resolve().parents[1]
+    for path in ['tools/hooks/bash_guard_rules.py', 'tools/hooks/hook_common.py']:
+        plan = selector().select_tests(root, [path])
+        assert {'tests/hooks/test_bash_guard_allow.py', 'tests/hooks/test_bash_guard_deny.py'} <= set(plan['tests'])
