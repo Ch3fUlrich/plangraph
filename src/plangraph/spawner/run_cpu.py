@@ -1,4 +1,9 @@
-"""Process-tree CPU accounting for the run watchdog."""
+"""Process-tree CPU accounting for the run watchdog.
+
+Live-descendant detection is Linux-only. ``_watchdog_child_active`` is reset to
+False on every sample and stays False on other platforms, including Windows
+Job Object CPU accounting; there it means unobserved, not proof of no child.
+"""
 import asyncio
 import os
 import sys

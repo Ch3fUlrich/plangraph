@@ -81,7 +81,7 @@ class Watchdog:
                                        else 0)
 
     def decide(self, now, edit, activity, cpu, *, stdout_activity=None, waiting=False):
-        if waiting: activity = now  # a visible live child CLI can be waiting on its provider
+        # A live child defers only CPU-based stuck detection, never output/progress stalls.
         if cpu is None:
             self.cpu_idle_since = None
         elif waiting or self.cpu is None or cpu != self.cpu:
