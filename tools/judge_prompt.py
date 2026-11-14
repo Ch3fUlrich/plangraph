@@ -32,6 +32,7 @@ def build_judge_prompt(
     ci: Mapping[str, str], *, byte_budget: int = 100_000,
     revision_range: str = "base..head",
     tool_mode: str = "prompt-only",
+    context: dict | None = None,
 ) -> str:
     """Pure renderer: preserve all findings/diff/CI and include whole file bodies.
 
@@ -40,7 +41,10 @@ def build_judge_prompt(
     """
     if byte_budget < 0:
         raise ValueError("byte_budget must be nonnegative")
+    from plangraph.review.prompt import render_brief
+
     parts = [
+        render_brief("review", context),
         ("# Review judge\n" + (
         "Cut files are unavailable; judge only supplied evidence. No tools are available.\n"
         if tool_mode == "prompt-only" else
@@ -69,7 +73,7 @@ def build_judge_prompt(
     parts.append("## Cut files\n" + ("\n".join(cut) if cut else "None"))
     result = JudgePrompt("\n\n".join(parts) + "\n")
     result.evidence = {"findings": findings, "diff": diff, "files": dict(files), "ci": dict(ci),
-                       "byte_budget": byte_budget, "revision_range": revision_range}
+                       "byte_budget": byte_budget, "revision_range": revision_range, "context": context}
     return result
 
 
@@ -96,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--byte-budget", type=int, default=100_000)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--context", type=Path, help="JSON review context fields")
     parser.add_argument("--tool-mode", choices=("tools", "inline-only", "prompt-only"),
                         default="prompt-only")
     args = parser.parse_args(argv)
@@ -125,9 +130,13 @@ def main(argv: list[str] | None = None) -> int:
     ci = json.loads(args.ci_summary.read_text(encoding="utf-8"))
     if not isinstance(ci, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in ci.items()):
         parser.error("CI summary must be a JSON object of job -> conclusion strings")
+    context = json.loads(args.context.read_text()) if args.context else {}
+    context.update(base_sha=git("rev-parse", args.base).strip(),
+                   head_sha=git("rev-parse", args.head).strip())
     result = build_judge_prompt(findings, diff, files, ci,
                                 byte_budget=args.byte_budget, revision_range=revision_range,
-                                tool_mode=args.tool_mode)
+                                tool_mode=args.tool_mode,
+                                context=context)
     if args.output:
         args.output.write_text(result, encoding="utf-8")
     else:

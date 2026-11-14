@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from string import Template
 from pathlib import Path
 
 __all__ = [
@@ -23,6 +24,19 @@ NO_TOOLS_PREAMBLE = (
 )
 
 
+def render_brief(role: str, context: dict | None = None) -> str:
+    """Render a versioned brief; substitution never interprets item text."""
+    if role not in ("review", "writer"):
+        raise ValueError("role must be review or writer")
+    fields = ("item_key", "done_criteria", "invariants", "base_sha", "head_sha",
+              "public_symbols", "callers", "test_output_paths")
+    values = {field: "unavailable (request before acceptance)" for field in fields}
+    values.update({key: str(value) for key, value in (context or {}).items()
+                   if key in fields})
+    text = Path(__file__).with_name(role + "_brief.md").read_text(encoding="utf-8")
+    return Template(text).substitute(values)
+
+
 def load_tail() -> str:
     """Tail reminder text stored next to this module."""
     return Path(__file__).with_name("tail.md").read_text(encoding="utf-8")
@@ -38,13 +52,14 @@ def vector_block(vectors: list[str]) -> str:
 
 
 def assemble(vectors: list[str], parts: list[tuple[str, str]],
-             *, preamble: bool = True) -> str:
+             *, preamble: bool = True, context: dict | None = None) -> str:
     """Full prompt: preamble, vectors, labelled parts, tail last."""
     if not vectors:
         raise ValueError("vectors must not be empty")
     out = ""
     if preamble:
         out += NO_TOOLS_PREAMBLE + "\n"
+    out += render_brief("review", context) + "\n"
     out += vector_block(vectors)
     for label, text in parts:
         out += "\n=== %s\n" % label + text
@@ -120,7 +135,8 @@ def part_map(parts: list[dict[str, str]]) -> str:
 
 
 def assemble_all(vectors: list[str], files: dict[str, str],
-                 limit: int = 60_000, preamble: bool = True) -> list[str]:
+                 limit: int = 60_000, preamble: bool = True,
+                 context: dict | None = None) -> list[str]:
     """One full prompt per split part, each carrying the file-part map."""
     if not vectors:
         raise ValueError("vectors must not be empty")
@@ -132,12 +148,13 @@ def assemble_all(vectors: list[str], files: dict[str, str],
     for part in parts:
         labelled = [("FILE-PART MAP", mapping)]
         labelled.extend(sorted(part.items()))
-        prompts.append(assemble(vectors, labelled, preamble=preamble))
+        prompts.append(assemble(vectors, labelled, preamble=preamble, context=context))
     return prompts
 
 
 def assemble_diff(vectors: list[str], diff_text: str,
-                  max_bytes: int = 60_000, preamble: bool = True) -> list[str]:
+                  max_bytes: int = 60_000, preamble: bool = True,
+                  context: dict | None = None) -> list[str]:
     """One prompt per module part of a diff, each carrying the file map.
 
     Parts come from split.split_diff_by_module: grouped by module, never
@@ -149,8 +166,8 @@ def assemble_diff(vectors: list[str], diff_text: str,
         raise ValueError("vectors must not be empty")
     parts = split.split_diff_by_module(diff_text, max_bytes)
     if not parts:
-        return assemble_all(vectors, {}, max_bytes, preamble)
+        return assemble_all(vectors, {}, max_bytes, preamble, context)
     mapping = split.render_part_map(parts)
     return [assemble(vectors, [("FILE-PART MAP", mapping),
                                ("DIFF PART %d [%s]" % (p.index, p.module), p.text)],
-                     preamble=preamble) for p in parts]
+                     preamble=preamble, context=context) for p in parts]
