@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+regex = "1"
+toml = "0.5"
 gix = { version = "0.90", default-features = false, features = ["sha1", "revision", "blocking-http-transport-reqwest-rust-tls"] }
 pg-worker-core = { path = "../worker-core" }
 serde = { version = "1", features = ["derive"] }

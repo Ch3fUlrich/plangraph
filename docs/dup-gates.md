@@ -1,0 +1,6 @@
+# Capability duplication gate (DUP-GATES slice 1)
+`rust/pg-ctx/src/dup_gates.rs` exposes `parse`, `scan`, `check` for root `capabilities.toml`. Canonical modules resolve under the root or `src/`; Python uses dots, Rust accepts `::`, JS/TS `/`. Supported languages: python, rust, javascript, typescript.
+Initial owners from origin/main: live_follow.read_token, fleet_report.append_inbox, merge_batch_util.git. No helpers move. The lexical scanner reports file:line for def/fn/function definitions and imports from other modules (including Python relative/multiline imports and extensionless Python scripts).
+Source fixtures are scanned; hidden/build/vendor directories and symlinks are skipped. Read/configuration errors fail closed. Renamed clones, dynamic imports and arbitrary module reexports are outside this slice.
+`capabilities-baseline.toml` records today's per-file counts including tests. `check(root, reference)` requires exact counts (stale entries fail); supply the trusted base revision's baseline as `reference` to reject additions/raises. Remove/lower entries as debt shrinks.
+Revision loading, subcommands and CI integration are later slices. Run the hermetic temp-tree tests with `cd rust && cargo test -p pg-ctx` (no network).
