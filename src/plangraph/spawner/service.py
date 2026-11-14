@@ -17,6 +17,12 @@ from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
 from .item_key import annotate_item
 from .base_fresh import admit_base
+def remote_native_running(record):
+    """True for a running native Codex run placed on another host; only these need a remote refresh."""
+    return (record.get('run_kind') == 'native-codex' and bool(record.get('overflow_remote'))
+            and record.get('status') == 'running')
+
+
 class SpawnService(SeatSpawnMixin):
     def __init__(self, runner=None, state=None, leg_reader=None):
         self.runner = runner or SpawnerRunner()
@@ -43,7 +49,7 @@ class SpawnService(SeatSpawnMixin):
     async def refresh_result(self, run_id):
         """Refresh remote evidence off the event loop; result() stays a local read."""
         record = self.result(run_id)
-        if record.get('run_kind') == 'native-codex' and record.get('overflow_remote') and record.get('status') == 'running':
+        if remote_native_running(record):
             from .remote_ps import native_result
             record = await asyncio.to_thread(native_result, record)
             self._save(record)
@@ -129,8 +135,7 @@ class SpawnService(SeatSpawnMixin):
         next_refresh = 0
         while True:
             record = self.result(run_id)
-            if (record.get('run_kind') == 'native-codex' and record.get('overflow_remote')
-                    and record.get('status') == 'running' and time.monotonic() >= next_refresh):
+            if remote_native_running(record) and time.monotonic() >= next_refresh:
                 remaining = None if deadline is None else max(0, deadline - time.monotonic())
                 try:
                     record = await asyncio.wait_for(self.refresh_result(run_id), remaining)
