@@ -65,10 +65,9 @@ mod tests {
             "GIT_CONFIG_KEY_0",
             "GIT_CONFIG_VALUE_0",
         ] {
-            assert!(
-                git.get_envs()
-                    .any(|(name, value)| name == key && value.is_none())
-            );
+            assert!(git
+                .get_envs()
+                .any(|(name, value)| name == key && value.is_none()));
         }
     }
 

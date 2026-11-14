@@ -373,3 +373,5 @@ the Temporal spike keeps its CI replay-only check and is skipped for unrelated w
 
 Worker preflight tests default to the CI test-only unjailed environment when no jail
 configuration is supplied; explicit jail settings are preserved and other check commands are unaffected.
+
+Rust test builds, including nested admission checks and Python placement fixtures, inherit `CARGO_TARGET_DIR`; keep the host shared target when it is configured.

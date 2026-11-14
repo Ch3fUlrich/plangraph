@@ -150,11 +150,9 @@ fn pilot_credentials_absent_with_parent_positive_control() {
         assert!(!String::from_utf8_lossy(&out.stderr).contains("fixture"));
         for name in names {
             assert_eq!(std::env::var(name).unwrap(), "pilot-parent");
-            assert!(
-                !String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .any(|l| l.starts_with(&format!("{name}=")))
-            );
+            assert!(!String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .any(|l| l.starts_with(&format!("{name}="))));
         }
     }
 }
