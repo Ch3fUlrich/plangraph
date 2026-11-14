@@ -1,0 +1,1 @@
+- Classify ordinary namespace entries before reading symlink targets, avoiding Windows non-reparse-point errors during check and read-only apply.

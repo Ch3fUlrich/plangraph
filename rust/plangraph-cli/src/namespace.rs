@@ -63,7 +63,22 @@ fn ancestors(path: &Path) -> io::Result<()> {
     Ok(())
 }
 fn is_shim(old: &Path, new: &Path) -> io::Result<bool> {
-    let target = match fs::read_link(old) {
+    is_shim_with(old, new, |path| fs::read_link(path))
+}
+fn is_shim_with(
+    old: &Path,
+    new: &Path,
+    read_link: impl FnOnce(&Path) -> io::Result<PathBuf>,
+) -> io::Result<bool> {
+    // Windows read_link reports a non-reparse-point error for ordinary files;
+    // inspect the entry first so that error is never confused with a bad shim.
+    match fs::symlink_metadata(old) {
+        Ok(metadata) if !metadata.file_type().is_symlink() => return Ok(false),
+        Ok(_) => (),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    }
+    let target = match read_link(old) {
         Ok(target) => target,
         Err(e) if [io::ErrorKind::NotFound, io::ErrorKind::InvalidInput].contains(&e.kind()) => {
             return Ok(false)
@@ -346,3 +361,20 @@ pub fn cli(home: &Path, args: &[String]) -> i32 {
 #[cfg(all(test, unix))]
 #[path = "namespace_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod shim_tests {
+    use super::*;
+    #[test]
+    fn ordinary_paths_do_not_depend_on_platform_read_link_errors() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("file");
+        fs::write(&file, b"fixture").unwrap();
+        for path in [file, root.path().to_path_buf(), root.path().join("absent")] {
+            let result = is_shim_with(&path, &root.path().join("target"), |_| {
+                Err(io::Error::other("not a reparse point"))
+            });
+            assert!(!result.unwrap());
+        }
+    }
+}

@@ -86,3 +86,7 @@ Rust prompt/diff Git fixtures clear every inherited GIT_* variable through the
 shared command builder, then set only isolated config/home controls. Regression
 children poison routing and injected-config variables using disposable paths;
 no fixture selects the actual checkout or its worktree list.
+
+Namespace checks classify entries by link metadata before reading a shim target.
+Ordinary files and directories require no read_link call, including on Windows
+where a non-reparse-point error is not reported as InvalidInput.
