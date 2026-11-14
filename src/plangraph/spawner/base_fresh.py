@@ -7,8 +7,8 @@ import time
 
 ADMISSION_TIMEOUT = 180
 def _git_env():
-    return {k: v for k, v in os.environ.items()
-            if k not in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR')}
+    from .prompt_input import checkout_env
+    return checkout_env()
 def _check(repo, default=None, fetch=True, timeout=60, ref='HEAD'):
     repo = os.fspath(repo)
     def git(*args, check=True):
@@ -47,6 +47,59 @@ def _check(repo, default=None, fetch=True, timeout=60, ref='HEAD'):
 def base_fresh(repo, *, default=None, fetch=True, timeout=60) -> dict:
     """Compare the run cwd's HEAD with origin's default branch, fetching by default."""
     return _check(repo, default, fetch, timeout)
+
+def fresh_worktree_base(repo, *, base='origin/main', default='main', fetch=True):
+    """Fetch, fast-forward main safely, and refuse a stale worktree creation base."""
+    from .git_guard import run_worktree_lock
+    from pathlib import Path
+    from plangraph.routing_errors import SpawnRefused
+    def git(*args, check=True):
+        return subprocess.run(['git', '-C', os.fspath(repo), *map(str, args)],
+            env=_git_env(), capture_output=True, text=True, check=check, timeout=30)
+    step = 'worktree_git_failed'
+    repo = os.path.abspath(repo)
+    try:
+        if default != 'main' and not default.startswith('phase/'):
+            raise SpawnRefused('base_stale: invalid_default')
+        git('check-ref-format', 'refs/heads/' + default)
+        common = Path(git('rev-parse', '--git-common-dir').stdout.strip())
+        if not common.is_absolute(): common = Path(repo) / common
+        with run_worktree_lock(common / 'fresh-base'):
+            if fetch:
+                step = 'worktree_fetch_failed'
+                refs = dict.fromkeys(('main', default))
+                git('fetch', '--no-write-fetch-head', 'origin', *(
+                    '+refs/heads/' + name + ':refs/remotes/origin/' + name for name in refs))
+                step = 'worktree_git_failed'
+            base_sha = git('rev-parse', '--verify', '--end-of-options', str(base) + '^{commit}').stdout.strip()
+            target = git('rev-parse', '--verify', 'refs/remotes/origin/' + default + '^{commit}').stdout.strip()
+            main = git('rev-parse', '--verify', 'refs/remotes/origin/main^{commit}').stdout.strip()
+            if any(git('merge-base', '--is-ancestor', sha, base_sha, check=False).returncode for sha in (target, main)):
+                raise SpawnRefused('base_stale: worktree_base_behind_origin')
+            old = git('rev-parse', '--verify', 'refs/heads/main', check=False)
+            if old.returncode == 0:
+                old = old.stdout.strip()
+                if git('merge-base', '--is-ancestor', old, main, check=False).returncode:
+                    raise SpawnRefused('base_stale: main_diverged')
+                main_tree = None
+                for line in git('worktree', 'list', '--porcelain').stdout.splitlines():
+                    if line.startswith('worktree '): main_tree = line.removeprefix('worktree ')
+                    elif line == 'branch refs/heads/main':
+                        if git('-C', main_tree, 'status', '--porcelain').stdout:
+                            raise SpawnRefused('base_stale: main_dirty')
+                        git('-C', main_tree, 'merge', '--ff-only', '--no-edit', main)
+                        break
+                else:
+                    git('update-ref', 'refs/heads/main', main, old)
+            return base_sha
+    except SpawnRefused:
+        raise
+    except subprocess.TimeoutExpired:
+        raise SpawnRefused('base_stale: worktree_fetch_timeout' if step == 'worktree_fetch_failed'
+                           else 'base_stale: worktree_git_timeout') from None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise SpawnRefused('base_stale: ' + step) from None
+
 async def admit_base(service, record, card, *, launch=False):
     """Check the worker checkout and any reviewed diff at both admission boundaries."""
     card = card or {}
@@ -59,7 +112,7 @@ async def admit_base(service, record, card, *, launch=False):
             and check['reason'] == f"base_stale: behind={check['behind']}")
     diff = card.get('diff_ref') if record.get('role') in ('review', 'judge') else None
     if accepted(result) and diff is not None:
-        reviewed = await asyncio.to_thread(_check, diff.get('repo') or repo, ref=diff.get('head', ''))
+        reviewed = await asyncio.to_thread(_check, diff.get('repo') or repo, fetch=False, ref=diff.get('head', ''))
         if not accepted(reviewed):
             result = reviewed
     if accepted(result):

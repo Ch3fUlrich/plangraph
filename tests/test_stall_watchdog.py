@@ -397,3 +397,30 @@ def test_host_run_probes(tmp_path, monkeypatch):
     log.unlink()
     assert check(500)[0]['rule'] == 'run-orphan'
     assert json.loads((directory / 'record.json').read_text())['reason'] == 'orphaned'
+
+
+def test_seeded_silent_run_publishes_stall_episode(tmp_path, monkeypatch):
+    import os
+    from plangraph.spawner import stuck_watch
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
+    monkeypatch.setattr(w.time, 'time', lambda: 161)
+    monkeypatch.setattr(w.os, 'kill', lambda *args: None)
+    monkeypatch.setattr(w, 'read_claims', lambda: [])
+    monkeypatch.setattr(stuck_watch, 'check', lambda *a, **k: [])
+    directory = tmp_path / 'runs/run-seeded'
+    directory.mkdir(parents=True)
+    (directory / 'record.json').write_text(json.dumps(dict(
+        run_id='run-seeded', status='running', pid=123, started=1,
+        role='implement', card={'stall_min': 1})))
+    log = directory / 'live.log'
+    log.write_text('last progress\n')
+    os.utime(log, (100, 100))
+    assert w.main(['tick']) == 0
+    alerts = [json.loads(p.read_text()) for p in (tmp_path / 'watchdog/outbox').glob('*.json')]
+    assert len(alerts) == 1
+    assert alerts[0]['kind'] == 'stall'
+    assert alerts[0]['stalled_at'] == 160 and alerts[0]['noticed_at'] == 161
+    assert (tmp_path / 'watchdog/status.txt').read_text().strip()
+    assert w.main(['tick']) == 0
+    assert len(list((tmp_path / 'watchdog/outbox').glob('*.json'))) == 1

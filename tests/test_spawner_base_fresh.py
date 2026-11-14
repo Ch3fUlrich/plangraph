@@ -115,9 +115,12 @@ def test_launch_variants_cannot_bypass(repository, dispatch, hardened, mode):
         service._route = lambda *a, **k: replace(route(*a, **k), review_seats=route(*a, **k).legs)
     result = asyncio.run(service.spawn(card, 'Implement a tested change', wait_seconds=None, **options))
     for record in result.get('seats', [result]):
-        assert record['status'] == 'failed' and record['reason'] == 'base_stale: behind=2'
         if mode in ('worktree', 'seats'):
-            assert record['run_worktree']['base_sha'] == old and record['run_worktree']['removed']
+            assert record['status'] == 'refused'
+            assert record['reason'] == 'base_stale: worktree_base_behind_origin'
+            assert not record.get('run_worktree')
+        else:
+            assert record['status'] == 'failed' and record['reason'] == 'base_stale: behind=2'
     assert not calls
 @pytest.mark.parametrize('role', ['implement', 'review', 'judge'])
 @pytest.mark.parametrize('current', [False, True])
@@ -187,12 +190,12 @@ raise SystemExit(cli.main(['--supervise']))
     card = dict(estimate_tokens=100, lane_branch='lane/resume', continuation=True)
     started = time.monotonic()
     try:
-        assert cli.main(['spawn', '--card', json.dumps(card), '--run-worktree', 'Implement a tested change']) == int(stale)
+        assert cli.main(['spawn', '--card', json.dumps(card), '--run-worktree', 'Implement a tested change']) == (2 if stale else 0)
         assert time.monotonic() - started < 2.5
         record = json.loads(capsys.readouterr().out)
-        assert record['status'] == ('failed' if stale else 'running')
+        assert record['status'] == ('refused' if stale else 'running')
         if stale:
-            assert record['reason'] == 'base_stale: behind=2'
+            assert record['reason'] == 'base_stale: worktree_base_behind_origin'
         else:
             assert record['base_admitted'] is True
     finally:
@@ -384,7 +387,7 @@ def test_review_requires_fresh_checkout_and_diff(tmp_path, monkeypatch, role, la
     worker, reviewed = str(tmp_path / 'worker'), str(tmp_path / 'reviewed')
     calls, saved = [], []
     def check(repo, default=None, fetch=True, timeout=60, ref='HEAD'):
-        calls.append((repo, ref))
+        calls.append((repo, ref, fetch))
         fresh = worker_fresh if repo == worker else diff_fresh
         return dict(ok=fresh, reason=None if fresh else 'base_stale: behind=1',
                     origin_sha='b' * 40, base_sha=('b' if fresh else 'a') * 40, behind=int(not fresh))
@@ -393,10 +396,49 @@ def test_review_requires_fresh_checkout_and_diff(tmp_path, monkeypatch, role, la
     card = dict(diff_ref=dict(repo=reviewed, head='reviewed-head'))
     record = dict(role=role, cwd=worker)
     assert asyncio.run(base_fresh.admit_base(service, record, card, launch=launch)) == (worker_fresh and diff_fresh)
-    assert (worker, 'HEAD') in calls
+    assert (worker, 'HEAD', True) in calls
     if worker_fresh:
-        assert (reviewed, 'reviewed-head') in calls
+        assert (reviewed, 'reviewed-head', False) in calls
     if worker_fresh and diff_fresh:
         assert record['checked_base_sha'] == 'b' * 40
     else:
         assert record['status'] == 'failed' and record['reason'] == 'base_stale: behind=1'
+
+
+def test_worktree_gate_fast_forwards_clean_main(repository, tmp_path):
+    from plangraph.spawner.base_fresh import fresh_worktree_base
+    origin, repo = repository
+    old = advance(origin, repo)
+    expected = git(origin, 'rev-parse', 'main')
+    assert git(repo, 'rev-parse', 'HEAD') == old
+    assert fresh_worktree_base(repo) == expected
+    assert git(repo, 'rev-parse', 'HEAD') == expected
+
+
+@pytest.mark.parametrize('damage', ['dirty', 'stale', 'diverged'])
+def test_worktree_gate_refuses_before_creation(repository, damage):
+    from plangraph.spawner.base_fresh import fresh_worktree_base
+    from plangraph.routing_errors import SpawnRefused
+    origin, repo = repository
+    old = advance(origin, repo)
+    if damage == 'dirty':
+        (repo / 'untracked').write_text('keep')
+    elif damage == 'diverged':
+        git(repo, 'commit', '--allow-empty', '-m', 'local divergence')
+    with pytest.raises(SpawnRefused, match='base_stale'):
+        fresh_worktree_base(repo, base=old if damage == 'stale' else 'origin/main')
+    assert git(repo, 'worktree', 'list', '--porcelain').count('worktree ') == 1
+
+
+def test_phase_worktree_gate_checks_phase_tracking_head(repository):
+    from plangraph.spawner.base_fresh import fresh_worktree_base
+    from plangraph.routing_errors import SpawnRefused
+    _, repo = repository
+    git(repo, 'checkout', '-b', 'phase/test')
+    old = git(repo, 'rev-parse', 'HEAD')
+    git(repo, 'commit', '--allow-empty', '-m', 'phase')
+    git(repo, 'push', 'origin', 'HEAD:phase/test')
+    git(repo, 'reset', '--hard', old)
+    with pytest.raises(SpawnRefused, match='base_stale'):
+        fresh_worktree_base(repo, base='phase/test', default='phase/test')
+    assert fresh_worktree_base(repo, base='origin/phase/test', default='phase/test') != old

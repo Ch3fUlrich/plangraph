@@ -32,14 +32,17 @@ def test_probe_expectation_rejects_recorded_call(tmp_path):
 
 
 @pytest.mark.parametrize('mutation', ['new_call', 'stale_entry'])
-def test_guard_checks_exact_allowlisted_call(tmp_path, mutation):
+@pytest.mark.parametrize(('filename', 'original'), [
+    ('base_fresh.py', 'service.spawn(**payload, wait_seconds=0)'),
+    ('cli.py', 'service.spawn(**payload, wait_seconds=None)'),
+])
+def test_guard_checks_exact_allowlisted_call(tmp_path, mutation, filename, original):
     root = tmp_path / 'spawner'
     shutil.copytree(Path(runner.__file__).parent, root)
-    path = root / 'base_fresh.py'
+    path = root / filename
     source = path.read_text()
-    original = 'service.spawn(**payload, wait_seconds=0)'
-    assert original in source  # A moved call site must never make the mutation vacuous.
-    replacement = (original + '; runner.spawn(prompt=p, model_or_combo=m)'
+    assert source.count(original) == 1, 'mutation must change exactly one real call site'
+    replacement = ('(' + original + ', runner.spawn(prompt=p, model_or_combo=m))[0]'
                    if mutation == 'new_call' else 'service.spawn(**payload, wait_seconds=1, prompt_record=record)')
     path.write_text(source.replace(original, replacement))
     with pytest.raises(AssertionError, match='runner.spawn' if mutation == 'new_call' else 'stale allowlist'):

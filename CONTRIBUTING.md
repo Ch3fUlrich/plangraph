@@ -333,3 +333,24 @@ The lesson-gate verification record is in `docs/lesson-gates-verification.md`.
 Prompt-record call-site allowances track the exact probe/preparation calls;
 companion evidence cannot bypass the prompt-only diff requirement.
 Prompt-record mutation fixtures assert that their target exists before testing the guard.
+
+CI runs pytest in three deterministic `PYTEST_SHARD=INDEX/COUNT` shards while keeping xdist groups together and loadgroup scheduling; PR runs stop at ten failures within each pytest job. Empty shards succeed without broadening the selected tests. Whole-run cancellation is not installed. Synthetic sensitivity sweeps never consult host quota databases.
+
+CI timing measurements and pending PR-run evidence are tracked in `docs/ci-performance.csv`. Sensitivity reproducibility runs one case per seed so all five seeds retain coverage across workers.
+
+Python sessions and Rust workspace/writer fixtures compare the real checkout’s worktree registry metadata before and after tests. Worktree tests must create their repositories inside temporary roots; the guard reads metadata directly and never runs Git on the real checkout.
+
+The pre-push hook and preflight print their Python interpreter. They prefer `.venv/bin/python` (or `.venv/Scripts/python.exe`), then `PREFLIGHT_PYTHON`, then `python3` on PATH. Set `PREFLIGHT_PYTHON` to an absolute environment interpreter when the checkout shares another repository environment. A selected test run without pytest reports `FAIL pytest-missing` and its install command.
+
+Rust Git fixtures share `pg_worker_core::git_test_support` (unit tests or the `test-support` feature). It clears inherited and preconfigured `GIT_*` controls before setting a null global/system config, fixture HOME/XDG paths and test identity. Test consumers enable the feature through dev-dependencies; fixture helpers must not construct unprotected Git commands.
+
+Local preflight invokes `affected_tests.py --files-only`: changed test files and reverse-import consumers remain explicit files, while workflow/config/shared-fixture changes add bounded smoke coverage instead of selecting `tests/`. An unreadable graph refuses local selection. CI keeps the conservative full-suite fallback. The affected-test limit remains 240 seconds; Rust checks also receive an environment without inherited `GIT_*` controls.
+
+Package R Python files already in flight are individually listed in
+`tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
+
+Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
+
+Local preflight combines `--local` shared-asset consumer traversal with `--files-only` bounded suite-control checks, using `origin/main` for test selection when available. Scrub and policy retain their pushed-range baselines.
+
+Rust repository-input scans exclude Git metadata, including linked-worktree `.git` files; tracked input coverage remains enforced.

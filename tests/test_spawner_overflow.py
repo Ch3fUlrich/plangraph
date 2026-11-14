@@ -1,5 +1,7 @@
 import json
 import hashlib
+import os
+import shutil
 import shlex
 import subprocess
 import sys
@@ -9,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.spawner import overflow as o
+from test_spawner_base_fresh import repository  # noqa: F401 local Git origin fixture
 
 
 def healthy(**changes):
@@ -312,14 +315,16 @@ def test_local_limits_coerce_or_default(inputs, monkeypatch, key, value):
 
 @pytest.mark.parametrize('prompt', ['trailing\n', 'trailing\n\n', 'literal $(false) .\n', 'x' * (300 * 1024)],
                          ids=['newline', 'blank-line', 'shell-literal', '300KiB'])
-def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
+def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt, repository):
     stage = tmp_path / 'stage with spaces'
     stage.mkdir()
     binary_dir = tmp_path / 'bin'
     binary_dir.mkdir()
     policy = tmp_path / 'route-policy.json'
     policy.write_text('{"banned_families": [], "off_families": [], "paused_harnesses": {}}')
-    env = dict(PATH=str(binary_dir), HOME=str(tmp_path), AUTOOS_ROOT=str(tmp_path),
+    env = dict(PATH=str(binary_dir) + os.pathsep + str(o.Path(shutil.which('git')).parent),
+               GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
+               HOME=str(tmp_path), AUTOOS_ROOT=str(tmp_path),
                XDG_STATE_HOME=str(tmp_path / 'state'), PLANGRAPH_OMNIROUTE_LEG_STATE='0',
                PLANGRAPH_ROUTE_POLICY=str(policy))
     real_run = subprocess.run
@@ -350,7 +355,7 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
             return result
         return SimpleNamespace(returncode=0, stdout=str(stage) if argv[-1] == 'mktemp -d' else '{}')
     monkeypatch.setattr(o.subprocess, 'run', run)
-    host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src=str(source))
+    host = dict(ssh='invented-alias', repo=str(repository[1]), spawner_src=str(source))
     options = ['--role', 'review', '--leg', 'agy-gemini-3.8-flash', '--writer-family', 'gpt',
                '--override-reason', 'hermetic prompt transport regression', '--dry-run', '--json']
     record = o.remote_spawn('invented', host, {'estimate_tokens': 1000}, prompt, options)

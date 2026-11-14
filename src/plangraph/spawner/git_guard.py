@@ -98,6 +98,10 @@ def run_tree(state, repo=None):
             if path.is_symlink() or (path.exists() and not valid(path)):
                 raise RuntimeError('run_tree_invalid')
             if not path.exists():
+                from .base_fresh import fresh_worktree_base
+                if stale:
+                    raise SpawnRefused('base_stale: ' + stale)
+                fresh_worktree_base(repo, base=sha, fetch=False)
                 # Reuse only this missing registration; never prune other trees.
                 git('worktree', 'add', '--detach', '--force', '--force', path, sha)
             if not (path / '.git').is_file():
@@ -179,10 +183,11 @@ def create(root, repo, lane_branch, continuation=False, *, finished_dependencies
             r'(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})', sha) for sha in finished_dependencies):
         raise RunWorktreeDependencyNotMerged('run_worktree_dependency_not_merged')
     # Network latency must not monopolize the host's creation/reaper lock.
-    git('fetch', '--no-write-fetch-head', 'origin', '+refs/heads/main:refs/remotes/origin/main',
-        failure='run_worktree_fetch_failed')
-    main = git('rev-parse', '--verify', 'refs/remotes/origin/main^{commit}',
-               failure='run_worktree_base_unavailable').stdout.strip()
+    if continuation:
+        git('rev-parse', '--verify', 'refs/heads/' + lane_branch + '^{commit}',
+            failure='run_worktree_branch_missing')
+    from .base_fresh import fresh_worktree_base
+    main = fresh_worktree_base(repo, base='refs/heads/' + lane_branch if continuation else 'origin/main')
     with run_worktree_lock(root):
         if not continuation and not git('show-ref', '--verify', '--quiet', 'refs/heads/' + lane_branch,
                                         check=False).returncode:

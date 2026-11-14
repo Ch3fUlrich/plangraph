@@ -92,8 +92,9 @@ For MiMo seats and all other `review` runs, `run_watchdog_limits.thresholds` set
 `hard_max=True`, including default caps: reviews never wait for a writer's first
 edit and ignore a valid `hard_first_edit` opt-in. Card limits must be positive,
 finite numbers (not booleans); invalid limits refuse the spawn. Without a card
-`max_min`, an unset `PLANGRAPH_SPAWN_RUN_TIMEOUT` gives a 25-minute cap, an empty
-value keeps the default 90-minute wall, and a positive numeric value sets seconds.
+`max_min`, an unset or empty `PLANGRAPH_SPAWN_RUN_TIMEOUT` keeps the ten-minute review
+wall, and a positive numeric value sets seconds. Measured card-class p90 data can
+widen the role defaults; explicit card or environment limits still take precedence.
 The package-wide `inline_diff_prompt` bound change was dropped to preserve main's
 cost-context contract: `max_chars` measures only the diff and exact-fit diffs pass.
 Oversized diffs keep `InlineDiffError`'s `diff too large for leg` text and diff-only
@@ -349,7 +350,7 @@ it does not close items or bypass the keeper's authorization checks.
 it receives recipient as its final argument and event JSON on stdin. Consumers
 must deduplicate by event_id: external delivery is at-least-once across crashes.
 Failed hooks are logged and retried on re-save; local inbox replay is idempotent.
-`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds execution in seconds; reviews share one run deadline across all legs and prompt preparation (writers retain per-child limits); unset gives a 25-minute review cap, while empty means no review-specific cap (the ordinary 90-minute maximum still applies); internal `max_s: null` limits have no deadline;
+`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds execution in seconds. Implement/fix runs default to a 25-minute stall threshold and 45-minute hard maximum; reviews default to a ten-minute hard maximum. These roles share their run deadline across legs and preparation. An empty timeout keeps the role default; internal `max_s: null` limits have no deadline;
 expiry kills its process tree and records rc 124 with FAILED completion.
 Terminal stall/timeout records preserve their outcome and events even without a watchdog event (`watchdog: null`). A provider stop leaves the harness status and exit code unchanged (completed with exit 0 stays completed), adding `provider_stop` only when no reason exists and the stopped leg's own coverage slot names a seat group, preserving it in the attempt and unfilled-slot error while leaving completed non-seat reasons unset and tolerating empty, absent or non-dict coverage entries.
 Mixed seat/non-seat coverage never resolves a seat to an unrelated chosen leg. The detached supervisor must survive the child; killing the supervisor itself
@@ -671,7 +672,8 @@ Cross-host ps: see [site configuration and transport](spawner-ps.md); [host read
 
 Run readers persist expired `queued`/`queue_claimed` records as failed `queue_timeout` at `queued_until`, even without an owner, rechecking under the record lock.
 Legacy bounds use `started` (default 0) plus `queue_bound_s` (default 900 seconds). Invalid bounds and unexpired/terminal records stay untouched; dry-run never writes. Expired queues no longer suppress finished-child or idle-claim findings.
-The SSH ps endpoint serializes only running and queued records; terminal history does not consume the 1 MiB transport budget.
+The SSH ps endpoint serializes only running and queued records. Terminal history
+does not consume the 1 MiB transport budget.
 Malformed terminal fields do not hide live runs; malformed live or oversized replies name the queried host as unknown rather than silently omitting it.
 Rust source-filter tests and pytest's real `configured_hosts` checks consume
 `tests/fixtures/doctor_sources.json`, binding both validators and probe limits
@@ -702,16 +704,24 @@ Review and judge freshness admission requires both the worker checkout HEAD and 
 
 Run listing is read-only. Watchdog sweeps own queue-timeout persistence and corrupt-record diagnostic delivery; dry sweeps only project the results.
 
-See [lesson gates](lesson-gates.md) for gateway admission, review diff requirements,
-writer-family binding, Remote Control checks, and run-status watchdogs.
-RC startup waits use a monotonic deadline; the lesson-gate reference covers the bound.
+See [lesson gates](lesson-gates.md) for gateway admission, review diffs, writer-family binding, Remote Control checks, and run-status watchdogs.
 
-`wait()` gives a `pid_gone` status snapshot 0.5 seconds for the supervisor to persist its final outcome; caller timeouts still apply.
+`wait()` gives a `pid_gone` snapshot 0.5 seconds for the supervisor to persist its final outcome; caller timeouts still apply. The no-leg timer skips `queued` and `queue_claimed` runs; their queue watchdog owns the deadline.
 
-The no-leg timer skips `queued` and `queue_claimed` runs; their queue watchdog owns the queue deadline.
+RC startup waits use a monotonic deadline. A required session without a bridge retains its running state and session ID, with `rc_missing=true`, while launch reports `RC-MISSING`.
 
-An RC-required session without a bridge retains its running state and session ID, with `rc_missing=true`, while launch reports `RC-MISSING`.
+Review liveness probes normalize `OK` answers and retain the shared two-failure booking rule. Capped-first MiMo exhaustion is terminal without retry; cancellation and watchdog outcomes retain priority.
 
-Review liveness probes normalize `OK` answers and retain the shared two-failure booking rule.
+Standalone overflow accepts omitted `--state` using the service environment default; explicit state still owns local records. Importing overflow defers the CLI import, allowing source-only `python -m plangraph.spawner.cli` execution without runpy warnings.
 
-Capped-first MiMo review exhaustion is terminal without retry; cancellation and watchdog outcomes retain priority.
+Review admission fetches the worker’s default branch once per admission boundary; the following diff-head ancestry check reuses tracking refs with `fetch=False`.
+
+Worktree creation uses `base_fresh.fresh_worktree_base`: fetch the main and requested `phase/*` tracking refs, refuse stale creation bases, then fast-forward a clean main checkout (or its unoccupied branch ref). Dirty or diverged main is refused. Continuations must include current main; missing cached trees cannot be recreated after a failed fetch. Existing cached trees can still be leased offline, subject to normal launch admission. The routing repository’s `fleet-launch` and package-worktree callers must invoke this shared helper before cutting their trees; those scripts are outside this checkout.
+
+Watchdog silent-run alerts use `kind=stall` with `stalled_at` (the silence deadline) and `noticed_at` (the observing tick); durable episode throttling prevents duplicate alerts. Healthy ticks also write a non-empty status. Completed runs without an item keep their parent Inbox delivery and skip the keeper item sink.
+
+Run monitors stop three consecutive tool calls with the same name and canonical arguments as `tool_loop`, deduplicating streaming updates by call ID. Complete structured Opencode, Claude and Codex tool frames are recognized; plain text is not a tool call. Tool-loop signals wake the monitor immediately. With 180 seconds of stdout silence and a proven unchanged process-tree CPU sample, the run ends as `stuck`; missing CPU evidence does not authorize that stop, and CPU progress keeps the run alive until its other limits. CPU sampling is bounded and shared scans survive a single consumer’s cancellation.
+
+`PLANGRAPH_SPAWN_P90_TABLE` optionally names measured JSON data shaped as `{"<card_class>": {"implement": {"stall_min": 30, "max_min": 55}}}`; the numbers here illustrate the format, not measurements. Cards select it with `card_class`. Only positive finite numeric values are accepted, and table values only widen defaults. Unknown classes or malformed configured data refuse launch. No p90 dataset is shipped without evidence.
+
+Freshness admission and refused-worktree cleanup use the shared checkout Git environment, stripping inherited object-store redirects and config injection as well as repository, index, and worktree overrides.

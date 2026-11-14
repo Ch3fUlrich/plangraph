@@ -57,6 +57,8 @@ def test_dispatch_timeout_keeps_the_big_file_event(tmp_path, monkeypatch):
     record = asyncio.run(run())
     assert record["status"] == "timeout", record["status"]
     names = [e["event"] for e in record["events"]]
-    assert names.count("big_file_unsliced") == 1 and any(n.startswith("watchdog_") for n in names)
-    assert names.index("big_file_unsliced") < names.index(next(n for n in names if n.startswith("watchdog_")))
+    # Shared budgets may expire during admission before the child watchdog starts.
+    timeout_event = next((n for n in names if n.startswith("watchdog_") or n == "run_timeout"), None)
+    assert names.count("big_file_unsliced") == 1 and timeout_event is not None
+    assert names.index("big_file_unsliced") < names.index(timeout_event)
     assert record["warnings"] and record["warnings"][0].startswith("big_file_unsliced: big.py 500 lines")

@@ -44,7 +44,7 @@ def tick(runs, claims, activity, *, now=None, deliver=None, state=None, dry_run=
             if finding:
                 findings.append(finding)
                 if deliver:
-                    deliver(dict(finding, kind='completion'))
+                    deliver(dict(finding, kind='stall' if finding['rule'] == 'run-silent' else 'completion'))
         parent = run.get('parent_session')
         ended = run.get('ended')
         if not parent or ended is None or run.get('status') in ('running', 'queued'):
@@ -391,7 +391,7 @@ def main(argv=None, *, hung_config=None):
         warning = (warning + '; ' if warning else '') + 'delivery-bridge-unconfigured'
     if command and pending:
         error = error or 'delivery-bridge-failed'
-    text = status(findings)
+    text = status(findings) or 'watchdog ok'
     if not command:
         text += ('\n' if text else '') + f'outbox {pending}, no bridge'
     if warning:

@@ -2,3 +2,12 @@
 resolver = "2"
 members = ["og-memory", "pg-ctx", "pg-hook", "pg-jail", "pg-mcp", "pg-probe", "pg-reap", "pg-spawnd", "worker-core"]
 exclude = ["spikes"]
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.pg-worker-core]
+opt-level = 3

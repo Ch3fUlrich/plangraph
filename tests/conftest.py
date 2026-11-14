@@ -9,6 +9,7 @@ re-checks the chain over HTTP (head after each write == sha256(previous head + e
 head against SQLite through the adapter.
 """
 import re
+import hashlib
 import atexit
 import os
 import shutil
@@ -109,14 +110,23 @@ def git_config_guard(root):
         common = metadata
         if (metadata / 'commondir').is_file():
             common = (metadata / (metadata / 'commondir').read_text().strip()).resolve()
-        return tuple((str(path), path.read_bytes() if path.exists() else None)
-                     for path in (common / 'config', metadata / 'config.worktree'))
+        configs = tuple((str(path), path.read_bytes() if path.exists() else None)
+                        for path in (common / 'config', metadata / 'config.worktree'))
+        # The registry is what supplies `git worktree list`; read metadata directly.
+        paths = [common / 'HEAD']
+        for entry in sorted((common / 'worktrees').glob('*')):
+            paths.extend(entry / name for name in ('gitdir', 'HEAD', 'locked'))
+        registry = tuple((str(path), path.read_bytes() if path.exists() else None) for path in paths)
+        return configs, registry
     before = snapshot()
     try:
         yield
     finally:
-        if snapshot() != before:
+        after = snapshot()
+        if after[0] != before[0]:
             raise AssertionError('repository .git/config changed during pytest session')
+        if after[1] != before[1]:
+            raise AssertionError('repository worktree registry changed during pytest session')
 
 
 @pytest.fixture(scope='session', autouse=True)
@@ -131,6 +141,11 @@ def isolated_git_session(tmp_path_factory):
             yield
     finally:
         patch.undo()
+
+
+@pytest.fixture
+def config_guard():
+    return git_config_guard
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -406,7 +421,30 @@ def pytest_ignore_collect(collection_path, config):
     return None
 
 
+def shard_items(items, shard):
+    try:
+        index, count = map(int, shard.split('/'))
+        if not 0 <= index < count:
+            raise ValueError
+    except (ValueError, AttributeError):
+        raise pytest.UsageError('PYTEST_SHARD must be INDEX/COUNT with 0 <= INDEX < COUNT') from None
+    def bucket(item):
+        group = item.get_closest_marker('xdist_group')
+        key = str(group.kwargs.get('name', group.args[0] if group.args else 'default')) if group else item.nodeid
+        return int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], 'big') % count
+    return [item for item in items if bucket(item) == index]
+
+@pytest.fixture
+def shard_selector():
+    return shard_items
+
+
 def pytest_collection_modifyitems(config, items):
+    if os.environ.get('PYTEST_SHARD'):
+        selected = shard_items(items, os.environ['PYTEST_SHARD'])
+        identities = {id(item) for item in selected}
+        config.hook.pytest_deselected(items=[item for item in items if id(item) not in identities])
+        items[:] = selected
     if sys.platform == "win32":
         from win_skips import skip_reason
         for item in items:
@@ -435,3 +473,9 @@ def fake_ownership(monkeypatch):
     born = real_stat(os.getpid())[4]   # only processes started after this test session exist for the stubbed view
     monkeypatch.setattr(proc_kill, '_stat', lambda pid, root='/proc': (lambda st: st if st and st[4] >= born else None)(real_stat(pid, root)))
     monkeypatch.setattr(SpawnerRunner, 'identity_provider', staticmethod(lambda pid, **k: real_identity(pid, **k) or 'fake-token'))
+
+
+def pytest_sessionfinish(session, exitstatus):
+    # An affected selection can legitimately assign no items to this shard.
+    if exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and os.environ.get('PYTEST_SHARD'):
+        session.exitstatus = pytest.ExitCode.OK

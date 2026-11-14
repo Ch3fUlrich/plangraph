@@ -32,6 +32,7 @@ def trees(tmp_path, monkeypatch):
     git(origin, 'add', '.')
     git(origin, 'commit', '-m', 'tree A')
     git(tmp_path, 'clone', str(origin), str(repo))
+    git(repo, 'switch', '-c', 'caller')
     return origin, repo, state
 
 
@@ -94,6 +95,13 @@ def test_missing_cached_directory_is_created_before_use(cached_tree, registered,
     assert (path.parent / (previous['tree_sha'] + '.lease')).exists()
     if offline:
         git(repo, 'remote', 'set-url', 'origin', str(repo / 'missing'))
+    if offline:
+        from plangraph.routing_errors import SpawnRefused
+        with pytest.raises(SpawnRefused, match='base_stale: fetch_failed'):
+            with git_guard.run_tree(state, repo):
+                pytest.fail('offline worktree was created')
+        assert not path.exists()
+        return
     with git_guard.run_tree(state, repo) as tree:
         assert tree['tree_sha'] == previous['tree_sha']
         assert tree['tree_path'] == previous['tree_path']
@@ -275,7 +283,7 @@ def test_windows_selection_disables_reaping_without_importing_fcntl(cached_tree,
         name='nt', environ=os.environ, utime=os.utime, fstat=os.fstat))
     with git_guard.run_tree(state, repo) as tree:
         assert tree['tree_sha'] == main and Path(tree['tree_path']).is_dir() and Path(a['tree_path']).is_dir()
-    assert calls == [1, 0, 1, 0]
+    assert calls == [1, 0, 1, 1, 0, 0]
 
 
 def test_cached_directory_cannot_be_an_unregistered_subdirectory(trees):

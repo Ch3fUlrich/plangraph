@@ -30,7 +30,7 @@ async def cpu_seconds(runner, job_id, pid, tick):
         if cache is None or cache[0] != tick:
             # Cache the task before awaiting: concurrent monitors share ONE scan.
             cache = runner._watchdog_cpu_cache = (tick, asyncio.create_task(asyncio.to_thread(proc_scan)))
-        rows = await cache[1]
+        rows = await asyncio.shield(cache[1])
         def belongs(child):
             seen = set()
             while child in rows and child not in seen:

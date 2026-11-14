@@ -79,7 +79,20 @@ def smoke_tests(texts, path):
     return set(near) | ({SMOKE_TEST} if SMOKE_TEST in texts else set())
 
 
-def select_tests(root, changed, within=None):
+def local_control_tests(texts, path):
+    """Bounded file checks for suite controls; CI owns exhaustive fixture coverage."""
+    named = {name for name, text in texts.items()
+             if name.startswith('tests/') and Path(name).name.startswith('test_')
+             and not name.startswith('tests/browser/')
+             and (path in text or Path(path).name in text)}
+    near = smoke_tests(texts, path)
+    selected = set(sorted(named | near)[:SMOKE_LIMIT])
+    if SMOKE_TEST in texts:
+        selected.add(SMOKE_TEST)
+    return selected
+
+
+def select_tests(root, changed, within=None, *, files_only=False, local=False):
     root = Path(root)
     paths = sorted(p for folder in ("src", "tests") for p in (root / folder).rglob("*.py"))
     modules = {}
@@ -120,6 +133,8 @@ def select_tests(root, changed, within=None):
                     if dep:
                         reverse.setdefault(dep, set()).add(rel)
     except (SyntaxError, UnicodeError, OSError) as exc:
+        if files_only:
+            return {"tests": [], "reason": "graph unreadable: " + str(exc), "error": True}
         return {"tests": filter_within(["tests"], within), "reason": "graph unreadable: " + str(exc)}
     selected = set()
     asset_cache = {}
@@ -134,6 +149,9 @@ def select_tests(root, changed, within=None):
                         or p.name.startswith("requirements")
                         or path.startswith(".github/workflows/"))
         if suite_config:
+            if files_only:
+                selected.update(local_control_tests(texts, path))
+                continue
             return fallback("suite configuration")
         # docs/status trees and root files cannot affect tests; untracked scratch outside the
         # source roots is skipped; tracked files elsewhere map to tests naming them or full suite.
@@ -153,7 +171,10 @@ def select_tests(root, changed, within=None):
             # scratch files stay skippable here.
             if not revision_asset(root, path, asset_cache):
                 continue
-        if p.name == "conftest.py" or (path.startswith("tests/") and not p.name.startswith("test_")):
+        if p.name == "conftest.py" or (not local and path.startswith("tests/") and not p.name.startswith("test_")):
+            if files_only:
+                selected.update(local_control_tests(texts, path))
+                continue
             return fallback("shared fixture")
         if p.parts[0] in {"src", "tests", "tools"} and path not in texts and p.suffix == ".py":
             selected.update(smoke_tests(texts, path))
@@ -195,6 +216,9 @@ def main(root=None):
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
+    parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
+    parser.add_argument("--maxfail", type=int, default=0)
     parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
     parser.add_argument("-n", "--workers", default="auto")
     parser.add_argument("--within", nargs="+", action="extend", help="restrict selection to given paths")
@@ -210,12 +234,24 @@ def main(root=None):
             if not (root / w).exists():
                 print(f"unknown --within path: {w}", file=sys.stderr)
                 return 2
-    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within)
+    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, files_only=args.files_only, local=args.local)
     print(json.dumps(plan), flush=True)
+    if args.local and args.run and "tests" in plan["tests"]:
+        print('local preflight refuses the full suite; specify affected test files with --within', file=sys.stderr)
+        return 2
+    if args.files_only and (plan.get('error') or any(not (root / path).is_file() for path in plan['tests'])):
+        print('FAIL local-selection: cannot determine explicit test files; repair the graph or selection; full collection refused', file=sys.stderr)
+        return 1
     if args.within is not None and not plan["tests"]:
         print("no pg-affected tests")
         return 0
+    if args.run and not plan["tests"]:
+        print("no affected tests")
+        return 0
     if args.run and plan["tests"]:
+        if importlib.util.find_spec("pytest") is None:
+            print(f"FAIL pytest-missing: {sys.executable}; install with {sys.executable} -m pip install -e .[test]", file=sys.stderr)
+            return 1
         placement = any('placement' in Path(path).name or
                         (root / path).is_dir() and any((root / path).rglob('*placement*.py'))
                         for path in plan['tests'])
@@ -225,8 +261,8 @@ def main(root=None):
         start = time.monotonic()
         parallel = (["-n", args.workers, "--dist", "loadgroup"]
                     if importlib.util.find_spec("xdist") is not None else [])
-        result = subprocess.run([sys.executable, "-m", "pytest", *parallel,
-                                 *plan["tests"]], cwd=root)
+        result = subprocess.run([sys.executable, "-m", "pytest", *parallel, "--durations=30",
+                                 *(["--maxfail", str(args.maxfail)] if args.maxfail else []), *plan["tests"]], cwd=root)
         print(f"affected wall seconds: {time.monotonic() - start:.3f}")
         return result.returncode
     return 0

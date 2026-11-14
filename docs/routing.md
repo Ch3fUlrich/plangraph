@@ -112,3 +112,5 @@ Gateway legs require a configured child base URL and client credential before ro
 
 Writer family selection precedes health filtering. A down writer family cannot
 silently select a different family unless the card allows family fallthrough.
+
+The shipped provider config and the pending benchmark inventory use the same `omniroute/deepseek-v4.1-flash` identity; the pending row explicitly records missing measurements. Historical fallthrough replay projects the legacy alias onto this registered identity.

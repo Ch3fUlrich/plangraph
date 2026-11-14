@@ -74,3 +74,5 @@ without routing alerts or signalling.
 Check failures are isolated from completion and claim processing.
 
 `read_runs` only reads snapshots; `sweep_runs` owns queued-run expiry and corrupt-record diagnostics during a watchdog tick.
+
+Current role caps and `tool_loop`/`stuck` monitoring are documented in [SPAWNER.md](SPAWNER.md). Host probes use the same role and measured card-class stall limits as run monitors.

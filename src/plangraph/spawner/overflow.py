@@ -20,8 +20,14 @@ from plangraph.keeper.credential_guard import mask
 from plangraph.fleet_sync.genconfig import config_dir
 from plangraph.routing_errors import ParameterRefused
 
-from . import cli
 from .private_io import atomic_write_private
+
+def __getattr__(name):
+    # Keep the compatibility attribute without loading the executable module on import.
+    if name == 'cli':
+        from importlib import import_module
+        return import_module('.cli', __package__)
+    raise AttributeError(name)
 
 class Decision(NamedTuple):
     host: str | None
@@ -177,6 +183,7 @@ def ready_records(config, role='implement'):
 
 
 def local_resources(state=None):
+    from . import cli
     runs = cli.SpawnService(state=state).ps()['runs']
     return sum(row.get('status') == 'running' for row in runs), available_memory_mb()
 
@@ -313,6 +320,7 @@ def remote_spawn(name, host, card, prompt, options):
 
 
 def main(argv=None):
+    from . import cli
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('verb', choices=['spawn'])
     parser.add_argument('--repo', required=True)
@@ -320,9 +328,10 @@ def main(argv=None):
     parser.add_argument('--prompt', required=True)
     parser.add_argument('--role', default='implement')
     parser.add_argument('--cwd')
-    parser.add_argument('--state', required=True, help='invoking spawn state directory (local only)')
+    parser.add_argument('--state', help='invoking spawn state directory (local only; defaults to the service state)')
     args, options = parser.parse_known_args(argv)
-    local = ['--state', args.state, 'spawn', '--card', '@' + args.card]
+    local = [*(['--state', args.state] if args.state is not None else []),
+             'spawn', '--card', '@' + args.card]
     if args.cwd is not None:
         options.extend(['--cwd', args.cwd])
     if args.role != 'implement':
@@ -336,7 +345,7 @@ def main(argv=None):
         if placement_policy(registry_caps(), config)[1]:
             return cli.main([*local, Path(args.prompt).read_text(), *options])
         role_mb, floor_mb = local_limits(registry_caps(), args.role)
-        _, memory = local_resources(args.state)
+        _, memory = local_resources(args.state) if args.state is not None else local_resources()
         if decide(memory, role_mb, floor_mb, {}, False).reason == 'local room':
             return cli.main([*local, Path(args.prompt).read_text(), *options])
         card = json.loads(Path(args.card).read_text())

@@ -66,7 +66,8 @@ def probe_run(state, record, now, *, dry_run=False, hung=None):
                     atomic_write_private(directory / 'record.json', json.dumps(record))
                 return event
         silent = event['seconds_silent']
-        limit = float((record.get('card') or {}).get('stall_min', 12)) * 60
+        from .run_watchdog_limits import thresholds
+        limit = thresholds(record.get('card'), role=record.get('role'))['stall_s']
         if not math.isfinite(limit) or limit <= 0:
             return event
         if silent is None:
@@ -78,6 +79,7 @@ def probe_run(state, record, now, *, dry_run=False, hung=None):
                 return None
             event['rule'] = 'run-silent'
             event['episode'] = log.stat().st_mtime
+            event.update(stalled_at=event['episode'] + limit, noticed_at=now)
             if silent >= 2 * limit and not dry_run:
                 from .runner import spawn_service
                 result = asyncio.run(spawn_service(state=state).cancel(record['run_id']))
@@ -136,3 +138,64 @@ def reconcile_record(record, directory, now=None):
     if type(pid) is int and 0 < pid <= 0xffffffff and _record_pid_live(pid, record.get('pid_start')) is False:
         record.update(status='exited', reason='pid_gone', ended=now)
     return record
+
+class ToolLoop:
+    """Three consecutive tool invocations with identical names and arguments.
+
+    Tool IDs deduplicate streaming updates; only the digest is retained.
+    Text and tool results are never interpreted as invocations.
+    """
+    def __init__(self):
+        from collections import deque
+        self.seen = set()
+        self.order = deque()
+        self.last, self.count = None, 0
+
+    def feed(self, line):
+        import hashlib
+        try:
+            frame = json.loads(line)
+        except (ValueError, TypeError):
+            return False
+        if not isinstance(frame, dict):
+            return False
+        kind = frame.get('type')
+        calls = []
+        if kind == 'tool_use' and isinstance(frame.get('part'), dict):
+            part = frame['part']
+            state = part.get('state')
+            if isinstance(state, dict) and 'input' in state:
+                calls = [(part.get('callID'), part.get('tool'), state['input'])]
+        elif kind in ('tool_call', 'function_call'):
+            calls = [(frame.get('id'), frame.get('name'), frame.get('arguments'))]
+        elif kind == 'assistant' and isinstance(frame.get('message'), dict):
+            content = frame['message'].get('content')
+            calls = [(part.get('id'), part.get('name'), part.get('input'))
+                     for part in content if isinstance(part, dict) and part.get('type') == 'tool_use'] if isinstance(content, list) else []
+        elif kind in ('item.started', 'item.completed') and isinstance(frame.get('item'), dict):
+            item = frame['item']
+            if item.get('type') in ('tool_call', 'function_call'):
+                calls = [(item.get('id'), item.get('name'), item.get('arguments'))]
+            elif item.get('type') == 'command_execution':
+                calls = [(item.get('id'), 'command_execution', item.get('command'))]
+        found = False
+        for identity, name, arguments in calls:
+            if not isinstance(name, str) or not name:
+                continue
+            if isinstance(identity, str) and identity:
+                if identity in self.seen:
+                    continue
+                self.seen.add(identity)
+                self.order.append(identity)
+                if len(self.order) > 1024:
+                    self.seen.remove(self.order.popleft())
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except ValueError:
+                    pass
+            digest = hashlib.sha256(json.dumps([name, arguments], sort_keys=True, separators=(',', ':')).encode()).digest()
+            self.count = self.count + 1 if digest == self.last else 1
+            self.last = digest
+            found |= self.count >= 3
+        return found
