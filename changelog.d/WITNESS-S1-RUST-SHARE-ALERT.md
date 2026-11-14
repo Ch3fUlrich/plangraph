@@ -1,0 +1,1 @@
+- Report sustained low witnessed share per leg with a five-run minimum, human/JSON alerts, and full-UUID gateway session tags.

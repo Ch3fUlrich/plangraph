@@ -183,7 +183,8 @@ pub(crate) fn build_report(
         .iter()
         .filter(|r| r["outcome"] == "TOOL_CALL_ONLY")
         .count();
-    Ok(json!({"version":1,"window":{"since":since,"until":until},
+    Ok(
+        json!({"version":1,"witness_alerts":witness_alerts(records, &all, until),"window":{"since":since,"until":until},
         "tool_call_only_floor":{"count":tool_only,"denominator":rows.len(),"fraction":fraction(tool_only,rows.len())},
         "sibling_ok_within30min":{"count":sibling_ok,"denominator":kills.len(),"fraction":fraction(sibling_ok,kills.len())},
         "later_ok_fallthrough_recovery":{"count":recovered,"denominator":failures.len(),"fraction":fraction(recovered,failures.len())},
@@ -193,8 +194,101 @@ pub(crate) fn build_report(
         "k_count":populations[0],"k_fraction":fraction(populations[0],known),"unknown_lower_hours":populations[3] as f64*615.01/3600.0,"unknown_upper_hours":populations[3] as f64*1815.01/3600.0,
         "tool_open_savings_hours":populations[0] as f64*(1815.01-615.01)/3600.0,"blind_bound_hours":populations[2] as f64*612.01/3600.0,"no_first_bound_hours":populations[4] as f64*195.01/3600.0},
         "first_activity_s":metric("first_activity_s"),"time_to_first_strong_s":metric("time_to_first_strong_s"),"s_eff_s":metric("s_eff_s"),
-        "parked":parked,"no_time_episodes":episodes,"stale_alarms":stale,"baseline":null,"target":null,"missing_fields":{"outcome":missing,"observations":invalid}}))
+        "parked":parked,"no_time_episodes":episodes,"stale_alarms":stale,"baseline":null,"target":null,"missing_fields":{"outcome":missing,"observations":invalid}}),
+    )
 }
+fn witness_alerts(records: &[Value], rows: &[Value], until: i64) -> Vec<String> {
+    // One observation per run/leg, even when an attempt was retried or also
+    // appears in outcome evidence. A child-writable session store is not a witness.
+    let mut runs = BTreeMap::<(String, String), (i64, bool)>::new();
+    let mut observe = |row: &Value, parent: &Value| {
+        let leg = row["leg_key"]
+            .as_str()
+            .or(row["leg"]["id"].as_str())
+            .or(row["leg"].as_str())
+            .or(row["chosen_leg"]["id"].as_str())
+            .or(parent["chosen_leg"]["id"].as_str());
+        let id = row["run_id"].as_str().or(parent["run_id"].as_str());
+        let ts = [
+            &row["ts"],
+            &row["ended"],
+            &parent["ended"],
+            &row["started"],
+            &parent["started"],
+        ]
+        .into_iter()
+        .find_map(|v| v.as_f64().filter(|t| t.is_finite()).map(|t| t as i64));
+        let status = row["status"].as_str().or(parent["status"].as_str());
+        if matches!(
+            status,
+            Some("dry_run" | "skipped" | "refused" | "running" | "queued")
+        ) {
+            return;
+        }
+        let (Some(leg), Some(id), Some(ts)) = (leg, id, ts) else {
+            return;
+        };
+        if leg.is_empty() || id.is_empty() {
+            return;
+        }
+        let final_leg = parent["chosen_leg"]["id"].as_str() == Some(leg);
+        let model = row["served_model"]
+            .as_str()
+            .or_else(|| final_leg.then(|| parent["served_model"].as_str()).flatten());
+        let kind = row["witness_kind"]
+            .as_str()
+            .or_else(|| final_leg.then(|| parent["witness_kind"].as_str()).flatten());
+        let witnessed = model.is_some_and(|m| !m.is_empty() && m != "unwitnessed")
+            && kind != Some("request-side-opencode-store");
+        runs.entry((id.into(), leg.into()))
+            .and_modify(|r| {
+                r.0 = r.0.max(ts);
+                r.1 |= witnessed;
+            })
+            .or_insert((ts, witnessed));
+    };
+    for record in records {
+        if let Some(attempts) = record["attempts"].as_array().filter(|a| !a.is_empty()) {
+            for attempt in attempts {
+                observe(attempt, record);
+            }
+        } else {
+            observe(record, &Value::Null);
+        }
+    }
+    for row in rows {
+        observe(row, &Value::Null);
+    }
+    let mut per_leg = BTreeMap::<String, [[u64; 2]; 2]>::new();
+    for ((_, leg), (ts, witnessed)) in runs {
+        if ts < until.saturating_sub(43200) || ts >= until {
+            continue;
+        }
+        let window = usize::from(ts >= until.saturating_sub(21600));
+        let counts = &mut per_leg.entry(leg).or_default()[window];
+        counts[0] += 1;
+        counts[1] += u64::from(witnessed);
+    }
+    per_leg
+        .into_iter()
+        .filter_map(|(leg, [before, after])| {
+            // Recent low coverage is a continuing condition, not a transition.
+            // Five recent runs suffice; the older window is diagnostic context.
+            if after[0] < 5 || after[1] * 5 >= after[0] {
+                return None;
+            }
+            let leg: String = leg
+                .chars()
+                .map(|c| if c.is_control() { '_' } else { c })
+                .collect();
+            Some(format!(
+                "ALERT witnessed share collapsed: leg={leg} previous={}/{} recent={}/{}",
+                before[1], before[0], after[1], after[0]
+            ))
+        })
+        .collect()
+}
+
 fn parse_class(text: &str) -> Option<Class> {
     Some(match text {
         "OK" => Class::Ok,
