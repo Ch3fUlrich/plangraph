@@ -1,0 +1,1 @@
+- Add a Rust complete-inventory mirror refresh command that reports per-repository alarms and continues after failures, with an opt-in user timer running every minute.

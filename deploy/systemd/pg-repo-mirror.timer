@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh repository mirrors every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+Persistent=true
+Unit=pg-repo-mirror.service
+
+[Install]
+WantedBy=timers.target

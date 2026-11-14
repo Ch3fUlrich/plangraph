@@ -80,6 +80,14 @@ impl Mirror {
             repos,
         })
     }
+    /// Attempt the complete configured inventory, preserving each repository's alarm.
+    /// One failed fetch must never prevent later repositories from being refreshed.
+    pub fn fetch_all(&self) -> BTreeMap<String, Result<Watermark, Alarm>> {
+        self.repos
+            .keys()
+            .map(|name| (name.clone(), self.fetch(name)))
+            .collect()
+    }
     pub fn mirror_dir(&self, repo: &str) -> io::Result<PathBuf> {
         if !self.repos.contains_key(repo) {
             return Err(io::Error::new(
