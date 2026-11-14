@@ -98,6 +98,156 @@ def normalise_run(run) -> dict:
 class RunsMixin:
     """The spawner-only ``record_run`` verb."""
 
+    def _merged_open_prs(self, item, decision_id, head, now):
+        try:
+            return self._merged_open_prs_checked(item, decision_id, head, now)
+        except Refused:
+            raise
+        except Exception:
+            raise Refused("evidence_unverified", "merged_pr_proof_unavailable") from None
+
+    def _merged_seat_waiver(self, item, decision_id, waiver_id, prs, now):
+        from .evidence_types import as_epoch
+        check = "decision_id"
+        try:
+            if not isinstance(waiver_id, str) or not re.fullmatch(r"D-[0-9]+", waiver_id):
+                raise ValueError("operator decision id required")
+            decisions = self._ctx(item, now).decisions
+            check = "unique_row_and_columns"
+            row = decisions.fields(waiver_id)
+            if not row:
+                raise ValueError("missing or ambiguous waiver row")
+            check = "operator_authority"
+            if row.get("class") != "OPERATOR":
+                raise ValueError("OPERATOR required")
+            check = "waiver_class_and_verification"
+            if (not re.match(r"^Waiver:\s*merged-without-witnesses(?=$|[\s;,.])", row.get("decision", ""))
+                    or not self._verify_evidence(item, "decision", {"id": waiver_id}, now).ok):
+                raise ValueError("operator waiver is not authorized")
+            # The list ends at the next field/semicolon; prose outside it has
+            # no authority. Split only on spaces: commas are not delimiters.
+            scopes = re.findall(r"(?:^|;|\s)Waives-seats: +([^;\n]+)", row.get("decision", ""))
+            tokens = []
+            for scope in scopes:
+                scope = re.split(r" +[A-Za-z][A-Za-z-]*: +", scope, maxsplit=1)[0]
+                tokens.extend(scope.strip().split(" "))
+            if item["key"] not in tokens:
+                raise Refused("evidence_unverified", "operator_seat_waiver_scope_mismatch")
+            git = self._adapter("git")
+            check = "historical_cutoff"
+            cutoff = as_epoch(decisions.seat_waiver_cutoff())
+            if cutoff is None:
+                raise ValueError("invalid historical cutoff")
+            for proof in prs:
+                go_date = as_epoch(decisions.fields(proof["decision_id"]).get("date"))
+                merge = git.merge_commit_of(git.repo_path(item["project"]), proof["head"],
+                                             git.repo_ref(item["project"]))
+                proc = git._run(git.repo_path(item["project"]),
+                                ["show", "-s", "--format=%cI", "--end-of-options", merge[0]]) if merge else None
+                merge_date = as_epoch(proc.stdout.strip()) if proc and proc.returncode == 0 else None
+                if merge_date is None:
+                    raise Refused("evidence_unverified", "operator_seat_waiver_merge_date_missing")
+                if merge_date >= cutoff:
+                    raise Refused("evidence_unverified", "operator_seat_waiver_merge_at_or_after_cutoff")
+                if go_date is None or go_date >= cutoff:
+                    raise Refused("evidence_unverified", "operator_seat_waiver_go_date_ineligible")
+            return {"class": "merged-without-witnesses", "decision_id": waiver_id}
+        except Refused:
+            raise
+        except Exception:
+            raise Refused("evidence_unverified", f"operator_seat_waiver_invalid_or_ineligible: {check}") from None
+
+    @staticmethod
+    def _refresh_merged_default_ref(git, project):
+        """Complete remote history needs a successful fetch, never a throttled one."""
+        from .evidence_git import valid_ref
+        try:
+            repo, ref = git.repo_path(project), git.repo_ref(project)
+            if not repo or not valid_ref(ref):
+                return False
+            if "/" not in ref:
+                return True  # configured local refs are authoritative locally
+            remote, branch = ref.split("/", 1)
+            if not valid_ref(remote) or not valid_ref(branch):
+                return False
+            return git._run(repo, ["fetch", "--quiet", "--", remote,
+                                  f"+refs/heads/{branch}:refs/remotes/{ref}"],
+                            timeout=20).returncode == 0
+        except Exception:
+            return False
+
+    def _merged_go_scope_matches(self, decision_id, item, now, *, require_key=True):
+        """Additional PR GOs must name this project and this item explicitly."""
+        rows = self._ctx(item, now).decisions._rows_strict().get(decision_id, ())
+        if len(rows) != 1:
+            return False
+        cells = [c.strip() for c in rows[0].split("|")[1:]]
+        if len(cells) < 3 or cells[1] != item["project"]:
+            return False
+        text = cells[2]
+        keys = re.findall(r"(?<![\w:-])[A-Za-z][A-Za-z0-9_.-]*:[A-Za-z0-9_.-]+", text)
+        if keys:
+            return item["key"] in keys
+        if not require_key:
+            return True  # legacy head-only GO; the caller selected this row
+        bare = item["key"].split(":", 1)[1]
+        return re.search(r"(?<![\w:-])" + re.escape(bare) + r"(?![\w:-])", text) is not None
+
+    def _merged_open_prs_checked(self, item, decision_id, head, now):
+        from . import context_sources
+        from .evidence_types import valid_commit_ref
+        git = self._adapter("git")
+        if not self._refresh_merged_default_ref(git, item["project"]):
+            raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
+        if context_sources.open_lanes(git, item["project"], item["key"]) != []:
+            raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
+        commits = context_sources.plan_item_commits(
+            git, item["project"], item["key"], fetch=False, limit=None)
+        proofs = {}
+        for commit in commits or ():
+            merge = commit.get("merge") or {}
+            if type(merge.get("pr")) is not int or merge["pr"] <= 0:
+                raise Refused("evidence_unverified", "merged_pr_missing")
+            merged = git.merge_commit_of(git.repo_path(item["project"]), commit["sha"],
+                                         git.repo_ref(item["project"]))
+            proc = git._run(git.repo_path(item["project"]),
+                            ["show", "-s", "--format=%P", "--end-of-options", merged[0]]) if merged else None
+            parents = proc.stdout.strip().split() if proc and proc.returncode == 0 else []
+            if len(parents) != 2 or not all(valid_commit_ref(p) for p in parents):
+                raise Refused("evidence_unverified", "merged_pr_head_missing")
+            proofs[parents[1]] = {"pr": merge["pr"], "head": parents[1]}
+        if not proofs or head not in proofs:
+            raise Refused("evidence_unverified", "merged_pr_missing")
+        if not self._merged_go_scope_matches(decision_id, item, now, require_key=False):
+            raise Refused("evidence_unverified", "merged_pr_go_scope_mismatch")
+        proofs[head]["decision_id"] = decision_id
+        for did in sorted(self._ctx(item, now).decisions.decisions()):
+            if all("decision_id" in p for p in proofs.values()):
+                break
+            if not self._merged_go_scope_matches(did, item, now):
+                continue
+            try:
+                other_head, _ = self._merged_go_proof(item, did, now, all_work=True)
+            except Refused:
+                continue
+            if other_head in proofs:
+                proofs[other_head].setdefault("decision_id", did)
+        if any("decision_id" not in p for p in proofs.values()):
+            raise Refused("evidence_unverified", "merged_pr_go_missing")
+        return sorted(proofs.values(), key=lambda p: (p["pr"], p["head"]))
+
+    def _record_merged_seats(self, principal, item, decision_id, seats, now):
+        """Mirror a verified historical seat bundle while holding the close lock."""
+        seats = [{k: s[k] for k in ("model", "verdict", "run_id")} for s in seats]
+        run_id = f"merged-{decision_id}"
+        self._append(principal, item["key"], "run_recorded", {
+            "run_id": run_id, "phase": "finished", "rc": 0, "seats": seats}, now)
+        ids = json.loads(item.get("run_ids") or "[]")
+        ids = list(dict.fromkeys([*ids, run_id, *(s["run_id"] for s in seats)]))
+        models = [{"model": s["model"], "verdict": s["verdict"]} for s in seats]
+        self.conn.execute("UPDATE items SET run_ids=?, seat_models=? WHERE key=?",
+                          (_dump(ids), _dump(models), item["key"]))
+
     def record_run(self, principal, key, run):
         return self._run(principal, "record_run", key,
                          lambda now: self._record_run(principal, key, run, now))
