@@ -1,0 +1,2 @@
+- Inbox question parks no longer raise a false unknown-activity alarm for `observe`; worker activity names are drift-checked, and new attempt histories carry patch-gated execution identity without changing legacy payloads.
+- Complete the known control-activity documentation and split oversized worker activity/workflow sources into bounded files without changing module namespaces.
