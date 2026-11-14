@@ -36,12 +36,18 @@ class SpawnService(SeatSpawnMixin):
         """Read one run record; retry options forward to read_text_retry."""
         try:
             record = json.loads(read_text_retry(self._path(run_id), **read_retry))
-            if record.get('run_kind') == 'native-codex' and record.get('overflow_remote') and record.get('status') == 'running':
-                from .remote_ps import native_result
-                record = native_result(record); self._save(record)
             return record
         except FileNotFoundError:
             raise ValueError('unknown run id') from None
+
+    async def refresh_result(self, run_id):
+        """Refresh remote evidence off the event loop; result() stays a local read."""
+        record = self.result(run_id)
+        if record.get('run_kind') == 'native-codex' and record.get('overflow_remote') and record.get('status') == 'running':
+            from .remote_ps import native_result
+            record = await asyncio.to_thread(native_result, record)
+            self._save(record)
+        return record
 
     def _save(self, record):
         native_receipt(record); self._sync_seat(record)

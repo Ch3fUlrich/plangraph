@@ -161,6 +161,9 @@ class SeatSpawnMixin:
             bound = inspect.signature(self._spawn).bind(*args, **kwargs)
             options = dict(bound.arguments)
             card = options.get('card')
+            if (card or {}).get('run_kind') == 'native-codex':
+                from .overflow import native_repo
+                native_repo(card)
             from plangraph.retired_models import check_retired
             check_retired(options)
             check_retired(card)

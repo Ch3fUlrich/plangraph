@@ -145,6 +145,13 @@ pub(crate) fn probe(state: &Path, args: &Args) -> Result<String, ToolError> {
 /// Native cards share Python's existing RAM/SSH admission, then one Rust lifecycle.
 pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError> {
     crate::spawn::validate(args)?;
+    if !args["card"]
+        .get("repo")
+        .and_then(Value::as_str)
+        .is_some_and(|repo| !repo.trim().is_empty() && Path::new(repo).is_absolute())
+    {
+        return Err(parameter("native-codex requires an absolute card.repo"));
+    }
     if args.get("dry_run") == Some(&Value::Bool(true)) {
         return Err(parameter("native-codex dry_run is not supported"));
     }

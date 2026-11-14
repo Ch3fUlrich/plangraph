@@ -105,7 +105,7 @@ exit 2
     )
     .unwrap();
     for (prompt, code) in [("--dry-run", None), ("brief", Some(-32000))] {
-        let reply = fixture.client.request("tools/call", json!({"name":"plangraph_agent_spawn","arguments":{"card":{"run_kind":"native-codex"},"prompt":prompt}}));
+        let reply = fixture.client.request("tools/call", json!({"name":"plangraph_agent_spawn","arguments":{"card":{"run_kind":"native-codex","repo":"/repo"},"prompt":prompt}}));
         if let Some(code) = code {
             assert_eq!(reply["error"]["code"], code, "{reply}");
             assert!(

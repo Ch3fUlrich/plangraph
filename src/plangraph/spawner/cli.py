@@ -355,7 +355,7 @@ raise SystemExit(code)
                 while any(r.get('status') == 'running' for r in runs) and time.monotonic() < deadline:
                     time.sleep(min(.02, max(0, deadline - time.monotonic())))
                     for run in runs:
-                        if run.get('status') == 'running': run.update(service.result(run['run_id']))
+                        if run.get('status') == 'running': run.update(asyncio.run(service.refresh_result(run['run_id'])))
         elif args.verb == 'ps':
             from .remote_ps import list_runs
             result = {'runs': list_runs(service.ps()['runs'])}
@@ -364,7 +364,7 @@ raise SystemExit(code)
         elif args.verb == 'wait':
             result = asyncio.run(service.wait(args.run_id, timeout=args.timeout))
         else:
-            result = service.result(args.run_id)
+            result = asyncio.run(service.refresh_result(args.run_id))
         if isinstance(result, dict):
             seen = set()
             for skipped in list(result.get('skipped', [])) + list(result.get('attempts', [])):

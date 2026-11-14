@@ -340,6 +340,13 @@ def remote_spawn(name, host, card, prompt, options):
             '; rmdir -- ' + q(directory))
 
 
+def native_repo(card):
+    repo = card.get('repo')
+    if not isinstance(repo, str) or not repo.strip() or not Path(repo).is_absolute():
+        raise ValueError('native-codex requires an absolute card.repo')
+    return Path(repo).resolve()
+
+
 async def native_spawn(self, card, options):
     """Placement is already admitted; Rust owns the native writer lifecycle."""
     import asyncio, time
@@ -353,7 +360,7 @@ async def native_spawn(self, card, options):
     record = dict(run_id='run-' + uuid.uuid4().hex, run_kind='native-codex',
         host=(options.get('_placement') or {}).get('host') or os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname(),
         status='running', started=time.time(), role='implement', writer_family='openai',
-        base_ref=card.get('base_ref'), repo=str(Path(card.get('repo') or getattr(self.runner, 'default_cwd', None) or os.getcwd()).resolve()))
+        base_ref=card.get('base_ref'), repo=str(native_repo(card)))
     directory = self._path(record['run_id']).parent
     self._save(record)
     request = dict(record=record, card=card, prompt=options.get('prompt', ''), record_path=str(self._path(record['run_id'])))

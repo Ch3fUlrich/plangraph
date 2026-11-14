@@ -234,7 +234,7 @@ fn native_arguments_are_validated_before_adapter_launch() {
         ("run_worktree", json!(true)),
         ("wait_seconds", json!(-1)),
     ] {
-        let mut args = json!({"card":{"run_kind":"native-codex"},"prompt":"brief"});
+        let mut args = json!({"card":{"run_kind":"native-codex","repo":"/repo"},"prompt":"brief"});
         args[key] = value;
         assert!(
             matches!(
@@ -260,4 +260,97 @@ fn native_arguments_are_validated_before_adapter_launch() {
             Err(crate::errors::ToolError::Refused { .. })
         ));
     }
+}
+
+#[test]
+fn native_cards_require_explicit_absolute_repo_before_admission() {
+    for repo in [Value::Null, json!(""), json!("relative/repo"), json!(42)] {
+        let mut card = json!({"run_kind":"native-codex", "base_ref":"refs/heads/main"});
+        if !repo.is_null() {
+            card["repo"] = repo;
+        }
+        let args = json!({"card":card,"prompt":"brief"});
+        match crate::placement::native_spawn(
+            std::path::Path::new("/unused"),
+            args.as_object().unwrap(),
+        ) {
+            Err(crate::errors::ToolError::Refused { message, .. }) => {
+                assert_eq!(message, "native-codex requires an absolute card.repo");
+            }
+            _ => panic!("invalid repo must be refused before adapter launch"),
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = std::process::Command::new("python3").current_dir(&root).env("PYTHONPATH", root.join("src"))
+        .args(["-c", r#"
+import asyncio, pathlib, tempfile
+from unittest.mock import patch
+from plangraph.spawner.service import SpawnService
+from plangraph.spawner.overflow import native_spawn
+async def check():
+    with tempfile.TemporaryDirectory() as directory:
+        service = SpawnService(state=pathlib.Path(directory)/'state')
+        for repo in (None, '', 'relative/repo', 42):
+            card = dict(run_kind='native-codex', base_ref='refs/heads/main')
+            if repo is not None: card['repo'] = repo
+            with patch.object(service, 'admit_spawn', side_effect=AssertionError('admission reached')), patch('asyncio.create_subprocess_exec', side_effect=AssertionError('worker launched')):
+                for operation in (service.spawn(card=card, prompt='brief'), native_spawn(service, card, dict(prompt='brief'))):
+                    try: await operation
+                    except ValueError as exc: assert str(exc) == 'native-codex requires an absolute card.repo', exc
+                    else: raise AssertionError('invalid repo accepted')
+asyncio.run(check())
+"#]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn native_remote_reads_are_local_and_explicit_refresh_does_not_block_loop() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = std::process::Command::new("python3").current_dir(&root).env("PYTHONPATH", root.join("src"))
+        .args(["-c", r#"
+import asyncio, pathlib, tempfile, threading
+from unittest.mock import patch
+from plangraph.spawner.service import SpawnService
+from plangraph.spawner.mcp import MCPSpawnerServer
+async def check():
+    with tempfile.TemporaryDirectory() as directory:
+        service = SpawnService(state=pathlib.Path(directory)/'state')
+        receipt = dict(run_id='run-abc', run_kind='native-codex', host='other', status='running', overflow_remote=True)
+        service._save(receipt)
+        with patch('plangraph.spawner.remote_ps.native_result', side_effect=AssertionError('local read contacted SSH')):
+            assert service.result('run-abc')['status'] == 'running'
+        server = MCPSpawnerServer(state=service.state)
+        server.service = service
+        for verb in ('result', 'status'):
+            entered, release = threading.Event(), threading.Event()
+            loop_thread = threading.get_ident()
+            def refresh(record):
+                assert threading.get_ident() != loop_thread, 'SSH on event loop'
+                entered.set()
+                assert release.wait(2), 'event loop did not progress while SSH waited'
+                return dict(record, final_head='refreshed-head')
+            with patch('plangraph.spawner.remote_ps.native_result', side_effect=refresh) as ssh:
+                task = asyncio.create_task(server.call_tool('plangraph_agent_' + verb, {'run_id':'run-abc'}))
+                try:
+                    assert await asyncio.to_thread(entered.wait, 2), 'refresh never started'
+                    await asyncio.sleep(0)
+                    assert not task.done(), 'poll did not wait for refresh'
+                finally: release.set()
+                assert (await task)['final_head'] == 'refreshed-head'
+                assert ssh.call_count == 1
+        with patch('plangraph.spawner.remote_ps.native_result', return_value=dict(receipt, status='cancelled')) as ssh:
+            assert (await service.cancel('run-abc'))['status'] == 'cancelled'
+            assert ssh.call_count == 1, 'cancel must perform only its cancel round trip'
+            assert ssh.call_args.kwargs == {'verb':'cancel'}
+asyncio.run(check())
+"#]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
