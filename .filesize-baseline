@@ -50,7 +50,7 @@ src/plangraph/planner/routing.py 470
 src/plangraph/routing_support/catalog_db.py 512
 src/plangraph/routing_support/catalog_seed.py 1048
 src/plangraph/routing_support/resolver.py 1247
-src/plangraph/spawner/runner.py 1222
+src/plangraph/spawner/runner.py 1157
 src/plangraph/views.py 440
 tests/browser/assets/elk.bundled.js 6696
 tests/browser/test_repros.py 436

@@ -116,7 +116,7 @@ Before decoding display stdout, `opencode_answer.record_steps` retains each
 `step_finish` as an `opencode_step_finish` event with `finish_reason`,
 `output_tokens` and `reasoning_tokens`; absent usage remains null, not zero.
 Structured `output-limit` errors and the matching OpenCode stderr diagnostic
-add `opencode_output_limit`. These are diagnostic events, not served-model witnesses.
+add `opencode_output_limit`. These are diagnostic events, not served-model witnesses. Review tool-denial validation and its defaults live in `spawner/opencode_isolation.py`. The `spawner.runner` gate wrapper passes its own `_DENIED_TOOLS`, `_REVIEW_OPENCODE_ENV_ALLOW` and `_opencode_managed_dir` at call time, preserving rebinding of those three dependencies. The wrapper also resolves the isolation implementation at call time; isolation internals such as `json`, `Path` and `Mapping` are not runner override points. Patching the shared `sys.platform` attribute still reaches managed-directory resolution, while replacing runner module objects is outside this contract. All managed-directory, permission and child-environment checks remain mandatory; only the runner wrapper supplies explicit dependency values. Direct isolation calls resolve omitted or `None` inputs from the isolation module at call time.
 A final `length` step with output zero, or that error with no text/output,
 adds `opencode_reasoning_exhausted`; later completed output is not retried.
 Display-text decoding also protects plain/mixed stdout answers; diagnostic-only JSON, including blank separator lines, is not answer text.
@@ -275,7 +275,7 @@ and try the next leg in the same run, failing only after route exhaustion. Ordin
 failure diagnostics do not book cooldowns, mark legs down or emit LEG_REFUSED; only
 recognized availability/quota evidence does. Review `usage_limit:`/`credit_limit:` labels book only when their payload is recognized quota evidence (for example `error: usage limit reached`/`error: credits exhausted`); a label plus `task diagnostic` does not book. Writer
 generic failures keep their stop rule; cancellation, safety refusals and watchdog
-terminals still stop immediately. Safety refusal attempts precede provider-stop classification without overwriting distinct terminal reasons; specific unavailable diagnostics outrank generic provider stops. Provider-stop responses pass through spawner redaction before being added to attempts, including safety refusals. OOM wrapper marker lines (including prefixed telemetry) are not failure reasons.
+terminals still stop immediately. Safety refusal attempts precede provider-stop classification without overwriting distinct terminal reasons; specific unavailable diagnostics outrank generic provider stops. Provider-stop responses pass through spawner redaction before being added to attempts, including safety refusals. OOM wrapper marker lines (including prefixed telemetry) are not failure reasons. A `plangraph_oom` envelope on stderr is recorded only as an event and removed from the captured stderr, so each failed attempt keeps its own reason and a later attempt's OOM line cannot overwrite it.
 Plain stdout, including text saying 429, is never provider evidence.
 
 ### SHA-named run-tree primitive (SPAWNER-RUN-TREE-S1)
@@ -323,6 +323,27 @@ process cwd and child PWD use that path. With the flag off, cwd is unchanged;
 dry runs create nothing. No worktrees are removed, no pg-reap lock sharing is
 implemented, and enabling by default and the Rust port remain later slices.
 
+OpenCode gateway runs carry a per-job session tag for every role, including Sol
+writers and effort variants. After exit (successful or failed), the parent reads
+the response-side gateway call log independently of review tool permissions. Only
+a unique admitted model from successful rows for that tag supplies a witness;
+missing, mismatched tags, failed rows and unknown model IDs stay unwitnessed.
+Model identity admission and call-log row parsing live in `spawner/gateway_models.py`;
+`spawner/gateway_witness.py` retains compatible re-exports and owns session tagging,
+transport and witness orchestration. Admission matches exact model segments in the route table, stripping transport
+provider prefixes and the registered `cx-` GPT alias prefix. A different admitted
+model keeps its family witness and records `served_model_mismatch` with the raw
+requested and served IDs, including when an effort variant serves its base model.
+A writer child holds the gateway API key and session tag and can submit calls
+with that tag. The witness proves the model served for tagged gateway calls;
+it does not prove independence from the child or bind a response to its answer.
+The management log credential stays in the parent. The child-writable OpenCode
+store remains review-only request-side evidence.
+Run `python -m pytest -q -s tests/test_gateway_witness.py -k route_table_witness_paths`
+to list default and explicit legs without a witness path, including disabled
+legs. The check uses synthetic rows, assumes gateway-backed MiMo, and also checks
+model-family admission; it never contacts a gateway or reads management keys.
+
 Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
 chosen leg, served model/family with witness kind (a structured claude `system/init` model is a native witness; a mismatch with the requested leg sets `served_model_mismatch`), writer family, status, started/ended timestamps,
 attempts with provider stop details, job id, pid, and stdout tail.
@@ -356,7 +377,7 @@ The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md]
 
 CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
 A probe with its harness binary missing reports `host-not-ready` and books no leg event. Probe timeouts must be finite and strictly positive; TTL remains nonnegative (zero disables ordinary automatic probes, not snapshot-error recovery). Invalid settings refuse before probe state writes, and CLI parameter refusals are JSON `ParameterRefused` with exit 2. Timeout errors name `--timeout` for an explicit CLI argument, `timeout_s` for a direct probe argument, or `PLANGRAPH_LEG_PROBE_TIMEOUT_S` for the environment. CLI and MCP probe refusal handlers catch only parameter-validation errors, not internal `ValueError`s. Spawn-call exceptions report probe infrastructure failure and never book leg liveness. `src/plangraph/spawner/leg_probe.py:before_launch` retries snapshot read errors once, then probes before admitting/skipping; failed-probe reasons retain the probe's own cause; only an empty or `unknown` reason is recorded as `leg_probe_failed` (`host_not_ready` for a missing host binary), never as `unknown` (run-e99aae2287e541b48886d0f04e46c37e). See [snapshot recovery](spawner-leg-state.md#snapshot-read-errors-slice-1).
-Probe and quota bookkeeping key a leg by its model string: only a bare model of an agy leg gets the `agy/` prefix, a provider-qualified model is its own key, and legacy record rows without a harness keep their model-only key.
+Probe and quota bookkeeping key a leg by its model string: only a bare model of an agy leg gets the `agy/` prefix, a provider-qualified model is its own key, and legacy record rows without a harness keep their model-only key. Gateway quota refusals (omniroute "quota policy filtered" / "reached configured quota threshold", agy `RESOURCE_EXHAUSTED`) book like any harness limit. Before routing, `src/plangraph/routing_support/quota_snapshots.py::QuotaGate` reads omniroute `quota_snapshots` (read-only `QUOTA_SNAPSHOT_DB` mount/copy when configured, otherwise the management API; cached 60 s) and reads a leg `limited` while every account of its provider pool is at or below `PLANGRAPH_QUOTA_MIN_REMAINING_PCT` (default 1) until the earliest reset (`next_reset_at`; a reset-less row holds 30 min from its timestamp or API observation); a missing or unreadable snapshot never blocks routing. A gateway leg silent for 60 s is checked against the call log (`sessionTag`) at the next 30 s watchdog tick (detected 60-90 s after the stall, bounded 3 s per check) and a logged quota error ends the run (exit 7) so the next leg runs; agy is not a gateway leg and its printed refusal is caught by the output refusal gate.
 Failed probes retain a scrubbed, single-line excerpt of the last 400 stderr
 characters in their result, output line and leg-state event. A `running` record
 on the same model/harness with a nonempty `live.log` grown within
@@ -669,3 +690,7 @@ Rust source-filter tests and pytest's real `configured_hosts` checks consume
 `tests/fixtures/doctor_sources.json`, binding both validators and probe limits
 to the same accepted/rejected cases. Rust embeds JSON, never Python source or
 an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
+
+OOM wrapper lines are recognized by their known event shape, including `wrapper:` prefixes and extra metadata. The known event is retained in `events`; extra metadata is redacted into an `oom_telemetry_detail` event. Unknown or diagnostic-bearing envelopes remain in stderr. These untrusted telemetry events confer no provider identity or authorization. OpenCode structured `type=error` messages survive display-text decoding and supply attempt diagnostics. When all legs fail, the run reason selects the last real attempt before accumulated errors or stderr. The three Dell incident captures are replayed by `tests/test_spawner_oom_reason.py` using `tests/fixtures/spawner_dell_oom.json`. Failure classification also uses the route harness for jobs without command metadata and filters progress from a stored final-attempt reason.
+
+Quota polling considers only the newest request of a session, including a 429 without text. Timestamp-less pool observations keep their first-seen hold until recovery; database reads select the latest row per window.

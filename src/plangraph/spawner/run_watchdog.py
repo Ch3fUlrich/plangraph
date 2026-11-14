@@ -11,6 +11,7 @@ import time
 from .run_cpu import cpu_seconds, proc_scan  # noqa: F401  re-exported for callers and tests
 from .prompt_input import checkout_env
 from .run_watchdog_limits import leg_limits, thresholds  # noqa: F401  re-exported for callers and tests
+from .gateway_witness import QuotaWatch
 from .run_refusal import REFUSAL_MAX_FRAMES, REFUSAL_MAX_LINES, REFUSAL_WINDOW_S, RefusalGate  # noqa: F401  re-exported for callers and tests
 
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)')
@@ -328,11 +329,12 @@ async def collect(runner, job_id, proc):
     task = asyncio.create_task(output())
     refusal_wait = asyncio.ensure_future(refused.wait())
     waiters = [task, refusal_wait]
+    quota = QuotaWatch(job, env)
     ticker = asyncio.ensure_future(gate.run())
     try:
         while not task.done():
             # Deadlines stay accurate even with the default 120s sample interval.
-            delay = min(limits['interval'], max(.001, job.start_time + w.budget() - time.time()))
+            delay = quota.delay(min(limits['interval'], max(.001, job.start_time + w.budget() - time.time())))
             if limits.get('hard_first_edit') and w.writer and not w.edited and w.edit_baseline_known and w.edit is not None:
                 delay = min(delay, max(.001, job.start_time + limits['first_edit_s'] - time.time()))
             if w.writer and w.edit is None:
@@ -362,6 +364,9 @@ async def collect(runner, job_id, proc):
                 break
             if task in done:
                 break
+            line = await quota.refusal(job_id, job, env, refused)
+            if line:   # a refusal the harness never printed, read from the gateway call log
+                job.refusal = scrub(line); refused.set(); continue
             edit = (await asyncio.to_thread(edit_signature, job.cwd or runner.default_cwd)
                     if w.writer else None)
             now = time.time()

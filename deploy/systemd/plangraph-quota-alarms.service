@@ -1,0 +1,15 @@
+[Unit]
+Description=Subscription quota alarms (50/75/90 % per window) to routing
+
+[Service]
+Type=oneshot
+# Requires checkout at %h/code/plangraph and /usr/bin/python3 >= 3.11.
+# Use a user unit override for a different checkout or virtualenv interpreter.
+WorkingDirectory=%h/code/plangraph
+Environment=PYTHONPATH=%h/code/plangraph/src
+# Required: QUOTA_SNAPSHOT_DB=<read-only mount or copy of gateway storage.sqlite>.
+EnvironmentFile=%h/.config/plangraph/quota-alarms.env
+NoNewPrivileges=yes
+ExecStartPre=/usr/bin/test -n "${QUOTA_SNAPSHOT_DB}"
+ExecStart=/usr/bin/python3 -m plangraph.keeper.quota_alarms --db "${QUOTA_SNAPSHOT_DB}"
+TimeoutStartSec=2min

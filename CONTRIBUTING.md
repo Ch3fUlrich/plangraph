@@ -30,7 +30,7 @@ install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
 with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
 The D-5504/D-5506 `mcp_tools.py` exception only splits schema data out of the full Python MCP transport; it also retires with MCP-RUST.
-Interim (operator D-5830): `**/*.py` and `**/*.sh` are allowlisted, so new Python and shell files pass the new-code gate; Rust stays the preferred language for new code, and the gate, its CI job and its tests stay in place for the other blocked extensions.
+Interim (operator D-5830): `**/*.py` and `**/*.sh` are allowlisted, so new Python and shell files pass the new-code gate; Rust stays the preferred language for new code, and the gate, its CI job and its tests stay in place for the other blocked extensions. Keep both OOM diagnostic regression and quota snapshot module/test entries in `tools/new_code_allowlist.txt` when merging these concurrent in-flight changes.
 
 ```bash
 python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
@@ -91,6 +91,7 @@ SHA explicitly in a reviewed PR when needed, not the shared Rust release pin.
 
 Completed Rust ports remove only their own Python waiver from
 `tools/new_code_allowlist.txt`; preserve unrelated exceptions when merging main.
+Merge in-flight test entries additively so each active lane retains its own coverage.
 SPAWNER-RUST-PORT slice 2 also removes the stale doctor-source waiver retired by
 slice 1; its changelog fragment accounts for all four named Python waivers.
 Doctor source-filter goldens live in `tests/fixtures/doctor_sources.json` and run
@@ -156,6 +157,7 @@ The file-size gate refuses malformed Git batch headers with a single reason line
 New Python source outside tests needs a `path | reason (D-id)` line in
 `tools/new_code_allowlist.txt`, which `python3 tools/check_new_code_lang.py` reads; for
 example the keeper's host-sample store stays Python because the keeper is Python (D-5038).
+The `spawner/gateway_models.py` entry covers a responsibility-only extraction of existing Python model admission and row parsing; `gateway_witness.py` keeps compatible re-exports.
 
 ## Changelog and documentation
 
@@ -173,6 +175,12 @@ Every commit message ends with one trailer paragraph — no blank lines inside i
 Plan-Item: plangraph:<KEY>
 Co-Authored-By: <author> <noreply@example.com>
 ```
+
+A merged commit whose trailers fail the CI commit gate is never rewritten. A router decision adds its full sha to
+`tools/ci_commit_exempt.txt` in a commit that carries `Gate-Edit: D-<id>` in the same trailer paragraph. The gate reads
+the list from the base commit, so the row has to merge to `main` before the pull request that holds the commit can pass.
+A row for a test-removal failure is added only after the branch asserts the removed behaviour again; the comment line
+above the row names the decision, the pull request and that test.
 
 ## No secrets in the history
 
@@ -306,7 +314,7 @@ pg-worker-core --test turn_budget_hook --test turn_budget_poll --test
 turn_budget_alert --test turn_budget_watchdog`. Tests never install hooks, read
 live session state, or change permissions/settings files.
 
-Package R Python files already in flight are individually listed in
+Python files already in flight are individually listed in
 `tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
 
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
