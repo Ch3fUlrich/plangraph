@@ -1,0 +1,1 @@
+Preserve reviewed decision-only stored items on router import and round trip, returning a warning count. Keep new-create and tier/evidence edit refusals, allow unrelated legacy edits, correct new-item examples, and decode spawner checkout identity with explicit UTF-8 replacement.

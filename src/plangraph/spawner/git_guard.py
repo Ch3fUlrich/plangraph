@@ -32,7 +32,8 @@ def read_code_identity(repo=CODE_TREE):
     try:
         result = subprocess.run(
             ['git', '-C', str(repo), 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'],
-            check=True, capture_output=True, text=True, timeout=1, env=checkout_env())
+            check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=1, env=checkout_env())
         sha, branch = result.stdout.strip().splitlines()
         if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', sha):
             raise ValueError('invalid code tree SHA')

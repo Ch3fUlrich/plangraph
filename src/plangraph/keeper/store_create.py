@@ -25,6 +25,8 @@ from .store_tiers import (
     _TIER_FIELDS,
     check_seat_clause_tier,
     default_review_tier,
+    decision_tier_conflict,
+    validate_decision_edit,
     tier_needs_router,
     validated_decision_tier,
     validated_review_tier,
@@ -86,7 +88,7 @@ def _active_edit_only(fields):
             and not set(fields) - _ACTIVE_EDITABLE)
 
 
-def creation_tier(raw, definition, principal):
+def creation_tier(raw, definition, principal, *, stored=False):
     """The tier a create stores for *principal* (D-2458: raise-only, never a clamp).
 
     A tier below the project default needs the router role; an ``oversight``
@@ -127,8 +129,8 @@ def creation_tier(raw, definition, principal):
                 raise Refused(
                     "forbidden",
                     "only the router may lower review_tier below its default")
-        return validated_decision_tier(tier, definition["evidence_kinds"], principal=principal)
-    return validated_decision_tier(default, definition["evidence_kinds"], principal=principal)
+        return validated_decision_tier(tier, definition["evidence_kinds"], principal=principal, stored=stored)
+    return validated_decision_tier(default, definition["evidence_kinds"], principal=principal, stored=stored)
 
 
 class CreateMixin:
@@ -168,7 +170,7 @@ class CreateMixin:
             # ``under`` is a create-only attachment; a legacy import may not
             # smuggle one in (checked before _normalise resolves it).
             raise Refused("validation", "import_items does not accept 'under'")
-        defs = [self._normalise_create(raw, principal) for raw in items]
+        defs = [self._normalise_create(raw, principal, stored=legacy) for raw in items]
         for raw in items:
             if isinstance(raw, dict):
                 validate_family(raw.get("owner_family"))
@@ -250,6 +252,10 @@ class CreateMixin:
                                   for definition, gate in attach]
         if any(not definition.get("description") for definition in defs):
             result["warnings"] = ["description missing: brief will be empty"]
+        conflicts = sum(decision_tier_conflict(d["review_tier"], d["evidence_kinds"]) for d in defs)
+        if legacy and conflicts:
+            result.setdefault("warnings", []).append(
+                f"imported {conflicts} stored item(s) with decision-only evidence and review_tier != 'none'")
         return result
 
     def _under_gate(self, principal, definition):
@@ -274,9 +280,10 @@ class CreateMixin:
         self._assert_unlocked(gate)
         return gate
 
-    def _normalise_create(self, raw, principal):
+    def _normalise_create(self, raw, principal, *, stored=False):
         definition = self._normalise(raw)
-        definition["review_tier"] = self._tier_for(raw, definition, principal)
+        definition["review_tier"] = (creation_tier(raw, definition, principal, stored=True)
+                                     if stored else self._tier_for(raw, definition, principal))
         return definition
 
     def _tier_for(self, raw, definition, principal):
@@ -432,9 +439,7 @@ class CreateMixin:
         if (tier_needs_router(resulting_tier) and resulting_tier != item["review_tier"]
                 and principal.role != "router"):
             raise Refused("forbidden", "only the router may set review_tier='none'")
-        validated_decision_tier(
-            resulting_tier,
-            edit_fields.get("evidence_kinds", item["evidence_kinds"]), principal=principal, previous_evidence=item["evidence_kinds"])
+        validate_decision_edit(item, edit_fields, principal)
         before = self._all_items()
         candidate = self._all_items()
         me = next(it for it in candidate if it["key"] == key)
@@ -495,7 +500,7 @@ class CreateMixin:
                    for value in renamed):
                 edit_fields["review_tier"] = "high"
                 me["review_tier"] = "high"
-        validated_decision_tier(me["review_tier"], me["evidence_kinds"], principal=principal, previous_evidence=item["evidence_kinds"])
+        validate_decision_edit(item, edit_fields, principal)
         if any(field in edit_fields and edit_fields[field] != item.get(field)
                for field in ("done_criteria", "review_tier")):
             resulting_tier = edit_fields.get(
@@ -533,9 +538,7 @@ class CreateMixin:
                 self._may_manage(principal, fresh["project"])
             bump_epoch = tier_edit and ("done_criteria" in edit_fields or "depends_on" in edit_fields)
             # Re-check tier/evidence under the lock, including open-item edits.
-            validated_decision_tier(
-                edit_fields.get("review_tier", fresh["review_tier"]),
-                edit_fields.get("evidence_kinds", fresh["evidence_kinds"]), principal=principal, previous_evidence=fresh["evidence_kinds"])
+            validate_decision_edit(fresh, edit_fields, principal)
             if tier_edit:
                 # Bump the round like ``submit`` does: earlier verdicts stop
                 # matching ``_round_verdicts`` -- no stale count under the new tier.

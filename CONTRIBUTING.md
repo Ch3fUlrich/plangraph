@@ -324,3 +324,5 @@ Local preflight tests compare the branch against origin/main, follow shared asse
 
 The K1-R1 HEAD audit runtime is explicitly stdlib Python so the installer can copy
 it outside the changing checkout; its narrow allowlist entry covers that requirement.
+
+The generated example batch declares tier `none` for new decision-only items; the example builder preserves historical imported plan definitions and their stored tiers.

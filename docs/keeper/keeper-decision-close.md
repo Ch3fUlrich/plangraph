@@ -107,3 +107,39 @@ second call on DONE, refuse `bad_state`; all other roles refuse `forbidden`.
 This is not a batch op and changes no `verdict`, `claim`, `evidence`, or `close`
 rule. The Python MCP schema table lives in `mcp_tools.py` so the stdio
 transport stays below its 400-line limit without unrelated formatting churn.
+
+
+### Stored decision-only definitions and import compatibility
+
+Interactive creates and edits that set `review_tier` or `evidence_kinds` refuse
+`[decision]` evidence with a `standard` or `high` review tier. Router imports
+preserve these existing definitions and return a warning counting the affected
+items; export and replay retain their tier, evidence and state. Unrelated edits
+may preserve the stored combination. Setting either field validates the resulting
+pair, including a same-value declaration, and checks again under the write lock.
+
+The repository producers were audited as follows:
+
+- `examples/plans/orchard.yaml` (O-1, O-2, O-4, GOAL) and
+  `examples/plans/lighthouse.yaml` (L-1, L-2) are historical import examples.
+  `tools/split/build_examples.py` imports them to produce `examples/snapshot.json`
+  and `examples/rendered/demo.html`. Preserve those inputs and generated contents.
+- `tests/fixtures/import_mini/atlas.yaml` (R1, R2, IR1) and `borealis.yaml`
+  (A4, A5) deliberately exercise legacy import and round trip; retain them.
+  `importer.load_dir` supplies default tiers when absent and `export_yaml` writes
+  stored definitions; neither should silently change evidence or tier.
+- `tests/fixtures/mini_snapshot.json` (atlas:GOAL), `page_snapshot.json`
+  (atlas:IMP4/GOAL, borealis:WP4/GOAL), and
+  `tests/fixtures/ui/make_synthetic.py` / `synthetic_snapshot.json` are stored
+  display fixtures, including historical reviewed decision-only definitions;
+  keep their data rather than make rendering fixtures obey new-create policy.
+- `tests/keeper_util.py:defn` preserves caller-supplied evidence and default tiers.
+  `tests/test_ready_owner.py:srv` uses it to create a *new* decision-only question:
+  its missing `review_tier: none` was a fixture mistake and is now explicit.
+  Deliberate invalid declarations in keeper tier/decision tests remain refusals.
+- `examples/batch/demo-batch.yaml` creates O-5 interactively: its missing tier was
+  a new-create example mistake; it now declares `review_tier: none`.
+  `build_examples.py` also emits this batch without changing its declarations.
+- `tools/decisions_import.py` and `tools/md_sync_plan.py` already declare tier
+  `none` with decision-only evidence; `tools/md_sync_dclose.py` repairs the pair
+  together. They need no compatibility exception or data change.
