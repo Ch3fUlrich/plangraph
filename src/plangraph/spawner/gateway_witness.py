@@ -226,6 +226,87 @@ def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=No
         raise LookupError('call log unreadable: ' + type(exc).__name__) from None
 
 
+QUOTA_POLL_IDLE_S = 60.0   # a gateway leg silent this long is checked against the call log
+QUOTA_POLL_EVERY_S = 30.0
+QUOTA_POLL_TIMEOUT_S = 3.0
+
+
+def quota_refusal(rows, tag):
+    """Only the newest request of a session can refuse it; unversioned rows use input order."""
+    from .env_redact import early_refusal
+    from plangraph.routing_support.quota_snapshots import _ts
+    def order(pair):
+        index, row = pair
+        at = _ts(row.get('createdAt') or row.get('created_at') or row.get('timestamp')) or 0
+        try:
+            ident = int(row.get('id') or 0)
+        except (TypeError, ValueError):
+            ident = 0
+        return at, ident, index
+    matching = [(i, r) for i, r in enumerate(rows if isinstance(rows, list) else ())
+                if isinstance(r, dict) and r.get('sessionTag') == tag]
+    if not matching:
+        return None
+    row = max(matching, key=order)[1]
+    try:
+        status = int(row.get('status'))
+    except (TypeError, ValueError):
+        status = 0
+    if 200 <= status < 300:
+        return None
+    line = ' '.join(' '.join(str(row.get(k) or '') for k in
+                    ('error_summary', 'errorSummary', 'error')).split())[:300]
+    found = early_refusal(line) or early_refusal('Error: ' + line)
+    return found or (('HTTP 429: ' + line if line else 'HTTP 429') if status == 429 else None)
+
+
+
+def poll_quota(job_id, job, env, *, fetch=None):
+    """Quota refusal text for a running gateway leg, or None; never raises."""
+    if not gateway_leg(getattr(job, 'model_or_combo', None), env):
+        return None
+    try:
+        return quota_refusal((fetch or fetch_rows)(session_tag(job_id), env), session_tag(job_id))
+    except Exception:
+        return None
+
+
+class QuotaWatch:
+    """Throttled call-log check for a gateway leg that has gone silent (used by the run watchdog)."""
+
+    def __init__(self, job, env):
+        self.model = getattr(job, 'model_or_combo', None)
+        self.wake = gateway_leg(self.model, env)   # wake cadence only; check() re-reads the env
+        self.last = 0.0
+
+    def delay(self, delay):
+        return min(delay, QUOTA_POLL_EVERY_S) if self.wake else delay
+
+    def check(self, job_id, job, env, refused):
+        now = time.time()
+        if (refused.is_set() or now - self.last < QUOTA_POLL_EVERY_S
+                or now - max(getattr(job, 'last_activity_ts', 0) or 0, getattr(job, 'start_time', now) or now) < QUOTA_POLL_IDLE_S
+                or not gateway_leg(self.model, env)):
+            return False
+        self.last = now
+        return True
+
+    async def refusal(self, job_id, job, env, refused):
+        """Refusal text that ends the run, else None; a failing check never ends or fails the run."""
+        try:
+            return await self.poll(job_id, job, env) if self.check(job_id, job, env, refused) else None
+        except Exception:
+            return None
+
+    async def poll(self, job_id, job, env):
+        """Refusal text, or None; bounded by QUOTA_POLL_TIMEOUT_S so a slow gateway never stalls the watchdog loop."""
+        import asyncio
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(poll_quota, job_id, job, env), QUOTA_POLL_TIMEOUT_S)
+        except Exception:
+            return None
+
+
 def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
     """Record the gateway-served model on ``job`` through the runner's adapter check."""
     fetch = fetch or fetch_rows
