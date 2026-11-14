@@ -220,7 +220,7 @@ def record_reruns(repo, number, reruns):
             path = Path(tmp, "body.md")
             path.write_text(body + "\n\nCI reruns (must be explained by a flake fix/quarantine item):\n"
                             + "\n".join("- " + line for line in additions) + "\n", encoding="utf-8")
-            gh("api", "--method", "PATCH", f"repos/{repo}/pulls/{number}", "-f", f"body=@{path}")
+            gh("api", "--method", "PATCH", f"repos/{repo}/pulls/{number}", "-F", f"body=@{path}")
 
 
 def require_main_green(repo, head, go_row=None):

@@ -80,30 +80,61 @@ assert 'browser: failure' in ci.gate(needs)
 fn full_tier_requires_windows_and_every_workflow_job() {
     python(
         r#"
-import pathlib, sys
+import sys
 sys.path.insert(0, 'tools')
 import ci_select as ci
 needs = {'select': {'result': 'success', 'outputs': {'full': 'true', **{s: 'false' for s in ci.SUITES}}}}
 needs.update({s: {'result': 'success'} for s in ci.ALWAYS + ci.SUITES})
 needs['rust-windows'] = {'result': 'skipped'}
 assert ci.gate(needs) == ['rust-windows: skipped'], ci.gate(needs)
-workflow = pathlib.Path('.github/workflows/tests.yml').read_text()
-import yaml
-jobs = yaml.safe_load(workflow)['jobs']
-assert set(jobs['ci-gate']['needs']) == set(jobs) - {'ci-gate'}
-assert jobs['browser']['needs'] == 'select'
-assert "needs.select.outputs.browser == 'true'" in jobs['browser']['if']
-assert 'browser' in jobs['select']['outputs']
-selection = jobs['select']['steps'][1]
-assert 'PR_BASE_REF' in selection['env'] and 'PR_DRAFT' in selection['env']
-assert 'PR_HEAD_REF' in selection['env']
-assert 'batch/*' in selection['run'] and '--full' in selection['run']
-for name in ('pytest', 'pytest-postgres'):
-    for step in jobs[name]['steps']:
-        if 'affected_tests.py' in step.get('run', ''):
-            assert "needs.select.outputs.full" in step['run'], step
 "#,
     );
+    let workflow = std::fs::read_to_string(root().join(".github/workflows/tests.yml")).unwrap();
+    let jobs = workflow.split_once("\njobs:\n").unwrap().1;
+    let names: std::collections::BTreeSet<_> = jobs
+        .lines()
+        .filter_map(|line| {
+            let name = line.strip_prefix("  ")?.strip_suffix(':')?;
+            (!name.starts_with(' ') && !name.contains(' ')).then_some(name)
+        })
+        .collect();
+    let gate = jobs.split_once("\n  ci-gate:\n").unwrap().1;
+    let needed: std::collections::BTreeSet<_> = gate
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("needs: ["))
+        .unwrap()
+        .trim_end_matches(']')
+        .split(", ")
+        .collect();
+    assert_eq!(
+        needed,
+        names
+            .into_iter()
+            .filter(|name| *name != "ci-gate")
+            .collect()
+    );
+    let browser = jobs
+        .split_once("\n  browser:\n")
+        .unwrap()
+        .1
+        .split("\n  pytest-postgres:")
+        .next()
+        .unwrap();
+    assert!(browser.contains("needs: select"));
+    assert!(browser.contains("if: needs.select.outputs.browser == 'true'"));
+    let selection = jobs.split_once("\n  scrub:").unwrap().0;
+    for input in [
+        "PR_BASE_REF",
+        "PR_HEAD_REF",
+        "PR_DRAFT",
+        "batch/*",
+        "--full",
+        "steps.sel.outputs.browser",
+    ] {
+        assert!(selection.contains(input), "missing {input}");
+    }
+    assert_eq!(workflow.matches("needs.select.outputs.full").count(), 4);
+    assert!(workflow.contains("types: [opened, synchronize, reopened, ready_for_review, edited]"));
 }
 
 #[test]
@@ -189,6 +220,51 @@ with patch.object(land, 'gh_json', side_effect=api), tempfile.TemporaryDirectory
         raise AssertionError('pending main accepted')
     except land.MergeBatchError:
         pass
+"#,
+    );
+}
+
+#[test]
+fn rerun_audit_preserves_the_body_and_sends_file_contents() {
+    python(
+        r#"
+import pathlib, sys
+from unittest.mock import patch
+sys.path.insert(0, 'tools')
+import merge_batch_land as land
+calls = []
+def gh(*args):
+    assert '-F' in args, 'body file must use --field; --raw-field sends a literal filename'
+    payload = args[args.index('-F') + 1]
+    assert payload.startswith('body=@')
+    body = pathlib.Path(payload[len('body=@'):]).read_text()
+    assert body.startswith('Original PR body')
+    assert 'rust-windows' in body and 'attempt 2' in body
+    calls.append(args)
+with patch.object(land, 'gh_json', return_value={'body': 'Original PR body'}), patch.object(land, 'gh', side_effect=gh):
+    land.record_reruns('o/r', 7, ['tests run 7 attempt 2: rust-windows'])
+assert len(calls) == 1
+"#,
+    );
+}
+
+#[test]
+fn prepush_only_skips_the_network_part_when_offline() {
+    python(
+        r#"
+import runpy
+from types import SimpleNamespace
+from unittest.mock import patch
+hook = runpy.run_path('tools/hooks/pre-push')
+f = hook['commit_gate']
+g = f.__globals__
+clean = SimpleNamespace(returncode=0, stdout='', stderr='')
+for response, expected in [(SimpleNamespace(returncode=1, stdout='', stderr='offline'), 0), (SimpleNamespace(returncode=0, stdout='invalid json', stderr=''), 1), (SimpleNamespace(returncode=0, stdout='[{"headRefOid": "bad"}]', stderr=''), 1)]:
+    with patch.dict(g, git_out=lambda *a: 'b' * 40), patch.object(g['subprocess'], 'run', side_effect=[clean, response]):
+        assert f('a' * 40) == expected
+with patch.dict(g, git_out=lambda *a: 'b' * 40), patch.object(g['subprocess'], 'run', return_value=SimpleNamespace(returncode=1, stdout='bad trailers', stderr='')) as run:
+    assert f('a' * 40) != 0
+    assert run.call_count == 1
 "#,
     );
 }

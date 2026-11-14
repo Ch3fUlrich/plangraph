@@ -177,7 +177,10 @@ def commit_gate(head):
             if git("cat-file", "-e", sha + "^{commit}").returncode:
                 if git("fetch", "--quiet", "origin", sha).returncode:
                     raise OSError("open PR head fetch unavailable")
-    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+    except (ValueError, KeyError, TypeError):
+        print("pre-push: invalid open PR response: push refused", file=sys.stderr)
+        return 1
+    except (OSError, subprocess.TimeoutExpired):
         print("pre-push: open PR merge check skipped (network/gh unavailable); local trailer gate passed",
               file=sys.stderr)
         return 0
