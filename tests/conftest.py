@@ -266,6 +266,10 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     providers = tmp_path_factory.mktemp('empty-providers') / 'providers.json'
     monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(providers))
     state = tmp_path_factory.mktemp('xdg-state')  # never the production spawner/leg state (D-2844)
+    # An absent child of the already-owned state root costs no extra mkdir.
+    # Keep HOME for git/SSH/toolchains; a nonempty XDG root prevents gateway
+    # lookup from falling back to the operator's HOME/.config.
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(state / 'config'))
     monkeypatch.setenv('XDG_STATE_HOME', str(state))
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
     monkeypatch.setenv('PLANGRAPH_CATALOG_DB', str(state / 'absent-catalog.db'))

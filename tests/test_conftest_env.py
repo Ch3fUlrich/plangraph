@@ -48,3 +48,38 @@ def test_strict_routing_child_stat_errors(tmp_path, monkeypatch, child, damage):
             roots._scan_routing_tree(tmp_path, True)
     finally:
         tmp_path.chmod(0o700)
+
+
+def test_gateway_config_is_isolated_from_home(tmp_path, monkeypatch):
+    from plangraph.routing_support.clients import effective_gateway_base_url
+    from plangraph.spawner import gateway_witness as gw
+
+    # A real-looking HOME has an endpoint, but the shared fixture's XDG root
+    # must keep this file out of ordinary endpoint resolution.
+    home = tmp_path / "home"
+    config = home / ".config"
+    planted = config / "plangraph" / "omniroute-base-url"
+    planted.parent.mkdir(parents=True)
+    endpoint = "https://planted.invalid/v1"
+    planted.write_text(endpoint)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PLANGRAPH_GATEWAY_URL")
+    isolated = Path(os.environ["XDG_CONFIG_HOME"])
+    assert isolated != config
+    reads = []
+    read_text = Path.read_text
+
+    def record_read(path, *args, **kwargs):
+        reads.append(path)
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", record_read)
+    assert effective_gateway_base_url() is None
+    with pytest.raises(LookupError, match="gateway endpoint not configured"):
+        gw.fetch_rows("plangraph-job", dict(os.environ), opener=pytest.fail)
+    assert reads and set(reads) == {isolated / "plangraph" / "omniroute-base-url"}
+    # Opt in to file configuration explicitly; also cover HOME/.config with
+    # an injected environment so no real user's home can ever be consulted.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
+    assert effective_gateway_base_url() == endpoint
+    assert effective_gateway_base_url({"HOME": str(home)}) == endpoint

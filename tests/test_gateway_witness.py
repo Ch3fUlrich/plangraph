@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -11,13 +12,6 @@ pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: FAKE_PID excee
 
 from plangraph.spawner import gateway_witness as gw
 from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
-
-
-@pytest.fixture(autouse=True)
-def _no_host_gateway_file(monkeypatch, tmp_path):
-    # The endpoint lookup falls back to a file in the user's config directory; tests never read the host's.
-    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
-    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'home' / '.config'))
 
 
 class _Runner:
@@ -41,7 +35,8 @@ def _job(model='omniroute/cx-gpt-6-luna'):
 def _env(job_id):
     cfg = {'providers': {'omniroute': {'options': {}}}, 'permission': {'*': 'deny'}}
     gw.tag_session(cfg, job_id)
-    return {'OPENCODE_CONFIG_CONTENT': json.dumps(cfg)}
+    return {'OPENCODE_CONFIG_CONTENT': json.dumps(cfg),
+            'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']}
 
 
 def test_tag_session_sets_header_on_omniroute_provider_only():
@@ -139,7 +134,8 @@ def test_management_url_is_parent_only(monkeypatch):
     assert sent[0].full_url.startswith('https://parent.example/api/usage/call-logs?')
     assert sent[0].get_header('Authorization') == 'Bearer parent-token'
     with pytest.raises(LookupError, match='endpoint'):
-        gw.fetch_rows('tag', child, secrets={gw.TOKEN_ENV: 'parent-token'}, opener=pytest.fail)
+        gw.fetch_rows('tag', child, secrets={gw.TOKEN_ENV: 'parent-token',
+                                                  'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']}, opener=pytest.fail)
 
 
 @pytest.mark.parametrize('returncode', [0, 1])   # r2 seat (mimo-pro): a failed seat is witnessed too

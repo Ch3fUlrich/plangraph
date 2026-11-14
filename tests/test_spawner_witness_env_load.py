@@ -1,4 +1,5 @@
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -16,7 +17,8 @@ from plangraph.spawner import gateway_witness as gw
 ])
 def test_unavailable(provider, served, tagged, reason):
     cfg = {'provider': {'omniroute': {'headers': {gw.SESSION_HEADER: gw.session_tag('job')}}}}
-    env = {'OPENCODE_CONFIG_CONTENT': json.dumps(cfg) if tagged else '{}'}
+    env = {'OPENCODE_CONFIG_CONTENT': json.dumps(cfg) if tagged else '{}',
+           'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']}
     job = SimpleNamespace(model_or_combo=provider + '/model', served_model=served, events=[])
     def fetch(*args):
         raise LookupError(reason)
@@ -55,7 +57,9 @@ def test_required_refusal(monkeypatch, tmp_path, model, reason):
     monkeypatch.delenv(gw.TOKEN_ENV, raising=False)
     monkeypatch.setenv(gw.TOKEN_FILE_ENV, str(tmp_path / 'missing'))
     with pytest.raises(SpawnRefused, match=reason):
-        gw.require_witness(model, {}, secrets={gw.TOKEN_FILE_ENV: str(tmp_path / 'missing')})
+        gw.require_witness(model, {'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']},
+                           secrets={gw.TOKEN_FILE_ENV: str(tmp_path / 'missing'),
+                                    'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']})
 
 
 def test_route_gateway_first(monkeypatch, tmp_path):
@@ -82,7 +86,8 @@ def test_required_uses_pinned_secrets(monkeypatch):
     gw.require_witness('omniroute/model', secrets, secrets=secrets)
     from plangraph.planner.routing import SpawnRefused
     with pytest.raises(SpawnRefused, match='gateway endpoint not configured'):
-        gw.require_witness('omniroute/model', {}, secrets={gw.TOKEN_ENV: 'pinned'})
+        gw.require_witness('omniroute/model', {'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']},
+                           secrets={gw.TOKEN_ENV: 'pinned', 'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']})
 
 
 @pytest.mark.parametrize('model', [None, 'direct/model', 'omniroute/model', 'mimo/model'])
