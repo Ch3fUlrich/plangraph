@@ -50,8 +50,10 @@ The JSON companion includes follow-up definition proposals, grouped by project
 and primary class, with dependencies on
 `plangraph:INREVIEW-BACKFILL-CLASS-PLAN` as the routing/review gate. Owners are
 logical L1 roles until the orchestrator substitutes registered principals.
-The five supported projects are plangraph, server, autoos, workst-gen and
-workst-basic-analysis; each project's L1 owns its keys' seats. The output never
+The five supported projects are plangraph, server, autoos, project-alpha and
+project-beta; the last two are neutral project labels. Map private project IDs
+to these labels consistently in the snapshot and refusal reports before running
+the tool. Each project's L1 owns its keys' seats. The output never
 claims those leaves or gate edges have already been written to the keeper.
 
 Orchestrator handoff: provide the original exports and snapshot; generate and

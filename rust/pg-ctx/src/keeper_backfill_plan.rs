@@ -34,8 +34,8 @@ pub fn build(items: &[Value], reports: &[Vec<Value>], expected: usize) -> Result
             "plangraph",
             "server",
             "autoos",
-            "workst-gen",
-            "workst-basic-analysis",
+            "project-alpha",
+            "project-beta",
         ]
         .contains(&project)
         {
