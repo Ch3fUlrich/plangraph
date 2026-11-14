@@ -113,14 +113,19 @@ def test_collect_enforces_deadline_with_injected_transport(monkeypatch):
         runner = SimpleNamespace(jobs={'j': job}, _child_envs={'j': {}},
                                  _stdin_payloads={}, default_cwd='tree', _reap_process=reap)
         real_wait = asyncio.wait
+        ticks = []
         async def tick(waiters, timeout, return_when):
-            assert timeout == 120
+            # The monitor samples at most every 30s; the hard edit deadline is 120s.
+            assert timeout == 30
+            assert job.status == 'running'
+            ticks.append(timeout)
             clock.now += timeout
             job.last_activity_ts = clock.now
             return set(), set(waiters)
         monkeypatch.setattr(wd.asyncio, 'wait', tick)
         await wd.collect(runner, 'j', Transport())
         monkeypatch.setattr(wd.asyncio, 'wait', real_wait)
+        assert ticks == [30, 30, 30, 30]
         assert clock.now == 120
         assert job.status == 'stalled'
         assert job.events[0]['rule'] == 'no-first-edit'

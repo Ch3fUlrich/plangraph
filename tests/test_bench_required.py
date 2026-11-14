@@ -81,8 +81,8 @@ def test_absent_explicit_operator_order():
 
 @pytest.mark.parametrize("data", [None, rows(WRITERS[1:])])
 def test_strict_names_missing(data):
-    # D-5206/D-5212: the missing first writer is now effort-qualified Sol.
-    with pytest.raises(routing.SpawnRefused, match=r"benchmark rows missing: .*cx-gpt-6\.1-sol-xhigh") as exc:
+    # D-5840 supersedes D-5206/D-5212: the default writer is Sol medium.
+    with pytest.raises(routing.SpawnRefused, match=r"benchmark rows missing: .*cx-gpt-6\.1-sol-medium") as exc:
         plan(benchmark=data, strict=True)
     assert {g["leg"] for g in exc.value.gaps} == {
         l.id for l in POLICY if 'implement' in l.roles and not l.disabled

@@ -527,13 +527,14 @@ def test_selector_timeout_kills_its_worker_group(tmp_path):
 @pytest.mark.parametrize('interrupted', [False, True])
 def test_selector_timeout_uses_group_cleanup_on_each_platform(tmp_path, monkeypatch, platform, interrupted):
     import runpy
+    from fake_pid import FAKE_PID
     from types import SimpleNamespace
     hook = runpy.run_path(str(HOOK))
     (tmp_path / 'tools').mkdir()
     (tmp_path / 'tools/affected_tests.py').touch()
     created, killed, commands = [], [], []
     class Process:
-        pid = 987654
+        pid = FAKE_PID
         waits = 0
         def wait(self, timeout):
             self.waits += 1
@@ -553,10 +554,10 @@ def test_selector_timeout_uses_group_cleanup_on_each_platform(tmp_path, monkeypa
         hook['affected_gate'](tmp_path, 'base', 'head', timeout=.1)
     if platform == 'nt':
         assert created[0]['creationflags'] == getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x200)
-        assert commands == [['taskkill', '/F', '/T', '/PID', '987654']]
+        assert commands == [['taskkill', '/F', '/T', '/PID', str(FAKE_PID)]]
     else:
         assert created[0]['start_new_session'] is True
-        assert killed[0] == (987654, 9)
+        assert killed[0] == (FAKE_PID, 9)
     assert killed[-1] == 'parent'
 
 
