@@ -293,6 +293,13 @@ def test_spawn_missing_seat_identity_is_persisted(tmp_path, monkeypatch, dispatc
 
 @pytest.mark.parametrize('positional', [False, True])
 def test_refusal_item_key(tmp_path, monkeypatch, positional):
+    from time import time
+    from plangraph.keeper.cli_verbs import Session
+
+    # Reach the routing refusal with an authoritative, live admission claim.
+    monkeypatch.setattr(Session, 'call', lambda self, method, verb, *a, **kw:
+        dict(key=KEY, state='claimed', claimed_by='worker', lease_until=time() + 3600)
+        if verb == 'show' else dict(name='worker'))
     service = _service(tmp_path, monkeypatch)
 
     def refuse(*args, **kwargs):
