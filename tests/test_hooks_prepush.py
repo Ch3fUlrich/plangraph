@@ -473,6 +473,7 @@ def test_affected_gate_is_file_only_and_time_bounded(tmp_path, monkeypatch):
     assert hook['affected_gate'](tmp_path, 'base', 'head') == 0
     command, options = calls[0]
     assert '--files-only' in command and '--run' in command
+    assert command[command.index('--max-files') + 1] == '40'
     assert Path(command[1]).name == 'affected_tests.py'
     assert options['timeout'] <= 240
     forwarded_git_dir = options['env'].get('GIT_DIR')
@@ -557,3 +558,32 @@ def test_selector_timeout_uses_group_cleanup_on_each_platform(tmp_path, monkeypa
         assert created[0]['start_new_session'] is True
         assert killed[0] == (987654, 9)
     assert killed[-1] == 'parent'
+
+
+def test_capped_hook_timeout_still_refuses(tmp_path, monkeypatch, capsys):
+    import runpy
+    from types import SimpleNamespace
+    from fake_pid import FAKE_PID
+    selector = tmp_path / 'tools/affected_tests.py'
+    selector.parent.mkdir()
+    selector.touch()
+    hook = runpy.run_path(str(HOOK))
+    commands = []
+    class Process:
+        pid = FAKE_PID
+        waits = 0
+        def wait(self, timeout):
+            self.waits += 1
+            if self.waits == 1:
+                raise subprocess.TimeoutExpired('selector', timeout)
+            return -9
+        def kill(self):
+            pass
+    monkeypatch.setattr(subprocess, 'Popen', lambda command, **kw: commands.append(command) or Process())
+    globals_ = hook['affected_gate'].__globals__
+    monkeypatch.setitem(globals_, 'test_environment', lambda *a: {})
+    monkeypatch.setitem(globals_, 'os', SimpleNamespace(name='posix', environ={}, killpg=lambda *a: None))
+    monkeypatch.setitem(globals_, 'push_main', lambda: hook['affected_gate'](tmp_path, 'base', 'head', timeout=.01))
+    assert hook['main']() == 1
+    assert capsys.readouterr().err == 'pre-push: subprocess timeout: push refused\n'
+    assert commands[0][commands[0].index('--max-files') + 1] == '40'

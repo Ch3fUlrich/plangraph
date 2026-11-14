@@ -469,7 +469,7 @@ def test_local_shared_controls_have_bounded_smoke_coverage(tmp_path):
     module = selector()
     plan = module.select_tests(tmp_path, ['tests/conftest.py', 'tests/test_written.py'], files_only=True)
     assert 'tests/test_written.py' in plan['tests']
-    assert len(plan['tests']) <= module.SMOKE_LIMIT + 1
+    assert len(plan['tests']) <= module.LOCAL_FILE_CAP
     assert 'tests' not in plan['tests']
 
 
@@ -482,3 +482,95 @@ def test_local_unreadable_graph_refuses_instead_of_full_collection(tmp_path, mon
     monkeypatch.setattr(sys, 'argv', ['affected_tests.py', '--base', 'HEAD', '--changed', 'tests/test_broken.py', '--files-only', '--run'])
     assert module.main(root=tmp_path) == 1
     assert 'local-selection' in capsys.readouterr().err
+
+
+def _local_tree(root, files):
+    for name, text in files.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+
+@pytest.mark.parametrize('control', ['tests/conftest.py', 'pytest.ini', 'pyproject.toml',
+    'tools/hooks/pre-push', 'tools/preflight.py', 'tools/affected_tests.py'])
+def test_local_controls_select_own_hook_preflight_and_changed_tests(tmp_path, control):
+    own = {'tests/test_conftest_env.py', 'tests/test_hooks_prepush.py',
+           'tests/test_preflight.py', 'tests/test_preflight_git_env.py', 'tests/test_affected_tests.py'}
+    _local_tree(tmp_path, {**{p: '' for p in own},
+        'tests/test_written.py': 'def test_written(): pass\n',
+        **{f'tests/test_unrelated_{i:03}.py': 'def test_unrelated(): pass\n' for i in range(80)}})
+    result = selector().select_tests(tmp_path, [control, 'tests/test_written.py'], files_only=True)
+    assert set(result['tests']) == own | {'tests/test_written.py'}
+    assert result['tests'][0] == 'tests/test_written.py'
+
+
+def test_local_support_helper_selects_direct_importers(tmp_path):
+    _local_tree(tmp_path, {'tests/helpers.py': 'VALUE = 1\n',
+        'tests/test_direct.py': 'from helpers import VALUE\n',
+        'tests/test_unrelated.py': 'def test_unrelated(): pass\n'})
+    result = selector().select_tests(tmp_path, ['tests/helpers.py'], files_only=True)
+    assert result['tests'] == ['tests/test_direct.py']
+
+
+def test_local_cap_prioritizes_changed_then_direct_then_transitive(tmp_path):
+    direct = [f'tests/test_direct_{i:03}.py' for i in range(80)]
+    written = 'tests/test_z_written.py'
+    _local_tree(tmp_path, {'src/pkg/core.py': 'VALUE = 1\n',
+        'src/pkg/api.py': 'from pkg.core import VALUE\n',
+        **{p: 'from pkg.core import VALUE\n' for p in direct}, written: '',
+        'tests/test_00_indirect.py': 'from pkg.api import VALUE\n',
+        'tests/test_01_indirect.py': 'from pkg.api import VALUE\n'})
+    module = selector()
+    changes = ['src/pkg/core.py', written]
+    result = module.select_tests(tmp_path, changes, files_only=True)
+    assert result['tests'] == [written, *direct[:39]]
+    assert result['deferred'] == 43
+    assert module.select_tests(tmp_path, reversed(changes), files_only=True) == result
+
+
+def test_local_cap_applies_even_when_all_files_are_changed_tests(tmp_path):
+    files = {f'tests/test_written_{i:03}.py': '' for i in range(60)}
+    _local_tree(tmp_path, files)
+    result = selector().select_tests(tmp_path, reversed(files), files_only=True)
+    assert result['tests'] == sorted(files)[:40]
+    assert result['deferred'] == 20
+
+
+def test_local_cap_reports_files_left_to_ci_once(tmp_path, monkeypatch, capsys):
+    import json
+    import sys
+    _local_tree(tmp_path, {'src/pkg/core.py': 'VALUE = 1\n',
+        **{f'tests/test_direct_{i:03}.py': 'from pkg.core import VALUE\n' for i in range(45)}})
+    from types import SimpleNamespace
+    module, launched = selector(), []
+    monkeypatch.setattr(module, 'test_environment', lambda *a: {'FIXTURE': 'clean'})
+    monkeypatch.setattr(module.subprocess, 'run', lambda command, **kw:
+                        launched.append((command, kw)) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(sys, 'argv', ['affected_tests', '--base', 'unused', '--changed',
+                                    'src/pkg/core.py', '--files-only', '--run'])
+    assert module.main(root=tmp_path) == 0
+    output = capsys.readouterr()
+    selected = json.loads(output.out.splitlines()[0])['tests']
+    assert len(selected) == 40
+    assert [arg for arg in launched[0][0] if arg.endswith('.py')] == selected
+    assert launched[0][1]['env'] == {'FIXTURE': 'clean'}
+    assert output.err.splitlines() == ['affected tests: 5 files left to CI (local cap: 40 files)']
+
+
+@pytest.mark.parametrize('cap', [0, -1, 41])
+def test_local_cap_cannot_be_disabled_or_increased(tmp_path, monkeypatch, cap, capsys):
+    import sys
+    monkeypatch.setattr(sys, 'argv', ['affected_tests', '--base', 'unused',
+                                    '--files-only', '--max-files', str(cap)])
+    with pytest.raises(SystemExit) as err:
+        selector().main(root=tmp_path)
+    assert err.value.code == 2
+    assert '--max-files must be between 1 and 40' in capsys.readouterr().err
+
+
+def test_local_global_support_keeps_explicit_direct_importers_only(tmp_path):
+    _local_tree(tmp_path, {'tests/conftest.py': 'VALUE = 1\n',
+        'tests/test_z_direct.py': 'from conftest import VALUE\n',
+        'tests/test_a_indirect.py': 'from test_z_direct import VALUE\n'})
+    plan = selector().select_tests(tmp_path, ['tests/conftest.py'], files_only=True)
+    assert plan['tests'] == ['tests/test_z_direct.py']

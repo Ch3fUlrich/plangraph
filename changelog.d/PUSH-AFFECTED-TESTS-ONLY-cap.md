@@ -1,0 +1,1 @@
+- Cap local affected selection at 40 test files, prioritizing changed tests then sorted direct consumers and transitive consumers; target shared support coverage and report the count left to CI. The pre-push hook requests the cap explicitly, retains Git-binding scrubbing, and still refuses timeouts while cleaning up worker groups.

@@ -63,6 +63,10 @@ def filter_within(selected_tests, within):
 # Under docs/ and status/ only these documentation files select no tests.
 DOC_SUFFIXES = {".md", ".rst", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico"}
 SMOKE_LIMIT = 12
+LOCAL_FILE_CAP = 40
+LOCAL_CONTROLS = {'tools/hooks/pre-push', 'tools/preflight.py', 'tools/affected_tests.py'}
+CONTROL_TEST_PREFIXES = ('test_conftest', 'test_affected_tests', 'test_hooks_prepush',
+                         'test_pre_push', 'test_preflight')
 SMOKE_TEST = "tests/test_affected_tests.py"
 
 
@@ -79,21 +83,24 @@ def smoke_tests(texts, path):
     return set(near) | ({SMOKE_TEST} if SMOKE_TEST in texts else set())
 
 
-def local_control_tests(texts, path):
-    """Bounded file checks for suite controls; CI owns exhaustive fixture coverage."""
-    named = {name for name, text in texts.items()
-             if name.startswith('tests/') and Path(name).name.startswith('test_')
-             and not name.startswith('tests/browser/')
-             and (path in text or Path(path).name in text)}
-    near = smoke_tests(texts, path)
-    selected = set(sorted(named | near)[:SMOKE_LIMIT])
+def local_control_tests(texts, path, reverse, *, global_control=False):
+    """Direct support coverage, not the consumers of implicit global fixtures."""
+    selected = {name for name, text in texts.items()
+                if name.startswith('tests/') and Path(name).name.startswith('test_')
+                and (path in text or Path(path).name in text
+                     or global_control and Path(name).stem.startswith(CONTROL_TEST_PREFIXES))}
+    selected.update(reverse.get(path, ()))
     if SMOKE_TEST in texts:
         selected.add(SMOKE_TEST)
-    return selected
+    return {name for name in selected if name.startswith('tests/')
+            and Path(name).name.startswith('test_')}
 
 
-def select_tests(root, changed, within=None, *, files_only=False):
+def select_tests(root, changed, within=None, *, files_only=False, max_files=LOCAL_FILE_CAP):
     root = Path(root)
+    changed = {Path(path).as_posix() for path in changed}
+    if files_only and not 1 <= max_files <= LOCAL_FILE_CAP:
+        raise ValueError('local file cap must be between 1 and 40')
     paths = sorted(p for folder in ("src", "tests") for p in (root / folder).rglob("*.py"))
     modules = {}
     for p in paths:
@@ -136,9 +143,9 @@ def select_tests(root, changed, within=None, *, files_only=False):
         if files_only:
             return {"tests": [], "reason": "graph unreadable: " + str(exc), "error": True}
         return {"tests": filter_within(["tests"], within), "reason": "graph unreadable: " + str(exc)}
-    selected = set()
+    selected, direct = set(), set()
     asset_cache = {}
-    for raw in changed:
+    for raw in sorted(changed):
         path = Path(raw).as_posix()
         def fallback(reason):
             return {"tests": filter_within(["tests"], within), "reason": reason + ": " + path}
@@ -148,10 +155,12 @@ def select_tests(root, changed, within=None, *, files_only=False):
         suite_config = (p.name in {"pyproject.toml", "pytest.ini", "setup.cfg", "setup.py", "tox.ini"}
                         or p.name.startswith("requirements")
                         or path.startswith(".github/workflows/"))
+        if files_only and (suite_config or p.name == 'conftest.py' or path in LOCAL_CONTROLS):
+            coverage = local_control_tests(texts, path, reverse, global_control=True)
+            selected.update(coverage)
+            direct.update(coverage)
+            continue
         if suite_config:
-            if files_only:
-                selected.update(local_control_tests(texts, path))
-                continue
             return fallback("suite configuration")
         # docs/status trees and root files cannot affect tests; untracked scratch outside the
         # source roots is skipped; tracked files elsewhere map to tests naming them or full suite.
@@ -173,7 +182,9 @@ def select_tests(root, changed, within=None, *, files_only=False):
                 continue
         if p.name == "conftest.py" or (path.startswith("tests/") and not p.name.startswith("test_")):
             if files_only:
-                selected.update(local_control_tests(texts, path))
+                coverage = local_control_tests(texts, path, reverse)
+                selected.update(coverage)
+                direct.update(coverage)
                 continue
             return fallback("shared fixture")
         if p.parts[0] in {"src", "tests", "tools"} and path not in texts and p.suffix == ".py":
@@ -187,10 +198,13 @@ def select_tests(root, changed, within=None, *, files_only=False):
             seen.add(current)
             todo.extend(reverse.get(current, ()))
         hits = {s for s in seen if s.startswith("tests/") and Path(s).name.startswith("test_")}
+        direct.update(reverse.get(path, ()))
         # Include subprocess/dynamic consumers naming the file or module.
-        hits.update(s for s, text in texts.items() if s.startswith("tests/")
+        named = set(s for s, text in texts.items() if s.startswith("tests/")
                     and Path(s).name.startswith("test_")
                     and (p.name in text or path in text))
+        hits.update(named)
+        direct.update(named)
         if not hits and p.suffix in {".md", ".rst"}:
             continue  # prose no test names cannot change a test result (D-5827)
         if not hits:
@@ -198,7 +212,13 @@ def select_tests(root, changed, within=None, *, files_only=False):
             continue
         selected.update(hits)
     selected = {t for t in selected if not t.startswith("tests/browser/")}  # own CI job (D-2821)
-    return {"tests": filter_within(sorted(selected), within), "reason": "reverse imports and explicit file references"}
+    tests = filter_within(sorted(selected), within)
+    plan = {"tests": tests, "reason": "reverse imports and explicit file references"}
+    if files_only:
+        rank = lambda name: (0 if name in changed else 1 if name in direct else 2, name)
+        ordered = sorted(tests, key=rank)
+        plan.update(tests=ordered[:max_files], deferred=max(0, len(ordered) - max_files))
+    return plan
 
 
 def changed_files(root, base, head=None):
@@ -227,12 +247,16 @@ def main(root=None):
     parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
+    parser.add_argument("--max-files", type=int, default=LOCAL_FILE_CAP,
+                        help="local selection size, 1..40; CI owns the remainder")
     parser.add_argument("--maxfail", type=int, default=0)
     parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
     parser.add_argument("-n", "--workers", default="auto")
     parser.add_argument("--within", nargs="+", action="extend", help="restrict selection to given paths")
     parser.add_argument("--root", default=None, help="repository root")
     args = parser.parse_args()
+    if not 1 <= args.max_files <= LOCAL_FILE_CAP:
+        parser.error('--max-files must be between 1 and 40')
     if root is None:
         root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parents[1]
     else:
@@ -243,8 +267,11 @@ def main(root=None):
             if not (root / w).exists():
                 print(f"unknown --within path: {w}", file=sys.stderr)
                 return 2
-    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, files_only=args.files_only)
+    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, files_only=args.files_only, max_files=args.max_files)
     print(json.dumps(plan), flush=True)
+    if plan.get('deferred'):
+        print(f"affected tests: {plan['deferred']} files left to CI (local cap: {args.max_files} files)",
+              file=sys.stderr)
     if args.files_only and (plan.get('error') or any(not (root / path).is_file() for path in plan['tests'])):
         print('FAIL local-selection: cannot determine explicit test files; repair the graph or selection; full collection refused', file=sys.stderr)
         return 1

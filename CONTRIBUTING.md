@@ -3,8 +3,14 @@
 Before pushing, run `python3 tools/affected_tests.py --base origin/main --head HEAD --files-only --run`.
 The pre-push hook runs this selector automatically with a shared 240-second test
 budget, after ref safety, pushed-tree size policy, commit identity and scrub gates.
-It always selects explicit affected files; it never invokes the full suite or
-`tools/preflight.py`. `PREFLIGHT_SKIP` and `PREFLIGHT_FAST` do not bypass it.
+Local selection has a hard cap of 40 explicit test files: changed tests first,
+then direct importers and file-reference consumers, then transitive consumers,
+sorted within each group. Shared test controls (conftest, pytest configuration,
+selector, hook and preflight) select their own coverage plus hook/preflight tests,
+rather than the implicit global fixture fanout. The selector prints one line with
+the count left to CI when capped; `--max-files` may lower the cap but cannot raise
+it or disable it. Timeout still refuses the push and kills the selector's worker
+group. The hook never invokes the full suite or `tools/preflight.py`. `PREFLIGHT_SKIP` and `PREFLIGHT_FAST` do not bypass it.
 GitHub CI runs full verification. The standalone preflight command remains an
 explicit diagnostic tool, with its own per-family policy and timeouts. Private
 scrub words come from `PLANGRAPH_SCRUB_WORDS` or `~/.config/plangraph/scrub-words.txt`;
@@ -36,8 +42,8 @@ python tools/affected_tests.py --base origin/main --run -n auto  # writers / PR 
 python -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
 
-The affected selector falls back to the full suite for shared fixtures and suite
-configuration; unmapped code selects a bounded smoke set (tests naming its directory,
+CI selection without `--files-only` retains full-suite fallback for shared fixtures
+and suite configuration; unmapped code selects a bounded smoke set (tests naming its directory,
 at most 12, plus `tests/test_affected_tests.py`), and CI/main keep the full suite; documentation, `changelog.d/` fragments,
 build artifacts, and `.md`/`.rst`/`.txt` files no test names, select no tests. Under `docs/` and `status/` only documentation files (`.md`, `.rst`, images) select no tests; any other file there (`docs/conf.py`, `status/x.toml`) goes through the normal mapping. Do not bypass a conservative fallback on PRs.
 Pass `--head <revision>` for a committed-only comparison, excluding staged,

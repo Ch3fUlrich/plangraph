@@ -205,7 +205,7 @@ def test_environment(root, env):
 
 
 def affected_gate(root, base, head, timeout=240):
-    """Local pushes select explicit affected files; the full suite belongs to CI."""
+    """Run at most 40 explicit files within 240s; timeout refuses and CI owns the rest."""
     selector = Path(root) / 'tools/affected_tests.py'
     if not selector.is_file():
         print('pre-push: tools/affected_tests.py missing: push refused', file=sys.stderr)
@@ -214,7 +214,7 @@ def affected_gate(root, base, head, timeout=240):
         print('pre-push: affected-test budget exhausted: push refused', file=sys.stderr)
         return 1
     command = [PYTHON, str(selector), '--root', str(root), '--base', base,
-               '--head', head, '--files-only', '--run', '--workers', '2']
+               '--head', head, '--files-only', '--max-files', '40', '--run', '--workers', '2']
     try:
         env = test_environment(root, os.environ)
     except (OSError, subprocess.SubprocessError):
