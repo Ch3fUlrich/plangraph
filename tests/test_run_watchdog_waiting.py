@@ -51,3 +51,8 @@ def test_cpu_sample_records_visible_live_child(monkeypatch, state, expected):
     runner = SimpleNamespace(jobs={'job': job})
     assert asyncio.run(run_cpu.cpu_seconds(runner, 'job', 100, 1)) == 0
     assert job._watchdog_child_active is expected
+
+
+def test_idle_default_follows_card_stall_window():
+    limits = thresholds({'stall_min': 40}, role='implement')
+    assert limits['stuck_s'] == limits['stall_s'] + 300

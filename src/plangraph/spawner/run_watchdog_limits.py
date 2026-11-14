@@ -57,6 +57,7 @@ def thresholds(card=None, *, role=None):
     if not isinstance(card.get('hard_first_edit', False), bool): raise SpawnRefused('invalid watchdog threshold: hard_first_edit')
     if role != 'review' and card.get('hard_first_edit'): result['hard_first_edit'] = True
     for key, default in defaults.items():
+        if key == 'stuck_min': default = result['stall_s'] / 60 + 5
         value = card.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise SpawnRefused('invalid watchdog threshold: ' + key)
