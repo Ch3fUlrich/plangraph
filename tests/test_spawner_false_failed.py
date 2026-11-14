@@ -25,6 +25,7 @@ def monitor(monkeypatch, stderr, stdout=FINAL, code=5, status='running',
     async def reap(*args):
         pass
 
+    monkeypatch.setattr('plangraph.spawner.gateway_witness.witness', lambda *args: None)
     monkeypatch.setattr('plangraph.spawner.run_watchdog.collect', collect)
     runner = SimpleNamespace(jobs={'j': job}, _nonces={}, _child_envs={'j': {}},
                              _git_guards={}, _stdin_payloads={}, _adapter_tokens={},

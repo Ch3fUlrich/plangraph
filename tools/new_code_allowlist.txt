@@ -41,3 +41,4 @@ tests/test_spawner_oom_reason.py | D-5847 in-flight
 src/plangraph/routing_support/quota_snapshots.py | D-5847 in-flight
 tests/test_spawner_quota_failfast.py | D-5847 in-flight
 tests/test_keeper_origin_git_env.py | D-5847 in-flight
+src/plangraph/spawner/gateway_models.py | D-5840 rule 9.14: responsibility-only extraction of existing gateway model admission and row parsing below the 400-line gate; no new behaviour

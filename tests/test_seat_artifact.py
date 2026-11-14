@@ -173,21 +173,22 @@ def test_dispatch_hash_is_in_memory(tmp_path, monkeypatch, dry_run):
 def test_authenticated_finish_not_inferred(tmp_path):
     from plangraph.spawner.runner import SpawnerRunner
     instance = SpawnerRunner()
-    record, job = completed()
+    model = 'synthetic/gpt-6.1-sol'
+    record, job = completed(model)
     job.response_finish_reason = None
     instance.jobs[job.job_id] = job
     capability = object()
     instance._adapter_tokens[job.job_id] = capability
     with pytest.raises(ValueError):
-        instance.served_witness(job.job_id, 'synthetic/gpt-5',
+        instance.served_witness(job.job_id, model,
             adapter_token=object(), finish_reason='stop')
-    instance.served_witness(job.job_id, 'synthetic/gpt-5', adapter_token=capability)
+    instance.served_witness(job.job_id, model, adapter_token=capability)
     assert job.response_finish_reason is None
-    instance.served_witness(job.job_id, 'synthetic/gpt-5',
+    instance.served_witness(job.job_id, model,
         adapter_token=capability, finish_reason='stop')
     sa.publish(tmp_path, record, job)
     assert (tmp_path / 'evidence.json').exists()
-    instance.served_witness(job.job_id, 'synthetic/gpt-5', adapter_token=capability)
+    instance.served_witness(job.job_id, model, adapter_token=capability)
     assert job.response_finish_reason is None
     sa.publish(tmp_path, record, job)
     assert not (tmp_path / 'evidence.json').exists()

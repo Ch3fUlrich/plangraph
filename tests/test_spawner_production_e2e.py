@@ -705,7 +705,7 @@ def test_production_e2e_mcp_server_workflow(live_gateway: GatewayServerInfo, mon
     async def _test():
         from dataclasses import replace
         from plangraph.planner import legs
-        monkeypatch.setattr(legs, 'DEFAULT_LEGS', tuple(replace(l, model='mimo/mimo-v2.6-pro') if l.id == 'cx-gpt-6.1-sol-xhigh' else l for l in legs.DEFAULT_LEGS if l.model != 'mimo/mimo-v2.6-pro'))
+        monkeypatch.setattr(legs, 'DEFAULT_LEGS', tuple(replace(l, model='mimo/mimo-v2.6-pro', family='mimo') if l.id == 'cx-gpt-6.1-sol-xhigh' else l for l in legs.DEFAULT_LEGS if l.model != 'mimo/mimo-v2.6-pro'))
         runner = ProductionGatewayChildRunner(gateway_url=live_gateway.base_url)
         mcp_server = MCPSpawnerServer(runner=runner)
 
