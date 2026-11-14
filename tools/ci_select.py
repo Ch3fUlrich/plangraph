@@ -124,7 +124,7 @@ def select(paths: list[str]) -> dict[str, bool]:
     res["full"] = False
 
     for p in norm_paths:
-        if p.startswith(("src/plangraph/web/", "tests/browser/", "vendor/")) or p in ("tests/conftest.py", "pyproject.toml"):
+        if p.startswith(("src/plangraph/web/", "tests/browser/", "vendor/")) or p in ("tests/conftest.py", "pyproject.toml", "src/plangraph/render.py"):
             res["browser"] = True
         if any(fnmatchcase(p, pattern) for pattern in RUST_INPUTS):
             res["rust"] = True

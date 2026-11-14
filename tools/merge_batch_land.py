@@ -179,10 +179,11 @@ def require_full_run(repo, head, branch):
             or run.get("status") != "completed" or run.get("conclusion") != "success"):
         raise MergeBatchError(f"full_ci: tests run {run['id']} is not green on exact batch head {head}")
     attempt = run.get("run_attempt", 1)
-    def jobs_for(number):
+    def jobs_for(number, run_id=None):
+        run_id = run["id"] if run_id is None else run_id
         jobs, page = [], 1
         while True:
-            data = gh_json("api", f"{endpoint}/runs/{run['id']}/attempts/{number}/jobs?per_page=100&page={page}")
+            data = gh_json("api", f"{endpoint}/runs/{run_id}/attempts/{number}/jobs?per_page=100&page={page}")
             jobs.extend(data["jobs"])
             if len(jobs) >= data["total_count"]:
                 return jobs
@@ -199,6 +200,10 @@ def require_full_run(repo, head, branch):
     if missing or bad:
         raise MergeBatchError("full_ci: " + ", ".join([*(f"{n}=missing" for n in sorted(missing)), *bad]))
     reruns = []
+    for previous in runs:
+        if previous["id"] != run["id"]:
+            names = ", ".join(sorted(j["name"] for j in jobs_for(previous.get("run_attempt", 1), previous["id"])))
+            reruns.append(f"tests run {run['id']} replaces run {previous['id']} at {head}: {names}")
     for number in range(2, attempt + 1):
         names = ", ".join(sorted(j["name"] for j in jobs_for(number)))
         reruns.append(f"tests run {run['id']} attempt {number} at {head}: {names}")

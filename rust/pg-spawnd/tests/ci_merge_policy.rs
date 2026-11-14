@@ -10,12 +10,18 @@ fn python(source: &str) {
         .current_dir(root())
         .output()
         .unwrap();
-    assert!(output.status.success(), "{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
 fn prepush_refuses_invalid_trailers_before_scrub_or_preflight() {
-    python(r#"
+    python(
+        r#"
 import io, os, pathlib, runpy, subprocess, tempfile
 from unittest.mock import patch
 hook = runpy.run_path('tools/hooks/pre-push')
@@ -48,28 +54,32 @@ with tempfile.TemporaryDirectory() as tmp:
         finally:
             os.chdir(old)
         git('reset', '--hard', base)
-"#);
+"#,
+    );
 }
 
 #[test]
 fn browser_selection_and_failure_are_enforced() {
-    python(r#"
+    python(
+        r#"
 import sys
 sys.path.insert(0, 'tools')
 import ci_select as ci
 assert ci.select(['src/plangraph/keeper/store.py'])['browser'] is False
-for path in ['src/plangraph/web/app.js', 'tests/browser/test_ui.py', 'requirements-ci.txt', '.github/workflows/tests.yml', 'vendor/htmx.js', 'tests/conftest.py', 'pyproject.toml']:
+for path in ['src/plangraph/web/app.js', 'tests/browser/test_ui.py', 'requirements-ci.txt', '.github/workflows/tests.yml', 'vendor/htmx.js', 'tests/conftest.py', 'pyproject.toml', 'src/plangraph/render.py']:
     assert ci.select([path])['browser'] is True, path
 needs = {'select': {'result': 'success', 'outputs': {s: 'true' for s in ci.SUITES}}}
 needs.update({s: {'result': 'success'} for s in ci.ALWAYS + ci.SUITES})
 needs['browser']['result'] = 'failure'
 assert 'browser: failure' in ci.gate(needs)
-"#);
+"#,
+    );
 }
 
 #[test]
 fn full_tier_requires_windows_and_every_workflow_job() {
-    python(r#"
+    python(
+        r#"
 import pathlib, sys
 sys.path.insert(0, 'tools')
 import ci_select as ci
@@ -92,12 +102,14 @@ for name in ('pytest', 'pytest-postgres'):
     for step in jobs[name]['steps']:
         if 'affected_tests.py' in step.get('run', ''):
             assert "needs.select.outputs.full" in step['run'], step
-"#);
+"#,
+    );
 }
 
 #[test]
 fn land_requires_exact_full_run_and_records_reruns() {
-    python(r#"
+    python(
+        r#"
 import sys
 from unittest.mock import patch
 sys.path.insert(0, 'tools')
@@ -142,12 +154,14 @@ with patch.object(land, 'gh_json', side_effect=api):
     run['run_attempt'] = 2
     reruns = land.require_full_run('o/r', head, 'batch/test')
     assert reruns and 'rust-windows' in '\n'.join(reruns)
-"#);
+"#,
+    );
 }
 
 #[test]
 fn red_main_freezes_land_except_a_head_bound_go_row() {
-    python(r#"
+    python(
+        r#"
 import pathlib, sys, tempfile
 from unittest.mock import patch
 sys.path.insert(0, 'tools')
@@ -175,5 +189,6 @@ with patch.object(land, 'gh_json', side_effect=api), tempfile.TemporaryDirectory
         raise AssertionError('pending main accepted')
     except land.MergeBatchError:
         pass
-"#);
+"#,
+    );
 }
