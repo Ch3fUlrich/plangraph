@@ -1,6 +1,7 @@
 import json
 import hashlib
 import shlex
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone, timedelta
@@ -311,6 +312,16 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
     stage.mkdir()
     binary_dir = tmp_path / 'bin'
     binary_dir.mkdir()
+    (binary_dir / 'git').symlink_to(shutil.which('git'))
+    origin, repo = tmp_path / 'origin.git', tmp_path / 'repo'
+    def git(cwd, *args):
+        subprocess.run(['git', '-C', str(cwd), '-c', 'user.name=Test', '-c',
+                        'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', *args],
+                       check=True, capture_output=True)
+    git(tmp_path, 'init', '--bare', '-b', 'main', str(origin))
+    git(tmp_path, 'clone', str(origin), str(repo))
+    git(repo, 'commit', '--allow-empty', '-m', 'initial')
+    git(repo, 'push', 'origin', 'HEAD:main')
     policy = tmp_path / 'route-policy.json'
     policy.write_text('{"banned_families": [], "off_families": [], "paused_harnesses": {}}')
     env = dict(PATH=str(binary_dir), HOME=str(tmp_path), AUTOOS_ROOT=str(tmp_path),
@@ -344,7 +355,7 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
             return result
         return SimpleNamespace(returncode=0, stdout=str(stage) if argv[-1] == 'mktemp -d' else '{}')
     monkeypatch.setattr(o.subprocess, 'run', run)
-    host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src=str(source))
+    host = dict(ssh='invented-alias', repo=str(repo), spawner_src=str(source))
     options = ['--role', 'review', '--leg', 'agy-gemini-3.8-flash', '--writer-family', 'gpt',
                '--override-reason', 'hermetic prompt transport regression', '--dry-run', '--json']
     record = o.remote_spawn('invented', host, {'estimate_tokens': 1000}, prompt, options)

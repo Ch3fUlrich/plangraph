@@ -189,7 +189,7 @@ def spawn_runs(record):
 
 def spawn_exit_code(record):
     for run in spawn_runs(record):
-        if run.get('status') not in ('running', 'dry_run', 'completed'):
+        if run.get('status') not in ('running', 'dry_run', 'completed', 'queued'):
             return run.get('exit_code') or 1
     return 0
 
