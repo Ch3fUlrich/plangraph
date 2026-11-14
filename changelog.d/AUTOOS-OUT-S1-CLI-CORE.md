@@ -5,3 +5,5 @@ correct the setup documentation's Windows CI claim.
 
 Allow symlinked ancestors above the selected setup home while refusing links at
 or below it. Correct the Windows CI scope and use a scrub-safe dummy key path.
+
+Match KEY/PAT name parts without refusing ordinary PATH or COMPAT env keys.

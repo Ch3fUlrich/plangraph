@@ -19,7 +19,8 @@ config and state paths and check ownership/privacy before using them.
 
 The env file accepts uppercase keys, optional matching quotes, comments on their
 own lines and literal values (no expansion). Duplicate keys, invalid syntax and
-inline keys containing TOKEN, SECRET, PASSWORD, KEY or PAT are refused.
+inline keys containing TOKEN, SECRET, PASSWORD or API_KEY are refused, as are
+underscore-separated KEY or PAT name parts. Ordinary PATH/COMPAT names are allowed.
 Credential file paths ending in `_FILE` are permitted. Process credentials are
 not subject to the env-file prohibition. No env values appear in diagnostics.
 Setup preserves existing env values and comments and adds only missing defaults.

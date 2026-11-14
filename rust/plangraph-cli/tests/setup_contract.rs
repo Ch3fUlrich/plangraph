@@ -199,3 +199,27 @@ fn symlink_above_home_is_allowed_but_home_and_descendants_must_not_be_links() {
     assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
     assert_eq!(run(&alias, &text, Mode::Apply).0, 2);
 }
+
+#[test]
+fn ordinary_keys_containing_pat_or_key_substrings_remain_valid() {
+    let values =
+        env::parse("PATH=/usr/bin\nLD_LIBRARY_PATH=/lib\nCOMPAT_MODE=enabled\nMONKEY_COUNT=3\n")
+            .unwrap();
+    assert_eq!(values["PATH"], "/usr/bin");
+    assert_eq!(values["LD_LIBRARY_PATH"], "/lib");
+    assert_eq!(values["COMPAT_MODE"], "enabled");
+    assert_eq!(values["MONKEY_COUNT"], "3");
+    for key in [
+        "SERVICE_PAT",
+        "SERVICE_KEY",
+        "PAT",
+        "KEY",
+        "PAT_EXTRA",
+        "PRIVATE_KEY_DATA",
+    ] {
+        assert!(
+            env::parse(&format!("{key}=fixture")).is_err(),
+            "accepted inline {key}"
+        );
+    }
+}

@@ -21,9 +21,10 @@ pub fn parse(text: &str) -> Result<BTreeMap<String, String>, String> {
             return Err(format!("invalid env key on line {}", i + 1));
         }
         if !key.ends_with("_FILE")
-            && ["TOKEN", "SECRET", "PASSWORD", "KEY", "PAT"]
+            && (["TOKEN", "SECRET", "PASSWORD", "API_KEY"]
                 .iter()
                 .any(|s| key.contains(s))
+                || key.split('_').any(|part| matches!(part, "KEY" | "PAT")))
         {
             return Err(format!("inline secret refused on line {}", i + 1));
         }
