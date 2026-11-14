@@ -32,7 +32,8 @@ def wait_for_runtime_exit(pidfile):
         try:
             if '\nState:\tZ' in Path(f'/proc/{pid}/status').read_text():
                 return
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
+            # procfs can open successfully, then report ESRCH on read after exit.
             return
         time.sleep(0.01)
     pytest.fail(f'audit process {pid} survived its one-second deadline')

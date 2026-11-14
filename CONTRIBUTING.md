@@ -25,6 +25,8 @@ pytest session clears inherited bindings and disables global/system Git config
 before collection and test fixtures.
 Discovery failures refuse to launch tests. The hook's own Git and policy calls
 retain the caller's context; temporary test repositories keep their own hooks.
+Rust source changes always select `tests/test_spawner_import_guard.py` in affected
+CI runs; its tree-wide scan rejects Python command bodies depending on pytest or test helpers.
 
 `tools/merge_batch.py plan` and `build` fetch origin and measure each PR against
 `origin/<base>...<head sha>` with Git, so refresh merges and GitHub's truncated
