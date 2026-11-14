@@ -20,7 +20,7 @@ def world(tmp_path, request):
     w = World(tmp_path, backend=request.param)
     w.store.create_items(w.p("router"), [
         defn("OPENCODE-PW-ROTATE", project="server", kind="operator_task",
-             review_tier="high", evidence_kinds=["decision"]),
+             review_tier="high", evidence_kinds=["any"]),
         defn("GOAL", [KEY], project="server", kind="goal"),
     ])
     w.store.set_legacy_state(w.p("router"), KEY, "claimed")
@@ -68,7 +68,7 @@ def test_decision_write_requires_string_id(tmp_path, router, ref):
     w = World(tmp_path)
     try:
         w.store.create_items(w.p("router"), [
-            defn("A", evidence_kinds=["decision"]),
+            defn("A", evidence_kinds=["any"]),
             defn("G", ["A"], kind="goal"),
         ])
         epoch = to_claimed(w, "demo:A")

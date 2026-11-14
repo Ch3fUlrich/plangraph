@@ -91,17 +91,39 @@ def tier_needs_router(tier: str) -> bool:
     return tier == _DECISION_TIER
 
 
-def validated_decision_tier(tier: str, evidence_kinds: Any) -> str:
+def decision_tier_conflict(tier, evidence_kinds):
+    """A stored combination to warn about, but refuse on a new declaration."""
+    return tier != _DECISION_TIER and frozenset(evidence_kinds or []) == {'decision'}
+
+
+def validate_decision_edit(item, fields, principal):
+    """Unrelated edits preserve legacy data; tier/evidence declarations validate."""
+    return validated_decision_tier(
+        fields.get("review_tier", item.get("review_tier") or "standard"),
+        fields.get("evidence_kinds", item["evidence_kinds"]), principal=principal,
+        previous_evidence=item["evidence_kinds"], stored=not _TIER_FIELDS.intersection(fields))
+
+
+def validated_decision_tier(tier: str, evidence_kinds: Any, *, principal=None,
+                            previous_evidence=None, stored=False) -> str:
     """Return *tier*; a ``none`` item must have evidence_kinds == ['decision']
     or ['decision', 'commit'] (order-insensitive), or it is refused.
+    Stored imports and unrelated edits may retain a pre-existing reviewed
+    decision-only item; all other tier and authorization checks still apply.
     """
-    if tier == _DECISION_TIER:
-        kinds_list = list(evidence_kinds or [])
-        kinds_set = frozenset(kinds_list)
-        if len(kinds_list) != len(kinds_set) or kinds_set not in _ALLOWED_DECISION_KINDS:
-            raise Refused("validation",
-                          f"review_tier='none' requires evidence_kinds="
-                          f"['decision'] or ['decision', 'commit'], not {kinds_list}")
+    kinds_list = list(evidence_kinds or [])
+    kinds_set = frozenset(kinds_list)
+    if not stored and decision_tier_conflict(tier, kinds_list):
+        raise Refused('validation', "decision-only evidence requires review_tier='none'; "
+                      "set review_tier='none' or add the implementation evidence kinds")
+    if (principal is not None and principal.role != 'router'
+            and kinds_list == ['decision'] and list(previous_evidence or []) != ['decision']):
+        raise Refused('forbidden', 'only the router may declare decision-only evidence')
+    if tier == _DECISION_TIER and (
+            len(kinds_list) != len(kinds_set) or kinds_set not in _ALLOWED_DECISION_KINDS):
+        raise Refused("validation",
+                      f"review_tier='none' requires evidence_kinds="
+                      f"['decision'] or ['decision', 'commit'], not {kinds_list}")
     return tier
 
 

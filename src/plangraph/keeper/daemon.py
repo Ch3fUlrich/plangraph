@@ -81,6 +81,9 @@ def _make_store(conn, cfg):
 
 def run(cfg, *, host=None, port=None, ready=None):
     """Start the server and block until a signal; returns 0 on clean shutdown."""
+    if not cfg.repos.get('decisions'):
+        print('keeper: warning: missing repos.decisions; configure the decisions checkout '
+              'with ref origin/main for decision closes', file=sys.stderr)
     lock = kdb.lock_keeper(cfg.db, **cfg.db_options)
     conn = kdb.open_db(cfg.db, **cfg.db_options)
     server = None

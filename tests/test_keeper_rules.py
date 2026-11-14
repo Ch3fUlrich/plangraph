@@ -116,7 +116,7 @@ def test_edit_definition_open_only(w):
 # ------------------------------------------------------------------ evidence
 
 def test_submit_requires_evidence(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     epoch = to_claimed(w, key)
     with pytest.raises(Refused) as exc:
         w.store.submit(w.p("l1main"), key, epoch)
@@ -124,7 +124,7 @@ def test_submit_requires_evidence(w):
 
 
 def test_submit_refuses_unverified_evidence(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     w.verifiers["decision"].ok = False
     epoch = to_claimed(w, key)
     w.store.add_evidence(w.p("l1main"), key, epoch, "decision", {"id": "D-1"})
@@ -160,7 +160,7 @@ def test_verdict_reverifies_evidence(w):
 
 
 def test_router_batch_evidence_attaches(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     to_in_review(w, key)
     w.store.add_evidence_router(w.p("router"), key, "decision", {"id": "D-9"})
     rows = w.conn.execute("SELECT verified FROM evidence WHERE key=?", (key,)).fetchall()

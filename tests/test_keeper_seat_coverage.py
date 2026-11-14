@@ -61,7 +61,7 @@ def test_anthropic_claimant_uses_evidence_writer(w, model, code):
                                                    ("mimo-v2", None),
                                                    ("unknown-model", "family_unknown")])
 def test_no_commit_writer_model_then_legacy_fallback(w, writer_model, expected):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     to_in_review(w, key, who="claimant")
     w.conn.execute("UPDATE items SET claimed_by='legacy-owner', owner_family='anthropic', writer_model=? WHERE key=?",
                    (writer_model, key))
@@ -158,9 +158,7 @@ def test_hand_edit_leaf_identity_is_not_merge_identity(monkeypatch):
     assert git._writer_trailer("repo", SHA_A)["_writer_commit"] == SHA_A
 
 
-# --------------------------------------------------------------------------
 # 1. mixed-writer HIGH item: every writer family must be covered
-# --------------------------------------------------------------------------
 
 def test_high_mixed_writers_close_only_when_every_family_is_covered(w):
     covered, refused = seed(
@@ -190,9 +188,7 @@ def test_high_mixed_writers_close_only_when_every_family_is_covered(w):
     assert len(verdict_events(w, refused)) == 1
 
 
-# --------------------------------------------------------------------------
 # 2. two Claude seats are ONE family, even with a D-217 waiver
-# --------------------------------------------------------------------------
 
 def test_two_claude_seats_are_one_family(w):
     plain, waived = seed(
@@ -224,9 +220,7 @@ def test_two_claude_seats_are_one_family(w):
     assert len(verdict_events(w, waived)) == 0
 
 
-# --------------------------------------------------------------------------
 # 3. a sensitive (HIGH) item can never close on Claude seats alone
-# --------------------------------------------------------------------------
 
 def test_sensitive_high_cannot_close_with_claude_seats_only(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",),
@@ -247,9 +241,7 @@ def test_sensitive_high_cannot_close_with_claude_seats_only(w):
     assert len(verdict_events(w, key)) == 0
 
 
-# --------------------------------------------------------------------------
 # 4. standard item: one seat covers the sole writer, not a mixed pair
-# --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("seat,done,blamed", [
     ("rGoogle", True, None),
@@ -276,9 +268,7 @@ def test_standard_mixed_writers_need_every_family_covered(w, seat, done, blamed)
     assert verdict_events(w, key) == []
 
 
-# --------------------------------------------------------------------------
 # 5. standard item: Claude may review a single non-Claude writer
-# --------------------------------------------------------------------------
 
 def test_standard_single_writer_claude_seat_is_allowed(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
@@ -288,9 +278,7 @@ def test_standard_single_writer_claude_seat_is_allowed(w):
     assert result["reviews_passed"] == 1
 
 
-# --------------------------------------------------------------------------
 # 6. fail closed when a writer family cannot be resolved
-# --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("case", ["missing_writer", "unknown_model",
                                   "trailers_error"])
@@ -327,12 +315,28 @@ def test_writer_family_uses_only_the_first_trailer_token(w, trailer, family):
     assert w.store.verdict(w.p("rAnthropic1"), key, True, "covered")["state"] == "done"
 
 
-# --------------------------------------------------------------------------
-# 7. decision-only evidence has no commit writers: behaviour unchanged
-# --------------------------------------------------------------------------
+# 7. non-commit evidence has no commit writers on either close path
 
-def test_decision_only_item_has_no_commit_writers_and_still_closes(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+@pytest.mark.parametrize('tier', ['standard', 'high'])
+def test_decision_only_item_has_no_commit_writers_and_still_closes(w, tier):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
+    # Historical reviewed decision-only rows remain valid review inputs.
+    w.conn.execute("UPDATE items SET evidence_kinds='[\"decision\"]', review_tier=? WHERE key=?",
+                   (tier, key))
+    w.store.ctx = make_ctx(git=FakeGit())
+    to_in_review(w, key, who="claimant")
+    assert _cov().writer_families(w.store, w.store._item(key), w.store.ctx) == []
+    result = w.store.verdict(w.p("rGoogle"), key, True, "no commits")
+    if tier == 'high':
+        assert result['state'] == 'in_review'
+        result = w.store.verdict(w.p("rDeepseek"), key, True, "second family")
+    assert result['state'] == 'done'
+    assert result['reviews_passed'] == (2 if tier == 'high' else 1)
+    assert w.store._item(key)['state'] == 'done'
+
+
+def test_non_commit_item_has_no_commit_writers_and_still_closes(w):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     w.store.ctx = make_ctx(git=FakeGit())
     to_in_review(w, key, who="claimant")
     families = _cov().writer_families(
@@ -341,9 +345,7 @@ def test_decision_only_item_has_no_commit_writers_and_still_closes(w):
     assert w.store.verdict(w.p("rGoogle"), key, True, "no commits")["state"] == "done"
 
 
-# --------------------------------------------------------------------------
 # 8. ok=False is a change request, never a coverage refusal
-# --------------------------------------------------------------------------
 
 def test_changes_requested_with_uncovered_writer_is_not_refused_for_coverage(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
@@ -355,9 +357,7 @@ def test_changes_requested_with_uncovered_writer_is_not_refused_for_coverage(w):
     assert verdict_events(w, key) == []
 
 
-# --------------------------------------------------------------------------
 # 9. only the CLOSING high verdict is checked; a refusal appends nothing
-# --------------------------------------------------------------------------
 
 def test_first_high_verdict_is_not_checked_and_refusal_is_atomic(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",),
@@ -386,9 +386,7 @@ def test_first_high_verdict_is_not_checked_and_refusal_is_atomic(w):
     assert len(verdict_events(w, key)) == 2
 
 
-# --------------------------------------------------------------------------
 # 10. the pure function: table plus parity with tools/seat_verdict.coverage
-# --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("writers,seats,need,sensitive,want", [
     (["xiaomi"], ["anthropic", "anthropic"], 2, False, ["xiaomi"]),
