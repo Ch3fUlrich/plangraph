@@ -73,10 +73,10 @@ mapping for a crate covers its own paths, not shared workspace manifests or lock
 
 ### Rust builds and toolchain bumps
 
-Run Cargo from `rust/` (or a crate directory beneath it) so rustup reads
-`rust/rust-toolchain.toml`, the single Rust release pin shared with all CI jobs
-through `.github/actions/setup-rust`. Passing `--manifest-path` from the repository
-root does not select that toolchain locally. For example:
+The repository-root `rust-toolchain.toml` is the single Rust release pin shared
+with all CI jobs through `.github/actions/setup-rust`, including Windows.
+Rustup selects it from both the repository root and `rust/`, so root-level
+`cargo build --manifest-path rust/Cargo.toml` uses the same compiler as:
 
 ```bash
 cd rust
@@ -85,12 +85,17 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
 
-**Bump step:** open one PR that changes the channel in `rust/rust-toolchain.toml`
+Toolchain-only changes select all CI suites, the Python pin guards, and local Rust
+preflight checks.
+
+**Bump step:** open one PR that changes the channel in `rust-toolchain.toml`
 and fixes the new lints, without weakening `-D warnings`. Run every Rust CI job
 (`rust`, `rust-windows`, `rust-worker`, `rust-spike`) and require green before
 merging. Do not duplicate the version in workflows. The regression check is
 `python3 -m pytest -q -n 2 tests/test_ci_rust_toolchain.py`.
-It scans every workflow and local composite action, rejecting case-insensitive
+The Rust integration test `toolchain_pin` checks `rustc --version` from the root
+and `rust/` against that channel, without inherited `RUSTUP_TOOLCHAIN` overrides.
+The Python guard scans every workflow and local composite action, rejecting case-insensitive
 `RUSTUP_TOOLCHAIN` overrides (including container/service environments),
 `cargo +<toolchain>`, `rustup run <toolchain>` and direct rustup installation/selection.
 Only the shared setup may use actions whose names contain `rust` or `toolchain`.
@@ -347,3 +352,12 @@ The generated example batch declares tier `none` for new decision-only items; th
 
 Gemini retirement regressions preserve historical record reads while checking request
 admission and catalog filtering; AGY capability/witness activation requires evidence.
+
+Checkpoint 5 includes test worktree registry and caller snapshots; run its affected Python checks in an isolated clone.
+
+Checkpoint 14 covers remaining policy and sensitivity contracts. The sensitivity sweep
+uses synthetic leg state and checks all five stability seeds independently; run
+`python3 -m pytest -q -p no:cacheprovider tests/test_spawner_docs_contract.py`
+to verify reproducibility and CLI serialization.
+
+Checkpoint 7 includes review evidence records; run its affected Python checks in an isolated clone.

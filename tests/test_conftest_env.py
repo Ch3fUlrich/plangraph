@@ -1,5 +1,7 @@
 """The writer environment is scrubbed before test fixtures execute."""
 import os
+import subprocess
+import sys
 from pathlib import Path
 import pytest
 
@@ -120,3 +122,88 @@ def test_pytest_shards_preserve_groups_and_cover_every_case(shard_selector):
     assert sorted(x.nodeid for shard in shards for x in shard) == ['a', 'b', 'c', 'd']
     assert sum(any(x.nodeid == 'a' for x in shard) and any(x.nodeid == 'b' for x in shard) for shard in shards) == 1
     assert [[x.nodeid for x in shard_selector(list(reversed(items)), f'{n}/3')][::-1] for n in range(3)] == [[x.nodeid for x in shard] for shard in shards]
+
+
+@pytest.mark.parametrize('linked', [False, True])
+@pytest.mark.parametrize('change', ['add', 'remove', 'relocate'])
+def test_guard_detects_worktree_registry_changes(tmp_path, config_guard, linked, change):
+    repo, common = tmp_path / 'repo', tmp_path / 'metadata'
+    repo.mkdir()
+    (common / 'worktrees/old').mkdir(parents=True)
+    (common / 'config').write_text('[core]\n')
+    entry = common / 'worktrees/old/gitdir'
+    entry.write_text(str(tmp_path / 'old/tree/.git') + '\n')
+    if linked:
+        (repo / '.git').write_text('gitdir: ' + str(common / 'worktrees/old') + '\n')
+        (common / 'worktrees/old/commondir').write_text('../..\n')
+    else:
+        (repo / '.git').symlink_to(common, target_is_directory=True)
+    with pytest.raises(AssertionError, match='worktree registry changed'):
+        with config_guard(repo, registry_roots=(tmp_path,)):
+            if change == 'add':
+                (common / 'worktrees/new').mkdir()
+                (common / 'worktrees/new/gitdir').write_text(str(tmp_path / 'new/tree/.git') + '\n')
+            elif change == 'remove':
+                entry.unlink()
+            else:
+                entry.write_text(str(tmp_path / 'moved/tree/.git') + '\n')
+
+
+def test_guard_ignores_other_sessions_worktree_moves(tmp_path, config_guard, monkeypatch):
+    repo = tmp_path / 'repo'
+    metadata = repo / '.git'
+    other = metadata / 'worktrees/other'
+    other.mkdir(parents=True)
+    (metadata / 'config').write_text('[core]\n')
+    (metadata / 'HEAD').write_text('ref: refs/heads/main\n')
+    (other / 'gitdir').write_text(str(tmp_path / 'other/.git'))
+    with config_guard(repo, registry_roots=(tmp_path / 'test-owned',)):
+        (metadata / 'HEAD').write_text('ref: refs/heads/another-session\n')
+        (other / 'HEAD').write_text('b' * 40)
+        (other / 'gitdir').write_text(str(tmp_path / 'elsewhere/.git'))
+        read_text = Path.read_text
+        def disappearing(path, *args, **kwargs):
+            if path == other / 'gitdir': path.unlink()
+            return read_text(path, *args, **kwargs)
+        monkeypatch.setattr(Path, 'read_text', disappearing)
+
+
+@pytest.mark.parametrize('boundary', ['preflight', 'selector', 'pytest'])
+def test_test_environment_uses_git_discovery_and_removes_config_prefix(tmp_path, monkeypatch, boundary, request):
+    import runpy
+    from test_affected_tests import selector
+    root = Path(__file__).resolve().parents[1]
+    # Nested suites register their own conftest under the same Python module name.
+    # Exercise that collision even when this file is selected without those suites.
+    monkeypatch.setitem(sys.modules, 'conftest', object())
+    root_conftest = request.config.pluginmanager.get_plugin(str(root / 'tests/conftest.py'))
+    assert root_conftest is not None
+    helper = (runpy.run_path(str(root / 'tools/preflight.py'))['test_environment'] if boundary == 'preflight'
+              else selector().test_environment if boundary == 'selector' else root_conftest._test_environment)
+    inherited = dict(GIT_DIR='caller', GIT_FUTURE_BINDING='caller', GIT_PREFIX='prefix/',
+                     GIT_CONFIG='caller', GIT_CONFIG_GLOBAL='caller', GIT_CONFIG_NOSYSTEM='1',
+                     GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_7='caller', GIT_CONFIG_VALUE_7='caller',
+                     git_config_future='caller', PATH='preserved', GIT_SSH_COMMAND='preserved')
+    before = dict(inherited)
+    def discover(command, **kwargs):
+        assert command == ['git', 'rev-parse', '--local-env-vars']
+        assert kwargs['env'] == inherited
+        return 'GIT_DIR\nGIT_FUTURE_BINDING\n'
+    monkeypatch.setattr(subprocess, 'check_output', discover)
+    assert helper(tmp_path, inherited) == {'PATH': 'preserved', 'GIT_SSH_COMMAND': 'preserved'}
+    assert inherited == before  # Hook-owned Git calls retain their original context.
+
+
+def test_selector_git_discovery_failure_never_launches_tests(tmp_path, monkeypatch):
+    from test_affected_tests import selector
+    (tmp_path / 'tests').mkdir()
+    (tmp_path / 'tests/test_fixture.py').touch()
+    def unavailable(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, args[0])
+    monkeypatch.setattr(subprocess, 'check_output', unavailable)
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: pytest.fail('test process launched'))
+    module = selector()
+    monkeypatch.setattr(module, 'select_tests', lambda *a, **k: {'tests': ['tests/test_fixture.py']})
+    monkeypatch.setattr(sys, 'argv', ['affected_tests', '--base', 'HEAD', '--changed',
+                                   'tests/test_fixture.py', '--run'])
+    assert module.main(root=tmp_path) == 1

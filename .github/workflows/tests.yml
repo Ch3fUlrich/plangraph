@@ -251,13 +251,13 @@ jobs:
     env:
       PYTEST_SHARD: ${{ matrix.shard }}/3
       PG_KEEPER_BACKEND: postgres
-      # per-route keeper latency table at the end of the run (tests/contract/conftest.py)
-      PG_CONTRACT_LATENCY_DIR: /tmp/pg-contract-latency
       # root-cause hunt (CI-PG-CONTRACT-TIMEOUT): on a hung request dump the keeper's thread stacks
       PG_CONTRACT_ABORT_ON_TIMEOUT: "1"
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
+      - name: Isolate contract latency output
+        run: echo "PG_CONTRACT_LATENCY_DIR=$(mktemp -d "$RUNNER_TEMP/pg-contract-latency.XXXXXX")" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-rust
       - uses: actions/cache@v4
         with:
@@ -400,39 +400,18 @@ jobs:
             rust/worker/target
           key: rust-worker-dev-${{ runner.os }}-${{ hashFiles('rust/worker/Cargo.lock', 'rust/worker/Cargo.toml', 'rust/worker-core/Cargo.toml', 'rust/Cargo.toml') }}
       - uses: ./.github/actions/setup-temporal
-      - name: Start Temporal dev server
-        run: |
-          "$TEMPORAL_CLI" server start-dev --ip 127.0.0.1 --port 17233 > /tmp/temporal.log 2>&1 &
-          for i in $(seq 1 30); do
-            if "$TEMPORAL_CLI" operator cluster health --address 127.0.0.1:17233 2>/dev/null; then
-              echo "Temporal server is healthy"
-              break
-            fi
-            if [ "$i" -eq 30 ]; then
-              echo "Temporal server failed to start"
-              exit 1
-            fi
-            sleep 1
-          done
       - name: cargo fmt --check
         run: cargo fmt --check
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: cargo test
         env:
-          PG_TEMPORAL_ADDR: http://127.0.0.1:17233
           # Unit tests run attempts without the jail helper; the jail is covered by the rust job.
           PG_JAIL: "off"
           PG_TEST_ALLOW_UNJAILED: "1"
           # Inside the cached rust/worker/target: the guard's nested cargo checks stay warm between runs.
           PG_ADMISSION_GUARD_TARGET_DIR: ${{ github.workspace }}/rust/worker/target/admission-guard
-        run: cargo test
-      - name: Dev server log tail
-        if: always()
-        run: |
-          if [ -f /tmp/temporal.log ]; then
-            tail -n 100 /tmp/temporal.log
-          fi
+        run: cargo run --manifest-path ../Cargo.toml -p pg-spawnd --bin ci-temporal -- cargo test
 
   rust-spike:
     needs: select

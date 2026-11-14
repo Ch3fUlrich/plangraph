@@ -9,7 +9,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 SETUP = "./.github/actions/setup-rust"
-PIN = "rust/rust-toolchain.toml"
+PIN = "rust-toolchain.toml"
 
 
 def assert_no_toolchain_environment(owner, name):
@@ -74,9 +74,9 @@ def test_local_rust_toolchain_is_an_exact_release():
     assert re.fullmatch(r"\d+\.\d+\.\d+", toolchain["channel"])
     assert toolchain["profile"] == "minimal"
     assert set(toolchain["components"]) == {"rustfmt", "clippy"}
-    assert not (ROOT / "rust-toolchain.toml").exists()
+    assert (ROOT / "rust-toolchain.toml").is_file()
     assert not (ROOT / "rust-toolchain").exists()
-    assert list((ROOT / "rust").rglob("rust-toolchain.toml")) == [ROOT / PIN]
+    assert list((ROOT / "rust").rglob("rust-toolchain.toml")) == []
     assert not list((ROOT / "rust").rglob("rust-toolchain"))
 
 
@@ -238,7 +238,6 @@ def test_workflow_allows_shared_installer_and_normal_cargo_commands():
 def test_shared_installer_refuses_unpinned_channels(tmp_path, channel):
     action = yaml.safe_load((ROOT / ".github/actions/setup-rust/action.yml").read_text())
     pin = tmp_path / PIN
-    pin.parent.mkdir()
     pin.write_text(f'[toolchain]\nchannel = "{channel}"\n')
     output = tmp_path / "github-output"
     result = subprocess.run(
