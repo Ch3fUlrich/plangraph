@@ -166,3 +166,5 @@ f01bf0649761970ed338abea54bf2957c6b54cfc
 010a2acbbcabaf3417016177baf0c79b16cbb6ef
 # D-5870 #866 exempt row first committed on the PR branch without Gate-Edit, reverted there
 85816292002bf7a696e4b418563530ab3f545cf2
+# D-5890 #881 8f0f3005 test renamed and its seed widened; the decision-only close case is asserted again by tests/test_keeper_seat_coverage.py::test_decision_only_item_has_no_commit_writers_and_still_closes (597faf73); no history rewrite (D-3097)
+8f0f3005d1f1940d0cbe089ce4ea5dcc72fd01be
