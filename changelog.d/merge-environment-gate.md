@@ -5,3 +5,6 @@ Windows/browser results. Batch landing checks exact-head Actions jobs and
 records rerun attempts in the PR body.
 Batch landing freezes on missing, pending, red or cancelled main CI; the
 head-bound GO-row main-red-fix exception is explicit and logged.
+Seat cleanup fixtures use isolated, unsigned Git plumbing and no Windows console
+host; a signing-poison regression and 50-iteration cache-survival stress test
+retain the original reset assertions.
