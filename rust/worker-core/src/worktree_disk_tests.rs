@@ -133,6 +133,8 @@ asyncio.run(main())
         .env_remove("PLANGRAPH_SETTINGS")
         .env("PLANGRAPH_CARGO_TARGET_DIR", root.path().join("target"))
         .env("PLANGRAPH_CARGO_TARGET_CAP_GB", "0.0078125") // 8 MiB
+        // Cache-cap admission is independent of the temporary filesystem's free space.
+        .env("PLANGRAPH_DISK_FLOOR_GB", "0")
         .output()
         .unwrap();
     assert!(
