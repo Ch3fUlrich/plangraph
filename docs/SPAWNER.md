@@ -59,30 +59,9 @@ A tail therefore masks commit SHAs and long slash paths: take SHAs from git or t
 
 ### Prompt delivery
 
-Every harness and helper receives the prompt by stdin or file, never argv, for
-all prompt sizes on every OS (D-5233). Python's Linux OOM child inherits the stdin
-pipe; pg-spawnd uses the same launch-spec transport.
-Child env construction drops only known legacy task carriers (`PROMPT`, `PROMPT_TEXT`,
-`PROMPT_SUFFIX`, `TASK_PROMPT`, `PLANGRAPH_TASK_PROMPT`, case-insensitive), including
-overlays; unrelated shell/theme/template configuration survives. Rust refuses exact
-prompt carriers and embedded prompts of at least 16 bytes in argv/env, without
-mistaking short incidental substrings of flags or model names for task transport.
-SSH overflow passes a staged UTF-8 file to the real spawn CLI's `--prompt-file`
-option, preserving trailing newlines without shell command substitution.
-Request-budget refusals keep the launch adapter's exit status in their run record;
-pre-exec refusals without an exit code also retain the named `prompt_too_large` reason.
-Qoder retains an explicit empty `-p` value with `--input-format text`; missing prompt flags fail with
-`stdin_prompt_flag_missing` in launch-spec refusals and Python run records. All agy commands use
-`--input-format stream-json --output-format stream-json -p ""`, with
-one UTF-8 NDJSON user event on stdin followed by EOF. The last result's
-`response` supplies the answer and verdict; an ERROR or missing result fails
-explicitly, without publishing an unsuccessful response as an answer.
-OpenCode, Claude, Gemini and Qwen read text stdin; Codex uses `exec -`. Fleet sessions
-also read stdin; SSH overflow uses `--prompt-file` without shell expansion. Assembled
-prompts exceeding the leg budget (three chars/token) record `prompt_too_large`.
-Rejected stdin input or an unavailable/closed input pipe fails the run explicitly;
-the watchdog never retries a rejected payload as an empty prompt. Gateway config
-size refusal leaves the caller's environment unchanged.
+Prompts travel by stdin or file on every launch path (D-5233). See
+[spawner prompt rules](operations/spawner-prompt-rules.md) for transport contracts,
+carrier validation, failure behavior, fixer reports and retry bounds.
 
 ### MiMo seat timeouts and verdict packaging (MIMO-VERDICT-TIMEOUTS)
 
@@ -148,13 +127,14 @@ Terminal saves dispatch review verdicts to the keeper:
 - Remove both journal and marker explicitly to requeue after repair.
 - Delivery markers stop retries even when the completion field is absent.
 Spawn records take `item_key` (or the legacy `item` alias) from the card, falling back to `PLANGRAPH_SPAWN_ITEM` only when neither card field supplies a value. Python and `pg-spawnd` require an ASCII `project:ID` key (at most 200 characters total and 180 in the ID); invalid explicit values stay null with a warning rather than falling through to another identity. Prompt mentions never supply an item key. Review/judge records without a key retain a `seat_item_missing` warning event. Main's verdict outbox above is the only automatic posting path; record-derived posting refuses a `--key` that differs from a recorded `item_key`, including null. Legacy records without the field retain the manual CLI path.
+Python spawn identity removes repeated copies of the same project prefix before launching (for example, `demo:demo:KEY` becomes `demo:KEY`); other colon-qualified IDs remain intact. Record-derived completion SHAs must be exactly 40 hex characters, without trailing newlines; malformed heads refuse immediately rather than entering the persistence retry budget.
 The `evidence.json` manual path also refuses any supplied `item_key` or `key` that differs from `--key`, including null or conflicting aliases, before reading reviewer tokens or posting. Missing-seat events are deduplicated against launch events and remain persisted on dry runs and queue refusals.
 Companion records still bind the target when `evidence.json` is present: missing evidence identity cannot override a record's explicit null or different key, and malformed companion records fail closed. Git-config capture refusals also retain validated identity and launch/missing-seat events. The record-only path checks record identity independently of the evidence builder. Manual invocations always require `--key` (including legacy records); omission exits 2 before reading seat files or tokens. Non-dry completed Python dispatch saves also preserve missing-seat and launch events.
 `worker-core::writer_result::check_result` runs the mandatory Rust file-size
 gate before returning a checked result; export rechecks it before content gates,
 bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
 and no publish/push is attempted. Changed tracked files use the Python CI gate's
-400-line rule, exemptions, binary detection, splitlines counting and baseline
+800-line rule (D-5840), exemptions, binary detection, splitlines counting and baseline
 ratchet. CI still runs unchanged `tools/check_file_size.py` over all tracked files.
 The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI entry/skip-trailer rule, returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. Doc-only and empty commits do not require skip reasons; section boundaries include indented headings in both Rust and CI.
 The S1c Rust docs-map gate reads `.docs-map` from the committed head and compares changed paths over `merge-base(base, head)..head`. Each matching rule needs at least one mapped doc in that range; failures return `HOLD gate docs-map:` with unmatched `source -> doc` pairs before export/content gates or publication. Missing maps pass; malformed rules/dates hold. `# enforce-after:` begins enforcement inclusively on that local calendar date (earlier missing-doc matches do not hold); entries have no expiry syntax. CI retains its stricter union of merge-base and head policies, so removing head rules cannot disable CI enforcement. Shared JSON cases exercise Rust/Python parsing and glob parity.
@@ -320,7 +300,7 @@ and retains ordered creation evidence in `worktree_attempts`; `base_sha` is the
 attempt's starting commit (main head or continuation tip). A failed fixer creation
 records no worktree and a null cwd, never its parent's path. Runner `JobInfo.cwd`,
 process cwd and child PWD use that path. With the flag off, cwd is unchanged;
-dry runs create nothing. No worktrees are removed, no pg-reap lock sharing is
+dry runs create nothing. Admission fetches origin's default branch and refuses stale workers, continuations and seats (`base_stale`); a card `base_decision` needs scoped operator proof from the configured decision authority to waive known lag; cleanup removes only unadmitted attempts created by this run and never continuations; detached CLI waits for admission (180-second timeout: `base_admission_timeout`, exit 1); no pg-reap lock sharing is
 implemented, and enabling by default and the Rust port remain later slices.
 
 OpenCode gateway runs carry a per-job session tag for every role, including Sol
@@ -675,7 +655,6 @@ Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can
 Benchmark catalog and ranking invariants: see [verified benchmarks](spawner-benchmarks.md).
 
 Continue with [review protocol, interfaces, and operations](spawner-operations.md); see [OOM policy](../deploy/oom-policy.md) for repository checks versus live-pressure evidence.
-See [spawner prompt rules](operations/spawner-prompt-rules.md) for fixer reports and retry bounds.
 The served-model probe cache has a five-minute freshness bound,
 not a five-minute completion or delivery SLA; see the operations guide for details.
 
@@ -683,15 +662,16 @@ Cross-host ps: see [site configuration and transport](spawner-ps.md); [host read
 # Remote ps protocol
 
 The SSH ps endpoint serializes only running and queued records. Terminal history
-does not consume the 1 MiB transport budget; malformed terminal fields do not
-hide live runs. Malformed live replies and oversized replies name the queried
-host as unknown rather than silently omitting it.
+does not consume the 1 MiB transport budget.
+Malformed terminal fields do not hide live runs; malformed live or oversized replies name the queried host as unknown rather than silently omitting it.
 Rust source-filter tests and pytest's real `configured_hosts` checks consume
 `tests/fixtures/doctor_sources.json`, binding both validators and probe limits
 to the same accepted/rejected cases. Rust embeds JSON, never Python source or
 an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
 
 OOM wrapper lines are recognized by their known event shape, including `wrapper:` prefixes and extra metadata. The known event is retained in `events`; extra metadata is redacted into an `oom_telemetry_detail` event. Unknown or diagnostic-bearing envelopes remain in stderr. These untrusted telemetry events confer no provider identity or authorization. OpenCode structured `type=error` messages survive display-text decoding and supply attempt diagnostics. When all legs fail, the run reason selects the last real attempt before accumulated errors or stderr. The three Dell incident captures are replayed by `tests/test_spawner_oom_reason.py` using `tests/fixtures/spawner_dell_oom.json`. Failure classification also uses the route harness for jobs without command metadata and filters progress from a stored final-attempt reason.
+
+See [admission contracts](operations/spawner-admission-contracts.md) for split admission and cleanup details.
 
 Quota polling considers only the newest request of a session, including a 429 without text. Timestamp-less pool observations keep their first-seen hold until recovery; database reads select the latest row per window.
 Checkpoint 4: Fresh bases and registry guard is included in this checkpoint.
@@ -726,3 +706,8 @@ for benchmark foreign keys and never appears in the model list.
 
 Checkpoint 8: MCP source guard snapshots the derived transitive import closure, including function-level imports; lazy modules execute startup source after checkout updates while optional platform dependencies stay lazy. Non-object launch arguments return Invalid params on fresh servers and SourceChanged on stale servers.
 See [parallel CI isolation](ci-parallel.md) for test pipes and Temporal servers.
+Checkpoint 9: Worker core crate is included in this checkpoint.
+Checkpoint 6: Terminal events and run tree is included in this checkpoint.
+Checkpoint 3: Run watchdog and stall detection is included in this checkpoint.
+
+Review hard walls default to 25 minutes and implement/fix to 90 minutes; progressing runs retain these prior budgets. Read-only git status/diff/log and GitHub run/status polling do not count as tool loops. Queue expiry preserves records owned by live or unobservable supervisors.
