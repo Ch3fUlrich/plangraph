@@ -22,8 +22,8 @@ def selector():
     (["unknown.txt"], []),
     (["docs/guide.md", "status/card", "build/generated.py", "scratch.py"], []),
     (["tests/notes.md", "src/pkg/README.md"], []),
-    (["src/pkg/missing.py"], []),  # unmapped code: bounded smoke, no full suite
-    (["tools/new_tool.py"], []),  # unmapped code: bounded smoke, no full suite
+    (["src/pkg/missing.py"], ["tests"]),  # unresolved deletion: conservative fallback
+    (["tools/new_tool.py"], ["tests"]),  # unresolved deletion: conservative fallback
     (["out/generated.py", "docs/example.py", "status/card.md"], []),
     (["docs/guide.md", "src/pkg/core.py", "status/card"], ["tests/test_api.py"]),
     (["conftest.py"], ["tests"]),
@@ -431,3 +431,31 @@ def test_spawner_admission_selects_899_subprocess_regressions():
     plan = selector().select_tests(root, ['src/plangraph/spawner/base_fresh.py'])
     assert {'tests/test_spawner_overflow.py', 'tests/test_spawner_overflow_caps.py',
             'tests/test_run_exit_live.py'} <= set(plan['tests'])
+
+
+@pytest.mark.parametrize('path,importer,local', [
+    ('src/pkg/core.py', 'src/pkg/api.py', False),
+    ('tests/helper.py', 'tests/test_api.py', True),
+    ('tests/helper.py', 'tests/test_api.py', False),
+    ('tools/helper.py', 'tests/test_api.py', False),
+])
+def test_deleted_module_selects_base_importers(tmp_path, path, importer, local):
+
+    module = path.removeprefix('src/').removesuffix('.py').replace('/', '.')
+    git = _asset_repo(tmp_path, {
+        path: 'VALUE = 1', importer: f'from {module} import VALUE',
+    })
+    base = git('rev-parse', 'HEAD').strip()
+    (tmp_path / path).unlink()
+    # Use the base edges even when the head no longer has the old import.
+    (tmp_path / importer).write_text('VALUE = 2')
+    git('add', '.')
+    git('commit', '-qm', 'delete and change importer')
+    plan = selector().select_tests(tmp_path, [path], base=base, local=local, files_only=True)
+    assert plan['tests'] == ['tests/test_api.py']
+
+
+def test_deleted_unresolved_module_falls_back_to_suite(tmp_path):
+    _asset_repo(tmp_path, {'src/pkg/deleted.py': 'VALUE = 1'})
+    (tmp_path / 'src/pkg/deleted.py').unlink()
+    assert selector().select_tests(tmp_path, ['src/pkg/deleted.py'])['tests'] == ['tests']

@@ -49,7 +49,8 @@ python -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
 
 The selector follows static Python module launches (`-m`) and calls through
-`tools/*.sh`, including imports in shell Python heredocs.
+`tools/*.sh`, including imports in shell Python heredocs. Deleted Python modules
+use the base revision’s importer graph; unresolved importers select the full suite.
 The affected selector falls back to the full suite for shared fixtures and suite
 configuration; unmapped code selects a bounded smoke set (tests naming its directory,
 at most 12, plus `tests/test_affected_tests.py`), and CI/main keep the full suite; documentation, `changelog.d/` fragments,

@@ -3,6 +3,7 @@
 import argparse
 import ast
 import json
+import io
 import importlib.util
 import os
 import re
@@ -11,6 +12,7 @@ import subprocess
 import shutil
 import sys
 import time
+import tarfile
 
 
 def revision_asset(root, path, cache=None):
@@ -149,7 +151,25 @@ def dependency_graph(texts):
     return reverse
 
 
-def select_tests(root, changed, within=None, *, files_only=False, local=False):
+def base_dependency_graph(root, base, head):
+    """Read the comparison's merge base without restoring deleted checkout files."""
+    revision = subprocess.check_output(
+        ["git", "merge-base", base, head or "HEAD"], cwd=root,
+        stderr=subprocess.DEVNULL, text=True, timeout=30).strip()
+    archive = subprocess.check_output(["git", "archive", revision], cwd=root,
+                                      stderr=subprocess.DEVNULL, timeout=30)
+    texts = {}
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tree:
+        for entry in tree:
+            p = Path(entry.name)
+            if entry.isfile() and p.parts[0] in {"src", "tests", "tools"} and (
+                    p.suffix == ".py" or p.parts[0] == "tools" and p.suffix == ".sh"):
+                texts[entry.name] = tree.extractfile(entry).read().decode("utf-8")
+    return dependency_graph(texts)
+
+
+def select_tests(root, changed, within=None, *, files_only=False, local=False,
+                 base="HEAD", head=None):
     root = Path(root)
     texts = {}
     try:
@@ -164,6 +184,7 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False):
         return {"tests": filter_within(["tests"], within), "reason": "graph unreadable: " + str(exc)}
     selected = set()
     asset_cache = {}
+    base_reverse = None
     for raw in changed:
         path = Path(raw).as_posix()
         def fallback(reason):
@@ -197,14 +218,32 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False):
             # scratch files stay skippable here.
             if not revision_asset(root, path, asset_cache):
                 continue
+        if p.parts[0] in {"src", "tests", "tools"} and path not in texts and p.suffix == ".py":
+            try:
+                if base_reverse is None:
+                    base_reverse = base_dependency_graph(root, base, head)
+                for dep, consumers in base_reverse.items():
+                    reverse.setdefault(dep, set()).update(consumers)
+            except (OSError, subprocess.SubprocessError, tarfile.TarError,
+                    SyntaxError, UnicodeError):
+                return fallback("deleted module graph unreadable")
+            seen, todo = set(), [path]
+            while todo:
+                current = todo.pop()
+                if current not in seen:
+                    seen.add(current)
+                    todo.extend(reverse.get(current, ()))
+            hits = {s for s in seen if s in texts and s.startswith("tests/")
+                    and Path(s).name.startswith("test_") and not s.startswith("tests/browser/")}
+            if not hits:
+                return fallback("deleted module importers unresolved")
+            selected.update(hits)
+            continue
         if p.name == "conftest.py" or (not local and path.startswith("tests/") and not p.name.startswith("test_")):
             if files_only:
                 selected.update(local_control_tests(texts, path))
                 continue
             return fallback("shared fixture")
-        if p.parts[0] in {"src", "tests", "tools"} and path not in texts and p.suffix == ".py":
-            selected.update(smoke_tests(texts, path))
-            continue
         seen, todo = set(), [path]
         while todo:
             current = todo.pop()
@@ -272,7 +311,8 @@ def main(root=None):
             if not (root / w).exists():
                 print(f"unknown --within path: {w}", file=sys.stderr)
                 return 2
-    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, files_only=args.files_only, local=args.local)
+    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, files_only=args.files_only, local=args.local,
+                        base=args.base, head=args.head)
     print(json.dumps(plan), flush=True)
     if args.local and args.run and "tests" in plan["tests"]:
         print('local preflight refuses the full suite; specify affected test files with --within', file=sys.stderr)
