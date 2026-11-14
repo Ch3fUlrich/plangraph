@@ -36,6 +36,17 @@ fn git(repo: &Path, args: &[&str]) -> String {
 }
 fn fixture() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::create_dir(tmp.path().join("bin")).unwrap();
+        fs::write(tmp.path().join("bin/systemctl"), "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(
+            tmp.path().join("bin/systemctl"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
     let seed = tmp.path().join("source");
     fs::create_dir(&seed).unwrap();
     git(&seed, &["init", "-qb", "main"]);
@@ -50,6 +61,14 @@ fn fixture() -> tempfile::TempDir {
 fn run(cwd: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
         .current_dir(cwd)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                cwd.join("bin").display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
         .args(args)
         .output()
         .unwrap()
@@ -140,3 +159,100 @@ fn direct_children_and_symlink_children_are_discovered() {
     assert!(text.contains("linked"));
 }
 
+#[test]
+fn nested_path_never_fetches_or_reads_parent_config() {
+    let tmp = fixture();
+    let repo = tmp.path().join("checkout");
+    let before = git(&repo, &["rev-parse", "HEAD"]);
+    fs::create_dir(repo.join("nested")).unwrap();
+    let out = run(tmp.path(), &["--repo", "checkout/nested"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), before);
+    assert_ne!(
+        git(&repo, &["rev-parse", "origin/main"]),
+        git(&tmp.path().join("source"), &["rev-parse", "HEAD"])
+    );
+    let out = run(
+        tmp.path(),
+        &[
+            "--repo",
+            "checkout/nested",
+            "--check-config",
+            "--host",
+            "test",
+            "--allow-name",
+            "Fixture",
+            "--allow-email",
+            "test@example.invalid",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8(out.stdout)
+        .unwrap()
+        .contains("reason=fetch-failed"));
+}
+#[cfg(unix)]
+#[test]
+fn bounded_status_continues_to_next_repository() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = fixture();
+    let bin = tmp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let real = Command::new("which").arg("git").output().unwrap();
+    let real = String::from_utf8(real.stdout).unwrap();
+    fs::write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\ncase \"$*\" in *checkout*status*) sleep 3;; esac\nexec {} \"$@\"\n",
+            real.trim()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
+    git(tmp.path(), &["clone", "-q", "source", "next"]);
+    let start = std::time::Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
+        .current_dir(tmp.path())
+        .args(["--repo", "checkout", "--repo", "next"])
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .env("PG_REPO_SYNC_TIMEOUT_SECS", "1")
+        .output()
+        .unwrap();
+    assert!(start.elapsed() < std::time::Duration::from_millis(2500));
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8(out.stdout)
+        .unwrap()
+        .contains("reason=tracked-changes"));
+    assert_eq!(
+        git(&tmp.path().join("next"), &["rev-parse", "HEAD"]),
+        git(&tmp.path().join("source"), &["rev-parse", "HEAD"])
+    );
+}
+#[cfg(unix)]
+#[test]
+fn live_unit_checkout_is_reported_and_unchanged() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = fixture();
+    let bin = tmp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(bin.join("systemctl"), format!("#!/bin/sh\ncase \"$*\" in *list-units*) echo 'keeper.service loaded active running Keeper';; *show*) echo '{}';; esac\n", tmp.path().join("checkout").display())).unwrap();
+    fs::set_permissions(bin.join("systemctl"), fs::Permissions::from_mode(0o755)).unwrap();
+    let before = git(&tmp.path().join("checkout"), &["rev-parse", "HEAD"]);
+    let out = Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
+        .current_dir(tmp.path())
+        .args(["--repo", "checkout"])
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .output()
+        .unwrap();
+    assert!(String::from_utf8(out.stdout).unwrap().contains("live-unit"));
+    assert_eq!(
+        git(&tmp.path().join("checkout"), &["rev-parse", "HEAD"]),
+        before
+    );
+}
