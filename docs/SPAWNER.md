@@ -703,7 +703,7 @@ older databases. D-5903 enables Hydrogen high for implement after Sol and medium
 Both inherit the agy Claude capability bounds and remain unwitnessed: AGY emits no served-model telemetry.
 Historical records remain readable; the retired benchmark model row exists only
 for benchmark foreign keys and never appears in the model list.
-
+Native Codex writer placement and lifecycle: [run contract](native-codex-writer.md).
 Checkpoint 8: MCP source guard snapshots the derived transitive import closure, including function-level imports; lazy modules execute startup source after checkout updates while optional platform dependencies stay lazy. Non-object launch arguments return Invalid params on fresh servers and SourceChanged on stale servers.
 See [parallel CI isolation](ci-parallel.md) for test pipes and Temporal servers.
 Checkpoint 9: Worker core crate is included in this checkpoint.
