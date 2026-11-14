@@ -125,3 +125,5 @@ Earlier reconciliation notes above describe historical behavior, not current adm
 
 Deployment retirement tombstones are cleanup history: apply prunes the removed
 model-named combos and clean routes that have no remaining servable legs.
+
+D-5903 round 3 explicitly retains the Hydrogen tools review seat for cards without `diff_ref`, including when Mimo/OpenCode/Muse seats are unavailable. Like other agy tools seats it reviews the selected checkout (explicit `cwd`, otherwise the runner default); a no-diff card does not request an automatic checkout of another revision. Hydrogen reviews use read-only plan mode.

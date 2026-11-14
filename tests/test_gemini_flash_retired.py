@@ -184,6 +184,8 @@ def test_deployment_prunes_removed_combos_instead_of_leaving_stale_routes():
 
 
 def test_no_diff_review_keeps_hydrogen_when_other_seats_unavailable():
+    # Operator round 3 explicitly requires no-diff reviews to keep this tools seat;
+    # like other agy tools seats, it reads the selected working tree in plan mode.
     def reader(model, **kwargs):
         unavailable = any(name in model for name in ('mimo', 'opencode', 'muse', 'deepseek'))
         return dict(state='exhausted' if unavailable else 'available', evidence={})
@@ -209,9 +211,10 @@ def test_retired_separator_variants_refused_before_target_resolution(separator):
 
 
 @pytest.mark.parametrize('role', ['review', 'implement'])
-def test_agy_tools_command_uses_plan_only_for_review(role):
+@pytest.mark.parametrize('model', ['gemini-4-hydrogen-medium', 'Gemini-4-Hydrogen-medium'])
+def test_agy_tools_command_uses_plan_only_for_review(role, model):
     from plangraph.routing_support.clients import build_standalone_fallback_command
-    cmd = build_standalone_fallback_command('agy', 'review', 'gemini-4-hydrogen-medium',
+    cmd = build_standalone_fallback_command('agy', 'review', model,
                                             role=role, tool_mode='tools')
     if role == 'review':
         assert cmd[cmd.index('--mode') + 1] == 'plan'
