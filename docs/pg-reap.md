@@ -64,7 +64,9 @@ collection remain unwired. No deployment has been performed.
 Before deleting any expired branch, the executor requires its exact tip to be
 reachable from a remote-tracking ref. An unpushed tip refuses cleanup and keeps
 the branch, including when its worktree was already removed. Backup archives
-are not substitutes for this commit-history witness.
+are not substitutes for this commit-history witness. Remote-tracking refs are
+read as last fetched; the retention run does not refresh them. The caller must
+fetch the repository separately when a fresh remote view is required.
 Terminal outcomes do not prove idleness: immediately before backup and again
 before removal, Linux procfs scans compare process start tokens around cwd reads
 and protect processes anywhere inside the tree. An unreadable process inventory

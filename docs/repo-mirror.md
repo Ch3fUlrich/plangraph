@@ -144,3 +144,8 @@ contain only their paths. A killed worker cannot publish later; abandoned stagin
 is swept by the next locked fetch, with the existing crash-recovery guarantees.
 The deadline regression uses a hanging fake fetch-worker executable followed by
 a real local fetch; no Git fetch subprocess or network service is introduced.
+
+Retention uses the work repository's remote-tracking refs as last fetched and
+does not refresh them during a retention run. This mirror's separate bare main
+and watermark do not update those refs. Fetch the work repository separately
+when cleanup needs a fresh remote view.
