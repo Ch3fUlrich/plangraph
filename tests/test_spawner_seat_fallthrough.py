@@ -331,8 +331,8 @@ def test_empty_review_timeout_keeps_ordinary_maximum(monkeypatch):
     monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', '')
     monkeypatch.setattr('time.time', lambda: 1000)
     limits = thresholds(role='review')
-    assert limits['max_s'] == 90 * 60
-    assert leg_limits(dict(role='review', started=1000), limits)['deadline'] == 6400
+    assert limits['max_s'] == 10 * 60
+    assert leg_limits(dict(role='review', started=1000), limits)['deadline'] == 1600
 
 
 def test_uncapped_review_dispatch_can_fall_through(replay):
