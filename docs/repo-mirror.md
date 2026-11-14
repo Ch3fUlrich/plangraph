@@ -88,3 +88,5 @@ Keeper ready-file startup code and its contract harness predate this round and
 are not mirror wiring. The startup regression allows benign health retries while
 checking every probe's child-owned endpoint (including non-200 and OSError
 retries). Keeper mirror wiring remains a later slice.
+
+Mirror test fixtures use worker-core’s shared Git test helper, including integration tests through the `test-support` dev feature. Hook Git redirects and host HOME/XDG configuration cannot select a repository outside their temporary fixture.

@@ -185,3 +185,12 @@ def test_workflow_requires_language_job():
     workflow = yaml.safe_load((CHECKER.parents[1] / ".github/workflows/tests.yml").read_text())
     assert "new-code-lang" in workflow["jobs"]
     assert "new-code-lang" in workflow["jobs"]["ci-gate"]["needs"]
+
+
+@pytest.mark.parametrize('path,expected', [('src/new_module.py', 0), ('tools/new_tool.sh', 0),
+                                          ('src/new_module.js', 1),
+                                          ('tests/nested/test_regression.py', 0)])
+def test_project_allowlist_retains_main_operator_interim_policy(repo, path, expected):
+    rules = CHECKER.with_name('new_code_allowlist.txt').read_text()
+    result = check(repo, {'tools/new_code_allowlist.txt': rules, path: 'new content\n'})
+    assert result.returncode == expected, result.stdout
