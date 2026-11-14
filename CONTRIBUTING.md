@@ -33,6 +33,7 @@ install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 The MCP snapshot guard and D-5661 Python freshness gate have path-specific `tools/new_code_allowlist.txt` entries
 with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
 The D-5504/D-5506 `mcp_tools.py` exception only splits schema data out of the full Python MCP transport; it also retires with MCP-RUST.
+Interim (operator D-5830): `**/*.py` and `**/*.sh` are allowlisted, so new Python and shell files pass the new-code gate; Rust stays the preferred language for new code, and the gate, its CI job and its tests stay in place for the other blocked extensions. Keep both OOM diagnostic regression and quota snapshot module/test entries in `tools/new_code_allowlist.txt` when merging these concurrent in-flight changes.
 
 ```bash
 python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
@@ -177,6 +178,10 @@ Every commit message ends with one trailer paragraph — no blank lines inside i
 Plan-Item: plangraph:<KEY>
 Co-Authored-By: <author> <noreply@example.com>
 ```
+
+A merged commit whose trailers fail the CI commit gate is never rewritten. A router decision adds its full sha to
+`tools/ci_commit_exempt.txt` in a commit that carries `Gate-Edit: D-<id>` in the same trailer paragraph. The gate reads
+the list from the base commit, so the row has to merge to `main` before the pull request that holds the commit can pass.
 
 ## No secrets in the history
 
@@ -338,6 +343,8 @@ Rust Git fixtures share `pg_worker_core::git_test_support` (unit tests or the `t
 
 Local preflight invokes `affected_tests.py --files-only`: changed test files and reverse-import consumers remain explicit files, while workflow/config/shared-fixture changes add bounded smoke coverage instead of selecting `tests/`. An unreadable graph refuses local selection. CI keeps the conservative full-suite fallback. The affected-test limit remains 240 seconds; Rust checks also receive an environment without inherited `GIT_*` controls.
 
+Python files already in flight are individually listed in
+`tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
 
 Local preflight combines `--local` shared-asset consumer traversal with `--files-only` bounded suite-control checks, using `origin/main` for test selection when available. Scrub and policy retain their pushed-range baselines.

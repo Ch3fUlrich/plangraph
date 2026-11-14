@@ -1,0 +1,10 @@
+[Unit]
+Description=Check subscription quota thresholds every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+Unit=plangraph-quota-alarms.service
+
+[Install]
+WantedBy=timers.target

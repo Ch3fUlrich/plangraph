@@ -1,5 +1,6 @@
 """Shared dispatch outcome policy for base and routed launches."""
 import atexit
+import json
 
 from plangraph.routing_support.leg_state import _down_seconds
 from .env_redact import first_reason, harness_limit_line, unavailable_reason
@@ -22,9 +23,23 @@ def is_opencode(job):
     return bool(command and Path(command[0]).name == 'opencode')
 
 
-def failure_reason(job, stop=None):
-    text = without_progress(job.stderr) if is_opencode(job) else job.stderr
-    return first_reason(text) or ('provider_stop' if stop else f'harness exit code {job.exit_code}')
+def failure_reason(job, stop=None, *, harness=None):
+    opencode = harness == 'opencode' or is_opencode(job)
+    text = without_progress(job.stderr) if opencode else job.stderr
+    reason = first_reason(text)
+    if not reason and opencode:
+        reason = next((first_reason(e.get('message') or '') for e in reversed(getattr(job, 'events', ()))
+                       if e.get('event') == 'opencode_error' and e.get('message')), None)
+    if not reason and opencode:
+        for line in getattr(job, 'stdout', '').splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            error = event.get('error') if isinstance(event, dict) and event.get('type') == 'error' else None
+            if isinstance(error, dict) and isinstance(error.get('message'), str):
+                reason = first_reason(error['message']) or reason
+    return reason or ('provider_stop' if stop else f'harness exit code {job.exit_code}')
 
 
 def refusal_record(record, job):
@@ -232,7 +247,7 @@ def fallthrough_reason(service, chosen, job, record):
         return 'provider_stop'
     # Review/seat failures exhaust the existing route, not the whole run.
     # Ordinary failures carry diagnostics, not booking/notification evidence.
-    return reason or (failure_reason(job) if record.get('role') == 'review'
+    return reason or (failure_reason(job, harness=getattr(chosen, 'harness', None)) if record.get('role') == 'review'
                       and not getattr(job, 'survivors', ())
                       and job.status in ('failed', 'skipped', 'limited') else None)
 
@@ -274,6 +289,9 @@ def terminal_reason(record, job=None):
     leg = real[-1].get('leg') if real else None
     leg = leg if isinstance(leg, dict) else {}
     opencode = is_opencode(job) or (record.get('chosen_leg') or leg).get('harness') == 'opencode'
+    last_reason = real[-1].get('skip_reason') if real else None
+    if opencode and last_reason:
+        last_reason = without_progress(last_reason)
     if opencode:
         for field in ('reason', 'error'):
             if record.get(field):
@@ -311,8 +329,8 @@ def terminal_reason(record, job=None):
             # r3: 'timed_out' is the review wall-cap spelling of 'timeout'
             if last.get('status') in ('timeout', 'timed_out'):
                 reason = 'timeout'
-            elif not (last.get('skip_reason') or '').startswith('harness_limit'):
-                reason = last.get('skip_reason') or reason
+            elif not (last_reason or '').startswith('harness_limit'):
+                reason = last_reason or reason
         record['reason'] = reason
         return
     if record.get('exit_code') not in (None, 0):
@@ -325,7 +343,7 @@ def terminal_reason(record, job=None):
                 and not stdout.lstrip().startswith(('{', '['))):
             record['reason'] = 'exit1_after_stdout'
             return
-        record['reason'] = (reason or record.get('error')
+        record['reason'] = (reason or last_reason or record.get('error')
                             or first_reason(stderr)
                             or f"harness exit {record['exit_code']}")
 

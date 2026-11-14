@@ -51,7 +51,7 @@ from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notif
 from .git_guard import prepare_worktree, writer_launch
 from .base_fresh import admit_base
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
-from . import proc_kill
+from . import proc_kill, env_redact
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
 from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry, mismatch_flag, witness_native  # re-export: tests import and patch these on runner
 
@@ -701,14 +701,22 @@ class SpawnerRunner:
                                                         or self.jobs[job_id].survivors
                                                         or getattr(self.jobs[job_id], 'refusal', None)) else proc.returncode
             job = self.jobs[job_id]
-            for line in stderr_text.splitlines():
+            kept = []
+            for line in stderr_text.splitlines(keepends=True):
+                telemetry = proc_kill.oom_envelope(line)
+                if telemetry is not None:
+                    proc_kill.record_oom_envelope(job.events, telemetry)
+                    extras = {k: v for k, v in telemetry.items() if k != 'plangraph_oom'}
+                    if extras:
+                        job.events.append(dict(event='oom_telemetry_detail', detail=redact_output(
+                            env_redact.redact_env_values(json.dumps(extras), self._child_envs.get(job_id, os.environ)))))
+                    continue
+                kept.append(line)
                 try:
                     envelope = json.loads(line)
                 except (ValueError, TypeError):
                     continue
                 if not isinstance(envelope, dict) or set(envelope) != {'autoos_provider_response'}:
-                    from .proc_kill import record_oom_envelope
-                    record_oom_envelope(job.events, envelope)
                     continue
                 response = envelope['autoos_provider_response']
                 if not isinstance(response, dict) or response.get('nonce') != self._nonces.get(job_id) or not self._nonces.get(job_id):
@@ -723,13 +731,13 @@ class SpawnerRunner:
                         and all(isinstance(k, str) and isinstance(v, str) for k, v in response['headers'].items())):
                     self.provider_response(job_id, **response, source='stderr_envelope',
                                            nonce=self._nonces[job_id])
-            from .env_redact import redact_env_values
+            stderr_text = ''.join(kept)
             env = self._child_envs.get(job_id, os.environ)
             from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer, record_steps
             record_steps(job, stdout_text, stderr_text, env)
             decoded, stderr_text, exit_code = native_answer(job, answer_text(stdout_text) if is_opencode(job) else stdout_text, stderr_text, exit_code)
-            job.stdout = redact_output(redact_env_values(decoded, env))
-            job.stderr = redact_output(redact_env_values(stderr_text, env))
+            job.stdout = redact_output(env_redact.redact_env_values(decoded, env))
+            job.stderr = redact_output(env_redact.redact_env_values(stderr_text, env))
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
@@ -785,7 +793,7 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-claude-stream'
                 # D-3649: the review text (VERDICT line) is the stream's final result, not the raw stream.
                 await asyncio.to_thread(render_review_output, job, stdout_text,
-                                        lambda text: redact_output(redact_env_values(text, env)))
+                                        lambda text: redact_output(env_redact.redact_env_values(text, env)))
 
             await witness_native(self, job_id, job, stdout_text, requested_model)
             # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
@@ -918,7 +926,8 @@ def spawn_service(*args, **kwargs):
                     record[stream + '_tail'] = getattr(job, stream, '')
                 for attempt in record.get('attempts', []):
                     if attempt.get('status') in ('failed', 'skipped') and not attempt.get('skip_reason'):
-                        attempt['skip_reason'] = redact(failure_reason(job))
+                        meta = attempt.get('leg')
+                        attempt['skip_reason'] = redact(failure_reason(job, harness=meta.get('harness') if isinstance(meta, dict) else None))
             terminal = record.get('ended') is not None and record.get('status') != 'running'
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
             if not retry:
@@ -1130,7 +1139,7 @@ def spawn_service(*args, **kwargs):
                             job.status = 'failed'
                             job.exit_code = job.exit_code or 1
                         if job.status in ('failed', 'skipped'):
-                            reason = redact(failure_reason(job, stop))
+                            reason = redact(failure_reason(job, stop, harness=chosen.harness))
                         if unavailable:
                             reason = redact(unavailable)
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
