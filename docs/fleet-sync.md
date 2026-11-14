@@ -44,6 +44,8 @@ markers suppress the second observer. Linked worktrees use their own HEAD and
 worktree path. Every stub exits zero, including runtime/import/missing-script
 failures. The runtime starts in the background with its own session via `setsid`,
 with stdin, stdout and stderr redirected to `/dev/null`; Git never waits for it.
+Log writes may finish after Git returns. The shell snapshots the process chain
+before detaching so the originating Git process remains in the audit record.
 An external `timeout -s KILL 1` bounds interpreter startup and runtime, and the
 runtime also arms its own alarm. Without `setsid` or `timeout`, the hook skips
 observation. Audit remains best-effort: deadline expiry or errors may omit

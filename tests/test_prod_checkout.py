@@ -1,10 +1,11 @@
 """Production checkout alarms and HEAD audit use disposable repositories only."""
 import asyncio
-import json
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from prod_audit_util import wait_for_audit
 
 from plangraph.fleet_sync import drift
 from plangraph.fleet_sync.__main__ import main
@@ -73,12 +74,17 @@ def test_hook_install_dry_run_and_head_moves(repo, tmp_path, monkeypatch):
     assert not state.exists()
     monkeypatch.setenv('PYTHONPATH', str(Path(__file__).resolve().parents[1] / 'src'))
     assert main(['install-audit', '--repo', str(repo), '--state-dir', str(state), '--apply']) == 0
+    script = state / 'head-audit.py'
+    # Force Git's process to exit before the detached runtime inspects ancestors.
+    script.write_text('import time; time.sleep(0.1)\n' + script.read_text())
     first = git(repo, 'rev-parse', 'HEAD')
     git(repo, 'checkout', '-b', 'topic')
     git(repo, 'commit', '--allow-empty', '-m', 'second')
     second = git(repo, 'rev-parse', 'HEAD')
     git(repo, 'checkout', '--detach', first)
-    rows = [json.loads(line) for line in (state / 'head-moves.jsonl').read_text().splitlines()]
+    rows = wait_for_audit(state, lambda rows: any(
+        row['old_sha'] == second and row['new_sha'] == first for row in rows)
+        and any(row['new_sha'] == second for row in rows), 'log commit and checkout HEAD moves')
     moves = [row for row in rows if row['old_sha'] == second and row['new_sha'] == first]
     assert len(moves) == 1
     assert moves[0]['branch'] == 'detached'

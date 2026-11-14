@@ -114,18 +114,22 @@ def test_detached_runtime_still_has_external_deadline(audit_checkout):
                 pass
 
 
-@pytest.mark.parametrize('bounded', [True, False])
+@pytest.mark.parametrize('bounded', [True, False, 'detached'])
 def test_installer_upgrades_prior_foreground_stubs(audit_checkout, bounded):
     repo, state, _, _ = audit_checkout
     for name in ('post-checkout', 'reference-transaction'):
         hook = repo / '.git/hooks' / name
-        foreground = hook.read_text().replace(
+        content = hook.read_text()
+        # Reconstruct installed stubs from before ancestor snapshots were added.
+        prior = content[:content.index('# Capture ancestors')] + content[content.index('setsid timeout '):]
+        prior = prior.replace(' "$@" </dev/null', ' </dev/null')
+        foreground = prior.replace(
             'command -v setsid >/dev/null 2>&1 || exit 0\n', '').replace(
             'setsid timeout ', 'timeout ', 1).replace(' &\nexit 0\n', ' || true\nexit 0\n')
         if not bounded:
             foreground = foreground.replace('command -v timeout >/dev/null 2>&1 || exit 0\n', '').replace(
                 'timeout -s KILL 1 ', '', 1)
-        hook.write_text(foreground)
+        hook.write_text(prior if bounded == 'detached' else foreground)
     drift.install_audit(repo, state, apply=True)
     drift.install_audit(repo, state, apply=True)
     for name in ('post-checkout', 'reference-transaction'):

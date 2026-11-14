@@ -24,7 +24,7 @@ def process_chain():
     return chain
 
 
-def record(state, worktree, old, new, branch, gitdir, *, max_bytes=1024 * 1024):
+def record(state, worktree, old, new, branch, gitdir, *process_stats, max_bytes=1024 * 1024):
     """Serialize append/rotation under the runtime deadline; never scan the log."""
     import fcntl
     import json
@@ -48,8 +48,14 @@ def record(state, worktree, old, new, branch, gitdir, *, max_bytes=1024 * 1024):
         except (OSError, ValueError, IndexError, UnicodeError):
             pass
     state = Path(state)
+    chain = []
+    for stat in process_stats:
+        start, end = stat.index('('), stat.rindex(')')
+        chain.append({'pid': int(stat[:start].strip()),
+                      'ppid': int(stat[end + 2:].split()[1]),
+                      'comm': stat[start + 1:end]})
     row = {'time': datetime.now(UTC).isoformat(), 'old_sha': old, 'new_sha': new,
-           'worktree': worktree, 'branch': branch, 'process_chain': process_chain()}
+           'worktree': worktree, 'branch': branch, 'process_chain': chain or process_chain()}
     line = (json.dumps(row, ensure_ascii=True) + '\n').encode()
     lock_fd = os.open(state / 'head-audit.lock', os.O_WRONLY | os.O_CREAT, 0o600)
     with os.fdopen(lock_fd, 'wb') as lock:

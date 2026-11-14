@@ -6,6 +6,8 @@ import time
 
 import pytest
 
+from prod_audit_util import wait_for_audit
+
 from plangraph.fleet_sync import drift
 
 
@@ -57,6 +59,8 @@ def test_one_runtime_per_checkout_and_linked_tree_identity(checkout, tmp_path):
     __root, state, first, run = checkout
     linked = tmp_path / 'linked'
     run('worktree', 'add', '-b', 'linked-branch', str(linked))
+    wait_for_audit(state, lambda rows: any(row['worktree'] == str(linked) for row in rows),
+                   'log the initial linked worktree checkout')
     script = state / 'head-audit.py'
     # Count starts independently of log dedupe; both hooks share the runtime.
     original = script.read_text()
@@ -64,13 +68,15 @@ def test_one_runtime_per_checkout_and_linked_tree_identity(checkout, tmp_path):
     script.write_text(f'with open({str(counter)!r}, "a") as f: f.write(repr(__import__("sys").argv)+"\\n")\n' + original)
     counter.write_text('')
     subprocess.run(['/usr/bin/git', '-C', str(linked), 'checkout', '--detach', first], check=True, capture_output=True)
+    rows = wait_for_audit(state, lambda rows: rows and rows[-1]['branch'] == 'detached',
+                          'log the detached linked worktree checkout')
     assert len(counter.read_text().splitlines()) == 1, counter.read_text()
-    rows = [json.loads(line) for line in (state / 'head-moves.jsonl').read_text().splitlines()]
     assert rows[-1]['worktree'] == str(linked)
     assert rows[-1]['branch'] == 'detached'
     assert run('symbolic-ref', '--short', 'HEAD') == 'main'
     subprocess.run(['/usr/bin/git', '-C', str(linked), 'checkout', 'linked-branch'], check=True, capture_output=True)
-    rows = [json.loads(line) for line in (state / 'head-moves.jsonl').read_text().splitlines()]
+    rows = wait_for_audit(state, lambda rows: rows and rows[-1]['branch'] == 'linked-branch',
+                          'log the linked branch checkout')
     assert rows[-1]['worktree'] == str(linked) and rows[-1]['branch'] == 'linked-branch'
 
 
@@ -89,11 +95,14 @@ def test_log_rotation_keeps_one_previous_file(checkout):
     log = state / 'head-moves.jsonl'
     log.write_bytes(b'x' * (1024 * 1024))
     run('checkout', '--detach', first)
+    wait_for_audit(state, lambda rows: rows and rows[-1]['new_sha'] == first,
+                   'rotate and log the checkout')
     backup = log.with_suffix('.jsonl.1')
     assert backup.stat().st_size == 1024 * 1024
     assert log.stat().st_size < 4096
     assert json.loads(log.read_text())['new_sha'] == first
     run('update-ref', 'HEAD', run('rev-parse', 'main'))
+    wait_for_audit(state, lambda rows: len(rows) == 2, 'log the subsequent HEAD update')
     assert len(list(state.glob('head-moves.jsonl.*'))) == 1
 
 

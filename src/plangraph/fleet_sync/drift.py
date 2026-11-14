@@ -152,9 +152,25 @@ marker="$state/last-$key"
 ''' + selection + '\n' + dedupe + '\n'
             + 'command -v timeout >/dev/null 2>&1 || exit 0\n'
             + 'command -v setsid >/dev/null 2>&1 || exit 0\n'
-            + shlex.join(
+            + '''# Capture ancestors before Git returns and they disappear from /proc.
+# Log writes may finish after Git returns.
+set --
+pid=$$
+count=0
+while [ "$pid" -gt 0 ] && [ "$count" -lt 128 ]; do
+    IFS= read -r stat 2>/dev/null < "/proc/$pid/stat" || break
+    set -- "$@" "$stat"
+    fields=${stat##*) }
+    parent=${fields#* }
+    parent=${parent%% *}
+    case "$parent" in ''|*[!0-9]*) break ;; esac
+    [ "$parent" != "$pid" ] || break
+    pid=$parent
+    count=$((count + 1))
+done
+''' + shlex.join(
                 ['setsid', 'timeout', '-s', 'KILL', '1', python, '-I', '-S', str(script), str(state)])
-            + ' "$PWD" "$old" "$new" "$branch" "$gitdir" </dev/null >/dev/null 2>&1 &\nexit 0\n')
+            + ' "$PWD" "$old" "$new" "$branch" "$gitdir" "$@" </dev/null >/dev/null 2>&1 &\nexit 0\n')
 
 
 def install_audit(repo, state_dir, *, apply=False):
@@ -171,11 +187,13 @@ def install_audit(repo, state_dir, *, apply=False):
         old_command = [sys.executable, '-m', 'plangraph.fleet_sync', 'head-move',
                        '--repo', str(repo), '--state-dir', str(state_dir), '--hook', name, '--']
         legacy = '#!/bin/sh\nexec ' + shlex.join(old_command) + ' "$@"\n'
-        foreground = content.replace('command -v setsid >/dev/null 2>&1 || exit 0\n', '').replace(
+        prior = content[:content.index('# Capture ancestors')] + content[content.index('setsid timeout '):]
+        prior = prior.replace(' "$@" </dev/null', ' </dev/null')
+        foreground = prior.replace('command -v setsid >/dev/null 2>&1 || exit 0\n', '').replace(
             'setsid timeout ', 'timeout ', 1).replace(' &\nexit 0\n', ' || true\nexit 0\n')
         previous = foreground.replace('command -v timeout >/dev/null 2>&1 || exit 0\n', '').replace(
             'timeout -s KILL 1 ', '', 1)
-        if path.exists() and path.read_text() not in (content, foreground, previous, legacy):
+        if path.exists() and path.read_text() not in (content, prior, foreground, previous, legacy):
             raise ValueError('existing hook; integrate it explicitly before installing audit')
         hooks[path] = content
     if apply:
