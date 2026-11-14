@@ -1,4 +1,6 @@
 //! Repository context primitives.
+pub mod hygiene_cli;
+pub mod keeper_hygiene;
 pub mod keeper_reconcile;
 pub mod keeper_truth;
 pub mod mirror;

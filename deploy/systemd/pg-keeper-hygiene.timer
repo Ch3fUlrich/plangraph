@@ -1,0 +1,10 @@
+[Unit]
+Description=Report keeper hygiene daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=pg-keeper-hygiene.service
+
+[Install]
+WantedBy=timers.target

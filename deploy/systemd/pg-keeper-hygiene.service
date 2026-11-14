@@ -1,0 +1,9 @@
+[Unit]
+Description=Publish daily report-only keeper hygiene classes
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/plangraph/hygiene.env
+StateDirectory=pg-keeper-hygiene
+ExecStart=%h/.local/bin/pg-ctx lint-now ${SNAPSHOT} ${DECISIONS} %S/pg-keeper-hygiene/status.json
+TimeoutStartSec=5min
