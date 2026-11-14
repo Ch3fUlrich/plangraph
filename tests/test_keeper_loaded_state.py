@@ -1,6 +1,8 @@
 import json
 import os
 import subprocess
+import shutil
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -18,12 +20,7 @@ def checkout(tmp_path, monkeypatch):
     git(repo, 'init', '-b', 'main')
     git(repo, 'config', 'user.name', 'Fixture')
     git(repo, 'config', 'user.email', 'fixture@example.invalid')
-    files = {'src/plangraph/__init__.py': '', 'src/plangraph/shared.py': 'def later():\n    from . import nested\n    from tools import keeper_helper\n    return nested.VALUE\n',
-             'tools/__init__.py': '', 'tools/keeper_helper.py': 'VALUE = 1\n',
-             'src/plangraph/nested.py': 'VALUE = 1\n',
-             'src/plangraph/keeper/__init__.py': '',
-             'src/plangraph/keeper/daemon.py': 'from plangraph import shared\n',
-             'src/plangraph/spawner/unused.py': 'VALUE = 1\n'}
+    files = {'src/plangraph/keeper/daemon.py': 'VALUE = 1\n'}
     for name, text in files.items():
         path = repo / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -39,6 +36,7 @@ def checkout(tmp_path, monkeypatch):
 def test_daemon_writes_loaded_sha_pid_and_start_time(checkout, tmp_path, monkeypatch):
     repo, _, loaded = checkout
     monkeypatch.setattr(daemon, 'CODE_TREE', repo, raising=False)
+    monkeypatch.setattr(daemon, 'LOADED_IDENTITY', (loaded, 'main', False), raising=False)
     cfg = SimpleNamespace(db=tmp_path / 'keeper.db')
     path = daemon.write_loaded_state(cfg)
     row = json.loads(path.read_text())
@@ -70,30 +68,45 @@ def test_daemon_publishes_loaded_state_for_its_lifetime(tmp_path):
             process.wait(timeout=5)
 
 
-@pytest.mark.parametrize('kind', ['dirty', 'detached', 'non-git'])
+@pytest.mark.parametrize('kind', ['dirty', 'detached', 'non-git', 'nested', 'skip-worktree', 'assume-unchanged'])
 def test_loaded_state_describes_checkout_provenance(checkout, tmp_path, monkeypatch, kind):
     repo, _, loaded = checkout
     if kind == 'dirty':
         (repo / 'src/plangraph/keeper/daemon.py').write_text('DIRTY = True\n')
     elif kind == 'detached':
         git(repo, 'checkout', '--detach')
+    elif kind == 'nested':
+        repo = repo / 'install'
+        repo.mkdir()
+    elif kind in ('skip-worktree', 'assume-unchanged'):
+        git(repo, 'update-index', '--' + kind, 'src/plangraph/keeper/daemon.py')
+        (repo / 'src/plangraph/keeper/daemon.py').write_text('DIRTY = True\n')
     else:
         repo = tmp_path
     monkeypatch.setattr(daemon, 'CODE_TREE', repo)
+    monkeypatch.setattr(daemon, 'LOADED_IDENTITY', (loaded, None if kind == 'detached' else 'main', False), raising=False)
     row = json.loads(daemon.write_loaded_state(SimpleNamespace(db=tmp_path / 'provenance.db')).read_text())
-    assert row['loaded_branch'] == ('main' if kind == 'dirty' else None)
-    assert row['dirty'] is (True if kind == 'dirty' else False if kind == 'detached' else None)
+    dirty = kind in ('dirty', 'skip-worktree', 'assume-unchanged')
+    assert row['loaded_branch'] == ('main' if dirty else None)
+    assert row['dirty'] is (True if dirty else False if kind == 'detached' else None)
     assert row['loaded_sha'] == (loaded if kind == 'detached' else None)
 
 
 
-def test_bounded_clean_exit_unlinks_state_before_exit_and_lock_release(tmp_path, monkeypatch):
+@pytest.mark.parametrize('unlink_fails', [False, True])
+def test_bounded_clean_exit_unlinks_state_before_exit_and_lock_release(tmp_path, monkeypatch, unlink_fails):
     import signal
     from test_keeper_daemon import make_db_and_config
 
     db, config_path = make_db_and_config(tmp_path, 0)
     cfg = daemon.config_mod.load_config(config_path)
     state = db.with_name(db.name + '.loaded.json')
+    unlink = type(state).unlink
+    def remove(path, *args, **kwargs):
+        if path == state and unlink_fails:
+            raise PermissionError('unlink denied')
+        return unlink(path, *args, **kwargs)
+    monkeypatch.setattr(type(state), 'unlink', remove)
     real_thread = daemon.threading.Thread
     real_lock = daemon.kdb.lock_keeper
     exits, releases = [], []
@@ -124,6 +137,7 @@ def test_bounded_clean_exit_unlinks_state_before_exit_and_lock_release(tmp_path,
     monkeypatch.setattr(daemon.os, '_exit', exit_now)
     servers = []
     def ready(server):
+        assert state.exists()
         servers.append(server)
         signal.raise_signal(signal.SIGTERM)
     try:
@@ -134,5 +148,53 @@ def test_bounded_clean_exit_unlinks_state_before_exit_and_lock_release(tmp_path,
             server.shutdown()
             server.stop_reaper()
             server.server_close()
-    assert exits == [(0, False)]
-    assert releases == [False]
+    assert exits == [(0, unlink_fails)]
+    assert releases == [unlink_fails]
+
+
+def test_loaded_state_refuses_write_failure(tmp_path, monkeypatch, capsys):
+    from plangraph.routing_support import private_io
+    from test_keeper_daemon import make_db_and_config
+    _, cfg = make_db_and_config(tmp_path, 0)
+    def fail(*args):
+        raise OSError('disk full')
+    monkeypatch.setattr(private_io, 'atomic_write_private', fail)
+    result = daemon.main(['--config', str(cfg)])
+    assert result == 1
+    assert capsys.readouterr().err == 'keeper: REFUSED loaded-state publication: disk full\n'
+
+
+def test_head_moves_during_publication(checkout, tmp_path, monkeypatch):
+    from plangraph.routing_support import private_io
+    repo, _, loaded = checkout
+    monkeypatch.setattr(daemon, 'CODE_TREE', repo)
+    monkeypatch.setattr(daemon, 'LOADED_IDENTITY', (loaded, 'main', False), raising=False)
+    write = private_io.atomic_write_private
+    def moving(path, text):
+        write(path, text)
+        git(repo, 'commit', '--allow-empty', '-m', 'moved')
+    monkeypatch.setattr(private_io, 'atomic_write_private', moving)
+    row = json.loads(daemon.write_loaded_state(SimpleNamespace(db=tmp_path / 'moved.db')).read_text())
+    assert row['loaded_sha'] is None and row['dirty'] is None
+
+
+def test_head_moves_before_keeper_import(checkout, tmp_path):
+    repo, _, _ = checkout
+    shutil.copytree(daemon.CODE_TREE / 'src/plangraph', repo / 'src/plangraph', dirs_exist_ok=True)
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-m', 'package')
+    script = """
+import builtins, json, subprocess
+from types import SimpleNamespace
+original = builtins.__import__
+def importing(name, *args, **kwargs):
+    if name == 'views':
+        subprocess.run(['git', 'commit', '--allow-empty', '-qm', 'moved'], check=True)
+    return original(name, *args, **kwargs)
+builtins.__import__ = importing
+from plangraph.keeper import daemon
+print(daemon.write_loaded_state(SimpleNamespace(db='keeper.db')).read_text())
+"""
+    row = json.loads(subprocess.check_output([sys.executable, '-c', script], cwd=repo,
+                     env={**os.environ, 'PYTHONPATH': str(repo / 'src')}, text=True))
+    assert row['loaded_sha'] is None and row['dirty'] is None

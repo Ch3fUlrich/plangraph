@@ -1,11 +1,11 @@
 """Bounded, injectable host inspection; unavailable data is never zero drift."""
-import os
 from pathlib import Path
 import re
 import shlex
 import subprocess
 
 from .release import git
+from plangraph._loaded_identity import repo_git
 
 
 def transport(host):
@@ -37,13 +37,6 @@ def rows(registry, release, query=transport, count=None):
             behind = 'unknown'
         result.append({'host': host['id'], 'live_sha': live, 'release_sha': release, 'behind': behind})
     return result
-
-
-def repo_git(repo, *args, check=True):
-    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
-    env['GIT_TERMINAL_PROMPT'] = '0'
-    return subprocess.run(['git', '-C', str(repo), *args], check=check, capture_output=True,
-                          text=True, timeout=30, env=env)
 
 
 def pid_start(pid):

@@ -4,9 +4,10 @@ At daemon startup, before requests are served, the keeper atomically writes a
 private file beside its configured DB anchor, named `<db filename>.loaded.json`.
 It contains `loaded_sha`, `pid`, wall-clock `start_time`, and the process-start
 `/proc` token when available. The SHA describes the spawner-independent keeper
-code tree at startup; it is not reread after checkout moves. Missing Git identity
+code tree sampled before package imports and verified after publication.
+A changed identity during startup records unknown; it is not refreshed while serving. Missing Git identity
 is recorded as unknown, which makes a running keeper hold updates. Failure to
-publish the state prevents serving rather than leaving an unguarded live process.
+publish the state refuses serving with a named error and nonzero exit, without a traceback.
 Clean shutdown removes the file before releasing the keeper lock; stale crash
 state is rejected using PID/start-token identity by the updater.
 
