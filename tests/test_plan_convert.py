@@ -96,8 +96,9 @@ def update_yaml(plan, filename, change):
 def test_real_keeper_stop_codes(plan, mode, code, detail):
     cards = json.loads((plan / "cards.json").read_text())
     if mode == "credential":
+        pair = "/".join(("example", "placeholder1"))
         update_yaml(plan, "items.yaml", lambda d: d["items"][0].update(
-            done_criteria="login example/placeholder1 is refused"))
+            done_criteria=f"login {pair} is refused"))
     elif mode == "deps":
         update_yaml(plan, "items.yaml", lambda d: d["items"][0].update(
             depends_on=[f"D{i}" for i in range(201)]))

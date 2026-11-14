@@ -55,6 +55,7 @@ a running keeper. `PG_PLAN_CONVERT_BIN` may select an already-built binary;
 otherwise Cargo runs offline against the checked-out workspace.
 
 Run the focused tests with `python3 -m pytest -q tests/test_plan_convert.py`.
+The credential rejection case builds its synthetic input at runtime.
 Set `PG_PLAN_CONVERT_FIXTURE_DIR` to a private plan directory for the historical
 main and followup fixture checks. Their outputs stay under that data repository's `.w3-artifacts`.
 Without `PG_PLAN_CONVERT_CARDS`, this check replays the available historical YAML,
