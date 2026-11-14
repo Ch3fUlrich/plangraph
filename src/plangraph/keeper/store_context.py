@@ -2,8 +2,6 @@
 
 Sessions started work that was already merged, cancelled or overtaken by a
 later decision because ``ready``/``show``/``claim`` handed them a thin record.
-This mixin adds, per item:
-
 * ``dep_states`` / ``dependents``: every dependency and dependent with its
   state and, when terminal or replaced, why (cancel reason, ``corrected by``);
 * ``linked_decisions``: D-ids cited in the item text or naming its key in the
@@ -19,8 +17,7 @@ This mixin adds, per item:
 ``claim`` refuses an item with a merged ``Plan-Item`` commit or one a newer
 decision names, unless ``force_stale`` carries a reason, which is recorded on
 the ``claimed`` event.  A cancelled item or dependency is refused as before,
-now with its cancel reason.  Unknown facts (no repo, git failure, no
-decisions file) never refuse.  The guard reads git and the decisions log
+now with its cancel reason. The guard reads git and the decisions log
 before the write lock: both are outside the keeper, so no lock could hold
 them still, and the state checks are repeated under the lock as before.
 """
@@ -28,6 +25,10 @@ from __future__ import annotations
 
 import bisect
 import json
+import os
+import subprocess
+import time
+from contextlib import nullcontext
 
 from .. import views
 from . import context_sources as src
@@ -81,8 +82,11 @@ class ContextMixin:
     # ------------------------------------------------------------ inputs
     def _inputs(self, index, *, fresh=False):
         """Per-request shared inputs: decision rows, retirements, graph, clock."""
+        reconfirms = {}
+        for row in self.conn.execute("SELECT key,payload FROM events WHERE type='premise_reconfirmed' ORDER BY seq"):
+            reconfirms[row["key"]] = _payload(row["payload"])
         return {"book": src.decision_book(self._adapter("decisions"), fresh=fresh),
-                "graph": _graph(index), "clock": self._decision_clock()}
+                "graph": _graph(index), "clock": self._decision_clock(), "reconfirms": reconfirms}
 
     def _last_activity_map(self):
         out = {}
@@ -130,10 +134,10 @@ class ContextMixin:
         clock = getattr(self, "_ctx_clock", None)
         if clock is not None and clock["stamp"] == stamp:
             return clock
-        clock = {"seqs": [], "marks": [], "last": {}, "stamp": stamp}
+        clock = {"seqs": [], "marks": [], "last": {}, "stamp": stamp, "definitions": {}}
         mark = -1
         for row in self.conn.execute(
-                "SELECT seq, key, payload FROM events WHERE type IN (?,?)"
+                "SELECT seq, key, payload, ts, actor FROM events WHERE type IN (?,?)"
                 " ORDER BY seq", _DEF_TYPES):
             raw = row["payload"]
             ids = src.decision_ids(raw if isinstance(raw, str) else json.dumps(raw))
@@ -142,16 +146,12 @@ class ContextMixin:
             clock["seqs"].append(row["seq"])
             clock["marks"].append(mark)
             clock["last"][row["key"]] = row["seq"]
+            clock["definitions"][row["key"]] = dict(row)
         self._ctx_clock = clock
         return clock
 
     def _watermark(self, item, clock, cited=None):
-        """The newest decision the item's premise knew of, as a number.
-
-        The highest D-id cited in the item text; failing that, the decision
-        clock at its last definition (the highest D-id any definition had
-        cited by then).  ``None`` = unknown, which never refuses.
-        """
+        """Newest cited/source D-id, else the definition clock; None is unknown."""
         cited = src.decision_ids(*self._texts(item)) if cited is None else cited
         if cited:
             return _num(cited[-1])
@@ -164,10 +164,32 @@ class ContextMixin:
     @staticmethod
     def _texts(item):
         return [item.get(name) for name in
-                ("title", "description", "done_criteria", "note")]
+                ("title", "description", "done_criteria", "note", "source")]
 
     def _work(self, item, fetch):
         gitad = self._adapter("git")
+        if gitad is not None and os.environ.get("PG_KEEPER_TRUTH_LOCAL") != "1":
+            with getattr(gitad, "_fetch_lock", nullcontext()):
+                repo, ref = src._repo_ref(gitad, item["project"])
+                cache = getattr(self, "_repository_truth", {})
+                stamp, data = cache.get((repo, ref), (float("-inf"), None))
+                if time.monotonic() - stamp >= 60:
+                    try:
+                        result = subprocess.run(
+                            [os.environ.get("PG_KEEPER_TRUTH_BIN", "pg-keeper-truth"), "index", repo, ref],
+                            capture_output=True, text=True, timeout=300, check=True)
+                        data = json.loads(result.stdout)["items"]
+                        if not isinstance(data, dict) or any(not isinstance(w, dict) or any(
+                                not isinstance(w.get(f, []), list) for f in ("commits", "lanes", "prs")) for w in data.values()):
+                            raise ValueError("invalid repository index")
+                    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+                        data = None
+                    cache[(repo, ref)] = (time.monotonic(), data)
+                    self._repository_truth = cache
+                if data is None:
+                    return {"commits": None, "lanes": None, "prs": None, "unknown": True}
+                full, bare = data.get(item["key"], {}), data.get(item["id"], {})
+                return {name: full.get(name, []) + bare.get(name, []) for name in ("commits", "lanes", "prs")}
         return {"commits": src.plan_item_commits(gitad, item["project"], item["key"],
                                                  fetch=fetch),
                 "lanes": src.open_lanes(gitad, item["project"], item["key"])}
@@ -193,8 +215,17 @@ class ContextMixin:
         cited = src.decision_ids(*self._texts(item))
         naming = src.decisions_naming(inputs["book"], key)
         mark = self._watermark(item, inputs["clock"], cited)
+        definition = inputs["clock"]["definitions"].get(key, {})
+        confirmation = inputs["reconfirms"].get(key, {})
+        did = confirmation.get("decision_id")
+        metadata = inputs["book"].get("metadata", {}).get(did, {})
+        if (metadata and did not in inputs["book"]["superseded"]
+                and confirmation.get("definition_seq") == definition.get("seq")
+                and confirmation.get("digest") == metadata.get("digest")):
+            mark = max(mark if mark is not None else -1, _num(did))
         newer = [d for d in naming if d not in cited
-                 and mark is not None and _num(d) > mark]
+                 and mark is not None and _num(d) > mark
+                 and not src.premise_unchanged(inputs["book"], d, definition, self._parse_iso)]
         superseded = inputs["book"]["superseded"]
         ctx = {
             "dep_states": [entry(k) for k in deps],
@@ -245,34 +276,61 @@ class ContextMixin:
         return ensure_cap(brief)
 
     # -------------------------------------------------------------- ready
-    def _ready_items(self, project=None, n=10, owner=None, agent=False):
-        """``views.ready`` rows (copies) with ``context``; stale rows sort last.
-
-        The git check runs on the first :data:`READY_GIT_LIMIT` rows of the
-        whole ready list (after a first stale sort on the keeper-only facts)
-        BEFORE the cut to *n*, so a merged row cannot crowd out a fresh one.
-        """
+    def _ready_items(self, project=None, n=10, owner=None, agent=False,
+                     needs_reconcile=False, in_progress=False):
+        """Partition every candidate using the same repository facts as claim."""
         items = self._all_items()
         index = {it["key"]: it for it in items}
         rows = [dict(row) for row in
                 views.ready(items, project=project, owner=owner, agent=agent)]
-        inputs, activity = self._inputs(index), self._last_activity_map()
+        inputs, activity = self._inputs(index, fresh=True), self._last_activity_map()
+        selected = []
         for row in rows:
-            row["context"] = self._task_context(row, index, inputs=inputs,
-                                                activity=activity, git=False)
-        rows.sort(key=lambda r: r["context"]["stale"] is not None)  # stable
-        for row in rows[:READY_GIT_LIMIT]:
-            ctx = row["context"]
-            ctx["work_exists"] = self._work(row, fetch=False)
-            ctx["stale"] = self._stale_reason(row, ctx)
-        rows.sort(key=lambda r: r["context"]["stale"] is not None)
-        return rows if n is None else rows[:max(0, int(n))]
+            ctx = self._task_context(row, index, inputs=inputs, activity=activity, fetch=True)
+            row["context"] = ctx
+            work = ctx["work_exists"]
+            row["prs"] = work.get("prs") or []
+            reasons = self._claim_facts(ctx)
+            if work.get("unknown"):
+                reasons.append("repository index unavailable")
+            row["reconcile_reason"] = " | ".join(reasons) or None
+            bucket = "in_progress" if row["prs"] else "reconcile" if reasons else "ready"
+            row["repository_status"] = bucket
+            wanted = "reconcile" if needs_reconcile else "in_progress" if in_progress else "ready"
+            if bucket == wanted:
+                selected.append(row)
+        return selected if n is None else selected[:max(0, int(n))]
 
-    def _ready_text(self, project=None, n=10, owner=None, agent=False):
-        rows = self._ready_items(project=project, n=n, owner=owner, agent=agent)
+    def _ready_text(self, project=None, n=10, owner=None, agent=False, **filters):
+        rows = self._ready_items(project=project, n=n, owner=owner, agent=agent, **filters)
         return ready_context_rows(rows, views.unblocks(self._all_items()))
 
     # -------------------------------------------------------------- claim
+    def reconfirm(self, principal, key, decision_id):
+        return self._run(principal, "reconfirm", key,
+                         lambda now: self._reconfirm(principal, key, decision_id, now))
+
+    def _reconfirm(self, principal, key, decision_id, now):
+        item = self._get_or_refuse(key)
+        self._may_manage(principal, item["project"])
+        self._assert_unlocked(item)
+        expected = self._decision_clock()["last"].get(key)
+        try:
+            book = src.decision_book(self._adapter("decisions"), fresh=True)
+        except src.DecisionsUnreadable:
+            raise Refused("evidence_unverified", "decisions authority unavailable") from None
+        if decision_id not in book["rows"] or decision_id in book["superseded"]:
+            raise Refused("evidence_unverified", "reconfirm requires a current recorded decision")
+        with self._write():
+            self._assert_unlocked(self._get_or_refuse(key))
+            seq = self._decision_clock()["last"].get(key)
+            if seq != expected:
+                raise Refused("conflict", "definition changed while reconfirming")
+            payload = {"decision_id": decision_id, "definition_seq": seq,
+                       "digest": book["metadata"][decision_id]["digest"]}
+            self._append(principal, key, "premise_reconfirmed", payload, now)
+        return {"key": key, **payload}
+
     @staticmethod
     def _force_stale_reason(value):
         """``None`` or the stripped reason; anything else is a validation refusal."""
@@ -296,6 +354,20 @@ class ContextMixin:
             raise Refused("bad_state", f"cannot read decisions file: {path}") from None
         ctx = self._task_context(item, index, inputs=inputs,
                                  fetch=True)
+        facts = self._claim_facts(ctx)
+        if ctx["work_exists"].get("unknown"):
+            facts.append("repository index unavailable")
+        if ctx["work_exists"].get("prs"):
+            facts.append(f"in progress PR {ctx['work_exists']['prs']}")
+        if not facts:
+            return None
+        if reason is None:
+            raise Refused("bad_state", f"{item['key']} stale: " + " | ".join(facts)
+                          + " (override: force_stale=<reason>, audited)")
+        return {"reason": reason, "overrode": facts}
+
+    @staticmethod
+    def _claim_facts(ctx):
         facts = []
         commits = ctx["work_exists"]["commits"]
         lanes = ctx["work_exists"]["lanes"]
@@ -310,12 +382,7 @@ class ContextMixin:
             facts.append("premise outdated: " + ",".join(ctx["newer_decisions"])
                          + " names this item after its definition; re-confirm"
                          " (edit the item to cite it) first")
-        if not facts:
-            return None
-        if reason is None:
-            raise Refused("bad_state", f"{item['key']} stale: " + " | ".join(facts)
-                          + " (override: force_stale=<reason>, audited)")
-        return {"reason": reason, "overrode": facts}
+        return facts
 
     def _not_open_facts(self, item, index):
         """Why a non-claimable item is not claimable, with reasons (for refusals)."""

@@ -1,0 +1,1 @@
+- Add a deterministic Rust refusal-class plan generator with complete-cohort checks, exclusive primary key lists, rule/owner paths and gated per-project follow-up proposals; document the pending historical inputs and routing/review handoff.

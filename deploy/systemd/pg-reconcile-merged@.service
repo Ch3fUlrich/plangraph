@@ -1,0 +1,11 @@
+[Unit]
+Description=Report merged nonterminal keeper items for %i
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/plangraph/reconcile-%i.env
+StateDirectory=pg-reconcile-%i
+ExecStart=%h/.local/bin/pg-keeper-truth monitor ${SNAPSHOT} ${REPOSITORY} ${DEFAULT_REF} %S/pg-reconcile-%i/alert.json
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=10min

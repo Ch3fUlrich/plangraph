@@ -209,9 +209,6 @@ def _epoch(session, key) -> int:
 
 
 # --------------------------------------------------------------------------- #
-# read verbs
-# --------------------------------------------------------------------------- #
-
 def cmd_ready(args, session):
     if getattr(args, "brief", False):
         session.json_mode = False
@@ -222,12 +219,14 @@ def cmd_ready(args, session):
     agent = bool(getattr(args, "agent", False))
 
     def local():
-        # Offline (snapshot) fallback: --mine needs the server's whoami, so it
-        # falls back to no owner filter there; --owner and --agent still apply.
+        if getattr(args, "needs_reconcile", False) or getattr(args, "in_progress", False):
+            return 3  # Repository facts require the keeper's index.
         return _emit(session, session.local_items(),
                      lambda items: fmt.ready_text(items, args.project, n,
                                                   owner=owner, agent=agent))
     return read(session, "ready", {"project": args.project, "n": n,
+                                   "needs_reconcile": 1 if getattr(args, "needs_reconcile", False) else None,
+                                   "in_progress": 1 if getattr(args, "in_progress", False) else None,
                                    "all": 1 if args.all else None,
                                    "owner": owner, "mine": 1 if mine else None,
                                    "agent": 1 if agent else None},

@@ -47,6 +47,10 @@ def ready_context_rows(rows, ub) -> str:
             line += " | " + ",".join(ctx["linked_decisions"][-3:])
         if ctx.get("stale"):
             line += " | STALE: " + ctx["stale"]
+        if row.get("prs"):
+            line += " | in progress PR " + ",".join(map(str, row["prs"]))
+        if row.get("reconcile_reason"):
+            line += " | needs-reconcile: " + row["reconcile_reason"]
         out.append(line)
     return "\n".join(out)
 
@@ -220,6 +224,8 @@ def blocked_text(blocked: dict) -> str:
 
 def alerts_text(alerts: dict) -> str:
     lines = []
+    if alerts.get("force_stale_claims"):
+        lines.append(f"force_stale_claims {alerts['force_stale_claims']}")
     for row in alerts.get("lease_expiring") or []:
         lines.append(f"lease {row['key']} by {row.get('claimed_by')} "
                      f"until {row.get('lease_until')}")

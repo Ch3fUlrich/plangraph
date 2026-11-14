@@ -50,12 +50,15 @@ _ACTIVITY_CAP = 5000
 class ReadMixin:
     """Read-only verbs; any authenticated principal may call them."""
 
-    def ready(self, principal, project=None, n=10, owner=None, mine=False, agent=False):
+    def ready(self, principal, project=None, n=10, owner=None, mine=False, agent=False,
+              needs_reconcile=False, in_progress=False):
         """D-953: ``mine`` = items owned by the caller; ``agent`` drops operator steps."""
         owner = principal.name if mine else owner
         return self._run(principal, "ready", None,
                          lambda now: self._ready_text(project=project, n=n,
-                                                   owner=owner, agent=bool(agent)))
+                                                   owner=owner, agent=bool(agent),
+                                                   needs_reconcile=needs_reconcile,
+                                                   in_progress=in_progress))
 
     def show(self, principal, key, brief=False):
         if brief:
@@ -315,7 +318,12 @@ class ReadMixin:
                         " WHERE ok=0 AND key IS NOT NULL"
                         " GROUP BY key HAVING COUNT(*) >= 2 ORDER BY key")
                     if row["key"] in keys]
-        return {"lease_expiring": sorted(lease_expiring, key=lambda x: x["key"]),
+        overrides = sum(bool((json.loads(r["payload"]) if isinstance(r["payload"], str)
+                              else r["payload"]).get("force_stale"))
+                        for r in self.conn.execute("SELECT key,payload FROM events WHERE type='claimed'")
+                        if r["key"] in keys)
+        return {"force_stale_claims": overrides,
+                "lease_expiring": sorted(lease_expiring, key=lambda x: x["key"]),
                 "review_overdue": sorted(review_overdue),
                 "findings": findings, "refusals": refusals, "stalled": stalled,
                 "warnings": views.warnings(scope)}

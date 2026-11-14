@@ -1,0 +1,2 @@
+- Add a dry-run Rust reconcile-merged TSV tool, explicit existing-router batch closure, slice assessments and a persistent one-day alert monitor with hourly timer templates.
+- Verify merged Plan-Item and PR attribution against a hermetic temporary Git merge graph, and handle open-PR deltas whose default-branch parent is excluded.

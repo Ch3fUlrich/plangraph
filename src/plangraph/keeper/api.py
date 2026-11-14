@@ -302,8 +302,6 @@ class KeeperHandler(BaseHTTPRequestHandler):
                         "key_id": h.key_id,
                         "health": row.get("health", h.health),
                         "last_seen": row.get("last_seen", h.last_seen),
-                        # True only when a durable row backs this entry; the
-                        # startup seed makes that every inventory host.
                         "persisted": bool(row),
                     })
             return {"hosts": hosts_data}, False
@@ -323,10 +321,11 @@ class KeeperHandler(BaseHTTPRequestHandler):
             mine = str(self._one(query, "mine")).lower() in ("1", "true")   # MCP sends "True"
             agent = str(self._one(query, "agent")).lower() in ("1", "true")
             owner = principal.name if mine else self._one(query, "owner")
-            text = store.ready(principal, project=project, n=n, owner=owner, agent=agent)
+            filters = {k: str(self._one(query, k)).lower() in ("1", "true") for k in ("needs_reconcile", "in_progress")}
+            text = store.ready(principal, project=project, n=n, owner=owner, agent=agent, **filters)
             if as_text:
                 return text, True
-            items = store._ready_items(project=project, n=n, owner=owner, agent=agent)
+            items = store._ready_items(project=project, n=n, owner=owner, agent=agent, **filters)
             return {"items": items,
                     "unblocks": views.unblocks(store._all_items())}, False
         if name == "show":
