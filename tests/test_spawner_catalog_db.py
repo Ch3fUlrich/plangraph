@@ -366,21 +366,21 @@ def test_deploy_requirements_and_bootstrap_scripts() -> None:
     with open(req_file, "r", encoding="utf-8") as f:
         req_data = json.load(f)
 
-    core = req_data["autoos_components"]["core"]
-    agents = req_data["autoos_components"]["agents"]
+    core = req_data["components"]["core"]
+    agents = req_data["components"]["agents"]
 
     assert "git" in core
     assert "python" in core
     assert "nodejs" in core
     assert "tailscale" in core
-    assert "omniroute" in core
+    assert "omniroute" in req_data["delegated_components"] and "omniroute" not in core
     assert "opencode-cli" in core
 
     assert "claude-code" in agents
     assert "qwen-code" in agents
     assert "gemini-cli" in agents
     assert "qoder-cli" in agents
-    assert "agent-skill-links" in agents
+    assert "agent-skill-links" in req_data["delegated_components"] and "agent-skill-links" not in agents
 
     # Validate bootstrap.ps1 syntax via PowerShell dry run
     if sys.platform == "win32":
@@ -392,7 +392,7 @@ def test_deploy_requirements_and_bootstrap_scripts() -> None:
             "-File",
             str(ps1_file),
             "-DryRun",
-            "-SkipAutoOS",
+            "-SkipInstall",
         ]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         assert proc.returncode == 0, f"bootstrap.ps1 dry-run failed: {proc.stderr}"

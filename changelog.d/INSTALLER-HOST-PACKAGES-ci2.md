@@ -1,0 +1,1 @@
+- Align bootstrap contract tests with the canonical components/delegated_components manifest and SkipInstall switch; OmniRoute and skill links remain delegated rather than host installer packages.
