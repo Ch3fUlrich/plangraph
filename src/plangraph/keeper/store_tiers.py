@@ -95,13 +95,16 @@ def validated_decision_tier(tier: str, evidence_kinds: Any) -> str:
     """Return *tier*; a ``none`` item must have evidence_kinds == ['decision']
     or ['decision', 'commit'] (order-insensitive), or it is refused.
     """
-    if tier == _DECISION_TIER:
-        kinds_list = list(evidence_kinds or [])
-        kinds_set = frozenset(kinds_list)
-        if len(kinds_list) != len(kinds_set) or kinds_set not in _ALLOWED_DECISION_KINDS:
-            raise Refused("validation",
-                          f"review_tier='none' requires evidence_kinds="
-                          f"['decision'] or ['decision', 'commit'], not {kinds_list}")
+    kinds_list = list(evidence_kinds or [])
+    kinds_set = frozenset(kinds_list)
+    if tier != _DECISION_TIER and kinds_set == {'decision'}:
+        raise Refused('validation', "decision-only evidence requires review_tier='none'; "
+                      "set review_tier='none' or add the implementation evidence kinds")
+    if tier == _DECISION_TIER and (
+            len(kinds_list) != len(kinds_set) or kinds_set not in _ALLOWED_DECISION_KINDS):
+        raise Refused("validation",
+                      f"review_tier='none' requires evidence_kinds="
+                      f"['decision'] or ['decision', 'commit'], not {kinds_list}")
     return tier
 
 

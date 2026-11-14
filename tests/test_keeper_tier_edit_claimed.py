@@ -106,19 +106,19 @@ def test_router_re_tiers_claimed_item_with_while_marker(w):
 def test_router_edits_evidence_kinds_on_in_review_item(w):
     epoch = to_in_review(w, KEY)               # submit bumped round to 1
     out = w.store.edit_definition(w.p("router"), KEY,
-                                  {"evidence_kinds": ["decision"]})
+                                  {"evidence_kinds": ["decision", "run-record"]})
     assert out == {"key": KEY}
     item = w.store._item(KEY)
     assert (item["state"], item["epoch"]) == ("in_review", epoch)
     assert item["review_tier"] == "standard"   # untouched, lower not implied
-    assert item["evidence_kinds"] == ["decision"]
+    assert item["evidence_kinds"] == ["decision", "run-record"]
     assert item["round"] == 2
     event = last_defined(w)
     assert event["actor"] == "router"
     assert event["payload"] == {"fields": ["evidence_kinds"],
                                 "while": "in_review", "who": "router",
                                 "before": {"evidence_kinds": ["any"]},
-                                "after": {"evidence_kinds": ["decision"]}}
+                                "after": {"evidence_kinds": ["decision", "run-record"]}}
     assert folded(w)["round"] == item["round"]
     assert w.store.verify_integrity() == []
     assert w.store.verify_chain() == []
@@ -149,7 +149,7 @@ def test_router_edit_voids_the_current_rounds_verdicts(tmp_path):
     assert len(w.store._round_verdicts(w.store._item(KEY))) == 1
 
     w.store.edit_definition(w.p("router"), KEY,
-                            {"evidence_kinds": ["decision"]})
+                            {"evidence_kinds": ["decision", "run-record"]})
     item = w.store._item(KEY)
     assert item["review_tier"] == "high"
     assert item["round"] == 2
@@ -160,7 +160,7 @@ def test_router_edit_voids_the_current_rounds_verdicts(tmp_path):
     assert folded(w)["round"] == 2                         # ...under the old round
     assert w.store.verify_integrity() == []
 
-    # The voided seat must not count: one new verdict keeps the item in review
+    w.store.add_evidence_router(w.p("router"), KEY, "run-record", {"run_id": "fixture"})
     # (it would close it only if the stale one still tallied), a second closes.
     second = w.store.verdict(w.p("reviewer2"), KEY, True, "ok")
     assert second["state"] == "in_review"

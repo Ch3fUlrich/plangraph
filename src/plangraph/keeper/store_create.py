@@ -128,7 +128,7 @@ def creation_tier(raw, definition, principal):
                     "forbidden",
                     "only the router may lower review_tier below its default")
         return validated_decision_tier(tier, definition["evidence_kinds"])
-    return default
+    return validated_decision_tier(default, definition["evidence_kinds"])
 
 
 class CreateMixin:
@@ -429,14 +429,12 @@ class CreateMixin:
         # of either field alone cannot leave a `none` item with looser evidence.
         # Legacy row shapes missing review_tier use the standard default.
         resulting_tier = edit_fields.get("review_tier", item.get("review_tier") or "standard")
-        if tier_needs_router(resulting_tier):
-            if (resulting_tier != item["review_tier"]
-                    and principal.role != "router"):
-                raise Refused("forbidden",
-                              "only the router may set review_tier='none'")
-            validated_decision_tier(
-                resulting_tier,
-                edit_fields.get("evidence_kinds", item["evidence_kinds"]))
+        if (tier_needs_router(resulting_tier) and resulting_tier != item["review_tier"]
+                and principal.role != "router"):
+            raise Refused("forbidden", "only the router may set review_tier='none'")
+        validated_decision_tier(
+            resulting_tier,
+            edit_fields.get("evidence_kinds", item["evidence_kinds"]))
         before = self._all_items()
         candidate = self._all_items()
         me = next(it for it in candidate if it["key"] == key)
@@ -497,7 +495,7 @@ class CreateMixin:
                    for value in renamed):
                 edit_fields["review_tier"] = "high"
                 me["review_tier"] = "high"
-        # Check after rename escalation, and leave unrelated legacy edits alone.
+        validated_decision_tier(me["review_tier"], me["evidence_kinds"])
         if any(field in edit_fields and edit_fields[field] != item.get(field)
                for field in ("done_criteria", "review_tier")):
             resulting_tier = edit_fields.get(
@@ -534,12 +532,11 @@ class CreateMixin:
             else:
                 self._may_manage(principal, fresh["project"])
             bump_epoch = tier_edit and ("done_criteria" in edit_fields or "depends_on" in edit_fields)
+            # Re-check tier/evidence under the lock, including open-item edits.
+            validated_decision_tier(
+                edit_fields.get("review_tier", fresh["review_tier"]),
+                edit_fields.get("evidence_kinds", fresh["evidence_kinds"]))
             if tier_edit:
-                # Re-check the resulting (tier, kinds) pair under the lock:
-                # evidence_kinds may have been edited under us since the read.
-                validated_decision_tier(
-                    edit_fields.get("review_tier", fresh["review_tier"]),
-                    edit_fields.get("evidence_kinds", fresh["evidence_kinds"]))
                 # Bump the round like ``submit`` does: earlier verdicts stop
                 # matching ``_round_verdicts`` -- no stale count under the new tier.
                 round_no = int(fresh.get("round") or 0) + 1

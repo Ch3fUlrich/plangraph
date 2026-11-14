@@ -171,7 +171,7 @@ def test_waiver_writer_family_change_request_is_unchanged(w):
 @pytest.mark.parametrize("tier", ["standard", "none"])
 def test_waiver_disallowed_tier_stays_refused(w, tier):
     w.store.edit_definition(w.p("router"), KEY,
-                            {"review_tier": tier, "evidence_kinds": ["decision"]})
+                            {"review_tier": tier, "evidence_kinds": ["decision"] if tier == "none" else ["any"]})
     w.store.claim(w.p("l1main"), KEY)
     with pytest.raises(Refused) as exc:
         w.store.waive_second_family(w.p("router"), KEY, DECISION)

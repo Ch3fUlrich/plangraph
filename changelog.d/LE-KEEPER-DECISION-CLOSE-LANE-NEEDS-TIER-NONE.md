@@ -1,0 +1,1 @@
+Explicit decision-only evidence permits verified origin/main CLOSE rows to finish legacy lanes of any tier, while create/edit rejects decision-only evidence with a non-none review tier and explains the required tier or evidence fix.

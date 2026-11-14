@@ -99,9 +99,11 @@ def close_decision(store, principal, key, decision, epoch, batch_ref, now):
         _authorize(store, principal, fresh, epoch)
         if fresh["state"] not in ("claimed", "in_review"):
             raise Refused("bad_state", "decision close requires an active item")
-        if fresh.get("review_tier") != "none" and fresh.get("kind") not in (
-                "decision", "operator_task"):
-            raise Refused("bad_state", "item kind/tier cannot close on a decision")
+        if (fresh.get("review_tier") != "none" and fresh.get("kind") not in (
+                "decision", "operator_task") and fresh.get("evidence_kinds") != ["decision"]):
+            raise Refused("bad_state", "item kind/tier cannot close on a decision; "
+                          "decision-only items must declare evidence_kinds: [decision] "
+                          "with review_tier='none'")
         if "commit" in (fresh.get("evidence_kinds") or []):
             store._check_commit_evidence(key, fresh, now)
         cursor = store.conn.execute(

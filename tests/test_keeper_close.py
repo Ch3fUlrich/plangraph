@@ -310,7 +310,7 @@ def test_open_item_must_be_moved_first(tmp_path):
 
 
 @pytest.mark.parametrize("tier,kinds", [("standard", ("any",)),
-                                        ("high", ("decision",))])
+                                        ("high", ("any",))])
 def test_tier_not_none_refused(tmp_path, tier, kinds):
     w = _world(tmp_path, CLOSES, tier=tier, kinds=kinds)
     exc = _refuse(w, "bad_state")

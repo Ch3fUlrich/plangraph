@@ -18,7 +18,7 @@ def _fixture_item(kp, ident, **fields):
     if kp.get(f"/v1/show?key={key}&fmt=json", "reader").status == 200:
         pytest.skip(f"fixture item {key} was already used on this keeper")
     item = {"project": "demo", "id": ident, "kind": "lane", "title": ident, "description": "d",
-            "evidence_kinds": ["decision"], **fields}
+            "evidence_kinds": ["decision"] if fields.get("review_tier") == "none" else ["any"], **fields}
     goal = {"project": "demo", "id": ident + "-GOAL", "kind": "goal", "title": ident + " goal",
             "depends_on": [ident]}
     ok(kp.post("create_items", "router", {"items": [item, goal]}), "Created")
@@ -53,7 +53,7 @@ def test_waiver_is_pointless_on_a_standard_item(kp):
 
 def test_withdraw_review_returns_an_item_to_the_claimant(kp):
     need(kp, "decisions")
-    key = _fixture_item(kp, "WD-1")
+    key = _fixture_item(kp, "WD-1", review_tier="none")
     epoch = to_in_review(kp, key)
     for who in ("lead", "worker1", "reviewer1"):
         err(kp.post("withdraw_review", who, {"key": key, "decision_id": "D-2"}), 403, "forbidden")

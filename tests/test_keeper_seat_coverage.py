@@ -61,7 +61,7 @@ def test_anthropic_claimant_uses_evidence_writer(w, model, code):
                                                    ("mimo-v2", None),
                                                    ("unknown-model", "family_unknown")])
 def test_no_commit_writer_model_then_legacy_fallback(w, writer_model, expected):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     to_in_review(w, key, who="claimant")
     w.conn.execute("UPDATE items SET claimed_by='legacy-owner', owner_family='anthropic', writer_model=? WHERE key=?",
                    (writer_model, key))
@@ -328,11 +328,11 @@ def test_writer_family_uses_only_the_first_trailer_token(w, trailer, family):
 
 
 # --------------------------------------------------------------------------
-# 7. decision-only evidence has no commit writers: behaviour unchanged
+# 7. mixed non-commit evidence has no commit writers
 # --------------------------------------------------------------------------
 
-def test_decision_only_item_has_no_commit_writers_and_still_closes(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+def test_non_commit_item_has_no_commit_writers_and_still_closes(w):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     w.store.ctx = make_ctx(git=FakeGit())
     to_in_review(w, key, who="claimant")
     families = _cov().writer_families(
