@@ -216,3 +216,73 @@ def _advance(registry, sha, hosts, go, dry_run, record, log, run):
         if not result['ok']:
             return 1
     return 0
+
+
+def main_ff(repo, keeper_state, *, fetch=True, keeper_unit='plangraph-keeper.service'):
+    """Fast-forward main only when the running keeper's imported code stays fixed."""
+    import fcntl
+
+    from plangraph.routing_support.private_io import atomic_write_private
+
+    from .drift import (
+        KeeperProbeError,
+        keeper_changes,
+        main_ff_status_path,
+        repo_git,
+        running_keeper,
+    )
+
+    repo = Path(repo).resolve()
+    try:
+        status = main_ff_status_path(repo)
+    except (OSError, subprocess.SubprocessError):
+        return 2, 'REFUSED git rev-parse failed'
+    with status.with_suffix('.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        def finish(code, line):
+            atomic_write_private(status, line + '\n')
+            return code, line
+        class GitFailure(Exception):
+            pass
+        def checked_git(*args, **kwargs):
+            try:
+                result = repo_git(repo, *args, **kwargs)
+                if args[0] == 'symbolic-ref' and result.returncode not in (0, 1):
+                    raise GitFailure('REFUSED git symbolic-ref failed')
+                return result
+            except (OSError, subprocess.SubprocessError):
+                raise GitFailure(f'REFUSED git {args[0]} failed') from None
+        try:
+            branch = checked_git('symbolic-ref', '--short', '-q', 'HEAD', check=False).stdout.strip()
+            if branch != 'main':
+                return finish(2, f'REFUSED branch {branch or "HEAD"}, want main')
+            if checked_git('status', '--porcelain', '--untracked-files=no').stdout:
+                return finish(2, 'REFUSED tracked checkout changes')
+            if fetch:
+                checked_git('fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main')
+            target = checked_git('rev-parse', '--verify', 'origin/main^{commit}').stdout.strip()
+            current = checked_git('rev-parse', '--verify', 'HEAD^{commit}').stdout.strip()
+            ancestry = checked_git('merge-base', '--is-ancestor', current, target, check=False)
+            if ancestry.returncode == 1:
+                return finish(2, 'REFUSED main is not an ancestor of origin/main')
+            if ancestry.returncode:
+                return finish(2, 'REFUSED git merge-base failed')
+            def keeper_hold():
+                try:
+                    loaded = running_keeper(keeper_state)
+                    changed = keeper_changes(repo, loaded, target) if loaded else []
+                except KeeperProbeError as exc:
+                    return f'HELD {exc} target {target}'
+                except (OSError, ValueError, SyntaxError, subprocess.SubprocessError):
+                    return f'HELD keeper state/import analysis unavailable target {target}'
+                if changed:
+                    files = ', '.join(path.replace('\n', '?').replace('\r', '?') for path in changed)
+                    return f'HELD keeper code changed: {files} loaded {loaded} target {target}'
+                return None
+            if line := keeper_hold():
+                return finish(3, line)
+            if current != target:
+                checked_git('merge', '--ff-only', target)
+            return finish(0, f'UPDATED main {target}' if current != target else f'CURRENT main {target}')
+        except GitFailure as error:
+            return finish(2, str(error))

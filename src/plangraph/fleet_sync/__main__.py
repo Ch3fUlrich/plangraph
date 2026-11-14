@@ -23,8 +23,18 @@ def main(argv=None):
         command.add_argument('--registry', type=__import__('pathlib').Path,
                              default=genconfig.config_dir() / 'hosts.json')
     commands.choices['drift'].add_argument('--json', action='store_true')
+    ff = commands.add_parser('main-ff')
+    ff.add_argument('--repo', required=True)
+    ff.add_argument('--keeper-state', required=True)
+    ff.add_argument('--keeper-unit', default='plangraph-keeper.service')
+    ff.add_argument('--no-fetch', action='store_true')
     args = parser.parse_args(argv)
     try:
+        if args.command == 'main-ff':
+            code, line = advance.main_ff(args.repo, args.keeper_state, fetch=not args.no_fetch,
+                                         keeper_unit=args.keeper_unit)
+            print(line)
+            return code
         if args.command == 'release':
             data = release.record() if args.verb == 'record' else json.loads(release.release_path().read_text())
             print(json.dumps(data))

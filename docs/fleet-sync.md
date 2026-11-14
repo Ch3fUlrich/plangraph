@@ -112,3 +112,6 @@ requiring `pgrep`. Positive keeper detection takes precedence over a prior unit
 error in the HELD diagnostic. Headless user-bus failures and unavailable process
 tools remain inconclusive and HELD; no-process alone does not prove an unreadable
 user unit absent. See the state contract for the verified launch inventory.
+
+The `main-ff --repo CHECKOUT --keeper-state STATE` command holds clean main
+updates when existing keeper imports change; unreadable state holds, Git failures refuse.
