@@ -1,0 +1,1 @@
+- Seat records from Windows skip POSIX owner/mode checks; WSL drive paths skip only synthetic mode checks using resolved real paths (including symlink targets), while POSIX ownership and native writable-mode refusals remain enforced.

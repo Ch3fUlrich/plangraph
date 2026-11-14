@@ -326,3 +326,5 @@ Local controls run every named consumer plus a bounded smoke set; policy checks 
 The 800-line tracked file budget is authorized by D-5840 (95a9ac34); legacy baseline ratchets still apply.
 
 Checkpoint 5 includes test worktree registry and caller snapshots; run its affected Python checks in an isolated clone.
+
+Checkpoint 7 includes review evidence records; run its affected Python checks in an isolated clone.
