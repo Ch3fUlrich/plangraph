@@ -251,7 +251,15 @@ fn stderr_quota_survives_missing_log_and_sonnet_uses_the_model_store() {
 fn real_sonnet_launch_adapter_keeps_the_selected_harness_and_python_rejects_kind() {
     let dir = tempfile::tempdir().unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new("python3").current_dir(&root)
+    let checkout = dir.path().join("checkout");
+    assert!(Command::new("git")
+        .args(["clone", "-q", "--shared"])
+        .arg(&root)
+        .arg(&checkout)
+        .status()
+        .unwrap()
+        .success());
+    let output = Command::new("python3").current_dir(&checkout)
         .env("PYTHONPATH", root.join("src")).env("XDG_STATE_HOME", dir.path())
         .env("PLANGRAPH_OMNIROUTE_LEG_STATE", "0")
         .args(["-c", r#"
