@@ -258,7 +258,8 @@ class SpawnerRunner:
         if not isinstance(model, str) or not model.strip():
             raise ValueError('missing served model')
         model = model.strip()
-        family = detect_model_family(model)
+        from .gateway_witness import served_family
+        family = served_family(model)
         if '/' not in model or family not in MODEL_FAMILIES:
             raise ValueError('served model is not an admitted model id: ' + model)
         job = self.jobs[job_id]

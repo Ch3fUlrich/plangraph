@@ -134,12 +134,15 @@ def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch, spelling, r
 
     async def factory(*a, **kw):
         seen.update(kw['env'])
+        seen['expected_tag'] = a[a.index('--title') + 1]
         async def communicate(input=None):
             return b'', b''
         return SimpleNamespace(pid=FAKE_PID, returncode=0, communicate=communicate)
 
     def fetch(tag, env):
-        return [{'sessionTag': tag, 'status': 200, 'model': 'mimo/mimo-v2.6-pro'}]
+        return ([{'sessionTag': seen['expected_tag'], 'status': 200,
+                  'model': 'mimo/mimo-v2.6-pro'}]
+                if tag == seen['expected_tag'] else [])
     monkeypatch.setattr(gw, 'fetch_rows', fetch)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
 

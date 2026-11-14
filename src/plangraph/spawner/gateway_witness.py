@@ -182,6 +182,23 @@ def require_witness(model, env=None, *, secrets=None):
         raise SpawnRefused('witness required: ' + str(exc)) from None
 
 
+def model_segment(model):
+    """Provider-independent identity; cx- is the route table's GPT alias prefix."""
+    segment = str(model or '').rsplit('/', 1)[-1]
+    return segment.removeprefix('cx-') if segment.startswith('cx-gpt-') else segment
+
+
+def served_family(model):
+    """Admit exact route-table model segments, never substrings in provider names."""
+    from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
+    families = {leg.family for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS)
+                if model_segment(leg.model) == model_segment(model)}
+    if len(families) == 1:
+        family = families.pop()
+        return 'gpt' if family == 'openai' else family
+    return None
+
+
 def served_models(rows, tag):
     """Every model the gateway served (2xx rows) for ``tag``, as ``provider/model``."""
     served = set()
@@ -265,6 +282,9 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
             except ValueError as exc:
                 reason = str(exc)
                 break
+            if model_segment(model) != model_segment(job.model_or_combo):
+                job.events.append(dict(event='served_model_mismatch',
+                                       requested_model=job.model_or_combo, served_model=model))
             job.witness_kind = WITNESS_KIND
             job.served_witness_reason = 'gateway call log (sessionTag) response-side model'
             return

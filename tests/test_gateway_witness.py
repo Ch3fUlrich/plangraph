@@ -148,10 +148,13 @@ def test_runner_review_seat_on_omniroute_is_witnessed_from_call_log(tmp_path, mo
     seen = {}
     def fetch(tag, env):
         seen['tag'] = tag
-        return [{'sessionTag': tag, 'status': 200, 'model': 'gpt-6-luna', 'provider': 'cx'}]
+        return ([{'sessionTag': seen['expected_tag'], 'status': 200,
+                  'model': 'gpt-6-luna', 'provider': 'cx'}]
+                if tag == seen['expected_tag'] else [])
     monkeypatch.setattr(gw, 'fetch_rows', fetch)
     async def factory(*args, **kwargs):
         seen['cfg'] = json.loads(kwargs['env'].get('OPENCODE_CONFIG_CONTENT') or '{}')
+        seen['expected_tag'] = args[args.index('--title') + 1]
         async def communicate(input=None):
             return (b'VERDICT: ACCEPT' if returncode == 0 else b'seat died, no verdict line'), b''   # D-4430: a final verdict at rc 1 completes
         return SimpleNamespace(pid=FAKE_PID, returncode=returncode, communicate=communicate)
@@ -199,7 +202,9 @@ _SOL_LEGS = [leg for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS)
 @pytest.mark.parametrize('leg', _SOL_LEGS, ids=lambda leg: leg.id)
 @pytest.mark.parametrize('role', ['implement', 'review'])
 @pytest.mark.parametrize('row_kind', ['matching', 'prefixed', 'base-model', 'failed-run',
-                                      'missing', 'wrong-tag', 'failed', 'unknown-model'])
+                                      'missing', 'wrong-tag', 'failed', 'unknown-model',
+                                      'console-meta/muse-spark-1.3', 'omniroute/resolver-x',
+                                      'different-gpt'])
 def test_sol_gateway_witness_for_every_route_leg(tmp_path, monkeypatch, leg, role, row_kind):
     import asyncio
     from plangraph.spawner import resolver
@@ -220,12 +225,16 @@ def test_sol_gateway_witness_for_every_route_leg(tmp_path, monkeypatch, leg, rol
     served = leg.model.removeprefix('omniroute/cx-')
     if row_kind == 'base-model':
         served = 'gpt-6.1-sol'
+    elif row_kind == 'different-gpt':
+        served = 'gpt-6-luna'
+    elif '/' in row_kind:
+        served = row_kind
 
     def fetch(tag, env):
-        seen['fetched'] = True
-        if row_kind == 'missing':
+        seen.setdefault('fetch_tags', []).append(tag)
+        if row_kind == 'missing' or tag != seen['expected_tag']:
             return []
-        return [{'sessionTag': tag if row_kind != 'wrong-tag' else 'another-session',
+        return [{'sessionTag': seen['expected_tag'] if row_kind != 'wrong-tag' else 'another-session',
                  'status': 503 if row_kind == 'failed' else 200,
                  'provider': 'cx',
                  'model': ('unknown-model' if row_kind == 'unknown-model' else
@@ -235,6 +244,7 @@ def test_sol_gateway_witness_for_every_route_leg(tmp_path, monkeypatch, leg, rol
 
     async def factory(*args, **kwargs):
         seen['env'] = kwargs['env']
+        seen['expected_tag'] = args[args.index('--title') + 1]
         async def communicate(input=None):
             return b'VERDICT: ACCEPT', b''
         return SimpleNamespace(pid=FAKE_PID, returncode=1 if row_kind == 'failed-run' else 0,
@@ -250,11 +260,18 @@ def test_sol_gateway_witness_for_every_route_leg(tmp_path, monkeypatch, leg, rol
 
     job = asyncio.run(run())
     assert gw.tagged(seen['env']['OPENCODE_CONFIG_CONTENT'], job.job_id, 'omniroute')
-    assert seen.get('fetched')
-    if row_kind in ('matching', 'prefixed', 'base-model', 'failed-run'):
+    assert seen['expected_tag'] in seen.get('fetch_tags', [])
+    assert fetch('wrong-lookup-tag', seen['env']) == []
+    if row_kind in ('matching', 'prefixed', 'base-model', 'failed-run', 'different-gpt'):
         assert job.served_model == 'cx/' + served
         assert job.served_family == 'gpt'
         assert job.witness_kind == gw.WITNESS_KIND
+        mismatches = [e for e in job.events if e['event'] == 'served_model_mismatch']
+        if served != leg.model.removeprefix('omniroute/cx-'):
+            assert mismatches == [dict(event='served_model_mismatch',
+                                       requested_model=leg.model, served_model='cx/' + served)]
+        else:
+            assert mismatches == []
     else:
         assert job.served_model in (None, '', 'unwitnessed')
         assert job.served_family in (None, '', 'unwitnessed')
@@ -293,3 +310,32 @@ def test_route_table_witness_paths():
             missing.append(leg.id)
     print('Route-table legs without a witness path (including disabled legs):\n' + '\n'.join(missing))
     assert not set(missing).intersection(leg.id for leg in _SOL_LEGS), missing
+
+
+@pytest.mark.parametrize('model', ['console-meta/muse-spark-1.3', 'omniroute/resolver-x'])
+def test_adapter_rejects_unregistered_model_segments(model):
+    from plangraph.spawner.runner import JobInfo, SpawnerRunner
+    runner = SpawnerRunner()
+    job = JobInfo('admission', 'running', 'fixture', 'omniroute/cx-gpt-6.1-sol')
+    runner.jobs[job.job_id] = job
+    token = runner._adapter_tokens[job.job_id] = object()
+    with pytest.raises(ValueError, match='not an admitted model id'):
+        runner.served_witness(job.job_id, model, adapter_token=token)
+    assert job.served_model == job.served_family == 'unwitnessed'
+
+
+@pytest.mark.parametrize('model,family', [
+    ('console-meta/muse-spark-1.3-contributor', 'muse'),
+    ('omniroute/muse-spark-1.3-contributor', 'muse'),
+    ('cx/gpt-6.1-sol-medium', 'gpt'),
+    ('omniroute/cx-gpt-6.1-sol-medium', 'gpt'),
+    ('xiaomi-mimo/mimo-v2.6-flash', 'mimo'),
+])
+def test_adapter_family_uses_registered_model_segment(model, family):
+    from plangraph.spawner.runner import JobInfo, SpawnerRunner
+    runner = SpawnerRunner()
+    job = JobInfo('admission', 'running', 'fixture', model)
+    runner.jobs[job.job_id] = job
+    token = runner._adapter_tokens[job.job_id] = object()
+    runner.served_witness(job.job_id, model, adapter_token=token)
+    assert job.served_family == family

@@ -328,7 +328,15 @@ writers and effort variants. After exit (successful or failed), the parent reads
 the response-side gateway call log independently of review tool permissions. Only
 a unique admitted model from successful rows for that tag supplies a witness;
 missing, mismatched tags, failed rows and unknown model IDs stay unwitnessed.
-The child-writable OpenCode store remains review-only request-side evidence.
+Admission matches exact model segments in the route table, stripping transport
+provider prefixes and the registered `cx-` GPT alias prefix. A different admitted
+model keeps its family witness and records `served_model_mismatch` with the raw
+requested and served IDs, including when an effort variant serves its base model.
+A writer child holds the gateway API key and session tag and can submit calls
+with that tag. The witness proves the model served for tagged gateway calls;
+it does not prove independence from the child or bind a response to its answer.
+The management log credential stays in the parent. The child-writable OpenCode
+store remains review-only request-side evidence.
 Run `python -m pytest -q -s tests/test_gateway_witness.py -k route_table_witness_paths`
 to list default and explicit legs without a witness path, including disabled
 legs. The check uses synthetic rows, assumes gateway-backed MiMo, and also checks
