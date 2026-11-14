@@ -144,3 +144,36 @@ with patch.object(land, 'gh_json', side_effect=api):
     assert reruns and 'rust-windows' in '\n'.join(reruns)
 "#);
 }
+
+#[test]
+fn red_main_freezes_land_except_a_head_bound_go_row() {
+    python(r#"
+import pathlib, sys, tempfile
+from unittest.mock import patch
+sys.path.insert(0, 'tools')
+import merge_batch_land as land
+head = 'a' * 40
+run = {'head_sha': 'b' * 40, 'head_branch': 'main', 'status': 'completed', 'conclusion': 'failure'}
+def api(*args):
+    return {'object': {'sha': 'b' * 40}} if '/git/ref/' in args[1] else {'workflow_runs': [run]}
+with patch.object(land, 'gh_json', side_effect=api), tempfile.TemporaryDirectory() as tmp:
+    path = pathlib.Path(tmp, 'GO')
+    for text in ['', 'GO ' + head, 'GO ' + 'c' * 40 + ' EXCEPTION:main-red-fix', 'GO ' + head + ' EXCEPTION:main-red-fix-extra']:
+        path.write_text(text)
+        try:
+            land.require_main_green('o/r', head, str(path))
+            raise AssertionError('red main accepted: ' + text)
+        except land.MergeBatchError as exc:
+            assert 'main_red' in str(exc), str(exc)
+    path.write_text('GO ' + head + ' EXCEPTION:main-red-fix')
+    land.require_main_green('o/r', head, str(path))
+    run['conclusion'] = 'success'
+    land.require_main_green('o/r', head, None)
+    run['status'] = 'in_progress'
+    try:
+        land.require_main_green('o/r', head, None)
+        raise AssertionError('pending main accepted')
+    except land.MergeBatchError:
+        pass
+"#);
+}

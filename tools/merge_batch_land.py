@@ -218,6 +218,28 @@ def record_reruns(repo, number, reruns):
             gh("api", "--method", "PATCH", f"repos/{repo}/pulls/{number}", "-f", f"body=@{path}")
 
 
+def require_main_green(repo, head, go_row=None):
+    """Freeze land while main has no completed green full run at its current tip."""
+    tip = gh_json("api", f"repos/{repo}/git/ref/heads/main")["object"]["sha"]
+    runs = gh_json("api", f"repos/{repo}/actions/workflows/tests.yml/runs?branch=main&per_page=1")["workflow_runs"]
+    latest = runs[0] if runs else {}
+    if (latest.get("head_sha") == tip and latest.get("head_branch") == "main"
+            and latest.get("status") == "completed" and latest.get("conclusion") == "success"):
+        return
+    if go_row:
+        try:
+            lines = Path(go_row).read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            raise MergeBatchError(f"main_red: cannot read GO row: {exc}") from None
+        for line in lines:
+            tokens = line.split()
+            if "GO" in tokens and head in tokens and "EXCEPTION:main-red-fix" in tokens:
+                print(f"main_red: GO exception for {head} from {go_row}", file=sys.stderr)
+                return
+    raise MergeBatchError("main_red: latest tests run on main is not completed green at its tip; "
+                          "only a GO row for this head with EXCEPTION:main-red-fix permits land")
+
+
 def settle(repo, recs, wait):
     """{pr: GitHub's state and head} of the included PRs, polled for up to ``wait`` seconds until each is MERGED
     or has a moved head (a PR with a new commit does not merge by itself, so it is not waited for)."""
@@ -279,6 +301,7 @@ def cmd_land(args):
         reruns = require_full_run(repo, st["head"], st["branch"])
         record_reruns(repo, number, reruns)
         require_green(repo, number, [c for c in (args.checks or "").split(",") if c])
+        require_main_green(repo, st["head"], args.go_row)
         gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"])
     elif pr["state"] != "MERGED":
         raise MergeBatchError(f"batch PR #{number} is {pr['state']}")

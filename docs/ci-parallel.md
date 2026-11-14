@@ -28,3 +28,19 @@ all jobs and shards green with none skipped, and refuses missing environments.
 `--checks` cannot bypass that proof. Rerun attempts and their job names are
 appended to the batch PR before landing; explain them with the flake fix or
 quarantine Plan-Item, rather than silently rerunning a known failure.
+
+## Red main and runner switches
+
+Landing freezes unless main's latest tests run is completed green on main's
+current tip. A missing, queued, cancelled or failed run refuses with `main_red`.
+The only exception is a recorded GO row naming the exact batch SHA, `GO`, and
+`EXCEPTION:main-red-fix` as separate tokens; pass its file with `land --go-row`.
+It does not waive the batch's own full CI or review requirements.
+
+Trial runner changes on a non-main branch. Before changing `CI_SELF_HOSTED*`
+or `*_RUNNER_LABELS`, dispatch the full tests workflow on that branch using the
+proposed runners, require every job green, and record the run URL, head SHA and
+runner labels in the authorizing D-row. Only then switch the repository runner
+variables. A red trial is repaired on the branch; main is never the trial host.
+The router-owned `merge-part` command must perform the same main-tip check
+before using any single-PR exception.

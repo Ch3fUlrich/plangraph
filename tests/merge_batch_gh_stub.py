@@ -97,11 +97,16 @@ elif cmd == ["pr", "edit"]:  # gh 2.45 fails here for every repo: the tool must 
         "(repository.pullRequest.projectCards)")
 elif ARGV[0] == "api":  # the REST calls the tool makes: add labels, update title and body
     endpoint_get = ARGV[1]
+    if "/git/ref/heads/main" in endpoint_get:
+        print(json.dumps({"object": {"sha": git("rev-parse", "refs/heads/main").stdout.strip()}}))
+        sys.exit(0)
     if "/actions/" in endpoint_get:
         batch = next((follow_branch(p) for p in S["prs"].values() if p["headRefName"].startswith("batch/")), None)
         run = {"id": 7, "head_sha": batch["headRefOid"] if batch else "0" * 40,
                "head_branch": batch["headRefName"] if batch else "main", "event": "pull_request",
                "status": "completed", "conclusion": "success", "run_attempt": 1}
+        if "branch=main" in endpoint_get:
+            run.update(head_sha=git("rev-parse", "refs/heads/main").stdout.strip(), head_branch="main", event="push")
         if "/jobs?" in endpoint_get:
             names = ["select", "scrub", "file-size", "new-code-lang", "changelog-docs", "browser",
                      "rust", "rust-windows", "rust-worker", "rust-spike", "ci-gate"]
