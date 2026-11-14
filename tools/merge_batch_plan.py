@@ -116,7 +116,7 @@ def plan_batches(prs, base, max_prs=6, max_lines=1200, patterns=()):
     unit_list = []
     for members in units.values():
         members = stack_sorted(sorted(members), parent)
-        unit_list.append({"prs": members, "lines": sum(by_num[n]["lines"] for n in members),
+        unit_list.append({"prs": members, "lines": sum(by_num[n].get("batch_lines", by_num[n]["lines"]) for n in members),
                           "high": any(high_hits(by_num[n], patterns) for n in members)})
     unit_list.sort(key=lambda unit: min(unit["prs"]))
     batches, open_batch = [], {}  # open_batch: the batch of each tier that can still take a unit
@@ -139,6 +139,7 @@ def plan_batches(prs, base, max_prs=6, max_lines=1200, patterns=()):
     rows = [{"number": n, "title": by_num[n]["title"], "head": by_num[n]["head"], "ref": by_num[n]["ref"],
              "base": by_num[n]["base"], "draft": by_num[n]["draft"], "ci": by_num[n]["ci"],
              "files": len(by_num[n]["files"]), "lines": by_num[n]["lines"], "paths": by_num[n]["files"],
+             "batch_lines": by_num[n].get("batch_lines", by_num[n]["lines"]),
              "generated_lines": by_num[n].get("generated_lines", 0),
              "generated_files": by_num[n].get("generated_files", []),
              "high": bool(high_hits(by_num[n], patterns)),

@@ -197,7 +197,7 @@ def norm_pr(raw):
         "draft": bool(raw.get("isDraft")), "cross": bool(raw.get("isCrossRepository")),
         "labels": [lab["name"] for lab in raw.get("labels") or []],
         "files": [f["path"] for f in files], "truncated": (raw.get("changedFiles") or 0) > len(files),
-        "extra": [],  # paths git sees in the diff that gh's list lacks (refresh_diff)
+        "extra": [],  # old rename paths from Git (refresh_diff)
         "lines": lines or sum(
             (f.get("additions") or 0) + (f.get("deletions") or 0) for f in files),
         "ci": ci_state(raw.get("statusCheckRollup")),
@@ -226,26 +226,45 @@ def refresh_diff(base, prs, heads=None):
             raise MergeBatchError(f"cannot fetch the PR heads from {REMOTE} to read their paths: {exc} "
                                   f"(run it in a checkout whose {REMOTE} is the repo)") from None
         heads = {pr["number"]: pr["head"] for pr in prs}
+    by_ref = {}
+    for pr in sorted(prs, key=lambda pr: pr["number"]):
+        if not pr["cross"]:
+            by_ref.setdefault(pr["ref"], pr)
     for pr in prs:
         try:
             diff = f"{REMOTE}/{base}...{heads[pr['number']]}"
             paths = git("diff", "--name-only", "-z", diff).stdout
             all_paths = git("diff", "--name-only", "--no-renames", "-z", diff).stdout
             files = [path for path in paths.split("\0") if path]
-            generated = [path for path in files if Path(path).name == "Cargo.lock"
-                         or "generated" in Path(path).parts or ".min." in Path(path).name]
+            def generated(path):
+                return (Path(path).name == "Cargo.lock" or "generated" in Path(path).parts
+                        or ".min." in Path(path).name)
 
-            def lines(*pathspecs):
-                stat = git("diff", "--shortstat", diff, "--", *pathspecs).stdout
-                return sum(int(n) for n in re.findall(r"(\d+) (?:insertion|deletion)s?\(", stat))
+            def lines(comparison):
+                stat = git("diff", "--shortstat", comparison).stdout
+                # The first number is the file count; the others are added/deleted
+                # lines. Avoid matching translated insertion/deletion labels.
+                return sum(map(int, re.findall(r"\d+", stat)[1:]))
 
-            pr.update(files=files, truncated=False, lines=lines(),
-                      generated_lines=lines(*[f":(literal){path}" for path in generated]) if generated else 0,
-                      generated_files=generated,
+            generated_files, generated_lines = set(), 0
+            records = iter(git("diff", "--numstat", "-z", diff).stdout.split("\0"))
+            for record in records:
+                if not record:
+                    continue
+                added, deleted, path = record.split("\t", 2)
+                paths = [path] if path else [next(records), next(records)]  # rename: old, new
+                if any(generated(path) for path in paths):
+                    generated_files.update(path for path in paths if generated(path))
+                    generated_lines += sum(int(n) for n in (added, deleted) if n != "-")
+            parent = by_ref.get(pr["base"])
+            # Display each diff against main, but count only this layer of a stack
+            # toward the batch cap, as with GitHub's per-PR sizes before refresh.
+            contribution = f"{heads[parent['number']]}...{heads[pr['number']]}" if parent else diff
+            pr.update(files=files, truncated=False, lines=lines(diff), batch_lines=lines(contribution),
+                      generated_lines=generated_lines, generated_files=sorted(generated_files),
                       extra=sorted(set(all_paths.split("\0")) - set(files) - {""}))
         except MergeBatchError as exc:
             raise MergeBatchError(f"cannot read the diff of PR #{pr['number']} ({short(pr['head'])}): {exc}") from None
-
 
 
 def repo_info(repo=None):

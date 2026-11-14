@@ -92,7 +92,7 @@ def test_plan_and_build_use_refreshed_git_sizes_and_full_paths(env):
     table = env.run("plan", "--max-lines", "6000", cwd=fresh).stdout
     assert "batch 1 HIGH: --prs 912,921,928" in table and "batch 2" not in table
     # The first two merge cleanly; build must apply the same corrected caps.
-    result = env.run("build", "--name", "real", "--prs", "912,921", "--max-lines", "6000", cwd=fresh)
+    result = env.run("build", "--name", "real", "--prs", "912,921", "--max-lines", "2000", cwd=fresh)
     assert result.returncode == 0, result.stderr
 
 
@@ -106,6 +106,27 @@ def test_plan_counts_generated_churn_separately_inside_total(env):
     assert "GENERATED" in env.run("plan").stdout
     result = env.run("build", "--name", "generated", "--prs", "1", "--max-lines", "5")
     assert result.returncode == 1 and "over the caps" in result.stderr
+
+
+def test_plan_stack_counts_each_layer_once_against_cap(env):
+    env.branch_pr(1, {"a.txt": "a\n" * 700})
+    env.branch_pr(2, {"b.txt": "b\n" * 100}, base="lane/p1")
+    plan = json.loads(env.run("plan", "--json").stdout)
+    assert [row["lines"] for row in plan["prs"]] == [700, 800]
+    assert [row["batch_lines"] for row in plan["prs"]] == [700, 100]
+    assert plan["batches"][0]["lines"] == 800 and not plan["batches"][0]["over_cap"]
+    result = env.run("build", "--name", "stackcap", "--prs", "1,2")
+    assert result.returncode == 0, result.stderr
+
+
+def test_plan_generated_rename_counts_churn_from_full_diff(env):
+    old, new = "ui/generated/old.js", "ui/generated/new.js"
+    content = "".join(f"line {i}\n" for i in range(100))
+    env.seed({old: content})
+    env.branch_pr(1, {new: content.replace("line 5\n", "changed\n")}, moves={old: new})
+    row = json.loads(env.run("plan", "--json").stdout)["prs"][0]
+    assert row["lines"] == row["generated_lines"] == 2
+    assert row["generated_files"] == [new, old]
 
 
 def test_plan_high_by_the_old_path_of_a_rename(env):
