@@ -1,0 +1,1 @@
+- New skill `phase-batch-orchestration`: phase batches with long-lived package writers, checkpoint PRs and one review per checkpoint (rule 3.1 in practice).
