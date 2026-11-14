@@ -177,3 +177,39 @@ def test_scan_line_still_returns_only_rule_names(tree):
     cfg = sc.build_config()
     assert sc.scan_line("addr " + IP_A, cfg, lambda t: []) == {"ipv4"}
     assert sc.scan_line("nothing to see", cfg, lambda t: []) == set()
+
+
+def _git(tree, *args):
+    import subprocess
+    subprocess.run(["git", "-C", str(tree), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                    *args], check=True, capture_output=True)
+
+
+def _leaky(tree):
+    (tree / "tracked.txt").write_text("addr " + IP_A + "\n")
+    (tree / ".pytest_cache").mkdir()
+    (tree / ".pytest_cache" / "nodeids").write_text("addr " + IP_A + "\n")
+
+
+def test_git_checkout_scans_tracked_files_only(tree):
+    _git(tree, "init", "-q")
+    _leaky(tree)
+    _git(tree, "add", "tracked.txt")
+    _git(tree, "commit", "-qm", "x")
+    assert [h.path for h in sc.scan_tree(tree, sc.build_config())] == ["tracked.txt"]
+
+
+def test_file_removed_from_index_but_in_head_is_still_scanned(tree):
+    _git(tree, "init", "-q")
+    _leaky(tree)
+    _git(tree, "add", "tracked.txt")
+    _git(tree, "commit", "-qm", "x")
+    _git(tree, "rm", "-q", "--cached", "tracked.txt")
+    assert [h.path for h in sc.scan_tree(tree, sc.build_config())] == ["tracked.txt"]
+
+
+def test_checkout_without_commit_fails_closed_and_scans_everything(tree):
+    _git(tree, "init", "-q")
+    _leaky(tree)
+    paths = sorted(h.path for h in sc.scan_tree(tree, sc.build_config()))
+    assert paths == [".pytest_cache/nodeids", "tracked.txt"]

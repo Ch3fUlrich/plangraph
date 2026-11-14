@@ -119,12 +119,29 @@ def test_every_worker_activity_is_a_known_type():
     import re
     from plangraph.projector.models import KNOWN_ACTIVITY_TYPES
     src = (ROOT / "rust/worker/src/activities.rs").read_text()
-    names = re.findall(r"#\[activity\]\s+pub async fn (\w+)", src)
+    activities = re.findall(r'#\[activity(?:\(([^]]*)\))?\]\s+pub async fn (\w+)', src)
+    assert len(activities) == len(re.findall(r"(?m)^\s*#\[activity(?:\(|\])", src))
+    names = [name for _, name in activities]
     # Never pass vacuously: a regex that stopped matching must fail loudly.
     assert len(names) >= 1, "parsed no #[activity] fn names from activities.rs"
-    assert {"ask_question", "record_question_timeout", "janitor"} <= set(names), names
-    for name in names:
-        assert name == "attempt" or f"CardActivities::{name}" in KNOWN_ACTIVITY_TYPES, name
+    assert {"attempt", "observe", "ask_question", "record_question_timeout", "janitor"} <= set(names)
+    for attrs, name in activities:
+        override = re.search(r'\bname\s*=\s*"([^"]+)"', attrs or "")
+        wire_name = override[1] if override else f"CardActivities::{name}"
+        assert wire_name in KNOWN_ACTIVITY_TYPES, wire_name
+
+
+def test_observe_question_park_fixture_projects_without_alarm(world, projector):
+    from keeper_util import seed
+    from plangraph.projector.models import KNOWN_ACTIVITY_TYPES
+    seed(world, [("A", [])])
+    h = load(ROOT / "rust/worker/tests/fixtures/projector/observe_park.json")
+    proj = project_history(h, workflow_id="card:demo:A", run_id="r2")
+    assert proj.shape_issues == ()
+    assert "observe" in KNOWN_ACTIVITY_TYPES
+    assert [s.state for s in proj.states] == ["running", "needs_input", "parked"]
+    assert projector.apply_run(proj, run_ord=1).states_written == 3
+    assert alarms(world) == []
 
 
 def test_rebuild_from_history_yields_identical_alarm_rows_twice(world, projector):

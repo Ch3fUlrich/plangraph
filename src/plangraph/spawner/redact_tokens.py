@@ -51,13 +51,21 @@ def join_shielded_assignments(text, assignment):
 
 
 def redact_wrapped(text):
+    out, copied = [], 0
+    for start, end in _wrapped_spans(text):
+        out.extend((text[copied:start], '[REDACTED]'))
+        copied = end
+    return ''.join((*out, text[copied:]))
+
+
+def _wrapped_spans(text):
     """Consume contiguous bodies across LF/CRLF, exactly like redact_wrapped.rs.
 
     Before the floor a continuation may end mid-line. After it, only whole
     allowed-byte lines join; full contiguous runs are consumed before testing
     floors or the 4096-byte continuation budget (not a per-run truncation).
     """
-    out, copied = [], 0
+    copied = 0
     for match in _PREFIX.finditer(text):
         if match.start() < copied:
             continue
@@ -88,9 +96,8 @@ def redact_wrapped(text):
                 break
             end, wrapped = next_start, True
         if wrapped and count >= spec.floor:
-            out.extend((text[copied:match.start()], '[REDACTED]'))
+            yield match.start(), end
             copied = end
-    return ''.join((*out, text[copied:]))
 
 
 _NAME_KEYWORD = re.compile(r'token|secret|password|passwd|api_?key|access_?key|private_?key|credential')
@@ -141,9 +148,11 @@ def _name_headers(text):
 
 
 def redact_wide_assignments(text, assignment):
-    """Python NEW-only stage: OLD headers/values win; NEW consumes to CR/LF."""
+    """OLD wins; NEW consumes physical lines without exposing old wrapped masks."""
     old_matches = iter(assignment.finditer(text))
     old = next(old_matches, None)
+    wrapped = iter(_wrapped_spans(text))
+    span = next(wrapped, None)
     out, copied = [], 0
     for start, end in _name_headers(text):
         if start < copied:
@@ -154,6 +163,10 @@ def redact_wide_assignments(text, assignment):
             continue  # OLD value containment or intersecting half-open headers.
         value_end = _LINE_REMAINDER.match(text, end).end()
         if value_end > end:
+            # Keep every continuation the pre-A1 wrapped scanner would mask.
+            while span is not None and span[0] < value_end:
+                value_end = _LINE_REMAINDER.match(text, max(value_end, span[1])).end()
+                span = next(wrapped, None)
             out.extend((text[copied:end], '[REDACTED]'))
             copied = value_end
             while old is not None and old.start() < copied:
