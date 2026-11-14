@@ -320,3 +320,6 @@ Python files already in flight are individually listed in
 `tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
 
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
+
+The K1-R1 HEAD audit runtime is explicitly stdlib Python so the installer can copy
+it outside the changing checkout; its narrow allowlist entry covers that requirement.

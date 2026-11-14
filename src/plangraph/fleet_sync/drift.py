@@ -1,11 +1,13 @@
 """Bounded, injectable host inspection; unavailable data is never zero drift."""
+import hashlib
 import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
-from datetime import UTC, datetime
+import time
 from pathlib import Path
 
 from .release import git
@@ -19,8 +21,8 @@ def _local_git(repo, *args, check=True):
                           capture_output=True, text=True, timeout=10, env=env)
 
 
-def check_checkout(repo, send, *, default_branch=None, routing='routing'):
-    """Inspect tracked files only and reuse the fleet-bus alarm sink."""
+def checkout_findings(repo, *, default_branch=None):
+    """Read production checkout health without fetching or changing it."""
     findings = []
     try:
         default = default_branch or _local_git(
@@ -33,86 +35,133 @@ def check_checkout(repo, send, *, default_branch=None, routing='routing'):
             raise ValueError('branch unavailable')
         elif branch.stdout.strip() != default:
             findings.append(f'wrong branch {branch.stdout.strip()}, want {default}')
+        else:
+            merged = _local_git(repo, 'merge-base', '--is-ancestor', 'HEAD',
+                                'refs/remotes/origin/' + default, check=False)
+            if merged.returncode == 1:
+                findings.append('unmerged commits on the default branch')
+            elif merged.returncode:
+                raise ValueError('origin default unavailable')
+        flags = _local_git(repo, 'ls-files', '-v', '-z').stdout.split('\0')
+        if any(row and (row[0] == 'S' or row[0].islower()) for row in flags):
+            findings.append('hidden tracked files: skip-worktree or assume-unchanged')
         if _local_git(repo, 'status', '--porcelain', '--untracked-files=no').stdout:
             findings.append('dirty tracked files')
     except (OSError, ValueError, subprocess.SubprocessError):
         findings.append('checkout or default branch unavailable')
-    if findings:
-        send(routing, 'production-checkout alarm: ' + '; '.join(findings))
     return findings
 
 
-def process_chain():
-    """Read command names only, never cmdline, arguments or environment."""
-    chain, seen, pid = [], set(), os.getpid()
-    while pid > 0 and pid not in seen:
-        seen.add(pid)
-        try:
-            stat = (Path('/proc') / str(pid) / 'stat').read_text()
-            start, end = stat.index('('), stat.rindex(')')
-            ppid = int(stat[end + 2:].split()[1])
-            chain.append({'pid': pid, 'ppid': ppid, 'comm': stat[start + 1:end]})
-            pid = ppid
-        except (OSError, ValueError, IndexError):
-            break  # A parent can exit between reads.
-    return chain
+def alert_sender(command=None, runner=None):
+    """Use live_follow's configured keeper-alert command and final-argument contract."""
+    from plangraph.live_follow import Runner
+
+    argv = shlex.split(command if command is not None else os.environ.get('PLANGRAPH_ALERT_CMD', ''))
+    if not argv or not shutil.which(argv[0]):
+        raise ValueError('PLANGRAPH_ALERT_CMD must name an available keeper alert handler')
+    runner = runner or Runner()
+    def send(line):
+        rc, _ = runner.run([*argv, line])
+        if rc:
+            raise RuntimeError('keeper alert handler failed')
+    return send
 
 
-def audit_head(repo, state_dir, hook, args, transactions=''):
-    """Append HEAD moves from post-checkout and committed ref transactions."""
+def check_checkout(repo, send, *, state_dir, default_branch=None, now=None):
+    """Notify on bad/clear transitions, with at most one successful reminder/hour."""
     import fcntl
 
-    branch = _local_git(repo, 'symbolic-ref', '-q', 'HEAD', check=False).stdout.strip()
-    if hook == 'post-checkout':
-        if len(args) != 3 or args[2] != '1':
-            return  # File-only checkouts never move HEAD.
-        moves = [args[:2]]
-    elif hook == 'reference-transaction':
-        if args != ['committed']:
-            return
-        rows = [line.split() for line in transactions.splitlines()]
-        heads = [r[:2] for r in rows if len(r) == 3 and r[2] == 'HEAD']
-        moves = heads or [r[:2] for r in rows if len(r) == 3 and r[2] == branch]
-    else:
-        raise ValueError('unknown audit hook')
-    path = Path(state_dir) / 'head-moves.jsonl'
-    for old, new in moves:
-        if not all(re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', sha) for sha in (old, new)):
-            raise ValueError('invalid audit sha')
-        row = {'time': datetime.now(UTC).isoformat(), 'old_sha': old, 'new_sha': new,
-               'branch': branch.removeprefix('refs/heads/') or 'detached',
-               'process_chain': process_chain()}
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
-        with os.fdopen(fd, 'r+', encoding='utf-8') as stream:
-            fcntl.flock(stream, fcntl.LOCK_EX)
-            # The two hooks can observe the same checkout. Retain one line.
-            last = None
-            for line in stream:
-                last = line
-            previous = json.loads(last) if last else {}
-            if all(previous.get(k) == row[k] for k in ('old_sha', 'new_sha', 'branch')):
-                continue
-            stream.write(json.dumps(row, ensure_ascii=True) + '\n')
+    from plangraph.routing_support.private_io import atomic_write_private
+
+    now = time.time() if now is None else now
+    ident = hashlib.sha256(str(Path(repo).resolve()).encode()).hexdigest()[:16]
+    state = Path(state_dir)
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = state / (ident + '.json')
+    fd = os.open(state / (ident + '.lock'), os.O_WRONLY | os.O_CREAT, 0o600)
+    with os.fdopen(fd, 'wb') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        old = json.loads(path.read_text()) if path.exists() else {'bad': False, 'sent': 0}
+        if (not isinstance(old, dict) or type(old.get('bad')) is not bool
+                or type(old.get('sent')) not in (int, float)):
+            raise ValueError('invalid production checkout alarm state')
+        findings = checkout_findings(repo, default_branch=default_branch)
+        bad = bool(findings)
+        if bad != old['bad'] or (bad and now - old['sent'] >= 3600):
+            kind = 'alarm' if bad and not old['bad'] else 'reminder' if bad else 'clear'
+            line = f'production-checkout {kind}: ' + ('; '.join(findings) if bad else 'checkout healthy')
+            send(line)  # Only checkpoint an acknowledged delivery.
+            atomic_write_private(path, json.dumps({'bad': bad, 'sent': now}) + '\n')
+        return findings
+
+
+def _audit_stub(python, script, state, hook):
+    guard = ('[ "${1-}" = committed ] || exit 0' if hook == 'reference-transaction'
+             else '[ "${3-}" = 1 ] || exit 0')
+    selection = ('''old= new=
+while read -r before after ref; do
+    case "$before$after" in *[!0-9a-f]*) continue ;; esac
+    case "${#before}:${#after}" in 40:40|64:64) ;; *) continue ;; esac
+    case "$ref" in
+        HEAD|"$headref") old=$before; new=$after ;;
+    esac
+done
+[ -n "$new" ] || exit 0''' if hook == 'reference-transaction' else
+                 'old=$1; new=$2')
+    # The marker is per Git worktree registration, shared by its two observers.
+    # Shell builtins handle ignored phases and duplicate observations: no Python.
+    dedupe = ('''printf '%s %s %s\\n' "$old" "$new" "$branch" > "$marker" || exit 0'''
+              if hook == 'reference-transaction' else '''if [ -f "$marker" ]; then
+    read -r before after previous_branch < "$marker" || true
+    [ "$after $previous_branch" != "$new $branch" ] || exit 0
+fi
+printf '%s %s %s\\n' "$old" "$new" "$branch" > "$marker" || exit 0''')
+    return ('#!/bin/sh\n# plangraph HEAD audit v2: observations must never block Git.\n'
+            + guard + '\n' + 'state=' + shlex.quote(str(state)) + '\n' + '''
+# Git runs non-bare hooks in the worktree root, including linked worktrees.
+gitdir=${GIT_DIR:-.git}
+if [ -f "$gitdir" ]; then
+    IFS= read -r location < "$gitdir" || exit 0
+    gitdir=${location#gitdir: }
+fi
+headref=
+IFS= read -r headref < "$gitdir/HEAD" || exit 0
+case "$headref" in
+    'ref: refs/heads/'*) headref=${headref#ref: }; branch=${headref#refs/heads/} ;;
+    *) branch=detached ;;
+esac
+key=main
+[ ! -f "$gitdir/commondir" ] || key=wt-${gitdir##*/}
+marker="$state/last-$key"
+''' + selection + '\n' + dedupe + '\n' + shlex.join(
+                [python, '-I', '-S', str(script), str(state)])
+            + ' "$PWD" "$old" "$new" "$branch" "$gitdir" </dev/null >/dev/null 2>&1 || true\nexit 0\n')
 
 
 def install_audit(repo, state_dir, *, apply=False):
-    """Dry-run by default; refuse existing hooks rather than overwrite them."""
+    """Copy a standalone runtime to state; dry-run unless explicitly applied."""
+    from . import head_audit
+
     repo, state_dir = Path(repo).resolve(), Path(state_dir).resolve()
+    script = state_dir / 'head-audit.py'
     hooks = {}
     for name in ('post-checkout', 'reference-transaction'):
         path = Path(_local_git(repo, 'rev-parse', '--path-format=absolute', '--git-path',
                                'hooks/' + name).stdout.strip())
-        command = [sys.executable, '-m', 'plangraph.fleet_sync', 'head-move',
-                   '--repo', str(repo), '--state-dir', str(state_dir), '--hook', name, '--']
-        content = '#!/bin/sh\nexec ' + shlex.join(command) + ' "$@"\n'
-        if path.exists() and path.read_text() != content:
+        content = _audit_stub(sys.executable, script, state_dir, name)
+        old_command = [sys.executable, '-m', 'plangraph.fleet_sync', 'head-move',
+                       '--repo', str(repo), '--state-dir', str(state_dir), '--hook', name, '--']
+        legacy = '#!/bin/sh\nexec ' + shlex.join(old_command) + ' "$@"\n'
+        if path.exists() and path.read_text() not in (content, legacy):
             raise ValueError('existing hook; integrate it explicitly before installing audit')
         hooks[path] = content
     if apply:
+        from plangraph.routing_support.private_io import atomic_write_private
+        state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        atomic_write_private(script, Path(head_audit.__file__).read_text())
         for path, content in hooks.items():
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content)
+            atomic_write_private(path, content)
             path.chmod(0o700)
     return [str(path) for path in hooks]
 

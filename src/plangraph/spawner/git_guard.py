@@ -27,23 +27,32 @@ from .prompt_input import checkout_env
 CODE_TREE = Path(__file__).resolve().parents[3]
 
 
-def annotate_tree(record):
-    """Capture the code checkout at first persistence, independent of job cwd."""
-    if 'tree_sha' in record and 'tree_branch' in record:
-        return
+def read_code_identity(repo=CODE_TREE):
+    """One bounded Git read while loading the spawner, before async dispatch."""
     try:
-        def git(*args):
-            return subprocess.run(['git', '-C', str(CODE_TREE), *args], check=True,
-                                  capture_output=True, text=True, timeout=10,
-                                  env=checkout_env()).stdout.strip()
-        sha = git('rev-parse', '--verify', 'HEAD^{commit}')
-        branch = git('rev-parse', '--abbrev-ref', 'HEAD')
-        record.setdefault('tree_sha', sha)
-        record.setdefault('tree_branch', 'detached' if branch == 'HEAD' else branch)
-    except (OSError, subprocess.SubprocessError):
-        record.setdefault('tree_sha', None)
-        record.setdefault('tree_branch', None)
-        record.setdefault('warnings', []).append('spawner code checkout identity unavailable')
+        result = subprocess.run(
+            ['git', '-C', str(repo), 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'],
+            check=True, capture_output=True, text=True, timeout=1, env=checkout_env())
+        sha, branch = result.stdout.strip().splitlines()
+        if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', sha):
+            raise ValueError('invalid code tree SHA')
+        return {'tree_sha': sha, 'tree_branch': 'detached' if branch == 'HEAD' else branch}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {'tree_sha': None, 'tree_branch': None}
+
+
+# Pin provenance to code load, not a potentially newer checkout at record time.
+CODE_IDENTITY = read_code_identity()
+
+
+def annotate_tree(record):
+    """Copy cached process provenance; persistence never starts a subprocess."""
+    for key, value in CODE_IDENTITY.items():
+        record.setdefault(key, value)
+    if record['tree_sha'] is None:
+        warning = 'spawner code checkout identity unavailable at process startup'
+        if warning not in record.setdefault('warnings', []):
+            record['warnings'].append(warning)
 
 
 class RunWorktreeDependencyNotMerged(SpawnRefused):

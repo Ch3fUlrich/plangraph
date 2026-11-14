@@ -26,6 +26,7 @@ def repo(tmp_path):
     (root / 'tracked').write_text('first\n')
     git(root, 'add', '.')
     git(root, 'commit', '-m', 'initial')
+    git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
     git(root, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main')
     return root
 
@@ -43,25 +44,25 @@ def test_checkout_alarm(repo, condition):
     elif condition == 'untracked':
         (repo / 'scratch').write_text('ignored by check\n')
     sent = []
-    findings = drift.check_checkout(repo, lambda recipient, line: sent.append((recipient, line)))
+    findings = drift.check_checkout(repo, sent.append, state_dir=repo.parent / "alarm-state")
     assert bool(findings) == (condition in {'detached', 'branch', 'dirty', 'staged'})
     assert len(sent) == bool(findings)
     if findings:
-        assert sent[0][0] == 'routing'
-        assert 'production-checkout' in sent[0][1]
-        assert ('dirty' if condition == 'staged' else condition) in sent[0][1]
+        assert 'production-checkout' in sent[0]
+        assert ('dirty' if condition == 'staged' else condition) in sent[0]
 
 
 def test_missing_checkout_alarms(tmp_path):
     sent = []
-    assert drift.check_checkout(tmp_path / 'missing', lambda *args: sent.append(args))
-    assert 'unavailable' in sent[0][1]
+    assert drift.check_checkout(tmp_path / 'missing', sent.append, state_dir=tmp_path / 'state')
+    assert 'unavailable' in sent[0]
 
 
 def test_default_branch_is_not_hardcoded(repo):
     git(repo, 'branch', '-m', 'trunk')
+    git(repo, 'update-ref', 'refs/remotes/origin/trunk', 'HEAD')
     git(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk')
-    assert not drift.check_checkout(repo, lambda *_: pytest.fail('clean default'))
+    assert not drift.check_checkout(repo, lambda *_: pytest.fail('clean default'), state_dir=repo.parent / 'state')
 
 
 def test_hook_install_dry_run_and_head_moves(repo, tmp_path, monkeypatch):
@@ -103,9 +104,9 @@ def test_spawn_record_has_code_tree_identity(repo, tmp_path, monkeypatch, detach
 
     from plangraph.spawner import git_guard
 
-    monkeypatch.setattr(git_guard, 'CODE_TREE', repo, raising=False)
     if detached:
         git(repo, 'checkout', '--detach')
+    monkeypatch.setattr(git_guard, 'CODE_IDENTITY', git_guard.read_code_identity(repo))
     service = _service(tmp_path, monkeypatch)
     result = asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='fixture', role='implement', dry_run=True))
     record = service.result(result['run_id'])
@@ -121,3 +122,18 @@ def test_timer_is_five_minutes():
     root = Path(__file__).resolve().parents[1]
     timer = (root / 'deploy/systemd/plangraph-prod-checkout.timer').read_text()
     assert 'OnUnitActiveSec=5min' in timer
+
+
+def test_tree_identity_is_cached_before_git_operations(repo, monkeypatch):
+    from plangraph.spawner import git_guard
+
+    captured = git_guard.read_code_identity(repo)
+    assert captured['tree_sha'] == git(repo, 'rev-parse', 'HEAD')
+    monkeypatch.setattr(git_guard, 'CODE_IDENTITY', captured)
+    git(repo, 'commit', '--allow-empty', '-m', 'tree changed after code load')
+    assert git(repo, 'rev-parse', 'HEAD') != captured['tree_sha']
+    monkeypatch.setattr(git_guard.subprocess, 'run', lambda *a, **kw: pytest.fail('record persistence ran a subprocess'))
+    for _ in range(3):
+        record = {}
+        git_guard.annotate_tree(record)
+        assert record == captured

@@ -2,36 +2,53 @@
 
 ## Production checkout guard and audit
 
-`python3 -m plangraph.fleet_sync check-checkout --repo CHECKOUT` checks HEAD
-against `origin/HEAD`'s default branch and examines staged and unstaged tracked
-changes. Use `--default-branch main` when the remote symbolic ref is absent.
-Detached HEAD, the wrong branch, tracked dirt, and unavailable Git/default-branch
-data send a `production-checkout alarm` to `routing` through the existing
-fleet-bus client (including its durable delivery/spool behavior). Override the
-recipient with `--routing`. Healthy checks send nothing. Untracked files do not
-alarm. Findings and failed delivery exit nonzero; an unresolved finding repeats
-on each check. The check never fetches, resets, switches or cleans the checkout.
+`python3 -m plangraph.fleet_sync check-checkout --repo CHECKOUT --state-dir STATE`
+checks HEAD against `origin/HEAD`'s default branch and examines staged/unstaged
+tracked changes. Use `--default-branch main` if the symbolic default is absent.
+Detached HEAD, the wrong branch, unavailable refs, and local default-branch
+commits not merged into `origin/<default>` alarm. Behind-only main is allowed.
+Skip-worktree and assume-unchanged flags alarm as hidden tracked files: a
+production checkout must not hide changes from inspection. Untracked files do
+not alarm. This check never fetches, resets, switches or cleans the checkout.
 
-`deploy/systemd/plangraph-prod-checkout.{service,timer}` are templates only,
-with a five-minute interval. Adapt the checkout, Python environment, default
-branch and fleet-bus environment before an operator installs them. This package
-does not install or start either unit.
+Delivery uses the existing live-follow keeper-alert interface:
+`PLANGRAPH_ALERT_CMD` is parsed as argv and receives the message as its last
+argument. Configure the deployed keeper alert handler, with no hardcoded fleet
+session address. A missing/unexecutable handler or failed delivery exits nonzero;
+the unit failure remains visible. State is private, per checkout and locked:
+one alarm on healthy-to-bad, one clear on recovery, and at most one successful
+reminder per hour while bad. A failed delivery is not checkpointed and retries.
+Corrupt state fails visibly rather than resetting dedupe. Healthy checks require
+an available alert command too, so broken alarm configuration is not silent.
+
+`deploy/systemd/plangraph-prod-checkout.{service,timer}` are uninstalled templates
+with a five-minute interval. Adapt the checkout, Python environment and default
+branch, and supply the required `prod-checkout.env` with `PLANGRAPH_ALERT_CMD`
+before operator installation. This package does not install or start units.
 
 `python3 -m plangraph.fleet_sync install-audit --repo CHECKOUT --state-dir STATE`
-prints planned hook paths and writes nothing. `--apply` installs `post-checkout`
-and `reference-transaction` hooks; existing different hooks are refused before
-any write, so integrate those explicitly. Git's configured hooks path is honored;
-ensure it is dedicated to this production checkout before applying. The chosen
-Python interpreter must be able to import `plangraph` when Git runs the hooks
-(install the package or provide PYTHONPATH). No hook is installed by this package.
+prints the planned hook paths and writes nothing. `--apply` copies a self-contained
+stdlib runtime to private `STATE/head-audit.py`, and installs `post-checkout` and
+`reference-transaction` shell stubs. Other hooks are refused before any write;
+exact prior plangraph audit stubs can be upgraded. Git's hooks path is honored,
+so ensure it is dedicated to this production repository before applying.
+The stubs use the absolute interpreter and copied script with `-I -S`; they do
+not import the changing checkout and do not require Python on PATH/PYTHONPATH.
 
-The hooks append JSON lines to `STATE/head-moves.jsonl` under an exclusive lock:
-UTC time, old/new SHA, branch or `detached`, and the `/proc` parent process chain
-containing only pid, ppid and command name. Arguments and environment are never
-read. Committed ref transactions cover commit/reset moves as well as checkout;
-the post-checkout observer is deduplicated for the same move. File-only checkout
-does not log a HEAD move. Initial log creation is private (0600); rotate the log
-as an operator when needed. Auditing observes moves; it does not prevent them.
+Prepared/aborted transactions and file-only checkouts return immediately in sh.
+Only committed HEAD moves start the runtime, at most once per move: per-worktree
+markers suppress the second observer. Linked worktrees use their own HEAD and
+worktree path. Every stub exits zero, including runtime/import/missing-script
+failures; the runtime arms a one-second alarm before dependency imports and I/O.
+Audit is best-effort: busy locks, timeouts or errors may omit observations, and
+the marker deliberately prevents a second attempt from delaying the same move.
+
+The private JSONL log records UTC time, old/new SHA, worktree path, its branch or
+`detached`, and /proc pid/ppid/command-name chains. Process arguments/environment
+are never read. Appends take a nonblocking lock and never scan the whole log.
+At 1 MiB the log rotates to `head-moves.jsonl.1`, retaining one previous file.
+Auditing observes moves; it never authorizes or prevents them. No hooks are
+installed by this package.
 
 Run `python3 -m plangraph.fleet_sync release record` after fetching origin/main.
 The newest of the last 50 locally known first-parent main commits with successful required branch checks is
