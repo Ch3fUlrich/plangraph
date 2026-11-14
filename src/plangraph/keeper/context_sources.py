@@ -155,11 +155,21 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
 
 def _merge_of(git, repo, ref, sha):
     """The first-parent merge on *ref* that introduced *sha*, or ``None``."""
-    out = _ok(git, repo, ["rev-list", "--ancestry-path", "--first-parent",
+    # Combining --ancestry-path with --first-parent prunes paths through
+    # second parents (nested batches and PR branches refreshed from main).
+    # Walk ancestry separately, then intersect with the ref's landing merges.
+    ancestry = _ok(git, repo, ["rev-list", "--ancestry-path", "--merges",
+                              "--end-of-options", f"{sha}..{ref}"])
+    if not ancestry:
+        return None
+    out = _ok(git, repo, ["rev-list", "--first-parent",
                           "--merges", f"--max-count={_MERGE_SCAN}",
                           "--end-of-options", f"{sha}..{ref}"])
     found = (out or "").split()
-    # the introducing merge is the oldest; a full window may have cut it off
+    ancestors = set(ancestry.split())
+    found = [commit for commit in found if commit in ancestors]
+    # Containing merges form a prefix of the first-parent merge chain. An
+    # older unrelated merge proves the introducing merge is in the window.
     if not found or len(found) >= _MERGE_SCAN or not valid_commit_ref(found[-1]):
         return None
     subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
