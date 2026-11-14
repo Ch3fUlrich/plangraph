@@ -1,0 +1,10 @@
+[Unit]
+Description=Alarm on detached, wrong-branch or tracked-dirty production checkout
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/plangraph
+Environment=PYTHONPATH=%h/code/plangraph/src
+EnvironmentFile=-%h/.config/plangraph/prod-checkout.env
+ExecStart=/usr/bin/python3 -m plangraph.fleet_sync check-checkout --repo %h/code/plangraph --default-branch main
+TimeoutStartSec=1min

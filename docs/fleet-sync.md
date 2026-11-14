@@ -1,5 +1,38 @@
 # Fleet code sync
 
+## Production checkout guard and audit
+
+`python3 -m plangraph.fleet_sync check-checkout --repo CHECKOUT` checks HEAD
+against `origin/HEAD`'s default branch and examines staged and unstaged tracked
+changes. Use `--default-branch main` when the remote symbolic ref is absent.
+Detached HEAD, the wrong branch, tracked dirt, and unavailable Git/default-branch
+data send a `production-checkout alarm` to `routing` through the existing
+fleet-bus client (including its durable delivery/spool behavior). Override the
+recipient with `--routing`. Healthy checks send nothing. Untracked files do not
+alarm. Findings and failed delivery exit nonzero; an unresolved finding repeats
+on each check. The check never fetches, resets, switches or cleans the checkout.
+
+`deploy/systemd/plangraph-prod-checkout.{service,timer}` are templates only,
+with a five-minute interval. Adapt the checkout, Python environment, default
+branch and fleet-bus environment before an operator installs them. This package
+does not install or start either unit.
+
+`python3 -m plangraph.fleet_sync install-audit --repo CHECKOUT --state-dir STATE`
+prints planned hook paths and writes nothing. `--apply` installs `post-checkout`
+and `reference-transaction` hooks; existing different hooks are refused before
+any write, so integrate those explicitly. Git's configured hooks path is honored;
+ensure it is dedicated to this production checkout before applying. The chosen
+Python interpreter must be able to import `plangraph` when Git runs the hooks
+(install the package or provide PYTHONPATH). No hook is installed by this package.
+
+The hooks append JSON lines to `STATE/head-moves.jsonl` under an exclusive lock:
+UTC time, old/new SHA, branch or `detached`, and the `/proc` parent process chain
+containing only pid, ppid and command name. Arguments and environment are never
+read. Committed ref transactions cover commit/reset moves as well as checkout;
+the post-checkout observer is deduplicated for the same move. File-only checkout
+does not log a HEAD move. Initial log creation is private (0600); rotate the log
+as an operator when needed. Auditing observes moves; it does not prevent them.
+
 Run `python3 -m plangraph.fleet_sync release record` after fetching origin/main.
 The newest of the last 50 locally known first-parent main commits with successful required branch checks is
 recorded privately and atomically in `~/.local/state/plangraph/release.json`.

@@ -228,7 +228,11 @@ def test_overflow_keeps_explicit_cwd(checkouts, tmp_path, monkeypatch, source, d
     monkeypatch.setattr(overflow, 'ready_records', lambda *a: {'remote': dict(
         ssh='remote', ok=True, fresh=True, live_runs=0,
         mem_available_mb=100000, role_mb=2048, floor_mb=3000)})
-    monkeypatch.setattr(overflow.subprocess, 'run', lambda *a, **kw: pytest.fail('explicit cwd left host'))
+    run = overflow.subprocess.run
+    def local_only(argv, *args, **kwargs):
+        assert argv[0] == 'git', 'explicit cwd left host'
+        return run(argv, *args, **kwargs)
+    monkeypatch.setattr(overflow.subprocess, 'run', local_only)
     if source != 'equals':
         monkeypatch.setattr(overflow, 'remote_spawn', lambda *a: pytest.fail('explicit cwd offered remotely'))
     service = spawn_service(SpawnerRunner(default_cwd=str(caller)), state=tmp_path / 'state')

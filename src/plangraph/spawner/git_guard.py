@@ -24,6 +24,27 @@ import uuid
 from plangraph.routing_errors import SpawnRefused
 from .prompt_input import checkout_env
 
+CODE_TREE = Path(__file__).resolve().parents[3]
+
+
+def annotate_tree(record):
+    """Capture the code checkout at first persistence, independent of job cwd."""
+    if 'tree_sha' in record and 'tree_branch' in record:
+        return
+    try:
+        def git(*args):
+            return subprocess.run(['git', '-C', str(CODE_TREE), *args], check=True,
+                                  capture_output=True, text=True, timeout=10,
+                                  env=checkout_env()).stdout.strip()
+        sha = git('rev-parse', '--verify', 'HEAD^{commit}')
+        branch = git('rev-parse', '--abbrev-ref', 'HEAD')
+        record.setdefault('tree_sha', sha)
+        record.setdefault('tree_branch', 'detached' if branch == 'HEAD' else branch)
+    except (OSError, subprocess.SubprocessError):
+        record.setdefault('tree_sha', None)
+        record.setdefault('tree_branch', None)
+        record.setdefault('warnings', []).append('spawner code checkout identity unavailable')
+
 
 class RunWorktreeDependencyNotMerged(SpawnRefused):
     """A declared finished dependency is absent from the fetched main history."""

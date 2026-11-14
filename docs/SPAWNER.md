@@ -53,7 +53,7 @@ Source spans must start and end on line boundaries; invalid spans (even empty on
 Long hex (32+), then base64/url-safe blobs (40+, mixing letters and digits), run
 only on child output via Python's `redact_output`, and as part of Rust's `redact`.
 Python never runs these broad rules on prompts or record structures: SHAs and hashes
-must stay readable there, including run IDs, card hashes and prompt SHA-256 fields.
+must stay readable there, including run IDs, card hashes and prompt SHA-256 fields. Run records add immutable spawn-time `tree_sha` and `tree_branch` (or `detached`) from the spawner code checkout, independent of the job cwd; old records may omit them. See [checkout auditing](fleet-sync.md#production-checkout-guard-and-audit).
 Stored stdout/stderr tails have already passed the output scrubber at collection.
 A tail therefore masks commit SHAs and long slash paths: take SHAs from git or the run record, never from a tail.
 
