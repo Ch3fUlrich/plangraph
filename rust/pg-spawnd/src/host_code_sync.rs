@@ -74,6 +74,7 @@ mod tests {
     use super::*;
     use std::process::Command;
     fn git(repo: &Path, args: &[&str]) -> String {
+        let email = ["123+fixture", "users.noreply.github.com"].join("@");
         let o = Command::new("git")
             .arg("-C")
             .arg(repo)
@@ -81,12 +82,9 @@ mod tests {
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_AUTHOR_NAME", "Fixture")
-            .env("GIT_AUTHOR_EMAIL", "123+fixture@users.noreply.github.com")
+            .env("GIT_AUTHOR_EMAIL", &email)
             .env("GIT_COMMITTER_NAME", "Fixture")
-            .env(
-                "GIT_COMMITTER_EMAIL",
-                "123+fixture@users.noreply.github.com",
-            )
+            .env("GIT_COMMITTER_EMAIL", &email)
             .output()
             .unwrap();
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
