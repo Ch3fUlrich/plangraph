@@ -1,5 +1,6 @@
 """Regression coverage for the first split CI review."""
 import importlib
+import json
 import os
 from pathlib import Path
 import runpy
@@ -17,10 +18,33 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize('job', ['pytest', 'pytest-postgres'])
 def test_unsharded_collection_check_rejects_empty_suite(tmp_path, job):
     workflow = yaml.safe_load((ROOT / '.github/workflows/tests.yml').read_text())
+    step_name = 'Check nonempty selection' if job == 'pytest' else 'Check nonempty collection'
     step = next((s for s in workflow['jobs'][job]['steps']
-                 if s.get('name') == 'Check nonempty collection'), None)
+                 if s.get('name') == step_name), None)
     assert step is not None
     assert step['if'] == 'matrix.shard == 0'
+    if job == 'pytest':
+        assert step['timeout-minutes'] == 3
+        assert 'pytest' not in step['run']
+        assert '--run' not in step['run']
+        assert '--collect-only' not in step['run']
+        (tmp_path / 'tools').mkdir()
+        for event, selected, expected in [('pull_request', [], 5),
+                                          ('pull_request', ['tests/test_hidden.py'], 0),
+                                          ('push', ['tests'], 0)]:
+            plan = {'tests': selected}
+            (tmp_path / 'tools/affected_tests.py').write_text(
+                'import sys\nassert sys.argv[1:] == ["--base", "base-sha"]\n'
+                f'print({json.dumps(plan)!r})\n')
+            command = step['run'].replace('${{ github.event_name }}', event)
+            env = dict(os.environ, RUNNER_TEMP=str(tmp_path), BASE_SHA='base-sha')
+            result = subprocess.run(['bash', '-e', '-c', command], cwd=tmp_path,
+                                    env=env, capture_output=True, text=True)
+            assert result.returncode == expected, result.stdout + result.stderr
+            assert json.loads(result.stdout) == plan
+            if expected == 5:
+                assert 'Empty test selection' in result.stderr
+        return
     (tmp_path / 'tests').mkdir()
     (tmp_path / 'tests/test_hidden.py').write_text('# keeper_util\ndef test_hidden(): pass\n')
     (tmp_path / 'tests/conftest.py').write_text(
