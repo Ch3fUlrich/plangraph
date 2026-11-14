@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.parse
+import urllib.request
 from ipaddress import ip_address
 from typing import Any
 
@@ -52,6 +53,12 @@ def _is_valid_url(url: str) -> bool:
     if "@" in p.netloc or p.username or p.password or p.query or p.fragment:
         return False
     return True
+
+
+class _NoManagementRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Never forward the management credential beyond the validated URL.
+        return None
 
 
 def valid_gateway_endpoint(value):

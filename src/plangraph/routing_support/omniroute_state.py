@@ -15,7 +15,9 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from .clients import effective_gateway_base_url
-from .opencode_render import gateway_management_base_url, valid_gateway_endpoint
+from .opencode_render import (
+    _NoManagementRedirect, gateway_management_base_url, valid_gateway_endpoint,
+)
 from .host_keys import _gateway_key
 
 TTL_ENV_VAR = "PLANGRAPH_OMNIROUTE_STATE_TTL_S"
@@ -35,8 +37,6 @@ class ProviderState:
 
 
 def _default_fetch(url, headers, timeout):
-    from plangraph.spawner.gateway_witness import _NoManagementRedirect
-
     request = urllib.request.Request(url, headers=headers)
     opener = urllib.request.build_opener(_NoManagementRedirect())
     with opener.open(request, timeout=timeout) as response:

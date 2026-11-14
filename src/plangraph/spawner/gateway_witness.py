@@ -19,7 +19,9 @@ import urllib.parse
 import urllib.request
 
 from plangraph.routing_support.opencode_overlay import _strip_jsonc
-from plangraph.routing_support.opencode_render import gateway_management_base_url, valid_gateway_endpoint
+from plangraph.routing_support.opencode_render import (
+    _NoManagementRedirect, gateway_management_base_url, valid_gateway_endpoint,
+)
 from .gateway_models import (  # compatibility re-exports for callers
     PROVIDER_ALIASES, model_segment, served_family, served_models,
 )
@@ -181,12 +183,6 @@ def require_witness(model, env=None, *, secrets=None):
         load_token(secrets)
     except LookupError as exc:
         raise SpawnRefused('witness required: ' + str(exc)) from None
-
-
-class _NoManagementRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        # Never forward the management credential beyond the validated URL.
-        return None
 
 
 def fetch_rows(tag, env, *, timeout=5, opener=None, secrets=None):
