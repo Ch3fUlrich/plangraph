@@ -90,8 +90,11 @@ pub(super) fn tree_members(pids: &[u32], child: u32, grandchild: u32) -> bool {
         && pids.contains(&grandchild)
         && extras.len() <= 2
         && extras.iter().all(|&pid| {
-            image_name(pid)
-                .is_ok_and(|image| image.to_ascii_lowercase().ends_with("\\system32\\conhost.exe"))
+            image_name(pid).is_ok_and(|image| {
+                image
+                    .to_ascii_lowercase()
+                    .ends_with("\\system32\\conhost.exe")
+            })
         })
 }
 
