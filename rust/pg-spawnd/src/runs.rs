@@ -1,4 +1,4 @@
-//! Local runs; witnesses, retry/fall-through, writer checks/continuation, delivery,
+//! Local runs; review quota fallthrough is supported; writer checks/continuation, delivery,
 //! dispatch refusal and D3622 liveness remain unported; packs/env use Python.
 use crate::{errors::ToolError, placement::Args};
 use pg_worker_core::run::{
@@ -143,9 +143,7 @@ impl Runs {
                 stdin: launch.stdin.map(String::into_bytes),
                 base: base.as_object().unwrap().clone(),
                 events: events.clone(),
-                finish: Some(Box::new(move |record, status| {
-                    finish(record, status, &leg, attempt_id)
-                })),
+                finish: Some(crate::review_retry::hook(args.clone(), leg, attempt_id)),
             };
             match self.supervisor.start(spec) {
                 Ok(()) => {}
@@ -321,6 +319,7 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
     };
     record.set("chosen_leg", chosen);
     record.set("writer_family", leg["family"].clone());
+    crate::review_retry::witness(record, leg, attempt_id);
     if let Some(state) = record
         .path()
         .parent()

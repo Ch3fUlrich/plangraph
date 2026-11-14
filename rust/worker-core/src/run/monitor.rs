@@ -23,6 +23,16 @@ pub(super) fn monitor(
     mut record: RunRecord,
     cancel: Arc<AtomicBool>,
 ) {
+    while let Some(next) = attempt(rt.clone(), spec, &mut record, cancel.clone()) {
+        spec = next;
+    }
+}
+fn attempt(
+    rt: Arc<Runtime>,
+    mut spec: RunSpec,
+    record: &mut RunRecord,
+    cancel: Arc<AtomicBool>,
+) -> Option<RunSpec> {
     let mut permit = None;
     let mut grouped: Option<Grouped> = None;
     let mut capture = None;
@@ -72,7 +82,7 @@ pub(super) fn monitor(
         ) {
             Ok(g) => Some(g),
             Err(e) => {
-                launch_error(&mut record, e);
+                launch_error(record, e);
                 return (1, false, StopOutcome::Empty);
             }
         };
@@ -93,7 +103,13 @@ pub(super) fn monitor(
             "queued_at",
             record.get("started").cloned().unwrap_or(Value::Null),
         );
-        record.set("started", json!(finalize::now()));
+        if record
+            .get("attempts")
+            .and_then(Value::as_array)
+            .is_none_or(|a| a.len() <= 1)
+        {
+            record.set("started", json!(finalize::now()));
+        }
         record.set("pid", json!(identity.pid));
         record.set("pid_start", json!(identity.start_time));
         record.set("job_object", json!(cfg!(windows)));
@@ -135,6 +151,12 @@ pub(super) fn monitor(
         let mut last = Instant::now();
         let mut seq = 0;
         let (exit, was_cancelled) = loop {
+            if record.get("role").and_then(Value::as_str) == Some("review") {
+                if let Some(reason) = c.review_quota_reason() {
+                    record.set("reason", json!(reason));
+                    break (None, false);
+                }
+            }
             match g.child.try_wait() {
                 Ok(Some(s)) => break (Some(s), false),
                 Err(_) => break (None, false),
@@ -146,7 +168,7 @@ pub(super) fn monitor(
             if last.elapsed() >= rt.cfg.save_every {
                 let next = c.snapshot().seq;
                 if next != seq {
-                    finalize::output(&mut record, &c, false);
+                    finalize::output(record, &c, false);
                     if finalize::save(&record) {
                         seq = next;
                     }
@@ -175,7 +197,19 @@ pub(super) fn monitor(
             }
         }
         c.flush_live();
-        (exit.map(exit_code).unwrap_or(1), was_cancelled, stop)
+        (
+            if record
+                .get("reason")
+                .and_then(Value::as_str)
+                .is_some_and(|s| s.starts_with("review_quota:"))
+            {
+                7
+            } else {
+                exit.map(exit_code).unwrap_or(1)
+            },
+            was_cancelled,
+            stop,
+        )
     }));
     let (code, cancelled, stop) = result.unwrap_or_else(|_| {
         let _ = record.push_event(json!({"event":"monitor_failed", "error":"panic"}));
@@ -187,8 +221,8 @@ pub(super) fn monitor(
         (1, false, stop)
     });
     let held = matches!(stop, StopOutcome::Survivors(_));
-    finalize::finish(
-        &mut record,
+    let next = finalize::finish(
+        record,
         &mut spec.finish,
         code,
         cancelled,
@@ -216,6 +250,7 @@ pub(super) fn monitor(
         g.group.terminate();
     }
     drop(grouped);
+    next
 }
 fn record_dir_cancelled(rt: &Runtime, id: &str) -> bool {
     rt.cfg
