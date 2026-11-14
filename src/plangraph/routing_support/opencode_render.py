@@ -69,6 +69,16 @@ def valid_gateway_endpoint(value):
         return False
 
 
+def gateway_management_base_url(url: str) -> str:
+    """Remove only a final API-version path segment; preserve the authority."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return url  # Leave malformed input intact for endpoint validation.
+    path = parsed.path.rstrip('/').removesuffix('/v1')
+    return urllib.parse.urlunsplit(parsed._replace(path=path))
+
+
 def _normalize_gateway_url(url: str) -> str:
     p = urllib.parse.urlsplit(url.strip().rstrip("/"))
     path = p.path if p.path not in ("", "/") else "/v1"

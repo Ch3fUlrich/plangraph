@@ -212,7 +212,7 @@ def test_management_request_refuses_redirects(monkeypatch, status):
 
 
 @pytest.mark.parametrize('endpoint', ['http://gateway.invalid/v1', 'ftp://gateway.invalid/v1',
-                                     'https://ops:secret@gateway.invalid/v1'])
+                                     'https://ops:secret@gateway.invalid/v1', 'https://[invalid'])
 def test_required_witness_validates_before_key_read(monkeypatch, endpoint):
     from plangraph.planner.routing import SpawnRefused
     env = {'OMNIROUTE_BASE_URL': endpoint, gw.TOKEN_ENV: 'fixture-management-key'}
@@ -228,3 +228,90 @@ def test_required_witness_invalid_file_never_reads_key(isolated_config, monkeypa
     monkeypatch.setattr(gw, 'load_token', lambda *_: pytest.fail('invalid file read management key'))
     with pytest.raises(SpawnRefused, match='gateway endpoint not configured'):
         gw.require_witness('omniroute/model', dict(os.environ), secrets=dict(os.environ))
+
+
+@pytest.mark.parametrize(('endpoint', 'management'), [
+    ('https://v1', 'https://v1'),
+    ('https://v1/v1', 'https://v1'),
+    ('https://gatewayv1', 'https://gatewayv1'),
+    ('https://v1/v1/', 'https://v1'),
+    ('https://v1:8443/prefix/v1/', 'https://v1:8443/prefix'),
+    ('https://v1/prefix/', 'https://v1/prefix'),
+])
+def test_management_urls_preserve_authority(endpoint, management, monkeypatch):
+    from plangraph.routing_support import omniroute_state, quota_snapshots
+    secrets = {'OMNIROUTE_BASE_URL': endpoint, gw.TOKEN_ENV: 'synthetic'}
+    seen = []
+
+    class Response:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+        def read(self):
+            return b'[]'
+
+    def opener(request, **kwargs):
+        seen.append(request.full_url)
+        return Response()
+
+    assert gw.fetch_rows('test', {}, secrets=secrets, opener=opener) == []
+    assert seen == [management + '/api/usage/call-logs?sessionTag=test&limit=200']
+    state = omniroute_state.from_env(secrets, key_resolver=lambda _: 'synthetic')
+    assert state.base_url == management
+    monkeypatch.setattr(quota_snapshots, '_gateway_key', lambda _: 'synthetic')
+    def fetch(url, headers, timeout):
+        assert url == management + quota_snapshots.URL_PATH
+        return 200, '[]'
+    assert quota_snapshots.fetch_snapshot_rows(secrets, fetch=fetch) == []
+
+
+def test_mimo_not_gateway_uses_native_reason():
+    witness = job('mimo')
+    witness.events.append({'event': 'gateway_witness_unavailable',
+                           'reason': 'mimo leg not routed through gateway'})
+    record_native(witness, 'opencode', set(), witness.model_or_combo)
+    assert witness.served_witness_reason == 'opencode: emits no verified structured served-model telemetry'
+
+
+def test_unresolvable_home_is_unconfigured(monkeypatch):
+    from pathlib import Path
+    def unavailable_home():
+        raise RuntimeError('home cannot be resolved')
+    monkeypatch.setattr(Path, 'home', unavailable_home)
+    assert clients.effective_gateway_base_url({}) is None
+
+
+@pytest.mark.parametrize('kind', ['fifo', 'directory'])
+def test_nonregular_config_is_unconfigured_and_bounded(isolated_config, kind):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    path = isolated_config / 'omniroute-base-url'
+    if kind == 'fifo':
+        if not hasattr(os, 'mkfifo'):
+            pytest.skip('FIFO unavailable')
+        os.mkfifo(path)
+    else:
+        path.mkdir()
+    code = ("from plangraph.routing_support.clients import effective_gateway_base_url; "
+            "assert effective_gateway_base_url() is None")
+    result = subprocess.run([sys.executable, '-c', code], timeout=3,
+                            capture_output=True, text=True,
+                            env={**os.environ, 'PYTHONPATH': str(Path(clients.__file__).parents[2])})
+    assert result.returncode == 0, result.stderr
+
+
+def test_config_read_is_bounded(isolated_config):
+    (isolated_config / 'omniroute-base-url').write_text('https://gateway.invalid/' + 'x' * 8192)
+    assert clients.effective_gateway_base_url() is None
+
+
+def test_xdg_config_does_not_require_home(isolated_config, monkeypatch):
+    from pathlib import Path
+    monkeypatch.delenv('HOME')
+    monkeypatch.setattr(Path, 'home', lambda: pytest.fail('XDG config resolved HOME'))
+    endpoint = 'https://gateway.invalid/v1'
+    (isolated_config / 'omniroute-base-url').write_text(endpoint)
+    assert clients.effective_gateway_base_url() == endpoint

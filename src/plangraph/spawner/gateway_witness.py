@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.request
 
 from plangraph.routing_support.opencode_overlay import _strip_jsonc
-from plangraph.routing_support.opencode_render import valid_gateway_endpoint
+from plangraph.routing_support.opencode_render import gateway_management_base_url, valid_gateway_endpoint
 from .gateway_models import (  # compatibility re-exports for callers
     PROVIDER_ALIASES, model_segment, served_family, served_models,
 )
@@ -99,7 +99,7 @@ def _gateway_mimo(env, mimo_endpoints=None):
         return False
     seen, endpoints = _mimo_endpoints(env) if mimo_endpoints is None else mimo_endpoints
     def normalize(value):
-        return value.rstrip('/').removesuffix('/v1') if isinstance(value, str) else None
+        return gateway_management_base_url(value) if isinstance(value, str) else None
     # No explicit endpoint means the template default routes through the gateway.
     return seen and all(normalize(e) == normalize(gateway) for e in endpoints)
 
@@ -174,7 +174,7 @@ def require_witness(model, env=None, *, secrets=None):
         child, parent = _gateway(env), _gateway(secrets)
         if not child or not parent:
             raise LookupError('gateway endpoint not configured')
-        if child.rstrip('/').removesuffix('/v1') != parent.rstrip('/').removesuffix('/v1'):
+        if gateway_management_base_url(child) != gateway_management_base_url(parent):
             raise LookupError('child gateway endpoint differs from witness endpoint')
         if not valid_gateway_endpoint(parent):
             raise LookupError('gateway endpoint must use HTTP(S) with a host and HTTPS outside loopback')
@@ -202,8 +202,7 @@ def fetch_rows(tag, env, *, timeout=5, opener=None, secrets=None):
     if not valid_gateway_endpoint(base):
         raise LookupError('gateway endpoint must use HTTP(S) with a host and HTTPS outside loopback')
     token = load_token(secrets)
-    if base.endswith('/v1'):
-        base = base[:-3]
+    base = gateway_management_base_url(base)
     query = urllib.parse.urlencode({'sessionTag': tag, 'limit': 200})
     try:
         request = urllib.request.Request(f'{base}/api/usage/call-logs?{query}',

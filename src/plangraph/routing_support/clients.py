@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -66,7 +67,7 @@ def effective_gateway_base_url(env: Mapping[str, str] | None = None,
     the ``plangraph_agent_health`` report both call this helper, so the reported
     URL cannot diverge from the effective one. If neither env nor config names
     an endpoint, read plangraph/omniroute-base-url under XDG_CONFIG_HOME (or
-    HOME/.config). Missing/unreadable files mean unconfigured; never log values.
+    HOME/.config). Missing/unreadable/non-regular or oversized files mean unconfigured.
     """
     source = os.environ if env is None else env
     override = ((source or {}).get(OMNIROUTE_BASE_URL_ENV_VAR) or "").strip()
@@ -74,14 +75,22 @@ def effective_gateway_base_url(env: Mapping[str, str] | None = None,
     configured = override or gateway_url(source, config)
     if configured:
         return configured
-    home = Path(source.get('HOME') or Path.home())
-    root = Path(source.get('XDG_CONFIG_HOME') or home / '.config') / 'plangraph'
     try:
-        value = (root / 'omniroute-base-url').read_text(encoding='utf-8').strip()
+        config_home = source.get('XDG_CONFIG_HOME')
+        root = (Path(config_home) if config_home else
+                Path(source.get('HOME') or Path.home()) / '.config') / 'plangraph'
+        # Nonblocking open also covers a file replaced with a FIFO after lookup.
+        fd = os.open(root / 'omniroute-base-url', os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0))
+        with os.fdopen(fd, 'rb') as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                return None
+            value = stream.read(8193)
+        if len(value) > 8192:
+            return None
+        value = value.decode('utf-8').strip()
         return value if valid_gateway_endpoint(value) else None
-    except (OSError, UnicodeError, ValueError):
+    except (OSError, UnicodeError, ValueError, RuntimeError):
         return None
-
 
 from .opencode_overlay import _ABSENT, _child_settings
 

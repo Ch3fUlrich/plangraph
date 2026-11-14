@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from .clients import effective_gateway_base_url
+from .opencode_render import gateway_management_base_url
 from .host_keys import _gateway_key
 
 TTL_ENV_VAR = "PLANGRAPH_OMNIROUTE_STATE_TTL_S"
@@ -131,9 +132,7 @@ class OmniRouteState:
 def from_env(env=None, *, key_resolver=None, **kwargs):
     """Resolve configured endpoint first; never resolve a key without one."""
     source = os.environ if env is None else env
-    base = (effective_gateway_base_url(source) or "").rstrip("/")
-    if base.endswith("/v1"):
-        base = base[:-3].rstrip("/")
+    base = gateway_management_base_url(effective_gateway_base_url(source) or "")
     key = None
     if base:
         try:

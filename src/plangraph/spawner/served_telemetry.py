@@ -130,7 +130,8 @@ def record_native(job, harness, models, requested):
                   'emits no verified structured served-model telemetry')
         gateway = next((e.get('reason') for e in reversed(job.events)
                         if e.get('event') == 'gateway_witness_unavailable'
-                        and not str(e.get('reason', '')).startswith('not a gateway leg:')), None)
+                        and not str(e.get('reason', '')).startswith('not a gateway leg:')
+                        and e.get('reason') != 'mimo leg not routed through gateway'), None)
         job.served_witness_reason = (gateway.replace('no call log row', 'no call-log row')
                                      if gateway else f'{harness}: {reason}')
         return
