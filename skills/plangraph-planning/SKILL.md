@@ -55,7 +55,9 @@ proof, claimant authorization and operator-task restrictions still apply.
 ## 2. One agent, one task
 
 - Every task item is owned by **exactly one agent** for its whole life. No second agent edits that
-  task's files; no agent works on two tasks at once.
+  task's files; no agent works on two tasks at once. Exception: in the `batch` work mode
+  (unattended-orchestration Work modes, rule 3.41) one strong writer owns a brief of several
+  related tasks; each task still has that one owner and write sets stay disjoint between writers.
 - Planned file scopes are **disjoint** (enforced on cards as `write_set` overlap). If two tasks
   would touch the same file, merge them into one task (consolidation, not locking).
 - Implementers work in their own worktree/branch; the phase agent merges. No repo-wide git
