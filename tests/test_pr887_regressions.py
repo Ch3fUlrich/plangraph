@@ -139,9 +139,11 @@ def test_affected_collection_is_unsharded_and_does_not_execute(tmp_path, monkeyp
     assert selector().main(root=tmp_path) == (5 if ignored else 0)
 
 
-def test_empty_shard_still_succeeds(monkeypatch):
-    import conftest
+def test_empty_shard_still_succeeds(monkeypatch, request):
+    from pathlib import Path
     from types import SimpleNamespace
+    # Several directories hold a conftest.py; `import conftest` names whichever was loaded last.
+    conftest = request.config.pluginmanager.getplugin(str(Path(__file__).with_name('conftest.py')))
     monkeypatch.setenv('PYTEST_SHARD', '0/3')
     session = SimpleNamespace(exitstatus=pytest.ExitCode.NO_TESTS_COLLECTED)
     conftest.pytest_sessionfinish(session, session.exitstatus)
