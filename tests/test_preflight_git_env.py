@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import stat
 import subprocess
 import sys
 
@@ -156,11 +157,62 @@ def test_rust_checks_receive_no_hook_git_environment(repo, monkeypatch):
     assert not any(key.upper().startswith('GIT_') for key in rust_env)
 
 
-def _git_snapshot(repo):
-    metadata = repo / '.git'
-    return {p.relative_to(metadata).as_posix(): p.read_bytes()
-            for p in metadata.rglob('*') if p.is_file()}
+_NO_AUTO_MAINTENANCE = (
+    ('maintenance.auto', 'false'), ('maintenance.autoDetach', 'false'),
+    ('gc.auto', '0'), ('gc.autoDetach', 'false'),
+)
 
+
+def _fixture_git(repo, env, *args):
+    return subprocess.run(['git', '-C', str(repo), *args], env=env,
+                          capture_output=True, check=True)
+
+
+def _snapshot_repository(tmp_path, *, trace=None):
+    repo, home = tmp_path / 'caller', tmp_path / 'home'
+    repo.mkdir()
+    home.mkdir()
+    clean = {key: value for key, value in os.environ.items() if not key.upper().startswith('GIT_')}
+    clean.update(HOME=str(home), USERPROFILE=str(home), XDG_CONFIG_HOME=str(home / '.config'),
+                 GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+    if trace is not None:
+        clean['GIT_TRACE2_EVENT'] = str(trace)
+    _fixture_git(repo, clean, 'init', '-qb', 'protected')
+    # Configure the repository before its first object-writing command; inherited
+    # config injection is deliberately removed by the boundaries under test.
+    for key, value in _NO_AUTO_MAINTENANCE:
+        _fixture_git(repo, clean, 'config', '--local', key, value)
+    (repo / 'tracked.txt').write_text('original\n')
+    _fixture_git(repo, clean, 'add', 'tracked.txt')
+    _fixture_git(repo, clean, '-c', 'user.name=Fixture', '-c',
+                 'user.email=fixture@example.invalid', 'commit', '-qm', 'original')
+    return repo, clean
+
+
+def _git_snapshot(repo):
+    """Compare stable bytes/modes, including objects, refs, index and the worktree.
+
+    Git's *.lock files are coordination, never authoritative repository data.
+    Other disappearing entries remain visible as missing, so a real deletion
+    cannot silently pass as an ignored housekeeping race.
+    """
+    snapshot = {}
+    for path in repo.rglob('*'):
+        relative = path.relative_to(repo)
+        if relative.parts[0] == '.git' and path.name.endswith('.lock'):
+            continue
+        try:
+            mode = path.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                value = ('symlink', stat.S_IMODE(mode), os.readlink(path))
+            elif stat.S_ISDIR(mode):
+                value = ('directory', stat.S_IMODE(mode))
+            else:
+                value = ('file', stat.S_IMODE(mode), path.read_bytes())
+        except FileNotFoundError:
+            value = ('missing',)
+        snapshot[relative.as_posix()] = value
+    return snapshot
 
 
 @pytest.mark.parametrize('boundary', ['hook', 'selector', 'pytest'])
@@ -168,18 +220,10 @@ def test_hook_binding_never_mutates_caller_repository(tmp_path, boundary):
     """Every repository and every deliberately leaked variable belongs to this fixture."""
     import shutil
     source = Path(__file__).resolve().parents[1]
-    victim, suite, checkout = (tmp_path / name for name in ('caller', 'suite', 'checkout'))
-    victim.mkdir()
+    victim, clean = _snapshot_repository(tmp_path)
+    suite, checkout = tmp_path / 'suite', tmp_path / 'checkout'
     suite.mkdir()
     checkout.mkdir()
-    home = tmp_path / 'home'
-    home.mkdir()
-    clean = {key: value for key, value in os.environ.items() if not key.upper().startswith('GIT_')}
-    clean.update(HOME=str(home), GIT_CONFIG_NOSYSTEM='1')
-    subprocess.run(['git', 'init', '-qb', 'protected', str(victim)], env=clean, check=True)
-    subprocess.run(['git', '-C', str(victim), '-c', 'user.name=Fixture', '-c',
-                    'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'original'],
-                   env=clean, check=True)
     before = _git_snapshot(victim)
     metadata = victim / '.git'
     incoming = dict(clean, GIT_DIR=str(metadata), GIT_WORK_TREE=str(victim),
@@ -197,6 +241,8 @@ def test_hook_binding_never_mutates_caller_repository(tmp_path, boundary):
         "def test_fixture():\n"
         "    os.chdir(os.environ['FIXTURE_CHECKOUT'])\n"
         "    subprocess.run(['git', 'init', '-qb', 'main'], check=True)\n"
+        f"    for key, value in {_NO_AUTO_MAINTENANCE!r}:\n"
+        "        subprocess.run(['git', 'config', '--local', key, value], check=True)\n"
         "    subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', "
         "'commit', '--allow-empty', '-qm', 'fixture mutation'], check=True)\n"
         "    subprocess.run(['git', 'config', 'user.name', 'Child fixture'], check=True)\n"
@@ -224,8 +270,10 @@ def test_hook_binding_never_mutates_caller_repository(tmp_path, boundary):
             command = [sys.executable, '-m', 'pytest', '-q', 'tests/test_binding.py']
     result = subprocess.run(command, cwd=suite, env=incoming, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert _git_snapshot(victim) == before, 'caller refs, HEAD or config changed'
+    assert _git_snapshot(victim) == before, 'caller repository or working tree changed'
     assert (checkout / '.git/HEAD').is_file()
+    for key, value in _NO_AUTO_MAINTENANCE:
+        assert _fixture_git(checkout, clean, 'config', '--local', '--get', key).stdout.strip() == value.encode('ascii')
 
 
 @pytest.mark.parametrize('boundary', ['hook', 'selector', 'pytest'])
@@ -276,3 +324,77 @@ def test_git_discovery_failure_never_launches_tests(tmp_path, monkeypatch, bound
         monkeypatch.setattr(sys, 'argv', ['affected_tests', '--base', 'HEAD', '--changed',
                                        'tests/test_fixture.py', '--run'])
         assert module.main(root=tmp_path) == 1
+
+
+def test_git_snapshot_ignores_transient_lock(tmp_path, monkeypatch):
+    repo, _ = _snapshot_repository(tmp_path)
+    before = _git_snapshot(repo)
+    lock = repo / '.git/objects/maintenance.lock'
+    lock.write_bytes(b'ephemeral')
+    read = Path.read_bytes
+
+    def vanished(path):
+        if path == lock:
+            path.unlink()
+        return read(path)
+    monkeypatch.setattr(Path, 'read_bytes', vanished)
+    assert _git_snapshot(repo) == before
+
+
+@pytest.mark.parametrize('mutation', ['HEAD', 'refs', 'index', 'config', 'working-tree', 'untracked', 'untracked-lock', 'object'])
+def test_git_snapshot_detects_caller_mutation(tmp_path, mutation):
+    repo, clean = _snapshot_repository(tmp_path)
+
+    def git(*args):
+        return _fixture_git(repo, clean, *args).stdout
+    tracked = repo / 'tracked.txt'
+    git('branch', 'other')
+    before = _git_snapshot(repo)
+    if mutation == 'HEAD':
+        git('symbolic-ref', 'HEAD', 'refs/heads/other')
+    elif mutation == 'refs':
+        git('branch', 'extra')
+    elif mutation == 'index':
+        git('read-tree', '--empty')
+        assert tracked.read_text() == 'original\n'
+    elif mutation == 'config':
+        git('config', 'fixture.changed', 'true')
+    elif mutation == 'working-tree':
+        tracked.write_text('mutated\n')
+    elif mutation in ('untracked', 'untracked-lock'):
+        (repo / ('work.lock' if mutation == 'untracked-lock' else 'untracked')).write_text('new\n')
+    else:
+        oid = git('rev-parse', 'HEAD').decode('ascii').strip()
+        obj = repo / '.git/objects' / oid[:2] / oid[2:]
+        mode = obj.stat().st_mode
+        content = obj.read_bytes()
+        obj.chmod(mode | 0o200)
+        obj.write_bytes(content + b'changed')
+        obj.chmod(mode)
+    assert _git_snapshot(repo) != before, f'{mutation} mutation was hidden'
+
+
+def test_snapshot_fixture_never_starts_auto_maintenance(tmp_path):
+    trace = tmp_path / 'git-trace.jsonl'
+    repo, clean = _snapshot_repository(tmp_path, trace=trace)
+    for key, value in _NO_AUTO_MAINTENANCE:
+        assert _fixture_git(repo, clean, 'config', '--local', '--get', key).stdout.strip() == value.encode('ascii')
+    events = [json.loads(line) for line in trace.read_text().splitlines()]
+    starts = [event for event in events if event.get('event') == 'start']
+    assert any('commit' in event.get('argv', []) for event in starts)
+    assert not any({'maintenance', 'gc'} & set(event.get('argv', []))
+                   for event in events if event.get('event') == 'child_start')
+
+
+def test_git_snapshot_preserves_disappearing_index_mutation(tmp_path, monkeypatch):
+    repo, _ = _snapshot_repository(tmp_path)
+    before = _git_snapshot(repo)
+    index = repo / '.git/index'
+    read = Path.read_bytes
+
+    def vanished(path):
+        if path == index:
+            path.unlink()
+        return read(path)
+    monkeypatch.setattr(Path, 'read_bytes', vanished)
+    assert _git_snapshot(repo) != before

@@ -89,3 +89,13 @@ variables override `-c user.name` / `user.email`; fixture identities must not de
 on inherited variables or on the production publish helper's environment filtering.
 The exact author and committer checks cover both fixture commits with all caller
 `GIT_*` variables unset.
+
+Caller-repository snapshot fixtures configure `maintenance.auto=false`,
+`maintenance.autoDetach=false`, `gc.auto=0` and `gc.autoDetach=false` locally
+before their first commit, including the child checkout after Git environment
+scrubbing. This prevents commit-triggered detached maintenance from racing a
+snapshot. The shared snapshot in `tests/test_preflight_git_env.py` ignores only
+Git-internal lock files; it retains metadata/object bytes, modes, symlinks and
+working-tree contents. Missing non-lock entries remain mutation evidence.
+Mutation probes cover HEAD, refs, index, config, reachable objects, tracked and
+untracked worktree files (including worktree files named with a `.lock` suffix).

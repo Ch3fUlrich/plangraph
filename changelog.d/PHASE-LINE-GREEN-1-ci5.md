@@ -1,0 +1,1 @@
+- Disable automatic maintenance and GC before caller-isolation fixture commits; exclude Git coordination locks from snapshots while checking repository/object and working-tree mutations explicitly.
