@@ -1,0 +1,10 @@
+[Unit]
+Description=Fast-forward production main while holding loaded keeper code fixed
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/plangraph
+Environment=PYTHONPATH=%h/code/plangraph/src
+EnvironmentFile=%h/.config/plangraph/main-ff.env
+ExecStart=/usr/bin/python3 -m plangraph.fleet_sync main-ff --repo ${PLANGRAPH_MAIN_TREE} --keeper-state ${PLANGRAPH_KEEPER_STATE}
+TimeoutStartSec=5min

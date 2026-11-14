@@ -42,7 +42,15 @@ def rows(registry, release, query=transport, count=None):
                 behind = count(live, release)
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
             behind = 'unknown'
-        result.append({'host': host['id'], 'live_sha': live, 'release_sha': release, 'behind': behind})
+        row = {'host': host['id'], 'live_sha': live, 'release_sha': release, 'behind': behind}
+        if host.get('transport') == 'local':
+            try:
+                repo = host['repos']['plangraph']['live_dir']
+            except (KeyError, TypeError):
+                repo = None
+            if repo and (status := main_ff_status(repo)):
+                row['main_ff'] = status
+        result.append(row)
     return result
 
 
@@ -247,3 +255,10 @@ def keeper_main_pid(unit):
 
 def main_ff_status_path(repo):
     return Path(repo_git(repo, 'rev-parse', '--absolute-git-dir').stdout.strip()) / 'plangraph-main-ff.status'
+
+
+def main_ff_status(repo):
+    try:
+        return main_ff_status_path(repo).read_text().strip()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None

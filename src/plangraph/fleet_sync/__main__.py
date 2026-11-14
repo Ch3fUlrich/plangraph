@@ -50,7 +50,7 @@ def main(argv=None):
                 sha = 'unknown'
             data = drift.rows(json.loads(args.registry.read_text()), sha)
             print(json.dumps(data) if args.json else '\n'.join(
-                f"{r['host']} {r['live_sha']} {r['release_sha']} {r['behind']}" for r in data))
+                f"{r['host']} {r['live_sha']} {r['release_sha']} {r['behind']}" + ('\n' + r['main_ff'] if r.get('main_ff') else '') for r in data))
         return 0
     except ValueError as error:
         if args.command == 'advance':
