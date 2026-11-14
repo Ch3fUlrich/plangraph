@@ -366,7 +366,7 @@ class SpawnService(SeatSpawnMixin):
                             await self._continue_writer(record, job.stdout)
                         break
                 if role == 'review' and record['status'] == 'running': record.update(status='failed', exit_code=1)
-                if not launched and record.get('status') != 'timed_out':
+                if not launched and record.get('status') not in ('timed_out', 'timeout'):
                     record.update(status='failed', exit_code=1, error='; '.join(
                         a['skip_reason'] for a in record['attempts']) or 'no leg launched')
             except Exception as exc:
