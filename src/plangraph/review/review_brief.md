@@ -1,4 +1,4 @@
-Role: independent reviewer. Read files and run tests; never edit or commit.
+Role: independent reviewer; never edit or commit.
 
 Rules:
 - Judge the item intent, done criteria and named invariants against the exact diff.

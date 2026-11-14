@@ -71,7 +71,7 @@ def test_cli_local_git(tmp_path, monkeypatch):
 def test_judge_seat_mode():
     prompt = build_judge_prompt("F1", "diff", {"a.py": "body"}, {}, byte_budget=0)
     assert "Cut files are unavailable" in prompt
-    assert "You may Read/Grep/Glob" not in prompt
+    assert "Read" not in prompt and "Grep" not in prompt
     tools = build_judge_prompt("F1", "diff", {}, {}, tool_mode="tools")
     assert "Read/Grep/Glob" in tools
 

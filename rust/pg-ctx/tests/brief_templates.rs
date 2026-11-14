@@ -52,6 +52,7 @@ print(json.dumps([assemble(['correctness'], [('diff', 'body')], context=ctx),
             assert!(text.contains(field), "missing {field}: {text}");
         }
         assert_eq!(text.matches("=== ITEM CONTEXT").count(), 1);
+        assert!(!text.contains("Read files and run tests"));
     }
 }
 
