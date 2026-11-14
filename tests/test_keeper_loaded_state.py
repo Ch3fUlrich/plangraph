@@ -153,7 +153,8 @@ def test_loaded_state_refuses_write_failure(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(private_io, 'atomic_write_private', fail)
     result = daemon.main(['--config', str(cfg)])
     assert result == 1
-    assert capsys.readouterr().err == 'keeper: REFUSED loaded-state publication: disk full\n'
+    # Startup may print configuration warnings first; the refusal is the last line.
+    assert capsys.readouterr().err.splitlines()[-1] == 'keeper: REFUSED loaded-state publication: disk full'
 
 
 def test_head_moves_during_publication(checkout, tmp_path, monkeypatch):
