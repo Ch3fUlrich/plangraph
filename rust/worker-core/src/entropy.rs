@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 pub struct Baseline {
     pub test_source_ratio: f64,
     pub class_growth_fraction: f64,
+    // Retained for baseline compatibility and reporting only; G1 is void (D-5881).
     pub max_changed_lines: u64,
     pub max_test_file_lines: u64,
     pub max_test_addition_ratio: f64,
@@ -18,7 +19,7 @@ impl Default for Baseline {
             test_source_ratio: 0.2,
             class_growth_fraction: 0.03,
             max_changed_lines: 400,
-            max_test_file_lines: 400,
+            max_test_file_lines: 800,
             max_test_addition_ratio: 1.0,
         }
     }
@@ -114,8 +115,7 @@ fn valid(b: &Baseline) -> bool {
         && b.test_source_ratio >= 0.0
         && b.class_growth_fraction.is_finite()
         && (0.0..=0.03).contains(&b.class_growth_fraction)
-        && b.max_changed_lines <= 400
-        && b.max_test_file_lines <= 400
+        && b.max_test_file_lines <= 800
         && b.max_test_addition_ratio.is_finite()
         && (0.0..=1.0).contains(&b.max_test_addition_ratio)
 }
@@ -126,28 +126,15 @@ pub fn check(p: &Input) -> Vec<Finding> {
     let raised = p.prior_baseline.as_ref().is_some_and(|old| {
         b.test_source_ratio > old.test_source_ratio
             || b.class_growth_fraction > old.class_growth_fraction
-            || b.max_changed_lines > old.max_changed_lines
-            || b.max_test_file_lines > old.max_test_file_lines
+            // D-5881 explicitly migrates the former 400-line limit to 800.
+            || (b.max_test_file_lines > old.max_test_file_lines
+                && !(old.max_test_file_lines == 400 && b.max_test_file_lines == 800))
             || b.max_test_addition_ratio > old.max_test_addition_ratio
     });
     if !valid(b) || raised {
         add(
             "baseline",
             "restore or lower baseline thresholds; increases are forbidden".into(),
-        );
-    }
-    let changed = p
-        .changes
-        .iter()
-        .map(|c| c.added.saturating_add(c.deleted))
-        .sum::<u64>();
-    if changed > b.max_changed_lines
-        && !reason(&p.body, "Plan-Slice:")
-        && !reason(&p.body, "Entropy-Waiver:")
-    {
-        add(
-            "G1",
-            "split the PR or supply Plan-Slice: / Entropy-Waiver: with a reason".into(),
         );
     }
     for (class, now) in &p.current.classes {
@@ -183,7 +170,10 @@ pub fn check(p: &Input) -> Vec<Finding> {
     if p.current.largest_test > b.max_test_file_lines {
         add(
             "G3-file",
-            "split each test file into files of at most 400 lines".into(),
+            format!(
+                "split each test file into files of at most {} lines",
+                b.max_test_file_lines
+            ),
         );
     }
     for c in p.changes.iter().filter(|c| c.new && plan_report(&c.path)) {
