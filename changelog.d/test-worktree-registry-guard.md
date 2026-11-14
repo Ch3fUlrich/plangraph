@@ -1,0 +1,1 @@
+Add regression coverage for Python fixture guards detecting test-owned worktree registry mutations and for test launch boundaries preserving caller repositories, with byte, mode and symlink snapshots covering Git metadata and working-tree contents.
