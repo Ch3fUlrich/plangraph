@@ -398,3 +398,36 @@ def test_run_invocation_passes_dist_loadgroup(tmp_path, monkeypatch):
     cmd = argv["cmd"]
     assert "--dist" in cmd
     assert cmd[cmd.index("--dist") + 1] == "loadgroup"
+
+
+@pytest.mark.parametrize('launch', [
+    'subprocess.run([sys.executable, "-m", "pkg.cli"])',
+    'subprocess.run("python3 -m pkg.cli run", shell=True)',
+    'subprocess.run(["bash", "tools/outer.sh"])',
+])
+def test_subprocess_consumers_follow_import_graph(tmp_path, launch):
+    _asset_repo(tmp_path, {
+        'src/pkg/cli.py': 'from .core import VALUE',
+        'tools/outer.sh': 'bash tools/inner.sh\n',
+        'tools/inner.sh': 'python3 -m pkg.cli run\n',
+        'tests/test_process.py': launch,
+    })
+    plan = selector().select_tests(tmp_path, ['src/pkg/core.py'])
+    assert 'tests/test_process.py' in plan['tests']
+    assert 'tests/test_other.py' not in plan['tests']
+
+
+def test_shell_inline_python_consumer(tmp_path):
+    _asset_repo(tmp_path, {
+        'tools/smoke.sh': "python3 - <<'PY'\nfrom pkg.api import VALUE\nPY\n",
+        'tests/test_process.py': 'SCRIPT = "tools/smoke.sh"',
+    })
+    assert 'tests/test_process.py' in selector().select_tests(
+        tmp_path, ['src/pkg/core.py'])['tests']
+
+
+def test_spawner_admission_selects_899_subprocess_regressions():
+    root = Path(__file__).resolve().parents[1]
+    plan = selector().select_tests(root, ['src/plangraph/spawner/base_fresh.py'])
+    assert {'tests/test_spawner_overflow.py', 'tests/test_spawner_overflow_caps.py',
+            'tests/test_run_exit_live.py'} <= set(plan['tests'])

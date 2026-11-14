@@ -5,6 +5,7 @@ import ast
 import json
 import importlib.util
 import os
+import re
 from pathlib import Path
 import subprocess
 import shutil
@@ -92,30 +93,30 @@ def local_control_tests(texts, path):
     return selected
 
 
-def select_tests(root, changed, within=None, *, files_only=False, local=False):
-    root = Path(root)
-    paths = sorted(p for folder in ("src", "tests") for p in (root / folder).rglob("*.py"))
+def dependency_graph(texts):
+    """Reverse imports plus static module launches and tool-script consumers."""
     modules = {}
-    for p in paths:
-        rel = p.relative_to(root)
-        parts = list(rel.with_suffix("").parts)
+    for rel in texts:
+        p = Path(rel)
+        if p.suffix != ".py":
+            continue
+        parts = list(p.with_suffix("").parts)
         if parts[0] == "src":
             parts.pop(0)
         if parts[-1] == "__init__":
             parts.pop()
-        modules[".".join(parts)] = rel.as_posix()
-        if rel.parts[0] == "tests":
-            modules.setdefault(p.stem, rel.as_posix())
+        modules[".".join(parts)] = rel
+        if p.parts[0] == "tests":
+            modules.setdefault(p.stem, rel)
     reverse = {}
-    texts = {}
-    try:
-        for p in paths:
-            rel = p.relative_to(root).as_posix()
-            texts[rel] = p.read_text(encoding="utf-8")
-            tree = ast.parse(texts[rel])
+    scripts = [rel for rel in texts if rel.startswith("tools/") and rel.endswith(".sh")]
+    for rel, text in texts.items():
+        names = []
+        if rel.endswith(".py"):
+            tree = ast.parse(text)
             module = next(k for k, v in modules.items() if v == rel)
-            package = module if p.name == "__init__.py" else module.rpartition(".")[0]
-            names = []
+            package = module if Path(rel).name == "__init__.py" else module.rpartition(".")[0]
+            strings = []
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     names.extend(a.name for a in node.names)
@@ -126,12 +127,37 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False):
                         prefix = ".".join(parent[:len(parent) - node.level + 1] + ([prefix] if prefix else []))
                     names.append(prefix)
                     names.extend(prefix + "." + a.name for a in node.names)
-            for name in names:
-                # Importing a child also executes package __init__ modules.
-                for end in range(1, len(name.split(".")) + 1):
-                    dep = modules.get(".".join(name.split(".")[:end]))
-                    if dep:
-                        reverse.setdefault(dep, set()).add(rel)
+                elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    strings.append(node.value)
+            # Literal argv entries, runpy module names, and shell command strings.
+            names.extend(value for value in strings if value in modules)
+            command_text = "\n".join(strings)
+        else:
+            # Shell scripts may contain Python heredocs as well as -m commands.
+            command_text = text
+            names.extend(re.findall(r"^\s*(?:from|import)\s+([\w.]+)", text, re.M))
+        names.extend(re.findall(r"(?<!\w)-m\s+['\"]?([\w.]+)", command_text))
+        for name in names:
+            # Importing or launching a child also executes package __init__ modules.
+            for end in range(1, len(name.split(".")) + 1):
+                dep = modules.get(".".join(name.split(".")[:end]))
+                if dep:
+                    reverse.setdefault(dep, set()).add(rel)
+        for script in scripts:
+            if script in text or Path(script).name in text:
+                reverse.setdefault(script, set()).add(rel)
+    return reverse
+
+
+def select_tests(root, changed, within=None, *, files_only=False, local=False):
+    root = Path(root)
+    texts = {}
+    try:
+        for folder in ("src", "tests", "tools"):
+            for p in sorted((root / folder).rglob("*")):
+                if p.is_file() and (p.suffix == ".py" or folder == "tools" and p.suffix == ".sh"):
+                    texts[p.relative_to(root).as_posix()] = p.read_text(encoding="utf-8")
+        reverse = dependency_graph(texts)
     except (SyntaxError, UnicodeError, OSError) as exc:
         if files_only:
             return {"tests": [], "reason": "graph unreadable: " + str(exc), "error": True}
