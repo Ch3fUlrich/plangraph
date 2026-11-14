@@ -2199,6 +2199,7 @@ dependencies = [
  "chrono",
  "globset",
  "libc",
+ "pg-reap",
  "pg-worker-core",
  "rand 0.9.5",
  "regex",
