@@ -1,0 +1,1 @@
+- Add router-only merged closes for open/claimed items via --from-open, with default TSV dry-run and explicit --apply, complete Plan-Item PR/GO proof, witnessed-seat checks and atomic submit/pass evidence.

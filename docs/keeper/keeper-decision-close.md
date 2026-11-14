@@ -62,6 +62,7 @@ token revocation and fold of a passed review. Only the router may call it:
 ```sh
 pg close-merged demo:A D-5504 --family google
 pg close-merged demo:H D-5504 --family google --family deepseek
+pg close-merged demo:H D-5504  # recover seats from cited mirrored review runs
 ```
 
 HTTP `POST /v1/close_merged` and MCP `close_merged` take
@@ -107,7 +108,6 @@ This is not a batch op and changes no `verdict`, `claim`, `evidence`, or `close`
 rule. The Python MCP schema table lives in `mcp_tools.py` so the stdio
 transport stays below its 400-line limit without unrelated formatting churn.
 
-
 ### Stored decision-only definitions and import compatibility
 
 Interactive creates and edits that set `review_tier` or `evidence_kinds` refuse
@@ -142,3 +142,59 @@ The repository producers were audited as follows:
 - `tools/decisions_import.py` and `tools/md_sync_plan.py` already declare tier
   `none` with decision-only evidence; `tools/md_sync_dclose.py` repairs the pair
   together. They need no compatibility exception or data change.
+
+Omit `families` (CLI: omit `--family`) to recover review seats from the
+keeper-owned `spawner_records_dir` mirror. Run ids come from the item's `run_ids`
+or `run-...` citations in the GO cell. Every cited record must exist uniquely
+and bind to this item. Review records must witness a served model, an unpinned,
+single-attempt completed review with integer exit zero, the exact merged head,
+recorded stop/end_turn, `TEST_GAMING: no` and a final passing verdict.
+Implementation records supply no seats. Missing, ambiguous, invalid or
+unwitnessed records refuse `NO-WITNESS <key>` without changing state or events.
+The close rechecks witnesses under its transaction and records the recovered
+run bundle and each family verdict before passing the item atomically.
+
+`pg close-merged KEY D-NNNN --from-open [--family FAMILY]` checks an open or
+claimed item without changing it and emits `key`, `class`, `reason` TSV.
+Use `--apply` to close after the same checks. This router-only path scans the
+complete default-ref Plan-Item history after refreshing the configured remote ref
+(`merged_default_ref_refresh_failed` on failure), requires every introducing PR to have
+a head-bound GO (additional GO rows must name the same project and item), and refuses unmerged lanes or unavailable lane information.
+It uses the same seat rules (including cited-run recovery when families are
+omitted), records all PR numbers, heads and GO decisions in evidence, and
+atomically submits then passes the item. It does not require a new claim.
+HTTP `/v1/close_merged` accepts boolean `from_open` and `apply` for this path.
+
+Historical missing-witness closes remain disabled unless explicitly requested:
+`pg close-merged KEY GO-D-ID --waive-seats OPERATOR-D-ID`. The authority must
+be a unique indexed decision row with named `CLASS` and `DATE` table columns,
+class exactly `OPERATOR`, a DECISION cell beginning
+`Waiver: merged-without-witnesses; Waives-seats: KEY KEY ...`.
+The space-separated list binds whole tokens only; keys mentioned outside that
+list, prefixes, suffixes and comma-separated keys do not grant authority.
+Router-class rows, missing ids, duplicate rows and other waiver names refuse.
+Every merged PR still needs its head-bound GO; both its merge commit timestamp
+and the GO row's `DATE` must precede the cutoff at midnight UTC. The decisions
+adapter reads the sole ISO date in table row `| 3.37 | ... |` from the configured
+decisions document (the origin version in production); only an absent rule uses
+2026-11-13. Duplicate rules, missing/ambiguous dates and invalid dates refuse.
+Missing merge dates refuse `operator_seat_waiver_merge_date_missing`; merges on
+or after the cutoff refuse `operator_seat_waiver_merge_at_or_after_cutoff`.
+An ineligible GO date refuses `operator_seat_waiver_go_date_ineligible`.
+A key outside the list refuses `operator_seat_waiver_scope_mismatch`; a GO for
+another merge head refuses `go_row_head_mismatch`.
+Authority, scope, dates and PR proofs are checked again under the close lock.
+Rule 3.37 / D-5865 overrides the two-family rule, including the auth/secrets
+requirement for two non-Anthropic families, for the listed keys only.
+The item evidence records the waiver class, operator decision id, PR proofs,
+`review_tier`, `risk_tags` and `seat_rule_waived_by` (that operator decision id);
+no family verdict is invented. HTTP uses optional `waive_seats: "D-NNNN"`.
+Supplying `families` together with `waive_seats` refuses `families_with_waive_seats`.
+The shared `operator_seat_waiver_invalid_or_ineligible` refusal detail names the
+failed decision-id, unique-row/columns, operator-authority, waiver-class/verification
+or historical-cutoff check. Omitted HTTP families request recovery; explicit null
+is a validation refusal. Synthetic `merged-D-NNNN` bundles are not run citations.
+
+GO stamp prefixes accept `(HH:MMZ)` and `(HH:MxZ)` only, with optional `~`
+before the hour and optional `, date -u` before `)`. Hours are 00–23; minutes
+are 00–59 or a tens digit 0–5 followed by literal `x`. `(18Z)` is refused.
