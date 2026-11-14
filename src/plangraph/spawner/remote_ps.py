@@ -225,7 +225,7 @@ def native_result(record, *, verb='result'):
         command += "; printf '\\n%s\\n' " + shlex.quote(end)
         reply = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                                 '--', host['ssh'], command], capture_output=True,
-                               text=True, timeout=10)
+                               text=True, encoding='utf-8', errors='replace', timeout=10)
         # A terminal nonzero exit is the writer's exit, with a valid JSON record.
         text, _ = mask(reply.stdout)
         lines = text.splitlines()
