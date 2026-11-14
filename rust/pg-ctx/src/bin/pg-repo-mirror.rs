@@ -2,6 +2,10 @@ use pg_ctx::mirror::{Alarm, Mirror};
 use std::path::Path;
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.len() == 3 && args[0] == "--fetch-one" {
+        Mirror::run_fetch_worker(Path::new(&args[1]), Path::new(&args[2]))?;
+        return Ok(());
+    }
     if args.len() != 2 {
         return Err("usage: pg-repo-mirror REPOS.json MIRROR_ROOT".into());
     }
@@ -13,7 +17,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Err(alarm) => {
                 failed = true;
                 serde_json::json!({"repo":repo,"alarm":match alarm {
-                    Alarm::ForcePush => "force_push", Alarm::FetchFailed => "fetch_failed"
+                    Alarm::ForcePush => "force_push", Alarm::FetchFailed => "fetch_failed", Alarm::FetchTimedOut => "fetch_timed_out"
                 }})
             }
         };

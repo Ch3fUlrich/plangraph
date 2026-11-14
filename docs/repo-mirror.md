@@ -95,15 +95,19 @@ Mirror test fixtures use worker-core’s shared Git test helper, including integ
 
 `pg-repo-mirror REPOS.json MIRROR_ROOT` invokes `Mirror::fetch_all`, refreshing
 every configured repository in stable name order even if an earlier fetch fails.
-Each JSONL output row contains its repo and accepted watermark or `force_push` /
-`fetch_failed` alarm. Any failure makes the command exit 1 after attempting the
+Each JSONL output row contains its repo and accepted watermark or `force_push`,
+`fetch_failed`, or `fetch_timed_out` alarm. Any failure makes the command exit 1 after attempting the
 whole inventory. Per-repo quarantine, locks and monotonicity remain unchanged.
 
 The user timer in `deploy/systemd/pg-repo-mirror.{service,timer}` schedules this
 command every minute. It reads `~/.config/plangraph/repos.json` and stores under
-`~/.local/state/plangraph/mirrors`. A 55-second service deadline bounds a stalled
-sweep; a timeout can leave later repositories unvisited, so monitor service errors
-and per-repo watermark age. Systemd never overlaps this oneshot with itself.
+`~/.local/state/plangraph/mirrors`. Each fetch runs in a separate Rust worker using the same native gix backend.
+A per-repository deadline kills and reaps a stuck worker (its process group on
+Linux), records `fetch_timed_out`, and proceeds to the next repository. The default
+limit is the smaller of five seconds and 45 seconds divided by inventory size;
+`fetch_all_with_timeout` permits an explicit per-repository bound. The outer
+55-second service deadline remains a final guard. Monitor service errors and
+per-repository watermark age. Systemd never overlaps this oneshot with itself.
 Installing/enabling the timer is a live operator step:
 
 ```sh
@@ -122,3 +126,12 @@ journalctl --user -u pg-repo-mirror.service -n 50 --no-pager
 These units are supplied, not installed. Keeper HTTP exposure and FLOW-WATCHDOG
 alarm ingestion remain separate wiring; JSONL journal rows are not proof of an
 HTTP endpoint or an installed stale-mirror alarm.
+
+The `pg-repo-mirror` command uses itself as its fetch worker. Library callers of
+`fetch_all` must install that executable on PATH or pin its path with
+`with_fetch_worker`. Single-repository `fetch`/`fetch_named` remain direct native
+operations. Private request/result files carry worker data; subprocess arguments
+contain only their paths. A killed worker cannot publish later; abandoned staging
+is swept by the next locked fetch, with the existing crash-recovery guarantees.
+The deadline regression uses a hanging fake fetch-worker executable followed by
+a real local fetch; no Git fetch subprocess or network service is introduced.

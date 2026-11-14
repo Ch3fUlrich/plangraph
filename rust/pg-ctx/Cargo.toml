@@ -12,6 +12,7 @@ tempfile = "3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { version = "1", features = ["fs"] }
+libc = "0.2"
 
 [dev-dependencies]
 pg-worker-core = { path = "../worker-core", features = ["test-support"] }

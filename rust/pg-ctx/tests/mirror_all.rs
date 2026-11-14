@@ -14,7 +14,9 @@ fn every_configured_repository_is_attempted_after_failure() {
     )
     .unwrap();
     let mirror = Mirror::from_repos(&config, &tmp.path().join("mirrors")).unwrap();
-    let result = mirror.fetch_all();
+    let result = mirror
+        .with_fetch_worker(env!("CARGO_BIN_EXE_pg-repo-mirror"))
+        .fetch_all();
     assert_eq!(result.len(), 2);
     assert_eq!(result["first"], Err(Alarm::FetchFailed));
     assert_eq!(result["second"], Err(Alarm::FetchFailed));

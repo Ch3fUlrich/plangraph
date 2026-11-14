@@ -2116,6 +2116,7 @@ name = "pg-ctx"
 version = "0.1.0"
 dependencies = [
  "gix",
+ "libc",
  "pg-worker-core",
  "rustix",
  "serde",

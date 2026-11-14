@@ -10,12 +10,15 @@ use std::{
 
 #[path = "mirror_backend.rs"]
 mod backend;
+#[path = "mirror_worker.rs"]
+mod worker;
 use backend::{copy_repository, open, set_main};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Alarm {
     ForcePush,
     FetchFailed,
+    FetchTimedOut,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,11 +55,15 @@ fn now() -> u64 {
 pub struct Mirror {
     root: PathBuf,
     repos: BTreeMap<String, String>,
+    fetch_worker: PathBuf,
 }
 impl Mirror {
     /// Read a JSON object mapping safe, single-component repo names to remote URLs.
     pub fn from_repos(path: &Path, root: &Path) -> io::Result<Self> {
         let repos: BTreeMap<String, String> = serde_json::from_slice(&fs::read(path)?)?;
+        Self::from_entries(repos, root)
+    }
+    fn from_entries(repos: BTreeMap<String, String>, root: &Path) -> io::Result<Self> {
         for (name, remote) in &repos {
             if !name
                 .as_bytes()
@@ -78,15 +85,36 @@ impl Mirror {
         Ok(Self {
             root: std::path::absolute(root)?,
             repos,
+            fetch_worker: std::env::current_exe()
+                .ok()
+                .filter(|p| p.file_stem().is_some_and(|name| name == "pg-repo-mirror"))
+                .unwrap_or_else(|| PathBuf::from("pg-repo-mirror")),
         })
     }
-    /// Attempt the complete configured inventory, preserving each repository's alarm.
-    /// One failed fetch must never prevent later repositories from being refreshed.
+    /// Attempt every repository with its own killable native fetch worker.
     pub fn fetch_all(&self) -> BTreeMap<String, Result<Watermark, Alarm>> {
+        let count = u32::try_from(self.repos.len()).unwrap_or(u32::MAX).max(1);
+        // Keep a normal inventory within the outer 55-second service envelope.
+        let timeout = Duration::from_secs(5).min(Duration::from_secs(45) / count);
+        self.fetch_all_with_timeout(timeout)
+    }
+    /// Library callers may pin the installed worker path explicitly.
+    pub fn with_fetch_worker(mut self, worker: impl Into<PathBuf>) -> Self {
+        self.fetch_worker = worker.into();
+        self
+    }
+    pub fn fetch_all_with_timeout(
+        &self,
+        timeout: Duration,
+    ) -> BTreeMap<String, Result<Watermark, Alarm>> {
         self.repos
             .keys()
-            .map(|name| (name.clone(), self.fetch(name)))
+            .map(|name| (name.clone(), worker::fetch(self, name, timeout)))
             .collect()
+    }
+    /// Internal worker entry point: fetches with the native backend, without recursion.
+    pub fn run_fetch_worker(request: &Path, result: &Path) -> io::Result<()> {
+        worker::run(request, result)
     }
     pub fn mirror_dir(&self, repo: &str) -> io::Result<PathBuf> {
         if !self.repos.contains_key(repo) {
