@@ -18,6 +18,8 @@ def mirrored_reviews(w, tmp_path):
     for run, model in [("run-one", "gemini-test"), ("run-two", "deepseek-test")]:
         path = root / "fixture" / run / "record.json"
         path.parent.mkdir(parents=True, mode=0o700)
+        for parent in (root, root / "fixture"):  # mkdir applies the mode to the leaf only
+            parent.chmod(0o700)
         path.write_text(json.dumps({
             "run_id": run, "host": "fixture", "item_key": "demo:H",
             "role": "review", "status": "completed", "exit_code": 0,
