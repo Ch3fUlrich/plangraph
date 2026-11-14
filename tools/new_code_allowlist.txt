@@ -40,4 +40,6 @@ src/plangraph/spawner/replan_job.py | D-5847 in-flight
 tests/test_round_cap.py | D-5847 in-flight
 tests/test_round_cap_replan.py | D-5847 in-flight
 src/plangraph/spawner/skipped_attempts.py | D-5847 in-flight
+src/plangraph/routing_support/quota_snapshots.py | D-5847 in-flight
+tests/test_spawner_quota_failfast.py | D-5847 in-flight
 tests/test_keeper_origin_git_env.py | D-5847 in-flight
