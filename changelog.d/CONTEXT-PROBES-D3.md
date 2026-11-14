@@ -1,0 +1,1 @@
+- Add 40 proposed rule probes and 10 knowledge probes, a pinned-adapter Rust runner with private sessions and at most four concurrent probes, immutable run artifacts, offline rescoring and opt-in daily timer units; retain live adapter and keeper baseline as explicit prerequisites.

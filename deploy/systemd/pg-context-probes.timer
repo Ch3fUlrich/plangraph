@@ -1,0 +1,10 @@
+[Unit]
+Description=Run pinned context retrieval probes daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=pg-context-probes.service
+
+[Install]
+WantedBy=timers.target

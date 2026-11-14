@@ -2154,8 +2154,10 @@ dependencies = [
 name = "pg-probe"
 version = "0.1.0"
 dependencies = [
+ "pg-worker-core",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 

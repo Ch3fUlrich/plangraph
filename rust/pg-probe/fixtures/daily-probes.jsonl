@@ -1,0 +1,50 @@
+{"id":"rule-01","kind":"rule","question":"Which operator decision restores the per-file Rust-only new-code gate?","gold":"D-5847","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-02","kind":"rule","question":"Which rule requires a reasoned allowlist entry for new Python files?","gold":"9.14","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-03","kind":"rule","question":"Which decision requires a changelog entry for non-documentation changes?","gold":"D-653","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-04","kind":"rule","question":"Which decision requires mapped documentation updates for changed source paths?","gold":"D-653","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-05","kind":"rule","question":"Which decision allows direct-child changelog fragments as change entries?","gold":"D-653","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-06","kind":"rule","question":"Which decision governs the reasoned Changelog skip trailer exemption?","gold":"D-653","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-07","kind":"rule","question":"Which decision is cited for the RUN-WORKTREE Python regression exception?","gold":"D-5062","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-08","kind":"rule","question":"Which decision identifies the Python MCP freshness gate?","gold":"D-5661","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-09","kind":"rule","question":"Which first decision authorizes the schema-only MCP tool split?","gold":"D-5504","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-10","kind":"rule","question":"Which follow-up decision also authorizes that schema-only MCP split?","gold":"D-5506","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-11","kind":"rule","question":"Which decision requires Python/Rust token-catalog scrubber parity?","gold":"D-5279","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-12","kind":"rule","question":"Which decision allows the Python keeper host-sample store?","gold":"D-5038","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-13","kind":"rule","question":"Which decision identifies the local shadow merge gate?","gold":"D-5252","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-14","kind":"rule","question":"Which rule is cited for refusing stale green main-delta evidence?","gold":"3.19","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-15","kind":"rule","question":"Which decision identifies hermetic recorded-finish evidence regressions?","gold":"D-5624","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-16","kind":"rule","question":"Which decision requires the review VERDICT to be the last line?","gold":"D-3420","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-17","kind":"rule","question":"Which decision identifies the no-verdict Qwen review-seat exclusion?","gold":"D-3225","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-18","kind":"rule","question":"Which decision identifies the Claude harness for the Haiku review leg?","gold":"D-3605","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-19","kind":"rule","question":"Which decision is cited for skipping a host missing the Claude binary?","gold":"D-3649","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-20","kind":"rule","question":"Which decision governs per-part mixed-writer family review independence?","gold":"D-3084","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-21","kind":"rule","question":"Which decision makes Sol xhigh an automatic rather than explicit-only leg?","gold":"D-5206","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-22","kind":"rule","question":"Which decision applies measured within-tier utility ordering to implement roles?","gold":"D-5092","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-23","kind":"rule","question":"Which decision identifies the required benchmark release/swap gate?","gold":"D-2576","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-24","kind":"rule","question":"Which decision identifies Windows SystemRoot preservation in client envelopes?","gold":"D-2090","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-25","kind":"rule","question":"Which decision identifies catalog fallback during a leg database read error?","gold":"D-2637","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-26","kind":"rule","question":"Which decision extends wrapped redaction masks through intersecting spans?","gold":"D-5703","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-27","kind":"rule","question":"Which decision is cited for readiness admission on default role-neutral routes?","gold":"D-3828","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-28","kind":"rule","question":"Which decision is cited when review refuses an absent writer family?","gold":"D-1533","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-29","kind":"rule","question":"Which decision identifies the original Rust preferred new-production-code policy?","gold":"D-4691","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-30","kind":"rule","question":"Which decision is cited for the grandfathered pre-gate host-readiness helper?","gold":"D-5062","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-31","kind":"rule","question":"Which decision is cited for the single-file Python redact_tokens parity exception?","gold":"D-5279","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-32","kind":"rule","question":"Which decision is cited for retirement of the MCP snapshot Python exception?","gold":"D-5062","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-33","kind":"rule","question":"Which rule must be cited for a new Python file outside tests?","gold":"9.14","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-34","kind":"rule","question":"Which rule keeps a stale-green check distinct from successful CI on an old head?","gold":"3.19","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-35","kind":"rule","question":"Which decision is cited for requiring stop/end_turn plus TEST_GAMING no in recorded seat evidence?","gold":"D-5624","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-36","kind":"rule","question":"Which decision is cited for completed lifecycle-step review text parsing?","gold":"D-3420","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-37","kind":"rule","question":"Which decision governs docs-map enforcement for a source path mapped to multiple documents?","gold":"D-653","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-38","kind":"rule","question":"Which decision governs why deleting a changelog or changing only whitespace is insufficient?","gold":"D-653","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-39","kind":"rule","question":"Which decision restores per-file shell exceptions instead of a recursive shell exemption?","gold":"D-5847","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"rule-40","kind":"rule","question":"Which rule requires an explicit exception reason instead of an unqualified Python waiver?","gold":"9.14","expected_path":{"tool":"context"},"planner_proposed":true}
+{"id":"knowledge-01","kind":"knowledge","question":"Which crate owns repository mirror implementation?","gold":"pg-ctx","expected_path":{"file_class":"repository_source"},"planner_proposed":true}
+{"id":"knowledge-02","kind":"knowledge","question":"Which crate owns deterministic context-probe scoring?","gold":"pg-probe","expected_path":{"file_class":"repository_source"},"planner_proposed":true}
+{"id":"knowledge-03","kind":"knowledge","question":"Which crate owns report-only worktree reaper policy?","gold":"pg-reap","expected_path":{"file_class":"repository_source"},"planner_proposed":true}
+{"id":"knowledge-04","kind":"knowledge","question":"Which crate owns shared worker workspace verification?","gold":"pg-worker-core","expected_path":{"file_class":"repository_source"},"planner_proposed":true}
+{"id":"knowledge-05","kind":"knowledge","question":"Which repository holds the router/bin/fleet-launch source referenced by launch integration?","gold":"plangraph-data","expected_path":{"file_class":"repository_source"},"planner_proposed":true}
+{"id":"knowledge-06","kind":"knowledge","question":"Which harness name is the qoder alias resolved to in the transport registry?","gold":"qodercli","expected_path":{"file_class":"repository_source"},"planner_proposed":true}
+{"id":"knowledge-07","kind":"knowledge","question":"Which file is the authoritative prompt transport v1 registry?","gold":"src/plangraph/config/prompt_transport_v1.json","expected_path":{"file_class":"repository_source"},"planner_proposed":true}
+{"id":"knowledge-08","kind":"knowledge","question":"Which document owns documentation for the mirror crate?","gold":"docs/repo-mirror.md","expected_path":{"file_class":"repository_source"},"planner_proposed":true}
+{"id":"knowledge-09","kind":"knowledge","question":"Which tool owns context probe loading, configuration and score types?","gold":"pg-probe","expected_path":{"file_class":"repository_source"},"planner_proposed":true}
+{"id":"knowledge-10","kind":"knowledge","question":"Which Python module owns keeper CLI entry handling?","gold":"plangraph.keeper.cli","expected_path":{"file_class":"repository_source"},"planner_proposed":true}
