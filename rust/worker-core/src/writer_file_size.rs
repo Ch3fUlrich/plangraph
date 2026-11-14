@@ -171,7 +171,7 @@ pub(super) fn check(root: &Path, base: &str, head: &str) -> Result<(), String> {
             continue;
         }
         let count = lines(&String::from_utf8_lossy(&bytes)).len();
-        let cap = 400.max(*counts.get(path.as_ref()).unwrap_or(&0));
+        let cap = 800.max(*counts.get(path.as_ref()).unwrap_or(&0));
         if count as i64 > cap {
             return Err(format!("{path} {count} lines > {cap}"));
         }

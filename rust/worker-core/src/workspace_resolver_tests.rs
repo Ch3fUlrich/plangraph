@@ -3,14 +3,7 @@ use std::collections::BTreeMap;
 use tempfile::TempDir;
 
 fn git(root: &Path, args: &[&str]) -> String {
-    let out = git_command(root)
-        .env("HOME", root)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", root.join("absent-config"))
-        .env("GIT_AUTHOR_NAME", "tester")
-        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
-        .env("GIT_COMMITTER_NAME", "tester")
-        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+    let out = crate::git_test_support::command(root)
         .args(args)
         .output()
         .unwrap();
@@ -19,12 +12,14 @@ fn git(root: &Path, args: &[&str]) -> String {
 }
 
 struct Fixture {
+    _repo_guard: crate::test_repo_guard::RepoGuard,
     temp: TempDir,
     repo: RepoEntry,
     sha: String,
 }
 impl Fixture {
     fn new() -> Self {
+        let repo_guard = crate::test_repo_guard::RepoGuard::real();
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         git(root, &["init", "--bare", "origin"]);
@@ -39,6 +34,7 @@ impl Fixture {
         let checkout = root.join("checkout");
         git(&checkout, &["remote", "set-url", "origin", &origin]);
         Self {
+            _repo_guard: repo_guard,
             repo: RepoEntry {
                 live_dir: None,
                 health_checks: None,

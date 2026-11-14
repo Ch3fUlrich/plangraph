@@ -706,3 +706,5 @@ Stale-base waivers require PLANGRAPH_BASE_DECISIONS_FILE configured by the opera
 Checkpoint 6: Terminal events and run tree is included in this checkpoint.
 
 Checkpoint 8: MCP source guard is included in this checkpoint.
+
+Checkpoint 9: Worker core crate is included in this checkpoint.
