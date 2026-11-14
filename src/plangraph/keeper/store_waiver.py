@@ -204,6 +204,10 @@ class WaiverMixin:
             raise Refused("validation", "from_open and apply must be booleans")
         if not isinstance(key, str) or not key.strip():
             raise Refused("validation", "key must be a nonblank string")
+        if families is not None and waive_seats is not None:
+            raise Refused("validation", "families_with_waive_seats")
+        if families is not None and not isinstance(families, list):
+            raise Refused("validation", "families must be a list")
         item = self._get_or_refuse(key)
         self._merged_review_state(item, from_open)  # DONE is bad_state, not locked
         self._assert_unlocked(item)
@@ -250,7 +254,11 @@ class WaiverMixin:
             ref = {"id": decision_id, "families": seats,
                    "merged_head": head, "caller": principal.name}
             if waiver:
-                ref.update(waiver=waiver, prs=prs)
+                self._card_requires_non_anthropic_seats(fresh)  # validate the recorded risk tags
+                card = self.conn.execute("SELECT risk_tags FROM cards WHERE key=?", (key,)).fetchone()
+                ref.update(waiver=waiver, prs=prs, review_tier=fresh["review_tier"],
+                           risk_tags=json.loads(card["risk_tags"]) if card else [],
+                           seat_rule_waived_by=waive_seats)
             if from_open:
                 ref["prs"] = prs
                 self.conn.execute("UPDATE items SET state='in_review', lease_until=NULL WHERE key=?", (key,))

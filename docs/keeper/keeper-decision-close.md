@@ -117,8 +117,9 @@ run bundle and each family verdict before passing the item atomically.
 `pg close-merged KEY D-NNNN --from-open [--family FAMILY]` checks an open or
 claimed item without changing it and emits `key`, `class`, `reason` TSV.
 Use `--apply` to close after the same checks. This router-only path scans the
-complete default-ref Plan-Item history, requires every introducing PR to have
-a head-bound GO, and refuses unmerged lanes or unavailable lane information.
+complete default-ref Plan-Item history after refreshing the configured remote ref
+(`merged_default_ref_refresh_failed` on failure), requires every introducing PR to have
+a head-bound GO (additional GO rows must name the same project and item), and refuses unmerged lanes or unavailable lane information.
 It uses the same seat rules (including cited-run recovery when families are
 omitted), records all PR numbers, heads and GO decisions in evidence, and
 atomically submits then passes the item. It does not require a new claim.
@@ -143,5 +144,17 @@ An ineligible GO date refuses `operator_seat_waiver_go_date_ineligible`.
 A key outside the list refuses `operator_seat_waiver_scope_mismatch`; a GO for
 another merge head refuses `go_row_head_mismatch`.
 Authority, scope, dates and PR proofs are checked again under the close lock.
-The item evidence records the waiver class, operator decision id and PR proofs;
+Rule 3.37 / D-5865 overrides the two-family rule, including the auth/secrets
+requirement for two non-Anthropic families, for the listed keys only.
+The item evidence records the waiver class, operator decision id, PR proofs,
+`review_tier`, `risk_tags` and `seat_rule_waived_by` (that operator decision id);
 no family verdict is invented. HTTP uses optional `waive_seats: "D-NNNN"`.
+Supplying `families` together with `waive_seats` refuses `families_with_waive_seats`.
+The shared `operator_seat_waiver_invalid_or_ineligible` refusal detail names the
+failed decision-id, unique-row/columns, operator-authority, waiver-class/verification
+or historical-cutoff check. Omitted HTTP families request recovery; explicit null
+is a validation refusal. Synthetic `merged-D-NNNN` bundles are not run citations.
+
+GO stamp prefixes accept `(HH:MMZ)` and `(HH:MxZ)` only, with optional `~`
+before the hour and optional `, date -u` before `)`. Hours are 00–23; minutes
+are 00–59 or a tens digit 0–5 followed by literal `x`. `(18Z)` is refused.

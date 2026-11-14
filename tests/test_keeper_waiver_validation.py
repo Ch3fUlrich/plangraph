@@ -21,14 +21,17 @@ def historical_waiver_fixture(world, monkeypatch, *, authority="OPERATOR", date=
     monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
 
 
-@pytest.mark.parametrize("decision,authority", [(None, "OPERATOR"), ("", "OPERATOR"),
-                                               ("D-9999", "OPERATOR"), ("D-6000", "ROUTER")])
-def test_merged_seat_waiver_refuses_without_operator_authority(unseated_w, monkeypatch, decision, authority):
+@pytest.mark.parametrize("decision,authority,cause", [
+    ("not-a-decision", "OPERATOR", "decision_id"), ("", "OPERATOR", "decision_id"),
+    ("D-9999", "OPERATOR", "unique_row_and_columns"),
+    ("D-6000", "ROUTER", "operator_authority")])
+def test_merged_seat_waiver_refuses_without_operator_authority(unseated_w, monkeypatch, decision, authority, cause):
     world = unseated_w
     historical_waiver_fixture(world, monkeypatch, authority=authority)
     before = world.store._evidence("demo:H")
-    with pytest.raises(Refused):
+    with pytest.raises(Refused) as exc:
         world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats=decision)
+    assert exc.value.msg == f"operator_seat_waiver_invalid_or_ineligible: {cause}"
     assert world.store._item("demo:H")["state"] == "in_review"
     assert world.store._evidence("demo:H") == before
 

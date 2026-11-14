@@ -76,7 +76,7 @@ def test_active_close_requires_go_for_every_merged_pr(w, monkeypatch, second_go)
     w.conn.execute("UPDATE items SET state='open' WHERE key=?", (KEY,))
     if second_go:
         with w.decision_path.open("a") as handle:
-            handle.write(f"| D-5505 | demo | GO {other} |\n")
+            handle.write(f"| D-5505 | demo | GO {other}; Item: {KEY} |\n")
         assert w.store.close_merged(w.p("router"), KEY, "D-5504", ["google"],
                                     from_open=True, apply=True)["state"] == "done"
         assert len(w.store._evidence(KEY)[-1]["ref"]["prs"]) == 2
@@ -208,7 +208,7 @@ def test_unrelated_hex_in_decision_cell_cannot_bind_head(w):
 
 
 @pytest.mark.parametrize("body", [
-    {}, {"key": KEY}, {"key": KEY, "decision_id": "D-5504"},
+    {}, {"key": KEY},
     {"key": [], "decision_id": "D-5504", "families": ["google"]},
     {"key": KEY, "decision_id": {}, "families": ["google"]},
     {"key": KEY, "decision_id": "D-5504", "families": None},
@@ -216,15 +216,11 @@ def test_unrelated_hex_in_decision_cell_cannot_bind_head(w):
 def test_router_http_malformed_body_is_audited_refusal(w, doors, body):
     before = _counts(w)
     status, response = doors.http("router", "POST", "/v1/close_merged", body)
-    automatic = body.get("key") == KEY and body.get("decision_id") == "D-5504" \
-        and body.get("families") is None
     assert status == 400
-    assert response["error"] == ("evidence_unverified" if automatic else "validation")
-    if automatic:
-        assert "NO-WITNESS" in response["msg"]
+    assert response["error"] == "validation"
     assert _counts(w) == (before[0], before[1], before[2] + 1)
     row = w.conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
-    assert (row["action"], row["ok"], row["code"]) == ("close_merged", 0, response["error"])
+    assert (row["action"], row["ok"], row["code"]) == ("close_merged", 0, "validation")
     assert row["key"] == (body.get("key") if isinstance(body.get("key"), str) else None)
     assert w.store._item(KEY)["state"] == "in_review"
 
@@ -316,3 +312,16 @@ def test_real_git_merge_head_survives_later_trailer_commit(w, tmp_path, monkeypa
     w.decision_path.write_text(f"| D-5504 | demo | GO {head} |\n")
     assert _close(w)["state"] == "done"
     assert w.store._evidence(KEY)[-1]["ref"]["merged_head"] == head
+
+
+def test_router_http_well_formed_without_citations_is_audited_no_witness(w, doors):
+    before = _counts(w)
+    status, response = doors.http("router", "POST", "/v1/close_merged",
+                                  {"key": KEY, "decision_id": "D-5504"})
+    assert status == 400
+    assert response["error"] == "evidence_unverified"
+    assert "NO-WITNESS" in response["msg"]
+    assert _counts(w) == (before[0], before[1], before[2] + 1)
+    row = w.conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
+    assert (row["action"], row["ok"], row["code"]) == ("close_merged", 0, "evidence_unverified")
+    assert w.store._item(KEY)["state"] == "in_review"

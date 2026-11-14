@@ -22,7 +22,7 @@ def _passing_review(text):
                 if (m := _VERDICT_LINE.match(line))]
     gaming = re.compile(r"^TEST[_-]GAMING:[ \t]*(.*)$", re.I)
     answers = [m[1].strip().lower() for line in lines if (m := gaming.match(line))]
-    return bool(verdicts and len({v for _, v in verdicts}) == 1 and answers
+    return bool(verdicts and len({v for _, v in verdicts}) == 1 and len(answers) == 1
                 and re.fullmatch(r"no(?:\s+-\s+[^|]+)?", answers[-1])
                 and all(not line.strip() or gaming.match(line)
                         for line in lines[verdicts[-1][0] + 1:]))
@@ -50,7 +50,7 @@ class SpawnerRecordAdapter:
         ids = json.loads(item.get("run_ids") or "[]")
         if not isinstance(ids, list) or any(not isinstance(r, str) for r in ids):
             raise ValueError("invalid item run citations")
-        ids = set(ids) | set(re.findall(r"(?<![\w-])run-[A-Za-z0-9._-]+", decision_text))
+        ids = {r for r in ids if not re.fullmatch(r"merged-D-[0-9]+", r)} | set(re.findall(r"(?<![\w-])run-[A-Za-z0-9._-]+", decision_text))
         if not ids or self.directory is None:
             raise ValueError("no cited records or record mirror")
         seats = []
@@ -74,6 +74,8 @@ class SpawnerRecordAdapter:
             text = record.get("stdout_tail")
             finish = record.get("finish_reason") or (
                 completion.get("finish_reason") if isinstance(completion, dict) else None)
+            finishes = [part["finish_reason"] for part in (record, completion)
+                        if isinstance(part, dict) and "finish_reason" in part]
             pinned = any(isinstance(part, dict) and any(
                 k in part and part[k] is not False for k in ("pin", "pinned", "spawn_pin"))
                 for part in (record, record.get("plan"), record.get("chosen_leg")))
@@ -84,6 +86,7 @@ class SpawnerRecordAdapter:
                     or not isinstance(completion, dict)
                     or completion.get("head_sha") not in ([head] if isinstance(head, str) else head)
                     or finish not in ("stop", "end_turn")
+                    or any(value not in ("stop", "end_turn") for value in finishes)
                     or not isinstance(attempts, list) or len(attempts) != 1
                     or not _passing_review(text)
                     or record.get("served_family", family) != family):
