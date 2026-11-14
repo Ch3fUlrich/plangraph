@@ -26,6 +26,20 @@ before collection and test fixtures.
 Discovery failures refuse to launch tests. The hook's own Git and policy calls
 retain the caller's context; temporary test repositories keep their own hooks.
 
+`tools/merge_batch.py build --name NAME --prs 1,2 --plan plangraph:KEY` records the
+batch PLAN key; `--deviations TEXT` records nonconformance (forced build exceptions
+also appear as deviations). Record every included part with `review --name NAME
+--pr N --file PATH`: evidence must end in `HEAD: <full part sha>` then
+`VERDICT: ACCEPT` (or `REQUEST_CHANGES` / `REJECT`, which replace an earlier
+ACCEPT and block the request). `push --name NAME --ci-run ID` records the full batch CI run's
+head, status and conclusion; repeat push after CI completes. A push without an ID
+refreshes an existing run only on the same head; a new head clears it.
+`go-req --name NAME` prints one batch GO-REQ with PR, full head, diff stat, part
+reviews, CI and the final PLAN block. It refuses absent/stale ACCEPT evidence,
+non-green or missing CI, and workflow edits whose touching commits lack a
+`Gate-Edit: D-<id>` trailer, including edits introduced by merge resolution. The batch key is explicit; part Plan-Items do not
+stand in for the batch's PLAN key.
+
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
 ## Setup and tests
@@ -366,3 +380,14 @@ to verify reproducibility and CLI serialization.
 Checkpoint 7 includes review evidence records; run its affected Python checks in an isolated clone.
 Python sessions compare only registrations pointing under their temporary test root, so other sessions may move worktrees concurrently; shared and per-worktree config bytes remain guarded. Worktree tests must create their repositories inside temporary roots; the guard reads metadata directly and never runs Git on the real checkout.
 Checkpoint 13 includes routing and provider contracts; run its affected Python checks in an isolated clone.
+
+Standalone Rust workspaces, including rust/worker, receive manifest-specific preflight checks.
+Preflight selects changed crates and their transitive path dependents across workspaces;
+the Temporal spike keeps its CI replay-only check and is skipped for unrelated workspace changes.
+
+Worker preflight tests default to the CI test-only unjailed environment when no jail
+configuration is supplied; explicit jail settings are preserved and other check commands are unaffected.
+
+Rust test builds, including nested admission checks and Python placement fixtures, inherit `CARGO_TARGET_DIR`; keep the host shared target when it is configured.
+
+Local worker preflight runs library and binary unit tests offline. CI runs the full worker suite, including Temporal-dependent integrations, through `ci-temporal`.

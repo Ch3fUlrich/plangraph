@@ -257,3 +257,42 @@ def update_pr(repo, number, title, body_path):
     """Set a PR's title and body (REST, for the same reason as add_label)."""
     gh("api", "--method", "PATCH", f"repos/{repo}/pulls/{number}", "-f", f"title={title}",
        "-F", f"body=@{body_path}")
+
+
+def part_review(path, head):
+    """Read an unambiguous final verdict bound to this part's full head."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise MergeBatchError(f"review file {path} cannot be read: {exc}") from None
+    lines = [line.rstrip() for line in text.split("\n") if line.strip()]
+    verdicts = re.findall(r"(?im)^VERDICT: ([A-Z_]+)\s*$", text)
+    heads = re.findall(r"(?im)^HEAD: ([0-9a-f]{40})\s*$", text)
+    verdict = verdicts[0] if len(verdicts) == 1 else ""
+    if (verdict not in ("ACCEPT", "REQUEST_CHANGES", "REJECT") or len(lines) < 2 or
+            lines[-1] != f"VERDICT: {verdict}" or lines[-2].lower() != f"head: {head}" or
+            [h.lower() for h in heads] != [head]):
+        raise MergeBatchError(f"review file {path} needs one HEAD: {head} followed by one "
+                              "VERDICT: ACCEPT, REQUEST_CHANGES or REJECT at its end")
+    if verdict == "ACCEPT" and re.search(
+            r"(?i)verdict[\W_]*:[\W_]*(?:fail|fix|halt|reject|change|request[\W_]*change)", text):
+        raise MergeBatchError(f"review file {path} has conflicting verdicts; cannot record VERDICT: ACCEPT")
+    return {"file": str(Path(path).resolve()), "head": head, "verdict": verdict}
+
+
+
+def batch_workflow_gate(st):
+    """Reuse the gate trailer parser for every workflow and every touching commit."""
+    from gate_wiring_check import GateError, commits_missing_gate_edit
+
+    wt, base, head = st["worktree"], st["base_head"], st["head"]
+    # Log rather than endpoint diff: reverted edits and deleted/renamed workflows count too.
+    paths = git("log", "--full-history", "--cc", "--format=", "--name-only", "--no-renames", "-z", f"{base}..{head}",
+                "--", ".github/workflows/", cwd=wt).stdout
+    for path in sorted({p.strip("\n") for p in paths.split("\0") if p.strip("\n")}):
+        try:
+            missing = commits_missing_gate_edit(base, head, path, cwd=wt, include_merges=True)
+        except GateError as exc:
+            raise MergeBatchError(f"workflow Gate-Edit check failed: {exc}") from None
+        if missing:
+            raise MergeBatchError(f"workflow {path} needs Gate-Edit: D-id on touching commit(s): " + " ".join(missing))

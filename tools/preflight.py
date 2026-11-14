@@ -89,7 +89,26 @@ def first_error(output):
     return (marked or lines or ["no output"])[0]
 
 
+def rust_path_dependencies(manifest, data, workspace_dir, workspace):
+    """Resolve normal, dev, build and target-specific Cargo path dependencies."""
+    dependencies = set()
+    sections = [data, *data.get('target', {}).values()]
+    for section in sections:
+        for kind in ('dependencies', 'dev-dependencies', 'build-dependencies'):
+            for name, dependency in section.get(kind, {}).items():
+                if not isinstance(dependency, dict):
+                    continue
+                directory = manifest.parent
+                if dependency.get('workspace'):
+                    dependency = (workspace or {}).get('dependencies', {}).get(name, {})
+                    directory = workspace_dir
+                if isinstance(dependency, dict) and 'path' in dependency:
+                    dependencies.add((directory / dependency['path']).resolve())
+    return dependencies
+
+
 def rust_commands(root, base, head, env=None):
+    root = root.resolve()
     try:
         changed = subprocess.check_output(
             ["git", "diff", "--name-only", "--no-renames", f"{base}...{head}"],
@@ -113,23 +132,51 @@ def rust_commands(root, base, head, env=None):
                               for excluded in workspace.get('exclude', []))}
         if 'package' in tomllib.loads(workspace_file.read_text()):
             members.add(workspace_file.parent.resolve())
-    manifests = {}
+    manifests, standalone, crates = {}, {}, {}
     for manifest in (root / "rust").rglob("Cargo.toml"):
         if "target" in manifest.parts:
             continue
-        if members is not None and manifest.parent.resolve() not in members:
-            continue
         data = tomllib.loads(manifest.read_text())
-        if "package" in data:
-            manifests[manifest.parent.relative_to(root).as_posix()] = data["package"]["name"]
+        owner = manifest.parent.relative_to(root).as_posix()
+        if members is not None and manifest.parent not in members:
+            if "workspace" not in data or "package" not in data:
+                continue
+            standalone[owner] = manifest
+        elif "package" in data:
+            manifests[owner] = data["package"]["name"]
+        else:
+            continue
+        crates[owner] = rust_path_dependencies(
+            manifest, data, manifest.parent if owner in standalone else workspace_file.parent,
+            data.get('workspace') if owner in standalone else workspace)
     selected = set()
     for path in changed:
-        owners = [p for p in manifests if path.startswith(p + "/")]
+        owners = [p for p in crates if path.startswith(p + "/")]
         selected.update([max(owners, key=len)] if owners else manifests)
-    packages = [arg for p in sorted(selected) for arg in ("-p", manifests[p])]
-    return [["cargo", "fmt", "--check"],
-            ["cargo", "clippy", *packages, "--all-targets", "--", "-D", "warnings"],
-            ["cargo", "test", *packages]]
+    # A changed dependency requires checking every consumer, across workspaces.
+    while True:
+        directories = {root / owner for owner in selected}
+        dependents = {owner for owner, deps in crates.items() if deps & directories}
+        if dependents <= selected:
+            break
+        selected.update(dependents)
+    packages = [arg for p in sorted(selected & manifests.keys()) for arg in ("-p", manifests[p])]
+    commands = ([["cargo", "fmt", "--check"],
+                 ["cargo", "clippy", *packages, "--all-targets", "--", "-D", "warnings"],
+                 ["cargo", "test", *packages]] if packages else [])
+    for owner in sorted(selected & standalone.keys()):
+        target = ["--manifest-path", str(standalone[owner])]
+        if owner == 'rust/spikes/temporal-spike':
+            # This experiment's CI contract is replay only (tests.yml rust-spike).
+            commands.append(["cargo", "test", *target, "--test", "replay"])
+        else:
+            # Worker integration tests require a real Temporal server/CLI. CI
+            # supplies those through ci-temporal; local checks stay offline.
+            tests = ["--lib", "--bins"] if owner == 'rust/worker' else []
+            commands += [["cargo", "fmt", *target, "--check"],
+                         ["cargo", "clippy", *target, "--all-targets", "--", "-D", "warnings"],
+                         ["cargo", "test", *target, *tests]]
+    return commands
 
 
 def test_environment(root, env):
@@ -240,12 +287,23 @@ def main(argv=None, root=None):
                 failed = []  # policy runs every check and reports all failures
                 for command in commands:
                     cwd = root / "rust" if family == "rust" else root
-                    code, output = run(command, cwd, family_env)
+                    command_env = family_env
+                    if (family == "rust" and command[:2] == ["cargo", "test"]
+                            and "--manifest-path" in command
+                            and command[command.index("--manifest-path") + 1]
+                            == str((root / "rust/worker/Cargo.toml").resolve())
+                            and "PG_JAIL_BIN" not in family_env
+                            and family_env.get("PG_JAIL", "off") == "off"):
+                        # Match rust-worker CI for this test child only.
+                        command_env = dict(family_env)
+                        command_env.setdefault("PG_JAIL", "off")
+                        command_env.setdefault("PG_TEST_ALLOW_UNJAILED", "1")
+                    code, output = run(command, cwd, command_env)
                     print(output, end="", flush=True)
                     infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     if infra:
                         print(f"{family}: INFRA HTTP 5xx; rerun once", flush=True)
-                        code, output = run(command, cwd, family_env)
+                        code, output = run(command, cwd, command_env)
                         print(output, end="", flush=True)
                         infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     status = "PASS" if not code else ("INFRA" if infra else "FAIL")

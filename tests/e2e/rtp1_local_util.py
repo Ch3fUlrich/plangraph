@@ -130,8 +130,12 @@ def reap_recorded(pid_dir: Path, grace_s: float = 1.0) -> list[int]:
             root = Path(f"/proc/{pid}")
             if (root / "stat").read_text().split(") ", 1)[1].startswith("Z"):
                 return False  # exited, awaiting its parent's waitpid
-            identity = (root / "cmdline").read_bytes() + (root / "environ").read_bytes()
-            return any(str(p).encode() in identity for p in
+            command = (root / "cmdline").read_bytes()
+            environment = (root / "environ").read_bytes().split(b"\0")
+            # Cache and temp paths can contain pid_dir as a prefix. Only the
+            # harness's explicit, exact directory variable proves ownership.
+            recorded_env = b"PG_FAKE_PID_DIR=" + str(pid_dir.resolve()).encode()
+            return recorded_env in environment or any(str(p).encode() in command for p in
                        (pid_dir.resolve(), pid_dir.parent.resolve() / "opencode"))
         except OSError:
             return False

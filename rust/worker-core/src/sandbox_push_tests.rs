@@ -140,7 +140,9 @@ fn pilot_credentials_absent_with_parent_positive_control() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
             stderr.contains("fatal: unable to get password from user")
-                || (stderr.contains("fatal: could not read Password for")
+                || ((stderr.contains("fatal: could not read Password for")
+                    || stderr
+                        .contains("fatal: could not read Username for 'https://example.invalid'"))
                     && stderr.contains("terminal prompts disabled")),
             "{stderr}"
         );

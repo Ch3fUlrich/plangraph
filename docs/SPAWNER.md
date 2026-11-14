@@ -1,4 +1,4 @@
-# Plangraph Spawner & Model Routing Architecture
+# Plangraph Spawner & Model Routing Architecture — [disk admission](operations/spawner-disk-admission.md)
 
 | Config key | Values | Default / details |
 | --- | --- | --- |
