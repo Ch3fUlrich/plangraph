@@ -60,6 +60,17 @@ are unchanged, and the benchmark contract passes with the retained null efforts.
 Ember, high/complex review-prefix and planning Fable positive paths are synthetic-only
 tests of upstream admission, not real-registry coverage. Real-registry assertions
 pin their absence and missing roles (plus permanent disables for declarations).
+## DeepSeek review identity (D-5641, D-5643)
+
+The `omniroute-deepseek-flash` subscription leg requests
+`omniroute/deepseek-v4.1-flash`, not the obsolete `omniroute/deepseek-flash`.
+The Go review leg already requests `opencode-go/deepseek-v4.1-flash`.
+Registration is not host availability: the launch boundary checks the rendered
+child config via `opencode models --standalone` and skips an absent id with
+`not_served_on_host` before starting a harness run. The recorded local probe
+does not yet list the corrected OmniRoute id; its provider declaration and
+gateway and credential readiness remain a host-side operator request. Never replace
+it with the distinct paid `omniroute/deepseek-direct-flash` route.
 
 ## Replan-0438 CI reconciliation
 
@@ -96,3 +107,5 @@ files: `139 passed in 63.38s (0:01:03)`. The untouched argv-limit file reproduce
 `2 failed, 44 passed in 5.38s`, both at its digest-versus-redaction assertion
 on line 57. The full suite was not run, following the brief's final prohibition
 on whole-suite runs; no test was skipped or weakened to hide those failures.
+
+The shipped provider config and the pending benchmark inventory use the same `omniroute/deepseek-v4.1-flash` identity; the pending row explicitly records missing measurements. Historical fallthrough replay projects the legacy alias onto this registered identity.

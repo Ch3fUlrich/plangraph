@@ -330,3 +330,5 @@ Checkpoint 5 includes test worktree registry and caller snapshots; run its affec
 Checkpoint 7 includes review evidence records; run its affected Python checks in an isolated clone.
 
 Standalone Rust workspaces, including rust/worker, receive manifest-specific preflight checks.
+
+Checkpoint 13 includes routing and provider contracts; run its affected Python checks in an isolated clone.

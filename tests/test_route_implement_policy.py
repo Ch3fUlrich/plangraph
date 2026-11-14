@@ -16,6 +16,7 @@ CARD = {"estimate_tokens": 20000, "risk_tags": [],
 WRITERS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "openrouter-free",
            "opencode-big-pickle", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
            "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
+LIVE = [leg for leg in WRITERS if leg != "agy-gemini-3.8-flash"]  # D-5696: fenced on the live route
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +36,7 @@ def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card,
         return {"state": state if model == "omniroute/cx-gpt-6.1-sol-xhigh" else "available", "evidence": None}
     service = SpawnService(state=tmp_path, leg_reader=reader)
     plan = service.route(card, role="implement")
-    expected = WRITERS if state == "available" else WRITERS[1:]
+    expected = LIVE if state == "available" else LIVE[1:]
     if card.get("risk_tags"):
         expected = [lid for lid in expected if not next(l for l in DEFAULT_LEGS if l.id == lid).trains_on_data]
     assert [leg.id for leg in plan.legs] == expected
@@ -94,7 +95,7 @@ def test_implement_renamed_operator_claude_fails_closed(tmp_path, monkeypatch, c
     from plangraph.planner.route_policy import RoutePolicy
     from plangraph.planner.routing import RouteError, route_card
     template, fallback = (next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
-                          for leg_id in WRITERS[:2])
+                          for leg_id in LIVE[:2])
     row = dict(dataclasses.asdict(template), id="operator-writer", model="provider/some-model",
                family="unidentified-high" if identity == "unknown" else "gpt", claude_family=identity == "flag",
                harness="claude" if identity == "harness" else "opencode")
@@ -176,8 +177,49 @@ def test_default_writer_refusal_falls_through_to_agy(tmp_path, refusal):
     runner.spawn = spawn
     service = SpawnService(runner, state=tmp_path)
     record = asyncio.run(service.spawn(card=CARD, prompt="Implement public code", wait_seconds=None))
-    assert calls == [("omniroute/cx-gpt-6.1-sol-xhigh", "opencode"), ("gemini-3.8-flash", "agy")]
+    assert calls == [("omniroute/cx-gpt-6.1-sol-xhigh", "opencode"), ("openrouter/free", "opencode")]
     assert record["status"] == "completed"
-    assert record["chosen_leg"]["id"] == "agy-gemini-3.8-flash"
+    assert record["chosen_leg"]["id"] == "openrouter-free"
     assert record["chosen_leg"]["effort"] is None
     assert not (tmp_path / "spawn-overrides.jsonl").exists()
+
+"""The live default route (SpawnService.route) fences legacy and argon legs."""
+import pytest
+
+from plangraph.planner import legs
+from plangraph.routing_support import resolver
+from plangraph.spawner.service import SpawnService
+
+ROLES = ('implement', 'review', 'orchestrate')
+LIVE_CARD = {'estimate_tokens': 1000}
+LIVE_DIFF = dict(LIVE_CARD, diff_ref={'repo': '/repo', 'base': 'HEAD~1', 'head': 'HEAD'})
+
+
+@pytest.fixture
+def service(monkeypatch, tmp_path):
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: ())
+    return SpawnService(state=tmp_path, leg_reader=lambda *a, **kw: {'state': 'ok', 'evidence': None})
+
+
+def routed(plan):
+    return [leg.id + leg.model for leg in (*plan.legs, *plan.review_seats)]
+
+
+@pytest.mark.parametrize('role', ROLES)
+def test_live_default_route_never_routes_legacy(service, role):
+    plan = service.route(LIVE_DIFF, role, writer_families=('claude',))
+    assert plan.legs
+    assert not [i for i in routed(plan) if 'gemini-3.8-flash' in i.lower() or 'gpt-6-luna' in i.lower()]
+
+
+@pytest.mark.parametrize('card', [LIVE_CARD, LIVE_DIFF], ids=['no_diff', 'diff'])
+@pytest.mark.parametrize('family', ['anthropic', 'claude'])
+def test_live_default_review_route_never_uses_argon(service, card, family):
+    plan = service.route(card, 'review', writer_families=(family,))
+    assert plan.legs and plan.review_seats
+    assert not [i for i in routed(plan) if 'argon' in i.lower()]
+
+
+def test_live_default_legs_keep_pinnable_legs_in_registry():
+    ids = {leg.id for leg in legs.DEFAULT_LEGS}
+    assert {'agy-gemini-3.8-flash', 'cx-gpt-6-luna', 'agy-gemini-4-argon'} <= ids

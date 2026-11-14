@@ -19,8 +19,10 @@ def leg(name):
     return next(row for row in DEFAULT_LEGS if row.id == name)
 
 
-GEMINI = leg('agy-gemini-3.8-flash')
-LUNA = leg('cx-gpt-6-luna')
+# D-5696/D-5648: legacy flash/luna and argon are fenced off the live route; the first two seat
+# families stand in with live review legs (openai and deepseek families).
+GEMINI = leg('agy-gpt-oss-120b')
+LUNA = leg('omniroute-deepseek-flash')
 SONNET = leg('agy-sonnet-5.5')
 OPUS = leg('agy-opus-5.5')
 CARD = {'estimate_tokens': 1000,
@@ -130,11 +132,11 @@ def test_unfilled_slot_names_distinct_family_refusal(service, monkeypatch):
 def test_route_names_anthropic_second_family_without_reordering(service):
     svc = service()
     plan = svc.route(CARD, 'review', ['gpt'], benchmark={})
-    assert plan.review_seats == (GEMINI, SONNET)
-    assert [l.id for l in plan.legs] == [GEMINI.id, SONNET.id, OPUS.id]
+    assert plan.review_seats == (LUNA, SONNET)
+    assert [l.id for l in plan.legs] == [LUNA.id, SONNET.id, OPUS.id]
     data = plan.to_dict()
     assert 'second review family is anthropic' in data['reasons']
-    assert [s['family'] for s in data['review_seats']] == ['gemini', 'claude']
+    assert [s['family'] for s in data['review_seats']] == ['deepseek', 'claude']
     docs = (Path(__file__).resolve().parents[1] / 'docs/spawner-seats.md').read_text()
     assert '`route.review_seats` names planned slots; their family is final only after dispatch.' in docs
 

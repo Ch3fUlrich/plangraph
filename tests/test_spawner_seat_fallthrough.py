@@ -327,12 +327,12 @@ def test_review_without_numeric_cap_has_no_deadline(monkeypatch):
     assert record == dict(role='review', started=1000)
 
 
-def test_empty_review_timeout_keeps_ordinary_maximum(monkeypatch):
+def test_empty_review_timeout_keeps_role_maximum(monkeypatch):
     monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', '')
     monkeypatch.setattr('time.time', lambda: 1000)
     limits = thresholds(role='review')
-    assert limits['max_s'] == 90 * 60
-    assert leg_limits(dict(role='review', started=1000), limits)['deadline'] == 6400
+    assert limits['max_s'] == 25 * 60
+    assert leg_limits(dict(role='review', started=1000), limits)['deadline'] == 2500
 
 
 def test_uncapped_review_dispatch_can_fall_through(replay):
@@ -386,7 +386,7 @@ def test_recorded_capture_matches_registered_provider_identity(recorded_plan):
     registered = next(leg for leg in DEFAULT_LEGS if leg.id == 'omniroute-deepseek-flash')
     skipped = next(row for row in CAPTURE['skipped'] if row['leg'] == registered.id)
     assert skipped['reason'] == 'not_served_on_host: ' + registered.model
-    assert registered.model == 'omniroute/deepseek-flash'
+    assert registered.model == 'omniroute/deepseek-v4.1-flash'
     unlaunched = [a['leg'] for a in CAPTURE['attempts'] if a['skip_reason'] == 'run_terminated_before_leg']
     assert unlaunched == [leg.id for leg in recorded_plan.legs[1:]]
     assert [a['leg'] for a in CAPTURE['attempts'] if a['skip_reason'] == 'unknown'] == [

@@ -126,7 +126,7 @@ DEFAULT_LEGS = (
     Leg("agy-opus-5.5", "subscription", "agy", "claude-opus-5-5-high",
         "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
         roles=("review",)),
-    Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-flash",
+    Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-v4.1-flash",
         "deepseek", ("128k",), 100000, False, roles=("implement", "review", "orchestrate")),
     Leg("omniroute-muse-spark", "subscription", "opencode",
         "omniroute/muse-spark-1.3-contributor", "muse", ("128k",), 100000, False,
