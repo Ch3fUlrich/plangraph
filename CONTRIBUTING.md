@@ -322,3 +322,9 @@ Python files already in flight are individually listed in
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
 
 Local controls run every named consumer plus a bounded smoke set; policy checks use origin/main when available, including inherited stack changes. Preflight clears the complete GIT_CONFIG namespace before selector launch.
+
+CI validates collection once without `PYTEST_SHARD` on shard 0, using the PR
+affected selection or the full push/nightly suite. Empty individual shards remain
+valid; a nonempty file selection that collects no tests fails the job. Local
+preflight timeouts terminate the selector and its pytest descendants. Missing
+`tools/preflight.py` refuses branch pushes unless `PREFLIGHT_SKIP=1` is explicit.

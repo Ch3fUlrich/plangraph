@@ -173,6 +173,16 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: b=$(git rev-parse --verify --end-of-options "HEAD^1^{commit}") && git show "$b":tests/test_workflow_archive.py > .git/workflow_archive_base.py && python .git/workflow_archive_base.py "$b"
+      - name: Check nonempty collection
+        if: matrix.shard == 0
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PYTEST_SHARD= python tools/affected_tests.py --base "$BASE_SHA" --run --collect-only
+          else
+            PYTEST_SHARD= python -m pytest -q --collect-only tests
+          fi
       - name: pytest
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

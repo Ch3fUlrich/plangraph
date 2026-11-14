@@ -1,4 +1,8 @@
-from test_preflight import *
+from pathlib import Path
+import shutil
+import subprocess
+import pytest
+from test_preflight import preflight, repo, fake_runner
 
 @pytest.mark.parametrize("command,family", [
     (["cargo", "clippy"], "rust"), (["cargo", "test"], "rust"),
@@ -27,6 +31,7 @@ def test_slow_passing_check(repo, monkeypatch, capsys, command, family):
         return 0, ""
 
     monkeypatch.setattr(preflight.subprocess, "run", sleeping_check)
+    monkeypatch.setattr(preflight, "run_test_process", sleeping_check)
     monkeypatch.setattr(preflight, "run", run)
     monkeypatch.setattr(preflight, "test_environment", lambda root, env: env)
     monkeypatch.setattr(preflight, "test_baseline", lambda root, base: base)

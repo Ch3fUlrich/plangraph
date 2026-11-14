@@ -1,1 +1,1 @@
-- Disable automatic maintenance and GC before caller-isolation fixture commits; exclude Git coordination locks from snapshots while checking repository/object and working-tree mutations explicitly.
+- Isolate test Git configuration and read shared/worktree config bytes and worktree registration metadata directly; object, ref and working-tree mutation coverage is outside this part.

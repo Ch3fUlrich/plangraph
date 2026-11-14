@@ -226,6 +226,7 @@ def main(root=None):
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--collect-only", action="store_true", help="validate the unsharded selection without running tests")
     parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
     parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
     parser.add_argument("--maxfail", type=int, default=0)
@@ -274,9 +275,12 @@ def main(root=None):
             print('FAIL test-env: cannot discover Git repository bindings', file=sys.stderr)
             return 1
         start = time.monotonic()
+        if args.collect_only:
+            env.pop("PYTEST_SHARD", None)
         parallel = (["-n", args.workers, "--dist", "loadgroup"]
-                    if importlib.util.find_spec("xdist") is not None else [])
+                    if not args.collect_only and importlib.util.find_spec("xdist") is not None else [])
         result = subprocess.run([sys.executable, "-m", "pytest", *parallel, "--durations=30",
+                                 *(["--collect-only"] if args.collect_only else []),
                                  *(["--maxfail", str(args.maxfail)] if args.maxfail else []), *plan["tests"]], cwd=root, env=env)
         print(f"affected wall seconds: {time.monotonic() - start:.3f}")
         return result.returncode

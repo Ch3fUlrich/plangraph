@@ -18,7 +18,19 @@ def git_config_guard(root, registry_roots=None):
             common = (metadata / (metadata / 'commondir').read_text().strip()).resolve()
         configs = tuple((str(path), path.read_bytes() if path.exists() else None)
                         for path in (common / 'config', metadata / 'config.worktree'))
-        return configs, ()
+        # The registry is what supplies `git worktree list`; read metadata directly.
+        paths = [common / 'HEAD'] if registry_roots is None else []
+        for entry in sorted((common / 'worktrees').glob('*')):
+            if registry_roots is not None:
+                try:
+                    target = Path((entry / 'gitdir').read_text().strip()).resolve()
+                except FileNotFoundError:
+                    continue  # another session may remove its registration during this scan
+                if not any(target.is_relative_to(Path(root).resolve()) for root in registry_roots):
+                    continue
+            paths.extend(entry / name for name in ('gitdir', 'HEAD', 'locked'))
+        registry = tuple((str(path), path.read_bytes() if path.exists() else None) for path in paths)
+        return configs, registry
     before = snapshot()
     try:
         yield

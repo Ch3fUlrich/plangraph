@@ -1,4 +1,6 @@
-from test_affected_tests import *
+from pathlib import Path
+import pytest
+from test_affected_tests import selector
 
 def test_ci_pr_uses_affected_and_nightly_keeps_full():
     import yaml

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import re
+import signal
 from pathlib import Path
 import shutil
 import subprocess
@@ -37,10 +38,29 @@ class FailFamily(ValueError):
     """A check cannot run because a required tool is missing."""
 
 
+def run_test_process(command, **kwargs):
+    """Bound the selector and its pytest workers as one process tree."""
+    timeout = kwargs.pop('timeout')
+    with subprocess.Popen(command, **kwargs, start_new_session=os.name == 'posix') as process:
+        try:
+            stdout, _ = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            if os.name == 'posix':
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                               capture_output=True, timeout=CHECK_TIMEOUT)
+                process.kill()
+            process.communicate()
+            raise exc
+        return subprocess.CompletedProcess(command, process.returncode, stdout)
+
+
 def run(command, cwd, env):
     timeout = check_timeout(command)
     try:
-        result = subprocess.run(command, cwd=cwd, env=env, text=True,
+        runner = run_test_process if len(command) > 1 and Path(command[1]).name == "affected_tests.py" else subprocess.run
+        result = runner(command, cwd=cwd, env=env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 timeout=timeout)
         return result.returncode, result.stdout

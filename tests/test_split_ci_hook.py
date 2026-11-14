@@ -1,4 +1,6 @@
-from test_hooks_prepush import *
+from pathlib import Path
+import subprocess
+from test_hooks_prepush import HOOK
 
 def test_affected_gate_is_file_only_and_time_bounded(tmp_path, monkeypatch):
     import runpy
