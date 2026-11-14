@@ -7,6 +7,7 @@ from pathlib import Path
 
 __all__ = [
     "NO_TOOLS_PREAMBLE",
+    "render_brief",
     "load_tail",
     "vector_block",
     "assemble",
@@ -24,7 +25,7 @@ NO_TOOLS_PREAMBLE = (
 )
 
 
-def render_brief(role: str, context: dict | None = None) -> str:
+def render_brief(role: str, context: dict | None = None, *, rules: str = "") -> str:
     """Render a versioned brief; substitution never interprets item text."""
     if role not in ("review", "writer"):
         raise ValueError("role must be review or writer")
@@ -34,7 +35,8 @@ def render_brief(role: str, context: dict | None = None) -> str:
     values.update({key: str(value) for key, value in (context or {}).items()
                    if key in fields})
     text = Path(__file__).with_name(role + "_brief.md").read_text(encoding="utf-8")
-    return Template(text).substitute(values)
+    prefix, marker, item = text.partition("=== ITEM CONTEXT")
+    return prefix + rules + "\n" + marker + Template(item).substitute(values)
 
 
 def load_tail() -> str:
@@ -53,17 +55,16 @@ def vector_block(vectors: list[str]) -> str:
 
 def assemble(vectors: list[str], parts: list[tuple[str, str]],
              *, preamble: bool = True, context: dict | None = None) -> str:
-    """Full prompt: preamble, vectors, labelled parts, tail last."""
+    """Fixed preamble/rules/output contract first, item context and material last."""
     if not vectors:
         raise ValueError("vectors must not be empty")
     out = ""
     if preamble:
         out += NO_TOOLS_PREAMBLE + "\n"
-    out += render_brief("review", context) + "\n"
+    out += render_brief("review", context, rules=load_tail().rstrip()) + "\n"
     out += vector_block(vectors)
     for label, text in parts:
         out += "\n=== %s\n" % label + text
-    out += "\n" + load_tail().rstrip()
     return out
 
 

@@ -53,3 +53,48 @@ print(json.dumps([assemble(['correctness'], [('diff', 'body')], context=ctx),
         assert_eq!(text.matches("=== ITEM CONTEXT").count(), 1);
     }
 }
+
+#[test]
+fn different_items_share_the_complete_rules_prefix() {
+    let briefs = render(
+        r#"
+import json
+from plangraph.review.prompt import render_brief, assemble
+from plangraph.routing_support.fixer import render_fixer_brief
+from tools.judge_prompt import build_judge_prompt
+pairs = []
+for builder in (lambda c: render_brief('writer', c),
+                lambda c: render_brief('review', c),
+                lambda c: render_fixer_brief([{'text': c['done_criteria']}], c),
+                lambda c: assemble([c['done_criteria']], [('diff', c['item_key'])], context=c),
+                lambda c: build_judge_prompt(c['done_criteria'], c['item_key'], {}, {}, context=c)):
+    pairs.append([builder(dict(item_key='plangraph:' + key, done_criteria='finish ' + key))
+                  for key in ('FIRST', 'SECOND')])
+print(json.dumps(pairs))
+"#,
+    );
+    for pair in briefs.as_array().unwrap() {
+        let first = pair[0].as_str().unwrap();
+        let second = pair[1].as_str().unwrap();
+        let prefix = first.split_once("=== ITEM CONTEXT").unwrap().0;
+        assert_eq!(
+            prefix.as_bytes(),
+            second.split_once("=== ITEM CONTEXT").unwrap().0.as_bytes()
+        );
+        for field in [
+            "Role:",
+            "Rules:",
+            "Language:",
+            "Gates:",
+            "Plan-Item:",
+            "Writer:",
+        ] {
+            assert!(prefix.contains(field), "prefix missing {field}");
+        }
+        assert!(!prefix.contains("FIRST"));
+        assert!(!prefix.contains("SECOND"));
+        assert!(first.contains("plangraph:FIRST"));
+        assert!(second.contains("plangraph:SECOND"));
+        assert_ne!(first, second);
+    }
+}
