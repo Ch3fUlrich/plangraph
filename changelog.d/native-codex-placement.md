@@ -6,4 +6,4 @@ Remote native result/cancel receipts now tolerate shell banners through nonce fr
 
 Native worktrees live under each run’s state directory so retained runs leave the source checkout clean for future worktree admission. Disk probes follow the worktree filesystem.
 
-Native cards require an explicit absolute repository before admission. Result reads remain local; CLI and MCP polls refresh remote receipts off the event loop, and cancellation makes one remote round trip.
+Native cards require an explicit absolute repository before admission. Result reads remain local; CLI and MCP polls refresh remote receipts off the event loop, and Python cancellation makes one remote round trip. CLI wait refreshes remote native runs at most once per second within its timeout.

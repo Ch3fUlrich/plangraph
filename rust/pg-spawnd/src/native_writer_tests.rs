@@ -168,7 +168,8 @@ with tempfile.TemporaryDirectory() as directory:
 
 #[test]
 fn native_rust_mcp_bridge_rejects_review_before_starting_adapter() {
-    let args = json!({"card":{"run_kind":"native-codex"},"role":"review","prompt":"brief"});
+    let args =
+        json!({"card":{"run_kind":"native-codex","repo":"/repo"},"role":"review","prompt":"brief"});
     let result =
         crate::placement::native_spawn(std::path::Path::new("/unused"), args.as_object().unwrap());
     assert!(result.is_err());
@@ -248,8 +249,8 @@ fn native_arguments_are_validated_before_adapter_launch() {
         );
     }
     for card in [
-        json!({"run_kind":"native-codex","cwd":"/repo"}),
-        json!({"run_kind":"native-codex","findings":[{"text":"fix"}]}),
+        json!({"run_kind":"native-codex","repo":"/repo","cwd":"/repo"}),
+        json!({"run_kind":"native-codex","repo":"/repo","findings":[{"text":"fix"}]}),
     ] {
         let args = json!({"card":card,"prompt":"brief"});
         assert!(matches!(
@@ -346,6 +347,47 @@ async def check():
             assert (await service.cancel('run-abc'))['status'] == 'cancelled'
             assert ssh.call_count == 1, 'cancel must perform only its cancel round trip'
             assert ssh.call_args.kwargs == {'verb':'cancel'}
+asyncio.run(check())
+"#]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn native_remote_wait_refreshes_terminal_evidence_at_a_bounded_cadence() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = std::process::Command::new("python3").current_dir(&root).env("PYTHONPATH", root.join("src"))
+        .args(["-c", r#"
+import asyncio, pathlib, tempfile, time
+from unittest.mock import patch
+from plangraph.spawner.runner import spawn_service
+async def check():
+    with tempfile.TemporaryDirectory() as directory:
+        service = spawn_service(state=pathlib.Path(directory)/'state')
+        receipt = dict(run_id='run-abc', run_kind='native-codex', host='other', status='running', overflow_remote=True)
+        final = dict(receipt, status='completed', ended=time.time(), exit_code=0, final_head='remote-head', review={'verdict':'ACCEPT'})
+        service._save(receipt)
+        with patch('plangraph.spawner.remote_ps.native_result', return_value=final) as ssh:
+            result = await service.wait('run-abc', timeout=.5)
+            assert result['final_head'] == 'remote-head' and result['review']['verdict'] == 'ACCEPT', result
+            assert ssh.call_count == 1
+        service._save(receipt)
+        calls = []
+        def refresh(record):
+            calls.append(time.monotonic())
+            return record if len(calls) == 1 else final
+        with patch('plangraph.spawner.remote_ps.native_result', side_effect=refresh):
+            assert (await service.wait('run-abc', timeout=3))['status'] == 'completed'
+        assert len(calls) == 2 and calls[1] - calls[0] >= 1, calls
+        service._save(receipt)
+        with patch('plangraph.spawner.remote_ps.native_result', return_value=receipt) as ssh:
+            try: await service.wait('run-abc', timeout=.1)
+            except TimeoutError as exc: assert 'run wait timed out' in str(exc)
+            else: raise AssertionError('running receipt did not time out')
+            assert ssh.call_count == 1
 asyncio.run(check())
 "#]).output().unwrap();
     assert!(

@@ -934,8 +934,17 @@ def spawn_service(*args, **kwargs):
             if timeout is not None and timeout < 0:
                 raise ValueError('timeout must be nonnegative')
             deadline = None if timeout is None else time.monotonic() + timeout
+            next_refresh = 0
             while True:
                 record = self.result(run_id)
+                if (record.get('run_kind') == 'native-codex' and record.get('overflow_remote')
+                        and record.get('status') == 'running' and time.monotonic() >= next_refresh):
+                    remaining = None if deadline is None else max(0, deadline - time.monotonic())
+                    try:
+                        record = await asyncio.wait_for(self.refresh_result(run_id), remaining)
+                    except TimeoutError:
+                        raise TimeoutError('run wait timed out: ' + run_id) from None
+                    next_refresh = time.monotonic() + 1
                 if record.get('ended') is not None and record['status'] != 'running':
                     return record
                 from .exit_outcome import orphaned
