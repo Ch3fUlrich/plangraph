@@ -217,8 +217,6 @@ def run_hook() -> int:
                 and isinstance(cwd, str)):
             return 0
         ctx = context_tokens(transcript_path)
-        if ctx is None:
-            return 0
         handoff, hard = resolve_thresholds()
         hard = max(hard, handoff)  # a garbled pair must never hide or misreport the hard cap
         try:
@@ -233,6 +231,7 @@ def run_hook() -> int:
             previous = json.loads(read_text_capped(scan_path))
         except (OSError, ValueError):
             previous = None
+        scanned = None
         try:
             scanned = scan(transcript_path, previous) if scan else None
         except Exception:
@@ -240,8 +239,12 @@ def run_hook() -> int:
                 print("context_guard: context_compaction unavailable; continuing without scan", file=sys.stderr)
         stored = read_state(session_id) or {}
         scan_state = scanned or {}
-        boundary = scan_state.get("boundary") if scan_state.get("fleet") else None
+        boundary = scan_state.get("boundary")
         compact = bool(boundary)
+        if ctx is None:
+            if not compact:
+                return 0
+            ctx = 0
         if ctx < handoff and not compact:
             clear_state(session_id)  # back under the line (compaction): the next climb is announced afresh
             return 0
@@ -251,6 +254,8 @@ def run_hook() -> int:
             return 0
         line = emit_line(level, ctx, threshold)
         if compact:
+            if "HANDOFF-NOW" not in line:
+                line = "HANDOFF-NOW " + line
             line = line.replace(" >= %dk" % (threshold // 1000),
                                 " (compaction; handoff required)", 1)
         out = {"hookSpecificOutput": {"hookEventName": "PostToolUse",

@@ -23,10 +23,20 @@ class Compaction(GuardCase):
         state = json.loads(self.state_file().read_text())
         self.assertEqual((state["level"], state["compaction"] > 0), ("handoff", True))
 
-    def test_interactive_compaction_is_silent(self):
+    def test_interactive_compaction_also_requires_handoff(self):
         self.write(json.dumps({"type": "custom-title", "customTitle": "interactive"}),
                    BOUNDARY, usage_line(inp=1000))
-        self.assertEqual(self.hook(FLEET_SESSION_NAME="builder-0042").stdout, "")
+        self.assertIn("HANDOFF-NOW", self.ctx_text(self.hook(FLEET_SESSION_NAME="")))
+
+    def test_boundary_without_identity_or_usage_requires_handoff(self):
+        self.write(BOUNDARY)
+        self.assertIn("HANDOFF-NOW", self.ctx_text(self.hook(FLEET_SESSION_NAME="")))
+
+    def test_compaction_above_hard_cap_still_says_handoff_now(self):
+        self.write(BOUNDARY, usage_line(inp=301000))
+        text = self.ctx_text(self.hook(FLEET_SESSION_NAME=""))
+        self.assertIn("HANDOFF-NOW", text)
+        self.assertIn("HARD-CAP", text)
 
     def test_low_context_without_boundary_clears_state(self):
         self.fleet(usage_line(inp=280000))
