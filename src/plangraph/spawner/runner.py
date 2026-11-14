@@ -244,7 +244,7 @@ class SpawnerRunner:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
         from .target import resolve_target   # leg ids and admitted combos resolve before providers render
-        model_or_combo, leg = resolve_target(model_or_combo, chosen=chosen)
+        model_or_combo, leg = resolve_target(model_or_combo, **({'chosen': chosen} if chosen is not None else {}))
         if leg is not None:
             if client is not None and client != leg.harness:
                 from plangraph.routing_errors import SpawnRefused

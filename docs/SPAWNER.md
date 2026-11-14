@@ -718,7 +718,7 @@ No mimo review legs. CLI RESOURCE_EXHAUSTED/quota-reached responses use the exis
 leg-state store, keyed agy:<model> without effort (including the native Sonnet fallback). Each model has an independent
 reset; route JSON exposes all three agy_quota_states including reset_at evidence.
 
-Rust native review kinds `agy-cli` and `claude-cli` select only admitted review legs; Python MCP rejects this selector. Hydrogen high and Argon medium use agy plan mode with preallowed read tools;
+Rust native review kinds `agy-cli` and `claude-cli` select only admitted review legs; Python MCP rejects these native kinds. Hydrogen high and Argon medium use agy plan mode with preallowed read tools;
 command tools stay unapproved; native CLI reviews use the checkout rather than optional inline-diff rollout. Sonnet uses Claude restricted review tools and high effort. Rust requires a clean worktree and its exact HEAD fast-checks
 stamp, binds head_sha, and records verdict/findings plus cli_reported provenance.
 For agy this is the CLI-selected model, not authenticated provider telemetry; Claude must report a single Sonnet model in its stream.

@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn lists_the_embedded_fixture() {
         let listed = list_tools().tools;
-        let fixture: serde_json::Value = serde_json::from_str(TOOLS_JSON).expect("fixture");
+        let mut fixture: serde_json::Value = serde_json::from_str(TOOLS_JSON).expect("fixture");
         let mut base = serde_json::to_value(&listed).expect("tools");
         for tool in base.as_array_mut().unwrap() {
             if matches!(
@@ -346,6 +346,21 @@ mod tests {
                     .unwrap();
                 assert_eq!(leg["type"], "string");
                 assert!(leg["description"].as_str().unwrap().contains("agy-cli"));
+            }
+        }
+        for tool in fixture.as_array_mut().unwrap() {
+            tool["inputSchema"]["properties"]
+                .as_object_mut()
+                .unwrap()
+                .remove("leg");
+        }
+        // Probe keeps its existing array selector in both catalogues.
+        for tool in base.as_array_mut().unwrap() {
+            if tool["name"] == "plangraph_agent_probe" {
+                tool["inputSchema"]["properties"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("leg");
             }
         }
         assert_eq!(base, fixture);

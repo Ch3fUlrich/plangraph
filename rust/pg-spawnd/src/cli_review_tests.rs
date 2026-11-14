@@ -282,7 +282,8 @@ assert record['status'] == 'dry_run', record
 assert record['chosen_leg']['harness'] == 'claude', record
 server = MCPSpawnerServer(state=state)
 for verb in ['route', 'spawn']:
-    assert 'leg' not in next(t for t in TOOLS_METADATA if t['name']=='plangraph_agent_'+verb)['inputSchema']['properties']
+    if verb == 'route':
+        assert 'leg' not in next(t for t in TOOLS_METADATA if t['name']=='plangraph_agent_'+verb)['inputSchema']['properties']
     try:
         asyncio.run(server.call_tool('plangraph_agent_'+verb, dict(leg='agy-cli')))
     except ParameterRefused as exc:

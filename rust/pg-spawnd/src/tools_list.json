@@ -68,6 +68,10 @@
      "description": "Plan without starting subprocess",
      "type": "boolean"
     },
+    "leg": {
+     "description": "Registered leg reference (explicit override)",
+     "type": "string"
+    },
     "model_or_combo": {
      "description": "Exceptional audited override only; requires override_reason",
      "type": "string"
