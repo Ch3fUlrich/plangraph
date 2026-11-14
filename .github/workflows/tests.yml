@@ -181,9 +181,12 @@ jobs:
         run: |
           rc=0
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            PYTEST_SHARD= PYTEST_ADDOPTS="-q -o faulthandler_timeout=180" timeout -k 15 600 python tools/affected_tests.py --base "$BASE_SHA" --run --collect-only < /dev/null > "$RUNNER_TEMP/collect.log" 2>&1 || rc=$?
+            PYTHONFAULTHANDLER=1 PYTEST_SHARD= PYTEST_ADDOPTS="-q -o faulthandler_timeout=180" timeout -s ABRT -k 15 300 python tools/affected_tests.py --base "$BASE_SHA" --run --collect-only < /dev/null > "$RUNNER_TEMP/collect.log" 2>&1 || rc=$?
           else
-            PYTEST_SHARD= timeout -k 15 600 python -m pytest -q -o faulthandler_timeout=180 --collect-only tests < /dev/null > "$RUNNER_TEMP/collect.log" 2>&1 || rc=$?
+            PYTHONFAULTHANDLER=1 PYTEST_SHARD= timeout -s ABRT -k 15 300 python -m pytest -q -o faulthandler_timeout=180 --collect-only tests < /dev/null > "$RUNNER_TEMP/collect.log" 2>&1 || rc=$?
+          fi
+          if [ "$rc" -ne 0 ]; then
+            ps -eo pid,ppid,pgid,sid,stat,etime,rss,args --forest
           fi
           cat "$RUNNER_TEMP/collect.log"
           exit $rc
