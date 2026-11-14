@@ -52,7 +52,7 @@ def test_runner_agy_stream_result(monkeypatch, status, error):
         monkeypatch.setattr('plangraph.spawner.resolver.host_skip_reason_async', AsyncMock(return_value=None))
         prompt = 'x' * 40000
         job = await SpawnerRunner(process_factory=factory).spawn(
-            prompt, 'gemini-3.8-flash', client='agy', role='review', wait_seconds=2)
+            prompt, 'gemini-4-argon-high', client='agy', role='review', wait_seconds=2)
         assert job.status == ('completed' if status == 'SUCCESS' else 'failed')
         assert job.stdout == ('VERDICT: ACCEPT' if status == 'SUCCESS' else '')
         assert error in job.stderr

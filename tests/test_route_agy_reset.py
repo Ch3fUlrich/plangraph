@@ -50,19 +50,19 @@ def test_agy_gpt_oss_review_only_and_cross_family(boundary):
 
 @pytest.mark.parametrize('prefix', ['', 'agy/'])
 def test_probe_pass_clears_stored_agy_pause(boundary, prefix):
-    key = prefix + 'gemini-3.8-flash'
+    key = prefix + 'gemini-4-argon-high'
     # Two failed probes establish a harness pause; it has not expired at route time.
     for now in (10, 20):
         leg_state.record_probe_fail(key, 'probe unavailable', 'test',
                                     now=now, down_s=1000)
     assert boundary.leg_status(key, now=100)['state'] == 'down'
     paused = plan(boundary)
-    assert 'agy-gemini-3.8-flash' not in {l.id for l in paused.legs}
-    assert any(s['leg'] == 'agy-gemini-3.8-flash' and s['reason'] == 'down'
+    assert 'agy-gemini-4-argon' not in {l.id for l in paused.legs}
+    assert any(s['leg'] == 'agy-gemini-4-argon' and s['reason'] == 'down'
                for s in paused.skipped)
     leg_state.record_probe_pass(key, 'test', now=30)
     assert boundary.leg_status(key, now=100)['state'] == 'ok'
-    assert 'agy-gemini-3.8-flash' in {l.id for l in plan(boundary).legs}
+    assert 'agy-gemini-4-argon' in {l.id for l in plan(boundary).legs}
 
 
 def test_no_claude_implementers_and_haiku_last(boundary):

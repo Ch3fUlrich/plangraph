@@ -341,3 +341,6 @@ The K1-R1 HEAD audit runtime is explicitly stdlib Python so the installer can co
 it outside the changing checkout; its narrow allowlist entry covers that requirement.
 
 The generated example batch declares tier `none` for new decision-only items; the example builder preserves historical imported plan definitions and their stored tiers.
+
+Gemini retirement regressions preserve historical record reads while checking request
+admission and catalog filtering; AGY capability/witness activation requires evidence.

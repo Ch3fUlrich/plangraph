@@ -47,6 +47,8 @@ def payment_order(legs, role, *, order_class=None, writer_families=(), diff_toke
     from .legs import TIERS, WRITER_ORDER
     from .route_policy import implement_key
     ordered = list(legs)
+    from plangraph.retired_models import check_route_targets
+    check_route_targets(None, ordered)
     if order_class is not None:
         from plangraph.routing_support.catalog_seed import (
             IMPLEMENT_SONNET_REFUSAL, LEGACY_ROUTE_REPLACEMENTS,

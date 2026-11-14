@@ -165,3 +165,6 @@ Fleet-sync schema/example tests resolve fixtures relative to their test file
 and exercise reads after changing to an unrelated directory. The imports at
 `tests/test_fleet_sync.py:4` (`Path`) and `tests/test_fleet_sync.py:9` (`drift`)
 predate this PR.
+
+Keeper startup uses the Git identity and process-start helpers for its
+[loaded-state contract](keeper/main-fast-forward.md).

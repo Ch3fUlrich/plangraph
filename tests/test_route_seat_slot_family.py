@@ -19,7 +19,7 @@ def leg(name):
     return next(row for row in DEFAULT_LEGS if row.id == name)
 
 
-GEMINI = leg('agy-gemini-3.8-flash')
+GEMINI = leg('agy-gemini-4-argon')
 LUNA = leg('cx-gpt-6-luna')
 SONNET = leg('agy-sonnet-5.5')
 OPUS = leg('agy-opus-5.5')

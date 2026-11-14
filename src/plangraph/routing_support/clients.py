@@ -1,11 +1,7 @@
 """OmniRoute ACP-First Client Adapter with Tailnet Coexistence.
 
-All model providers route first through the local model gateway; its base URL is
-deployment config (``OMNIROUTE_BASE_URL``, ``PLANGRAPH_GATEWAY_URL`` or the
-spawner/keeper config, see ``effective_gateway_base_url``), never a source
-literal. Standalone direct CLI spawning (agy,
-qodercli, codex, claude) is reserved strictly as an offline emergency fallback
-when gateway_online=False.
+Model providers use the configured local gateway (``effective_gateway_base_url``).
+Direct CLI spawning is an emergency fallback when gateway_online=False.
 
 Preserves Windows SystemRoot/COMSPEC/PATHEXT/TEMP environment variables (D-2090 BUG-B).
 """
@@ -17,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from plangraph.retired_models import check_retired
 from plangraph.routing_support.claude_seat import claude_access_args
 from plangraph.routing_support.review_mode import leg_tool_mode, prompt_only_command, review_prompt
 
@@ -284,7 +281,8 @@ def build_opencode_command(
     headers: Mapping[str, str] | None = None, extra_flags: Sequence[str] = (), tool_mode: str = "tools",
 ) -> list[str]:
     """Build opencode command for execution via OmniRoute ACP/Gateway."""
-    # --standalone: the shared background service ignores the child's config overlay
+    check_retired(model_or_combo)
+    # The shared background service ignores the child config overlay.
     cmd = ["opencode", "run", "--standalone", "--model", model_or_combo]
     if serve_port is not None:
         cmd.extend(["--port", str(serve_port)])
@@ -316,11 +314,13 @@ def build_standalone_fallback_command(
     role: str = "implement", tool_mode: str = "tools",
 ) -> list[str]:
     """Build direct CLI command as offline emergency fallback when gateway is offline."""
+    check_retired(model)
     cname = client_name.lower()
     if cname == "agy":
-        cmd = ["agy", "--dangerously-skip-permissions"]
+        plan = role == "review" and (model or "").lower().removeprefix("agy/").startswith("gemini-4-hydrogen-")
+        cmd = ["agy", *(["--mode", "plan"] if plan else ["--dangerously-skip-permissions"])]
         if model:
-            cmd.extend(["--model", {"gemini-3.8-flash": "gemini-3.8-flash-high"}.get(model, model)])
+            cmd.extend(["--model", model])
         cmd.extend(["-p", "", "--input-format", "stream-json", "--output-format", "stream-json"])
         return cmd
     if cname in ("qoder", "qodercli"):
@@ -373,6 +373,7 @@ def build_command(
 ) -> list[str]:
     """Explicit harness is authoritative; else gateway-first. Unknown pairs use tools."""
     from plangraph.mimo_policy import check_mimo_path
+    check_retired(model_or_combo)
     tool_mode = tool_mode if tool_mode is not None else leg_tool_mode(client, model_or_combo)
     prompt = review_prompt(prompt, tool_mode, client) if role == "review" else prompt
     check_mimo_path(model_or_combo)
