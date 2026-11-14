@@ -440,6 +440,8 @@ class CreateMixin:
                 and principal.role != "router"):
             raise Refused("forbidden", "only the router may set review_tier='none'")
         validate_decision_edit(item, edit_fields, principal)
+        # Preserve caller declarations separately from automatic escalation.
+        decision_fields = dict(edit_fields)
         before = self._all_items()
         candidate = self._all_items()
         me = next(it for it in candidate if it["key"] == key)
@@ -489,8 +491,7 @@ class CreateMixin:
             else:
                 me[field] = value
         if "review_tier" not in edit_fields and me.get("review_tier") == "standard":
-            # Renaming into risky territory raises standard->high
-            # automatically.  Only an actual title/track rename triggers it;
+            # A title/track rename into risky territory raises standard->high;
             # an explicit tier in the same edit (or an already-high/none
             # item) is never touched, so this never lowers.  (``id`` is not
             # editable, so there is nothing to watch there.)
@@ -500,7 +501,6 @@ class CreateMixin:
                    for value in renamed):
                 edit_fields["review_tier"] = "high"
                 me["review_tier"] = "high"
-        validate_decision_edit(item, edit_fields, principal)
         if any(field in edit_fields and edit_fields[field] != item.get(field)
                for field in ("done_criteria", "review_tier")):
             resulting_tier = edit_fields.get(
@@ -538,7 +538,7 @@ class CreateMixin:
                 self._may_manage(principal, fresh["project"])
             bump_epoch = tier_edit and ("done_criteria" in edit_fields or "depends_on" in edit_fields)
             # Re-check tier/evidence under the lock, including open-item edits.
-            validate_decision_edit(fresh, edit_fields, principal)
+            validate_decision_edit(fresh, decision_fields, principal)
             if tier_edit:
                 # Bump the round like ``submit`` does: earlier verdicts stop
                 # matching ``_round_verdicts`` -- no stale count under the new tier.

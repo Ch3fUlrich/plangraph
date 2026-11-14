@@ -95,8 +95,16 @@ def check_checkout(repo, send, *, state_dir, default_branch=None, now=None):
         if bad != old['bad'] or (bad and now - old['sent'] >= 3600):
             kind = 'alarm' if bad and not old['bad'] else 'reminder' if bad else 'clear'
             line = f'production-checkout {kind}: ' + ('; '.join(findings) if bad else 'checkout healthy')
-            send(line)  # Only checkpoint an acknowledged delivery.
-            old, repair = {'bad': bad, 'sent': now}, True
+            # Reserve the dedupe state before delivery: a full disk must not
+            # produce an acknowledged alarm on every tick. Failed sends undo
+            # the reservation; a crash may defer a retry until the reminder.
+            atomic_write_private(path, json.dumps({'bad': bad, 'sent': now}) + '\n')
+            try:
+                send(line)
+            except Exception:
+                atomic_write_private(path, json.dumps(old) + '\n')
+                raise
+            repair = False
         if repair:
             atomic_write_private(path, json.dumps(old) + '\n')
         return findings
@@ -140,8 +148,10 @@ esac
 key=main
 [ ! -f "$gitdir/commondir" ] || key=wt-${gitdir##*/}
 marker="$state/last-$key"
-''' + selection + '\n' + dedupe + '\n' + shlex.join(
-                [python, '-I', '-S', str(script), str(state)])
+''' + selection + '\n' + dedupe + '\n'
+            + 'command -v timeout >/dev/null 2>&1 || exit 0\n'
+            + shlex.join(
+                ['timeout', '-s', 'KILL', '1', python, '-I', '-S', str(script), str(state)])
             + ' "$PWD" "$old" "$new" "$branch" "$gitdir" </dev/null >/dev/null 2>&1 || true\nexit 0\n')
 
 
@@ -159,7 +169,9 @@ def install_audit(repo, state_dir, *, apply=False):
         old_command = [sys.executable, '-m', 'plangraph.fleet_sync', 'head-move',
                        '--repo', str(repo), '--state-dir', str(state_dir), '--hook', name, '--']
         legacy = '#!/bin/sh\nexec ' + shlex.join(old_command) + ' "$@"\n'
-        if path.exists() and path.read_text() not in (content, legacy):
+        previous = content.replace('command -v timeout >/dev/null 2>&1 || exit 0\n', '').replace(
+            'timeout -s KILL 1 ', '', 1)
+        if path.exists() and path.read_text() not in (content, previous, legacy):
             raise ValueError('existing hook; integrate it explicitly before installing audit')
         hooks[path] = content
     if apply:

@@ -31,7 +31,7 @@ from keeper_seat_helpers import (
     w,  # noqa: F401 - the review world fixture
     writer,
 )
-from keeper_util import defn, seed, to_in_review
+from keeper_util import seed, to_in_review
 from plangraph.keeper import auth
 from plangraph.keeper.errors import Refused
 from plangraph.review import family as review_family
@@ -317,24 +317,22 @@ def test_writer_family_uses_only_the_first_trailer_token(w, trailer, family):
 
 # 7. non-commit evidence has no commit writers on either close path
 
-def test_decision_only_item_has_no_commit_writers_and_still_closes(w, monkeypatch):
-    from plangraph.keeper import store_decision_close
-
-    key = "demo:A"
-    w.store.create_items(w.p("router"), [
-        defn("A", evidence_kinds=("decision",), review_tier="none"),
-        defn("GOAL", ["A"], kind="goal")])
-    epoch = w.store.claim(w.p("claimant"), key)["epoch"]
-    w.store.add_evidence_router(w.p("router"), key, "decision", {"id": DECISION})
-    monkeypatch.setattr(store_decision_close, "_row", lambda *args:
-                        (SHA_A, f"| {DECISION} | CLOSE {key} |"))
-    item = w.store._item(key)
-    assert item["review_tier"] == "none" and item["evidence_kinds"] == ["decision"]
-    assert _cov().writer_families(w.store, item, w.store.ctx) == []
-    result = w.store.close_on_decision(w.p("claimant"), key, decision_ref=DECISION, epoch=epoch)
-    assert result["state"] == "done"
-    assert w.store._item(key)["state"] == "done"
-    assert verdict_events(w, key) == []
+@pytest.mark.parametrize('tier', ['standard', 'high'])
+def test_decision_only_item_has_no_commit_writers_and_still_closes(w, tier):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
+    # Historical reviewed decision-only rows remain valid review inputs.
+    w.conn.execute("UPDATE items SET evidence_kinds='[\"decision\"]', review_tier=? WHERE key=?",
+                   (tier, key))
+    w.store.ctx = make_ctx(git=FakeGit())
+    to_in_review(w, key, who="claimant")
+    assert _cov().writer_families(w.store, w.store._item(key), w.store.ctx) == []
+    result = w.store.verdict(w.p("rGoogle"), key, True, "no commits")
+    if tier == 'high':
+        assert result['state'] == 'in_review'
+        result = w.store.verdict(w.p("rDeepseek"), key, True, "second family")
+    assert result['state'] == 'done'
+    assert result['reviews_passed'] == (2 if tier == 'high' else 1)
+    assert w.store._item(key)['state'] == 'done'
 
 
 def test_non_commit_item_has_no_commit_writers_and_still_closes(w):

@@ -3,15 +3,15 @@
 The alternative `close_on_decision(p, key, decision_ref="D-5024", epoch=E)`
 needs no batch file. The router or the **current claimant** may call it; a
 non-router must supply the current claim epoch (a delegate alone is not enough).
-The item must be `claimed` or `in_review`, and either have tier `none` or kind
-`decision` (D-5053), or explicitly declare exactly `evidence_kinds: [decision]`.
-That declaration permits legacy decision-only lanes of any tier to close;
-claimants still cannot close `operator_task` (router or operator answer only).
-Create/edit refuses decision-only evidence with a non-`none` review tier: set
-`review_tier: none` or add the required implementation evidence kinds. Only the router may declare decision-only evidence, including by editing an existing `none` item. Without
-the declaration ordinary `standard`/`high` lanes retain the refusal, which names
-the missing declaration and tier fix. Mixed `[decision, commit]` evidence does
-not confer this lane exception. The `batch_ref` form remains a router-only fallback.
+The item must be `claimed` or `in_review`, have tier `none`, and declare exactly
+`evidence_kinds: [decision]`, regardless of item kind. A stored `standard`/`high`
+decision-only item closes only through review; claimants still cannot close
+`operator_task` (router or operator answer only). New decision-only declarations
+require the router and tier `none`. Stored reviewed definitions remain readable
+and accept edits that do not explicitly set tier/evidence, including automatic
+standard-to-high rename escalation; none-tier renames retain tier `none`.
+Mixed `[decision, commit]` evidence does not permit a decision-row close.
+The `batch_ref` form remains a router-only fallback.
 
 Proof rules (D-5053): fetch and immutable proof outside the write transaction; only keeper item/epoch rechecked inside:
 
@@ -26,9 +26,8 @@ Proof rules (D-5053): fetch and immutable proof outside the write transaction; o
   case-sensitive whole token `CLOSE project:ID` for this item. For example,
   `CLOSE demo:AB` cannot close `demo:A`. Local edits and other branches do not count;
   the legacy `Closes:` syntax is not this form's proof.
-* The row's SHA-256 (UTF-8 bytes, without its line ending) binds to that fetched commit (D-5053), even if origin/main later moves; no in-lock Git re-read. Authorization, epoch, unlocked state and eligible kind/tier
-  are rechecked under the lock. If `commit` is a required evidence kind, the
-  existing merged-commit evidence check also runs under the lock.
+* The row's SHA-256 (UTF-8 bytes, without its line ending) binds to that fetched commit (D-5053), even if origin/main later moves; no in-lock Git re-read. Authorization, epoch, unlocked state and eligible evidence/tier
+  are rechecked under the lock. Mixed evidence is refused even when its commit proof passes.
 
 Success sets `state=done`, records the caller as `reviewer`, and appends the
 locking `closed_on_decision` event with `decision_ref`, `decision_ids` and

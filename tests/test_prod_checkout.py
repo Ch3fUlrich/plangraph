@@ -137,3 +137,21 @@ def test_tree_identity_is_cached_before_git_operations(repo, monkeypatch):
         record = {}
         git_guard.annotate_tree(record)
         assert record == captured
+
+
+def test_installed_layout_does_not_inherit_enclosing_checkout(repo):
+    from plangraph.spawner import git_guard
+
+    installed = repo / '.venv/lib/python3.12/site-packages'
+    installed.mkdir(parents=True)
+    identity = git_guard.read_code_identity(installed)
+    assert identity == {'tree_sha': None, 'tree_branch': None}
+    original = git_guard.CODE_IDENTITY
+    try:
+        git_guard.CODE_IDENTITY = identity
+        record = {}
+        git_guard.annotate_tree(record)
+        assert record['tree_sha'] is None
+        assert 'checkout identity unavailable' in record['warnings'][0]
+    finally:
+        git_guard.CODE_IDENTITY = original

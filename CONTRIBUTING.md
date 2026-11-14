@@ -26,8 +26,8 @@ plangraph is public; the plans it tracks usually are not. Keep that difference c
 ## Setup and tests
 
 New devstack keeper configs require `PLANGRAPH_DECISIONS_REPO` naming a decisions
-checkout; existing valid configs are reused when it is unset. Explicit updates
-write `repos.decisions` at `origin/main` privately and retain unrelated settings.
+checkout; existing valid configs are reused when it is unset. Explicit setup
+adds missing `repos.decisions` at `origin/main` privately and preserves all existing values.
 See the [keeper install config](docs/RUNBOOK.md#1-init-and-config).
 
 Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so there is no

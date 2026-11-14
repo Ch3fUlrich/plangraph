@@ -134,3 +134,18 @@ def test_corrupt_alarm_state_still_alarms_and_is_replaced(checkout, tmp_path, mo
     assert json.loads(path.read_text()) == {'bad': True, 'sent': 100}
     drift.check_checkout(repo, sent.append, state_dir=state, now=101)
     assert len(sent) == 1, 'repaired state must resume normal dedupe'
+
+
+def test_checkpoint_failure_never_delivers_repeating_alarm(checkout, tmp_path, monkeypatch):
+    from plangraph.routing_support import private_io
+
+    repo, git = checkout
+    git('checkout', '--detach')
+    sent = []
+    def full(*args):
+        raise OSError('fixture disk full')
+    monkeypatch.setattr(private_io, 'atomic_write_private', full)
+    for now in (1, 301):
+        with pytest.raises(OSError, match='disk full'):
+            drift.check_checkout(repo, sent.append, state_dir=tmp_path / 'state', now=now)
+    assert sent == [], 'cannot deliver without a durable dedupe checkpoint'

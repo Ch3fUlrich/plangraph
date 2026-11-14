@@ -141,3 +141,17 @@ def test_concurrent_appends_survive_lock_contention_and_rotation(tmp_path):
             for line in path.read_text().splitlines()]
     assert {row['branch'] for row in rows} == {'first', 'second'}
     assert len(rows) == 2
+
+
+def test_interpreter_startup_is_inside_deadline(checkout, tmp_path):
+    root, state, first, run = checkout
+    slow_python = tmp_path / 'slow-python'
+    slow_python.write_text('#!/bin/sh\nexec /bin/sleep 5\n')
+    slow_python.chmod(0o755)
+    for hook in ('post-checkout', 'reference-transaction'):
+        path = root / '.git/hooks' / hook
+        path.write_text(drift._audit_stub(str(slow_python), state / 'head-audit.py', state, hook))
+    start = time.monotonic()
+    run('checkout', '--detach', first)
+    assert time.monotonic() - start < 1.8
+    assert run('rev-parse', 'HEAD') == first

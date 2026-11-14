@@ -40,7 +40,7 @@ For a new config, the devstack writer (`tools/devstack.sh keeper`) requires
 `PLANGRAPH_DECISIONS_REPO` and writes that path with ref `origin/main` privately.
 If the variable is unset and a valid private config already exists, the writer
 reuses it byte-for-byte, including its existing decisions mapping. Explicit
-updates retain other repository mappings and unrelated settings. For example, export it to your decisions checkout
+setup only adds a missing decisions mapping, preserving backend, dsn, bind, snapshot and all existing repository entries. For example, export it to your decisions checkout
 before running the keeper command. These instructions do not update live config.
 
 `batch_roots` is the **only** place `close_on_decision` may read a batch file from.

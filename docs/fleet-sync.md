@@ -17,9 +17,10 @@ argument. Configure the deployed keeper alert handler, with no hardcoded fleet
 session address. A missing/unexecutable handler or failed delivery exits nonzero;
 the unit failure remains visible. State is private, per checkout and locked:
 one alarm on healthy-to-bad, one clear on recovery, and at most one successful
-reminder per hour while bad. A failed delivery is not checkpointed and retries.
-Unreadable or invalid state resets to a healthy/unsent baseline so bad checkouts
-still alarm; an acknowledged send atomically replaces that state and resumes dedupe.
+reminder per hour while bad. Delivery first reserves the private checkpoint; a
+write failure sends nothing, and a failed send restores the prior state for retry.
+Unreadable or invalid state resets to a healthy/unsent baseline. A crash between
+reservation and delivery may omit that transition; a bad checkout reminds in an hour.
 Healthy checks require an available alert command too, so broken alarm
 configuration is not silent.
 
@@ -41,9 +42,9 @@ Prepared/aborted transactions and file-only checkouts return immediately in sh.
 Only committed HEAD moves start the runtime, at most once per move: per-worktree
 markers suppress the second observer. Linked worktrees use their own HEAD and
 worktree path. Every stub exits zero, including runtime/import/missing-script
-failures; the runtime arms a one-second alarm before dependency imports and I/O.
-Git may wait up to about one second per HEAD move for lock contention or blocked
-I/O; interpreter startup precedes that timer. Audit remains best-effort: deadline
+failures; an external `timeout -s KILL 1` bounds interpreter startup and runtime.
+Without `timeout`, the hook skips observation. The runtime also arms its own alarm.
+Git may wait about one second per HEAD move for startup, lock contention or I/O. Audit remains best-effort: deadline
 expiry or errors may omit observations. The marker prevents a second attempt
 from delaying the same move.
 

@@ -96,3 +96,31 @@ def test_explicit_decisions_update_preserves_unrelated_config(tmp_path):
     assert updated['ci'] == original['ci']
     assert updated['custom_setting'] == original['custom_setting']
     assert updated['repos']['decisions']['ref'] == 'origin/main'
+
+
+@pytest.mark.parametrize('has_decisions', [False, True])
+@pytest.mark.parametrize('explicit_defaults', [False, True])
+def test_setup_only_adds_missing_values_and_is_idempotent(tmp_path, has_decisions, explicit_defaults):
+    path = tmp_path / 'keeper.json'
+    original = {'backend': 'sqlite', 'dsn': 'postgresql://custom',
+                'bind': '127.0.0.1:9000', 'snapshot': 'custom-snapshot.json',
+                'repos': {'demo': '/fixture/demo'}, 'custom_setting': True}
+    if not explicit_defaults:
+        original = {'db': 'existing.db', 'repos': original['repos']}
+    if has_decisions:
+        original['repos']['decisions'] = {'path': '/fixture/decisions', 'ref': 'release'}
+    path.write_text(json.dumps(original))
+    path.chmod(0o600)
+    previous = None
+    for _ in range(2):
+        config.write_devstack_config(path, 'postgresql://replacement', state=tmp_path,
+                                    port=8765, decisions_repo=tmp_path / 'new-decisions')
+        updated = json.loads(path.read_text())
+        expected = {**original, 'repos': {**original['repos']}}
+        expected['repos'].setdefault('decisions', {
+            'path': str(tmp_path / 'new-decisions'), 'ref': 'origin/main'})
+        assert updated == expected
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        if previous is not None:
+            assert path.read_bytes() == previous
+        previous = path.read_bytes()

@@ -241,11 +241,12 @@ def write_devstack_config(path, dsn, *, state, port, decisions_repo):
             return  # Keep the validated established configuration byte-for-byte.
         raise ConfigError('set PLANGRAPH_DECISIONS_REPO to the decisions repository checkout')
     repos = dict(existing.get('repos') or {})
-    repos['decisions'] = {'path': str(Path(decisions_repo).expanduser().resolve()), 'ref': 'origin/main'}
-    data = {**existing,
+    repos.setdefault('decisions', {
+        'path': str(Path(decisions_repo).expanduser().resolve()), 'ref': 'origin/main'})
+    data = dict(existing) if path.exists() else {
         'backend': 'postgres', 'dsn': dsn, 'bind': f'127.0.0.1:{int(port)}',
         'snapshot': str(Path(state) / 'plan.snapshot.json'),
-        'repos': repos,
     }
+    data['repos'] = repos
     Config(data, Path(path).resolve().parent)
     atomic_write_private(path, json.dumps(data) + '\n')

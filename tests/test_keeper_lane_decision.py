@@ -3,7 +3,7 @@ import json
 
 import pytest
 from keeper_util import defn
-from test_keeper_decision_close import git, world  # noqa: F401 -- shared fixture
+from test_keeper_decision_close import world  # noqa: F401 -- shared fixture
 
 from plangraph.keeper.errors import Refused
 
@@ -13,32 +13,21 @@ def w(request):
     return request.getfixturevalue("world")
 
 
-@pytest.mark.parametrize('declared', [False, True])
-@pytest.mark.parametrize('kind', ['lane', 'gate', 'goal', 'question', 'loop'])
-def test_spawner_agy_witness_lane(w, declared, kind):
-    key = 'demo:SPAWNER-AGY-WITNESS'
-    w.store.create_items(w.p('router'), [defn(
-        'SPAWNER-AGY-WITNESS', kind='lane', review_tier='none',
-        evidence_kinds=['decision'], done_criteria='Close on the decision-only branch'),
-        defn('LANE-GOAL', ['SPAWNER-AGY-WITNESS'], kind='goal')])
-    epoch = w.store.claim(w.p('workerA'), key)['epoch']
-    w.store.add_evidence_router(w.p('router'), key, 'decision', {'id': 'D-5024'})
-    # Reproduce the pre-existing high-tier lane; new contradictory definitions
-    # are refused separately rather than preventing legacy close remediation.
+@pytest.mark.parametrize('tier', ['none', 'standard', 'high'])
+@pytest.mark.parametrize('evidence', [['decision'], ['any'], ['decision', 'commit']])
+@pytest.mark.parametrize('kind', ['lane', 'gate', 'goal', 'question', 'loop', 'decision', 'operator_task'])
+def test_decision_close_requires_exact_evidence_and_none(w, tier, evidence, kind):
+    # Stored rows must never gain a kind-based or reviewed-tier exemption.
     w.conn.execute('UPDATE items SET kind=?, review_tier=?, evidence_kinds=? WHERE key=?',
-                       (kind, 'high', json.dumps(['decision'] if declared else ['any']), key))
-    w.log.write_text(f'| D-5024 | CLOSE {key} |\n')
-    git(w.repo, 'commit', '-am', 'lane decision')
-    git(w.repo, 'push', 'origin', 'main')
-    if declared:
-        result = w.store.close_on_decision(w.p('workerA'), key,
-            decision_ref='D-5024', epoch=epoch)
+                   (kind, tier, json.dumps(evidence), 'demo:A'))
+    if tier == 'none' and evidence == ['decision']:
+        result = w.store.close_on_decision(w.p('router'), 'demo:A', decision_ref='D-5024')
         assert result['state'] == 'done'
     else:
         with pytest.raises(Refused, match='evidence_kinds.*decision') as exc:
-            w.store.close_on_decision(w.p('workerA'), key,
-                decision_ref='D-5024', epoch=epoch)
+            w.store.close_on_decision(w.p('router'), 'demo:A', decision_ref='D-5024')
         assert exc.value.code == 'bad_state'
+        assert w.store._get_or_refuse('demo:A')['state'] == 'claimed'
 
 
 @pytest.mark.parametrize('tier', ['standard', 'high', None])
@@ -135,3 +124,20 @@ def test_non_router_cannot_declare_decision_only_on_claimed_item(w, who, include
     assert dict(w.store._get_or_refuse('demo:NEW')) == before
     assert w.conn.execute('SELECT COUNT(*) FROM events').fetchone()[0] == events
     assert w.store.verify_integrity() == []
+
+
+@pytest.mark.parametrize('tier', ['none', 'standard', 'high'])
+@pytest.mark.parametrize('fields', [{'title': 'ordinary rename'}, {'title': 'security rename'},
+                                    {'track': 'deploy'}, {'description': 'legacy edit'}])
+def test_unrelated_legacy_edit_preserves_decision_only(w, tier, fields):
+    w.store.create_items(w.p('router'), [
+        defn('LEGACY', review_tier='none', evidence_kinds=['decision']),
+        defn('LEGACY-GOAL', ['LEGACY'], kind='goal')])
+    w.conn.execute("UPDATE items SET review_tier=? WHERE key='demo:LEGACY'", (tier,))
+    w.store.edit_definition(w.p('router'), 'demo:LEGACY', fields)
+    item = w.store._get_or_refuse('demo:LEGACY')
+    expected = 'high' if tier == 'standard' and fields in (
+        {'title': 'security rename'}, {'track': 'deploy'}) else tier
+    assert item['review_tier'] == expected
+    assert item['evidence_kinds'] == ['decision']
+    assert all(item[field] == value for field, value in fields.items())
