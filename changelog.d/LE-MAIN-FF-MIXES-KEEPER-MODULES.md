@@ -1,0 +1,1 @@
+Keeper startup publishes loaded SHA/process identity; the fleet-sync main-ff command holds updates changing existing keeper/imported code, with hourly templates and HELD status on the existing local drift surface. Unused additions and unrelated spawner changes remain eligible.

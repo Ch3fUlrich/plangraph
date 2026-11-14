@@ -11,8 +11,10 @@ import argparse
 import json
 import os
 import signal
+import subprocess
 import sys
 import threading
+import time
 from contextlib import suppress
 from pathlib import Path
 
@@ -23,6 +25,7 @@ from .store import Store
 __all__ = ["main", "run", "SHUTDOWN_TIMEOUT"]
 
 SHUTDOWN_TIMEOUT = 5.0
+CODE_TREE = Path(__file__).resolve().parents[3]
 
 
 def _install_signals(stop: threading.Event) -> None:
@@ -79,13 +82,31 @@ def _make_store(conn, cfg):
     return store
 
 
+def write_loaded_state(cfg):
+    """Publish code identity before serving; the main-ff guard reads this file."""
+    from plangraph.fleet_sync.drift import pid_start, repo_git
+    from plangraph.routing_support.private_io import atomic_write_private
+
+    try:
+        sha = repo_git(CODE_TREE, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        sha = None  # A live keeper with unknown provenance must hold updates.
+    path = Path(cfg.db).with_name(Path(cfg.db).name + '.loaded.json')
+    row = {'loaded_sha': sha, 'pid': os.getpid(), 'start_time': time.time(),
+           'pid_start': pid_start(os.getpid())}
+    atomic_write_private(path, json.dumps(row) + '\n')
+    return path
+
+
 def run(cfg, *, host=None, port=None, ready=None):
     """Start the server and block until a signal; returns 0 on clean shutdown."""
     lock = kdb.lock_keeper(cfg.db, **cfg.db_options)
     conn = kdb.open_db(cfg.db, **cfg.db_options)
     server = None
     cleanup_started = False
+    loaded_state = None
     try:
+        loaded_state = write_loaded_state(cfg)
         store = _make_store(conn, cfg)
         server = api.make_server(store, cfg, host=host, port=port)
         # M1: fail() may already have been recorded while the server was being
@@ -171,6 +192,9 @@ def run(cfg, *, host=None, port=None, ready=None):
                 os._exit(0)
             return 0
     finally:
+        if loaded_state is not None:
+            with suppress(OSError):
+                loaded_state.unlink(missing_ok=True)
         if server is not None and not cleanup_started:
             with suppress(Exception):
                 server.stop_reaper()

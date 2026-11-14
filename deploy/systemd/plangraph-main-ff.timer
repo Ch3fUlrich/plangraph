@@ -1,0 +1,10 @@
+[Unit]
+Description=Check production main fast-forward every hour
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Unit=plangraph-main-ff.service
+
+[Install]
+WantedBy=timers.target

@@ -216,3 +216,45 @@ def _advance(registry, sha, hosts, go, dry_run, record, log, run):
         if not result['ok']:
             return 1
     return 0
+
+
+def main_ff(repo, keeper_state, *, fetch=True):
+    """Fast-forward main only when the running keeper's imported code stays fixed."""
+    import fcntl
+
+    from plangraph.routing_support.private_io import atomic_write_private
+
+    from .drift import keeper_changes, main_ff_status_path, repo_git, running_keeper
+
+    repo = Path(repo).resolve()
+    status = main_ff_status_path(repo)
+    with status.with_suffix('.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        def finish(code, line):
+            atomic_write_private(status, line + '\n')
+            return code, line
+        branch = repo_git(repo, 'symbolic-ref', '--short', '-q', 'HEAD', check=False).stdout.strip()
+        if branch != 'main':
+            return finish(2, f'REFUSED branch {branch or "HEAD"}, want main')
+        if repo_git(repo, 'status', '--porcelain', '--untracked-files=no').stdout:
+            return finish(2, 'REFUSED tracked checkout changes')
+        if fetch:
+            try:
+                repo_git(repo, 'fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main')
+            except (OSError, subprocess.SubprocessError):
+                return finish(2, 'REFUSED origin/main fetch failed')
+        target = repo_git(repo, 'rev-parse', '--verify', 'origin/main^{commit}').stdout.strip()
+        current = repo_git(repo, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip()
+        if repo_git(repo, 'merge-base', '--is-ancestor', current, target, check=False).returncode:
+            return finish(2, 'REFUSED main is not an ancestor of origin/main')
+        try:
+            loaded = running_keeper(keeper_state)
+            changed = keeper_changes(repo, loaded, target) if loaded else []
+        except (OSError, ValueError, SyntaxError, subprocess.SubprocessError):
+            return finish(3, f'HELD keeper state/import analysis unavailable target {target}')
+        if changed:
+            files = ', '.join(path.replace('\n', '?').replace('\r', '?') for path in changed)
+            return finish(3, f'HELD keeper code changed: {files} loaded {loaded} target {target}')
+        if current != target:
+            repo_git(repo, 'merge', '--ff-only', target)
+        return finish(0, f'UPDATED main {target}' if current != target else f'CURRENT main {target}')

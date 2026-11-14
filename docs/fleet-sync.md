@@ -102,3 +102,32 @@ Fleet-sync schema/example tests resolve fixtures relative to their test file
 and exercise reads after changing to an unrelated directory. The imports at
 `tests/test_fleet_sync.py:4` (`Path`) and `tests/test_fleet_sync.py:9` (`drift`)
 predate this PR.
+
+## Keeper-aware production main fast-forward
+
+`python3 -m plangraph.fleet_sync main-ff --repo CHECKOUT --keeper-state STATE`
+fetches origin/main and fast-forwards a clean attached main only. Before a move,
+it compares the keeper's loaded SHA with the target using static import closure
+from the existing keeper package at both revisions. Existing changed/deleted
+keeper files and imported repository modules hold the move, including lazy,
+relative and literal import-module dependencies. Unimported additions and
+unrelated spawner changes pass; no loaded-state file means no running keeper.
+Stale PID/start-token state is ignored; unreadable state or failed analysis holds.
+`--no-fetch` checks locally known refs for offline fixture/manual diagnosis.
+
+A hold exits 3 and prints one line:
+`HELD keeper code changed: <files> loaded <sha> target <sha>`.
+Branch/dirt/non-fast-forward refusals exit 2; success/current exits 0. The last
+line is stored privately as `plangraph-main-ff.status` in the checkout's Git dir.
+Existing `drift` text output includes that line for local hosts; `drift --json`
+adds `main_ff` when a status is present. No status file preserves earlier output.
+
+`deploy/systemd/plangraph-main-ff.{service,timer}` are uninstalled hourly templates.
+Adapt their paths and supply `main-ff.env` with PLANGRAPH_MAIN_TREE and
+PLANGRAPH_KEEPER_STATE (the DB filename plus `.loaded.json`; see the
+[keeper state contract](keeper/main-fast-forward.md)). Restart the keeper from
+known code to publish its state before activating the guarded job. Stop/replace
+any prior unguarded updater rather than running both. No live config or unit is
+installed by this package. The named earlier main-ff script/routerctl sources
+were absent from this checkout; this command and the existing fleet drift
+surface provide the in-repository implementation and status integration.

@@ -23,8 +23,16 @@ def main(argv=None):
         command.add_argument('--registry', type=__import__('pathlib').Path,
                              default=genconfig.config_dir() / 'hosts.json')
     commands.choices['drift'].add_argument('--json', action='store_true')
+    ff = commands.add_parser('main-ff')
+    ff.add_argument('--repo', required=True)
+    ff.add_argument('--keeper-state', required=True)
+    ff.add_argument('--no-fetch', action='store_true')
     args = parser.parse_args(argv)
     try:
+        if args.command == 'main-ff':
+            code, line = advance.main_ff(args.repo, args.keeper_state, fetch=not args.no_fetch)
+            print(line)
+            return code
         if args.command == 'release':
             data = release.record() if args.verb == 'record' else json.loads(release.release_path().read_text())
             print(json.dumps(data))
@@ -40,7 +48,7 @@ def main(argv=None):
                 sha = 'unknown'
             data = drift.rows(json.loads(args.registry.read_text()), sha)
             print(json.dumps(data) if args.json else '\n'.join(
-                f"{r['host']} {r['live_sha']} {r['release_sha']} {r['behind']}" for r in data))
+                f"{r['host']} {r['live_sha']} {r['release_sha']} {r['behind']}" + ('\n' + r['main_ff'] if r.get('main_ff') else '') for r in data))
         return 0
     except ValueError as error:
         if args.command == 'advance':
