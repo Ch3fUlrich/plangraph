@@ -142,6 +142,7 @@ def test_non_rust_inputs_preserve_other_job_selection(path, expected):
 
 @pytest.mark.parametrize("path, expected", [
     (".docs-map", {"rust"}),
+    ("rust-toolchain.toml", set(ci_select.SUITES) | {"full"}),
     ("docs/rust-hooks.md", {"rust"}),
     ("tests/hooks/parity_payloads.json", {"pytest", "pytest-postgres", "rust"}),
     ("tools/new_code_allowlist.txt", {"pytest", "pytest-postgres", "rust"}),

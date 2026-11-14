@@ -97,7 +97,7 @@ def rust_commands(root, base, head, env=None):
             timeout=CHECK_TIMEOUT).splitlines()
     except subprocess.CalledProcessError as exc:
         raise SkipFamily("revision baseline unavailable or no merge-base") from exc
-    changed = [p for p in changed if p.startswith("rust/")]
+    changed = [p for p in changed if p.startswith("rust/") or p == "rust-toolchain.toml"]
     if not changed:
         raise SkipFamily("no rust changes")
     available = shutil.which("cargo") if env is None else shutil.which("cargo", path=env.get('PATH', ''))
