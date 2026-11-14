@@ -82,3 +82,10 @@ the session guard also removes inherited bindings before collection and fixtures
 Each boundary removes Git-advertised local variables, `GIT_CONFIG*` and
 `GIT_PREFIX`. Environment-discovery errors stop test launches. Regression tests
 use throwaway caller repositories and verify refs, HEAD and config byte for byte.
+
+Rust publish fixtures create commits through the shared isolated Git command and
+then explicitly set both author and committer identity. Git identity environment
+variables override `-c user.name` / `user.email`; fixture identities must not depend
+on inherited variables or on the production publish helper's environment filtering.
+The exact author and committer checks cover both fixture commits with all caller
+`GIT_*` variables unset.
