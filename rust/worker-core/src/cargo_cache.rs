@@ -123,11 +123,11 @@ mod tests {
     use super::*;
     #[test]
     fn roots_match_host_ready_defaults_overrides_and_expanduser() {
-        let home = Path::new("/home/fixture");
+        let home = Path::new("/srv/fixture-home");
         let cwd = Path::new("/work/tree");
         for (value, expected) in [
-            (None, "/home/fixture/.cache/plangraph/cargo-target"),
-            (Some("~/shared"), "/home/fixture/shared"),
+            (None, "/srv/fixture-home/.cache/plangraph/cargo-target"),
+            (Some("~/shared"), "/srv/fixture-home/shared"),
             (Some("/mnt/cache"), "/mnt/cache"),
             (Some("relative/cache"), "/work/tree/relative/cache"),
             (Some(""), "/work/tree/"),
