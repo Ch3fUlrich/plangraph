@@ -22,8 +22,8 @@ def selector():
     (["unknown.txt"], []),
     (["docs/guide.md", "status/card", "build/generated.py", "scratch.py"], []),
     (["tests/notes.md", "src/pkg/README.md"], []),
-    (["src/pkg/missing.py"], []),  # unmapped code: bounded smoke, no full suite
-    (["tools/new_tool.py"], []),  # unmapped code: bounded smoke, no full suite
+    (["src/pkg/missing.py"], ["tests"]),  # unresolved deletion: conservative fallback
+    (["tools/new_tool.py"], ["tests"]),  # unresolved deletion: conservative fallback
     (["out/generated.py", "docs/example.py", "status/card.md"], []),
     (["docs/guide.md", "src/pkg/core.py", "status/card"], ["tests/test_api.py"]),
     (["conftest.py"], ["tests"]),
@@ -398,3 +398,203 @@ def test_run_invocation_passes_dist_loadgroup(tmp_path, monkeypatch):
     cmd = argv["cmd"]
     assert "--dist" in cmd
     assert cmd[cmd.index("--dist") + 1] == "loadgroup"
+
+
+@pytest.mark.parametrize('launch', [
+    'subprocess.run([sys.executable, "-m", "pkg.cli"])',
+    'subprocess.run("python3 -m pkg.cli run", shell=True)',
+    'subprocess.run(["bash", "tools/outer.sh"])',
+])
+def test_subprocess_consumers_follow_import_graph(tmp_path, launch):
+    _asset_repo(tmp_path, {
+        'src/pkg/cli.py': 'from .core import VALUE',
+        'tools/outer.sh': 'bash tools/inner.sh\n',
+        'tools/inner.sh': 'python3 -m pkg.cli run\n',
+        'tests/test_process.py': launch,
+    })
+    plan = selector().select_tests(tmp_path, ['src/pkg/core.py'])
+    assert 'tests/test_process.py' in plan['tests']
+    assert 'tests/test_other.py' not in plan['tests']
+
+
+@pytest.mark.parametrize('statement', [
+    'from pkg.api import VALUE', 'from pkg import api', 'from pkg import api as renamed',
+    'from pkg import (\n    api,\n)',
+])
+def test_shell_inline_python_consumer(tmp_path, statement):
+    _asset_repo(tmp_path, {
+        'tools/smoke.sh': f"python3 - <<'PY'\n{statement}\nPY\n",
+        'tests/test_process.py': 'SCRIPT = "tools/smoke.sh"',
+    })
+    assert 'tests/test_process.py' in selector().select_tests(
+        tmp_path, ['src/pkg/core.py'])['tests']
+
+
+def test_spawner_admission_selects_899_subprocess_regressions():
+    root = Path(__file__).resolve().parents[1]
+    plan = selector().select_tests(root, ['src/plangraph/spawner/base_fresh.py'])
+    assert {'tests/test_spawner_overflow.py', 'tests/test_spawner_overflow_caps.py',
+            'tests/test_run_exit_live.py'} <= set(plan['tests'])
+
+
+@pytest.mark.parametrize('path,importer,local', [
+    ('src/pkg/core.py', 'src/pkg/api.py', False),
+    ('tests/helper.py', 'tests/test_api.py', True),
+    ('tests/helper.py', 'tests/test_api.py', False),
+    ('tools/helper.py', 'tests/test_api.py', False),
+])
+def test_deleted_module_selects_base_importers(tmp_path, path, importer, local):
+
+    module = path.removeprefix('src/').removesuffix('.py').replace('/', '.')
+    git = _asset_repo(tmp_path, {
+        path: 'VALUE = 1', importer: f'from {module} import VALUE',
+    })
+    base = git('rev-parse', 'HEAD').strip()
+    (tmp_path / path).unlink()
+    # Use the base edges even when the head no longer has the old import.
+    (tmp_path / importer).write_text('VALUE = 2')
+    git('add', '.')
+    git('commit', '-qm', 'delete and change importer')
+    plan = selector().select_tests(tmp_path, [path], base=base, local=local, files_only=True)
+    assert plan['tests'] == ['tests/test_api.py']
+
+
+def test_deleted_unresolved_module_falls_back_to_suite(tmp_path):
+    _asset_repo(tmp_path, {'src/pkg/deleted.py': 'VALUE = 1'})
+    (tmp_path / 'src/pkg/deleted.py').unlink()
+    assert selector().select_tests(tmp_path, ['src/pkg/deleted.py'])['tests'] == ['tests']
+
+
+@pytest.mark.parametrize('launch', [
+    'subprocess.run([sys.executable, "-m", "pkg"])',
+    'subprocess.run("python3 -m pkg", shell=True)',
+    'SCRIPT = "tools/launch.sh"',
+])
+def test_package_launch_follows_main(tmp_path, launch):
+    _asset_repo(tmp_path, {
+        'src/pkg/__main__.py': 'from .core import VALUE',
+        'tools/launch.sh': 'python3 -m pkg',
+        'tests/test_process.py': launch,
+    })
+    for changed in ['src/pkg/core.py', 'src/pkg/__main__.py']:
+        assert 'tests/test_process.py' in selector().select_tests(tmp_path, [changed])['tests']
+
+
+def test_shell_calls_python_tool_transitively(tmp_path):
+    _asset_repo(tmp_path, {
+        'tools/entry.py': 'from pkg.core import VALUE',
+        'tools/launch.sh': 'python3 tools/entry.py',
+        'tests/test_process.py': 'SCRIPT = "tools/launch.sh"',
+    })
+    assert 'tests/test_process.py' in selector().select_tests(
+        tmp_path, ['src/pkg/core.py'])['tests']
+
+
+def test_deleted_module_keeps_literal_consumers(tmp_path):
+    _asset_repo(tmp_path, {
+        'tools/entry.py': '',
+        'tests/test_importer.py': 'from tools import entry',
+        'tests/test_process.py': 'subprocess.run(["python3", "tools/entry.py"])',
+        'src/pkg/direct.py': '',
+        'tests/test_direct.py': 'subprocess.run(["python3", "src/pkg/direct.py"])',
+    })
+    (tmp_path / 'tools/entry.py').unlink()
+    (tmp_path / 'src/pkg/direct.py').unlink()
+    plan = selector().select_tests(tmp_path, ['tools/entry.py', 'src/pkg/direct.py'])
+    assert plan['tests'] == ['tests/test_direct.py', 'tests/test_importer.py', 'tests/test_process.py']
+
+
+@pytest.mark.parametrize('path', ['tests/test_removed.py', 'tests/conftest.py'])
+def test_unresolved_deleted_tests_require_suite(tmp_path, path):
+    _asset_repo(tmp_path, {path: ''})
+    (tmp_path / path).unlink()
+    # The brief requires importer coverage or the whole suite for *every*
+    # deleted Python file under tests, including leaf tests and conftest.
+    for files_only in [False, True]:
+        assert selector().select_tests(tmp_path, [path], files_only=files_only)['tests'] == ['tests']
+
+
+def test_deleted_conftest_keeps_implicit_fixture_consumers(tmp_path):
+    _asset_repo(tmp_path, {
+        'tests/conftest.py': 'VALUE = 1',
+        'tests/test_importer.py': 'from conftest import VALUE',
+        'tests/test_implicit.py': 'def test_implicit(fixture): pass',
+    })
+    (tmp_path / 'tests/conftest.py').unlink()
+    assert selector().select_tests(tmp_path, ['tests/conftest.py'])['tests'] == ['tests']
+
+
+def test_python_tool_in_production_prose_is_not_a_call(tmp_path):
+    _asset_repo(tmp_path, {
+        'tools/check.py': '',
+        'src/pkg/api.py': 'PROMPT = "Run python3 tools/check.py"',
+    })
+    assert selector().select_tests(tmp_path, ['tools/check.py'])['tests'] == []
+
+
+@pytest.mark.parametrize('deleted', [False, True])
+def test_tool_bare_imports_follow_all_candidates(tmp_path, deleted):
+    _asset_repo(tmp_path, {
+        'tools/hooks/rules.py': 'VALUE = 1',
+        'tools/other/rules.py': 'VALUE = 2',
+        'tools/hooks/entry.py': 'import rules',
+        'tests/test_bare.py': 'import entry',
+        'tests/test_rules.py': 'from rules import VALUE',
+    })
+    path = 'tools/hooks/rules.py'
+    if deleted:
+        (tmp_path / path).unlink()
+    assert {'tests/test_bare.py', 'tests/test_rules.py'} <= set(
+        selector().select_tests(tmp_path, [path])['tests'])
+
+
+@pytest.mark.parametrize('call', ['run', 'Popen', 'check_output'])
+def test_python_tool_keyword_argv(tmp_path, call):
+    _asset_repo(tmp_path, {
+        'tools/entry.py': 'from pkg.core import VALUE',
+        'src/pkg/api.py': f'subprocess.{call}(args=["python3", "tools/entry.py"])',
+    })
+    assert 'tests/test_api.py' in selector().select_tests(
+        tmp_path, ['src/pkg/core.py'])['tests']
+
+
+def test_real_hook_rules_select_implicit_importers():
+    root = Path(__file__).resolve().parents[1]
+    for path in ['tools/hooks/bash_guard_rules.py', 'tools/hooks/hook_common.py']:
+        plan = selector().select_tests(root, [path])
+        assert {'tests/hooks/test_bash_guard_allow.py', 'tests/hooks/test_bash_guard_deny.py'} <= set(plan['tests'])
+
+
+@pytest.mark.parametrize('command', [
+    "python3 -c 'from pkg.core import VALUE; print(VALUE)'",
+    'PYTHONPATH=src python3 -c "import pkg.core"',
+    'python3 -c "from pkg import (\n    api,\n)"',
+    "bash -c 'python3 -c \"import pkg.core\"'",
+    "python3 - <<-'PY'\n\tfrom pkg import (\n\t    api,\n\t)\nPY\n",
+])
+def test_shell_literal_python_commands(tmp_path, command):
+    _asset_repo(tmp_path, {
+        'tools/launch.sh': command,
+        'tests/test_process.py': 'SCRIPT = "tools/launch.sh"',
+    })
+    assert 'tests/test_process.py' in selector().select_tests(
+        tmp_path, ['src/pkg/core.py'])['tests']
+
+
+@pytest.mark.parametrize('command', [
+    "out=$(python3 -c 'import pkg.api; print(1)')",
+    "(python3 -c 'import pkg.api')",
+    "x=`python3 -c 'import pkg.api'`",
+    "python3 -c 'import pkg.api'&&echo",
+    "python3 -c 'import pkg.api'|cat",
+    'echo "$(python3 -c \'import pkg.api\')"',
+    'python3 -c "import pkg.api as m; m.run($ARG)"',
+    'python3 -c "from pkg import api as m; m.run($ARG)"',
+])
+def test_shell_imports_survive_shell_syntax(tmp_path, command):
+    _asset_repo(tmp_path, {
+        'tools/launch.sh': command,
+        'tests/test_process.py': 'SCRIPT = "tools/launch.sh"',
+    })
+    assert 'tests/test_process.py' in selector().select_tests(
+        tmp_path, ['src/pkg/core.py'])['tests']
