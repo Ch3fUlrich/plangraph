@@ -116,7 +116,7 @@ Before decoding display stdout, `opencode_answer.record_steps` retains each
 `step_finish` as an `opencode_step_finish` event with `finish_reason`,
 `output_tokens` and `reasoning_tokens`; absent usage remains null, not zero.
 Structured `output-limit` errors and the matching OpenCode stderr diagnostic
-add `opencode_output_limit`. These are diagnostic events, not served-model witnesses.
+add `opencode_output_limit`. These are diagnostic events, not served-model witnesses. Review tool-denial validation, its allow/deny constants, and managed-directory resolution live in `spawner/opencode_isolation.py`; the existing `spawner.runner` names remain available for callers and test overrides.
 A final `length` step with output zero, or that error with no text/output,
 adds `opencode_reasoning_exhausted`; later completed output is not retried.
 Display-text decoding also protects plain/mixed stdout answers; diagnostic-only JSON, including blank separator lines, is not answer text.

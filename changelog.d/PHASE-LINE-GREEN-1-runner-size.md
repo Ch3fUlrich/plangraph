@@ -1,0 +1,1 @@
+Move OpenCode review isolation validation into the existing opencode_isolation module, retaining runner compatibility exports and its managed-directory override seam. Lower the runner file-size baseline to the extracted implementation size; behavior and permissions are unchanged.

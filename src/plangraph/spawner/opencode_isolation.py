@@ -12,11 +12,14 @@ and its data dir (auth, git); review adds its own store and tool deny.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
-from pathlib import Path
 import sqlite3
 import subprocess
+import sys
 import tempfile
+from collections.abc import Mapping
+from pathlib import Path
 
 CLOSED_LAYERS = {'OPENCODE_DISABLE_PROJECT_CONFIG': '1', 'OPENCODE_DISABLE_CLAUDE_CODE': '1',
                  'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS': '1'}
@@ -247,3 +250,89 @@ def fail_unchanged_writer(job, work_dir):
     job.exit_code = WRITER_NO_CHANGES_EXIT
     job.events.append({'event': 'writer_no_changes'})
     job.stderr = 'writer_no_changes: exit 0 with no commit and no working-tree change\n' + (job.stderr or '')
+
+
+#: Every tool key the opencode 2.1.0 config schema knows ('*' exists only in
+#: the engine's internal Permission.Ruleset actions): a review child must have
+#: all of them denied (D-2905 (1)).
+_DENIED_TOOLS = ('bash', 'doom_loop', 'edit', 'external_directory', 'glob', 'grep',
+                 'list', 'lsp', 'question', 'read', 'skill', 'task', 'todowrite',
+                 'webfetch', 'websearch')
+
+
+def _opencode_managed_dir(env: Mapping) -> Path:
+    """opencode's system (managed) config dir as the child will resolve it.
+
+    Fixed on Linux/macOS; on win32 opencode reads ProgramData from its own
+    env, so the CHILD env is read here (the same value the child sees).
+    """
+    if sys.platform == 'darwin':
+        return Path('/Library/Application Support/opencode')
+    if sys.platform == 'win32':
+        return Path(env.get('ProgramData') or 'C:\\ProgramData', 'opencode')
+    return Path('/etc/opencode')
+
+#: The only OPENCODE_* env names a review child may carry. Anything else a
+#: caller sets (e.g. OPENCODE_CLI_CONFIG_CONTENT, OPENCODE_TEST_HOME) is
+#: dropped before launch so no caller-set override can re-enable a tool or add
+#: a config layer (REVIEW-WITNESS-OPENCODE R1).
+_REVIEW_OPENCODE_ENV_ALLOW = ('OPENCODE_CONFIG_CONTENT', 'OPENCODE_CONFIG',
+                              'OPENCODE_CONFIG_DIR', 'OPENCODE_DISABLE_PROJECT_CONFIG',
+                              'OPENCODE_DISABLE_CLAUDE_CODE', 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS',
+                              'OPENCODE_DISABLE_AUTOUPDATE', 'OPENCODE_API_KEY')
+
+
+def _opencode_tools_denied(config_json, env, *, managed_dir=None) -> bool:
+    """True only when the child's final config AND env prove every tool denied.
+
+    Checked, all required: 'permission' maps '*' and every _DENIED_TOOLS key
+    to 'deny'; the managed config dir (_opencode_managed_dir, resolved from
+    the child env) holds no opencode.json/opencode.jsonc; 'mcp' is {} and
+    'plugin' is [] in config_json; HOME,
+    XDG_CONFIG_HOME, XDG_DATA_HOME and OPENCODE_CONFIG_DIR all resolve inside
+    the same per-job dir (XDG_DATA_HOME); OPENCODE_CONFIG is an existing file
+    inside that dir whose content parses to {};
+    OPENCODE_DISABLE_PROJECT_CONFIG, OPENCODE_DISABLE_CLAUDE_CODE and
+    OPENCODE_DISABLE_CLAUDE_CODE_SKILLS are each '1'; and no OPENCODE_* env
+    name outside _REVIEW_OPENCODE_ENV_ALLOW is present. This proves only the
+    env/config shape: the runtime behaviour of opencode is not proven by this
+    function (an L1 runtime probe covers that).
+    """
+    try:
+        cfg = json.loads(config_json or '{}')
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(cfg, dict):
+        return False
+    permission = cfg.get('permission')
+    if not isinstance(permission, dict) or not all(
+            permission.get(tool) == 'deny' for tool in ('*',) + _DENIED_TOOLS):
+        return False
+    if cfg.get('mcp') != {} or cfg.get('plugin') != []:
+        return False
+    if not isinstance(env, Mapping):
+        return False
+    managed = (managed_dir or _opencode_managed_dir)(env)
+    if any((managed / name).exists() for name in ('opencode.json', 'opencode.jsonc')):
+        return False
+    for name in env:
+        if str(name).startswith('OPENCODE_') and name not in _REVIEW_OPENCODE_ENV_ALLOW:
+            return False
+    if (env.get('OPENCODE_DISABLE_PROJECT_CONFIG') != '1'
+            or env.get('OPENCODE_DISABLE_CLAUDE_CODE') != '1'
+            or env.get('OPENCODE_DISABLE_CLAUDE_CODE_SKILLS') != '1'):
+        return False
+    try:
+        job_dir = Path(env.get('XDG_DATA_HOME') or '')
+        if not job_dir.name:
+            return False
+        for key in ('HOME', 'XDG_CONFIG_HOME', 'OPENCODE_CONFIG_DIR'):
+            path = Path(env.get(key) or '')
+            if not path.name or not path.resolve().is_relative_to(job_dir.resolve()):
+                return False
+        cfg_path = Path(env.get('OPENCODE_CONFIG') or '')
+        return (bool(cfg_path.name) and cfg_path.is_file()
+                and cfg_path.resolve().is_relative_to(job_dir.resolve())
+                and json.loads(cfg_path.read_text()) == {})
+    except (OSError, ValueError):
+        return False
