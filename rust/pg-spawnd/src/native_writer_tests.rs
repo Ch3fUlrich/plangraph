@@ -123,6 +123,7 @@ with patch.object(o, 'registry_caps', return_value={'self':'primary','hosts':[]}
     refused = s.admit(SimpleNamespace(runner=SimpleNamespace()), opts, card=card, preview=True)
     assert refused['host'] != 'other', refused
     row.update(disk_free_gb=6)
+    row.pop('refusal', None)
     card['repo'] = '/nonexistent-controller-repo'
     with patch.object(o, 'placement_policy', return_value=('primary',True)), patch('shutil.disk_usage', side_effect=FileNotFoundError):
         placed = s.admit(SimpleNamespace(runner=SimpleNamespace()), opts, card=card, preview=True)
