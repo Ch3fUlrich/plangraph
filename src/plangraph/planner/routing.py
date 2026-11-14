@@ -56,8 +56,6 @@ class Route:
     cross_family: bool
     reasons: tuple[str, ...]
 
-    agy_quota_states: dict = field(default_factory=dict)
-
     @property
     def first_leg(self) -> Leg:
         return self.legs[0]
@@ -231,6 +229,8 @@ class SpawnPlan:
     writer_groups: tuple = ()
     seat_coverage: tuple[dict, ...] = ()
     placement: dict = field(default_factory=lambda: dict(host=None, reason='placement_not_evaluated', free_mb=None))
+
+    agy_quota_states: dict = field(default_factory=dict)
 
     @property
     def first_leg(self) -> Leg | None:
