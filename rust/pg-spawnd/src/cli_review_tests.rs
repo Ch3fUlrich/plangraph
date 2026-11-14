@@ -246,3 +246,49 @@ fn stderr_quota_survives_missing_log_and_sonnet_uses_the_model_store() {
     .unwrap();
     assert_eq!(&argv[argv.len() - 2..], ["--reset-at", "2000000030"]);
 }
+
+#[test]
+fn real_sonnet_launch_adapter_keeps_the_selected_harness_and_python_rejects_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = Command::new("python3").current_dir(&root)
+        .env("PYTHONPATH", root.join("src")).env("XDG_STATE_HOME", dir.path())
+        .env("PLANGRAPH_OMNIROUTE_LEG_STATE", "0")
+        .args(["-c", r#"
+import asyncio, json, sys
+from pathlib import Path
+from plangraph.spawner.launch_spec import build
+from plangraph.spawner.service import SpawnService
+from plangraph.spawner.mcp import MCPSpawnerServer, ParameterRefused, TOOLS_METADATA
+state = str(Path(sys.argv[1]).resolve())
+request = dict(run_id='run-'+'a'*32, job_id='fixture', role='review', dry_run=True,
+    leg=dict(id='claude-sonnet-5-5-high'), prompt='review', card=dict(estimate_tokens=1000), cwd=str(Path.cwd()), state=state)
+argv = build(request)['argv']
+assert argv[0] == 'claude', argv
+assert argv[argv.index('--model')+1] == 'claude-sonnet-5-5', argv
+assert argv[argv.index('--effort')+1] == 'high', argv
+record = asyncio.run(SpawnService(state=state).spawn(card=dict(estimate_tokens=1000),
+    prompt='review', role='review', leg='claude-sonnet-5-5-high', writer_families=['openai'],
+    override_reason='fixture direct native Sonnet', dry_run=True))
+assert record['status'] == 'dry_run', record
+assert record['chosen_leg']['harness'] == 'claude', record
+server = MCPSpawnerServer(state=state)
+for verb in ['route', 'spawn']:
+    assert 'leg' not in next(t for t in TOOLS_METADATA if t['name']=='plangraph_agent_'+verb)['inputSchema']['properties']
+    try:
+        asyncio.run(server.call_tool('plangraph_agent_'+verb, dict(leg='agy-cli')))
+    except ParameterRefused as exc:
+        assert 'pg-spawnd' in str(exc)
+    else:
+        raise AssertionError('Python MCP silently accepted a Rust selector')
+print(json.dumps(dict(argv=argv, status=record['status'])))
+"#]).arg(dir.path()).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["argv"][0], "claude");
+    assert_eq!(value["status"], "dry_run");
+}

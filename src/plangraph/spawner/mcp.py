@@ -151,8 +151,7 @@ for _verb in ('route', 'ps', 'result'):
 for _tool in TOOLS_METADATA:
     if _tool['name'] in ('plangraph_agent_route', 'plangraph_agent_spawn'):
         _tool['inputSchema']['properties'].update({
-            'require_bench': {'type': 'boolean'}, 'bench_db': {'type': 'string'},
-            'leg': {'type': 'string', 'description': 'Registered leg reference; Rust review kinds: agy-cli or claude-cli'}})
+            'require_bench': {'type': 'boolean'}, 'bench_db': {'type': 'string'}})
 
 
 class MCPSpawnerServer:
@@ -181,6 +180,8 @@ class MCPSpawnerServer:
         self._source_guard.check(name, arguments)
         if isinstance(name, str) and name.startswith('plangraph_session_'):
             return await self._session_tool(name, arguments)
+        if name in ('plangraph_agent_route', 'plangraph_agent_spawn') and 'leg' in arguments:
+            raise ParameterRefused('leg selection requires the Rust pg-spawnd server')
         if name == 'plangraph_agent_probe':
             try:
                 return await leg_probe.probe_many(self.runner, arguments.get('leg', ()),
