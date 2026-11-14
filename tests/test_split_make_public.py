@@ -29,18 +29,15 @@ author_email = "noreply@example.invalid"
 message = "Initial public history"
 """
 
-
 def git(cwd, *args):
     env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
     return subprocess.run(["git", *args], cwd=cwd, env=env, check=True,
                           capture_output=True, text=True).stdout
 
-
 def write(root, rel, text="x = 1\n"):
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text)
-
 
 @pytest.fixture
 def src(tmp_path):
@@ -61,24 +58,20 @@ def src(tmp_path):
             "commit", "-q", "--allow-empty", "-m", f"private history {i}")
     return s
 
-
 @pytest.fixture
 def manifest(tmp_path):
     p = tmp_path / "manifest.toml"
     p.write_text(MANIFEST)
     return p
 
-
 def run(src, out, manifest, *extra):
     words = [] if "--words" in extra or "--no-words" in extra else ["--no-words"]
     return mp.main(["--source", str(src), "--out", str(out), "--manifest", str(manifest),
                     "--no-gitleaks", *words, *extra])
 
-
 EXPECT = {"src/pkg/__init__.py", "src/pkg/core.py", "tests/test_core.py",
           "tests/fixtures/synthetic.json", "tools/apply.py", "docs/PUBLIC.md",
           "examples/p1.yaml", "README.md", "pyproject.toml"}
-
 
 def test_build_is_fresh_one_commit_exact_allow_list(tmp_path, src, manifest, monkeypatch):
     home = tmp_path / "home"
@@ -96,7 +89,6 @@ def test_build_is_fresh_one_commit_exact_allow_list(tmp_path, src, manifest, mon
     assert git(out, "status", "--porcelain").strip() == ""
     src_head = git(src, "rev-parse", "HEAD").strip()
     assert src_head not in git(out, "log", "--all", "--format=%H")
-
 
 def test_deny_listed_survivor_is_refused_and_nothing_written(tmp_path, src, manifest, capsys):
     write(src, "src/pkg/state.db", "\n")
@@ -517,6 +509,13 @@ def test_public_config_provenance_and_guardrail():
     assert "Never add a non-test path here" in comments
 
 
+def test_gitleaks_missing_names_runner_install_command(tmp_path, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with pytest.raises(AssertionError, match=r"deploy/bootstrap\.sh --ci-tools-only"):
+        test_public_real_pem_in_other_file_is_reported(tmp_path)
+
+
 def test_public_real_pem_in_other_file_is_reported(tmp_path):
     """gitleaks is REQUIRED here -- no skip when the binary is absent.
 
@@ -525,14 +524,14 @@ def test_public_real_pem_in_other_file_is_reported(tmp_path):
     must report a real PEM outside the two allow-listed fixture paths.
     """
     exe = shutil.which("gitleaks") or str(Path.home() / ".local" / "bin" / "gitleaks")
-    assert Path(exe).exists(), "gitleaks is required for this gate test (PATH or ~/.local/bin)"
+    assert Path(exe).exists(), ("gitleaks is required for this gate test (PATH or ~/.local/bin); "
+                                "install as the runner user: bash deploy/bootstrap.sh --ci-tools-only")
     header = "-----BEGIN " + "PRIVATE KEY-----"
     footer = "-----END " + "PRIVATE KEY-----"
     body = "MIIEvQIBADANBgkqhkiG" + str(9) + "w" + str(0) + "BAQEFAASCBKcwggSjAgEAAoIBAQC"
     write(tmp_path, "src/other.pem", header + "\n" + body + "\n" + footer)
     hits, error = mp.run_gitleaks(tmp_path, exe, LEAKS_CFG)
     assert not error and hits
-
 
 
 @pytest.mark.skipif(shutil.which("gitleaks") is None

@@ -1,12 +1,7 @@
 use super::*;
+use pg_worker_core::git_test_support::command as isolated_git;
 fn git(root: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .current_dir(root)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", root.join("absent"))
-        .args(args)
-        .output()
-        .unwrap();
+    let output = isolated_git(root).args(args).output().unwrap();
     assert!(output.status.success(), "git fixture failed");
     String::from_utf8_lossy(&output.stdout).trim().into()
 }
@@ -55,8 +50,7 @@ fn real_temp_git_commits_exact_diff() {
         head_sha: git(&root, &["rev-parse", "HEAD"]),
         ..diff
     };
-    let expected = std::process::Command::new("git")
-        .current_dir(&root)
+    let expected = isolated_git(&root)
         .args(["diff", "--binary", &diff.base_sha, &diff.head_sha])
         .output()
         .unwrap();

@@ -3,14 +3,8 @@ use pg_ctx::mirror::{Alarm, Mirror, Watermark};
 use std::{collections::BTreeMap, fs, path::Path};
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = pg_worker_core::workspace_resolver::git_command(dir)
+    let out = pg_worker_core::git_test_support::command(dir)
         .args(args)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", dir.join("absent-config"))
-        .env("GIT_AUTHOR_NAME", "Mirror Test")
-        .env("GIT_COMMITTER_NAME", "Mirror Test")
-        .env("GIT_AUTHOR_EMAIL", "mirror@example.invalid")
-        .env("GIT_COMMITTER_EMAIL", "mirror@example.invalid")
         .output()
         .unwrap();
     assert!(

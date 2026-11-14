@@ -333,6 +333,7 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
     (binary_dir / 'python3').write_text(
         f'#!{sys.executable} -S\n'
         'import os, runpy, sys\n'
+        f'assert sys.executable == {sys.executable!r}\n'
         f'assert os.environ["PYTHONPATH"] == {str(source)!r}\n'
         'import plangraph.spawner.overflow as module\n'
         f'assert module.__file__ == {str(source / "plangraph/spawner/overflow.py")!r}\n'

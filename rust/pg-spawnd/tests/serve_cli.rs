@@ -348,3 +348,24 @@ fn idle_handshake_times_out_and_server_accepts_again() {
     let mut next = McpClient::connect(&socket);
     assert!(next.initialize()["result"].is_object());
 }
+
+#[test]
+fn parallel_stale_sockets_are_independent() {
+    let barrier = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        for _ in 0..2 {
+            scope.spawn(|| {
+                let tmp = TempDir::new();
+                let socket = tmp.path().join("spawnd.sock");
+                drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+                barrier.wait();
+                let _guard = spawn_serve(&socket);
+                let mut client = McpClient::connect(&socket);
+                assert_eq!(
+                    client.initialize()["result"]["serverInfo"]["name"],
+                    "pg-spawnd"
+                );
+            });
+        }
+    });
+}

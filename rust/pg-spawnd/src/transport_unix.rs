@@ -124,6 +124,13 @@ pub(crate) async fn connect(path: &Path) -> Result<tokio::net::UnixStream, Strin
 mod tests {
     use super::*;
 
+    fn private_tempdir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap()
+    }
+
     #[tokio::test]
     #[ignore = "requires root to create a foreign-uid socket peer"]
     async fn foreign_uid_peer_is_refused() {
@@ -133,15 +140,12 @@ mod tests {
         extern "C" {
             fn setuid(uid: u32) -> i32;
         }
-        let base = std::env::temp_dir().join(format!("pg-spawnd-peer-{}", std::process::id()));
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&base)
-            .unwrap();
+        let temp = private_tempdir();
+        let base = temp.path();
         let path = base.join("socket");
         // The child switches to another uid before it binds and listens, so the
         // peer check sees the foreign uid while the verified directory stays ours.
-        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o777)).unwrap();
+        std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o777)).unwrap();
         use std::os::unix::process::CommandExt;
         let mut command = std::process::Command::new("python3");
         command.args(["-c", "import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(); time.sleep(3)"]).arg(&path);
@@ -160,7 +164,7 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o700)).unwrap();
         let result = connect(&path).await;
         child.kill().unwrap();
         child.wait().unwrap();
@@ -172,11 +176,8 @@ mod tests {
 
     #[tokio::test]
     async fn shim_refuses_accessible_and_symlinked_directories() {
-        let base = std::env::temp_dir().join(format!("pg-spawnd-connect-{}", std::process::id()));
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&base)
-            .unwrap();
+        let temp = private_tempdir();
+        let base = temp.path();
         let dir = base.join("dir");
         std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
         let path = dir.join("socket");
@@ -202,11 +203,8 @@ mod tests {
 
     #[test]
     fn concurrent_bind_cannot_replace_live_socket() {
-        let base = std::env::temp_dir().join(format!("pg-spawnd-bind-{}", std::process::id()));
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&base)
-            .unwrap();
+        let temp = private_tempdir();
+        let base = temp.path();
         let path = base.join("socket");
         drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
         let mut replacement = None;
@@ -227,15 +225,8 @@ mod tests {
 
     #[test]
     fn directory_identity_change_after_bind_is_refused() {
-        use std::hash::{BuildHasher, Hasher};
-        let nonce = std::collections::hash_map::RandomState::new()
-            .build_hasher()
-            .finish();
-        let base = std::env::temp_dir().join(format!("pg-spawnd-race-{nonce}"));
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&base)
-            .unwrap();
+        let temp = private_tempdir();
+        let base = temp.path();
         let dir = base.join("dir");
         let moved = base.join("moved");
         let result = bind_checked(&dir.join("spawnd.sock"), || {

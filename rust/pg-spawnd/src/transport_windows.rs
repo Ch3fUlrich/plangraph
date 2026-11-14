@@ -34,7 +34,27 @@ pub(crate) fn pipe_name() -> Result<String, String> {
     if name.is_empty() {
         return Err("cannot resolve the user name for the pipe path".into());
     }
-    Ok(format!(r"\\.\pipe\plangraph-spawnd-{name}"))
+    scoped_pipe_name(
+        &name,
+        std::env::var("PG_SPAWND_PIPE_NAMESPACE").ok().as_deref(),
+    )
+}
+
+fn scoped_pipe_name(name: &str, namespace: Option<&str>) -> Result<String, String> {
+    let suffix = match namespace {
+        None => String::new(),
+        Some(value)
+            if !value.is_empty()
+                && value.len() <= 80
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-') =>
+        {
+            format!("-{value}")
+        }
+        Some(_) => return Err("invalid PG_SPAWND_PIPE_NAMESPACE".into()),
+    };
+    Ok(format!(r"\\.\pipe\plangraph-spawnd{suffix}-{name}"))
 }
 
 struct OwnedSid {
@@ -196,5 +216,22 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod namespace_tests {
+    #[test]
+    fn independent_pipe_names_keep_the_user_scope() {
+        let a = super::scoped_pipe_name("user", Some("test-a")).unwrap();
+        let b = super::scoped_pipe_name("user", Some("test-b")).unwrap();
+        assert_ne!(a, b);
+        assert!(a.ends_with("-user"));
+        assert!(super::scoped_pipe_name("user", Some(r"bad\path")).is_err());
+        assert!(super::scoped_pipe_name("user", Some("")).is_err());
+        assert_eq!(
+            super::scoped_pipe_name("user", None).unwrap(),
+            r"\\.\pipe\plangraph-spawnd-user"
+        );
     }
 }

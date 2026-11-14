@@ -46,7 +46,7 @@ subprocess.run(["python3", "-I", "-m", "pip", "--isolated", "download",
                        cwd=stage, check=True)
 '''
     return ('mkdir "$scratch/data/cargo"\n'
-            'env -i HOME="$scratch/data/fetch-home" PATH="/usr/bin:/bin:$cargo_bin" '
+            'env -i HOME="$scratch/data/fetch-home" PATH="$cargo_bin:/usr/bin:/bin" '
             'CARGO_HOME="$scratch/data/cargo" RUSTUP_HOME="$HOME/.rustup" '
             'python3 -I -c ' + shlex.quote(program) +
             ' "$scratch/checkout" "$scratch/data"\n')
@@ -154,8 +154,10 @@ git -C {shell_path(source)} bundle create "$scratch/history.bundle" --all HEAD
 git -C "$scratch/checkout" fetch -q "$scratch/history.bundle" '+refs/*:refs/*'
 git -C "$scratch/checkout" fetch -q "$scratch/history.bundle" HEAD
 git -C "$scratch/checkout" reset --mixed FETCH_HEAD
-toolchain=$(rustc --print sysroot)
-cargo_bin=$(dirname "$(command -v cargo)")
+toolchain_channel=$(python3 -I -c 'import pathlib, re, sys, tomllib; channel = tomllib.loads(pathlib.Path(sys.argv[1]).read_text())["toolchain"]["channel"]; assert re.fullmatch(r"[0-9]+[.][0-9]+[.][0-9]+", channel), "invalid Rust release pin"; print(channel)' "$scratch/checkout/rust-toolchain.toml")
+rustup toolchain install "$toolchain_channel" --profile minimal --component rustfmt,clippy --target x86_64-pc-windows-gnu
+toolchain=$(rustup run "$toolchain_channel" rustc --print sysroot)
+cargo_bin="$toolchain/bin"
 protoc=$(command -v protoc || command -v "${{HOME}}/.local/bin/protoc") || {{ echo 'host fault: protoc missing' >&2; exit 1; }}
 protoc=$(readlink -f "$protoc")
 {('temporal=$(command -v temporal || command -v "${HOME}/.local/bin/temporal") || { echo "host fault: Temporal CLI missing" >&2; exit 1; }' + chr(10) + 'temporal=$(readlink -f "$temporal")') if needs_temporal else ''}
