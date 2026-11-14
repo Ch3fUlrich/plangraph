@@ -3,7 +3,8 @@
 Reads hook JSON from stdin and sums input tokens plus both cache buckets in
 the last usable assistant usage record in a bounded tail; non-numeric records
 are stepped past. context_compaction incrementally scans transcript identity
-and compaction boundaries. Fleet compaction requires handoff even below cap.
+and compaction boundaries. Every compaction requires handoff even below cap,
+including transcripts without fleet identity or a session name.
 Stdlib-only and portable; hook mode fails silently, while ready reports errors.
 Ready v2 validates a handoff/card pair and persists their hashes before kicking
 the watchdog. fill_from_usage and resolve_thresholds are public shared helpers.

@@ -7,10 +7,11 @@ LINE_CAP = 1 << 20
 
 
 def scan(path, previous):
-    """Return a persisted byte cursor, fleet identity, and latest boundary.
+    """Return a persisted byte cursor, optional fleet identity, and latest boundary.
 
     Identity uses transcript metadata, not FLEET_SESSION_NAME (which is not
-    inherited by fleet sessions). Only complete appended lines are consumed.
+    inherited by fleet sessions). Identity is optional: compaction boundaries
+    still require a handoff without it. Only complete appended lines are consumed.
     The initial scan streams once; subsequent tool calls seek to the cursor.
     """
     p = Path(path)
