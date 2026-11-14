@@ -1,0 +1,1 @@
+- Record a current-main prompt-transport replan draft, helper inventory and proposed background refusal, explicitly blocked on the full historical findings and independent design acceptance before frozen launch code changes.

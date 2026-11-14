@@ -22,3 +22,8 @@ Basis: `origin/main` d41bcd1211fa8a15761e0164aeb6b064c40f1c4a; re-read overlaps
 after intervening merges. S01 leaves clients/runner/seat_spawn/service untouched,
 preserving #791 and #795 behavior. One writer, sequential slices on current main
 after predecessors; never merge this lane or change PR state (D-5526).
+
+The [D3 replan draft](prompt-transport-d3-design.md) inventories current launch
+boundaries and proposes named background refusal. It is blocked on the complete
+historical findings and another-family design acceptance; it changes no S01
+behavior and does not lift the D-5526 freeze.
