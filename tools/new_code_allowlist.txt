@@ -37,3 +37,4 @@ src/plangraph/keeper/mcp_tools.py | D-5504/D-5506 rule 9.14: schema-only split r
 
 tools/keeper_deploy.py | D-5847 in-flight
 tests/test_keeper_deploy.py | D-5847 in-flight
+tests/test_keeper_origin_git_env.py | D-5847 in-flight

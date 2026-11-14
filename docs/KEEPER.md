@@ -212,7 +212,7 @@ code and `owner/repo` only. Each `CommitStatus` (`id`, `status`, `context`, `cre
 `warning`→`neutral`, `skipped`→`skipped`, an unknown status → `failure`), keeping only the
 newest status per `context` (`updated_at`, ties by higher `id`) so the stale failure of a
 rerun cannot block a green sha; no statuses is the verifier's existing "no CI check-runs"
-failure. Proposed, not applied: `docs/proposals/keeper-ci-config.md`.
+failure. Proposed, not applied: `docs/proposals/keeper-ci-config.md`. The decisions-origin fetch in `evidence_decisions.py` runs in an isolated git env (no system or global config). It re-injects only the caller's global `credential.helper` and `credential.<url>.helper` entries through `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`, so a private https origin authenticates; values are never logged and a failed read injects nothing. Includes are explicitly disabled while reading helpers; helper order and empty reset entries are preserved. Other credential settings, core, URL, HTTP and include entries stay isolated. A timed-out reader is killed and reaped. The door is `src/plangraph/keeper/evidence_decisions.py` function `_origin_git_env`; regression coverage uses an authenticated loopback smart-HTTP origin and a fixture-only helper.
 
 ## Legacy and decision closes
 
