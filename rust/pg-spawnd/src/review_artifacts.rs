@@ -64,8 +64,19 @@ pub(crate) fn write_review_artifacts(
     record: &Value,
     review: &str,
 ) -> Result<(), EvidenceError> {
-    let seat = directory(state, record)?.join("seat");
+    let dir = directory(state, record)?;
+    let seat = dir.join("seat");
     regular(&seat, true)?;
+    if crate::record_status::prompt_only_missing(record, &dir) {
+        for name in ["evidence.json", "review.txt"] {
+            match fs::remove_file(seat.join(name)) {
+                Ok(()) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(error) => return Err(error.into()),
+            }
+        }
+        return Err(EvidenceError::Invalid);
+    }
     let mut evidence = json!({});
     for key in [
         "served_model",

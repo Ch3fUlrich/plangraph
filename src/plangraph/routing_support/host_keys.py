@@ -57,6 +57,9 @@ def _load_helper(root, name):
 def _gateway_key(env):
     """AutoOS gateway client key from the keys file; None when unresolvable."""
     try:
+        if env.get('PLANGRAPH_GATEWAY_KEY_FILE'):
+            key = Path(env['PLANGRAPH_GATEWAY_KEY_FILE']).expanduser().read_text().strip()
+            return key or None
         keys_path = _keys_path(env)
         if not keys_path.is_file():
             return None

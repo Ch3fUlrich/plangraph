@@ -1,0 +1,1 @@
+- Inline diffs for every prompt-only review leg and void verdicts without dispatched diff text.

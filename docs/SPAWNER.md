@@ -704,6 +704,14 @@ Review and judge freshness admission requires both the worker checkout HEAD and 
 
 Run listing is read-only. Watchdog sweeps own queue-timeout persistence and corrupt-record diagnostic delivery; dry sweeps only project the results.
 
+See [lesson gates](lesson-gates.md) for gateway admission, review diffs, writer-family binding, Remote Control checks, and run-status watchdogs.
+
+`wait()` gives a `pid_gone` snapshot 0.5 seconds for the supervisor to persist its final outcome; caller timeouts still apply. The no-leg timer skips `queued` and `queue_claimed` runs; their queue watchdog owns the deadline.
+
+RC startup waits use a monotonic deadline. A required session without a bridge retains its running state and session ID, with `rc_missing=true`, while launch reports `RC-MISSING`.
+
+Review liveness probes normalize `OK` answers and retain the shared two-failure booking rule. Capped-first MiMo exhaustion is terminal without retry; cancellation and watchdog outcomes retain priority.
+
 Standalone overflow accepts omitted `--state` using the service environment default; explicit state still owns local records. Importing overflow defers the CLI import, allowing source-only `python -m plangraph.spawner.cli` execution without runpy warnings.
 
 Review admission fetches the worker’s default branch once per admission boundary; the following diff-head ancestry check reuses tracking refs with `fetch=False`.

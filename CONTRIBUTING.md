@@ -322,6 +322,18 @@ Pytest uses a session-owned temporary global Git config and disables system Git 
 
 Event-log seat reviews use completed step text only. A stop answer survives empty trailing steps, but new unfinished text or tool activity cannot supply a verdict; plain-text logs retain their existing path.
 
+The context guard skips sidechain usage and continues to the newest main-thread
+usage; a sidechain-only transcript remains silent.
+
+Record-derived prompt-only review evidence is void unless the saved dispatched prompt contains diff text.
+
+CI selects Rust checks when a settings.json/settings.local.json changes and runs `pg-settings-lint --tracked ..` before clippy.
+
+The lesson-gate verification record is in `docs/lesson-gates-verification.md`.
+Prompt-record call-site allowances track the exact probe/preparation calls;
+companion evidence cannot bypass the prompt-only diff requirement.
+Prompt-record mutation fixtures assert that their target exists before testing the guard.
+
 CI runs pytest in three deterministic `PYTEST_SHARD=INDEX/COUNT` shards while keeping xdist groups together and loadgroup scheduling; PR runs stop at ten failures within each pytest job. Empty shards succeed without broadening the selected tests. Whole-run cancellation is not installed. Synthetic sensitivity sweeps never consult host quota databases.
 
 CI timing measurements and pending PR-run evidence are tracked in `docs/ci-performance.csv`. Sensitivity reproducibility runs one case per seed so all five seeds retain coverage across workers.
@@ -340,3 +352,5 @@ Package R Python files already in flight are individually listed in
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
 
 Local preflight combines `--local` shared-asset consumer traversal with `--files-only` bounded suite-control checks, using `origin/main` for test selection when available. Scrub and policy retain their pushed-range baselines.
+
+Rust repository-input scans exclude Git metadata, including linked-worktree `.git` files; tracked input coverage remains enforced.

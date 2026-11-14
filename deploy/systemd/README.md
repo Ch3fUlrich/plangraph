@@ -89,3 +89,9 @@ Notes:
 - Reads the same `projector.env` (`%h/.config/plangraph/projector.env`) as the reconcile service.
 - Does not replace the nightly reconcile timer.
 - Production placement stays with the release/deploy item.
+
+Install and enable `plangraph-review-probe.timer` to refresh every review leg every fifteen minutes. `pg-spawnd review-probe` uses the private `watchdog.env` for gateway and Python bridge configuration; missing management keys produce one routing notice without blocking independent legs.
+
+Install and enable `plangraph-rc-watch.timer` for two-minute RC checks. Windows uses `deploy/watchdog/rc-watch.xml` with `pg-spawnd.exe` on PATH; configure the same private spawn state and actual Claude executable for that account.
+
+Install `plangraph-run-watch.timer` (or `deploy/watchdog/run-watch.xml` on Windows) for two-minute no-leg checks. Use the same spawn-state environment as the spawner and routing outbox bridge.

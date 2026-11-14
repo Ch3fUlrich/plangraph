@@ -351,6 +351,7 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     # Admission renders gateway providers like launch (I6): a dead-port URL keeps
     # gateway legs admissible; no-URL tests delenv it themselves.
     monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'http://127.0.0.1:9/v1')
+    monkeypatch.setenv('AUTOOS_OMNIROUTE_KEY', 'fixture-gateway-key')
     # Fake writers exit 0 without touching the checkout they run in; the D-3236
     # no-change check is exercised only by tests marked writer_change_check.
     if 'writer_change_check' not in request.keywords:

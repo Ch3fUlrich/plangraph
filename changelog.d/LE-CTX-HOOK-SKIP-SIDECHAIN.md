@@ -1,0 +1,1 @@
+- Suppress context handoff signals for sidechain transcripts without reading copied parent usage.

@@ -32,12 +32,16 @@
     },
     "card": {
      "properties": {
+      "allow_family_fallthrough": {
+       "description": "explicitly permit implement routing to change writer family",
+       "type": "boolean"
+      },
       "cwd": {
        "description": "absolute path to an existing git checkout",
        "type": "string"
       },
       "diff_ref": {
-       "description": "review: {repo, base, head}; inlined for inline-only seats",
+       "description": "review: {repo, base, head}; inlined for inline-only and prompt-only seats",
        "type": "object"
       },
       "estimate_tokens": {
@@ -56,6 +60,10 @@
       "stall_min": {
        "exclusiveMinimum": 0,
        "type": "number"
+      },
+      "writer_family": {
+       "description": "implement: binding writer family; defaults to first operator-priority family",
+       "type": "string"
       }
      },
      "required": [
@@ -348,12 +356,16 @@
     },
     "card": {
      "properties": {
+      "allow_family_fallthrough": {
+       "description": "explicitly permit implement routing to change writer family",
+       "type": "boolean"
+      },
       "cwd": {
        "description": "absolute path to an existing git checkout",
        "type": "string"
       },
       "diff_ref": {
-       "description": "review: {repo, base, head}; inlined for inline-only seats",
+       "description": "review: {repo, base, head}; inlined for inline-only and prompt-only seats",
        "type": "object"
       },
       "estimate_tokens": {
@@ -372,6 +384,10 @@
       "stall_min": {
        "exclusiveMinimum": 0,
        "type": "number"
+      },
+      "writer_family": {
+       "description": "implement: binding writer family; defaults to first operator-priority family",
+       "type": "string"
       }
      },
      "required": [

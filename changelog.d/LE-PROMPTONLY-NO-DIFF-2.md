@@ -1,0 +1,1 @@
+- Check companion evidence and Rust review artifacts for dispatched diffs, clearing stale evidence on void reviews.

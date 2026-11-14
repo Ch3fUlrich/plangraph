@@ -241,7 +241,7 @@ class SpawnPlan:
 
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
                 legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, placement=None,
-                catalog_rows=None) -> SpawnPlan:
+                catalog_rows=None, gateway_check=None, enforce_writer_family=False) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
     Measured inputs rank within cost tiers; implement writer priority is final.
     ``exclude_families`` excludes the specified family names from candidate legs.
@@ -260,7 +260,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         if field in card and (not isinstance(card[field], (list, tuple)) or
                               not all(isinstance(v, str) for v in card[field])):
             raise SpawnRefused(f'{field} must be a list of strings')
-    for field in ('has_tests', 'is_pure_doc', 'is_docs_only'):
+    for field in ('has_tests', 'is_pure_doc', 'is_docs_only', 'allow_family_fallthrough'):
         if field in card and type(card[field]) is not bool:
             raise SpawnRefused(f'{field} must be boolean')
     for field in ('estimate_tokens', 'reviewer_count', 'fanout'):
@@ -331,6 +331,18 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                 return alt
         return st
 
+    from .seats import seat_family
+    from .route_policy import implement_key, implement_family_excluded
+    requested_family = card.get('writer_family')
+    if role == 'implement' and requested_family is None and (preferred_candidates := [
+            (i, l) for i, l in enumerate(candidates) if not implement_family_excluded(l)
+            and not policy.skip_reason(l, role)]):
+        preferred = min(preferred_candidates, key=lambda row:
+            implement_key(row[1], TIERS.index(row[1].tier), row[0]))[1]
+        requested_family = preferred.family
+    family_fenced = {l.id for l in candidates if enforce_writer_family and role == 'implement'
+        and not card.get('allow_family_fallthrough', False)
+        and seat_family(l.family) != seat_family(requested_family)}
     states = {l.id: _leg_status(l) for l in candidates}
     limited = {key for key, state in states.items() if unavailable(state)}
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
@@ -340,9 +352,11 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
     for leg in candidates:
-        reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
+        reason = policy.skip_reason(leg, role) or ('excluded_family' if role == 'implement' and implement_family_excluded(leg) else None) or (gateway_check(leg) if gateway_check is not None else None) or (states[leg.id]["state"] if leg.id in limited else None)
         if reason:
             pass
+        elif leg.id in family_fenced:
+            reason = 'writer_family_fallthrough_refused'
         elif leg.family in excluded:
             reason = "excluded_family"
         elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
@@ -353,6 +367,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             except RouteError as exc:
                 reason = next(iter(exc.exclusion_reasons), 'routing_error')
                 states[leg.id] = dict(states[leg.id], evidence={'state': states[leg.id]['evidence'], 'error': str(exc)})
+        if reason == 'excluded_family' and role == 'implement' and implement_family_excluded(leg):
+            states[leg.id] = dict(states[leg.id], evidence={'state': states[leg.id]['evidence'],
+                'error': 'excluded_family: writer identity refused'})
         if reason:
             skipped.append({"leg": leg.id, "reason": reason,
                             "evidence": states[leg.id]["evidence"]})
@@ -368,9 +385,11 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
         "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat")}
     try:
-        route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
+        route = route_card(card, legs=candidates, unavailable=limited | policy_skipped | family_fenced | {s["leg"] for s in skipped if s["reason"].startswith("gateway not configured")},
                            exclude_families=excluded, role=role, now=now)
     except RouteError as exc:
+        if enforce_writer_family and role == 'implement' and requested_family and not card.get('allow_family_fallthrough', False):
+            exc = RouteError(f'writer_family_unavailable: {requested_family}; {exc}')
         return SpawnPlan((), tuple(skipped), "operator-order", (),
                          tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details), placement=placement)
     ordered = list(route.legs)

@@ -85,7 +85,7 @@ def test_bounded_wait_and_private_record(tmp_path, wait):
                 'print("sk-plantedsecret API_KEY=hidden")', **kwargs)
         service = spawn_service(SpawnerRunner(process_factory=factory), tmp_path)
         started = asyncio.get_running_loop().time()
-        record = await asyncio.wait_for(service.spawn(card={'estimate_tokens': 1000}, wait_seconds=wait), 5)
+        record = await asyncio.wait_for(service.spawn(card={'estimate_tokens': 1000, 'allow_family_fallthrough': True}, wait_seconds=wait), 5)
         assert asyncio.get_running_loop().time() - started < 5
         assert record['status'] == 'running'
         release.set()
@@ -119,7 +119,7 @@ def test_harness_quota_falls_through(tmp_path, monkeypatch):
 
         runner.process_factory = factory
         service = spawn_service(runner, tmp_path, store)
-        record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
+        record = await service.spawn(card={'estimate_tokens': 1000, 'allow_family_fallthrough': True}, wait_seconds=None)
         assert record['status'] == 'completed'
         assert len(calls) == 2
         assert record['attempts'][0]['skip_reason'].startswith('harness_limit:')
@@ -147,7 +147,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
                 'print(' + repr(json.dumps({'event': 'result', 'result': {'status': 'SUCCESS', 'response': 'done'}})) + ')', **kwargs)
         runner.process_factory = factory
         service = spawn_service(runner, tmp_path, store)
-        record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
+        record = await service.spawn(card={'estimate_tokens': 1000, 'allow_family_fallthrough': True}, wait_seconds=None)
         models = [a['leg']['model'] for a in record['attempts'] if isinstance(a['leg'], dict)]
         assert 'error' not in record, record.get('error')
         assert len(models) == 11, record  # Every registered non-Claude input except the fenced legacy flash (D-5696).
@@ -158,11 +158,11 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         assert models[:3] == ['omniroute/cx-gpt-6.1-sol-xhigh',
                               'opencode/deepseek-v4.1-flash-free', 'opencode/glm-5.3-flash-free']
         attempted_ids = {a['leg']['id'] for a in record['attempts']}
-        for leg in service.route({'estimate_tokens': 1000}).legs:
+        for leg in service.route({'estimate_tokens': 1000, 'allow_family_fallthrough': True}).legs:
                 store.record_provider_response(leg.model if '/' in leg.model else 'agy/' + leg.model,
                     429, 'provider quota exhausted', {}, 'test')
         count = len(runner.jobs)
-        record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
+        record = await service.spawn(card={'estimate_tokens': 1000, 'allow_family_fallthrough': True}, wait_seconds=None)
         assert record['exit_code'] == 4
         assert record['evidence']
         assert len(record["attempts"]) == 11
@@ -249,10 +249,10 @@ def test_records_and_review(tmp_path, monkeypatch):
     install_fallthrough_legs(monkeypatch)  # Known writer families in this mechanics table.
     async def run():
         service = SpawnService(state=tmp_path)
-        record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', dry_run=True)
+        record = await service.spawn(card={'estimate_tokens': 1000, 'allow_family_fallthrough': True}, prompt='task', dry_run=True)
         assert service.result(record['run_id'])['status'] == 'dry_run'
         assert service.ps()['runs'][0]['run_id'] == record['run_id']
-        plan = service.route({'estimate_tokens': 1000}, role='review', review_of=record['run_id'])
+        plan = service.route({'estimate_tokens': 1000, 'allow_family_fallthrough': True}, role='review', review_of=record['run_id'])
         assert all(l.family != record['writer_family'] for l in plan.legs)
     asyncio.run(run())
 
@@ -274,7 +274,7 @@ def test_transport_only_fallthrough(tmp_path, provider_stop, monkeypatch):
                 'print(' + repr(json.dumps({'event': 'result', 'result': {'status': 'SUCCESS', 'response': '429'}})) + ')', **kwargs)
         runner.process_factory = factory
         service = SpawnService(runner, tmp_path, store)
-        record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
+        record = await service.spawn(card={'estimate_tokens': 1000, 'allow_family_fallthrough': True}, prompt='task', wait_seconds=None)
         assert len(record["attempts"]) == 11
         launched = [a for a in record['attempts'] if a['status'] != 'skipped']
         assert (len(launched), len(runner.jobs)) == ((2, 2) if provider_stop else (1, 1))
@@ -284,7 +284,7 @@ def test_transport_only_fallthrough(tmp_path, provider_stop, monkeypatch):
         first_model = list(runner.jobs.values())[0].model_or_combo
         assert store.leg_status(first_model if '/' in first_model else 'agy/' + first_model)['state'] == ('limited' if provider_stop else 'ok')
         if provider_stop:
-            assert service.route({'estimate_tokens': 1000}).first_leg.model != first_model
+            assert service.route({'estimate_tokens': 1000, 'allow_family_fallthrough': True}).first_leg.model != first_model
     asyncio.run(run())
 
 
@@ -306,7 +306,7 @@ def test_breaker_503_fails_run_without_same_leg_retry(tmp_path):
                 'import sys; print("503 circuit open", file=sys.stderr); raise SystemExit(1)', **kwargs)
         runner.process_factory = factory
         service = SpawnService(runner, tmp_path, store)
-        record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
+        record = await service.spawn(card={'estimate_tokens': 1000, 'allow_family_fallthrough': True}, prompt='task', wait_seconds=None)
         launched = [a for a in record['attempts'] if a['status'] != 'skipped']
         assert len(launched) == 1
         assert len(runner.jobs) == 1
@@ -340,7 +340,7 @@ def test_cancel_real_child(tmp_path):
             return await asyncio.create_subprocess_exec(sys.executable, '-c', 'import time; time.sleep(60)', **kwargs)
         runner = SpawnerRunner(process_factory=factory)
         service = SpawnService(runner, tmp_path)
-        record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=0)
+        record = await service.spawn(card={'estimate_tokens': 1000, 'allow_family_fallthrough': True}, prompt='task', wait_seconds=0)
         for _ in range(500):  # D-3520: a fixed 0.05 s wait raced the child start on a loaded host
             record = service.result(record['run_id'])
             if record.get('job_id') in runner._processes: break
@@ -358,8 +358,8 @@ def test_override_and_unknown_review(tmp_path):
     async def run():
         service = SpawnService(state=tmp_path)
         with pytest.raises(ValueError, match='unknown run'):
-            await service.spawn(card={'estimate_tokens': 1000}, review_of='run-unknown', dry_run=True)
-        await service.spawn(card={'estimate_tokens': 1000}, role='review', writer_families=('gpt',), model='mimo/mimo-v2.6-pro', override_reason='explicit test override', dry_run=True)
+            await service.spawn(card={'estimate_tokens': 1000, 'allow_family_fallthrough': True}, review_of='run-unknown', dry_run=True)
+        await service.spawn(card={'estimate_tokens': 1000, 'allow_family_fallthrough': True}, role='review', writer_families=('gpt',), model='mimo/mimo-v2.6-pro', override_reason='explicit test override', dry_run=True)
         assert json.loads((tmp_path / 'spawn-overrides.jsonl').read_text())['reason'] == 'explicit test override'
         with pytest.raises(ValueError):
             await service.spawn(model='omniroute/mimo-v2.6-pro', override_reason='explicit test override', dry_run=True)

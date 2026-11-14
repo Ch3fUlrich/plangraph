@@ -175,3 +175,18 @@ fn switch_off_still_artifacts() {
     assert_eq!(evidence["verdict"], "HALT");
     std::fs::remove_dir_all(state).unwrap();
 }
+
+#[test]
+fn missing_prompt_only_diff_clears_preceding_pair() {
+    let state = tempfile::tempdir().unwrap();
+    let mut record = json!({"run_id":"run-fixture","role":"review","status":"completed",
+        "served_model":"gpt-5","witness_kind":"response","finish_reason":"stop",
+        "test_gaming":"no","verdict":"PASS"});
+    write_review_artifacts(state.path(), &record, "VERDICT: PASS").unwrap();
+    let pair = state.path().join("runs/run-fixture/seat");
+    assert!(pair.join("evidence.json").exists());
+    record["chosen_leg"] = json!({"tool_mode":"prompt-only"});
+    assert!(write_review_artifacts(state.path(), &record, "VERDICT: PASS").is_err());
+    assert!(!pair.join("evidence.json").exists());
+    assert!(!pair.join("review.txt").exists());
+}

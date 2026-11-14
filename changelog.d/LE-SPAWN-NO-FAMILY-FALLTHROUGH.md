@@ -1,0 +1,1 @@
+- Bind implement routing to the requested writer family unless the card explicitly permits a family change, and record the actual launched leg.

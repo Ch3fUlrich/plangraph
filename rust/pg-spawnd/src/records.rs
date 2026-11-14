@@ -171,7 +171,9 @@ fn read_record_file(path: &Path) -> Result<Value, ToolError> {
     if bytes.len() as u64 > MAX_RECORD_BYTES {
         return Err(invalid());
     }
-    serde_json::from_slice(&bytes).map_err(|_| invalid())
+    let mut record = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    crate::record_status::reconcile(&mut record, path.parent().unwrap());
+    Ok(record)
 }
 
 pub(crate) fn read_record(state: &Path, run_id: &Value) -> Result<Value, ToolError> {

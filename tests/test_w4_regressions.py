@@ -73,7 +73,7 @@ def test_running_records_release_every_attempt_job(tmp_path, monkeypatch):
         store = LegStateStore(tmp_path / 'legs.sqlite')
         runner = SpawnerRunner(process_factory=factory, default_cwd=str(tmp_path))
         service = spawn_service(runner, tmp_path, store)
-        record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
+        record = await service.spawn(card={'estimate_tokens': 1000, 'allow_family_fallthrough': True}, prompt='task', wait_seconds=None)
         assert record['status'] == 'completed', record
         assert len(runner.jobs) == 2, sorted(runner.jobs)   # quota fallthrough launched leg 2
         assert service._running_records == {}
@@ -97,7 +97,7 @@ def test_cancelled_run_stays_cancelled_and_never_falls_through(tmp_path, monkeyp
         store = LegStateStore(tmp_path / 'legs.sqlite')
         runner = SpawnerRunner(process_factory=factory, default_cwd=str(tmp_path))
         service = spawn_service(runner, tmp_path, store)
-        record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=0.05)
+        record = await service.spawn(card={'estimate_tokens': 1000, 'allow_family_fallthrough': True}, prompt='task', wait_seconds=0.05)
         for _ in range(200):
             if len(runner.jobs) >= 2:
                 break
@@ -141,7 +141,7 @@ def test_watchdog_timed_out_leg_records_its_attempt_row(tmp_path, monkeypatch):
     async def run():
         runner = SpawnerRunner(process_factory=factory, default_cwd=str(tmp_path))
         service = spawn_service(runner, tmp_path)
-        record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
+        record = await service.spawn(card={'estimate_tokens': 1000, 'allow_family_fallthrough': True}, prompt='task', wait_seconds=None)
         assert record['status'] == 'timeout', record
         rows = [a for a in record['attempts'] if a.get('status') in ('stalled', 'timeout')]
         assert len(rows) == 1, record['attempts']

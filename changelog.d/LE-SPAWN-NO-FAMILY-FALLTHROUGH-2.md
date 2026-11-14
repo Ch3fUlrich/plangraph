@@ -1,0 +1,1 @@
+- Expose writer-family admission in MCP cards and explicitly authorize fallback in mechanics fixtures.

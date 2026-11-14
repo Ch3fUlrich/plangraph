@@ -95,6 +95,9 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         raise RecordPending(f"record.json is not valid JSON: {exc}") from exc
     if not isinstance(record, dict):
         raise ValueError("record.json is not an object")
+    from plangraph.spawner.inline_diff import prompt_only_void
+    if prompt_only_void(record, run_dir):
+        raise ValueError('void verdict: prompt_only_no_diff')
     # F6: bind the record to its directory and to this uid's write access.
     windows = os.name == "nt"
     # Drive mounts synthesize modes; only the real record location is exempt.

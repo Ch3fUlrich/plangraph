@@ -9,6 +9,7 @@ mod errors;
 mod evidence;
 mod evidence_row;
 mod fleet_snapshot;
+mod gateway_health;
 mod gitconfig_guard;
 mod health_cli;
 mod health_report;
@@ -16,10 +17,12 @@ mod health_report_rows;
 mod jobs;
 mod launch;
 mod leg_ref;
+mod no_leg_watch;
 mod placement;
 mod prompt;
 mod prompt_git;
 mod pyjson;
+mod rc_watch;
 mod reconcile;
 #[allow(dead_code)]
 mod reconcile_attach;
@@ -32,8 +35,10 @@ mod reconcile_time;
 #[cfg(unix)]
 #[allow(dead_code)]
 mod reconcile_watch;
+mod record_status;
 mod records;
 mod review_artifacts;
+mod review_probe;
 mod runs;
 mod serve;
 mod serve_options;

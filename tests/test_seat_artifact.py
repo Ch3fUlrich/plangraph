@@ -192,3 +192,32 @@ def test_authenticated_finish_not_inferred(tmp_path):
     sa.publish(tmp_path, record, job)
     assert not (tmp_path / 'evidence.json').exists()
     assert dry(tmp_path) != 0
+
+
+def test_prompt_only_verdict_without_diff_is_void(tmp_path):
+    record, job = completed()
+    record['chosen_leg'] = {'tool_mode': 'prompt-only'}
+    (tmp_path / 'prompt.txt').write_text('Review an unspecified change')
+    sa.publish(tmp_path, record, job)
+    assert record['verdict_status'] == 'void'
+    assert record['verdict_void_reason'] == 'prompt_only_no_diff'
+    assert not (tmp_path / 'evidence.json').exists()
+
+
+def test_prompt_only_verdict_with_diff_publishes(tmp_path):
+    record, job = completed()
+    record['chosen_leg'] = {'tool_mode': 'prompt-only'}
+    (tmp_path / 'prompt.txt').write_text('diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n')
+    sa.publish(tmp_path, record, job)
+    assert 'verdict_status' not in record
+    assert (tmp_path / 'evidence.json').exists()
+
+
+def test_companion_evidence_cannot_bypass_prompt_only_void(tmp_path):
+    record, job = completed()
+    sa.publish(tmp_path, record, job)
+    record['chosen_leg'] = {'tool_mode': 'prompt-only'}
+    (tmp_path / 'record.json').write_text(json.dumps(record))
+    (tmp_path / 'prompt.txt').write_text('no patch supplied')
+    with pytest.raises(ValueError, match='prompt_only_no_diff'):
+        sv.read_record_identity(tmp_path)

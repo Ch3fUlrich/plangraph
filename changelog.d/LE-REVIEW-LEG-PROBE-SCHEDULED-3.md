@@ -1,0 +1,1 @@
+- Make prompt-record seam mutations target the current call site and reject missing mutation targets.

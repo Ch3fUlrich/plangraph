@@ -55,7 +55,8 @@ def rust_repo_inputs(root):
             for base in bases:
                 path = (base / value).resolve()
                 if (path.is_file() and path.is_relative_to(root)
-                        and not path.is_relative_to(root / "rust")):
+                        and not path.is_relative_to(root / "rust")
+                        and not path.is_relative_to(root / ".git")):
                     relative = path.relative_to(root).as_posix()
                     inputs[relative] = f"{source.relative_to(root)}:{before.count(chr(10)) + 1}"
     return inputs
@@ -164,3 +165,16 @@ def test_pg_hook_runs_in_windows_job():
     for name in ("lib.rs", "main.rs"):
         source = (ROOT / "rust/pg-hook/src" / name).read_text()
         assert "#[cfg(all(test, unix))]\nmod tests" in source
+
+
+@pytest.mark.parametrize('metadata', ['.git', '.git/worktrees/lane/HEAD'])
+def test_rust_input_scan_excludes_repository_metadata(tmp_path, metadata):
+    source = tmp_path / 'rust/sample/src/lib.rs'
+    source.parent.mkdir(parents=True)
+    (source.parent.parent / 'Cargo.toml').write_text('[package]\nname = "sample"\n')
+    entry = tmp_path / metadata
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    entry.write_text('fixture metadata')
+    source.write_text('fn metadata() { let _ = Path::new(env!("CARGO_MANIFEST_DIR"))'
+                      f'.parent().unwrap().parent().unwrap().join("{metadata}"); }}')
+    assert rust_repo_inputs(tmp_path) == {}

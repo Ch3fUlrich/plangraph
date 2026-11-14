@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from plangraph.routing_support.clients import without_prompt_env
 
@@ -128,7 +129,7 @@ class _AgentsMixin:
         except _ActionFailed:
             return []
 
-    def _agents_rows_strict(self):
+    def _agents_rows_strict(self, timeout=STOP_TIMEOUT):
         # Fail-closed poll for decisions that gate a launch or relaunch: when
         # the poll cannot say whether an old id is still live, the action is
         # refused, never passed (round 4). Head resolution refusals propagate
@@ -136,7 +137,7 @@ class _AgentsMixin:
         # must never fall back to a bare "claude" on win32 (R-9).
         head = self._claude_head()
         try:
-            proc = self._run(head + ["agents", "--json"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=STOP_TIMEOUT)
+            proc = self._run(head + ["agents", "--json"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
             if proc.returncode != 0:
                 raise _ActionFailed(f"agents poll failed: exit {proc.returncode}")
             rows = json.loads(proc.stdout or "[]")
@@ -158,6 +159,27 @@ class _AgentsMixin:
                 # closed (r10).
                 raise _ActionFailed("agents poll failed: bad sessionId")
         return rows
+
+    def _wait_bridge(self, sid):
+        """Bound both each CLI poll and total startup time; unknown bridge fails closed."""
+        budget = min(60.0, max(0.0, self._resolve_budget))
+        deadline = time.monotonic() + budget
+        for attempt in range(max(1, int(budget / 0.5) + 1)):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not sid:
+                return None
+            try:
+                rows = self._agents_rows_strict(timeout=min(STOP_TIMEOUT, remaining))
+            except _ActionFailed:
+                rows = []
+            for row in rows:
+                bridge = row.get('bridgeSessionId')
+                if (row.get('sessionId') == sid and row.get('state') not in FINISHED_STATES
+                        and isinstance(bridge, str) and bridge.strip()):
+                    return bridge
+            if attempt < int(budget / 0.5):
+                self._sleep(min(0.5, max(0, deadline - time.monotonic())))
+        return None
 
     def _resolve_id(self, name, stdout, exclude=None, launched_ms=None):
         """Map a just-launched session to its real session id. A full UUID in

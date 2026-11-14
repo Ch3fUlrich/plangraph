@@ -1,0 +1,1 @@
+- Reconcile Rust and Python running-status snapshots with PID identity on every read, reporting exited/pid_gone without poll-time writes.

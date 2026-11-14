@@ -57,6 +57,7 @@ REEMIT_DELTA = 10000
 
 # Sentinel for a tail line that is not the assistant+usage record we want.
 _SKIP = object()
+_SIDECHAIN = object()
 
 
 # A session id becomes a file name: checked by hook_common.safe_id (shared).
@@ -108,6 +109,8 @@ def _tail_ctx(line):
         obj = json.loads(text)
     except (ValueError, TypeError):
         return _SKIP
+    if isinstance(obj, dict) and obj.get("isSidechain") is True:
+        return _SIDECHAIN
     if not isinstance(obj, dict) or obj.get("type") != "assistant":
         return _SKIP
     message = obj.get("message")
@@ -138,7 +141,7 @@ def context_tokens(path) -> int | None:
         lines = lines[1:]
     for line in reversed(lines):
         result = _tail_ctx(line)
-        if result is _SKIP or result is None:
+        if result is _SIDECHAIN or result is _SKIP or result is None:
             continue
         return result
     return None

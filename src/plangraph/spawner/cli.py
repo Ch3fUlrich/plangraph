@@ -125,10 +125,12 @@ def main(argv=None):
             p.add_argument('--seats', action='store_true', help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps')
     commands.add_parser('catalog')
+    commands.add_parser('gateway-health')
     commands.add_parser('launch-spec')
     p = commands.add_parser('probe')
     p.add_argument('--leg', action='append', default=[])
     p.add_argument('--all-writers', action='store_true')
+    p.add_argument('--all-reviews', action='store_true')
     p.add_argument('--timeout', type=float)
     p.add_argument('--json', action='store_true')
     p = commands.add_parser('wait')
@@ -137,6 +139,11 @@ def main(argv=None):
     for verb in ('result', 'status', 'cancel'):
         commands.add_parser(verb).add_argument('run_id')
     args = parser.parse_args(argv)
+    if args.verb == 'gateway-health':
+        from .clients import effective_child_base_url, gateway_configuration_error
+        print(json.dumps(dict(gateway_default_url=effective_child_base_url() or '',
+                              gateway_error=gateway_configuration_error())))
+        return 0
     if args.verb == 'catalog':
         from plangraph.routing_support.resolver import get_catalog_models
         from plangraph.planner.legs import REVIEW_UNFIT_SEATS
@@ -152,7 +159,7 @@ def main(argv=None):
         if args.verb == 'probe':
             from .leg_probe import ParameterRefused, probe_many, reset_iso
             try:
-                result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout))
+                result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout, **({'all_reviews': True} if args.all_reviews else {})))
             except ParameterRefused as exc:
                 print(json.dumps(dict(status='refused', refusal='ParameterRefused', error=str(exc), exit_code=2)))
                 return 2

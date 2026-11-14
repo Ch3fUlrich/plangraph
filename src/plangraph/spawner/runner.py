@@ -452,7 +452,7 @@ class SpawnerRunner:
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
                 from .opencode_answer import cap_reasoning
-                if reasoning_cap and not cap_reasoning(child_env, model_or_combo):
+                if reasoning_cap and not cap_reasoning(child_env, model_or_combo, allow_already_capped=True):
                     render_reason = 'reasoning_output_limit: no supported reasoning cap'
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
@@ -965,7 +965,6 @@ def spawn_service(*args, **kwargs):
                                 atomic_write_private(marker, 'delivered\n')
                             except Exception:
                                 logging.getLogger(__name__).exception('completion hook failed')
-
         def retry_completions(self):
             """Re-drive durable terminal records after a supervisor/bridge outage."""
             for record in self.ps()['runs']:
@@ -979,15 +978,17 @@ def spawn_service(*args, **kwargs):
                         self._save(record, retry=True)
                     except Exception:
                         logging.getLogger(__name__).exception('completion retry failed')
-
         async def wait(self, run_id, timeout=None):
             if timeout is not None and timeout < 0:
                 raise ValueError('timeout must be nonnegative')
             deadline = None if timeout is None else time.monotonic() + timeout
+            gone_since = None
             while True:
                 record = self.result(run_id)
+                gone_since = (gone_since or time.monotonic()) if record.get('reason') == 'pid_gone' else None
                 if record.get('ended') is not None and record['status'] != 'running':
-                    return record
+                    if gone_since is None or time.monotonic() - gone_since >= .5:
+                        return record
                 from .exit_outcome import orphaned
                 gone = orphaned(record, time.time())
                 if gone is not None:
@@ -996,7 +997,6 @@ def spawn_service(*args, **kwargs):
                 if deadline is not None and time.monotonic() >= deadline:
                     raise TimeoutError('run wait timed out: ' + run_id)
                 await asyncio.sleep(.02)
-
         def _route(self, card, role='implement', writer_families=(), review_of=None, **options):
             from . import leg_state
             original = self.leg_reader

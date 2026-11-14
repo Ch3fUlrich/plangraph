@@ -100,6 +100,9 @@ def build(request: dict) -> dict:
         raise LaunchRefused('leg_inactive', str(exc)) from None
     if request['role'] not in leg.roles:
         raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
+    from plangraph.routing_support.clients import gateway_leg_error
+    if reason := gateway_leg_error(leg):
+        raise LaunchRefused('gateway_not_configured', reason)
     service = SpawnService(state=request['state'])
     service.runner.default_cwd = request['cwd']
     service.runner._child_envs = _LaunchOwned()
@@ -127,7 +130,7 @@ def build(request: dict) -> dict:
         try:
             job = asyncio.run(service.runner.spawn(prompt=prompt, model_or_combo=leg.model,
                 role=request['role'], dry_run=True, client=leg.harness, extra_env=writer_env,
-                prepare_launch=True))  # REMOVE-AT-R10: Rust owns redaction and recording.
+                prepare_launch=True, reasoning_cap=request['role'] == 'review' and getattr(leg, 'family', None) == 'mimo'))  # REMOVE-AT-R10: Rust owns redaction and recording.
         except (SpawnRefused, ValueError) as exc:
             raise LaunchRefused('refused', str(exc)) from None
         for event in job.events:

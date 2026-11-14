@@ -1,0 +1,1 @@
+- Accept already-capped MiMo configurations and preserve bounded legacy retries and cancellation guards.

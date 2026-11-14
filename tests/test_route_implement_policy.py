@@ -11,7 +11,7 @@ from plangraph.planner.routing import plan_spawn
 from plangraph.spawner.cli import main
 
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
-CARD = {"estimate_tokens": 20000, "risk_tags": [],
+CARD = {"estimate_tokens": 20000, "risk_tags": [], "allow_family_fallthrough": True,
         "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
 WRITERS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "openrouter-free",
            "opencode-big-pickle", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
@@ -30,11 +30,12 @@ def isolated_catalog(monkeypatch, tmp_path):
 @pytest.mark.parametrize("card", [CARD, {"estimate_tokens": 1000}, {"estimate_tokens": 20000},
     {"estimate_tokens": 20000, "risk_tags": []}, {"estimate_tokens": 20000, "risk_tags": ["secrets"]}])
 @pytest.mark.parametrize("state", ["available", "limited", "down", "expired"])
-def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card, state):
+def test_implement_effort_and_authorized_fallback_without_override(tmp_path, card, state):
     from plangraph.spawner.service import SpawnService
     def reader(model, **kwargs):
         return {"state": state if model == "omniroute/cx-gpt-6.1-sol-xhigh" else "available", "evidence": None}
     service = SpawnService(state=tmp_path, leg_reader=reader)
+    card = dict(card, allow_family_fallthrough=True)  # This test exercises explicitly authorized fallback.
     plan = service.route(card, role="implement")
     expected = LIVE if state == "available" else LIVE[1:]
     if card.get("risk_tags"):

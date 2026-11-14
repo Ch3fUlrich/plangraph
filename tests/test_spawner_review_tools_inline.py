@@ -103,6 +103,7 @@ def test_tools_invalid_diff_ref_refused(diff_ref):
     ('provider-stop', 2, True), ('thin-budget', 1, True),
     ('stalled', 1, False), ('retry-stalled', 2, False), ('retry-cancelled', 2, False),
     ('ordinary-timeout', 1, False), ('ordinary-cancelled', 1, False),
+    ('capped-first', 1, True), ('capped-cancelled', 1, False), ('capped-timeout', 1, False),
 ])
 def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scenario, launches, terminal):
     """Use real spawn/render/monitor/record paths; only transport and witnesses are fake."""
@@ -141,12 +142,12 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
         child_env = runner._child_envs[jid]
         assert child_env is calls[-1][1]['env']
         config = json.loads(child_env['OPENCODE_CONFIG_CONTENT'])
-        if scenario == 'already-capped':
+        if scenario == 'already-capped' or scenario.startswith('capped-'):
             assert config['providers']['mimo']['models']['mimo-v2.6-flash']['body']['thinking'] == {'type': 'disabled'}
         successful = scenario == 'normal' or len(calls) == 2 and scenario == 'verdict'
-        if scenario in ('cancelled', 'ordinary-cancelled') or scenario == 'retry-cancelled' and len(calls) == 2:
+        if scenario in ('cancelled', 'ordinary-cancelled', 'capped-cancelled') or scenario == 'retry-cancelled' and len(calls) == 2:
             runner.jobs[jid].status = 'cancelled'
-        if scenario in ('timeout', 'stalled', 'ordinary-timeout') or scenario in ('retry-timeout', 'retry-stalled') and len(calls) == 2:
+        if scenario in ('timeout', 'stalled', 'ordinary-timeout', 'capped-timeout') or scenario in ('retry-timeout', 'retry-stalled') and len(calls) == 2:
             status = 'stalled' if scenario.endswith('stalled') else 'timeout'
             runner.jobs[jid].status, runner.jobs[jid].exit_code = status, 6 if status == 'stalled' else 124
             runner.jobs[jid].events.append({'event': 'watchdog_' + status, 'rule': 'max'})
@@ -189,6 +190,12 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     runner = SpawnerRunner(default_cwd=diff_ref['repo'], process_factory=factory)
     monkeypatch.setattr(runner, '_reap_process', reap)
     service = (SpawnService if dispatch == 'base' else spawn_service)(runner=runner, state=tmp_path / 'state')
+    # Keep legacy retry coverage alongside the production capped-first path.
+    launch_leg = service._launch_leg
+    async def legacy_uncapped(record, chosen, **options):
+        return await launch_leg(record, chosen, reasoning_cap=False, **options)
+    if not scenario.startswith('capped-'):
+        monkeypatch.setattr(service, '_launch_leg', legacy_uncapped)
     continuation = AsyncMock(wraps=service._continue_writer)
     monkeypatch.setattr(service, '_continue_writer', continuation)
     monkeypatch.setattr(service, '_route', lambda *a, **kw: plan)
@@ -197,6 +204,9 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     record = asyncio.run(service.spawn(card, 'Review this change', role=role,
                                      writer_families=['deepseek'], wait_seconds=None, **options))
     assert len(calls) == launches
+    if scenario.startswith('capped-'):
+        assert record['reasoning_cap'] == 0
+        assert 'reasoning_retry' not in record
     assert service.result(record['run_id']) == record
     assert record['ended'] >= record['started'] and not service._running_records and not runner._tasks
     assert (record.get('reason') == 'reasoning_output_limit') == terminal
@@ -231,14 +241,23 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
             assert record['completion']['event'] == 'FAILED' and record['completion']['reason'] == 'reasoning_output_limit'
             assert record['error'] and record['completion']['rc'] == job.exit_code
             assert all(a['request_side_model'] == chosen.model and a['witness_kind'] == 'hermetic-witness' for a in real)
-    if scenario in ('cancelled', 'ordinary-cancelled', 'retry-cancelled'):
+    if scenario in ('cancelled', 'ordinary-cancelled', 'retry-cancelled', 'capped-cancelled'):
         assert record['status'] == 'cancelled'
     if scenario == 'non-review':
         assert not any(e['event'].startswith(('opencode_step_finish', 'opencode_reasoning', 'reasoning_'))
                        for e in record['events'])
-    if scenario in ('timeout', 'retry-timeout', 'ordinary-timeout'):
+    if scenario in ('timeout', 'retry-timeout', 'ordinary-timeout', 'capped-timeout'):
         assert record['status'] == 'timed_out' and record['reason'] == 'timeout'
     if scenario in ('stalled', 'retry-stalled'):
         assert record['status'] == record['reason'] == 'stalled'
     if 'timeout' in scenario or 'stalled' in scenario:
         assert sum(e['event'].startswith('watchdog_') for e in record['events']) == 1
+
+
+def test_prompt_only_seat_always_inlines_or_refuses(diff_ref):
+    leg = SimpleNamespace(harness='claude', tool_mode='prompt-only', max_request_tokens=100000)
+    seat = SeatSpawnMixin()
+    seat.runner = SimpleNamespace(default_cwd=diff_ref['repo'])
+    assert 'diff --git' in seat._leg_prompt('review', {'diff_ref': diff_ref}, 'review', leg)
+    with pytest.raises(InlineDiffError):
+        seat._leg_prompt('review with no change', {}, 'review', leg, document_review=True)

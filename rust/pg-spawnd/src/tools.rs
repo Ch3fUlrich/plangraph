@@ -37,18 +37,15 @@ pub(crate) fn list_tools() -> ListToolsResult {
     ListToolsResult::with_all_items(tools())
 }
 
-fn health_json(total: u64, running: usize) -> String {
-    format!(
-        concat!(
-            r#"{{"status":"healthy","daemon":"pg-spawnd","#,
-            r#""spawner_version":"pg-spawnd {version}","placement":"off","#,
-            r#""runner_jobs_total":{total},"active_jobs_count":{running},"#,
-            r#""catalog_models_count":0,"gateway_default_url":""}}"#
-        ),
-        version = env!("CARGO_PKG_VERSION"),
-        total = total,
-        running = running
-    )
+fn health_json(total: u64, running: usize, gateway: &serde_json::Value) -> String {
+    serde_json::json!({
+        "status": if gateway["gateway_error"].is_null() { "healthy" } else { "degraded" },
+        "daemon":"pg-spawnd", "spawner_version":format!("pg-spawnd {}", env!("CARGO_PKG_VERSION")),
+        "placement":"off", "runner_jobs_total":total, "active_jobs_count":running,
+        "catalog_models_count":0, "gateway_default_url":gateway["gateway_default_url"],
+        "gateway_error":gateway["gateway_error"]
+    })
+    .to_string()
 }
 
 /// Dispatch one `tools/call` request.
@@ -176,7 +173,7 @@ pub(crate) fn dispatch(
     match name {
         "plangraph_agent_health" => Ok(CallToolResult::success(vec![ContentBlock::text({
             let (total, running) = runs.map(|r| r.health_counts(state)).unwrap_or_default();
-            health_json(total, running)
+            health_json(total, running, &crate::gateway_health::read(state))
         })])),
         other if tool_names().contains(other) => {
             Ok(CallToolResult::error(vec![ContentBlock::text(format!(
@@ -337,15 +334,20 @@ mod tests {
 
     #[test]
     fn health_payload_shape() {
-        let result = call_tool(
-            &request("plangraph_agent_health"),
-            std::path::Path::new("unused"),
-        )
-        .expect("health");
-        assert_eq!(result.is_error, Some(false));
-        let text = result.content[0].as_text().expect("text").text.clone();
+        let text = health_json(
+            0,
+            0,
+            &serde_json::json!({"gateway_default_url":"", "gateway_error":"gateway not configured"}),
+        );
         let payload: serde_json::Value = serde_json::from_str(&text).expect("payload");
-        assert_eq!(payload["status"], "healthy");
+        assert_eq!(payload["status"], "degraded");
+        let configured: serde_json::Value = serde_json::from_str(&health_json(
+            0,
+            0,
+            &serde_json::json!({"gateway_default_url":"", "gateway_error":null}),
+        ))
+        .unwrap();
+        assert_eq!(configured["status"], "healthy");
         assert_eq!(payload["daemon"], "pg-spawnd");
         assert_eq!(
             payload["spawner_version"],

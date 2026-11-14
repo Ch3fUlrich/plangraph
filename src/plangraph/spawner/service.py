@@ -34,11 +34,14 @@ class SpawnService(SeatSpawnMixin):
     def result(self, run_id, **read_retry):
         """Read one run record; retry options forward to read_text_retry."""
         try:
-            return json.loads(read_text_retry(self._path(run_id), **read_retry))
+            from .stall_probe import reconcile_record
+            return reconcile_record(json.loads(read_text_retry(self._path(run_id), **read_retry)), self._path(run_id).parent)
         except FileNotFoundError:
             raise ValueError('unknown run id') from None
 
     def _save(self, record):
+        from .inline_diff import prompt_only_void
+        prompt_only_void(record, self._path(record['run_id']).parent)
         self._sync_seat(record)
         from .private_io import atomic_write_private
         from .runner import redact
@@ -291,6 +294,9 @@ class SpawnService(SeatSpawnMixin):
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
         if plan.error or not plan.first_leg:
             raise SpawnRefused(plan.error or 'no eligible leg')
+        from plangraph.routing_support.clients import gateway_leg_error
+        if reason := gateway_leg_error(plan.first_leg):
+            raise SpawnRefused(reason)
         plan = replace(plan, legs=witness_gate_legs(card, role, plan.legs), placement=_placement or plan.placement)  # before run artifacts
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,

@@ -108,4 +108,9 @@ files: `139 passed in 63.38s (0:01:03)`. The untouched argv-limit file reproduce
 on line 57. The full suite was not run, following the brief's final prohibition
 on whole-suite runs; no test was skipped or weakened to hide those failures.
 
+Gateway legs require a configured child base URL and client credential before routing. The skip reason names `gateway not configured`; direct subscription legs retain their own admission.
+
+Writer family selection precedes health filtering. A down writer family cannot
+silently select a different family unless the card allows family fallthrough.
+
 The shipped provider config and the pending benchmark inventory use the same `omniroute/deepseek-v4.1-flash` identity; the pending row explicitly records missing measurements. Historical fallthrough replay projects the legacy alias onto this registered identity.

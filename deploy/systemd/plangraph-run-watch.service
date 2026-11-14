@@ -1,0 +1,7 @@
+[Unit]
+Description=Detect accepted runs that never launch a leg
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/plangraph/watchdog.env
+ExecStart=%h/.cargo/bin/pg-spawnd run-watch
+TimeoutStartSec=30

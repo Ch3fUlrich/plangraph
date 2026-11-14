@@ -1,0 +1,1 @@
+- Keep the disabled-reader routing fixture explicitly authorized for multi-family mechanics.
