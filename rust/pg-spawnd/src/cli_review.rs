@@ -94,6 +94,14 @@ pub(crate) fn prepare(args: &Args, launch: &mut LaunchSpec) -> Result<Option<Str
     Ok(Some(head))
 }
 
+fn read_log(record: &RunRecord) -> std::io::Result<String> {
+    let path = record.path().with_file_name("live.log");
+    if std::fs::metadata(&path)?.len() > 8 * 1024 * 1024 {
+        return Err(std::io::Error::other("review log too large"));
+    }
+    std::fs::read_to_string(path)
+}
+
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     if record.get("role").and_then(Value::as_str) != Some("review")
         || !eligible(leg)
@@ -113,24 +121,27 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     let text = crate::review_artifacts::review_text(state, &value).unwrap_or_default();
     // Book provider errors through the existing store/parser, never answer prose.
     if status != Status::Completed || text.is_empty() || text.contains("VERDICT: HALT") {
-        if let Ok(log) = std::fs::read_to_string(record.path().with_file_name("live.log")) {
+        if let Ok(log) = read_log(record) {
             let mut argv = vec![
                 "quota-result".into(),
                 "--model".into(),
                 leg["model"].as_str().unwrap().into(),
             ];
-            let errors: Vec<_> = log
+            let mut errors: Vec<_> = log
                 .lines()
                 .filter_map(|l| serde_json::from_str::<Value>(l).ok())
                 .filter(|v| v["event"] == "result" && v["result"]["status"] != "SUCCESS")
                 .filter_map(|v| v["result"]["error"].as_str().map(str::to_owned))
                 .collect();
+            if let Some(stderr) = value["stderr_tail"].as_str().filter(|s| !s.is_empty()) {
+                errors.push(stderr.to_owned());
+            }
             if !errors.is_empty() && leg["harness"] == "agy" {
                 argv.extend(["--error".into(), errors.join("\n")]);
-                if crate::adapter::Adapter(state)
-                    .run(&argv, Duration::from_secs(10))
-                    .is_err()
-                {
+                if !matches!(
+                    crate::adapter::Adapter(state).run(&argv, Duration::from_secs(10)),
+                    Ok((0, _, _))
+                ) {
                     record.set("quota_record_error", json!(true));
                 }
             }
@@ -148,7 +159,7 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     }
     let mut model = leg["model"].as_str().unwrap().to_owned();
     if leg["harness"] == "claude" {
-        let Ok(log) = std::fs::read_to_string(record.path().with_file_name("live.log")) else {
+        let Ok(log) = read_log(record) else {
             return;
         };
         let mut models = std::collections::BTreeSet::new();

@@ -90,7 +90,12 @@ fn review_kind_spawns_a_stamped_repository_review_and_records_it() {
         "card":{"item_key":"demo:AGY", "estimate_tokens":1000, "head_sha":head}, "wait_seconds":5
     }});
     let missing_stamp = client.request("tools/call", request.clone());
-    assert_eq!(missing_stamp["result"]["isError"], true, "{missing_stamp}");
+    assert!(
+        missing_stamp["error"]["message"]
+            .as_str()
+            .is_some_and(|s| s.contains("fast-checks stamp")),
+        "{missing_stamp}"
+    );
     let stamps = repo.join(".git/fast-checks");
     std::fs::create_dir(&stamps).unwrap();
     std::fs::write(stamps.join(&head), "green").unwrap();
