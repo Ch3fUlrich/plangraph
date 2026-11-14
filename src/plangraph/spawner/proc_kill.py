@@ -342,6 +342,20 @@ def record_oom_envelope(events, envelope):
         events.append({'event': name})
 
 
+def record_oom_line(events, line, env):
+    """Retain one recognized telemetry line; leave all other diagnostics in stderr."""
+    telemetry = oom_envelope(line)
+    if telemetry is None:
+        return False
+    record_oom_envelope(events, telemetry)
+    extras = {k: v for k, v in telemetry.items() if k != 'plangraph_oom'}
+    if extras:
+        from .env_redact import redact_env_values, redact_output
+        events.append(dict(event='oom_telemetry_detail', detail=redact_output(
+            redact_env_values(json.dumps(extras), env))))
+    return True
+
+
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         os.write(2, b'oom wrapper: expected score path and command\n')

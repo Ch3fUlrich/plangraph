@@ -8,7 +8,7 @@ import pytest
 from plangraph.planner.routing import SpawnRefused
 from plangraph.spawner.item_key import annotate_item, valid_item
 from plangraph.spawner.runner import spawn_service
-from registry_route_util import _Runner, _service
+from registry_route_util import _Runner, _service, live_claim
 
 
 KEY = 'plangraph:D-5047'
@@ -293,7 +293,7 @@ def test_spawn_missing_seat_identity_is_persisted(tmp_path, monkeypatch, dispatc
 
 @pytest.mark.parametrize('positional', [False, True])
 def test_refusal_item_key(tmp_path, monkeypatch, positional):
-    service = _service(tmp_path, monkeypatch)
+    service = _service(tmp_path, live_claim(monkeypatch, KEY))
 
     def refuse(*args, **kwargs):
         raise SpawnRefused('test refusal')
@@ -345,6 +345,11 @@ def test_spawn_item_key(tmp_path, monkeypatch, dispatch, item, env, expected):
     card = {'estimate_tokens': 100}
     if item is not None:
         card['item'] = item
+    if expected is None:
+        with pytest.raises(SpawnRefused, match='item_key required'):
+            asyncio.run(service._spawn(card=card, prompt=f'Review {OTHER_KEY}', dry_run=True))
+        assert saved == []
+        return
     result = asyncio.run(service._spawn(card=card, prompt=f'Review {OTHER_KEY}', dry_run=True))
     assert saved and all(r['item_key'] == expected for r in saved)
     assert result['item_key'] == expected

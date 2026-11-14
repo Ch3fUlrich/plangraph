@@ -241,6 +241,8 @@ class SpawnerRunner:
         watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial',  # REMOVE-AT-R10
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
+        from .round_cap import launch_phase, observe_process
+        launch_phase('prelaunch')
         from plangraph.planner.routing import validate_model
         from .target import resolve_target   # leg ids and admitted combos resolve before providers render
         model_or_combo, leg = resolve_target(model_or_combo)
@@ -497,6 +499,7 @@ class SpawnerRunner:
                 from .opencode_isolation import record_baseline
                 await asyncio.to_thread(record_baseline, job, work_dir, list(self.jobs.values()))   # D-3236
             try:
+                launch_phase('starting')
                 proc = await self.process_factory(
                     resolved_exe,
                     *cmd[1:],
@@ -515,10 +518,12 @@ class SpawnerRunner:
                 job.events.append({'event': 'spawn_failed', 'error': type(exc).__name__})
                 raise
             self._processes[job_id] = proc
+            observe_process(job_id, proc)
             self._nonces[job_id] = nonce
             root_pid = getattr(proc, 'pid', None)   # pid-less process objects (test fakes): nothing of ours to track or kill
             if root_pid is not None:
                 self._owned = {**getattr(self, '_owned', {}), job_id: dict(pid=root_pid, pid_start=self.identity_provider(root_pid, platform='nt' if self._nt() else None), job_object=False)}
+                job._launch_identity = self._owned[job_id]  # Retain proof after reap prunes the live registry.
                 start = self._owned[job_id]['pid_start']
                 if start is not None and not self._nt():   # setsid() orphans: remember the tree while the root lives
                     self._seen = {**getattr(self, '_seen', {}), job_id: {}}
@@ -637,14 +642,7 @@ class SpawnerRunner:
             kept = []
             from .env_redact import redact_env_values
             for line in stderr_text.splitlines(keepends=True):
-                from .proc_kill import oom_envelope, record_oom_envelope
-                telemetry = oom_envelope(line)
-                if telemetry is not None:
-                    record_oom_envelope(job.events, telemetry)
-                    extras = {k: v for k, v in telemetry.items() if k != 'plangraph_oom'}
-                    if extras:
-                        job.events.append(dict(event='oom_telemetry_detail', detail=redact_output(
-                            redact_env_values(json.dumps(extras), self._child_envs.get(job_id, os.environ)))))
+                if proc_kill.record_oom_line(job.events, line, self._child_envs.get(job_id, os.environ)):
                     continue
                 try:
                     envelope = json.loads(line)
@@ -974,6 +972,8 @@ def spawn_service(*args, **kwargs):
                 )
             from plangraph.settings import admit_review_scope
             admit_review_scope(card, role, review_scope)
+            from .round_cap import enforce_round_cap
+            await enforce_round_cap(self, card, role, dry_run=dry_run)
             # A seat run (_plan from _spawn_seats) keeps to its own legs on re-route.
             def restrict(p, tried):
                 from .seat_artifact import restrict_seat_plan
@@ -1046,7 +1046,7 @@ def spawn_service(*args, **kwargs):
                             self._save(record); return
                         job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
                             role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
-                            prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
+                            round_card=card, prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                         if record.get('reason') == 'reasoning_output_limit':
                             return
                         if job.survivors:   # kill_incomplete: terminal, no fall-through leg, no second writer

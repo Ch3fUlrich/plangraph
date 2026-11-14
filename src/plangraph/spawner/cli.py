@@ -81,10 +81,9 @@ def _supervise():
         try:
             record = await service.spawn(**payload, wait_seconds=0)
         except Exception as exc:
-            record = next((r for r in service.ps()['runs'] if r.get('error') == str(exc)), None)
-            if record is None:
-                record = service.save_refusal(exc, payload.get('role', 'implement'))
+            record = next((r for r in service.ps()['runs'] if r.get('error') == str(exc)), None) or service.save_refusal(exc, payload.get('role', 'implement'))
             print(json.dumps(record), flush=True)
+            await asyncio.gather(*service.tasks.values(), return_exceptions=True)  # round-cap replan job
             return record['exit_code']
         print(json.dumps(record), flush=True)
         sys.stdout.close()

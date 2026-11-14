@@ -316,5 +316,8 @@ live session state, or change permissions/settings files.
 
 Python files already in flight are individually listed in
 `tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
+The round-cap lane retains these individual exceptions for its new
+`src/plangraph/spawner/round_cap.py`, `replan_job.py`, `skipped_attempts.py`,
+`tests/test_round_cap.py` and `tests/test_round_cap_replan.py` files.
 
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.

@@ -1,0 +1,1 @@
+Refuse implement admission without a live keeper claim held by the authenticated caller; enforce the three-round cap and atomic reservations across item keys sharing a PR or diff branch, including when the keeper is offline.
