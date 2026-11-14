@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from plangraph.spawner.runner import SpawnerRunner, spawn_service
+from test_spawner_base_fresh import repository  # noqa: F401 isolated origin fixture
 
 
 def test_live_smoke_contract():
@@ -21,7 +22,7 @@ def test_live_smoke_contract():
 
 
 @pytest.mark.parametrize('visible', [True, False])
-def test_smoke_requires_live_readback(tmp_path, monkeypatch, visible):
+def test_smoke_requires_live_readback(tmp_path, monkeypatch, visible, repository):
     """Execute the shipped smoke offline; a marker alone must never pass."""
     runs = []
 
@@ -53,12 +54,19 @@ def test_smoke_requires_live_readback(tmp_path, monkeypatch, visible):
     monkeypatch.setenv('PLANGRAPH_NOTIFY_SMOKE_TIMEOUT', '.2')
     root = Path.cwd()
     monkeypatch.setenv('PYTHONPATH', str(root / 'src'))
+    registry = tmp_path / 'config/plangraph/hosts.json'
+    registry.parent.mkdir(parents=True)
+    registry.write_text(json.dumps({'self': 'smoke', 'hosts': [{
+        'id': 'smoke', 'caps': {'mem_floor_mb': 0},
+        'warmup': {'ramp_mb': {'implement': 1}}}]}))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config'))
+    monkeypatch.setenv('PLANGRAPH_HOST_NAME', 'smoke')
     try:
         result = subprocess.run(['bash', str(root / 'tools/smoke-run-exit-notify.sh')],
-                                cwd=tmp_path, capture_output=True, text=True, timeout=15)
+                                cwd=repository[1], capture_output=True, text=True, timeout=15)
         assert (result.returncode == 0) == visible, result.stderr
         assert len(runs) == 1
-        assert len(list(tmp_path.glob('.notify-smoke-*/runs/*/keeper.delivered'))) == 1
+        assert len(list(repository[1].glob('.notify-smoke-*/runs/*/keeper.delivered'))) == 1
     finally:
         server.shutdown()
         thread.join()
@@ -100,7 +108,8 @@ def test_real_exit_http_marker_retry(tmp_path, monkeypatch, script, rc):
     monkeypatch.setattr('plangraph.spawner.runner.build_command',
                         lambda **kw: [sys.executable, '-c', script])
     if rc == 124:
-        monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', '.03')
+        # The shared run budget includes admission; leave time to launch the child.
+        monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', '2')
     from plangraph.spawner import private_io
     original = private_io.atomic_write_private
     fail = [True]
@@ -111,12 +120,12 @@ def test_real_exit_http_marker_retry(tmp_path, monkeypatch, script, rc):
         return original(path, data)
 
     monkeypatch.setattr(private_io, 'atomic_write_private', write)
-    service = spawn_service(runner=SpawnerRunner(), state=tmp_path)
+    service = spawn_service(runner=SpawnerRunner(default_cwd=str(tmp_path)), state=tmp_path)
 
     async def run():
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='tiny', model='omniroute/cx-gpt-6.1-sol',
                                      override_reason='HTTP completion regression', wait_seconds=5)
-        assert record['exit_code'] == rc
+        assert record['exit_code'] == rc, record
         marker = service._path(record['run_id']).parent / 'keeper.delivered'
         assert not marker.exists()
         assert len(events) == 1

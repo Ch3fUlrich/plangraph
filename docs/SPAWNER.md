@@ -702,3 +702,5 @@ Review hard walls default to 25 minutes and implement/fix to 90 minutes; progres
 Checkpoint 4: Fresh bases and registry guard is included in this checkpoint.
 
 Stale-base waivers require PLANGRAPH_BASE_DECISIONS_FILE configured by the operator. Admission fetches its origin/main, requires one decision row whose DECISION cell contains Source: operator, Waives: spawn-base:<checked-base-sha> and Origin: <fetched-origin-sha>, and refuses missing, duplicate, unreadable or mismatched proof. A card D-id alone never waives lag or failed fetches. Refused-worktree cleanup requires matching created_by_run_id and never removes continuations or admitted workers.
+
+Checkpoint 6: Terminal events and run tree is included in this checkpoint.

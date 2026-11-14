@@ -7,7 +7,7 @@ from .env_redact import first_reason, harness_limit_line, unavailable_reason
 
 #: Verdicts a guard or a cancel owns.  No later fallthrough outcome may stomp
 #: them and terminal_reason never pops them (M9/M15, Q14).
-TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled', 'reasoning_output_limit')
+TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled', 'reasoning_output_limit', 'tool_loop', 'stuck')
 
 
 def without_progress(text):
