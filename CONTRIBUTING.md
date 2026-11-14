@@ -396,3 +396,9 @@ configuration is supplied; explicit jail settings are preserved and other check 
 Rust test builds, including nested admission checks and Python placement fixtures, inherit `CARGO_TARGET_DIR`; keep the host shared target when it is configured.
 
 Local worker preflight runs library and binary unit tests offline. CI runs the full worker suite, including Temporal-dependent integrations, through `ci-temporal`.
+
+Review prompt builders use `src/plangraph/review/review_brief.md` through
+`plangraph.review.prompt.render_brief`. Supply item context explicitly (the judge
+CLI accepts `--context` JSON); missing fields remain visible as unavailable.
+Fixed brief rules and output contracts precede `=== ITEM CONTEXT`; item-specific
+content follows it so different items reuse the same prompt cache prefix.
