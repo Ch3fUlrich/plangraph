@@ -14,3 +14,6 @@ logs/
 
 # Built Git hook
 /tools/hooks/commit-msg
+
+# Writer handoffs belong outside the checkout, at every depth.
+STATUS-*.txt

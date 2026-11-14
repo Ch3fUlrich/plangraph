@@ -281,7 +281,16 @@ def main(argv: list[str] | None = None) -> int:
         return bail(f"check-changelog-docs: git rev-list failed: {revs.stderr.strip()}", warn_only)
     commits = revs.stdout.split()
 
-    problems: list[str] = []
+    # NUL-delimited and without rename detection: renaming a tracked file to a
+    # status note is an addition too, including names Git would normally quote.
+    added = git(root, "diff", "--name-only", "--diff-filter=A", "--no-renames", "-z",
+                merge_base, head_sha)
+    if added.returncode != 0:
+        return bail(f"check-changelog-docs: git diff failed: {added.stderr.strip()}", warn_only)
+    status_notes = [p for p in added.stdout.split("\0")
+                    if re.fullmatch(r"STATUS-[^/]*\.txt", p.rsplit("/", 1)[-1])]
+    problems: list[str] = [f"writer status file must not be committed: {p}"
+                           for p in status_notes]
     warnings: list[str] = []
     skipped: list[str] = []
     uncovered: list[str] = []

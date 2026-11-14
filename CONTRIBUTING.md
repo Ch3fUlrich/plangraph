@@ -370,3 +370,7 @@ Checkpoint 13 includes routing and provider contracts; run its affected Python c
 Install Git message validation with `tools/hooks/install_hooks.sh --git`
 (using the shared host `CARGO_TARGET_DIR`). Non-merge commits require a strict
 `Writer:` or `Hand-Edit:` trailer. See `docs/rust-hooks.md`.
+
+Writer handoffs named `STATUS-*.txt` are ignored at every depth. Keep them
+outside the checkout; the changelog/docs PR gate also rejects added status
+notes, including forced additions and renames into that naming pattern.
