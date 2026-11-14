@@ -17,7 +17,7 @@ import os
 import re
 import sqlite3  # tests patch runner.sqlite3.connect (test_opencode_served_witness)
 import subprocess
-import sys
+import sys  # noqa: F401 -- compatibility: callers patch runner.sys.platform
 import time
 import uuid
 from dataclasses import asdict, dataclass, field, replace
@@ -49,6 +49,12 @@ _keeper_unconfigured_last_warned = None
 from .env_redact import first_reason, redact, redact_output, _redact_prompt
 from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, refusal_record, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
+from . import opencode_isolation as _opencode_isolation
+from .opencode_isolation import (
+    _DENIED_TOOLS,
+    _REVIEW_OPENCODE_ENV_ALLOW,
+    _opencode_managed_dir,
+)
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
@@ -130,90 +136,10 @@ class JobInfo:
         return mismatch_flag(asdict(self))
 
 
-#: Every tool key the opencode 2.1.0 config schema knows ('*' exists only in
-#: the engine's internal Permission.Ruleset actions): a review child must have
-#: all of them denied (D-2905 (1)).
-_DENIED_TOOLS = ('bash', 'doom_loop', 'edit', 'external_directory', 'glob', 'grep',
-                 'list', 'lsp', 'question', 'read', 'skill', 'task', 'todowrite',
-                 'webfetch', 'websearch')
-
-
-def _opencode_managed_dir(env: Mapping) -> Path:
-    """opencode's system (managed) config dir as the child will resolve it.
-
-    Fixed on Linux/macOS; on win32 opencode reads ProgramData from its own
-    env, so the CHILD env is read here (the same value the child sees).
-    """
-    if sys.platform == 'darwin':
-        return Path('/Library/Application Support/opencode')
-    if sys.platform == 'win32':
-        return Path(env.get('ProgramData') or 'C:\\ProgramData', 'opencode')
-    return Path('/etc/opencode')
-
-#: The only OPENCODE_* env names a review child may carry. Anything else a
-#: caller sets (e.g. OPENCODE_CLI_CONFIG_CONTENT, OPENCODE_TEST_HOME) is
-#: dropped before launch so no caller-set override can re-enable a tool or add
-#: a config layer (REVIEW-WITNESS-OPENCODE R1).
-_REVIEW_OPENCODE_ENV_ALLOW = ('OPENCODE_CONFIG_CONTENT', 'OPENCODE_CONFIG',
-                              'OPENCODE_CONFIG_DIR', 'OPENCODE_DISABLE_PROJECT_CONFIG',
-                              'OPENCODE_DISABLE_CLAUDE_CODE', 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS',
-                              'OPENCODE_DISABLE_AUTOUPDATE', 'OPENCODE_API_KEY')
-
-
 def _opencode_tools_denied(config_json, env) -> bool:
-    """True only when the child's final config AND env prove every tool denied.
-
-    Checked, all required: 'permission' maps '*' and every _DENIED_TOOLS key
-    to 'deny'; the managed config dir (_opencode_managed_dir, resolved from
-    the child env) holds no opencode.json/opencode.jsonc; 'mcp' is {} and
-    'plugin' is [] in config_json; HOME,
-    XDG_CONFIG_HOME, XDG_DATA_HOME and OPENCODE_CONFIG_DIR all resolve inside
-    the same per-job dir (XDG_DATA_HOME); OPENCODE_CONFIG is an existing file
-    inside that dir whose content parses to {};
-    OPENCODE_DISABLE_PROJECT_CONFIG, OPENCODE_DISABLE_CLAUDE_CODE and
-    OPENCODE_DISABLE_CLAUDE_CODE_SKILLS are each '1'; and no OPENCODE_* env
-    name outside _REVIEW_OPENCODE_ENV_ALLOW is present. This proves only the
-    env/config shape: the runtime behaviour of opencode is not proven by this
-    function (an L1 runtime probe covers that).
-    """
-    try:
-        cfg = json.loads(config_json or '{}')
-    except (ValueError, TypeError):
-        return False
-    if not isinstance(cfg, dict):
-        return False
-    permission = cfg.get('permission')
-    if not isinstance(permission, dict) or not all(
-            permission.get(tool) == 'deny' for tool in ('*',) + _DENIED_TOOLS):
-        return False
-    if cfg.get('mcp') != {} or cfg.get('plugin') != []:
-        return False
-    if not isinstance(env, Mapping):
-        return False
-    managed = _opencode_managed_dir(env)
-    if any((managed / name).exists() for name in ('opencode.json', 'opencode.jsonc')):
-        return False
-    for name in env:
-        if str(name).startswith('OPENCODE_') and name not in _REVIEW_OPENCODE_ENV_ALLOW:
-            return False
-    if (env.get('OPENCODE_DISABLE_PROJECT_CONFIG') != '1'
-            or env.get('OPENCODE_DISABLE_CLAUDE_CODE') != '1'
-            or env.get('OPENCODE_DISABLE_CLAUDE_CODE_SKILLS') != '1'):
-        return False
-    try:
-        job_dir = Path(env.get('XDG_DATA_HOME') or '')
-        if not job_dir.name:
-            return False
-        for key in ('HOME', 'XDG_CONFIG_HOME', 'OPENCODE_CONFIG_DIR'):
-            path = Path(env.get(key) or '')
-            if not path.name or not path.resolve().is_relative_to(job_dir.resolve()):
-                return False
-        cfg_path = Path(env.get('OPENCODE_CONFIG') or '')
-        return (bool(cfg_path.name) and cfg_path.is_file()
-                and cfg_path.resolve().is_relative_to(job_dir.resolve())
-                and json.loads(cfg_path.read_text()) == {})
-    except (OSError, ValueError):
-        return False
+    return _opencode_isolation._opencode_tools_denied(config_json, env,
+        managed_dir=_opencode_managed_dir, denied_tools=_DENIED_TOOLS,
+        env_allow=_REVIEW_OPENCODE_ENV_ALLOW)
 
 
 class NonceCapacity(RuntimeError):
@@ -258,7 +184,8 @@ class SpawnerRunner:
         if not isinstance(model, str) or not model.strip():
             raise ValueError('missing served model')
         model = model.strip()
-        family = detect_model_family(model)
+        from .gateway_witness import served_family
+        family = served_family(model)
         if '/' not in model or family not in MODEL_FAMILIES:
             raise ValueError('served model is not an admitted model id: ' + model)
         job = self.jobs[job_id]
@@ -445,8 +372,6 @@ class SpawnerRunner:
                         raise ValueError('not an object')
                     cfg['permission'] = {tool: 'deny' for tool in ('*',) + _DENIED_TOOLS}
                     cfg.update(mcp={}, plugin=[])   # D-2921 F1: drop every MCP server and plugin
-                    from .gateway_witness import tag_session
-                    tag_session(cfg, job_id)   # D-3226: the gateway logs this run's sessionTag
                     child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
@@ -455,6 +380,15 @@ class SpawnerRunner:
                     render_reason = 'reasoning_output_limit: no supported reasoning cap'
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
+            # Response-side gateway evidence applies to writers as well as reviews.
+            # Tag after the final provider merge and review permission changes.
+            try:
+                cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
+                from .gateway_witness import tag_session
+                tag_session(cfg, job_id)
+                child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
+            except (ValueError, TypeError, AttributeError):
+                pass  # An unparseable config cannot supply a session-tag witness.
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
         if render_reason is None:
@@ -779,9 +713,10 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-opencode-store'
                 elif oc_dir and denied:
                     job.events.append({'event': 'opencode_witness_unavailable'})
-                if denied:   # D-3226 response-side, any exit code: the gateway call log names the model
-                    from .gateway_witness import witness
-                    await asyncio.to_thread(witness, self, job_id, job, env)
+            # The trusted response-side log is independent of child tool permissions.
+            if is_opencode(job):
+                from .gateway_witness import witness
+                await asyncio.to_thread(witness, self, job_id, job, env)
 
             if job.command and job.command[0] == 'claude' and last_stop_reason(stdout_text) == 'refusal':
                 answer = final_text(stdout_text)
