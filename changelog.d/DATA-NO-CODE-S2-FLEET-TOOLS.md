@@ -1,0 +1,9 @@
+- Add the native fleet command crate, fixed-card handoff validation and locked worklog logging, with Python parity cases and a repairable fleet PATH check.
+- Port fleet-name session discovery, confirmed replacement selection, launch fallback and bounded remote probes.
+- Port question-count with the existing queue summary format and counting rules.
+- Port resume-digest and carried transcript replay, pin 123 Python executions, compare active keeper claims with whoami, and preserve complete keeper wrapper JSON.
+- Port go-row-gate with 220 recorded receipt cases, shared GO token parsing and absolute wrapper lookup.
+- Port merge-part retries, ordered refusal codes and evidence handoff; add wrapper and hermetic origin/main integration tests.
+- Port inreview-backfill reporting and explicitly authorized apply, with historical binding goldens and native report/apply integration coverage.
+- Port work-summary with 33 recorded source executions, preserve help and usage output, bound inherited subprocess pipes, and document reviewed synthetic parity inputs and deferred host cutover.
+- Remove deployment identities from fleet defaults and parity fixtures; use a neutral data directory, require PG_REPO for merges, and normalize numbered routing sessions.

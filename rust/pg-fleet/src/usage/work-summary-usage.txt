@@ -1,0 +1,1 @@
+usage: work-summary [-h] [--since SINCE] [--project PROJECT]

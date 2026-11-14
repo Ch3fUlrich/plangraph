@@ -1,0 +1,7 @@
+fleet-name — the current session name for a role (operator 2026-10-31: session names end in a counter).
+
+    fleet-name <role>        e.g. `fleet-name routing` -> routing-0421
+
+Prints the newest live local session whose name is <role> or <role>-NNNN (`claude agents --json`), else the
+session_name in the role's launch record (~/.local/state/routing/launch/<role>.json). Exit 1 when neither knows it;
+for remote sessions use ListAgents and pick the live row named <role>-NNNN.

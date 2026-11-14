@@ -1,0 +1,1 @@
+usage: resume-digest [-h] [--role ROLE]

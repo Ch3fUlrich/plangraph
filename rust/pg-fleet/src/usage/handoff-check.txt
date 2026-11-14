@@ -1,0 +1,24 @@
+handoff-check — validate a session's handoff card (the fixed fleet format) and log its Done lines.
+
+    handoff-check <card> [--log]
+
+Exit 0: the card passes. Exit 1: one reason per line on stdout. Exit 2: usage. A card has at most 40 lines:
+
+    # <role> card · <session-name> · <YYYY-MM-DDTHH:MMZ>
+    ## Goal
+    ## Keeper        - claimed: KEY (state, since HH:MMZ), ...   /   - ready next: KEY, KEY
+    ## Done          - <MM-DDTHH:MMZ> <KEY|D-nnnn> <sha|PR#n> <evidence: CI run id / test / verdict>
+    ## In flight     - <KEY> <run or session id> since <HH:MMZ> next check <HH:MMZ>
+    ## Planned       1. <KEY> <why now>
+    ## Open          - <Q-id|D-id|BLOCKED> <what> | default <x> | deadline <ts>
+    ## Traps
+    ## Drill-down
+
+The 8 `##` headings are required, in this order; an empty section holds the single line `- none`. `## Done` lists everything
+finished since the previous card, one line each: UTC stamp, id, commit ref (`-` when nothing was committed), evidence.
+Checked: heading order, max 40 lines, the header line with its UTC stamp, empty sections, the shape of every Done line.
+--log (passing cards only) appends the Done lines not yet logged to $FLEET_WORKLOG (default ~/.local/state/fleet/worklog.jsonl)
+as {ts, role, session, item, ref, evidence, src}; a line already there (same text, so the same hash) is skipped.
+check_card(path) -> [reasons] is importable by path, the way bin/ctx-watchdog loads routerctl. Never reads *.token, *.dsn,
+.credentials* or ~/.config/plangraph (liveness/ excepted).
+

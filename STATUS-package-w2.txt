@@ -1,0 +1,17 @@
+W2-1 DONE: handoff-check parity (50 recorded grammar cases), worklog/secret/CLI tests and fleet PATH repair; Windows 7 tests, WSL 8 tests pass; clippy clean.
+W2-2 DONE: fleet-name; 4 parity/integration tests pass on Windows and WSL; clippy clean.
+W2-3 DONE: question-count; affected suite passes on Windows (12 tests) and WSL (13 tests); clippy clean.
+W2-4 DONE: resume-digest plus carried helper; 123 recorded executions match on Windows and WSL; principal/lease and full-JSON wrapper tests pass; clippy clean.
+W2-5 DONE: go-row-gate; 220 grammar scenarios and CLI/privacy tests pass on Windows and WSL; clippy clean.
+W2-6 DONE: merge-part and merge_paths; Windows 27 tests and WSL 28 tests pass; crate clippy clean (--no-deps; existing worker-core Windows lints excluded).
+W2-7 DONE: inreview-backfill; 146 parser cases, 147 report pairs and native apply/CLI tests pass on Windows and WSL; crate clippy clean.
+W2-8 DONE: work-summary matches 33 recorded executions on Windows and WSL; source precedence, deduplication, filters, caps and read-only behavior verified.
+LE-HANDOFF-CHECK-PATH DONE: named failures, repair from configured source, correct PATH no-op.
+LE-KC-OUTPUT-TRUNCATION DONE: native kc JSON remains complete; CLI snapshot fixture parses beyond 3000 characters.
+LE-RESUME-DIGEST-FALSE-LAPSED DONE: whoami principal binding, both incident keys, other-holder and expired-lease regressions.
+Final WSL: 45 passed, 0 failed; workspace fmt and crate clippy passed.
+Final Windows: 43 passed, 0 failed; workspace fmt and crate clippy passed.
+Public scrub: 0 hits; gitleaks: no leaks; affected public-split tests: 37 passed.
+File-size gate passed; every new source/test file is at most 400 lines (package cap 800).
+Live cutover excluded; CUTOVER-w2.md is untracked; source repository remains read-only; no branch push.
+ALL DONE

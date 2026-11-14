@@ -1,0 +1,31 @@
+usage: inreview-backfill [-h] [--items ITEMS] [--pgk PGK] [--project PROJECT]
+                         [--repo REPO] [--ref REF] [--log LOG] [--out OUT]
+                         [--out-missing OUT_MISSING] [--apply] [--go GO]
+                         [--rows ROWS] [--dry-run] [--runs-dir RUNS_DIR]
+                         [--writer-family WRITER_FAMILY]
+                         [--token-dir TOKEN_DIR] [--url URL]
+
+Report merged in-review items; writes require --apply, --go and --rows.
+
+options:
+  -h, --help            show this help message and exit
+  --items ITEMS         JSON list or snapshot; default: keeper snapshot
+  --pgk PGK
+  --project PROJECT     only report this project
+  --repo REPO
+  --ref REF             local main ref; never fetched
+  --log LOG
+  --out OUT
+  --out-missing OUT_MISSING
+  --apply
+  --go GO               router authorization D-id attached as decision
+                        evidence
+  --rows ROWS           selected item keys, one per line
+  --dry-run             preview apply commands without executing them
+  --runs-dir RUNS_DIR
+  --writer-family WRITER_FAMILY
+                        explicit seat_verdict writer families, comma-separated
+  --token-dir TOKEN_DIR
+                        passed to seat_verdict; never read here
+  --url URL             optional seat_verdict URL; otherwise it inherits
+                        PG_URL
