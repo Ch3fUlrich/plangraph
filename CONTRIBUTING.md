@@ -324,6 +324,9 @@ Python files already in flight are individually listed in
 
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
 
+The standalone fresh-base admission carry is listed as D-5848 in
+`tools/new_code_allowlist.txt` until the spawner Rust port.
+
 The K1-R1 HEAD audit runtime is explicitly stdlib Python so the installer can copy
 it outside the changing checkout; its narrow allowlist entry covers that requirement.
 
