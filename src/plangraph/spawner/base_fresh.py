@@ -77,7 +77,7 @@ def fresh_worktree_base(repo, *, base='origin/main', default='main', fetch=True)
             if any(git('merge-base', '--is-ancestor', sha, base_sha, check=False).returncode for sha in (target, main)):
                 raise SpawnRefused('base_stale: worktree_base_behind_origin')
             old = git('rev-parse', '--verify', 'refs/heads/main', check=False)
-            if old.returncode == 0:
+            if old.returncode == 0 and old.stdout.strip() != main:
                 old = old.stdout.strip()
                 if git('merge-base', '--is-ancestor', old, main, check=False).returncode:
                     raise SpawnRefused('base_stale: main_diverged')

@@ -163,7 +163,7 @@ class SpawnService(SeatSpawnMixin):
         self._save(child)
         try:
             chosen, card = child['chosen_leg'], dict(record.get('card') or {}, **({'base_decision': record['base_decision']} if 'base_decision' in record else {}))
-            if not await admit_base(self, child, card): return
+            if not record.get('run_worktree') and not await admit_base(self, child, card): return
             worktree = await prepare_worktree(self, child, {'lane_branch': (record.get('run_worktree') or {}).get('branch')}, bool(record.get('run_worktree')), continuation=True, repo=child['selected_cwd'])
             if not await admit_base(self, child, card, launch=True): return
             job = await self.runner.spawn(prompt=render_fixer_brief([{'text': g} for g in gaps]),
@@ -298,7 +298,7 @@ class SpawnService(SeatSpawnMixin):
             served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
              started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
             cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
-        if not await admit_base(self, record, card): return self.result(record['run_id'])
+        if not (run_worktree and not dry_run) and not await admit_base(self, record, card): return self.result(record['run_id'])
         pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
         async def execute():
             try:

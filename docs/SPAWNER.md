@@ -697,3 +697,10 @@ Quota polling considers only the newest request of a session, including a 429 wi
 Checkpoint 4: Fresh bases and registry guard is included in this checkpoint.
 
 Stale-base waivers require PLANGRAPH_BASE_DECISIONS_FILE configured by the operator. Admission fetches its origin/main, requires one decision row whose DECISION cell contains Source: operator, Waives: spawn-base:<checked-base-sha> and Origin: <fetched-origin-sha>, and refuses missing, duplicate, unreadable or mismatched proof. A card D-id alone never waives lag or failed fetches. Refused-worktree cleanup requires matching created_by_run_id and never removes continuations or admitted workers.
+
+Run-worktree spawns validate the selected creation base before cutting a tree, then
+validate its checkout and any review diff before launch. Caller HEAD does not
+admit or reject a new worktree. Clean main is fast-forwarded when behind; a main
+checkout already at origin/main needs no mutation and may retain local edits.
+Session launch (`src/plangraph/spawner/sessions.py`), routing `bin/fleet-launch`,
+and the external package-worktree script do not call this gate in this part.

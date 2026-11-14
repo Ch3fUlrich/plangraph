@@ -989,7 +989,7 @@ def spawn_service(*args, **kwargs):
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
             from .context_pack import annotate
             from .item_key import annotate_item
-            if not await admit_base(self, record, card): return self.result(run_id)
+            if not (run_worktree and not dry_run) and not await admit_base(self, record, card): return self.result(run_id)
             pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
             annotate_item(record, card)
             for skipped in plan.to_dict()['skipped']:
