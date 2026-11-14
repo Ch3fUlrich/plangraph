@@ -1,0 +1,1 @@
+- Specify Rust attempt-retention decisions for merged, successful, failed, cancelled and protected runs, including the 14-day boundary and dirty backup prerequisite; add a Linux executor with the shared host lock, registered-attempt checks, verified dirty backups, merge checks and compare-and-delete branch cleanup.

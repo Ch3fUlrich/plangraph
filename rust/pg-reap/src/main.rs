@@ -2,6 +2,12 @@ use std::io::{self, Write};
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "linux")]
+    if std::env::args().skip(1).collect::<Vec<_>>() == ["finish-attempt"] {
+        let request = serde_json::from_reader(io::stdin().lock())?;
+        println!("{:?}", pg_reap::retention::execute(&request)?);
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
     if std::env::args().nth(1).as_deref() == Some("orphans") {
         let path = std::env::args()
             .nth(2)

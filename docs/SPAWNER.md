@@ -722,3 +722,10 @@ The Linux `pg-reap orphans` primitive consumes previously recorded descendant
 start/cwd evidence. See [pg-reap](pg-reap.md#recorded-orphan-reaping) for the
 ownership boundary and deployment prerequisites; this does not close the Python
 sampler's observation gap or authorize deletion of historical probe directories.
+
+RUN-WORKTREE creation already shares the host root's `.lock` name and flock
+protocol reserved for the reaper. Rust attempt-retention outcome decisions are
+in `pg-reap::retention`; the report-only fleet reaper retains its stronger
+unmerged/unpushed protection. The Linux `pg-reap finish-attempt` executor verifies registrations, merge ancestry
+and dirty backups; run-end wiring still requires fresh PR/claim facts from the
+orchestrator. See [pg-reap](pg-reap.md#attempt-retention-decisions).

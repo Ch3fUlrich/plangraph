@@ -253,3 +253,4 @@ pub fn report(repos: &[Repository]) -> Result<String, String> {
 }
 
 pub mod orphans;
+pub mod retention;
