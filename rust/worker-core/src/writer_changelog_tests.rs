@@ -1,5 +1,7 @@
 use super::*;
 
+const LEDGER: &str = "CHANGELOG.md";
+
 fn assert_python_parity(f: &Fixture, passes: bool) {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/check_changelog_docs.py");
     let python = std::process::Command::new("python3")
@@ -262,7 +264,7 @@ fn parity_later_release_does_not_excuse_ordinary_edit() {
 #[test]
 fn parity_release_text_in_body_does_not_qualify() {
     let f = Fixture::new();
-    std::fs::write(f.tree.join("CHANGELOG.md"), "- edit").unwrap();
+    std::fs::write(f.tree.join(LEDGER), "- edit").unwrap();
     git(&f.tree, &["add", "."]).unwrap();
     f.commit("fixture\n\nRelease: 1.0\n\nBody prose follows.\n\nWriter: test");
     assert_python_parity(&f, false);
@@ -315,7 +317,7 @@ fn parity_merge_inherits_release_lines_but_cannot_discard_them() {
             "Release: 2.0",
         );
         git(&f.tree, &["merge", "--no-ff", "--no-commit", "feature"]).unwrap();
-        let merged = std::fs::read_to_string(f.tree.join("CHANGELOG.md")).unwrap();
+        let merged = std::fs::read_to_string(f.tree.join(LEDGER)).unwrap();
         assert!(merged.contains("- main\n") && merged.contains("- feature\n"));
         match resolution {
             "ours" | "theirs" => {
@@ -334,14 +336,11 @@ fn parity_merge_inherits_release_lines_but_cannot_discard_them() {
                 )
                 .unwrap();
             }
-            "drop_common" => std::fs::write(
-                f.tree.join("CHANGELOG.md"),
-                merged.replace("- existing\n", ""),
-            )
-            .unwrap(),
+            "drop_common" => {
+                std::fs::write(f.tree.join(LEDGER), merged.replace("- existing\n", "")).unwrap()
+            }
             "invent" => {
-                std::fs::write(f.tree.join("CHANGELOG.md"), format!("{merged}- invented\n"))
-                    .unwrap()
+                std::fs::write(f.tree.join(LEDGER), format!("{merged}- invented\n")).unwrap()
             }
             _ => {}
         }

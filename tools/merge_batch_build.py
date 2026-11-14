@@ -36,7 +36,9 @@ def default_union(base):
         return []
     patterns = []
     for line in git("show", f"{base}:.gitattributes").stdout.splitlines():
-        fields = shlex.split(line, comments=True, posix=False)
+        if line.lstrip().startswith("#"):
+            continue
+        fields = shlex.split(line, comments=False, posix=False)
         if not fields or fields[0].startswith("[attr]"):
             continue
         merge = next((a for a in reversed(fields[1:])

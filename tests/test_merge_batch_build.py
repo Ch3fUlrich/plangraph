@@ -292,13 +292,15 @@ def test_batch_changelog_and_checkpoint_appends_merge_by_default(env, legacy):
     assert not any(m["warnings"] for m in st["merged"])
 
 
-def test_union_defaults_come_from_fetched_base_not_callers_worktree(env):
-    env.seed({".gitattributes": '"release ledger.md" merge=union\n', "release ledger.md": "- old\n"})
+@pytest.mark.parametrize("ledger", ["release ledger.md", "docs/#notes.md"])
+def test_union_defaults_come_from_fetched_base_not_callers_worktree(env, ledger):
+    pattern = f'"{ledger}"' if " " in ledger else ledger
+    env.seed({".gitattributes": f"{pattern} merge=union\n", ledger: "- old\n"})
     for n in (1, 2):
-        env.branch_pr(n, {"release ledger.md": f"- change {n}\n- old\n"})
+        env.branch_pr(n, {ledger: f"- change {n}\n- old\n"})
     (env.repo / ".gitattributes").write_text("# uncommitted caller edit must not erase policy\n")
     result = env.run("build", "--name", "policy", "--prs", "1,2", "--union", "extra.txt")
     assert result.returncode == 0, result.stderr
-    assert read(env, "policy")["union"] == ['"release ledger.md"', 'extra.txt']
-    assert (wt_of(env, "policy") / "release ledger.md").read_text().splitlines() == [
+    assert read(env, "policy")["union"] == [pattern, 'extra.txt']
+    assert (wt_of(env, "policy") / ledger).read_text().splitlines() == [
         "- change 1", "- change 2", "- old"]
