@@ -76,7 +76,7 @@ fn next(
         if record.path().with_file_name("cancelled").exists() {
             return Ok(None);
         }
-        match prepare(record, &args, &leg) {
+        match prepare(record, &args, leg) {
             Ok(_) if record.path().with_file_name("cancelled").exists() => return Ok(None),
             Ok((job_id, launch)) => {
                 return advance(record, args, previous, attempt, leg.clone(), job_id, launch)
@@ -128,7 +128,7 @@ fn prepare(
     review_args["role"] = json!("review");
     crate::prompt::prepare_review(
         &review_args,
-        &leg,
+        leg,
         &mut launch,
         &crate::prompt::repos(),
         crate::prompt::configured_mode("review") == "on",
