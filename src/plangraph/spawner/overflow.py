@@ -22,6 +22,7 @@ from plangraph.routing_errors import ParameterRefused
 
 from .private_io import atomic_write_private
 
+
 def __getattr__(name):
     # Keep the compatibility attribute without loading the executable module on import.
     if name == 'cli':
@@ -29,12 +30,15 @@ def __getattr__(name):
         return import_module('.cli', __package__)
     raise AttributeError(name)
 
+
 class Decision(NamedTuple):
     host: str | None
     reason: str
 
+
 class RemoteRefusal(ValueError):
     """Safe, value-free remote failure reason."""
+
 
 def failure_reason(exc):
     """Describe the failure without exposing exception values or private paths."""
@@ -46,6 +50,7 @@ def failure_reason(exc):
         return 'remote spawn input has an invalid type'
     return 'remote spawn input or receipt has an invalid value'
 
+
 def registry_caps():
     """Read the same registry location and JSON format as fleet-sync."""
     try:
@@ -56,6 +61,7 @@ def registry_caps():
     except (OSError, ValueError, KeyError, TypeError):
         logging.warning('hosts registry missing or malformed; overflow disabled, local RAM defaults 3000/2048 MB')
         return {'hosts': [], 'self': None}
+
 
 def host_config(registry, name):
     for host in registry.get('hosts', []):
@@ -69,6 +75,7 @@ def host_config(registry, name):
         return host
     return {}
 
+
 def placement_policy(registry, config):
     name = os.environ.get('PLANGRAPH_HOST_NAME') or registry.get('self')
     host = host_config(registry, name)
@@ -77,6 +84,7 @@ def placement_policy(registry, config):
     local = hosts.get(name, {}) if isinstance(hosts, dict) else {}
     return name, (host.get('orchestration_only') is True or
                   isinstance(local, dict) and local.get('orchestration_only') is True)
+
 
 def host_caps(registry, name, role='implement'):
     host = host_config(registry, name)
@@ -91,11 +99,13 @@ def host_caps(registry, name, role='implement'):
     logging.warning('host %r: missing or malformed registry caps; not an overflow target', name)
     return None
 
+
 def local_limits(registry, role='implement'):
     caps = host_caps(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry.get('self'), role)
     if caps is None:
         logging.warning('local admission using conservative RAM defaults: floor 3000 MB, role 2048 MB')
     return caps or (2048, 3000)
+
 
 def memory_refusal(free_mb, reservation_mb, floor_mb):
     """Worker-core mem_fit: effective_free_mb - reservation_mb >= mem_floor_mb.
@@ -107,11 +117,13 @@ def memory_refusal(free_mb, reservation_mb, floor_mb):
         return None
     return f'memory: free {free_mb} MB, floor {floor_mb} MB, role {reservation_mb} MB'
 
+
 def memory_floor_record(memory, role_mb, floor, detail, role='implement'):
     return dict(run_id='run-' + uuid.uuid4().hex, status='refused', role=role,
                 reason='host_memory_floor', overflow_reason=detail, exit_code=2,
                 mem_available_mb=memory, floor_mb=floor, role_mb=role_mb, ended=time.time(),
                 error=f'host_memory_floor: MemAvailable {memory} MB, floor {floor} MB, role {role_mb} MB; {detail}')
+
 
 def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
             remote_first=False, local_refusal=None, host_order=()):
@@ -159,6 +171,7 @@ def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
     if remote_first:
         return Decision(None, local_reason or 'local_fallback_no_remote')
     return Decision(None, local_reason + '; queue: ' + ('; '.join(refused) or 'no overflow hosts configured'))
+
 
 def ready_records(config, role='implement'):
     records = {}
