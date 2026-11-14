@@ -325,7 +325,7 @@ CI runs pytest in three deterministic `PYTEST_SHARD=INDEX/COUNT` shards while ke
 
 CI timing measurements and pending PR-run evidence are tracked in `docs/ci-performance.csv`. Sensitivity reproducibility runs one case per seed so all five seeds retain coverage across workers.
 
-Python sessions and Rust workspace/writer fixtures compare the real checkout’s worktree registry metadata before and after tests. Worktree tests must create their repositories inside temporary roots; the guard reads metadata directly and never runs Git on the real checkout.
+Python sessions check shared/worktree config bytes and registrations under their own temporary roots, tolerating unrelated sessions moving worktrees. Rust workspace/writer fixtures compare the real checkout’s worktree registry metadata before and after tests. Worktree tests must create their repositories inside temporary roots; the guard reads metadata directly and never runs Git on the real checkout.
 
 The pre-push hook and preflight print their Python interpreter. They prefer `.venv/bin/python` (or `.venv/Scripts/python.exe`), then `PREFLIGHT_PYTHON`, then `python3` on PATH. Set `PREFLIGHT_PYTHON` to an absolute environment interpreter when the checkout shares another repository environment. A selected test run without pytest reports `FAIL pytest-missing` and its install command.
 
