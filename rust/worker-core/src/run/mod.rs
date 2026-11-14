@@ -20,8 +20,8 @@ mod oom;
 #[cfg(all(test, unix))]
 mod process_tests;
 pub mod record;
-pub mod review_quota;
 pub mod record_io;
+pub mod review_quota;
 pub mod scrub;
 pub mod supervise;
 #[cfg(test)]
