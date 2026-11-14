@@ -4,8 +4,9 @@ Build `pg-disk-hygiene` with `cd rust && cargo build -p pg-worker-core --bin
 pg-disk-hygiene --bin pg-process-cwds --release`, using the environment's shared `CARGO_TARGET_DIR`.
 
 `pg-disk-hygiene --repo PATH --root WORKTREES --pins PINS.json --dry-run`
-reports an alarm below 5 GB available. Below 10 GB available, `--apply`
-reclaims ignored `target/` and `node_modules/` in registered clean worktrees
+reports an alarm below 5 GiB available. Below 10 GB available, `--apply`
+reclaims ignored `target/`, `rust/target/`, `node_modules/`, and nested
+`__pycache__/` / `.pytest_cache/` in registered clean worktrees
 idle over six hours. It never removes worktrees or tracked source. Git probe
 failures skip that tree. Freed bytes count only removed rebuildable files.
 The main checkout, locked trees, pinned paths, `plangraph-md-sync`, keeper
@@ -13,8 +14,13 @@ The main checkout, locked trees, pinned paths, `plangraph-md-sync`, keeper
 The mandatory pins file is a JSON array of absolute paths exported by md-sync;
 missing or malformed protection data fails closed. Unknown run state fails closed.
 
-The two shared cache roots `$HOME/.cache/plangraph/cargo-target` and
-`$HOME/.cache/pg-target-po` can be reclaimed only with no build process running.
+The shared cache roots are `PLANGRAPH_CARGO_TARGET_DIR` (default
+`$HOME/.cache/plangraph/cargo-target`, with home expansion and absolute-path
+resolution) and `$HOME/.cache/pg-target-po`. They can be reclaimed only with no
+build process running and a nonblocking exclusive lease on the sibling
+`<target>.plangraph-lock` file. Spawner runs hold shared leases on that same
+file; cleanup skips a leased root and holds its exclusive lease through scanning
+and deletion. The lock file stays in place after release.
 The shared target cap defaults to 10 GB per root. Under disk pressure or above
 that cap, cleanup removes oldest idle incremental sessions and stale
 `build/<crate>-<hash>` variants, keeping the newest compile unit and run unit per crate and profile.
@@ -46,12 +52,12 @@ state directory is a hard error. `--apply --dry-run` is refused.
 Install the service and 15-minute timer under `~/.config/systemd/user/` and the
 binary under `~/.local/bin`. Set `PG_REPO`, `PG_WORKTREES`, `PG_PINS` in
 `~/.config/plangraph/disk-hygiene.env`. Review dry-run output before enabling.
-Threshold options are `--alarm-free-bytes` (default `5000000000`),
+Threshold options are `--alarm-free-bytes` (default `5368709120`, 5 GiB),
 `--cleanup-free-bytes` (default `10000000000`) and `--shared-target-cap-bytes`
-(default `10000000000`); units are decimal bytes. Alarm must be positive and no
+(default `10000000000`); options take byte counts (10 GB is decimal). Alarm must be positive and no
 larger than cleanup. JSON reports `free_bytes`, never a usage percentage.
-Rule 7.1 requires at least 5 GB free to start any writer/run on every host and
-stopping at 2 GB free. The spawner owns admission and runtime stopping;
+Rule 7.1 requires at least 5 GiB free to start any writer/run on every host and
+stopping at 2 GiB free. The spawner owns admission and runtime stopping;
 this timer reports pressure and reclaims idle rebuildable state.
 Live deployment is separate from repository validation.
 
