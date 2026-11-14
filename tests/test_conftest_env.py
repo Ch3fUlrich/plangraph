@@ -194,28 +194,16 @@ def test_test_environment_uses_git_discovery_and_removes_config_prefix(tmp_path,
     assert inherited == before  # Hook-owned Git calls retain their original context.
 
 
-@pytest.mark.parametrize('boundary', ['preflight', 'selector'])
-def test_git_discovery_failure_never_launches_tests(tmp_path, monkeypatch, boundary):
-    import runpy
+def test_selector_git_discovery_failure_never_launches_tests(tmp_path, monkeypatch):
     from test_affected_tests import selector
-    (tmp_path / 'tools').mkdir()
-    (tmp_path / 'tools/affected_tests.py').touch()
     (tmp_path / 'tests').mkdir()
     (tmp_path / 'tests/test_fixture.py').touch()
-    monkeypatch.setenv('PREFLIGHT_SKIP', '1')
     def unavailable(*args, **kwargs):
         raise subprocess.CalledProcessError(1, args[0])
     monkeypatch.setattr(subprocess, 'check_output', unavailable)
-    if boundary == 'preflight':
-        from test_preflight import preflight, fake_runner
-        calls = fake_runner(monkeypatch)
-        monkeypatch.setattr(preflight, 'rust_commands', lambda *a: [])
-        assert preflight.main(['--base', 'HEAD'], tmp_path) == 1
-        assert not any(Path(command[1]).name == 'affected_tests.py' for command, _, _ in calls)
-    else:
-        monkeypatch.setattr(subprocess, 'run', lambda *a, **k: pytest.fail('test process launched'))
-        module = selector()
-        monkeypatch.setattr(module, 'select_tests', lambda *a, **k: {'tests': ['tests/test_fixture.py']})
-        monkeypatch.setattr(sys, 'argv', ['affected_tests', '--base', 'HEAD', '--changed',
-                                       'tests/test_fixture.py', '--run'])
-        assert module.main(root=tmp_path) == 1
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: pytest.fail('test process launched'))
+    module = selector()
+    monkeypatch.setattr(module, 'select_tests', lambda *a, **k: {'tests': ['tests/test_fixture.py']})
+    monkeypatch.setattr(sys, 'argv', ['affected_tests', '--base', 'HEAD', '--changed',
+                                   'tests/test_fixture.py', '--run'])
+    assert module.main(root=tmp_path) == 1

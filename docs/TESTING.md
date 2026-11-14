@@ -83,12 +83,13 @@ Each boundary removes Git-advertised local variables, `GIT_CONFIG*` and
 `GIT_PREFIX`. Environment-discovery errors stop test launches. Regression tests
 use throwaway caller repositories and verify refs, HEAD and config byte for byte.
 
-Rust publish fixtures create commits through the shared isolated Git command and
-then explicitly set both author and committer identity. Git identity environment
-variables override `-c user.name` / `user.email`; fixture identities must not depend
-on inherited variables or on the production publish helper's environment filtering.
-The exact author and committer checks cover both fixture commits with all caller
-`GIT_*` variables unset.
+Rust publish fixtures in `rust/worker-core/src/finalize_publish_tests.rs` create
+commits through the production `finalize_publish::git` helper with
+`-c user.name=Fixture` and `-c user.email=fixture@example.invalid`. The helper
+uses `workspace_resolver::git_command` and strips inherited `GIT_*` identity
+variables before running Git, so fixture identity relies on that filtering.
+`fixture_has_explicit_isolated_ident` checks the newer fixture commit's author;
+it does not assert the committer identity or the older fixture commit's identity.
 
 Caller-repository snapshot fixtures configure `maintenance.auto=false`,
 `maintenance.autoDetach=false`, `gc.auto=0` and `gc.autoDetach=false` locally
