@@ -54,15 +54,15 @@ def test_completion_finish_cannot_be_masked(unseated_w, tmp_path, finish):
 
 @pytest.mark.parametrize("risk", ["auth", "secrets"])
 def test_waiver_records_overridden_seat_rule(unseated_w, monkeypatch, risk):
+    """Auth/secrets seat rules cannot be overridden or recorded as waived."""
     world = unseated_w
     historical_waiver_fixture(world, monkeypatch)
     world.store.put_card(world.p("router"), "demo:H", {"outcome": "fixture", "risk_tags": [risk]})
-    result = world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
-    assert result["reviews_passed"] == 0
-    ref = world.store._evidence("demo:H")[-1]["ref"]
-    assert ref["review_tier"] == "high"
-    assert ref["risk_tags"] == [risk]
-    assert ref["seat_rule_waived_by"] == "D-6000"
+    before = world.store._evidence("demo:H")
+    with pytest.raises(Refused, match="insufficient_non_anthropic_seat_families: need 2"):
+        world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert world.store._item("demo:H")["state"] == "in_review"
+    assert world.store._evidence("demo:H") == before
     assert world.store.verify_integrity() == []
 
 
