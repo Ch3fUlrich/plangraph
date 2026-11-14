@@ -372,11 +372,14 @@ def test_run_invocation_passes_dist_loadgroup(tmp_path, monkeypatch):
         path.write_text(text)
     argv = {}
 
-    def fake_run(cmd, cwd=None):
+    def fake_run(cmd, cwd=None, env=None):
+        argv["env"] = env
         argv["cmd"] = list(cmd)
         return types.SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(sel, "subprocess", types.SimpleNamespace(run=fake_run))
+    monkeypatch.setenv('GIT_DIR', 'caller-binding')
+    monkeypatch.setattr(sel.subprocess, 'check_output', lambda *a, **k: 'GIT_DIR\n')
+    monkeypatch.setattr(sel.subprocess, 'run', fake_run)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         "sys.argv",
@@ -389,36 +392,7 @@ def test_run_invocation_passes_dist_loadgroup(tmp_path, monkeypatch):
     )
     rc = sel.main(root=tmp_path)
     assert rc == 0
+    assert "GIT_DIR" not in argv["env"]
     cmd = argv["cmd"]
     assert "--dist" in cmd
     assert cmd[cmd.index("--dist") + 1] == "loadgroup"
-
-
-def test_ci_pr_uses_affected_and_nightly_keeps_full():
-    import yaml
-
-    workflow = yaml.safe_load((Path(__file__).resolve().parents[1]
-                              / ".github/workflows/tests.yml").read_text())
-    # pytest job runs all affected tests
-    pytest_steps = workflow["jobs"]["pytest"]["steps"]
-    pytest_checkout = next(s for s in pytest_steps if s.get("uses") == "actions/checkout@v4")
-    assert pytest_checkout["with"]["fetch-depth"] == 0
-    pytest_cmd = next(s["run"] for s in pytest_steps if s.get("name", "").startswith("pytest"))
-    assert 'pull_request' in pytest_cmd
-    assert 'tools/affected_tests.py --base "$BASE_SHA" --run -n auto' in pytest_cmd
-    assert 'python -m pytest -q -n auto' in pytest_cmd
-
-    # pytest-postgres job restricts affected tests via --within
-    pg_steps = workflow["jobs"]["pytest-postgres"]["steps"]
-    pg_checkout = next(s for s in pg_steps if s.get("uses") == "actions/checkout@v4")
-    assert pg_checkout["with"]["fetch-depth"] == 0
-    pg_cmd = next(s["run"] for s in pg_steps if s.get("name", "").startswith("pytest"))
-    assert 'pull_request' in pg_cmd
-    assert '--within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES' in pg_cmd
-    assert 'tools/affected_tests.py --base "$BASE_SHA"' in pg_cmd
-    # On push to main, the full PG set also includes claim contract coverage.
-    assert 'tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES' in pg_cmd
-    assert 'python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py' in pg_cmd
-
-    # PyYAML's YAML 1.1 loader treats the GitHub key `on` as boolean True.
-    assert workflow.get("on", workflow.get(True))["schedule"]

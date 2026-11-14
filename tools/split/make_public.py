@@ -43,6 +43,51 @@ class UsageError(Exception):
     pass
 
 
+def scan_committed(root, cfg, base, head):
+    """Scan changed blobs from a pinned tip; never read checkout file content."""
+    if not base or not head:
+        raise ValueError('committed scan requires both base and head')
+
+    def git(*args):
+        return subprocess.run(['git', '--no-replace-objects', '-C', str(root), *args],
+                              capture_output=True, check=True, timeout=30).stdout
+
+    tip = git('rev-parse', '--verify', '--end-of-options', head + '^{commit}').decode().strip()
+    tree = git('rev-parse', '--verify', '--end-of-options', base + '^{tree}').decode().strip()
+    changed = set(git('diff', '--no-ext-diff', '--no-renames', '--name-only',
+                      '--diff-filter=ACMRT', '-z', tree, tip, '--').split(b'\0'))
+    hits, skipped, find_shapes = [], [], sc._shape_finder()
+    for entry in git('ls-tree', '-r', '-z', tip).split(b'\0'):
+        if not entry:
+            continue
+        meta, path = entry.split(b'\t', 1)
+        if path not in changed:
+            continue
+        rel = os.fsdecode(path)
+        mode, kind, oid = meta.split()
+        skip = sc._allowed(rel, cfg)
+        if any(word.search(rel) for word in cfg['_words']) and 'private-word' not in skip:
+            pending = sc.pending_value_shas(rel, 'private-word', [rel], cfg)
+            if pending:
+                hits.append(sc.Hit(rel, 0, 'private-word', pending[0]))
+        if mode == b'120000':
+            hits.append(sc.Hit(rel, 0, 'symlink'))
+            continue
+        if kind != b'blob':
+            continue
+        data = git('cat-file', 'blob', oid.decode('ascii'))
+        if b'\0' in data[:8192]:
+            skipped.append(rel)
+            continue
+        for number, line in enumerate(data.decode('utf-8', 'replace').splitlines(), 1):
+            for rule, values in sorted(sc.scan_line_values(line, cfg, find_shapes).items()):
+                if rule not in skip:
+                    pending = sc.pending_value_shas(rel, rule, values, cfg)
+                    if pending:
+                        hits.append(sc.Hit(rel, number, rule, pending[0]))
+    return hits, skipped
+
+
 def load_manifest(path):
     try:
         with open(path, "rb") as fh:
