@@ -1,15 +1,16 @@
 # Implement route defaults (D-5206)
 
-An implement card uses `cx-gpt-6.1-sol-xhigh` (model `omniroute/cx-gpt-6.1-sol-xhigh`,
-effort `xhigh`), then `agy-gemini-3.8-flash` (agy harness). Quota, cooldown, or a
+The declared writer order uses `cx-gpt-6.1-sol-xhigh` (model `omniroute/cx-gpt-6.1-sol-xhigh`,
+effort `xhigh`), then `agy-gemini-4-hydrogen-high` (agy harness, D-5903). Hydrogen is enabled,
+with an unwitnessed seat because AGY emits no served-model telemetry. Quota, cooldown, or a
 confirmed availability refusal advances without an override; safety refusals,
 cancellation, and guards still stop dispatch. Eligibility and harness policy apply first.
 Both designated writers precede all other cost tiers, even when catalog tiers
-change: Sol xhigh, then Gemini Flash (rule 3.23a / D-5212). Other eligible legs
+change: Sol xhigh, then Hydrogen high (rule 3.23a / D-5212). Other eligible legs
 retain cost-tier order, with subscriptions before pay-as-you-go.
 Writer and review payment ordering uses one classification function for the
 payment class of raw and catalog-projected legs, treating muse-amber as paid:
-after the implement writer prefix (Sol, then Gemini Flash), no pay-as-you-go leg
+after the implement writer prefix (Sol, then Hydrogen high), no pay-as-you-go leg
 precedes a subscription-class leg, and muse-amber precedes paid DeepSeek.
 The designated writers keep that prefix even when catalog tiers reprice them as
 pay-as-you-go; review has no writer prefix. A trial or free slot keeps its position
@@ -45,23 +46,24 @@ renderer declares cx effort models; see [SPAWNER.md](SPAWNER.md#card-driven-rout
 `payment_order(..., order_class="standard"|"high"|"complex")` selects catalog
 positions after registered role filtering; it never grants roles or capabilities.
 The implement table lists Sol xhigh, Hydrogen high and non-Claude-Code Sonnet high.
-Hydrogen high is table-only until its registration is admitted; the real registry
-returns only Sol xhigh and Sonnet high (subject to upstream eligibility).
+Hydrogen high is enabled by D-5903; the real registry returns Sol xhigh, Hydrogen high
+and Sonnet high (subject to upstream eligibility).
 Review excludes writer families, requires diff <100k for Haiku, and needs opposing
 eligible cheaper verdicts for Ember. Spec amendment: MiMo and both DeepSeek review
 legs retain null registered effort, as does Haiku; requested medium/xhigh efforts
 are deferred until authoritative benchmark coverage exists. Non-table registrations
-are dropped; table identities with legacy models are refused. Six unknown-capability declarations
+are dropped; table identities with legacy models are refused. Four unknown-capability declarations
 are explicit-only, permanently disabled and role-less; JSON overrides may not
 omit windows, max_request_tokens or trains_on_data even when disabled.
 Live default activation and admission migration belong to LIVE-FENCE, not this core.
-No benchmark evidence is invented; benchmark rows, pending file and frozen ceiling
+D-5903 admits the two exact Hydrogen legs without benchmark scores; no benchmark
+evidence is invented. Benchmark rows, pending file and frozen ceiling
 are unchanged, and the benchmark contract passes with the retained null efforts.
-Ember, high/complex review-prefix and planning Fable positive paths are synthetic-only
+Ember, Sol/Terra review-prefix and planning Fable positive paths are synthetic-only
 tests of upstream admission, not real-registry coverage. Real-registry assertions
 pin their absence and missing roles (plus permanent disables for declarations).
 
-## Replan-0438 CI reconciliation
+## Replan-0438 CI reconciliation (historical validation)
 
 All existing test names and #763 checks remain. The lane diff was searched for
 the same role-stripping and two-writer-only assumptions; its registry, policy,
@@ -96,3 +98,32 @@ files: `139 passed in 63.38s (0:01:03)`. The untouched argv-limit file reproduce
 `2 failed, 44 passed in 5.38s`, both at its digest-versus-redaction assertion
 on line 57. The full suite was not run, following the brief's final prohibition
 on whole-suite runs; no test was skipped or weakened to hide those failures.
+
+## Gemini retirement (operator 2026-11-14)
+
+Every Gemini Flash version is retired. Requests and stored target overrides fail
+with `gemini_flash_retired: model retired by operator order 2026-11-14; use
+agy-gemini-4-hydrogen (medium: agy-gemini-4-hydrogen-medium)`.
+D-5903 enables `agy-gemini-4-hydrogen-high` for implement after Sol and
+`agy-gemini-4-hydrogen-medium` for read-only tools review (agy plan mode) in the retired Flash slot.
+Both use subscription tier, no training on data, windows 128k/256k/1m and
+max_request_tokens 900000 from the existing agy Claude 5.5 legs (same Antigravity
+subscription and harness). `clients.build_standalone_fallback_command` uses an
+empty `-p` argument; `clients.launch_stdin_payload` sends the prompt as stream JSON
+on stdin, so Linux's 128 kB single-argument ceiling does not limit this path.
+Reviews use an inline diff without repository tools (agy plan usage). Evidence:
+`agy models` lists Hydrogen low/medium/high/xhigh (read 2026-11-14), and agy CLI
+reviews returned verdicts for PR #878 (three heads) and #886 that day; see
+`handoffs/plan-order/reviews/` (PR 878 head `5ac07d1d`, PR 886 head
+`75c5bd2f`, Hydrogen text files). Both seats remain **unwitnessed** (rule 3.26):
+AGY emits no served-model telemetry; the runner retains `served_model` and
+`served_family` as `unwitnessed`. A declaration or successful verdict is no witness.
+Standard-tier ordering still starts at MiMo under D-5706; opt-in high review puts
+Hydrogen medium in its fixed table position after any admitted Sol/Terra seats.
+Terra, Ember and Fable declarations remain disabled. No Flash fallback is retained.
+Earlier reconciliation notes above describe historical behavior, not current admission.
+
+Deployment retirement tombstones are cleanup history: apply prunes the removed
+model-named combos and clean routes that have no remaining servable legs.
+
+D-5903 round 3 explicitly retains the Hydrogen tools review seat for cards without `diff_ref`, including when Mimo/OpenCode/Muse seats are unavailable. Like other agy tools seats it reviews the selected checkout (explicit `cwd`, otherwise the runner default); a no-diff card does not request an automatic checkout of another revision. Hydrogen reviews use read-only plan mode.

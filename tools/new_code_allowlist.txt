@@ -44,3 +44,5 @@ tests/test_keeper_origin_git_env.py | D-5847 in-flight
 src/plangraph/spawner/gateway_models.py | D-5840 rule 9.14: responsibility-only extraction of existing gateway model admission and row parsing below the 400-line gate; no new behaviour
 
 src/plangraph/fleet_sync/head_audit.py | K1-R1 operator-required stdlib snapshot copied outside the changing tree; isolated Git audit runtime, no package imports (D-5840)
+src/plangraph/retired_models.py | Shared operator retirement enforcement until SPAWNER-RUST-PORT (D-5840)
+src/plangraph/model_admission.py | Extract exact model admission from oversized routing module until SPAWNER-RUST-PORT (D-5840)
