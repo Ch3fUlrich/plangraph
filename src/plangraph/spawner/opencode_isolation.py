@@ -282,7 +282,8 @@ _REVIEW_OPENCODE_ENV_ALLOW = ('OPENCODE_CONFIG_CONTENT', 'OPENCODE_CONFIG',
                               'OPENCODE_DISABLE_AUTOUPDATE', 'OPENCODE_API_KEY')
 
 
-def _opencode_tools_denied(config_json, env, *, managed_dir=None) -> bool:
+def _opencode_tools_denied(config_json, env, *, managed_dir=_opencode_managed_dir,
+                           denied_tools=_DENIED_TOOLS, env_allow=_REVIEW_OPENCODE_ENV_ALLOW) -> bool:
     """True only when the child's final config AND env prove every tool denied.
 
     Checked, all required: 'permission' maps '*' and every _DENIED_TOOLS key
@@ -297,6 +298,10 @@ def _opencode_tools_denied(config_json, env, *, managed_dir=None) -> bool:
     name outside _REVIEW_OPENCODE_ENV_ALLOW is present. This proves only the
     env/config shape: the runtime behaviour of opencode is not proven by this
     function (an L1 runtime probe covers that).
+
+    Only the runner wrapper passes these keyword-only dependency inputs, using
+    its module-level constants and resolver at call time. Direct production
+    callers use the defaults; every validation remains mandatory.
     """
     try:
         cfg = json.loads(config_json or '{}')
@@ -306,17 +311,17 @@ def _opencode_tools_denied(config_json, env, *, managed_dir=None) -> bool:
         return False
     permission = cfg.get('permission')
     if not isinstance(permission, dict) or not all(
-            permission.get(tool) == 'deny' for tool in ('*',) + _DENIED_TOOLS):
+            permission.get(tool) == 'deny' for tool in ('*',) + denied_tools):
         return False
     if cfg.get('mcp') != {} or cfg.get('plugin') != []:
         return False
     if not isinstance(env, Mapping):
         return False
-    managed = (managed_dir or _opencode_managed_dir)(env)
+    managed = managed_dir(env)
     if any((managed / name).exists() for name in ('opencode.json', 'opencode.jsonc')):
         return False
     for name in env:
-        if str(name).startswith('OPENCODE_') and name not in _REVIEW_OPENCODE_ENV_ALLOW:
+        if str(name).startswith('OPENCODE_') and name not in env_allow:
             return False
     if (env.get('OPENCODE_DISABLE_PROJECT_CONFIG') != '1'
             or env.get('OPENCODE_DISABLE_CLAUDE_CODE') != '1'
