@@ -109,9 +109,15 @@ def main():
                 same = old and (path / old).resolve() == (path / "tools/hooks").resolve()
                 if old and not same and not args.force:
                     return 1
-                if args.force and config(path, "--worktree"):
-                    git(path, "config", "--worktree", "--unset-all", "core.hooksPath", optional=True)
-                git(path, "config", "--worktree", "core.hooksPath", "tools/hooks")
+                # --worktree is rejected in multi-worktree repos until the
+                # extension is enabled. Preserve the original shared install
+                # scope there, and existing per-worktree isolation elsewhere.
+                enabled = git(path, "config", "--bool", "--get", "extensions.worktreeConfig",
+                              optional=True).strip() == b"true"
+                scope = "--worktree" if enabled else "--local"
+                if args.force and config(path, scope):
+                    git(path, "config", scope, "--unset-all", "core.hooksPath", optional=True)
+                git(path, "config", scope, "core.hooksPath", "tools/hooks")
             elif not gated(path):
                 if common not in reported:
                     print(f"NO-GATE {path} {remote}")

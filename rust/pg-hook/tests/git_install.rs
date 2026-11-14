@@ -49,6 +49,32 @@ fn installing_and_removing_a_lane_preserves_other_worktrees_hooks() {
     )
     .status
     .success());
+    // The legacy push installer must work before the Rust installer enables
+    // worktreeConfig, even when a linked worktree already exists.
+    assert_eq!(
+        git(root, &["config", "--get", "extensions.worktreeConfig"])
+            .status
+            .code(),
+        Some(1)
+    );
+    for checkout in [root, lane.path()] {
+        let push_install = Command::new("python3")
+            .arg(source.join("tools/check_push_gate.py"))
+            .arg("--install")
+            .arg(checkout)
+            .env("PLANGRAPH_PUBLIC_REMOTES", "example.invalid")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(push_install.status.success(), "{push_install:?}");
+    }
+    assert_eq!(
+        git(root, &["config", "--get", "extensions.worktreeConfig"])
+            .status
+            .code(),
+        Some(1)
+    );
     let install = Command::new(env!("CARGO_BIN_EXE_commit-msg"))
         .arg("--install")
         .arg(lane.path())
