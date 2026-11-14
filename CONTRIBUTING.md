@@ -318,3 +318,6 @@ Python files already in flight are individually listed in
 `tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
 
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
+
+The standalone fresh-base admission carry is listed as D-5848 in
+`tools/new_code_allowlist.txt` until the spawner Rust port.
