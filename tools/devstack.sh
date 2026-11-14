@@ -444,10 +444,11 @@ cmd_status() {
 cmd_keeper() {
   pg_running || { echo "keeper: postgres is not up — run devstack.sh start first" >&2; exit 3; }
   local file="$DEVSTACK_STATE/keeper.json"
+  if [ ! -f "$file" ]; then : "${PLANGRAPH_DECISIONS_REPO:?set the decisions checkout for a new keeper config}"; fi
   # The config embeds the trust-auth dsn; the shared writer replaces it privately.
   (
     umask 077
-    PYTHONPATH="$REPO_ROOT/src" PLANGRAPH_DECISIONS_REPO="${PLANGRAPH_DECISIONS_REPO:?set the decisions repository checkout}" DEVSTACK_STATE="$DEVSTACK_STATE" KEEPER_PORT="$KEEPER_PORT" python3 - "$file" "$PG_DSN" <<'PY'
+    PYTHONPATH="$REPO_ROOT/src" PLANGRAPH_DECISIONS_REPO="${PLANGRAPH_DECISIONS_REPO:-}" DEVSTACK_STATE="$DEVSTACK_STATE" KEEPER_PORT="$KEEPER_PORT" python3 - "$file" "$PG_DSN" <<'PY'
 import os, sys
 from plangraph.keeper.config import write_devstack_config
 write_devstack_config(sys.argv[1], sys.argv[2], state=os.environ['DEVSTACK_STATE'],
