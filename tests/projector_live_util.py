@@ -31,7 +31,6 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 from plangraph.projector.temporal_source import TemporalSource, _run
 
 RECORDER_PATH = Path(__file__).with_name("projector_record.py")
-RESERVED_PORTS = {17233}             # another dev server runs there; never bind or stop it
 GATE_TIMEOUT_S = 30.0
 
 
@@ -52,16 +51,13 @@ def temporal_binary() -> str | None:
 
 
 def _free_ports(count: int) -> list[int]:
-    """``count`` distinct free ports (held open together so they cannot repeat), never reserved ones."""
+    """``count`` distinct free ports (held open together so they cannot repeat)."""
     socks, ports = [], []
     try:
         while len(ports) < count:
             s = socket.socket()
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
-            if port in RESERVED_PORTS:
-                s.close()
-                continue
             socks.append(s)
             ports.append(port)
     finally:

@@ -723,3 +723,5 @@ older databases. D-5903 enables Hydrogen high for implement after Sol and medium
 Both inherit the agy Claude capability bounds and remain unwitnessed: AGY emits no served-model telemetry.
 Historical records remain readable; the retired benchmark model row exists only
 for benchmark foreign keys and never appears in the model list.
+
+See [parallel CI isolation](ci-parallel.md) for test pipes and Temporal servers.

@@ -14,10 +14,10 @@ def test_devstack_worker_launch_identity(tmp_path):
     worker.chmod(0o755)
     env = dict(os.environ, DEVSTACK_STATE=str(tmp_path / "state"),
                DEVSTACK_DEPLOYMENT="launch-d", DEVSTACK_BUILD_ID="launch-b",
-               TEMPORAL_PORT="17233", PG_WORKER_BIN=str(worker))
+               TEMPORAL_PORT="7233", PG_WORKER_BIN=str(worker))
     result = subprocess.run(["bash", str(SCRIPT), "worker"], env=env,
                             capture_output=True, text=True, check=True)
-    assert result.stdout.splitlines() == ["launch-d", "launch-b", "http://127.0.0.1:17233"]
+    assert result.stdout.splitlines() == ["launch-d", "launch-b", "http://127.0.0.1:7233"]
 
 
 def test_start_propagates_promotion_failure_in_conditional(tmp_path):
