@@ -1,7 +1,7 @@
 """keeper_deploy: smoke ok keeps the new drop-in; smoke fail restores the old set (fakes only)."""
 import importlib.util
-from pathlib import Path
 import time
+from pathlib import Path
 
 import pytest
 
@@ -33,26 +33,46 @@ class FakeSession:
 
 
 @pytest.fixture
-def setup(tmp_path):
+def setup(tmp_path, monkeypatch):
     d = tmp_path / "unit.d"
     d.mkdir()
     (d / "live-sync-old-aaaa.conf").write_text("OLD\n")
+    import shlex
+    from types import SimpleNamespace
+
+    from fake_pid import FAKE_PID
+    proc = tmp_path / 'proc' / str(FAKE_PID)
+    proc.mkdir(parents=True)
+    monkeypatch.setattr(kd, 'PROC_ROOT', proc.parent, raising=False)
+    def revision(command, **kwargs):
+        assert command[0] == 'git' and command[1] == '-C'
+        assert not any(k.upper().startswith('GIT_') for k in kwargs['env'])
+        return SimpleNamespace(stdout='b' * 40 + '\n')
+    monkeypatch.setattr(kd.subprocess, 'run', revision)
     ctl_calls = []
     def ctl(*args):
         ctl_calls.append(args)
-        if args[0] == 'show':
+        if args[0] in ('show', 'restart'):
+            if args == getattr(kd, 'RUNNING_SHOW', None):
+                return f'MainPID={FAKE_PID}'
             effective = {}
             for path in sorted(d.glob('*.conf')):
                 for line in path.read_text().splitlines():
                     key, _, value = line.partition('=')
-                    if key in ('WorkingDirectory', 'Environment'):
+                    if key in ('WorkingDirectory', 'Environment', 'ExecStart'):
                         effective[key] = value
+            if args[0] == 'restart':
+                (proc / 'cwd').unlink(missing_ok=True)
+                (proc / 'cwd').symlink_to(effective.get('WorkingDirectory', '/previous'))
+                (proc / 'environ').write_bytes((effective.get('Environment', '') + '\0').encode())
+                command = effective.get('ExecStart', '/usr/bin/python3 -m plangraph.keeper.daemon')
+                (proc / 'cmdline').write_bytes(('\0'.join(shlex.split(command)) + '\0').encode())
             return '\n'.join(f'{key}={value}' for key, value in effective.items())
     return d, ctl_calls, ctl
 
 
 def run(d, ctl, session):
-    return kd.deploy("t1", "bbbb", "/tree/live-bbbb", "PROBE", session, dropin_dir=d, ctl=ctl,
+    return kd.deploy("t1", "b" * 40, "/tree/live-bbbb", "PROBE", session, dropin_dir=d, ctl=ctl,
                      timeout=1, sleep=lambda s: None)
 
 
@@ -63,7 +83,7 @@ def test_smoke_ok_keeps_new_dropin(setup):
     assert (d / "zzzz-plangraph-live-sync.conf").exists()
     assert "PYTHONPATH=/tree/live-bbbb/src" in (d / "zzzz-plangraph-live-sync.conf").read_text()
     assert session.calls == ["health", "claim", "release", "close_merged"]
-    assert calls == [("daemon-reload",), ("restart", kd.UNIT), kd.SHOW]
+    assert calls == [("daemon-reload",), ("restart", kd.UNIT), kd.SHOW, kd.RUNNING_SHOW, kd.RUNNING_SHOW]
 
 
 def test_smoke_fail_restores_previous_and_restarts(setup):
@@ -73,7 +93,7 @@ def test_smoke_fail_restores_previous_and_restarts(setup):
     assert code == 1 and "cannot read decisions file" in msg and "restored" in msg
     assert sorted(p.name for p in d.iterdir()) == ["live-sync-old-aaaa.conf"]
     assert (d / "live-sync-old-aaaa.conf").read_text() == "OLD\n"
-    assert calls == [("daemon-reload",), ("restart", kd.UNIT), kd.SHOW, ("daemon-reload",), ("restart", kd.UNIT)]
+    assert calls == [("daemon-reload",), ("restart", kd.UNIT), kd.SHOW, kd.RUNNING_SHOW, kd.RUNNING_SHOW, ("daemon-reload",), ("restart", kd.UNIT)]
 
 
 def test_missing_close_merged_route_fails(setup):
@@ -124,7 +144,7 @@ def test_unexpected_smoke_exception_rolls_back(setup, error):
             return super().call(method, verb, params, body)
     code, msg = run(d, ctl, Broken())
     assert code == 1 and str(error) in msg and 'restored' in msg
-    assert calls == [('daemon-reload',), ('restart', kd.UNIT), kd.SHOW, ('daemon-reload',), ('restart', kd.UNIT)]
+    assert calls == [('daemon-reload',), ('restart', kd.UNIT), kd.SHOW, kd.RUNNING_SHOW, kd.RUNNING_SHOW, ('daemon-reload',), ('restart', kd.UNIT)]
     assert sorted(p.name for p in d.iterdir()) == ['live-sync-old-aaaa.conf']
 
 
@@ -135,7 +155,7 @@ def test_hung_claim_is_bounded_and_rolls_back(setup):
             if verb == 'claim':
                 time.sleep(.3)
             return super().call(method, verb, params, body)
-    code, msg = kd.deploy('t', 'sha', '/tree', 'PROBE', Slow(), dropin_dir=d, ctl=ctl, timeout=.05)
+    code, msg = kd.deploy('t', 'b' * 40, '/tree', 'PROBE', Slow(), dropin_dir=d, ctl=ctl, timeout=.05)
     assert code == 1 and 'deadline' in msg
     assert sorted(p.name for p in d.iterdir()) == ['live-sync-old-aaaa.conf']
 
@@ -256,18 +276,19 @@ def test_backup_failure_never_touches_dropins(setup, monkeypatch):
     assert calls == []
 
 
-def test_restore_error_reported_and_restart_attempted(setup, monkeypatch):
+def test_restore_error_reports_backup_without_restarting(setup, monkeypatch):
     d, calls, ctl = setup
     monkeypatch.setattr(kd, 'restore_dropins', lambda *_: (_ for _ in ()).throw(OSError('restore denied')))
     code, msg = run(d, ctl, FakeSession(missing_route=True))
     assert code == 1 and 'ROLLBACK FAILED' in msg
-    assert calls[-2:] == [('daemon-reload',), ('restart', kd.UNIT)]
+    assert 'backup=' in msg
+    assert calls.count(('restart', kd.UNIT)) == 1 and calls.count(('daemon-reload',)) == 1
 
 
 @pytest.mark.parametrize('field', ['tag', 'sha', 'tree'])
 @pytest.mark.parametrize('bad', ['has space', 'line\nbreak', 'control\x00', 'percent%h'])
 def test_unit_arguments_reject_unsafe_values(field, bad):
-    args = dict(tag='t', sha='sha', tree='/tree')
+    args = {'tag': 't', 'sha': 'sha', 'tree': '/tree'}
     args[field] = bad
     with pytest.raises(ValueError):
         kd.dropin_text(**args)

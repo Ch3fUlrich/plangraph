@@ -89,7 +89,7 @@ SHA explicitly in a reviewed PR when needed, not the shared Rust release pin.
 
 ## Lanes
 
-`tools/keeper_deploy.py` replaces stale managed overrides, verifies systemd's effective working directory and Python path, and smokes with claimant-scoped checks before accepting a deployment. Preview is the default; `--apply` saves a disk backup, and failures or termination restore it. See `docs/RUNBOOK.md`.
+`tools/keeper_deploy.py` replaces stale managed overrides, verifies the checkout SHA and running MainPID/cwd/Python path/daemon command, and smokes with claimant-scoped checks before accepting a deployment. Preview is the default; `--apply` saves a disk backup, and failures or termination attempt to restore it; rollback restarts only after a complete restore. See `docs/RUNBOOK.md`.
 
 Completed Rust ports remove only their own Python waiver from
 `tools/new_code_allowlist.txt`; preserve unrelated exceptions when merging main.
@@ -313,7 +313,7 @@ pg-worker-core --test turn_budget_hook --test turn_budget_poll --test
 turn_budget_alert --test turn_budget_watchdog`. Tests never install hooks, read
 live session state, or change permissions/settings files.
 
-`tools/keeper_deploy.py` switches the live keeper to a new tree with a systemd drop-in, smokes it, and restores the previous drop-ins on failure (see docs/RUNBOOK.md).
+`tools/keeper_deploy.py` switches the live keeper to a new tree with a systemd drop-in, verifies its running process and smokes it, and attempts restoration from disk on failure (see docs/RUNBOOK.md).
 
 Python files already in flight, including Package R, are individually listed in
 `tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
