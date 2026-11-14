@@ -288,6 +288,8 @@ def remote_spawn(name, host, card, prompt, options):
     try:
         with tempfile.TemporaryDirectory() as local:
             rewritten = json.loads(json.dumps(card))
+            if rewritten.get('run_kind') == 'native-codex':
+                rewritten['repo'] = host['repo']
             diff = rewritten.get('diff_ref')
             if diff:
                 diff['repo'] = host['repo']
@@ -336,6 +338,65 @@ def remote_spawn(name, host, card, prompt, options):
     finally:
         ssh('rm -f -- ' + q(directory + '/card.json') + ' ' + q(directory + '/prompt.txt') +
             '; rmdir -- ' + q(directory))
+
+
+def native_repo(card):
+    repo = card.get('repo')
+    if not isinstance(repo, str) or not repo.strip() or not Path(repo).is_absolute():
+        raise ValueError('native-codex requires an absolute card.repo')
+    return Path(repo).resolve()
+
+
+async def native_spawn(self, card, options):
+    """Placement is already admitted; Rust owns the native writer lifecycle."""
+    import asyncio, time
+    from plangraph.fleet_snapshot import _projection_binary
+    from .private_io import atomic_write_private
+    import socket
+    if options.get('role', 'implement') != 'implement' or options.get('cwd'):
+        raise ValueError('native-codex requires implement role and a host-relative card.repo')
+    if options.get('dry_run'):
+        raise ValueError('native-codex dry-run is not supported')
+    record = dict(run_id='run-' + uuid.uuid4().hex, run_kind='native-codex',
+        host=(options.get('_placement') or {}).get('host') or os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname(),
+        status='running', started=time.time(), role='implement', writer_family='openai',
+        base_ref=card.get('base_ref'), repo=str(native_repo(card)))
+    directory = self._path(record['run_id']).parent
+    self._save(record)
+    request = dict(record=record, card=card, prompt=options.get('prompt', ''), record_path=str(self._path(record['run_id'])))
+    atomic_write_private(directory / 'native-request.json', json.dumps(request))
+    try:
+        process = await asyncio.create_subprocess_exec(_projection_binary(), 'native-writer',
+            str(directory / 'native-request.json'), stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE, start_new_session=True)
+    except (OSError, RuntimeError):
+        record.update(status='failed', exit_code=6, reason='native worker launch failed', ended=time.time())
+        self._save(record)
+        return record
+    from .proc_kill import root_identity
+    identity = root_identity(process.pid)
+    async def finish():
+        try:
+            _, error = await process.communicate()
+            final = self.result(record['run_id'])
+            if final.get('status') == 'running':
+                final.update(status='failed', exit_code=process.returncode or 6,
+                             reason=error.decode(errors='replace')[-4096:], ended=time.time())
+            self._save(final)
+        except asyncio.CancelledError:
+            survivors = await self.runner.kill_recorded(process.pid, identity)
+            await process.wait()
+            record.update(self.result(record['run_id']))
+            record.update(status='failed' if survivors else 'cancelled', exit_code=130, ended=time.time())
+            if survivors: record.update(reason='kill_incomplete', survivors=survivors)
+            self._save(record)
+            raise
+    self.tasks[record['run_id']] = asyncio.create_task(finish())
+    if options.get('wait_seconds') is None:
+        await self.tasks[record['run_id']]
+    elif options.get('wait_seconds', 0) > 0:
+        await asyncio.wait([self.tasks[record['run_id']]], timeout=options['wait_seconds'])
+    return self.result(record['run_id'])
 
 
 def main(argv=None):

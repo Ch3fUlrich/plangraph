@@ -15,6 +15,9 @@ impl Runs {
     }
     fn cancel_run(&self, state: &Path, id: &Value) -> Result<Value, ToolError> {
         let record = crate::records::read_record(state, id)?;
+        if record["run_kind"] == "native-codex" {
+            return crate::placement::native_control(state, &record, "cancel");
+        }
         if crate::runs::terminal(&record) {
             return Ok(record);
         }
