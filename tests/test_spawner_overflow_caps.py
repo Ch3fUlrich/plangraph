@@ -124,3 +124,11 @@ def test_missing_swap_readings_have_named_refusal(monkeypatch, text):
     assert o.local_health_refusal({}, 8000) == 'local_swap_unavailable'
     with pytest.raises(ValueError, match='swap readings'):
         o.swap_used_pct()
+
+
+@pytest.mark.parametrize('status,exit_code,expected', [
+    ('queued', 5, 0), ('running', None, 0), ('dry_run', 0, 0),
+    ('completed', 0, 0), ('failed', 5, 5), ('failed', 0, 1)])
+def test_spawn_exit_code(status, exit_code, expected):
+    from plangraph.spawner.base_fresh import spawn_exit_code
+    assert spawn_exit_code(dict(status=status, exit_code=exit_code)) == expected
