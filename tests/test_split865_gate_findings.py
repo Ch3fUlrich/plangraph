@@ -32,3 +32,15 @@ def test_policy_main_baseline_covers_inherited_stack(tmp_path):
                     'user.email=test@example.invalid', 'commit', '-qm', 'base', '--allow-empty'], check=True)
     subprocess.run(['git', '-C', str(tmp_path), 'update-ref', 'refs/remotes/origin/main', 'HEAD'], check=True)
     assert module.policy_baseline(tmp_path, 'HEAD') == 'origin/main'
+
+
+def test_standalone_crate_is_checked(tmp_path, monkeypatch):
+    module = load('preflight')
+    rust = tmp_path / 'rust'
+    (rust / 'worker').mkdir(parents=True)
+    (rust / 'Cargo.toml').write_text('[workspace]\nmembers = []\n')
+    (rust / 'worker/Cargo.toml').write_text('[workspace]\n[package]\nname = "worker"\n')
+    monkeypatch.setattr(module.subprocess, 'check_output', lambda *a, **k: 'rust/worker/src/lib.rs\n')
+    monkeypatch.setattr(module.shutil, 'which', lambda *a, **k: '/fake/cargo')
+    commands = module.rust_commands(tmp_path, 'base', 'head', {})
+    assert any('test' in c and '--manifest-path' in c and any('worker/Cargo.toml' in a for a in c) for c in commands)

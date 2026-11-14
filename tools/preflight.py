@@ -93,13 +93,15 @@ def rust_commands(root, base, head, env=None):
                               for excluded in workspace.get('exclude', []))}
         if 'package' in tomllib.loads(workspace_file.read_text()):
             members.add(workspace_file.parent.resolve())
-    manifests = {}
+    manifests, standalone = {}, []
     for manifest in (root / "rust").rglob("Cargo.toml"):
         if "target" in manifest.parts:
             continue
-        if members is not None and manifest.parent.resolve() not in members:
-            continue
         data = tomllib.loads(manifest.read_text())
+        if members is not None and manifest.parent.resolve() not in members:
+            if "workspace" in data and "package" in data:
+                standalone.append(manifest)
+            continue
         if "package" in data:
             manifests[manifest.parent.relative_to(root).as_posix()] = data["package"]["name"]
     selected = set()
@@ -107,9 +109,20 @@ def rust_commands(root, base, head, env=None):
         owners = [p for p in manifests if path.startswith(p + "/")]
         selected.update([max(owners, key=len)] if owners else manifests)
     packages = [arg for p in sorted(selected) for arg in ("-p", manifests[p])]
-    return [["cargo", "fmt", "--check"],
-            ["cargo", "clippy", *packages, "--all-targets", "--", "-D", "warnings"],
-            ["cargo", "test", *packages]]
+    commands = ([["cargo", "fmt", "--check"],
+                 ["cargo", "clippy", *packages, "--all-targets", "--", "-D", "warnings"],
+                 ["cargo", "test", *packages]] if selected else [])
+    shared = any(not any(path.startswith(owner + "/") for owner in manifests) and
+                 not any(path.startswith(m.parent.relative_to(root).as_posix() + "/") for m in standalone)
+                 for path in changed)
+    for manifest in sorted(standalone):
+        owner = manifest.parent.relative_to(root).as_posix()
+        if shared or any(path.startswith(owner + "/") for path in changed):
+            target = ["--manifest-path", str(manifest)]
+            commands += [["cargo", "fmt", *target, "--check"],
+                         ["cargo", "clippy", *target, "--all-targets", "--", "-D", "warnings"],
+                         ["cargo", "test", *target]]
+    return commands
 
 
 def test_environment(root, env):

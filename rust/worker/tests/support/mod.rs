@@ -357,21 +357,8 @@ pub(super) fn init_repo(dir: &Path) -> String {
 /// Local git runner, pinned identity and hermetic env like the other test
 /// modules: worker-core's own helper is private to that crate.
 pub(super) fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args([
-            "-c",
-            "user.name=tester",
-            "-c",
-            "user.email=t@example.com",
-            "-c",
-            "commit.gpgsign=false",
-        ])
+    let out = pg_worker_core::git_test_support::command(dir)
         .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
         .output()
         .expect("git runs");
     assert!(

@@ -328,3 +328,5 @@ The 800-line tracked file budget is authorized by D-5840 (95a9ac34); legacy base
 Checkpoint 5 includes test worktree registry and caller snapshots; run its affected Python checks in an isolated clone.
 
 Checkpoint 7 includes review evidence records; run its affected Python checks in an isolated clone.
+
+Standalone Rust workspaces, including rust/worker, receive manifest-specific preflight checks.
