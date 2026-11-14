@@ -372,11 +372,14 @@ def test_run_invocation_passes_dist_loadgroup(tmp_path, monkeypatch):
         path.write_text(text)
     argv = {}
 
-    def fake_run(cmd, cwd=None):
+    def fake_run(cmd, cwd=None, env=None):
+        argv["env"] = env
         argv["cmd"] = list(cmd)
         return types.SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(sel, "subprocess", types.SimpleNamespace(run=fake_run))
+    monkeypatch.setenv('GIT_DIR', 'caller-binding')
+    monkeypatch.setattr(sel.subprocess, 'check_output', lambda *a, **k: 'GIT_DIR\n')
+    monkeypatch.setattr(sel.subprocess, 'run', fake_run)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         "sys.argv",
@@ -389,6 +392,7 @@ def test_run_invocation_passes_dist_loadgroup(tmp_path, monkeypatch):
     )
     rc = sel.main(root=tmp_path)
     assert rc == 0
+    assert "GIT_DIR" not in argv["env"]
     cmd = argv["cmd"]
     assert "--dist" in cmd
     assert cmd[cmd.index("--dist") + 1] == "loadgroup"

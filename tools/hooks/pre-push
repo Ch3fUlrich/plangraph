@@ -197,6 +197,16 @@ def python_interpreter(root):
     return str(Path(configured).expanduser().absolute()) if configured else shutil.which('python3') or 'python3'
 
 
+def test_environment(root, env):
+    """Detach test subprocesses from every Git-advertised repository binding."""
+    local = set(subprocess.check_output(
+        ['git', 'rev-parse', '--local-env-vars'], cwd=root, env=env,
+        text=True, stderr=subprocess.DEVNULL, timeout=30).upper().splitlines())
+    local.add('GIT_PREFIX')
+    return {key: value for key, value in env.items()
+            if key.upper() not in local and not key.upper().startswith('GIT_CONFIG')}
+
+
 def affected_gate(root, base, head, timeout=240):
     """Local pushes select explicit affected files; the full suite belongs to CI."""
     selector = Path(root) / 'tools/affected_tests.py'
@@ -208,7 +218,12 @@ def affected_gate(root, base, head, timeout=240):
         return 1
     command = [PYTHON, str(selector), '--root', str(root), '--base', base,
                '--head', head, '--files-only', '--run', '--workers', '2']
-    return subprocess.run(command, cwd=root, timeout=min(timeout, 240)).returncode
+    try:
+        env = test_environment(root, os.environ)
+    except (OSError, subprocess.SubprocessError):
+        print('pre-push: cannot discover test Git environment: push refused', file=sys.stderr)
+        return 1
+    return subprocess.run(command, cwd=root, env=env, timeout=min(timeout, 240)).returncode
 
 
 def main():

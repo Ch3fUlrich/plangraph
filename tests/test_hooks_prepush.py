@@ -461,6 +461,7 @@ def test_affected_gate_is_file_only_and_time_bounded(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(subprocess, 'run', lambda command, **kw:
                         calls.append((command, kw)) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(subprocess, 'check_output', lambda *a, **k: 'GIT_DIR\n')
     hook = runpy.run_path(str(HOOK))
     assert hook['affected_gate'](tmp_path, 'base', 'head') == 0
     command, options = calls[0]

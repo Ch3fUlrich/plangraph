@@ -13,6 +13,7 @@ import hashlib
 import atexit
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -129,8 +130,35 @@ def git_config_guard(root):
             raise AssertionError('repository worktree registry changed during pytest session')
 
 
+def _test_environment(root, env):
+    """Detach test subprocesses from every Git-advertised repository binding."""
+    local = set(subprocess.check_output(
+        ['git', 'rev-parse', '--local-env-vars'], cwd=root, env=env,
+        text=True, stderr=subprocess.DEVNULL, timeout=30).upper().splitlines())
+    local.add('GIT_PREFIX')
+    return {key: value for key, value in env.items()
+            if key.upper() not in local and not key.upper().startswith('GIT_CONFIG')}
+
+
+def _clear_inherited_git_environment():
+    clean = _test_environment(tempfile.gettempdir(), dict(os.environ))
+    for key in set(os.environ) - clean.keys():
+        del os.environ[key]
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_sessionstart(session):
+    # Collection can import fixtures that invoke Git before session fixtures run.
+    _clear_inherited_git_environment()
+
+
 @pytest.fixture(scope='session', autouse=True)
-def isolated_git_session(tmp_path_factory):
+def detached_git_environment():
+    _clear_inherited_git_environment()
+
+
+@pytest.fixture(scope='session', autouse=True)
+def isolated_git_session(tmp_path_factory, detached_git_environment):
     config = tmp_path_factory.mktemp('git-session') / 'global.gitconfig'
     config.touch(mode=0o600)
     patch = pytest.MonkeyPatch()

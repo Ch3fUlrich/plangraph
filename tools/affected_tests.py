@@ -211,6 +211,16 @@ def changed_files(root, base, head=None):
     return sorted(set(p.decode() for p in (tracked + untracked).split(b"\0") if p))
 
 
+def test_environment(root, env):
+    """Detach test subprocesses from every Git-advertised repository binding."""
+    local = set(subprocess.check_output(
+        ['git', 'rev-parse', '--local-env-vars'], cwd=root, env=env,
+        text=True, stderr=subprocess.DEVNULL, timeout=30).upper().splitlines())
+    local.add('GIT_PREFIX')
+    return {key: value for key, value in env.items()
+            if key.upper() not in local and not key.upper().startswith('GIT_CONFIG')}
+
+
 def main(root=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
@@ -254,11 +264,16 @@ def main(root=None):
         if placement and not shutil.which('cargo'):
             print('CARGO FAIL: cargo is required for selected placement tests', file=sys.stderr)
             return 1
+        try:
+            env = test_environment(root, os.environ)
+        except (OSError, subprocess.SubprocessError):
+            print('FAIL test-env: cannot discover Git repository bindings', file=sys.stderr)
+            return 1
         start = time.monotonic()
         parallel = (["-n", args.workers, "--dist", "loadgroup"]
                     if importlib.util.find_spec("xdist") is not None else [])
         result = subprocess.run([sys.executable, "-m", "pytest", *parallel, "--durations=30",
-                                 *(["--maxfail", str(args.maxfail)] if args.maxfail else []), *plan["tests"]], cwd=root)
+                                 *(["--maxfail", str(args.maxfail)] if args.maxfail else []), *plan["tests"]], cwd=root, env=env)
         print(f"affected wall seconds: {time.monotonic() - start:.3f}")
         return result.returncode
     return 0

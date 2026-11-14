@@ -13,9 +13,12 @@ when neither is present, public rules still run but scrub reports SKIP with a re
 The revision controls `FILESIZE_REQUIRE_BASE`, `NEWCODE_BASE` and `CHANGELOG_BASE`
 are scoped to policy checks. Other families receive none of these controls,
 including inherited values, so nested Git test fixtures own their revision bases.
-Affected tests also clear Git's repository-local environment reported by
-`git rev-parse --local-env-vars`, including indexed configuration pairs. Policy
-checks retain the caller's Git context; test repositories keep their own hooks.
+The pre-push affected gate clears every name reported by
+`git rev-parse --local-env-vars`, all `GIT_CONFIG*` variables and `GIT_PREFIX`
+before starting the selector. The selector repeats this before pytest, and the
+pytest session clears inherited bindings before collection and test fixtures.
+Discovery failures refuse to launch tests. The hook's own Git and policy calls
+retain the caller's context; temporary test repositories keep their own hooks.
 
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
