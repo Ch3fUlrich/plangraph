@@ -317,7 +317,8 @@ def build_standalone_fallback_command(
     check_retired(model)
     cname = client_name.lower()
     if cname == "agy":
-        cmd = ["agy", *(["--mode", "plan"] if role == "review" else ["--dangerously-skip-permissions"])]
+        plan = role == "review" and (model or "").removeprefix("agy/").startswith("gemini-4-hydrogen-")
+        cmd = ["agy", *(["--mode", "plan"] if plan else ["--dangerously-skip-permissions"])]
         if model:
             cmd.extend(["--model", model])
         cmd.extend(["-p", "", "--input-format", "stream-json", "--output-format", "stream-json"])

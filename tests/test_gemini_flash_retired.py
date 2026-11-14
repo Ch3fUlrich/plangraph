@@ -266,3 +266,14 @@ def test_hydrogen_tools_review_launches_in_head_checkout(tmp_path, monkeypatch):
     job = runner.jobs[record['job_id']]
     assert job.task_prompt == 'Read marker.txt and review'
     assert (job.served_model, job.served_family, job.witness_kind) == ('unwitnessed', 'unwitnessed', None)
+
+
+
+@pytest.mark.parametrize('model', ['claude-opus-5-5-high', 'claude-sonnet-5-5-medium',
+                                   'gpt-oss-120b-medium', 'gemini-4-argon-high'])
+def test_other_agy_review_commands_keep_existing_permissions(model):
+    from plangraph.routing_support.clients import build_command
+    cmd = build_command('review', model, role='review', client='agy')
+    assert cmd[:2] == ['agy', '--dangerously-skip-permissions']
+    assert '--mode' not in cmd
+    assert cmd[cmd.index('--model') + 1] == model
