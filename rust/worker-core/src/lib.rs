@@ -66,6 +66,7 @@ pub mod seat_pool;
 pub mod slots;
 pub mod stall;
 pub mod turn_budget;
+pub mod usage_census;
 pub mod watch;
 pub mod workspace;
 pub mod workspace_bundle;

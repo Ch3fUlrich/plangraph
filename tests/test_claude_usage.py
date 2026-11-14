@@ -152,11 +152,16 @@ def test_v2_read_only_and_no_text(tree, capsys, monkeypatch):
     assert (tree / "s.jsonl").read_bytes() == before
 
 
-def test_v6_no_machine_identifiers():
+def test_v6_no_machine_identifiers(tree, capsys, monkeypatch):
     source = Path(usage.__file__).read_text()
-    assert "subprocess" not in source
     assert "socket" not in source
     assert "/home/" not in source
+    def refuse_child(*args, **kwargs):
+        pytest.fail("legacy accounting must not launch child processes")
+    monkeypatch.setattr(usage.subprocess, "run", refuse_child)
+    write(tree / "s.jsonl", [assistant()])
+    run(tree, capsys, "roles")
+    run(tree, capsys, "daily")
 
 
 def test_streaming_reader(tree, capsys, monkeypatch):

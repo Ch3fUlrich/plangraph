@@ -22,6 +22,8 @@ tools/** -> CONTRIBUTING.md
 src/plangraph/routing_support/leg_state.py -> docs/spawner-leg-state.md
 # Shared rust/Cargo.toml and rust/Cargo.lock are not owned by a single crate.
 rust/worker-core/src/bin/keeper-backup.rs -> docs/keeper-backup.md
+rust/worker-core/src/usage_census* -> docs/usage-census.md
+rust/worker-core/src/bin/pg-usage-census.rs -> docs/usage-census.md
 src/plangraph/routing_support/opencode_render.py -> docs/opencode-gateway.md
 src/plangraph/routing_support/opencode_overlay.py -> docs/opencode-gateway.md
 src/plangraph/planner/** -> docs/routing.md
