@@ -1,0 +1,1 @@
+- Isolate Context mirror Git fixtures from caller Git redirects and host HOME/XDG configuration using worker-core's shared test helper, including integration tests via the test-support feature.
