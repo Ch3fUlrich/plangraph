@@ -253,7 +253,7 @@ class SeatSpawnMixin:
                 or record.get('status') in ('cancelled', 'timeout', 'timed_out', 'stalled')
                 or getattr(job, 'survivors', ()) or record.get('reason') in
                 ('cancelled', 'timeout', 'timed_out', 'stalled', 'kill_incomplete', 'git_config_mutated', 'writer_no_changes')
-                or any(e.get('event') in ('watchdog_timeout', 'watchdog_stalled') for e in job.events))
+                or any(e.get('event') in ('watchdog_timeout', 'watchdog_stalled', 'disk_run_stopped') for e in job.events))
 
         def exhausted(job):
             if record.get('role') != 'review' or protected(job):

@@ -638,8 +638,8 @@ class SpawnerRunner:
     ) -> None:
         """Monitor process execution until completion."""
         try:
-            from .run_watchdog import collect
-            stdout_bytes, stderr_bytes = await collect(self, job_id, proc)
+            from .host_ready import collect_with_disk_guard
+            stdout_bytes, stderr_bytes = await collect_with_disk_guard(self, job_id, proc)
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
             exit_code = self.jobs[job_id].exit_code if (self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled')

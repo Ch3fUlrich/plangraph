@@ -52,7 +52,6 @@ def pytest_oom_configure(config):
         event = raise_oom_score()
         if event['event'] == 'oom_score_adj_denied':
             warnings.warn('oom_score_adj_denied: EACCES raising pytest worker to 500')
-
 @pytest.fixture
 def bounded_shutdown_cleanup(monkeypatch):
     """Finish cleanup before a mocked exit can close the database."""
@@ -79,12 +78,10 @@ def bounded_shutdown_cleanup(monkeypatch):
 
     monkeypatch.setattr(daemon, "run", run)
     yield
-
 @pytest.fixture
 def keeper_thread_guard():
     from _keeper_threads import guard_new_threads
     return guard_new_threads
-
 @pytest.fixture(autouse=True)
 def no_leaked_keeper_threads(request, no_leaked_keeper_fixture_threads):
     """Test-body starts stay test-owned; fixture starts follow their own scope."""
@@ -95,7 +92,6 @@ def no_leaked_keeper_threads(request, no_leaked_keeper_fixture_threads):
 
 from _split_ci_environment import (git_config_guard, _test_environment, _clear_inherited_git_environment,
     pytest_sessionstart, detached_git_environment, isolated_git_session, config_guard)
-
 @pytest.fixture(scope="session", autouse=True)
 def no_leaked_keeper_fixture_threads(request):
     import _keeper_threads as guard
@@ -394,6 +390,11 @@ def pytest_sessionfinish(session, exitstatus):
         session.exitstatus = pytest.ExitCode.OK
 @pytest.fixture(autouse=True)
 def isolated_build_cache(tmp_path, monkeypatch):
-    """Spawner tests use their own cache and do not depend on host disk space."""
+    """Isolate disk and default RAM readings; admission tests override either seam."""
     monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path.with_name(tmp_path.name + '-cargo-target')))
     monkeypatch.setenv('PLANGRAPH_DISK_FLOOR_GB', '0')
+    from plangraph.spawner import seat_spawn, overflow
+    default_memory, default_read = overflow.available_memory_mb, Path.read_text
+    def resources(service):
+        return 0, (64000 if overflow.available_memory_mb is default_memory and Path.read_text is default_read else overflow.available_memory_mb())
+    monkeypatch.setattr(seat_spawn, 'resources', resources)

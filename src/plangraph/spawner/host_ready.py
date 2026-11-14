@@ -27,7 +27,7 @@ def shared_cargo_target():
 
 
 def cargo_child_env(env):
-    return dict(env, CARGO_TARGET_DIR=str(shared_cargo_target()))
+    return dict(env, CARGO_TARGET_DIR=str(shared_cargo_target()), CARGO_INCREMENTAL="0")
 
 
 def disk_free_gb(path):
@@ -99,6 +99,12 @@ def cargo_lease(exclusive=False):
 
 def local_disk_refusal(worktree, service):
     """Check the worktree filesystem and bound the host's shared build cache."""
+    # SettingsError derives from ValueError: validate before measurement's catch.
+    from plangraph.settings import _policy_data, SettingsError, as_spawn_refused
+    try:
+        policy = _policy_data(worktree) or {}
+    except SettingsError as exc:
+        raise as_spawn_refused(exc) from None
     try:
         floor = float(os.environ.get('PLANGRAPH_DISK_FLOOR_GB', '5'))
         cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
@@ -110,7 +116,7 @@ def local_disk_refusal(worktree, service):
                 cache.is_relative_to(checkout) or cache == Path.home().resolve()):
             raise ValueError('unsafe cache directory')
         size = cargo_target_size_gb(target)
-        if size > cap:
+        if size >= cap:
             from .runner import is_terminal
             if any(r.get('survivors') or (r.get('status') != 'queued' and not is_terminal(r.get('status')))
                    for r in service.ps()['runs']):
@@ -121,10 +127,10 @@ def local_disk_refusal(worktree, service):
                         shutil.rmtree(target)
             except OSError:
                 return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy or cleanup unavailable'
-        paths = [worktree]
+        if cap == 0:
+            return 'cargo_target_cap: cap 0 GB; no build capacity'
+        paths = [worktree, target]
         if getattr(service, 'state', None) is not None:
-            from plangraph.settings import _policy_data
-            policy = _policy_data(worktree) or {}
             paths.append(policy.get('worktree_root') or service.state / 'worktrees')
             paths.append(service.state / 'trees')
         free = min(disk_free_gb(p) for p in paths)
@@ -132,6 +138,80 @@ def local_disk_refusal(worktree, service):
             return f'disk_low: free {free:.2f} GB, floor {floor:g} GB'
     except (OSError, ValueError, TypeError, KeyError):
         return 'disk_low: measurement or configuration unavailable'
+    return None
+
+
+async def collect_with_disk_guard(runner, job_id, proc):
+    """Sample live disk independently of output and the progress watchdog cadence.
+
+    Never delete a building cache. Over-cap runs are reaped; admission can reclaim
+    the cache only after every process lease has been released.
+    """
+    import asyncio
+    from .run_watchdog import collect
+    job = runner.jobs[job_id]
+    owner, interrupted, reaping, collecting = asyncio.current_task(), False, False, True
+    async def watch():
+        nonlocal interrupted, reaping
+        try:
+            while True:
+                await asyncio.sleep(1)
+                reason = await asyncio.to_thread(running_disk_refusal, job.cwd or runner.default_cwd)
+                if reason and job.status not in ('cancelled', 'timeout', 'stalled'):
+                    job.refusal = reason
+                    job.status, job.exit_code = 'failed', 7
+                    job.events.append(dict(event='disk_run_stopped', reason=reason))
+                    reaping = True
+                    await runner._reap_process(job_id, proc)
+                    if job.survivors and collecting:
+                        interrupted = True
+                        owner.cancel()
+                    return
+        except Exception:
+            owner.cancel()
+            raise
+    guard = asyncio.create_task(watch())
+    try:
+        # Await directly: an extra task here delays stdin delivery to fast children.
+        return await collect(runner, job_id, proc)
+    except asyncio.CancelledError:
+        if not interrupted:
+            raise
+        transport = getattr(proc, '_transport', None)
+        for fd in (0, 1, 2):
+            pipe = transport.get_pipe_transport(fd) if transport is not None else None
+            if pipe is not None:
+                pipe.close()  # Never signal an unproven survivor.
+        return b'', b''
+    finally:
+        collecting = False
+        if not reaping:
+            guard.cancel()
+        result, = await asyncio.gather(guard, return_exceptions=True)
+        if isinstance(result, Exception):
+            raise result
+
+
+def running_disk_refusal(worktree):
+    """Rule 7.1: stop below 2 GiB; cap the shared cache throughout a run."""
+    try:
+        from plangraph.settings import _policy_data
+        policy = _policy_data(worktree) or {}
+        target = shared_cargo_target()
+        paths = [worktree, target]
+        if policy.get('worktree_root'):
+            paths.append(policy['worktree_root'])
+        free = min(disk_free_gb(path) for path in paths)
+        if free < 2:
+            return f'disk_low: free {free:.2f} GB, stop 2 GB'
+        cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
+        if not math.isfinite(cap) or cap < 0:
+            raise ValueError('invalid cache cap')
+        size = cargo_target_size_gb(target)
+        if size >= cap:
+            return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB'
+    except (OSError, ValueError, TypeError, KeyError):
+        return 'disk_low: runtime measurement or configuration unavailable'
     return None
 
 
