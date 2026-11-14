@@ -26,6 +26,9 @@ rust/worker-core/src/usage_census* -> docs/usage-census.md
 rust/worker-core/src/bin/pg-usage-census.rs -> docs/usage-census.md
 rust/worker-core/src/entropy* -> docs/entropy-gate.md
 rust/worker-core/src/bin/pg-entropy.rs -> docs/entropy-gate.md
+rust/worker-core/src/plan_lint* -> docs/lint-plans.md
+rust/worker-core/src/bin/pg-plan-lint.rs -> docs/lint-plans.md
+tests/test_plan_lint.py -> docs/lint-plans.md
 src/plangraph/routing_support/opencode_render.py -> docs/opencode-gateway.md
 src/plangraph/routing_support/opencode_overlay.py -> docs/opencode-gateway.md
 src/plangraph/planner/** -> docs/routing.md
