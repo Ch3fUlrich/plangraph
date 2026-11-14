@@ -254,6 +254,8 @@ class WaiverMixin:
             if from_open:
                 ref["prs"] = prs
                 self.conn.execute("UPDATE items SET state='in_review', lease_until=NULL WHERE key=?", (key,))
+                # The item goes straight on to done: a run that still owns it is retired here.
+                self._exec_clear(self.conn, key, principal, now)
                 self._append(principal, key, "submitted", {"round": fresh["round"]}, now)
             self._record_evidence(principal, fresh, "decision", ref, now,
                                   Result(True, result.detail, ref))
