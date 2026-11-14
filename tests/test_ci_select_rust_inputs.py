@@ -130,7 +130,7 @@ def test_unlisted_rust_repository_read_fails_check(tmp_path, read, asset_path):
     ("docs/guide.md", set()), ("docs/schemas-other/input.json", set()),
     ("docs/placement-rules.md", {"rust"}),
     ("tests/fixtures/redact_parity.json", {"pytest", "pytest-postgres", "rust"}),
-    ("src/plangraph/web/agents_schema.json", {"pytest", "pytest-postgres", "rust"}),
+    ("src/plangraph/web/agents_schema.json", {"pytest", "pytest-postgres", "rust", "browser"}),
     ("tools/check_changelog_docs.py", {"pytest", "pytest-postgres", "rust"}),
     ("tests/fixtures/unrelated.json", {"pytest", "pytest-postgres"}),
     ("setup/placement-rules.schema.toml", set(ci_select.SUITES) | {"full"}),

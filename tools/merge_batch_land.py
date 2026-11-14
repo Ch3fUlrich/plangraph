@@ -167,6 +167,57 @@ def require_green(repo, number, names):
                               "not trusting the output")
 
 
+def require_full_run(repo, head, branch):
+    """Use Actions evidence at the batch SHA, independent of branch protection/--checks."""
+    endpoint = f"repos/{repo}/actions"
+    runs = gh_json("api", f"{endpoint}/workflows/tests.yml/runs?head_sha={head}&event=pull_request&per_page=100")["workflow_runs"]
+    if not runs:
+        raise MergeBatchError("full_ci: no tests run on exact batch head " + head)
+    run = max(runs, key=lambda r: r["id"])
+    if (run.get("head_sha") != head or run.get("head_branch") != branch
+            or run.get("event") != "pull_request" or not branch.startswith("batch/")
+            or run.get("status") != "completed" or run.get("conclusion") != "success"):
+        raise MergeBatchError(f"full_ci: tests run {run['id']} is not green on exact batch head {head}")
+    attempt = run.get("run_attempt", 1)
+    def jobs_for(number):
+        jobs, page = [], 1
+        while True:
+            data = gh_json("api", f"{endpoint}/runs/{run['id']}/attempts/{number}/jobs?per_page=100&page={page}")
+            jobs.extend(data["jobs"])
+            if len(jobs) >= data["total_count"]:
+                return jobs
+            if not data["jobs"]:
+                raise MergeBatchError("full_ci: incomplete job pagination")
+            page += 1
+    jobs = jobs_for(attempt)
+    required = {"select", "scrub", "file-size", "new-code-lang", "changelog-docs", "browser",
+                "rust", "rust-windows", "rust-worker", "rust-spike", "ci-gate"}
+    required.update(f"{suite} ({i})" for suite in ("pytest", "pytest-postgres") for i in range(3))
+    missing = required - {j["name"] for j in jobs}
+    bad = [f"{j['name']}={j.get('conclusion') or j.get('status')}" for j in jobs
+           if j.get("status") != "completed" or j.get("conclusion") != "success"]
+    if missing or bad:
+        raise MergeBatchError("full_ci: " + ", ".join([*(f"{n}=missing" for n in sorted(missing)), *bad]))
+    reruns = []
+    for number in range(2, attempt + 1):
+        names = ", ".join(sorted(j["name"] for j in jobs_for(number)))
+        reruns.append(f"tests run {run['id']} attempt {number} at {head}: {names}")
+    return reruns
+
+
+def record_reruns(repo, number, reruns):
+    if not reruns:
+        return
+    body = gh_json("pr", "view", str(number), "--repo", repo, "--json", "body")["body"]
+    additions = [line for line in reruns if line not in body]
+    if additions:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "body.md")
+            path.write_text(body + "\n\nCI reruns (must be explained by a flake fix/quarantine item):\n"
+                            + "\n".join("- " + line for line in additions) + "\n", encoding="utf-8")
+            gh("api", "--method", "PATCH", f"repos/{repo}/pulls/{number}", "-f", f"body=@{path}")
+
+
 def settle(repo, recs, wait):
     """{pr: GitHub's state and head} of the included PRs, polled for up to ``wait`` seconds until each is MERGED
     or has a moved head (a PR with a new commit does not merge by itself, so it is not waited for)."""
@@ -215,7 +266,7 @@ def cmd_land(args):
         raise MergeBatchError(f"batch {st['name']!r} is {st['status']} with batch PR {st.get('pr')}: "
                               f"push it first and pass its PR number (got #{number})")
     check_approval(args.approval, st["head"])
-    fields = "state,headRefOid,isDraft,mergeCommit"
+    fields = "state,headRefOid,isDraft,mergeCommit,baseRefName"
     pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
     if pr["headRefOid"] != st["head"]:
         raise MergeBatchError(f"batch PR #{number} head moved: {short(pr['headRefOid'])} on GitHub, "
@@ -223,6 +274,10 @@ def cmd_land(args):
     if pr["state"] == "OPEN":
         if pr["isDraft"]:
             raise MergeBatchError(f"batch PR #{number} is a draft")
+        if pr.get("baseRefName") != "main":
+            raise MergeBatchError("full_ci: batch PR must target main")
+        reruns = require_full_run(repo, st["head"], st["branch"])
+        record_reruns(repo, number, reruns)
         require_green(repo, number, [c for c in (args.checks or "").split(",") if c])
         gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"])
     elif pr["state"] != "MERGED":

@@ -168,8 +168,9 @@ def gate(needs: dict) -> list[str]:
         outputs = {}
 
     problems: list[str] = []
-    for suite in ALWAYS + SUITES:
-        selected = suite in ALWAYS or outputs.get(suite) != "false"
+    for suite in ALWAYS + SUITES + ("rust-windows",):
+        selection = "rust" if suite == "rust-windows" else suite
+        selected = outputs.get("full") == "true" or suite in ALWAYS or outputs.get(selection) != "false"
         if not selected:
             continue
 

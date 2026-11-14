@@ -66,3 +66,81 @@ needs['browser']['result'] = 'failure'
 assert 'browser: failure' in ci.gate(needs)
 "#);
 }
+
+#[test]
+fn full_tier_requires_windows_and_every_workflow_job() {
+    python(r#"
+import pathlib, sys
+sys.path.insert(0, 'tools')
+import ci_select as ci
+needs = {'select': {'result': 'success', 'outputs': {'full': 'true', **{s: 'false' for s in ci.SUITES}}}}
+needs.update({s: {'result': 'success'} for s in ci.ALWAYS + ci.SUITES})
+needs['rust-windows'] = {'result': 'skipped'}
+assert ci.gate(needs) == ['rust-windows: skipped'], ci.gate(needs)
+workflow = pathlib.Path('.github/workflows/tests.yml').read_text()
+import yaml
+jobs = yaml.safe_load(workflow)['jobs']
+assert set(jobs['ci-gate']['needs']) == set(jobs) - {'ci-gate'}
+assert jobs['browser']['needs'] == 'select'
+assert "needs.select.outputs.browser == 'true'" in jobs['browser']['if']
+assert 'browser' in jobs['select']['outputs']
+selection = jobs['select']['steps'][1]
+assert 'PR_BASE_REF' in selection['env'] and 'PR_DRAFT' in selection['env']
+assert 'PR_HEAD_REF' in selection['env']
+assert 'batch/*' in selection['run'] and '--full' in selection['run']
+for name in ('pytest', 'pytest-postgres'):
+    for step in jobs[name]['steps']:
+        if 'affected_tests.py' in step.get('run', ''):
+            assert "needs.select.outputs.full" in step['run'], step
+"#);
+}
+
+#[test]
+fn land_requires_exact_full_run_and_records_reruns() {
+    python(r#"
+import sys
+from unittest.mock import patch
+sys.path.insert(0, 'tools')
+import merge_batch_land as land
+head = 'a' * 40
+run = {'id': 7, 'head_sha': head, 'head_branch': 'batch/test', 'event': 'pull_request', 'status': 'completed', 'conclusion': 'success', 'run_attempt': 1}
+names = ['select', 'scrub', 'file-size', 'new-code-lang', 'changelog-docs', 'pytest (0)', 'pytest (1)', 'pytest (2)', 'pytest-postgres (0)', 'pytest-postgres (1)', 'pytest-postgres (2)', 'browser', 'rust', 'rust-windows', 'rust-worker', 'rust-spike', 'ci-gate']
+jobs = [{'name': n, 'status': 'completed', 'conclusion': 'success'} for n in names]
+def api(*args):
+    path = args[1]
+    if '/jobs?' in path:
+        return {'total_count': len(jobs), 'jobs': jobs}
+    if '/attempts/' in path:
+        return run
+    if '/runs/' in path:
+        return run
+    return {'workflow_runs': [run]}
+with patch.object(land, 'gh_json', side_effect=api):
+    assert land.require_full_run('o/r', head, 'batch/test') == []
+    for bad in ('skipped', 'failure', 'cancelled'):
+        jobs[names.index('rust-windows')]['conclusion'] = bad
+        try:
+            land.require_full_run('o/r', head, 'batch/test')
+            raise AssertionError('accepted ' + bad)
+        except land.MergeBatchError as exc:
+            assert 'rust-windows' in str(exc), str(exc)
+    jobs[names.index('rust-windows')]['conclusion'] = 'success'
+    jobs.pop(names.index('rust-windows'))
+    try:
+        land.require_full_run('o/r', head, 'batch/test')
+        raise AssertionError('accepted missing windows')
+    except land.MergeBatchError as exc:
+        assert 'rust-windows' in str(exc)
+    jobs.append({'name': 'rust-windows', 'status': 'completed', 'conclusion': 'success'})
+    run['head_sha'] = 'b' * 40
+    try:
+        land.require_full_run('o/r', head, 'batch/test')
+        raise AssertionError('accepted wrong head')
+    except land.MergeBatchError:
+        pass
+    run['head_sha'] = head
+    run['run_attempt'] = 2
+    reruns = land.require_full_run('o/r', head, 'batch/test')
+    assert reruns and 'rust-windows' in '\n'.join(reruns)
+"#);
+}
