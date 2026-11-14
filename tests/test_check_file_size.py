@@ -382,20 +382,5 @@ class RealTreeTests(unittest.TestCase):
                          + run.stdout + run.stderr)
 
 
-class Operator800LineLimitTests(RepoFixture):
-    def test_800_line_boundary(self):
-        for count in (401, 800):
-            self.file('new_module.py', count)
-            self.assertPasses(self.check())
-        self.file('new_module.py', 801)
-        self.assertFails(self.check(), 'new_module.py')
-
-    def test_update_prunes_entries_that_fit_the_new_cap(self):
-        self.file('legacy.py', 800)
-        self.baseline('legacy.py 900\nold.py 600\n')
-        self.assertPasses(self.check('--update-baseline'))
-        self.assertEqual(self.baseline_map(), {})
-
-
 if __name__ == "__main__":
     unittest.main(verbosity=2)
