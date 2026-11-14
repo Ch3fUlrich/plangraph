@@ -281,7 +281,11 @@ def _worker_claim(store, principal, body, need):
 
 ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "close_merged": lambda store, principal, body, need: store.close_merged(
-                    principal, body.get("key"), body.get("decision_id"), body.get("families")),
+                    principal, body.get("key"), body.get("decision_id"),
+                    # Omission requests recovery; explicit JSON null is malformed.
+                    body.get("families") if body.get("families", ()) is not None else (),
+                    from_open=body.get("from_open", False), apply=body.get("apply", False),
+                    waive_seats=body.get("waive_seats")),
                 "replay": _replay,
                 "withdraw_review": _withdraw_review,
                 "reopen": _reopen,

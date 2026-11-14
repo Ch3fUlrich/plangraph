@@ -1,0 +1,1 @@
+- Historical merged-seat waivers require whole tokens in `Waives-seats:`, read the cutoff from rule 3.37, and report separate scope, merge-date and GO-head refusals.
