@@ -68,8 +68,19 @@ fn installing_and_removing_a_lane_preserves_other_worktrees_hooks() {
     assert_eq!(
         String::from_utf8_lossy(&git(lane.path(), &["config", "--get", "core.hooksPath"]).stdout)
             .trim(),
-        hooks.to_str().unwrap()
+        "tools/hooks"
     );
+    assert!(git(
+        lane.path(),
+        &[
+            "config",
+            "--worktree",
+            "core.hooksPath",
+            hooks.to_str().unwrap()
+        ]
+    )
+    .status
+    .success());
     let push_install = Command::new("python3")
         .arg(source.join("tools/check_push_gate.py"))
         .arg("--install")
@@ -100,4 +111,44 @@ fn installing_and_removing_a_lane_preserves_other_worktrees_hooks() {
         "tools/hooks"
     );
     assert!(root.join("tools/hooks/pre-push").is_file());
+    let gate_path = root.join("tools/ci_commit_gate.py");
+    let modern_gate = std::fs::read_to_string(&gate_path).unwrap();
+    let legacy_gate = modern_gate.replace("add_parser('commit-message')", "add_parser('legacy')");
+    assert_ne!(modern_gate, legacy_gate);
+    std::fs::write(&gate_path, legacy_gate).unwrap();
+    assert!(git(root, &["add", "tools/ci_commit_gate.py"])
+        .status
+        .success());
+    assert!(git(root, &["commit", "-m", "legacy validator"])
+        .status
+        .success());
+    std::fs::write(&gate_path, modern_gate).unwrap();
+    assert!(git(root, &["add", "tools/ci_commit_gate.py"])
+        .status
+        .success());
+    assert!(git(root, &["commit", "-m", "modern validator"])
+        .status
+        .success());
+    let installed = Command::new(env!("CARGO_BIN_EXE_commit-msg"))
+        .arg("--install")
+        .arg(root)
+        .output()
+        .unwrap();
+    assert!(installed.status.success(), "{installed:?}");
+    assert!(git(root, &["checkout", "--detach", "HEAD~1"])
+        .status
+        .success());
+    let valid = git(
+        root,
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "older branch\n\nWriter: codex",
+        ],
+    );
+    assert!(valid.status.success(), "{valid:?}");
+    let invalid = git(root, &["commit", "--allow-empty", "-m", "x"]);
+    assert!(!invalid.status.success());
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("missing Writer trailer"));
 }

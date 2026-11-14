@@ -64,9 +64,9 @@ integration remain deferred; the production switch belongs to **RUST-HOOKS-SWITC
 Run `tools/hooks/install_hooks.sh --git` with the host's shared
 `CARGO_TARGET_DIR` set. It builds the Rust `commit-msg` executable, installs it
 into the checkout's `tools/hooks`, and sets worktree-scoped `core.hooksPath` to that directory
-(including its existing pre-push). Re-run after changing the Rust entry point.
-The binary calls `tools/ci_commit_gate.py commit-message` from the installing
-checkout (resolved relative to the installed binary): both CI and Git use `message_violations` for Writer, strict Hand-Edit,
+(including its existing pre-push). Re-run after changing the Rust entry point or validator.
+The installer snapshots `tools/ci_commit_gate.py` into the ignored
+`tools/hooks/.commit-msg-gate`; the binary calls that installed validator: both CI and Git use `message_violations` for Writer, strict Hand-Edit,
 and `Changelog: skip (<reason>)` validation. An active merge (`MERGE_HEAD`) bypasses the hook.
 Missing files, interpreters, and failed Git probes refuse the commit.
 Git editor comments are stripped for validation with `git stripspace --strip-comments`
@@ -84,3 +84,10 @@ worktree's hook path. Removing that worktree leaves other worktrees' hooks intac
 The existing `check_push_gate.py --install` accepts the equivalent absolute path
 and also preserves worktree scope. Scissors detection supports Git's automatic
 comment-character selection.
+
+The validator snapshot survives branch switches to revisions without the new
+CLI subcommand. It is generated from the shared source at installation, never
+maintained as a second policy implementation. The hook path is relative within
+the worktree, so moving a worktree preserves its hooks. No-editor commits keep
+comment lines under Git's default cleanup; editor `auto` prefixes are inferred
+from Git's generated comment block when no scissors line exists.

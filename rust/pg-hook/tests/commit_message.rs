@@ -6,6 +6,8 @@ fn git(root: &Path, args: &[&str]) -> Output {
     Command::new("git")
         .current_dir(root)
         .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
         .env("GIT_COMMITTER_NAME", "Test")
@@ -41,6 +43,10 @@ fn real_commits_share_the_ci_trailer_rules() {
     let dir = repo();
     for (message, diagnostic) in [
         ("x", "missing Writer trailer"),
+        (
+            "x\n\nWriter: codex\n# retained body",
+            "missing Writer trailer",
+        ),
         ("x\n\nWriter: ", "malformed Writer trailer"),
         ("x\n\nHand-edit: reason", "malformed Hand-Edit trailer"),
         ("x\n\nWriter: codex\nChangelog: skip", "malformed Changelog"),
@@ -129,6 +135,8 @@ fn editor_comments_do_not_hide_valid_trailers() {
                 "editor commit\n\n# body forces auto to choose another prefix\n\nWriter: codex",
             ])
             .env("GIT_EDITOR", "true")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_AUTHOR_NAME", "Test")
             .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
             .env("GIT_COMMITTER_NAME", "Test")
@@ -195,4 +203,35 @@ fn a_new_commit_after_a_merge_still_requires_attribution() {
     );
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("missing Writer trailer"));
+}
+
+#[test]
+fn automatic_comments_without_scissors_match_the_final_message() {
+    let dir = repo();
+    assert!(git(dir.path(), &["config", "core.commentChar", "auto"])
+        .status
+        .success());
+    for (message, valid) in [
+        ("subject\n\n# body\n\nWriter: codex", true),
+        (
+            "subject\n\n# leading body\n\nWriter: codex\n\n# retained body",
+            false,
+        ),
+    ] {
+        let output = Command::new("git")
+            .current_dir(dir.path())
+            .args(["commit", "--allow-empty", "--edit", "-m", message])
+            .env("GIT_EDITOR", "true")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.success(), valid, "{output:?}");
+    }
 }

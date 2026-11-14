@@ -9,6 +9,10 @@ fn install(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     if !root.join("tools/ci_commit_gate.py").is_file() {
         return Err("checkout has no commit gate".into());
     }
+    std::fs::copy(
+        root.join("tools/ci_commit_gate.py"),
+        hooks.join(".commit-msg-gate"),
+    )?;
     let executable = std::env::current_exe()?;
     let destination = hooks.join("commit-msg");
     if destination.canonicalize().ok().as_ref() != Some(&executable) {
@@ -17,12 +21,7 @@ fn install(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     std::fs::set_permissions(&destination, std::fs::metadata(&executable)?.permissions())?;
     for args in [
         vec!["config", "extensions.worktreeConfig", "true"],
-        vec![
-            "config",
-            "--worktree",
-            "core.hooksPath",
-            hooks.to_str().ok_or("non-UTF-8 hooks path")?,
-        ],
+        vec!["config", "--worktree", "core.hooksPath", "tools/hooks"],
     ] {
         if !Command::new("git")
             .arg("-C")
@@ -36,6 +35,19 @@ fn install(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     }
     println!("Git hooks installed: {}", hooks.display());
     Ok(0)
+}
+
+fn config_value(key: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let output = Command::new("git")
+        .args(["config", "--get", key])
+        .output()?;
+    match output.status.code() {
+        Some(0) => Ok(Some(
+            String::from_utf8(output.stdout)?.trim_end().to_owned(),
+        )),
+        Some(1) => Ok(None),
+        _ => Err(format!("cannot read {key}").into()),
+    }
 }
 
 fn run() -> Result<i32, Box<dyn std::error::Error>> {
@@ -60,17 +72,30 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     if merge.status.code() != Some(1) {
         return Err("cannot inspect merge state".into());
     }
-    // hooksPath is shared by linked worktrees. Keep this binary paired with
-    // its installed validator even when the committing worktree predates it.
+    // Install snapshots the single validator source so a branch switch cannot
+    // replace the installed binary's protocol with a pre-feature gate.
     let executable = std::env::current_exe()?;
-    let gate = executable
-        .parent()
-        .and_then(|p| p.parent())
-        .ok_or("cannot locate installed validator")?
-        .join("ci_commit_gate.py");
+    let snapshot = executable.with_file_name(".commit-msg-gate");
+    let gate = if snapshot.is_file() {
+        snapshot
+    } else {
+        executable
+            .parent()
+            .and_then(|p| p.parent())
+            .ok_or("cannot locate installed validator")?
+            .join("ci_commit_gate.py")
+    };
     // Git removes editor comments after this hook runs. Validate that same
     // message, honoring core.commentChar, without rewriting the user's file.
     let raw = std::fs::read(message)?;
+    // Git sets GIT_EDITOR=: when no editor is used (-m/-F/--no-edit).
+    // Its default cleanup then preserves comments, unlike editor commits.
+    let editor = std::env::var_os("GIT_EDITOR").as_deref() != Some(std::ffi::OsStr::new(":"));
+    let strip_comments = match config_value("commit.cleanup")?.as_deref() {
+        Some("strip" | "scissors") => true,
+        Some("whitespace" | "verbatim") => false,
+        _ => editor,
+    };
     // Git chooses the prefix for commentString/auto. The scissors suffix is
     // fixed; do not second-guess its choice by reading only commentChar.
     let scissors = b" ------------------------ >8 ------------------------";
@@ -81,13 +106,26 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             *offset += line.len();
             Some((start, line))
         })
-        .find(|(_, line)| line.strip_suffix(b"\n").unwrap_or(line).ends_with(scissors));
+        .find(|(_, line)| line.strip_suffix(b"\n").unwrap_or(line).ends_with(scissors))
+        .filter(|_| strip_comments);
     let cut = marker.map_or(raw.len(), |(offset, _)| offset);
     let mut command = Command::new("git");
-    if let Some((_, line)) = marker {
+    let marker_prefix = marker.map(|(_, line)| {
         let line = line.strip_suffix(b"\n").unwrap_or(line);
-        let prefix = std::str::from_utf8(&line[..line.len() - scissors.len()])?;
-        // auto may choose a different prefix because the message contains '#'.
+        &line[..line.len() - scissors.len()]
+    });
+    let configured = config_value("core.commentString")?.or(config_value("core.commentChar")?);
+    // With auto and no verbose diff, Git's generated comment block includes
+    // standalone prefix lines. The last such line identifies its chosen char.
+    let auto_prefix = if strip_comments && configured.as_deref() == Some("auto") {
+        raw.split(|b| *b == b'\n')
+            .rev()
+            .find(|line| line.len() == 1 && b"#;@!$%^&|:".contains(&line[0]))
+    } else {
+        None
+    };
+    if let Some(prefix) = marker_prefix.or(auto_prefix) {
+        let prefix = std::str::from_utf8(prefix)?;
         if !prefix.is_empty() {
             command
                 .arg("-c")
@@ -97,8 +135,11 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             }
         }
     }
+    command.arg("stripspace");
+    if strip_comments {
+        command.arg("--strip-comments");
+    }
     let mut cleaner = command
-        .args(["stripspace", "--strip-comments"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;

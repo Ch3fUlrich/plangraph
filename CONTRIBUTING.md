@@ -321,7 +321,8 @@ before the cursor are not detected (transcripts are append-only), and records ov
 1 MiB are skipped.
 
 The standalone Rust `turn-budget-hook` lives in `rust/worker-core`, beside the
-existing watchdog binaries; `tools/hooks/install_hooks.sh` remains Python-only.
+existing watchdog binaries. The default `tools/hooks/install_hooks.sh` mode
+copies Python hooks; its `--git` mode installs the Rust Git hook.
 Build, registration examples, injectable state paths and the polling-recognition
 boundary are documented in [Turn-budget hook](docs/turn-budget-hook.md).
 Run its hermetic contracts with `cargo test --manifest-path rust/Cargo.toml -p
