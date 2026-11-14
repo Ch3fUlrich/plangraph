@@ -2,38 +2,23 @@
 #![allow(dead_code)] // each test binary uses a different subset
 
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
-static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-/// A 0700 scratch directory removed on drop.
-pub(crate) struct TempDir(PathBuf);
-
+/// An exclusive, private scratch directory removed on drop.
+pub(crate) struct TempDir(tempfile::TempDir);
 impl TempDir {
-    pub(crate) fn new() -> TempDir {
-        use std::hash::{BuildHasher, Hasher};
-        let random = std::collections::hash_map::RandomState::new()
-            .build_hasher()
-            .finish();
-        let base = std::env::temp_dir().join(format!(
-            "pg-spawnd-it-{}-{}",
-            random,
-            COUNTER.fetch_add(1, Ordering::SeqCst)
-        ));
-        create_private_dir(&base).expect("exclusive temp dir");
-        TempDir(base)
+    pub(crate) fn new() -> Self {
+        let dir = tempfile::Builder::new()
+            .prefix("pg-spawnd-it-")
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        Self(dir)
     }
-
     pub(crate) fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        self.0.path()
     }
 }
 

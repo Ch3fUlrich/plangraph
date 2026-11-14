@@ -5,9 +5,9 @@ Real histories from a local Temporal dev server, recorded by `tests/projector_re
 Each file is `{"workflow_id", "run_id", "history": <WorkflowHistory.to_json() as a dict>}`.
 They are hermetic inputs for the projector parser and apply tests; the recorder is not collected by pytest.
 
-Regenerate (needs `temporalio` and a server; default address `127.0.0.1:17233`, namespace `default`):
+Regenerate (needs `temporalio` and a server; default address `127.0.0.1:7233`, namespace `default`):
 
-    TEMPORAL_ADDRESS=127.0.0.1:17233 python tests/projector_record.py --out tests/fixtures/temporal
+    TEMPORAL_ADDRESS=127.0.0.1:7233 python tests/projector_record.py --out tests/fixtures/temporal
 
 Regenerating changes run ids and event times; commit only when the history shape needs to change.
 

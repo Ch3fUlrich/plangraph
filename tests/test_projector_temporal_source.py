@@ -1,7 +1,7 @@
 """Live tests for ``TemporalSource`` against a running Temporal dev server.
 
 Skipped when ``temporalio`` is missing or no server answers at TEMPORAL_TEST_ADDRESS
-(default 127.0.0.1:17233).
+(default 127.0.0.1:7233).
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker  # noqa: E402
 
 from plangraph.projector.temporal_source import TemporalSource  # noqa: E402
 
-ADDRESS = os.environ.get("TEMPORAL_TEST_ADDRESS", "127.0.0.1:17233")
+ADDRESS = os.environ.get("TEMPORAL_TEST_ADDRESS", "127.0.0.1:7233")
 FIXTURES = Path(__file__).parent / "fixtures" / "temporal"
 TASK_QUEUE = f"proj-source-{uuid.uuid4().hex[:8]}"
 
