@@ -48,8 +48,9 @@ def claimed_owner(w, key):
     return epoch
 
 
+@pytest.mark.parametrize("release_by", ["workerA", "router"])
 @pytest.mark.parametrize("late_run_first", [False, True])
-def test_lapsed_lease_late_retired_run_is_refused(w, doors, late_run_first):
+def test_lapsed_lease_late_retired_run_is_refused(w, doors, late_run_first, release_by):
     """RT-P1 sq5 fix 2 (V1-1/V5-1): a clear keeps a retired-run fence.
 
     Explicit release clears the owner; the retired fence stays,
@@ -70,7 +71,7 @@ def test_lapsed_lease_late_retired_run_is_refused(w, doors, late_run_first):
     assert w.store.reap(w.p("system"), w.clock.advance(7201))["expired"] == []
     assert dict(w.store._item(key)) == before
     assert owner(w, key) == RUN1
-    w.store.release(w.p("workerA"), key, epoch)
+    w.store.release(w.p(release_by), key, epoch)
     assert owner(w, key) == (None, None, None)
     refused("forbidden", w.store.worker_park, w.p("workerA"), body)
     late = {"workflow_id": RUN1[0], "run_id": RUN1[1], "attempt": RUN1[2]}

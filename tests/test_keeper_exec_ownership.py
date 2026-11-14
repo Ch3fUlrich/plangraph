@@ -338,12 +338,10 @@ def test_reap_preserves_lapsed_claim_with_live_exec_owner(w):
     before = dict(w.conn.execute("SELECT * FROM items WHERE key=?",
                                  (key,)).fetchone())
     now = w.store._parse_iso(before["lease_until"]).timestamp() + 1
-    try:
-        result = w.store.reap(w.p("system"), now=now)
-    except Refused:
-        pass  # A loud refusal is also safe, provided nothing was reset.
-    else:
-        assert key not in result["expired"]
+    events_before = list(w.conn.execute("SELECT * FROM events ORDER BY seq"))
+    result = w.store.reap(w.p("system"), now=now)
+    assert key not in result["expired"]
+    assert list(w.conn.execute("SELECT * FROM events ORDER BY seq")) == events_before
     after = dict(w.conn.execute("SELECT * FROM items WHERE key=?",
                                 (key,)).fetchone())
     assert after == before

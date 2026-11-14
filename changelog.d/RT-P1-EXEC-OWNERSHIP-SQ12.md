@@ -1,1 +1,1 @@
-- Preserve lapsed claims with a live execution owner during lease reaping; require explicit release or hand-back and retain retired-run fencing and audit coverage (D-5026, D-5028).
+- **RT-P1-EXEC-OWNERSHIP-SQ12:** execution verbs move to `store_exec.py`; the retired-owner fence and the delayed-park ordering signal refuse stale workers on owned, unowned and post-clear cards.
