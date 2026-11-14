@@ -32,6 +32,7 @@ judge = build_judge_prompt('F1', 'diff', {}, {}, context=ctx)
 print(json.dumps([assemble(['correctness'], [('diff', 'body')], context=ctx),
                   *assemble_all(['check'], {'one.rs': 'body'}, context=ctx),
                   *assemble_diff(['check'], '', context=ctx),
+                  *assemble_diff(['check'], 'diff --git a/one.rs b/one.rs\n--- a/one.rs\n+++ b/one.rs\n@@ -1 +1 @@\n-old\n+new\n', context=ctx),
                   judge, judge.with_tool_mode('tools')]))
 "#,
     );
@@ -97,4 +98,21 @@ print(json.dumps(pairs))
         assert!(second.contains("plangraph:SECOND"));
         assert_ne!(first, second);
     }
+}
+
+#[test]
+fn judge_renders_in_an_uninstalled_checkout() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = Command::new("python3")
+        .args(["-c", "from tools.judge_prompt import build_judge_prompt; print(build_judge_prompt('F1', 'diff', {}, {}))"])
+        .env_remove("PYTHONPATH")
+        .current_dir(root)
+        .output()
+        .expect("run standalone judge");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("=== ITEM CONTEXT"));
 }

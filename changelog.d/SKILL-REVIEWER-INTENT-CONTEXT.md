@@ -1,1 +1,1 @@
-Review briefs share a versioned context block carrying item intent, invariants, exact revisions, public symbols and callers, and test evidence paths. Reviewers may inspect repository context.
+Review briefs share a versioned context block carrying item intent, invariants, exact revisions, public symbols and callers, and test evidence paths. Reviewers may inspect repository context. The judge CLI also resolves the shared renderer from an uninstalled checkout.
