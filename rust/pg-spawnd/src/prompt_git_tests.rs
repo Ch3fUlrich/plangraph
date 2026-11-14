@@ -1,7 +1,5 @@
 use super::*;
-#[path = "prompt_git_test_support.rs"]
-mod git_test_support;
-use git_test_support::command as isolated_git;
+use pg_worker_core::git_test_support::command as isolated_git;
 fn git(root: &Path, args: &[&str]) -> String {
     let output = isolated_git(root).args(args).output().unwrap();
     assert!(output.status.success(), "git fixture failed");

@@ -54,6 +54,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "tests/fixtures/writer_docs_map.json",
     "tests/hooks/parity_payloads.json",
     "tools/check_changelog_docs.py",
+    "tools/dell_ci_jobs.py",
     "tools/new_code_allowlist.txt",
     "tools/probe_admission_policy_guard.py",
     "tools/seat_verdict.py",
@@ -138,7 +139,8 @@ def select(paths: list[str]) -> dict[str, bool]:
             res["pytest-postgres"] = True
             if p.startswith("rust/spikes/"):
                 res["rust-spike"] = True
-            if p.startswith("rust/worker/") or p.startswith("rust/worker-core/"):
+            if (p.startswith(("rust/worker/", "rust/worker-core/", "rust/pg-spawnd/"))
+                    or fnmatchcase(p, "rust/Cargo.*")):
                 res["rust-worker"] = True
             if (
                 (not p.startswith("rust/spikes/") and not p.startswith("rust/worker/"))

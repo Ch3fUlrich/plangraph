@@ -382,6 +382,8 @@ jobs:
     if: needs.select.outputs.rust-worker == 'true'
     runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
     timeout-minutes: 45
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/rust/worker/target
     defaults:
       run:
         working-directory: rust/worker
@@ -398,7 +400,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/worker/target
-          key: rust-worker-dev-${{ runner.os }}-${{ hashFiles('rust/worker/Cargo.lock', 'rust/worker/Cargo.toml', 'rust/worker-core/Cargo.toml', 'rust/Cargo.toml') }}
+          key: rust-worker-dev-${{ runner.os }}-${{ hashFiles('rust/worker/Cargo.lock', 'rust/worker/Cargo.toml', 'rust/worker-core/Cargo.toml', 'rust/pg-spawnd/Cargo.toml', 'rust/Cargo.lock', 'rust/Cargo.toml') }}
       - uses: ./.github/actions/setup-temporal
       - name: cargo fmt --check
         run: cargo fmt --check

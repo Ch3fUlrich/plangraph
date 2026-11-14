@@ -63,7 +63,8 @@ CI suite selection in `tools/ci_select.py` treats `docs/schemas/**` and its
 select both `rust` and `rust-windows` via the shared `rust` output without changing
 other suites. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
 literals, manifest-relative reads and paths leaving `rust/`; new repository
-inputs must be added to `RUST_INPUTS`, not inline to the workflow.
+inputs must be added to `RUST_INPUTS`, not inline to the workflow. `rust/pg-spawnd/`
+and `rust/Cargo.*` also select `rust-worker`; its helper and tests share the cached target.
 Include paths passed through read helpers too: `pg-hook` reads `.docs-map`,
 `docs/rust-hooks.md`, `tools/new_code_allowlist.txt` and its parity corpus at
 `tests/hooks/parity_payloads.json`; all four are explicit selector inputs.
@@ -86,7 +87,7 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 Toolchain-only changes select all CI suites, the Python pin guards, and local Rust
-preflight checks.
+preflight checks. Dell installs this pin before mounting its direct sysroot.
 
 **Bump step:** open one PR that changes the channel in `rust-toolchain.toml`
 and fixes the new lints, without weakening `-D warnings`. Run every Rust CI job
