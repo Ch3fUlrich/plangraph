@@ -43,7 +43,14 @@ def admit(service, options, *, card=None, preview=False):
     role_mb, floor = overflow.local_limits(registry, role)
     _, memory = resources(service)
     repo = Path((card or {}).get('repo') or getattr(service.runner, 'default_cwd', None) or os.getcwd())
-    disk_low = native and __import__('shutil').disk_usage(repo).free < 5 * 1024 ** 3
+    disk_refusal = None
+    if native:
+        try:
+            if __import__('shutil').disk_usage(repo).free < 5 * 1024 ** 3:
+                disk_refusal = 'disk_low: need 5 GB free to start'
+        except OSError:
+            disk_refusal = 'local disk unavailable'
+    disk_low = disk_refusal is not None
     if not remote_first and not disk_low and not overflow.memory_refusal(memory, role_mb, floor):
         if native: options['_placement'] = dict(host=local, reason='local room', free_mb=memory)
         return None
@@ -58,11 +65,11 @@ def admit(service, options, *, card=None, preview=False):
     if native:
         for row in rows.values():
             if type(row.get('disk_free_gb')) is not int or row['disk_free_gb'] < 5:
-                row['refusal'] = 'disk_low: need 5 GB free to start'
+                row.setdefault('refusal', 'disk_low: need 5 GB free to start')
     if remote_first:
         rows = {name: row for name, row in rows.items()
                 if name != local and overflow.host_config(registry, name).get('id') != local}
-    health = 'disk_low: need 5 GB free to start' if disk_low else (overflow.local_health_refusal(config, memory) if remote_first else None)
+    health = disk_refusal if disk_low else (overflow.local_health_refusal(config, memory) if remote_first else None)
     flags = []
     for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope'):
         if options.get(key) is not None:

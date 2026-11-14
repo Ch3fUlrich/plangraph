@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import selectors
+import secrets
 import shlex
 import time
 from .runner import is_terminal
@@ -213,17 +214,24 @@ def native_result(record, *, verb='result'):
         run_id = record['run_id']
         if not re.fullmatch(r'run-[A-Za-z0-9]+', run_id):
             raise ValueError('invalid run id')
+        nonce = secrets.token_hex(16)
+        begin, end = (f'PLANGRAPH_RECEIPT_{nonce}_{suffix}' for suffix in ('BEGIN', 'END'))
         command = 'cd ' + shlex.quote(host['repo']) + ' && '
         if host.get('env_file'):
-            command += 'set -a && . ' + shlex.quote(host['env_file']) + ' && set +a && '
+            command += 'set -a && . ' + shlex.quote(host['env_file']) + ' >/dev/null 2>&1 && set +a && '
+        command += "printf '%s\\n' " + shlex.quote(begin) + ' && '
         command += ('PYTHONPATH=' + shlex.quote(host['spawner_src']) +
                     ' python3 -m plangraph.spawner.cli ' + verb + ' ' + shlex.quote(run_id))
+        command += "; printf '\\n%s\\n' " + shlex.quote(end)
         reply = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                                 '--', host['ssh'], command], capture_output=True,
                                text=True, timeout=10)
         # A terminal nonzero exit is the writer's exit, with a valid JSON record.
         text, _ = mask(reply.stdout)
-        remote = json.loads(text)
+        lines = text.splitlines()
+        if lines.count(begin) != 1 or lines.count(end) != 1 or lines.index(begin) >= lines.index(end):
+            raise ValueError('receipt unbracketed')
+        remote = json.loads('\n'.join(lines[lines.index(begin) + 1:lines.index(end)]))
         if remote.get('run_id') != run_id or remote.get('run_kind') != 'native-codex':
             raise ValueError('receipt mismatch')
         return native_receipt(dict(remote, host=record['host'], overflow_remote=True,

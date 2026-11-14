@@ -84,3 +84,46 @@ fn native_mcp_cancel_delegates_to_python_owner_locally_and_remotely() {
         assert!(calls.ends_with("cancel run-native\n"), "{calls}");
     }
 }
+
+#[test]
+fn native_mcp_spawn_preserves_dash_prompts_and_reports_adapter_refusals() {
+    let mut fixture = Fixture::new(false, "running");
+    let adapter = fixture.state.path().join("adapter");
+    fs::write(
+        &adapter,
+        r#"#!/bin/sh
+for argument in "$@"; do
+    if [ "$argument" = '--' ]; then separator=yes; fi
+    if [ "$argument" = '--dry-run' ] && [ "$separator" = yes ]; then
+        printf '%s' '{"run_id":"run-native","run_kind":"native-codex","status":"running"}'
+        exit 0
+    fi
+done
+echo 'fixture refused' >&2
+exit 2
+"#,
+    )
+    .unwrap();
+    for (prompt, code) in [("--dry-run", None), ("brief", Some(-32000))] {
+        let reply = fixture.client.request("tools/call", json!({"name":"plangraph_agent_spawn","arguments":{"card":{"run_kind":"native-codex"},"prompt":prompt}}));
+        if let Some(code) = code {
+            assert_eq!(reply["error"]["code"], code, "{reply}");
+            assert!(
+                reply["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("fixture refused"),
+                "{reply}"
+            );
+        } else {
+            assert!(reply["error"].is_null(), "{reply}");
+            assert!(
+                reply["result"]["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("run-native"),
+                "{reply}"
+            );
+        }
+    }
+}

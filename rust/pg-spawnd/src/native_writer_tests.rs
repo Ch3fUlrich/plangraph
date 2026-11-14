@@ -122,6 +122,16 @@ with patch.object(o, 'registry_caps', return_value={'self':'primary','hosts':[]}
     row['disk_free_gb'] = 4
     refused = s.admit(SimpleNamespace(runner=SimpleNamespace()), opts, card=card, preview=True)
     assert refused['host'] != 'other', refused
+    row.update(disk_free_gb=6)
+    card['repo'] = '/nonexistent-controller-repo'
+    with patch.object(o, 'placement_policy', return_value=('primary',True)), patch('shutil.disk_usage', side_effect=FileNotFoundError):
+        placed = s.admit(SimpleNamespace(runner=SimpleNamespace()), opts, card=card, preview=True)
+        assert placed['host'] == 'other', placed
+        row['refusal'] = 'stale readiness'
+        row.pop('disk_free_gb')
+        refused = s.admit(SimpleNamespace(runner=SimpleNamespace()), opts, card=card, preview=True)
+        assert row['refusal'] == 'stale readiness', row
+        assert refused['host'] != 'other' and refused['reason'] == 'local disk unavailable', refused
 "#]).output().unwrap();
     assert!(
         output.status.success(),
@@ -140,10 +150,10 @@ from types import SimpleNamespace
 from plangraph.spawner.remote_ps import native_result
 with tempfile.TemporaryDirectory() as directory:
     config = pathlib.Path(directory)/'hosts.json'
-    config.write_text(json.dumps({'hosts':{'other':{'repo':'/repo','spawner_src':'/src','ssh':'fixture'}}}))
+    config.write_text(json.dumps({'hosts':{'other':{'repo':'/repo','spawner_src':'/src','ssh':'fixture','env_file':'/env'}}}))
     receipt = dict(run_id='run-abc', run_kind='native-codex', host='other', status='running', overflow_remote=True)
     final = dict(receipt, status='completed', final_head='head', base_sha='base', exit_code=0, review={'verdict':'ACCEPT','text':'VERDICT: ACCEPT'})
-    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout=json.dumps(final), returncode=0)):
+    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(final) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=0)):
         result = native_result(receipt)
     assert result['final_head'] == 'head' and result['review']['verdict'] == 'ACCEPT', result
     assert result['host'] == 'other' and result['exit_code'] == 0, result
@@ -176,9 +186,9 @@ from plangraph.spawner.cancel_recorded import cancel_recorded
 from plangraph.spawner.service import SpawnService
 with tempfile.TemporaryDirectory() as directory:
     config = pathlib.Path(directory)/'hosts.json'
-    config.write_text(json.dumps({'hosts':{'other':{'repo':'/repo','spawner_src':'/src','ssh':'fixture'}}}))
+    config.write_text(json.dumps({'hosts':{'other':{'repo':'/repo','spawner_src':'/src','ssh':'fixture','env_file':'/env'}}}))
     receipt = dict(run_id='run-abc', run_kind='native-codex', host='other', status='running', overflow_remote=True, started=time.time(), pid=os.getpid(), pid_start=99, supervisor_pid_start=88, supervisor_stderr_path='/remote/log')
-    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout=json.dumps(receipt), returncode=0)):
+    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(receipt) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=0)):
         running = native_result(receipt)
     assert 'pid' not in running and 'pid_start' not in running and not any(k.startswith('supervisor_') for k in running), running
     persisted = dict(receipt)
@@ -193,12 +203,13 @@ with tempfile.TemporaryDirectory() as directory:
     runner = SimpleNamespace(jobs={}, kill_recorded=AsyncMock(side_effect=AssertionError('remote pid reached local killer')))
     saved = []
     service = SimpleNamespace(result=lambda *a, **kw: receipt, runner=runner, tasks={}, _save=saved.append)
-    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout=json.dumps(cancelled), returncode=1)) as ssh:
+    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(cancelled) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=1)) as ssh:
         result = asyncio.run(cancel_recorded(service, receipt['run_id']))
         assert 'plangraph.spawner.cli cancel run-abc' in ssh.call_args.args[0][-1], ssh.call_args
+        assert '. /env >/dev/null 2>&1' in ssh.call_args.args[0][-1], ssh.call_args
     runner.kill_recorded.assert_not_called()
     assert result['status'] == 'cancelled' and 'pid' not in result and saved[-1] == result, result
-    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.subprocess.run', side_effect=TimeoutError):
+    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', side_effect=TimeoutError):
         result = asyncio.run(cancel_recorded(service, receipt['run_id']))
     assert result['status'] == 'running' and result['remote_query_error'] == 'host query failed', result
 "#]).output().unwrap();
@@ -207,4 +218,45 @@ with tempfile.TemporaryDirectory() as directory:
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn native_arguments_are_validated_before_adapter_launch() {
+    for (key, value) in [
+        ("dry_run", json!(true)),
+        ("dry_run", json!("yes")),
+        ("cwd", json!("/repo")),
+        ("seats", json!(true)),
+        ("model_or_combo", json!("model")),
+        ("override_reason", json!("reason")),
+        ("review_scope", json!("diff")),
+        ("run_worktree", json!(true)),
+        ("wait_seconds", json!(-1)),
+    ] {
+        let mut args = json!({"card":{"run_kind":"native-codex"},"prompt":"brief"});
+        args[key] = value;
+        assert!(
+            matches!(
+                crate::placement::native_spawn(
+                    std::path::Path::new("/unused"),
+                    args.as_object().unwrap()
+                ),
+                Err(crate::errors::ToolError::Refused { .. })
+            ),
+            "{key}"
+        );
+    }
+    for card in [
+        json!({"run_kind":"native-codex","cwd":"/repo"}),
+        json!({"run_kind":"native-codex","findings":[{"text":"fix"}]}),
+    ] {
+        let args = json!({"card":card,"prompt":"brief"});
+        assert!(matches!(
+            crate::placement::native_spawn(
+                std::path::Path::new("/unused"),
+                args.as_object().unwrap()
+            ),
+            Err(crate::errors::ToolError::Refused { .. })
+        ));
+    }
 }
