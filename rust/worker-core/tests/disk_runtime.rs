@@ -12,8 +12,7 @@ use std::{
 #[test]
 fn disk_hygiene_usage_needs_no_df_and_bad_path_errors() {
     let tmp = tempfile::tempdir().unwrap();
-    let (pct, free) = disk_usage(tmp.path()).unwrap();
-    assert!((0.0..=100.0).contains(&pct));
+    let free = disk_usage(tmp.path()).unwrap();
     assert!(free > 0);
     assert!(disk_usage(&tmp.path().join("absent")).is_err());
 }
@@ -31,7 +30,7 @@ fn disk_hygiene_shared_cache_busy_and_pinned_paths_survive() {
     fs::create_dir(&cache).unwrap();
     fs::write(cache.join("rebuildable"), [0u8; 42]).unwrap();
     let mut report = Report {
-        disk_pct: 92.0,
+        free_bytes: 4_000_000_000,
         alarm: true,
         dry_run: true,
         freed_bytes: 0,

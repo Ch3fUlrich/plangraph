@@ -4,7 +4,7 @@ Build `pg-disk-hygiene` with `cd rust && cargo build -p pg-worker-core --bin
 pg-disk-hygiene --bin pg-process-cwds --release`, using the environment's shared `CARGO_TARGET_DIR`.
 
 `pg-disk-hygiene --repo PATH --root WORKTREES --pins PINS.json --dry-run`
-reports an alarm at 85% used or below 30 GB available. At 88% used, `--apply`
+reports an alarm below 5 GB available. Below 10 GB available, `--apply`
 reclaims ignored `target/` and `node_modules/` in registered clean worktrees
 idle over six hours. It never removes worktrees or tracked source. Git probe
 failures skip that tree. Freed bytes count only removed rebuildable files.
@@ -15,7 +15,15 @@ missing or malformed protection data fails closed. Unknown run state fails close
 
 The two shared cache roots `$HOME/.cache/plangraph/cargo-target` and
 `$HOME/.cache/pg-target-po` can be reclaimed only with no build process running.
-Process discovery fails closed; symlinked cache roots are refused.
+The shared target cap defaults to 10 GB per root. Under disk pressure or above
+that cap, cleanup removes oldest idle incremental sessions and stale
+`build/<crate>-<hash>` variants, keeping the newest compile unit and run unit per crate and profile.
+Candidates must be idle over six hours; recent, unknown and sole variants survive.
+The cap is a reclamation trigger, not a hard size limit: protected/newest data may
+exceed it. Build dependencies and other cached artifacts remain rebuildable but
+are retained. Each removal rechecks processes and eligibility; a live Cargo
+process anywhere defers cleanup, including when its cwd is outside the target.
+Process discovery fails closed; symlinked cache roots and children are refused.
 Linux may hide cwds of non-dumpable user services even from their owner. Install
 `pg-process-cwds` root-owned at `/usr/local/libexec/pg-process-cwds` with only
 `cap_sys_ptrace=ep` (operator installation: `install -o root -g root -m 0755`
@@ -38,8 +46,14 @@ state directory is a hard error. `--apply --dry-run` is refused.
 Install the service and 15-minute timer under `~/.config/systemd/user/` and the
 binary under `~/.local/bin`. Set `PG_REPO`, `PG_WORKTREES`, `PG_PINS` in
 `~/.config/plangraph/disk-hygiene.env`. Review dry-run output before enabling.
-Live deployment is separate from repository validation. The start admission
-gate belongs to the spawner and is maintained separately.
+Threshold options are `--alarm-free-bytes` (default `5000000000`),
+`--cleanup-free-bytes` (default `10000000000`) and `--shared-target-cap-bytes`
+(default `10000000000`); units are decimal bytes. Alarm must be positive and no
+larger than cleanup. JSON reports `free_bytes`, never a usage percentage.
+Rule 7.1 requires at least 5 GB free to start any writer/run on every host and
+stopping at 2 GB free. The spawner owns admission and runtime stopping;
+this timer reports pressure and reclaims idle rebuildable state.
+Live deployment is separate from repository validation.
 
 The same timer also invokes `pg-worktree-sweep --daily --apply`. Install that
 binary and configure `PG_SWEEP_CLAIMS_READER`; see [pg-reap](pg-reap.md#live-merged-worktree-sweep)

@@ -15,13 +15,37 @@ pub struct Guards {
 }
 #[derive(Debug, Serialize)]
 pub struct Report {
-    pub disk_pct: f64,
+    pub free_bytes: u64,
     pub alarm: bool,
     pub dry_run: bool,
     pub freed_bytes: u64,
     pub actions: Vec<String>,
     pub skipped: Vec<String>,
     pub error: Option<String>,
+}
+/// Decimal GB; no filesystem-size-dependent thresholds.
+#[derive(Clone, Copy)]
+pub struct Thresholds {
+    pub alarm_free_bytes: u64,
+    pub cleanup_free_bytes: u64,
+}
+impl Default for Thresholds {
+    fn default() -> Self {
+        Self {
+            alarm_free_bytes: 5_000_000_000,
+            cleanup_free_bytes: 10_000_000_000,
+        }
+    }
+}
+impl Thresholds {
+    pub fn validate(self) -> io::Result<Self> {
+        if self.alarm_free_bytes == 0 || self.cleanup_free_bytes < self.alarm_free_bytes {
+            return Err(io::Error::other(
+                "require 0 < alarm-free-bytes <= cleanup-free-bytes",
+            ));
+        }
+        Ok(self)
+    }
 }
 pub fn git(repo: &Path, args: &[&str]) -> io::Result<String> {
     let bytes = host_command::output(
@@ -219,23 +243,22 @@ pub fn sweep(
     root: &Path,
     guards: &Guards,
     now: SystemTime,
-    disk_pct: f64,
+    free_bytes: u64,
+    thresholds: Thresholds,
     apply: bool,
 ) -> io::Result<Report> {
-    if !disk_pct.is_finite() || !(0.0..=100.0).contains(&disk_pct) {
-        return Err(io::Error::other("invalid disk usage"));
-    }
+    let thresholds = thresholds.validate()?;
     let root = root.canonicalize()?;
     let mut report = Report {
-        disk_pct,
-        alarm: disk_pct >= 85.0,
+        free_bytes,
+        alarm: free_bytes < thresholds.alarm_free_bytes,
         dry_run: !apply,
         freed_bytes: 0,
         actions: vec![],
         skipped: vec![],
         error: None,
     };
-    if disk_pct < 88.0 {
+    if free_bytes >= thresholds.cleanup_free_bytes {
         return Ok(report);
     }
     let listing = git(repo, &["worktree", "list", "--porcelain", "-z"])?;

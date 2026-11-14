@@ -2,11 +2,9 @@
 use crate::disk_hygiene::{Guards, Report};
 use std::{fs, io, path::Path};
 
-pub const FREE_FLOOR: u64 = 30_000_000_000;
-
 /// No subprocess (in particular no unbounded df invocation).
 #[cfg(unix)]
-pub fn disk_usage(path: &Path) -> io::Result<(f64, u64)> {
+pub fn disk_usage(path: &Path) -> io::Result<u64> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
@@ -16,20 +14,13 @@ pub fn disk_usage(path: &Path) -> io::Result<(f64, u64)> {
     }
     // SAFETY: successful statvfs initialized stat.
     let stat = unsafe { stat.assume_init() };
-    let total = ((stat.f_blocks as u128).saturating_mul(stat.f_frsize as u128))
-        .min(u64::MAX as u128) as u64;
-    let free = ((stat.f_bavail as u128).saturating_mul(stat.f_frsize as u128)).min(u64::MAX as u128)
-        as u64;
-    if total == 0 {
-        return Err(io::Error::other("zero disk size"));
-    }
-    Ok((
-        100.0 * total.saturating_sub(free) as f64 / total as f64,
-        free,
-    ))
+    Ok(
+        ((stat.f_bavail as u128).saturating_mul(stat.f_frsize as u128)).min(u64::MAX as u128)
+            as u64,
+    )
 }
 #[cfg(not(unix))]
-pub fn disk_usage(_: &Path) -> io::Result<(f64, u64)> {
+pub fn disk_usage(_: &Path) -> io::Result<u64> {
     Err(io::Error::other("disk hygiene requires a Unix host"))
 }
 
@@ -102,12 +93,30 @@ pub fn shared_cache(
     apply: bool,
     report: &mut Report,
 ) -> io::Result<()> {
-    shared_cache_using(path, guards, building, apply, report, processes)
+    shared_cache_capped(path, guards, building, 0, true, apply, report)
 }
+/// Above the cap, reclaim oldest idle candidates even without disk pressure.
+#[allow(clippy::too_many_arguments)]
+pub fn shared_cache_capped(
+    path: &Path,
+    guards: &Guards,
+    building: bool,
+    cap: u64,
+    pressure: bool,
+    apply: bool,
+    report: &mut Report,
+) -> io::Result<()> {
+    shared_cache_using(
+        path, guards, building, cap, pressure, apply, report, processes,
+    )
+}
+#[allow(clippy::too_many_arguments)]
 fn shared_cache_using(
     path: &Path,
     guards: &Guards,
     building: bool,
+    cap: u64,
+    pressure: bool,
     apply: bool,
     report: &mut Report,
     mut process_reader: impl FnMut() -> io::Result<(Vec<std::path::PathBuf>, bool)>,
@@ -131,20 +140,38 @@ fn shared_cache_using(
     if building || cwds.iter().any(|p| p.starts_with(&canonical)) {
         return Ok(());
     }
-    let bytes = crate::disk_hygiene::scan(path)?.0;
-    if apply {
+    let mut bytes = crate::disk_hygiene::scan(path)?.0;
+    for (candidate, size) in crate::shared_target::candidates(path, std::time::SystemTime::now())? {
+        if !pressure && bytes <= cap {
+            break;
+        }
+        if guards.protects(&candidate) {
+            continue;
+        }
+        // Recheck eligibility before the final process probe, so a potentially
+        // expensive filesystem scan never separates that probe from removal.
+        if apply
+            && !crate::shared_target::candidates(path, std::time::SystemTime::now())?
+                .iter()
+                .any(|(p, _)| p == &candidate)
+        {
+            continue;
+        }
         let (cwds, building) = process_reader()?;
         if building || cwds.iter().any(|p| p.starts_with(&canonical)) {
             return Ok(());
         }
-        fs::remove_dir_all(path)?;
-        report.freed_bytes = report.freed_bytes.saturating_add(bytes);
+        if apply {
+            fs::remove_dir_all(&candidate)?;
+            report.freed_bytes = report.freed_bytes.saturating_add(size);
+        }
+        bytes = bytes.saturating_sub(size);
+        report.actions.push(format!(
+            "{} {} bytes={size}",
+            if apply { "removed" } else { "would-remove" },
+            candidate.display()
+        ));
     }
-    report.actions.push(format!(
-        "{} {} bytes={bytes}",
-        if apply { "removed" } else { "would-remove" },
-        path.display()
-    ));
     Ok(())
 }
 
@@ -158,116 +185,5 @@ fn resolve_processes(
     }
 }
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn disk_hygiene_denied_cwd_needs_authoritative_reader() {
-        let rows = resolve_processes(
-            Err(io::Error::from(io::ErrorKind::PermissionDenied)),
-            || Ok((vec!["/protected/tree".into()], false)),
-        )
-        .unwrap();
-        assert_eq!(rows.0, vec![std::path::PathBuf::from("/protected/tree")]);
-        assert!(resolve_processes(
-            Err(io::Error::from(io::ErrorKind::PermissionDenied)),
-            || Err(io::Error::other("reader unavailable"))
-        )
-        .is_err());
-        let rows =
-            resolve_processes(Ok((vec![], false)), || panic!("reader should not run")).unwrap();
-        assert!(rows.0.is_empty());
-    }
-    #[test]
-    fn disk_hygiene_shared_cache_apply_rechecks_builds_cwds_and_symlinks() {
-        let tmp = tempfile::tempdir().unwrap();
-        let cache = tmp.path().join("cargo-target");
-        fs::create_dir(&cache).unwrap();
-        fs::write(cache.join("object"), [0u8; 42]).unwrap();
-        let mut report = Report {
-            disk_pct: 92.0,
-            alarm: true,
-            dry_run: false,
-            freed_bytes: 0,
-            actions: vec![],
-            skipped: vec![],
-            error: None,
-        };
-        shared_cache_using(
-            &cache,
-            &Guards::default(),
-            false,
-            false,
-            &mut report,
-            || Ok((vec![cache.clone()], false)),
-        )
-        .unwrap();
-        assert!(report.actions.is_empty());
-        let mut probes = 0;
-        shared_cache_using(&cache, &Guards::default(), false, true, &mut report, || {
-            probes += 1;
-            Ok((vec![], probes == 2))
-        })
-        .unwrap();
-        assert!(cache.join("object").exists());
-        assert_eq!(report.freed_bytes, 0);
-        shared_cache_using(&cache, &Guards::default(), false, true, &mut report, || {
-            Ok((vec![], false))
-        })
-        .unwrap();
-        assert!(!cache.exists());
-        assert_eq!(report.freed_bytes, 42);
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(tmp.path().join("absent"), &cache).unwrap();
-            assert!(shared_cache_using(
-                &cache,
-                &Guards::default(),
-                false,
-                true,
-                &mut report,
-                || panic!("symlink must be refused")
-            )
-            .is_err());
-        }
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn disk_hygiene_process_inventory_reads_builds_and_cwds() {
-        let tmp = tempfile::tempdir().unwrap();
-        let pid = tmp.path().join("123");
-        fs::create_dir(&pid).unwrap();
-        fs::write(pid.join("comm"), "cargo\n").unwrap();
-        std::os::unix::fs::symlink("/protected/tree", pid.join("cwd")).unwrap();
-        let (cwds, building) = scan_processes(tmp.path()).unwrap();
-        assert!(building);
-        assert_eq!(cwds, vec![std::path::PathBuf::from("/protected/tree")]);
-        fs::remove_file(pid.join("cwd")).unwrap();
-        fs::write(pid.join("comm"), "node\n").unwrap();
-        let (cwds, building) = scan_processes(tmp.path()).unwrap();
-        assert!(!building);
-        assert!(cwds.is_empty());
-        fs::create_dir(pid.join("cwd")).unwrap();
-        assert!(scan_processes(tmp.path()).is_err());
-    }
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn disk_hygiene_denied_foreign_cwd_cannot_be_ignored() {
-        use std::os::unix::fs::MetadataExt;
-        // A real root-owned proc entry models the inode-owner mismatch of
-        // non-dumpable processes without needing root/chown in the fixture.
-        let probe = fs::read_link("/proc/1/cwd");
-        if probe.is_ok() || fs::metadata("/proc/1").unwrap().uid() == unsafe { libc::geteuid() } {
-            return;
-        } // No foreign denied entry on privileged runners.
-        assert_eq!(probe.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
-        let tmp = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink("/proc/1", tmp.path().join("1")).unwrap();
-        let result = scan_processes(tmp.path());
-        assert!(
-            result.is_err(),
-            "denied foreign cwd must not disappear from inventory"
-        );
-        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
-    }
-}
+#[path = "disk_runtime_tests.rs"]
+mod tests;

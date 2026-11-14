@@ -58,6 +58,7 @@ pub mod placement_rules;
 pub mod probe;
 pub mod redact;
 mod redact_tokens;
+mod shared_target;
 pub mod sweep_facts;
 /// Minimum body length redacted for the `gh[pousr]_` token family.
 pub const GITHUB_TOKEN_BODY_FLOOR: usize = redact_tokens::SPECS[1].floor;

@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 use pg_worker_core::{
-    disk_hygiene::{sweep, Guards},
+    disk_hygiene::{sweep, Guards, Thresholds},
     host_command,
 };
 use std::{
@@ -68,7 +68,8 @@ fn disk_hygiene_pinned_dirty_and_live_survive_real_cleanup() {
         &root,
         &guards,
         SystemTime::now() + Duration::from_secs(90000),
-        92.0,
+        4_000_000_000,
+        Thresholds::default(),
         true,
     )
     .unwrap();
@@ -103,7 +104,8 @@ fn disk_hygiene_ignored_non_cache_files_preserve_the_entire_tree() {
             &root,
             &Guards::default(),
             SystemTime::now() + Duration::from_secs(90000),
-            92.0,
+            4_000_000_000,
+            Thresholds::default(),
             apply,
         )
         .unwrap();
@@ -131,7 +133,8 @@ fn disk_hygiene_vanished_worktree_is_reported_and_other_trees_are_cleaned() {
         &root,
         &Guards::default(),
         SystemTime::now() + Duration::from_secs(90000),
-        92.0,
+        4_000_000_000,
+        Thresholds::default(),
         true,
     )
     .unwrap();
@@ -150,7 +153,8 @@ fn disk_hygiene_dry_run_and_recent_worktrees_preserve_everything() {
         &root,
         &Guards::default(),
         SystemTime::now() + Duration::from_secs(90000),
-        92.0,
+        4_000_000_000,
+        Thresholds::default(),
         false,
     )
     .unwrap();
@@ -161,7 +165,8 @@ fn disk_hygiene_dry_run_and_recent_worktrees_preserve_everything() {
         &root,
         &Guards::default(),
         SystemTime::now(),
-        92.0,
+        4_000_000_000,
+        Thresholds::default(),
         true,
     )
     .unwrap();
@@ -171,11 +176,12 @@ fn disk_hygiene_dry_run_and_recent_worktrees_preserve_everything() {
         &root,
         &Guards::default(),
         SystemTime::now() + Duration::from_secs(90000),
-        86.0,
+        10_000_000_000,
+        Thresholds::default(),
         true,
     )
     .unwrap();
-    assert!(low.alarm && low.actions.is_empty());
+    assert!(!low.alarm && low.actions.is_empty());
 }
 
 #[test]
@@ -190,7 +196,8 @@ fn disk_hygiene_unmerged_local_branch_keeps_worktree_but_reclaims_ignored_cache(
         &root,
         &Guards::default(),
         SystemTime::now() + Duration::from_secs(90000),
-        92.0,
+        4_000_000_000,
+        Thresholds::default(),
         true,
     )
     .unwrap();
@@ -226,7 +233,8 @@ fn disk_hygiene_symlinked_caches_never_touch_external_data() {
         &root,
         &Guards::default(),
         SystemTime::now() + Duration::from_secs(90000),
-        92.0,
+        4_000_000_000,
+        Thresholds::default(),
         true,
     )
     .unwrap();
@@ -252,7 +260,8 @@ fn disk_hygiene_missing_origin_ref_never_deletes_unmerged_branch() {
         &root,
         &Guards::default(),
         SystemTime::now() + Duration::from_secs(90000),
-        92.0,
+        4_000_000_000,
+        Thresholds::default(),
         true,
     )
     .unwrap();
@@ -267,7 +276,8 @@ fn disk_hygiene_cache_bytes_exclude_tracked_source() {
         &root,
         &Guards::default(),
         SystemTime::now() + Duration::from_secs(90000),
-        92.0,
+        4_000_000_000,
+        Thresholds::default(),
         true,
     )
     .unwrap();
@@ -283,7 +293,8 @@ fn disk_hygiene_git_probe_failure_skips_one_tree() {
         &root,
         &Guards::default(),
         SystemTime::now() + Duration::from_secs(90000),
-        92.0,
+        4_000_000_000,
+        Thresholds::default(),
         true,
     );
     assert!(result.is_ok());
@@ -363,7 +374,8 @@ fn disk_hygiene_large_ignored_cache_does_not_overflow_git_probe() {
         &root,
         &Guards::default(),
         SystemTime::now() + Duration::from_secs(90000),
-        92.0,
+        4_000_000_000,
+        Thresholds::default(),
         true,
     )
     .unwrap();

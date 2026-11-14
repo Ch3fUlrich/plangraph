@@ -1,5 +1,5 @@
 use pg_worker_core::{
-    disk_hygiene::{self, Guards, Report},
+    disk_hygiene::{self, Guards, Report, Thresholds},
     disk_runtime,
     run::record_io,
 };
@@ -12,9 +12,23 @@ use std::{
 fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
     let (mut repo, mut root, mut pins) = (None, None, None);
     let (mut apply, mut dry) = (false, false);
+    let mut thresholds = Thresholds::default();
+    let mut cap = 10_000_000_000u64;
     let mut args = args.iter();
     while let Some(flag) = args.next() {
         match flag.as_str() {
+            "--alarm-free-bytes" | "--cleanup-free-bytes" | "--shared-target-cap-bytes" => {
+                let value: u64 = args
+                    .next()
+                    .ok_or_else(|| io::Error::other("missing option value"))?
+                    .parse()
+                    .map_err(io::Error::other)?;
+                match flag.as_str() {
+                    "--alarm-free-bytes" => thresholds.alarm_free_bytes = value,
+                    "--cleanup-free-bytes" => thresholds.cleanup_free_bytes = value,
+                    _ => cap = value,
+                }
+            }
             "--apply" => apply = true,
             "--dry-run" => dry = true,
             "--repo" | "--root" | "--pins" | "--state" => {
@@ -38,7 +52,8 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
     let repo = repo.ok_or_else(|| io::Error::other("--repo required"))?;
     let root = root.ok_or_else(|| io::Error::other("--root required"))?;
     let pins = pins.ok_or_else(|| io::Error::other("--pins required"))?;
-    let (disk, free) = disk_runtime::disk_usage(&root)?;
+    let thresholds = thresholds.validate()?;
+    let free = disk_runtime::disk_usage(&root)?;
     let mut guards = Guards::load(&pins, state)?;
     let (cwds, building) = disk_runtime::processes()?;
     let canonical_root = root.canonicalize()?;
@@ -50,24 +65,28 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
         &root,
         &guards,
         SystemTime::now(),
-        if building { 0.0 } else { disk },
-        apply,
+        if building { u64::MAX } else { free },
+        thresholds,
+        apply && !building,
     )?;
-    report.disk_pct = disk;
-    report.alarm = disk >= 85.0 || free < disk_runtime::FREE_FLOOR;
+    report.dry_run = !apply;
+    report.free_bytes = free;
+    report.alarm = free < thresholds.alarm_free_bytes;
     if building {
         report
             .skipped
             .push("build running: cache cleanup deferred".into());
     }
-    if disk >= 88.0 {
+    {
         let home = env::var_os("HOME")
             .ok_or_else(|| io::Error::other("HOME required for shared caches"))?;
         for name in [".cache/plangraph/cargo-target", ".cache/pg-target-po"] {
-            if let Err(error) = disk_runtime::shared_cache(
+            if let Err(error) = disk_runtime::shared_cache_capped(
                 &PathBuf::from(&home).join(name),
                 &guards,
                 building,
+                cap,
+                free < thresholds.cleanup_free_bytes,
                 apply,
                 &mut report,
             ) {
@@ -92,7 +111,7 @@ fn run() -> io::Result<()> {
     let report = match &result {
         Ok(report) => serde_json::to_value(report)?,
         Err(error) => {
-            serde_json::json!({"alarm":true,"error":error.to_string(),"freed_bytes":0,"actions":[],"skipped":[],"dry_run":!args.iter().any(|a| a == "--apply"),"disk_pct":null})
+            serde_json::json!({"alarm":true,"error":error.to_string(),"freed_bytes":0,"actions":[],"skipped":[],"dry_run":!args.iter().any(|a| a == "--apply"),"free_bytes":null})
         }
     };
     let mut report = report;
