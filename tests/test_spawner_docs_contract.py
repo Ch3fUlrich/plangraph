@@ -83,13 +83,59 @@ def _load_sweep_module():
     return module
 
 @pytest.mark.usefixtures("restore_import_state")
-def test_sensitivity_json_reproducible(tmp_path: Path) -> None:
-    committed = (ROOT / "docs" / "spawner-sensitivity.json").read_bytes()
-    out = tmp_path / "spawner-sensitivity.json"
+@pytest.mark.parametrize('seed', (20261022, 11, 22, 33, 44))
+def test_sensitivity_json_reproducible(seed: int) -> None:
+    committed_bytes = (ROOT / "docs" / "spawner-sensitivity.json").read_bytes()
+    committed = json.loads(committed_bytes)
+    assert committed_bytes == (json.dumps(committed, indent=2, sort_keys=True) + '\n').encode()
     module = _load_sweep_module()
-    rc = module.main(["--out", str(out), "--catalogs", "200"])
-    assert rc == 0
-    assert out.read_bytes() == committed
+    result = module.run(200, seed)
+    stability = committed.pop('stability_seeds')
+    assert set(stability) == {'seeds', 'intel_pm1_max_flip_rate'}
+    assert list(module.STABILITY_SEEDS) == stability['seeds']
+    assert set(stability['intel_pm1_max_flip_rate']) == {str(value) for value in module.STABILITY_SEEDS}
+    if seed == module.SEED:
+        assert result == committed
+    module.STABILITY_SEEDS = (seed,)
+    assert module.stability_seeds(200, result) == {
+        'seeds': [seed],
+        'intel_pm1_max_flip_rate': {str(seed): stability['intel_pm1_max_flip_rate'][str(seed)]},
+    }
+
+
+@pytest.mark.usefixtures('restore_import_state')
+def test_sensitivity_cli_serialization(tmp_path):
+    module = _load_sweep_module()
+    out = tmp_path / 'sweep.json'
+    expected = module.run(1)
+    expected['stability_seeds'] = module.stability_seeds(1, expected)
+    assert module.main(['--out', str(out), '--catalogs', '1']) == 0
+    assert out.read_bytes() == (json.dumps(expected, indent=2, sort_keys=True) + '\n').encode()
+
+
+@pytest.mark.usefixtures('restore_import_state')
+@pytest.mark.parametrize('baseline_catalogs', (1, 2))
+def test_stability_reuses_only_matching_catalog_count(monkeypatch, baseline_catalogs):
+    module = _load_sweep_module()
+    module.STABILITY_SEEDS = (module.SEED,)
+    baseline = module.run(baseline_catalogs)
+    expected = module.run(2)
+    calls = []
+
+    def run(catalogs, seed):
+        calls.append((catalogs, seed))
+        return expected
+
+    monkeypatch.setattr(module, 'run', run)
+    assert module.stability_seeds(2, baseline) == {
+        'seeds': [module.SEED],
+        'intel_pm1_max_flip_rate': {str(module.SEED): {
+            risk: max(expected['perturbations']['intel_pm1'][f'{risk}/{role}']['flip_rate']
+                      for role in module.ROLES)
+            for risk in ('high', 'critical')
+        }},
+    }
+    assert calls == ([] if baseline_catalogs == 2 else [(2, module.SEED)])
 
 
 def test_sweep_loader_does_not_leak_state() -> None:
@@ -156,3 +202,10 @@ def test_stability_seeds_meet_threshold() -> None:
         entry = rates[str(seed)]
         assert entry["high"] <= 0.10
         assert entry["critical"] <= 0.10
+
+
+@pytest.mark.usefixtures('restore_import_state')
+def test_sensitivity_never_reads_ambient_leg_state(monkeypatch):
+    from plangraph.routing_support import resolver
+    monkeypatch.setattr(resolver, 'leg_status', lambda *a, **k: pytest.fail('offline sweep read ambient leg state'))
+    assert _load_sweep_module().run(1)['catalogs'] == 1

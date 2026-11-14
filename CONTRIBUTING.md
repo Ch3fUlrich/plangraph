@@ -347,3 +347,8 @@ The generated example batch declares tier `none` for new decision-only items; th
 
 Gemini retirement regressions preserve historical record reads while checking request
 admission and catalog filtering; AGY capability/witness activation requires evidence.
+
+Checkpoint 14 covers remaining policy and sensitivity contracts. The sensitivity sweep
+uses synthetic leg state and checks all five stability seeds independently; run
+`python3 -m pytest -q -p no:cacheprovider tests/test_spawner_docs_contract.py`
+to verify reproducibility and CLI serialization.
