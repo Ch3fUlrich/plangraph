@@ -35,25 +35,16 @@ def record(state, worktree, old, new, branch, gitdir, *process_stats, max_bytes=
 
     if not all(re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', sha) for sha in (old, new)):
         return
-    # New Git versions report a zero old OID for symref -> direct HEAD.
-    # Its just-written HEAD reflog retains the actual previous commit.
-    if not old.strip('0'):
-        try:
-            with (Path(gitdir) / 'logs/HEAD').open('rb') as log:
-                log.seek(0, 2)
-                log.seek(max(0, log.tell() - 4096))
-                fields = log.read().splitlines()[-1].split()
-            if fields[1].decode('ascii') == new:
-                old = fields[0].decode('ascii')
-        except (OSError, ValueError, IndexError, UnicodeError):
-            pass
     state = Path(state)
     chain = []
     for stat in process_stats:
-        start, end = stat.index('('), stat.rindex(')')
-        chain.append({'pid': int(stat[:start].strip()),
-                      'ppid': int(stat[end + 2:].split()[1]),
-                      'comm': stat[start + 1:end]})
+        try:
+            start, end = stat.index('('), stat.rindex(')')
+            chain.append({'pid': int(stat[:start].strip()),
+                          'ppid': int(stat[end + 2:].split()[1]),
+                          'comm': stat[start + 1:end]})
+        except (ValueError, IndexError):
+            continue  # A truncated /proc comm drops only this ancestor.
     row = {'time': datetime.now(UTC).isoformat(), 'old_sha': old, 'new_sha': new,
            'worktree': worktree, 'branch': branch, 'process_chain': chain or process_chain()}
     line = (json.dumps(row, ensure_ascii=True) + '\n').encode()

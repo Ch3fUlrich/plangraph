@@ -89,6 +89,7 @@ def test_detached_runtime_still_has_external_deadline(audit_checkout):
         'import os, signal, time\n'
         'signal.signal(signal.SIGTERM, signal.SIG_IGN)\n'
         'signal.signal(signal.SIGALRM, signal.SIG_IGN)\n'
+        'os.fstat(9)  # GNU timeout preserves the inherited slot fd.\n'
         f'with open({str(pidfile) + ".tmp"!r}, "w") as f: f.write(str(os.getpid()))\n'
         f'os.replace({str(pidfile) + ".tmp"!r}, {str(pidfile)!r})\n'
         'while True: time.sleep(60)\n')
@@ -101,7 +102,10 @@ def test_detached_runtime_still_has_external_deadline(audit_checkout):
         pid = int(pidfile.read_text())
         status = Path(f'/proc/{pid}/status')
         while time.monotonic() < deadline:
-            if not status.exists() or '\nState:\tZ' in status.read_text():
+            try:
+                if '\nState:\tZ' in status.read_text():
+                    break
+            except FileNotFoundError:
                 break
             time.sleep(0.01)
         else:
@@ -119,7 +123,8 @@ def test_installer_upgrades_prior_foreground_stubs(audit_checkout, bounded):
     repo, state, _, _ = audit_checkout
     for name in ('post-checkout', 'reference-transaction'):
         hook = repo / '.git/hooks' / name
-        content = hook.read_text()
+        content = drift._audit_stub(sys.executable,
+                                   state / 'head-audit.py', state, name, version=2)
         # Reconstruct installed stubs from before ancestor snapshots were added.
         prior = content[:content.index('# Capture ancestors')] + content[content.index('setsid timeout '):]
         prior = prior.replace(' "$@" </dev/null', ' </dev/null')
@@ -136,3 +141,79 @@ def test_installer_upgrades_prior_foreground_stubs(audit_checkout, bounded):
         content = (repo / '.git/hooks' / name).read_text()
         assert 'setsid timeout -s KILL 1 ' in content
         assert '2>&1 &\nexit 0\n' in content
+
+
+def test_quick_detached_moves_keep_previous_commit(audit_checkout):
+    from prod_audit_util import wait_for_audit
+
+    repo, state, git, first = audit_checkout
+    subprocess.run([*git, '-c', 'user.name=Fixture', '-c', 'user.email=f@example.invalid',
+                    'commit', '--allow-empty', '-m', 'two'], check=True, capture_output=True)
+    second = subprocess.check_output([*git, 'rev-parse', 'HEAD'], text=True).strip()
+    wait_for_audit(state, lambda rows: len(rows) == 1, 'log fixture commit')
+    (state / 'head-moves.jsonl').unlink()
+    script = state / 'head-audit.py'
+    # Make every runtime see the final reflog line if it reads it after detach.
+    script.write_text('import time; time.sleep(0.25)\n' + script.read_text())
+    for sha in (first, second, first):
+        subprocess.run([*git, 'checkout', '--detach', sha], check=True, capture_output=True)
+    rows = wait_for_audit(state, lambda rows: len(rows) == 3, 'log all quick moves')
+    assert sorted((r['old_sha'], r['new_sha']) for r in rows) == sorted(
+        [(second, first), (first, second), (second, first)])
+
+
+def test_stalled_log_runtime_count_is_capped(audit_checkout, tmp_path):
+    from pathlib import Path
+
+    repo, state, git, first = audit_checkout
+    subprocess.run([*git, '-c', 'user.name=Fixture', '-c', 'user.email=f@example.invalid',
+                    'commit', '--allow-empty', '-m', 'two'], check=True, capture_output=True)
+    second = subprocess.check_output([*git, 'rev-parse', 'HEAD'], text=True).strip()
+    from prod_audit_util import wait_for_audit
+    wait_for_audit(state, lambda rows: len(rows) == 1, 'log fixture commit')
+    (state / 'head-moves.jsonl').unlink()
+    os.mkfifo(state / 'head-moves.jsonl')
+    starts = tmp_path / 'starts'
+    script = state / 'head-audit.py'
+    # Disable both deadlines to model runtimes surviving a stuck supervisor.
+    # This is interruptible FIFO I/O, not a reproduction of kernel D state.
+    script.write_text('import os, signal\n'
+                      'signal.setitimer = lambda *args: None\n'
+                      f'fd = os.open({str(starts)!r}, os.O_WRONLY|os.O_CREAT|os.O_APPEND, 0o600)\n'
+                      'os.write(fd, f"{os.getpid()}\\n".encode()); os.close(fd)\n'
+                      + script.read_text())
+    binpath = tmp_path / 'bin'
+    binpath.mkdir()
+    timeout = binpath / 'timeout'
+    timeout.write_text('#!/bin/sh\nshift 3\nexec "$@"\n')
+    timeout.chmod(0o755)
+    env = dict(os.environ, PATH=str(binpath) + os.pathsep + os.defpath)
+    pids = []
+    try:
+        for sha in [first, second] * 8:
+            start = time.monotonic()
+            subprocess.run([*git, 'checkout', '--detach', sha], env=env,
+                           check=True, capture_output=True, timeout=0.5)
+            assert time.monotonic() - start < 0.5
+        time.sleep(0.2)
+        pids = [int(pid) for pid in starts.read_text().splitlines()]
+        assert len(pids) == 4  # All subsequent moves skipped launch.
+        for pid in pids:
+            assert '\nState:\tZ' not in Path(f'/proc/{pid}/status').read_text()
+    finally:
+        if starts.exists():
+            for pid in map(int, starts.read_text().splitlines()):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+
+def test_malformed_snapshot_drops_only_that_ancestor(tmp_path):
+    import json
+    from plangraph.fleet_sync.head_audit import record
+
+    record(tmp_path, '/fixture', 'a' * 40, 'b' * 40, 'main', '/unused',
+           '123 (truncated', '456 (git) S 789 0 0')
+    row = json.loads((tmp_path / 'head-moves.jsonl').read_text())
+    assert row['process_chain'] == [{'pid': 456, 'ppid': 789, 'comm': 'git'}]

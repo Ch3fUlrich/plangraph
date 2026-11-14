@@ -40,15 +40,19 @@ not import the changing checkout and do not require Python on PATH/PYTHONPATH.
 
 Prepared/aborted transactions and file-only checkouts return immediately in sh.
 Only committed HEAD moves start the runtime, at most once per move: per-worktree
-markers suppress the second observer. Linked worktrees use their own HEAD and
+markers in Git’s hooks directory suppress the second observer. Linked worktrees use their own HEAD and
 worktree path. Every stub exits zero, including runtime/import/missing-script
 failures. The runtime starts in the background with its own session via `setsid`,
 with stdin, stdout and stderr redirected to `/dev/null`; Git never waits for it.
 Log writes may finish after Git returns. The shell snapshots the process chain
-before detaching so the originating Git process remains in the audit record.
+before detaching (synchronous local `/proc` reads) so the originating Git process remains in the audit record.
 An external `timeout -s KILL 1` bounds interpreter startup and runtime, and the
 runtime also arms its own alarm. Without `setsid` or `timeout`, the hook skips
-observation. Audit remains best-effort: deadline expiry or errors may omit
+observation. Four nonblocking `flock` slots in Git's hooks directory cap live
+supervisors/runtimes per hook installation, including linked worktrees sharing
+that directory. Children inherit the slot fd, retaining it if a supervisor dies.
+The hook performs no audit state-directory I/O. A bounded 4096-byte local HEAD
+reflog read resolves zero old OIDs before Git returns. Audit remains best-effort: deadline expiry or errors may omit
 observations. Uninterruptible runtime I/O cannot hold Git waiting for timeout.
 
 The private JSONL log records UTC time, old/new SHA, worktree path, its branch or

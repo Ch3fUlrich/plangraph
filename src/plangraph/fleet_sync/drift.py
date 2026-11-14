@@ -110,7 +110,7 @@ def check_checkout(repo, send, *, state_dir, default_branch=None, now=None):
         return findings
 
 
-def _audit_stub(python, script, state, hook):
+def _audit_stub(python, script, state, hook, *, version=3):
     guard = ('[ "${1-}" = committed ] || exit 0' if hook == 'reference-transaction'
              else '[ "${3-}" = 1 ] || exit 0')
     selection = ('''old= new=
@@ -131,8 +131,32 @@ done
     [ "$after $previous_branch" != "$new $branch" ] || exit 0
 fi
 printf '%s %s %s\\n' "$old" "$new" "$branch" > "$marker" || exit 0''')
+    admission = ('''# Slots live beside Git's hooks, never on the audit state filesystem.
+# Inherited fd 9 keeps a slot occupied even if timeout's child cannot die.
+command -v flock >/dev/null 2>&1 || exit 0
+slot=0
+while [ "$slot" -lt 4 ]; do
+    exec 9> "${0%/*}/head-audit-slot-$slot" || exit 0
+    flock -n 9 && break
+    exec 9>&-
+    slot=$((slot + 1))
+done
+[ "$slot" -lt 4 ] || exit 0
+# Git may supply a zero old OID for symref -> direct HEAD. Resolve it
+# while this Git operation owns the reflog, with one bounded local read.
+case "$old" in
+    *[!0]*) ;;
+    *) reflog=$(tail -c 4096 "$gitdir/logs/HEAD" 2>/dev/null)
+       reflog=${reflog##*'
+'}
+       read -r previous current rest <<EOF
+$reflog
+EOF
+       [ "$current" != "$new" ] || old=$previous ;;
+esac
+''' if version >= 3 else '')
     # Never wait for timeout: even SIGKILL cannot reap uninterruptible I/O.
-    return ('#!/bin/sh\n# plangraph HEAD audit v2: observations must never block Git.\n'
+    return (f'#!/bin/sh\n# plangraph HEAD audit v{version}: observations must never block Git.\n'
             + guard + '\n' + 'state=' + shlex.quote(str(state)) + '\n' + '''
 # Git runs non-bare hooks in the worktree root, including linked worktrees.
 gitdir=${GIT_DIR:-.git}
@@ -148,8 +172,8 @@ case "$headref" in
 esac
 key=main
 [ ! -f "$gitdir/commondir" ] || key=wt-${gitdir##*/}
-marker="$state/last-$key"
-''' + selection + '\n' + dedupe + '\n'
+''' + ('marker="${0%/*}/head-audit-last-$key"\n' if version >= 3
+                   else 'marker="$state/last-$key"\n') + selection + '\n' + admission + dedupe + '\n'
             + 'command -v timeout >/dev/null 2>&1 || exit 0\n'
             + 'command -v setsid >/dev/null 2>&1 || exit 0\n'
             + '''# Capture ancestors before Git returns and they disappear from /proc.
@@ -187,13 +211,14 @@ def install_audit(repo, state_dir, *, apply=False):
         old_command = [sys.executable, '-m', 'plangraph.fleet_sync', 'head-move',
                        '--repo', str(repo), '--state-dir', str(state_dir), '--hook', name, '--']
         legacy = '#!/bin/sh\nexec ' + shlex.join(old_command) + ' "$@"\n'
-        prior = content[:content.index('# Capture ancestors')] + content[content.index('setsid timeout '):]
+        v2 = _audit_stub(sys.executable, script, state_dir, name, version=2)
+        prior = v2[:v2.index('# Capture ancestors')] + v2[v2.index('setsid timeout '):]
         prior = prior.replace(' "$@" </dev/null', ' </dev/null')
         foreground = prior.replace('command -v setsid >/dev/null 2>&1 || exit 0\n', '').replace(
             'setsid timeout ', 'timeout ', 1).replace(' &\nexit 0\n', ' || true\nexit 0\n')
         previous = foreground.replace('command -v timeout >/dev/null 2>&1 || exit 0\n', '').replace(
             'timeout -s KILL 1 ', '', 1)
-        if path.exists() and path.read_text() not in (content, prior, foreground, previous, legacy):
+        if path.exists() and path.read_text() not in (content, v2, prior, foreground, previous, legacy):
             raise ValueError('existing hook; integrate it explicitly before installing audit')
         hooks[path] = content
     if apply:

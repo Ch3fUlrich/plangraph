@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from prod_audit_util import wait_for_audit
+from prod_audit_util import wait_for_audit, wait_for_runtime_exit
 
 from plangraph.fleet_sync import drift
 
@@ -70,6 +70,7 @@ def test_one_runtime_per_checkout_and_linked_tree_identity(checkout, tmp_path):
     subprocess.run(['/usr/bin/git', '-C', str(linked), 'checkout', '--detach', first], check=True, capture_output=True)
     rows = wait_for_audit(state, lambda rows: rows and rows[-1]['branch'] == 'detached',
                           'log the detached linked worktree checkout')
+    time.sleep(0.2)  # Allow a second observer's detached launch to settle.
     assert len(counter.read_text().splitlines()) == 1, counter.read_text()
     assert rows[-1]['worktree'] == str(linked)
     assert rows[-1]['branch'] == 'detached'
@@ -84,10 +85,16 @@ def test_stalled_audit_is_bounded(checkout):
     _root, state, first, run = checkout
     # Opening a FIFO as the log is a real blocking I/O failure, not a fake timer.
     os.mkfifo(state / 'head-moves.jsonl')
+    pidfile = state / 'runtime-pid'
+    script = state / 'head-audit.py'
+    script.write_text(f'from pathlib import Path; import os\n'
+                      f'Path({str(pidfile)!r}).write_text(str(os.getpid()))\n'
+                      + script.read_text())
     start = time.monotonic()
     run('checkout', '--detach', first)
     assert time.monotonic() - start < 1.8
     assert run('rev-parse', 'HEAD') == first
+    wait_for_runtime_exit(pidfile)
 
 
 def test_log_rotation_keeps_one_previous_file(checkout):
@@ -155,7 +162,8 @@ def test_concurrent_appends_survive_lock_contention_and_rotation(tmp_path):
 def test_interpreter_startup_is_inside_deadline(checkout, tmp_path):
     root, state, first, run = checkout
     slow_python = tmp_path / 'slow-python'
-    slow_python.write_text('#!/bin/sh\nexec /bin/sleep 5\n')
+    pidfile = state / 'interpreter-pid'
+    slow_python.write_text(f'#!/bin/sh\necho $$ > {pidfile}\nexec /bin/sleep 5\n')
     slow_python.chmod(0o755)
     for hook in ('post-checkout', 'reference-transaction'):
         path = root / '.git/hooks' / hook
@@ -164,3 +172,4 @@ def test_interpreter_startup_is_inside_deadline(checkout, tmp_path):
     run('checkout', '--detach', first)
     assert time.monotonic() - start < 1.8
     assert run('rev-parse', 'HEAD') == first
+    wait_for_runtime_exit(pidfile)
