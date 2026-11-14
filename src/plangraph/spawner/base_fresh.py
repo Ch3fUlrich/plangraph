@@ -158,7 +158,7 @@ async def admit_base(service, record, card, *, launch=False):
     if record.get('run_worktree'): await asyncio.to_thread(_remove_refused_worktree, service, record)
     service._save(record)
     return False
-def _remove_refused_worktree(service, record):
+def _remove_refused_worktree(service, record, *, remove_branch=False):
     """Remove only this unlaunched attempt; never force dirty or locked evidence."""
     from pathlib import Path
     from .git_guard import run_worktree_lock, selected_checkout
@@ -173,6 +173,13 @@ def _remove_refused_worktree(service, record):
             subprocess.run(['git', '-C', repo, 'worktree', 'remove', metadata['path']],
                 env=_git_env(), check=True, capture_output=True, timeout=30)
         metadata['removed'] = True
+        if remove_branch:
+            branch = metadata['branch']
+            # Normal branch deletion protects occupied/unmerged refs. Use the
+            # fetched upstream as merge authority even with a detached caller.
+            subprocess.run(['git', '-C', repo, '-c', f'branch.{branch}.remote=origin',
+                '-c', f'branch.{branch}.merge=refs/heads/main', 'branch', '-d', '--', branch],
+                env=_git_env(), check=True, capture_output=True, timeout=30)
     except (OSError, subprocess.SubprocessError) as exc:
         record['worktree_cleanup_error'] = type(exc).__name__
 def spawn_runs(record):

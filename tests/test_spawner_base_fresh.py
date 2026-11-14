@@ -164,7 +164,8 @@ def test_detached_cli_later_worktree_refusal_is_reported_by_status(repository, d
     monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
     start = cli._start_supervisor
     script = f'''import asyncio
-from plangraph.spawner import cli
+from plangraph.spawner import cli, seat_spawn
+seat_spawn.resources = lambda service: (0, 1000000)
 from plangraph.spawner.runner import JobInfo
 from plangraph.spawner.service import SpawnService
 from plangraph.planner.routing import SpawnPlan

@@ -704,3 +704,8 @@ admit or reject a new worktree. Clean main is fast-forwarded when behind; a main
 checkout already at origin/main needs no mutation and may retain local edits.
 Session launch (`src/plangraph/spawner/sessions.py`), routing `bin/fleet-launch`,
 and the external package-worktree script do not call this gate in this part.
+
+Cancellation waits for an in-flight worktree creation thread before returning;
+new unlaunched attempts are removed, and normal Git branch deletion removes the
+new lane only when it is unoccupied and merged into the fetched origin/main.
+Continuation evidence remains protected from automatic removal.

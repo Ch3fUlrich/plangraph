@@ -46,3 +46,37 @@ def test_current_main_needs_no_fast_forward_even_when_dirty(repository, tmp_path
     assert sha == expected == git(repo, 'rev-parse', 'HEAD')
     assert path.read_text() == 'preserve this local work'
     assert git(repo, 'status', '--porcelain') == before
+
+
+def test_cancel_during_creation_waits_and_cleans_owned_attempt(repository, dispatch, monkeypatch):
+    import threading
+    from plangraph.spawner import git_guard
+    origin, repo = repository
+    service = dispatch[0](False)
+    entered, release = threading.Event(), threading.Event()
+    create = git_guard.create
+    made = []
+    def blocked(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        metadata = create(*args, **kwargs)
+        made.append(metadata)
+        return metadata
+    monkeypatch.setattr(git_guard, 'create', blocked)
+    async def exercise():
+        record = {'run_id': 'run-cancelcreate', 'cwd': str(repo)}
+        card = {'lane_branch': 'lane/cancel-create'}
+        task = asyncio.create_task(git_guard.prepare_worktree(service, record, card, True))
+        assert await asyncio.to_thread(entered.wait, 5)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # The creation thread must have finished before cancellation returns.
+        assert made
+        assert not (git_guard.Path(made[0]['path'])).exists()
+        assert 'lane/cancel-create' not in git(repo, 'branch', '--list')
+        # A named lane is immediately reusable, not an orphan branch.
+        metadata = await git_guard.prepare_worktree(service, {'run_id': 'run-retry', 'cwd': str(repo)}, card, True)
+        assert git(metadata['cwd'], 'rev-parse', 'HEAD') == git(origin, 'rev-parse', 'main')
+    asyncio.run(exercise())

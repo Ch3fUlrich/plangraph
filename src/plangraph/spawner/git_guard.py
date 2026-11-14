@@ -227,11 +227,22 @@ async def prepare_worktree(service, record, card, enabled, *, continuation=False
     previous = record.get('run_worktree')
     branch = previous['branch'] if previous else card.get('lane_branch') or 'lane/' + record['run_id']
     continuation = continuation or bool(previous) or bool(card.get('continuation'))
-    metadata = await asyncio.to_thread(create, root, repo, branch, continuation,
-                                      finished_dependencies=card.get('finished_dependencies', ()))
+    creation = asyncio.create_task(asyncio.to_thread(create, root, repo, branch, continuation,
+                                      finished_dependencies=card.get('finished_dependencies', ())))
+    cancelled = False
+    try:
+        metadata = await asyncio.shield(creation)
+    except asyncio.CancelledError:
+        cancelled = True
+        metadata = await creation  # A running Git thread cannot be cancelled.
     metadata.update(created_by_run_id=record['run_id'], continuation=continuation)
     record.update(run_worktree=metadata, cwd=metadata['path'])
     record.setdefault('worktree_attempts', []).append(metadata)
+    if cancelled:
+        from .base_fresh import _remove_refused_worktree
+        await asyncio.to_thread(_remove_refused_worktree, service, record, remove_branch=True)
+        service._save(record)
+        raise asyncio.CancelledError
     service._save(record)
     return dict(cwd=metadata['path'])
 
