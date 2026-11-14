@@ -13,7 +13,7 @@ def historical_waiver_fixture(world, monkeypatch, *, authority="OPERATOR", date=
         "| ID | PROJECT | DECISION | CLASS | DATE |\n"
         "| --- | --- | --- | --- | --- |\n"
         f"| D-5504 | demo | GO #1; GO-HEAD {HEAD} | ROUTER | {date} |\n"
-        f"| D-6000 | demo | Waiver: merged-without-witnesses; Waives: demo:H | {authority} | 2026-11-14 |\n")
+        f"| D-6000 | demo | Waiver: merged-without-witnesses; Waives-seats: demo:H | {authority} | 2026-11-14 |\n")
     git = world.store.ctx["git"]
     original = git._run
     monkeypatch.setattr(git, "_run", lambda repo, args: SimpleNamespace(
@@ -73,7 +73,7 @@ def test_merged_waiver_scope_date_and_lock_rechecks(unseated_w, monkeypatch, fau
     if fault == "wrong-name":
         text = text.replace("merged-without-witnesses", "unrelated-waiver")
     elif fault == "wrong-scope":
-        text = text.replace("Waives: demo:H", "Waives: demo:OTHER")
+        text = text.replace("Waives-seats: demo:H", "Waives-seats: demo:OTHER")
     elif fault == "duplicate":
         text += "| D-6000 | demo | copied waiver | OPERATOR | 2026-11-14 |\n"
     elif fault == "denied":
@@ -83,6 +83,102 @@ def test_merged_waiver_scope_date_and_lock_rechecks(unseated_w, monkeypatch, fau
             text.replace("| OPERATOR |", "| ROUTER |")))
     world.decision_path.write_text(text)
     with pytest.raises(Refused):
+        world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert world.store._item("demo:H")["state"] == "in_review"
+    assert world.store._evidence("demo:H") == before
+
+
+@pytest.mark.parametrize("scope", [
+    "demo:OTHER", "demo:HH", "prefix-demo:H", "demo:H-suffix",
+    "demo:OTHER; Mention: demo:H", "demo:H,demo:OTHER",
+])
+def test_merged_waiver_key_outside_seat_list_refuses(unseated_w, monkeypatch, scope):
+    world = unseated_w
+    historical_waiver_fixture(world, monkeypatch)
+    world.decision_path.write_text(world.decision_path.read_text().replace(
+        "Waives-seats: demo:H", f"Waives-seats: {scope}"))
+    before = world.store._evidence("demo:H")
+    with pytest.raises(Refused, match="operator_seat_waiver_scope_mismatch"):
+        world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert world.store._item("demo:H")["state"] == "in_review"
+    assert world.store._evidence("demo:H") == before
+
+
+def test_merged_waiver_merge_at_cutoff_refuses(unseated_w, monkeypatch):
+    world = unseated_w
+    historical_waiver_fixture(world, monkeypatch, date="2026-11-13")
+    # Keep the GO date eligible, isolating the merge-commit timestamp.
+    world.decision_path.write_text(world.decision_path.read_text().replace(
+        "| ROUTER | 2026-11-13 |", "| ROUTER | 2026-11-12 |"))
+    before = world.store._evidence("demo:H")
+    with pytest.raises(Refused, match="operator_seat_waiver_merge_at_or_after_cutoff"):
+        world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert world.store._item("demo:H")["state"] == "in_review"
+    assert world.store._evidence("demo:H") == before
+
+
+def test_merged_waiver_go_for_another_head_refuses(unseated_w, monkeypatch):
+    world = unseated_w
+    historical_waiver_fixture(world, monkeypatch)
+    world.decision_path.write_text(world.decision_path.read_text().replace(HEAD, "f" * 40))
+    before = world.store._evidence("demo:H")
+    with pytest.raises(Refused, match="go_row_head_mismatch"):
+        world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert world.store._item("demo:H")["state"] == "in_review"
+    assert world.store._evidence("demo:H") == before
+
+
+def test_merged_waiver_space_separated_scope_closes(unseated_w, monkeypatch):
+    world = unseated_w
+    historical_waiver_fixture(world, monkeypatch)
+    world.decision_path.write_text(world.decision_path.read_text().replace(
+        "Waives-seats: demo:H", "Waives-seats: demo:OTHER demo:H demo:LAST"))
+    result = world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert result["state"] == "done"
+    assert world.store.verify_integrity() == []
+
+
+@pytest.mark.parametrize("rule,merge_date,refusal", [
+    ("| 3.37 | Historical cutoff: 2026-11-12 |", "2026-11-12",
+     "operator_seat_waiver_merge_at_or_after_cutoff"),
+    ("| 3.37 | Historical cutoff: 2026-11-14 |", "2026-11-13", None),
+    ("| 3.37 | Historical cutoff: missing |", "2026-11-12",
+     "operator_seat_waiver_invalid_or_ineligible"),
+    ("| 3.37 | Historical cutoff: 2026-02-30 |", "2026-11-12",
+     "operator_seat_waiver_invalid_or_ineligible"),
+    ("| 3.37 | 2026-11-12 or 2026-11-14 |", "2026-11-12",
+     "operator_seat_waiver_invalid_or_ineligible"),
+    ("| 3.37 | 2026-11-14 |\n| 3.37 | 2026-11-14 |", "2026-11-12",
+     "operator_seat_waiver_invalid_or_ineligible"),
+])
+def test_merged_waiver_reads_rule_cutoff(unseated_w, monkeypatch, rule, merge_date, refusal):
+    world = unseated_w
+    historical_waiver_fixture(world, monkeypatch, date=merge_date)
+    world.decision_path.write_text(world.decision_path.read_text() + rule + "\n")
+    if refusal:
+        before = world.store._evidence("demo:H")
+        with pytest.raises(Refused, match=refusal):
+            world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+        assert world.store._item("demo:H")["state"] == "in_review"
+        assert world.store._evidence("demo:H") == before
+    else:
+        assert world.store.close_merged(world.p("router"), "demo:H", "D-5504",
+                                        waive_seats="D-6000")["state"] == "done"
+
+
+@pytest.mark.parametrize("change", ["scope", "cutoff"])
+def test_merged_waiver_rechecks_scope_and_cutoff_under_lock(unseated_w, monkeypatch, change):
+    from test_keeper_close_merged import _at_write_lock
+    world = unseated_w
+    historical_waiver_fixture(world, monkeypatch)
+    text = world.decision_path.read_text()
+    updated = (text.replace("Waives-seats: demo:H", "Waives-seats: demo:OTHER")
+               if change == "scope" else text + "| 3.37 | cutoff: 2026-11-12 |\n")
+    _at_write_lock(world, monkeypatch, lambda: world.decision_path.write_text(updated))
+    before = world.store._evidence("demo:H")
+    reason = ("operator_seat_waiver_scope_mismatch" if change == "scope"
+              else "operator_seat_waiver_merge_at_or_after_cutoff")
+    with pytest.raises(Refused, match=reason):
         world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
     assert world.store._item("demo:H")["state"] == "in_review"
     assert world.store._evidence("demo:H") == before

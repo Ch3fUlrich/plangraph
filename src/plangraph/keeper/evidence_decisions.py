@@ -207,6 +207,23 @@ class DecisionsAdapter:
                 return ""
         return text
 
+    def seat_waiver_cutoff(self):
+        """Rule 3.37's sole ISO date; absent rule uses the historical default.
+
+        Read the same authoritative document as decisions, including origin
+        mode. A present ambiguous/malformed rule must never use the default.
+        """
+        rows = []
+        for line in _prose_lines(self._document(_strict=True)):
+            if re.match(r"^\s*\|\s*`?3\.37`?\s*\|", line):
+                rows.append(line)
+        if not rows:
+            return "2026-11-13"
+        dates = re.findall(r"(?<![\w-])\d{4}-\d{2}-\d{2}(?![\w-])", rows[0])
+        if len(rows) != 1 or len(dates) != 1:
+            raise ValueError("rule 3.37 cutoff unavailable or ambiguous")
+        return dates[0]
+
     def fields(self, decision_id):
         """Unique row by named table columns; absent/ambiguous headers refuse."""
         canonical = self._canonical(decision_id)

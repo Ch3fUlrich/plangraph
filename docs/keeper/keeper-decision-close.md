@@ -128,10 +128,20 @@ Historical missing-witness closes remain disabled unless explicitly requested:
 `pg close-merged KEY GO-D-ID --waive-seats OPERATOR-D-ID`. The authority must
 be a unique indexed decision row with named `CLASS` and `DATE` table columns,
 class exactly `OPERATOR`, a DECISION cell beginning
-`Waiver: merged-without-witnesses; Waives: KEY`, and whole-item waiver scope.
+`Waiver: merged-without-witnesses; Waives-seats: KEY KEY ...`.
+The space-separated list binds whole tokens only; keys mentioned outside that
+list, prefixes, suffixes and comma-separated keys do not grant authority.
 Router-class rows, missing ids, duplicate rows and other waiver names refuse.
 Every merged PR still needs its head-bound GO; both its merge commit timestamp
-and the GO row's `DATE` must precede 2026-11-13 UTC. Missing dates refuse.
+and the GO row's `DATE` must precede the cutoff at midnight UTC. The decisions
+adapter reads the sole ISO date in table row `| 3.37 | ... |` from the configured
+decisions document (the origin version in production); only an absent rule uses
+2026-11-13. Duplicate rules, missing/ambiguous dates and invalid dates refuse.
+Missing merge dates refuse `operator_seat_waiver_merge_date_missing`; merges on
+or after the cutoff refuse `operator_seat_waiver_merge_at_or_after_cutoff`.
+An ineligible GO date refuses `operator_seat_waiver_go_date_ineligible`.
+A key outside the list refuses `operator_seat_waiver_scope_mismatch`; a GO for
+another merge head refuses `go_row_head_mismatch`.
 Authority, scope, dates and PR proofs are checked again under the close lock.
 The item evidence records the waiver class, operator decision id and PR proofs;
 no family verdict is invented. HTTP uses optional `waive_seats: "D-NNNN"`.
