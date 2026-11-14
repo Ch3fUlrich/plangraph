@@ -69,24 +69,54 @@ pub fn unit_paths() -> io::Result<Vec<PathBuf>> {
         command.args(&units);
         let values = output(&mut command)?;
         for value in values.lines().filter(|s| !s.is_empty()) {
-            let value = value.strip_prefix('-').unwrap_or(value);
-            let path = PathBuf::from(value);
-            if !path.is_absolute() || value.contains('\\') {
-                return Err(io::Error::other("unknown unit WorkingDirectory"));
-            }
-            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-            if canonical.components().any(|c| {
-                matches!(
-                    c,
-                    std::path::Component::ParentDir | std::path::Component::CurDir
-                )
-            }) {
-                return Err(io::Error::other("unresolved unit path"));
-            }
-            paths.push(canonical);
+            paths.push(unit_path(value)?);
         }
     }
     Ok(paths)
+}
+fn unit_path(value: &str) -> io::Result<PathBuf> {
+    // systemctl prefixes missing-ok paths with '-' and home-relative paths
+    // expanded to an absolute directory with '!'. Both flags can be present.
+    let value = value.trim_start_matches(['-', '!']);
+    let path = PathBuf::from(value);
+    if !path.is_absolute() || value.contains('\\') {
+        return Err(io::Error::other("unknown unit WorkingDirectory"));
+    }
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+    if canonical.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir | std::path::Component::CurDir
+        )
+    }) {
+        return Err(io::Error::other("unresolved unit path"));
+    }
+    Ok(canonical)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn working_directory_flags_preserve_protection_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().canonicalize().unwrap();
+        for prefix in ["", "-", "!", "-!"] {
+            assert_eq!(
+                unit_path(&format!("{prefix}{}", path.display())).unwrap(),
+                path
+            );
+        }
+        let missing = path.join("missing");
+        assert_eq!(
+            unit_path(&format!("-!{}", missing.display())).unwrap(),
+            missing
+        );
+        for invalid in ["", "-!", "!relative", "-relative", "/bad\\x20path"] {
+            assert!(unit_path(invalid).is_err(), "{invalid}");
+        }
+    }
 }
 impl Protection {
     pub fn load(pins: &Path, state: &Path, reader: Option<&Path>) -> io::Result<Self> {

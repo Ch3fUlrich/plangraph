@@ -22,6 +22,41 @@ fn directories(path: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+fn hash(value: &str) -> bool {
+    value.len() == 16 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn build_units(parent: &Path) -> io::Result<Vec<(String, PathBuf, bool)>> {
+    let mut units = vec![];
+    for path in directories(parent)? {
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if let Some((name, _)) = name.rsplit_once('-').filter(|(_, suffix)| hash(suffix)) {
+            let compile = path.join("build-script-build").is_file()
+                || path.join("build-script-build.exe").is_file();
+            let run = path.join("output").is_file() || path.join("invoked.timestamp").is_file();
+            if compile || run {
+                units.push((name.to_owned(), path.clone(), compile));
+            }
+        }
+        // Cargo 1.100 also stores units as build/<crate>/<hash>/, alongside
+        // ordinary library artifacts. Only recognize build-script units.
+        for unit in directories(&path)? {
+            if !unit.file_name().and_then(|s| s.to_str()).is_some_and(hash) {
+                continue;
+            }
+            let compile = unit.join("out/build_script_build").is_file()
+                || unit.join("out/build_script_build.exe").is_file();
+            let run = unit.join("run/invoked.timestamp").is_file();
+            if compile || run {
+                units.push((name.to_owned(), unit, compile));
+            }
+        }
+    }
+    Ok(units)
+}
+
 /// Includes target-triple/profile layouts; never follows directory symlinks.
 pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBuf, u64)>> {
     let mut profiles = directories(root)?;
@@ -41,30 +76,18 @@ pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBu
                 continue;
             }
             let mut crates: BTreeMap<(String, bool), Vec<_>> = BTreeMap::new();
-            for path in directories(&parent)? {
-                let (size, newest) = crate::disk_hygiene::scan(&path)?;
-                if kind == "incremental" {
+            if kind == "incremental" {
+                for path in directories(&parent)? {
+                    let (size, newest) = crate::disk_hygiene::scan(&path)?;
                     candidates.push((newest, path, size));
-                } else if let Some((name, hash)) = path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .and_then(|s| s.rsplit_once('-'))
-                {
-                    // Cargo's compile and run units have different hashes even
-                    // for the same current build. Retain the newest of each kind.
-                    let compile = path.join("build-script-build").is_file()
-                        || path.join("build-script-build.exe").is_file();
-                    let run =
-                        path.join("output").is_file() || path.join("invoked.timestamp").is_file();
-                    if hash.len() == 16
-                        && hash.bytes().all(|b| b.is_ascii_hexdigit())
-                        && (compile || run)
-                    {
-                        crates
-                            .entry((name.to_owned(), compile))
-                            .or_default()
-                            .push((newest, path, size));
-                    }
+                }
+            } else {
+                for (name, path, compile) in build_units(&parent)? {
+                    let (size, newest) = crate::disk_hygiene::scan(&path)?;
+                    crates
+                        .entry((name, compile))
+                        .or_default()
+                        .push((newest, path, size));
                 }
             }
             for variants in crates.values_mut() {
@@ -87,6 +110,114 @@ pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBu
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    #[test]
+    fn nested_units_keep_newest_compile_and_run_and_unknown_artifacts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let now = SystemTime::now();
+        let mut expected = vec![];
+        for profile in ["debug", "x86_64-unknown-linux-gnu/release"] {
+            for (crate_name, unit, marker, age, evict) in [
+                (
+                    "some-crate",
+                    "1111111111111111",
+                    "out/build_script_build",
+                    90000,
+                    true,
+                ),
+                (
+                    "some-crate",
+                    "2222222222222222",
+                    "out/build_script_build",
+                    80000,
+                    false,
+                ),
+                (
+                    "some-crate",
+                    "3333333333333333",
+                    "run/invoked.timestamp",
+                    90000,
+                    true,
+                ),
+                (
+                    "some-crate",
+                    "4444444444444444",
+                    "run/invoked.timestamp",
+                    80000,
+                    false,
+                ),
+                (
+                    "other-crate",
+                    "1111111111111111",
+                    "out/build_script_build.exe",
+                    90000,
+                    false,
+                ),
+                (
+                    "some-crate",
+                    "5555555555555555",
+                    "out/libsome_crate.rlib",
+                    90000,
+                    false,
+                ),
+                (
+                    "some-crate",
+                    "not-a-hash",
+                    "run/invoked.timestamp",
+                    90000,
+                    false,
+                ),
+                (
+                    "recent-crate",
+                    "1111111111111111",
+                    "run/invoked.timestamp",
+                    10,
+                    false,
+                ),
+                (
+                    "recent-crate",
+                    "2222222222222222",
+                    "run/invoked.timestamp",
+                    5,
+                    false,
+                ),
+            ] {
+                let path = tmp
+                    .path()
+                    .join(profile)
+                    .join("build")
+                    .join(crate_name)
+                    .join(unit);
+                let file = path.join(marker);
+                fs::create_dir_all(file.parent().unwrap()).unwrap();
+                fs::write(&file, [0; 42]).unwrap();
+                let modified = now - Duration::from_secs(age);
+                for p in [&file, file.parent().unwrap(), &path] {
+                    fs::File::open(p).unwrap().set_modified(modified).unwrap();
+                }
+                if evict {
+                    expected.push((path, 42));
+                }
+            }
+            let outside = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(
+                outside.path(),
+                tmp.path().join(profile).join("build/linked-crate"),
+            )
+            .unwrap();
+            std::os::unix::fs::symlink(
+                outside.path(),
+                tmp.path()
+                    .join(profile)
+                    .join("build/some-crate/6666666666666666"),
+            )
+            .unwrap();
+        }
+        let mut rows = candidates(tmp.path(), now).unwrap();
+        rows.sort();
+        expected.sort();
+        assert_eq!(rows, expected);
+    }
+
     #[test]
     fn compile_and_run_units_of_current_build_both_survive() {
         let tmp = tempfile::tempdir().unwrap();
