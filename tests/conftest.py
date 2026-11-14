@@ -100,7 +100,7 @@ def no_leaked_keeper_threads(request, no_leaked_keeper_fixture_threads):
 
 
 @contextmanager
-def git_config_guard(root):
+def git_config_guard(root, registry_roots=None):
     """Watch shared/worktree config bytes without invoking Git on the checkout."""
     def snapshot():
         entry = Path(root) / '.git'
@@ -113,8 +113,12 @@ def git_config_guard(root):
         configs = tuple((str(path), path.read_bytes() if path.exists() else None)
                         for path in (common / 'config', metadata / 'config.worktree'))
         # The registry is what supplies `git worktree list`; read metadata directly.
-        paths = [common / 'HEAD']
+        paths = [common / 'HEAD'] if registry_roots is None else []
         for entry in sorted((common / 'worktrees').glob('*')):
+            if registry_roots is not None:
+                target = entry / 'gitdir'
+                if not target.is_file() or not any(Path(target.read_text().strip()).resolve().is_relative_to(Path(root).resolve()) for root in registry_roots):
+                    continue
             paths.extend(entry / name for name in ('gitdir', 'HEAD', 'locked'))
         registry = tuple((str(path), path.read_bytes() if path.exists() else None) for path in paths)
         return configs, registry
@@ -137,7 +141,7 @@ def isolated_git_session(tmp_path_factory):
     patch.setenv('GIT_CONFIG_GLOBAL', str(config))
     patch.setenv('GIT_CONFIG_NOSYSTEM', '1')
     try:
-        with git_config_guard(Path(__file__).resolve().parents[1]):
+        with git_config_guard(Path(__file__).resolve().parents[1], (tmp_path_factory.getbasetemp(),)):
             yield
     finally:
         patch.undo()

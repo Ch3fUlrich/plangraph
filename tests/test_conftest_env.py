@@ -95,18 +95,32 @@ def test_guard_detects_worktree_registry_changes(tmp_path, config_guard, linked,
     (common / 'worktrees/old').mkdir(parents=True)
     (common / 'config').write_text('[core]\n')
     entry = common / 'worktrees/old/gitdir'
-    entry.write_text('/old/tree/.git\n')
+    entry.write_text(str(tmp_path / 'old/tree/.git') + '\n')
     if linked:
         (repo / '.git').write_text('gitdir: ' + str(common / 'worktrees/old') + '\n')
         (common / 'worktrees/old/commondir').write_text('../..\n')
     else:
         (repo / '.git').symlink_to(common, target_is_directory=True)
     with pytest.raises(AssertionError, match='worktree registry changed'):
-        with config_guard(repo):
+        with config_guard(repo, registry_roots=(tmp_path,)):
             if change == 'add':
                 (common / 'worktrees/new').mkdir()
-                (common / 'worktrees/new/gitdir').write_text('/new/tree/.git\n')
+                (common / 'worktrees/new/gitdir').write_text(str(tmp_path / 'new/tree/.git') + '\n')
             elif change == 'remove':
                 entry.unlink()
             else:
-                entry.write_text('/moved/tree/.git\n')
+                entry.write_text(str(tmp_path / 'moved/tree/.git') + '\n')
+
+
+def test_guard_ignores_other_sessions_worktree_moves(tmp_path, config_guard):
+    repo = tmp_path / 'repo'
+    metadata = repo / '.git'
+    other = metadata / 'worktrees/other'
+    other.mkdir(parents=True)
+    (metadata / 'config').write_text('[core]\n')
+    (metadata / 'HEAD').write_text('ref: refs/heads/main\n')
+    (other / 'gitdir').write_text(str(tmp_path / 'other/.git'))
+    with config_guard(repo, registry_roots=(tmp_path / 'test-owned',)):
+        (metadata / 'HEAD').write_text('ref: refs/heads/another-session\n')
+        (other / 'HEAD').write_text('b' * 40)
+        (other / 'gitdir').write_text(str(tmp_path / 'elsewhere/.git'))
