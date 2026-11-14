@@ -13,6 +13,7 @@ Forbidden:     <API changes, new dependencies, unrelated refactors, repo-wide gi
 Interfaces:    <signatures/contracts the task must honour; copied, not discovered>
 Acceptance:    <one command; pass = exit 0 and "N passed">
 Toolchain:     <lint, format, type-check, test commands, provided by the spawner>
+Language:      new code is Rust with Rust tests; no new Python or shell file; an allowlist line needs an operator D-id
 Rules:         load `coding-principles`; failing test first; document the why
 Worktree:      <branch/worktree name>; commit early; no repo-wide git operations
 Return:        done report (schema), or error record on tool failure
