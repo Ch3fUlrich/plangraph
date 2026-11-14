@@ -109,10 +109,10 @@ def test_fetch_rows_needs_spawner_token_and_sends_it(tmp_path):
     def opener(request, timeout):
         sent.append(request)
         return io.BytesIO(b'[{"sessionTag": "plangraph-job-1"}]')
-    rows = gw.fetch_rows('plangraph-job-1', {'OMNIROUTE_BASE_URL': 'http://gw:20128/v1'},
-                         opener=opener, secrets={gw.TOKEN_ENV: 'tok', 'OMNIROUTE_BASE_URL': 'http://gw:20128/v1'})
+    rows = gw.fetch_rows('plangraph-job-1', {'OMNIROUTE_BASE_URL': 'http://gateway.example.invalid:8080/v1'},
+                         opener=opener, secrets={gw.TOKEN_ENV: 'tok', 'OMNIROUTE_BASE_URL': 'http://gateway.example.invalid:8080/v1'})
     assert rows == [{'sessionTag': 'plangraph-job-1'}]
-    assert sent[0].full_url.startswith('http://gw:20128/api/usage/call-logs?sessionTag=plangraph-job-1')
+    assert sent[0].full_url.startswith('http://gateway.example.invalid:8080/api/usage/call-logs?sessionTag=plangraph-job-1')
     assert sent[0].get_header('Authorization') == 'Bearer tok'
 
 
