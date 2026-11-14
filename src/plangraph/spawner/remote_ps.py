@@ -193,6 +193,7 @@ def list_runs(local, *, transport=query_host):
 def native_receipt(record):
     """A target PID is evidence, never an origin-side process identity."""
     if record.get('run_kind') == 'native-codex' and record.get('overflow_remote'):
+        record['origin_receipt'] = True
         identity = {key: record.pop(key) for key in list(record)
                     if key in ('pid', 'pid_start', 'job_id', 'job_name', 'escapees')
                     or key.startswith('supervisor_')}

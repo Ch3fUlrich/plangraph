@@ -361,6 +361,8 @@ async def native_spawn(self, card, options):
         host=(options.get('_placement') or {}).get('host') or os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname(),
         status='running', started=time.time(), role='implement', writer_family='openai',
         base_ref=card.get('base_ref'), repo=str(native_repo(card)))
+    from .item_key import annotate_item
+    annotate_item(record, card)
     directory = self._path(record['run_id']).parent
     self._save(record)
     request = dict(record=record, card=card, prompt=options.get('prompt', ''), record_path=str(self._path(record['run_id'])))

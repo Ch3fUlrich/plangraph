@@ -97,14 +97,18 @@ class SpawnerRecordAdapter:
                 raise ValueError("invalid cited run id")
             hosts = [p.name for p in self.directory.iterdir()
                      if (p / run_id).exists()]
-            if len(hosts) != 1:
+            records = [(host, self.record(host, run_id)) for host in hosts]
+            records = [(host, record) for host, record in records
+                       if record.get("role") == "review"
+                       and not record.get("origin_receipt")]
+            if hosts and not records:
+                continue  # implementation runs and receipts are not witnesses
+            if len(records) != 1:
                 raise ValueError(f"{run_id}: missing or ambiguous record")
-            record = self.record(hosts[0], run_id)
-            if (record.get("run_id") != run_id or record.get("host") != hosts[0]
+            host, record = records[0]
+            if (record.get("run_id") != run_id or record.get("host") != host
                     or record.get("item_key") != item["key"]):
                 raise ValueError(f"{run_id}: record identity mismatch")
-            if record.get("role") != "review":
-                continue  # implementation runs are not review witnesses
             model = record.get("served_model")
             family = model_family(model) if isinstance(model, str) else None
             completion = record.get("completion")
