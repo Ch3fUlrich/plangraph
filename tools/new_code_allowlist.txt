@@ -45,3 +45,5 @@ src/plangraph/spawner/gateway_models.py | D-5840 rule 9.14: responsibility-only 
 src/plangraph/spawner/base_fresh.py | D-5848 standalone carry of reviewed split part 4; retired by SPAWNER-RUST-PORT
 
 src/plangraph/fleet_sync/head_audit.py | K1-R1 operator-required stdlib snapshot copied outside the changing tree; isolated Git audit runtime, no package imports (D-5840)
+src/plangraph/retired_models.py | Shared operator retirement enforcement until SPAWNER-RUST-PORT (D-5840)
+src/plangraph/model_admission.py | Extract exact model admission from oversized routing module until SPAWNER-RUST-PORT (D-5840)

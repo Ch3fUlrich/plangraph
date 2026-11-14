@@ -14,7 +14,7 @@ def test_qoder_off_for_review_even_with_old_active_leg():
 
 def test_disabled_leg_never_a_route_option():
     disabled = next(l for l in DEFAULT_LEGS if l.harness == 'qodercli')
-    later = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-3.8-flash')
+    later = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-argon')
     route = route_card({'estimate_tokens': 1000}, legs=(disabled, later), role='review')
     assert route.legs == (later,)
     assert 'excluded 1 legs: disabled' in route.reasons
@@ -22,7 +22,7 @@ def test_disabled_leg_never_a_route_option():
 
 def test_large_review_falls_through_small_window_with_reason():
     small = next(l for l in DEFAULT_LEGS if l.id == 'opencode-go-gemini-4-argon')
-    large = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-3.8-flash')
+    large = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-argon')
     route = route_card({'estimate_tokens': 200000, 'window_class': '128k'},
                        legs=(small, large), role='review')
     assert route.legs == (large,)

@@ -356,7 +356,7 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
         return SimpleNamespace(returncode=0, stdout=str(stage) if argv[-1] == 'mktemp -d' else '{}')
     monkeypatch.setattr(o.subprocess, 'run', run)
     host = dict(ssh='invented-alias', repo=str(repo), spawner_src=str(source))
-    options = ['--role', 'review', '--leg', 'agy-gemini-3.8-flash', '--writer-family', 'gpt',
+    options = ['--role', 'review', '--leg', 'agy-gemini-4-argon', '--writer-family', 'gpt',
                '--override-reason', 'hermetic prompt transport regression', '--dry-run', '--json']
     record = o.remote_spawn('invented', host, {'estimate_tokens': 1000}, prompt, options)
     assert received == [record]

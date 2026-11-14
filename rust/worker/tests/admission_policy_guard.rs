@@ -26,9 +26,18 @@ fn unrestricted_policy_is_test_only() {
     // Allow Cargo to fetch dependencies: CI may not have cached the parent
     // workspace's dev-dependencies. Resolution/build failures must still fail.
     // A separate target directory avoids the outer cargo test's build lock.
+    // PG_ADMISSION_GUARD_TARGET_DIR names a directory that persists between
+    // runs, so the nested checks rebuild only what changed; without it every
+    // run compiles both workspaces from scratch in a temporary directory.
     // Rustc checks callers under their actual cfg attributes, independently
     // of checkout paths, comments, and unrelated test modules.
-    let target = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let target = match std::env::var_os("PG_ADMISSION_GUARD_TARGET_DIR") {
+        Some(dir) if !dir.is_empty() => std::path::PathBuf::from(dir),
+        _ => scratch.path().to_path_buf(),
+    };
+    std::fs::create_dir_all(&target).unwrap();
+    let target = target.as_path();
     let worker = Path::new(env!("CARGO_MANIFEST_DIR"));
     for manifest in [
         worker.join("Cargo.toml"),
@@ -100,7 +109,7 @@ fn unrestricted_policy_is_test_only() {
             (true, Vec::new()),
             (false, all_features),
         ] {
-            let output = check(&manifest, target.path(), defaults, &features);
+            let output = check(&manifest, target, defaults, &features);
             assert!(
                 output.status.success(),
                 "production targets in {} with {features:?} must compile without the test-only admission bypass:\n{}",
@@ -126,7 +135,7 @@ fn unrestricted_policy_is_test_only() {
     let output = Command::new(env!("CARGO"))
         .args(["check", "--manifest-path"])
         .arg(probe.path().join("Cargo.toml"))
-        .env("CARGO_TARGET_DIR", target.path())
+        .env("CARGO_TARGET_DIR", target)
         .output()
         .expect("compile bypass probe");
     assert!(
