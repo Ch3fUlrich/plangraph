@@ -31,35 +31,64 @@ fn lines(text: &str) -> impl Iterator<Item = &str> {
     ])
 }
 
-fn entries(text: &str, unreleased_only: bool) -> HashMap<String, usize> {
-    let heading = Regex::new(r"(?i)^##\s+\[?unreleased\]?\s*$").unwrap();
-    let section = Regex::new(r"^##\s+").unwrap();
-    let mut inside = !unreleased_only;
+fn entries(text: &str) -> HashMap<String, usize> {
     let mut found = HashMap::new();
     for raw in lines(text) {
         let line = raw.trim();
-        if unreleased_only && heading.is_match(line) {
-            inside = true;
-        } else if unreleased_only && section.is_match(line) {
-            inside = false;
-        } else if inside && !line.is_empty() && !line.starts_with('#') {
+        if !line.is_empty() && !line.starts_with('#') {
             *found.entry(line.to_owned()).or_default() += 1;
         }
     }
     found
 }
 
-fn entry_added(root: &Path, base: &str, head: &str, path: &str, unreleased: bool) -> bool {
+fn entry_added(root: &Path, base: &str, head: &str, path: &str) -> bool {
     let read = |rev| git(root, &["show", &format!("{rev}:{path}")]).unwrap_or_default();
-    let before = entries(&read(base), unreleased);
-    entries(&read(head), unreleased)
+    let before = entries(&read(base));
+    entries(&read(head))
         .iter()
         .any(|(line, count)| *count > before.get(line).copied().unwrap_or_default())
+}
+
+fn check_release_edits(root: &Path, base: &str, head: &str) -> Result<(), String> {
+    let release = Regex::new(r"(?im)^Release:[ \t]*\S.*$").unwrap();
+    let commits = git(root, &["rev-list", &format!("{base}..{head}")])?;
+    for sha in commits.split_whitespace() {
+        // Combined merge diffs exclude inherited edits but catch resolution edits.
+        let changed = git(
+            root,
+            &[
+                "diff-tree",
+                "--root",
+                "--no-commit-id",
+                "--name-only",
+                "-r",
+                "--cc",
+                "--no-renames",
+                "-z",
+                sha,
+            ],
+        )?;
+        if changed.split('\0').any(|path| path == "CHANGELOG.md") {
+            let trailers = git(
+                root,
+                &["log", "-1", "--format=%(trailers:only,unfold)", sha],
+            )?;
+            if !release.is_match(&trailers) {
+                return Err(format!(
+                    "commit {} edits CHANGELOG.md outside a release; use changelog.d/<ITEM>.md",
+                    &sha[..8]
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn check(root: &Path, base: &str, head: &str) -> Result<(), String> {
     let base = git(root, &["merge-base", base, head])?;
     let base = base.trim();
+    check_release_edits(root, base, head)?;
     let paths = git(
         root,
         &["diff", "--name-only", "--no-renames", "-z", base, head],
@@ -124,13 +153,9 @@ pub(super) fn check(root: &Path, base: &str, head: &str) -> Result<(), String> {
     let fragment = paths.iter().any(|path| {
         path.strip_prefix("changelog.d/").is_some_and(|name| {
             !name.contains('/') && name.ends_with(".md") && !name.eq_ignore_ascii_case("readme.md")
-        }) && entry_added(root, base, head, path, false)
+        }) && entry_added(root, base, head, path)
     });
-    if paths.iter().any(|p| !is_doc_path(p))
-        && !entry_added(root, base, head, "CHANGELOG.md", true)
-        && !fragment
-        && !(skipped && !uncovered)
-    {
+    if paths.iter().any(|p| !is_doc_path(p)) && !fragment && !(skipped && !uncovered) {
         return Err("non-doc change needs an entry or per-commit skip reason".into());
     }
     Ok(())

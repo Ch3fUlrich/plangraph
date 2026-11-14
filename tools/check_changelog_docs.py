@@ -21,7 +21,6 @@ TODAY_ENV = "CHANGELOG_DOCS_TODAY"
 SKIP_TRAILER_RE = re.compile(
     r"^\s*changelog\s*:\s*skip(?:\s*\((.*?)\))?\s*$", re.IGNORECASE
 )
-UNRELEASED_RE = re.compile(r"^##\s+\[?unreleased\]?\s*$", re.IGNORECASE)
 
 
 def git(root: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -120,22 +119,6 @@ def glob_to_regex(pattern: str) -> re.Pattern[str]:
     return re.compile("".join(out) + r"\Z")
 
 
-def unreleased_lines(changelog: str) -> collections.Counter[str]:
-    """Non-blank, non-heading lines under '## Unreleased', stripped, as a multiset."""
-    found: collections.Counter[str] = collections.Counter()
-    inside = False
-    for raw in changelog.splitlines():
-        line = raw.strip()
-        if UNRELEASED_RE.match(line):
-            inside = True
-        # Match boundaries on stripped headings too, just like the opener.
-        elif re.match(r"^##\s+", line):
-            inside = False
-        elif inside and line and not line.startswith("#"):
-            found[line] += 1
-    return found
-
-
 def fragment_entry_added(root: str, paths: list[str], merge_base: str, head: str) -> bool:
     """True when a direct-child fragment adds an entry against the merge-base."""
     for path in paths:
@@ -150,15 +133,6 @@ def fragment_entry_added(root: str, paths: list[str], merge_base: str, head: str
         if run.returncode == 0 and entries(run.stdout) - entries(before.stdout):
             return True
     return False
-
-
-def changelog_entry_added(root: str, merge_base: str, head: str) -> bool:
-    """True when head's '## Unreleased' holds a line the merge-base's does not."""
-    def read(rev: str) -> str:
-        run = git(root, "show", f"{rev}:CHANGELOG.md")
-        return run.stdout if run.returncode == 0 else ""
-
-    return bool(unreleased_lines(read(head)) - unreleased_lines(read(merge_base)))
 
 
 class GitFailure(Exception):
@@ -279,6 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     if revs.returncode != 0:
         return bail(f"check-changelog-docs: git rev-list failed: {revs.stderr.strip()}", warn_only)
     commits = revs.stdout.split()
+    problems: list[str] = []
     # Include merges: combined diff names paths changed relative to every parent,
     # catching direct conflict-resolution edits without blaming inherited entries.
     try:
@@ -289,12 +264,11 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             trailers = git_checked(root, "log", "-1", "--format=%(trailers:only,unfold)", sha)
             if not re.search(r"^Release:[ \t]*\S.*$", trailers, re.IGNORECASE | re.MULTILINE):
-                return bail(f"check-changelog-docs: commit {sha[:8]} edits CHANGELOG.md outside a release; "
-                            "write changelog.d/<ITEM>.md or use a nonempty Release: trailer", warn_only)
+                problems.append(f"commit {sha[:8]} edits CHANGELOG.md outside a release; "
+                                "write changelog.d/<ITEM>.md or use a nonempty Release: trailer")
     except GitFailure as exc:
         return bail(f"check-changelog-docs: {exc}", warn_only)
 
-    problems: list[str] = []
     warnings: list[str] = []
     skipped: list[str] = []
     uncovered: list[str] = []

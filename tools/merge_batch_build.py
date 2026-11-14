@@ -47,7 +47,7 @@ def default_union(base):
 
 
 def attrs_args(st):
-    """git -c args that merge the --union paths line by line (an append-only ledger such as
+    """git -c args for the saved .gitattributes defaults plus explicit --union paths (an append-only ledger such as
     CHANGELOG.md conflicts in every pair of PRs that each add a line at the same spot)."""
     if not st.get("union"):
         return []
