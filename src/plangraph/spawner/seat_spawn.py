@@ -224,7 +224,7 @@ class SeatSpawnMixin:
             job = await round_cap.spawn_round(self, record, round_card, prompt_record=prompt_record, **kwargs)
             self._running_records[job.job_id] = record
             process = self.runner._processes.get(job.job_id)
-            owned = getattr(self.runner, '_owned', {}).get(job.job_id, {})
+            owned = getattr(self.runner, '_owned', {}).get(job.job_id, getattr(job, '_launch_identity', {}))
             record.update(job_id=job.job_id, pid=process.pid if process else None,
                 cwd=getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd()))
             if routed:

@@ -345,6 +345,11 @@ def test_spawn_item_key(tmp_path, monkeypatch, dispatch, item, env, expected):
     card = {'estimate_tokens': 100}
     if item is not None:
         card['item'] = item
+    if expected is None:
+        with pytest.raises(SpawnRefused, match='item_key required'):
+            asyncio.run(service._spawn(card=card, prompt=f'Review {OTHER_KEY}', dry_run=True))
+        assert saved == []
+        return
     result = asyncio.run(service._spawn(card=card, prompt=f'Review {OTHER_KEY}', dry_run=True))
     assert saved and all(r['item_key'] == expected for r in saved)
     assert result['item_key'] == expected

@@ -210,7 +210,7 @@ def test_shared_spawn_admission(setup, monkeypatch, entry):
     from plangraph.spawner.mcp import MCPSpawnerServer
     service, _, remote = setup
     shared = SharedService()
-    shared.runner, shared._save = service.runner, service._save
+    shared.runner, shared._save, shared.state = service.runner, service._save, service.state
     if entry == 'mcp':
         server = object.__new__(MCPSpawnerServer)
         server.service = shared

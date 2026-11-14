@@ -137,3 +137,12 @@ def test_spawner_can_alarm_but_cannot_define_slices(tmp_path, monkeypatch):
         assert len(alarms) == 1 and alarms[0]['key'] == ITEM and 'round_cap' in alarms[0]['detail']
     finally:
         world.close()
+
+
+def test_request_explicitly_reports_automatic_launch_deferred(tmp_path, calls):
+    payload = _cap(_service(tmp_path))
+    assert payload['automatic_replan']['status'] == 'deferred'
+    assert 'stronger model' in payload['automatic_replan']['reason']
+    assert 'durable' in payload['automatic_replan']['reason']
+    saved = json.loads(marker_path(SimpleNamespace(state=tmp_path), ITEM, '7').read_text())
+    assert saved['request']['automatic_replan'] == payload['automatic_replan']

@@ -314,6 +314,8 @@ class SpawnerRunner:
         watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial',  # REMOVE-AT-R10
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
+        from .round_cap import launch_phase, observe_process
+        launch_phase('prelaunch')
         from plangraph.planner.routing import validate_model
         from .target import resolve_target   # leg ids and admitted combos resolve before providers render
         model_or_combo, leg = resolve_target(model_or_combo)
@@ -563,6 +565,7 @@ class SpawnerRunner:
                 from .opencode_isolation import record_baseline
                 await asyncio.to_thread(record_baseline, job, work_dir, list(self.jobs.values()))   # D-3236
             try:
+                launch_phase('starting')
                 proc = await self.process_factory(
                     resolved_exe,
                     *cmd[1:],
@@ -581,10 +584,12 @@ class SpawnerRunner:
                 job.events.append({'event': 'spawn_failed', 'error': type(exc).__name__})
                 raise
             self._processes[job_id] = proc
+            observe_process(job_id, proc)
             self._nonces[job_id] = nonce
             root_pid = getattr(proc, 'pid', None)   # pid-less process objects (test fakes): nothing of ours to track or kill
             if root_pid is not None:
                 self._owned = {**getattr(self, '_owned', {}), job_id: dict(pid=root_pid, pid_start=self.identity_provider(root_pid, platform='nt' if self._nt() else None), job_object=False)}
+                job._launch_identity = self._owned[job_id]  # Retain proof after reap prunes the live registry.
                 start = self._owned[job_id]['pid_start']
                 if start is not None and not self._nt():   # setsid() orphans: remember the tree while the root lives
                     self._seen = {**getattr(self, '_seen', {}), job_id: {}}
@@ -1027,6 +1032,8 @@ def spawn_service(*args, **kwargs):
                 )
             from plangraph.settings import admit_review_scope
             admit_review_scope(card, role, review_scope)
+            from .round_cap import enforce_round_cap
+            await enforce_round_cap(self, card, role, dry_run=dry_run)
             # A seat run (_plan from _spawn_seats) keeps to its own legs on re-route.
             def restrict(p, tried):
                 from .seat_artifact import restrict_seat_plan

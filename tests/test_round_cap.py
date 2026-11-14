@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from fake_pid import FAKE_PID
 
 from plangraph.routing_errors import SpawnRefused
 from plangraph.spawner.round_cap import RoundCapRefused, check_round_cap
@@ -65,7 +66,8 @@ def test_other_item_pr_review_refused_and_dry_runs_unaffected(tmp_path):
     _seed(tmp_path, 2, item='plangraph:OTHER', pr='9')
     svc = _svc(tmp_path)
     check_round_cap(svc, _card('plangraph:OTHER', '9'), 'implement')
-    check_round_cap(svc, _card(pr='8'), 'implement')      # other PR of the same item
+    with pytest.raises(RoundCapRefused):
+        check_round_cap(svc, _card(pr='8'), 'implement')
     check_round_cap(svc, _card(), 'review')                # only writers are capped
     _seed(tmp_path, 1, item='plangraph:DRY', pr='1', status='dry_run')
     _seed(tmp_path, 3, item='plangraph:REF', pr='1', status='refused')
@@ -114,18 +116,14 @@ def test_unexpected_route_error_surfaces(tmp_path):
         check_round_cap(svc, _card(), 'implement')
 
 
-def test_runs_without_recorded_ref_do_not_count_toward_a_pr(tmp_path):
-    """MED-4: three legacy runs with no round_ref must not cap a PR."""
+def test_runs_without_recorded_ref_count_toward_the_item(tmp_path):
     _seed(tmp_path, 3, pr='legacy', round_ref=None)
-    check_round_cap(_svc(tmp_path), _card(pr='9'), 'implement')
-    _seed(tmp_path, 3, pr='7')
-    check_round_cap(_svc(tmp_path), _card(pr='9'), 'implement')
+    with pytest.raises(RoundCapRefused):
+        check_round_cap(_svc(tmp_path), _card(pr='9'), 'implement')
 
 
-def test_card_without_ref_counts_only_ref_less_runs(tmp_path):
+def test_card_without_ref_counts_all_item_runs(tmp_path):
     _seed(tmp_path, 3, pr='7')
-    check_round_cap(_svc(tmp_path), dict(item_key=ITEM), 'implement')
-    _seed(tmp_path, 3, pr='x', round_ref=None)
     with pytest.raises(RoundCapRefused):
         check_round_cap(_svc(tmp_path), dict(item_key=ITEM), 'implement')
 
@@ -217,6 +215,8 @@ def test_failed_spawn_releases_unlaunched_capacity(tmp_path):
     _seed(tmp_path, 2)
     calls = []
     async def fail(**kwargs):
+        from plangraph.spawner.round_cap import launch_phase
+        launch_phase('prelaunch')  # Explicit proof; an arbitrary runner exception is ambiguous.
         calls.append(1)
         raise ValueError('failed before process creation')
     service = SimpleNamespace(state=tmp_path, runner=SimpleNamespace(spawn=fail))
@@ -227,3 +227,102 @@ def test_failed_spawn_releases_unlaunched_capacity(tmp_path):
                 await spawn_round(service, record, _card(), prompt_record=None)
     asyncio.run(go())
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize('card', [{'pr': '7'}, {'item_key': 'invalid', 'pr': '7'}])
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_implement_requires_item_identity(tmp_path, monkeypatch, card, dry_run):
+    from plangraph.spawner.round_cap import enforce_round_cap
+    monkeypatch.delenv('PLANGRAPH_SPAWN_ITEM', raising=False)
+    with pytest.raises(SpawnRefused, match='item_key required'):
+        asyncio.run(enforce_round_cap(_svc(tmp_path), card, 'implement', dry_run=dry_run))
+
+
+@pytest.mark.parametrize('card', [_card(pr='different'), dict(item_key=ITEM, branch='renamed'), dict(item_key=ITEM)])
+def test_round_cap_is_per_keeper_item_across_refs(tmp_path, card):
+    _seed(tmp_path, 3)
+    with pytest.raises(RoundCapRefused):
+        check_round_cap(_svc(tmp_path), card, 'implement')
+
+
+def test_reservations_cannot_be_reset_by_changing_ref(tmp_path):
+    from plangraph.spawner.round_cap import reserve_round
+    _seed(tmp_path, 2)
+    service = _svc(tmp_path)
+    assert reserve_round(service, dict(item_key=ITEM, run_id='run-a', round_ref='7')) is not False
+    assert reserve_round(service, dict(item_key=ITEM, run_id='run-b', round_ref='8')) is False
+
+
+@pytest.mark.parametrize('outcome', ['fast_exit', 'post_launch_error'])
+def test_first_pid_observation_spends_round_before_spawn_returns(tmp_path, monkeypatch, outcome):
+    """Use the real runner boundary, faking only process construction and host rendering."""
+    from plangraph.spawner.runner import SpawnerRunner
+    from plangraph.spawner.round_cap import spawn_round, reserve_round
+    from plangraph.spawner import runner as module
+    from plangraph.spawner import resolver, opencode_isolation
+    _seed(tmp_path, 2)
+    async def available(*a, **kw):
+        return None
+    monkeypatch.setattr('plangraph.spawner.target.resolve_target', lambda model: (model, None))
+    monkeypatch.setattr('plangraph.planner.routing.validate_model', lambda model: None)
+    monkeypatch.setattr(module, 'build_command', lambda **kw: ['fake-cli'])
+    monkeypatch.setattr(module, 'build_child_env', lambda *a, **kw: {})
+    monkeypatch.setattr(resolver, 'host_skip_reason_async', available)
+    monkeypatch.setattr(resolver, 'admitted_by_render', lambda model: False)
+    monkeypatch.setattr(opencode_isolation, 'record_baseline', lambda *a: None)
+    async def factory(*a, **kw):
+        return SimpleNamespace(pid=FAKE_PID)
+    runner = SpawnerRunner(process_factory=factory, default_cwd=str(tmp_path))
+    runner._init_git_config_guard = lambda *a: None
+    def identity(*a, **kw):
+        if outcome == 'post_launch_error':
+            raise RuntimeError('identity failed after process start')
+        return 'fixture-start'
+    runner.identity_provider = identity
+    async def monitor(job_id, *a):
+        runner._processes.pop(job_id, None)
+        runner._owned.pop(job_id, None)
+        job = runner.jobs[job_id]
+        job.status, job.exit_code = 'completed', 0
+    runner._monitor_process = monitor
+    record = dict(run_id='run-test', role='implement', item_key=ITEM, round_ref='7')
+    service = SpawnService(runner, state=tmp_path)
+    service._save = lambda record: None
+    async def go():
+        if outcome == 'post_launch_error':
+            with pytest.raises(RuntimeError, match='identity failed'):
+                await spawn_round(SimpleNamespace(state=tmp_path, runner=runner), record, _card(),
+                                  prompt_record=None, prompt='x', model_or_combo='fake/model', wait_seconds=1)
+        else:
+            await service._launch_leg(record, SimpleNamespace(family='fixture'), routed=True,
+                                      prompt_record=None, prompt='x', model_or_combo='fake/model', wait_seconds=1)
+    asyncio.run(go())
+    assert record['writer_launched'] is True
+    assert record['writer_launch_pid'] == FAKE_PID
+    if outcome == 'fast_exit':
+        assert record['pid_start'] == 'fixture-start' and record['job_object'] is False
+    assert reserve_round(_svc(tmp_path), dict(item_key=ITEM, run_id='run-next', round_ref='7')) is False
+
+
+def test_ambiguous_spawn_error_retains_reservation(tmp_path):
+    from plangraph.spawner.round_cap import spawn_round, reserve_round
+    _seed(tmp_path, 2)
+    async def ambiguous(**kw):
+        raise RuntimeError('may have started a child')
+    service = SimpleNamespace(state=tmp_path, runner=SimpleNamespace(spawn=ambiguous))
+    record = dict(run_id='run-ambiguous', role='implement', item_key=ITEM)
+    with pytest.raises(RuntimeError):
+        asyncio.run(spawn_round(service, record, _card(), prompt_record=None))
+    assert reserve_round(service, dict(item_key=ITEM, run_id='run-next')) is False
+
+
+def test_operator_cancel_after_launch_spends_round(tmp_path):
+    _seed(tmp_path, 3, status='cancelled')
+    with pytest.raises(RoundCapRefused):
+        check_round_cap(_svc(tmp_path), _card(), 'implement')
+
+
+def test_one_continuation_per_round_does_not_spend_another_round(tmp_path):
+    _seed(tmp_path, 2)
+    _seed(tmp_path, 2, pr='continuation', continuation=1)
+    check_round_cap(_svc(tmp_path), _card(), 'implement')

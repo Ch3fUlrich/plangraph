@@ -1,4 +1,4 @@
-"""Round-cap handoff to an L1 through the existing keeper alarm door.
+"""Round-cap handoff to an L1; automatic stronger-model launch is deferred.
 
 The spawner's token keeps its existing authority. PR closure, planning runs and
 slice definitions belong to the L1 that consumes the alarm and routing request.
