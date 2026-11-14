@@ -715,11 +715,11 @@ Review hard walls default to 25 minutes and implement/fix to 90 minutes; progres
 D-5966 review route: gemini-4-hydrogen-high, gemini-4-argon-medium, free
 console-deepseek/deepseek-flash and opencode-go/beam-free, then claude-sonnet-5-5-high.
 No mimo review legs. CLI RESOURCE_EXHAUSTED/quota-reached responses use the existing
-leg-state store, keyed agy:<model> without effort. Each model has an independent
+leg-state store, keyed agy:<model> without effort (including the native Sonnet fallback). Each model has an independent
 reset; route JSON exposes all three agy_quota_states including reset_at evidence.
 
 Native review kinds `agy-cli` and `claude-cli` select only admitted review legs. Hydrogen high and Argon medium use agy plan mode with preallowed read tools;
-command tools stay unapproved. Sonnet uses Claude restricted review tools and high effort. Rust requires a clean worktree and its exact HEAD fast-checks
+command tools stay unapproved; native CLI reviews use the checkout rather than optional inline-diff rollout. Sonnet uses Claude restricted review tools and high effort. Rust requires a clean worktree and its exact HEAD fast-checks
 stamp, binds head_sha, and records verdict/findings plus cli_reported provenance.
 For agy this is the CLI-selected model, not authenticated provider telemetry; Claude must report a single Sonnet model in its stream.
 Repository HEAD and tracked cleanliness are rechecked at completion. Failed/quota streams never count.

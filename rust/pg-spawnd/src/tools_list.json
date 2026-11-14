@@ -68,6 +68,10 @@
      "description": "Plan without starting subprocess",
      "type": "boolean"
     },
+    "leg": {
+     "description": "Registered leg reference; Rust review kinds: agy-cli or claude-cli",
+     "type": "string"
+    },
     "model_or_combo": {
      "description": "Exceptional audited override only; requires override_reason",
      "type": "string"
@@ -378,6 +382,10 @@
       "estimate_tokens"
      ],
      "type": "object"
+    },
+    "leg": {
+     "description": "Registered leg reference; Rust review kinds: agy-cli or claude-cli",
+     "type": "string"
     },
     "require_bench": {
      "type": "boolean"

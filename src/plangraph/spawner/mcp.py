@@ -151,7 +151,8 @@ for _verb in ('route', 'ps', 'result'):
 for _tool in TOOLS_METADATA:
     if _tool['name'] in ('plangraph_agent_route', 'plangraph_agent_spawn'):
         _tool['inputSchema']['properties'].update({
-            'require_bench': {'type': 'boolean'}, 'bench_db': {'type': 'string'}})
+            'require_bench': {'type': 'boolean'}, 'bench_db': {'type': 'string'},
+            'leg': {'type': 'string', 'description': 'Registered leg reference; Rust review kinds: agy-cli or claude-cli'}})
 
 
 class MCPSpawnerServer:

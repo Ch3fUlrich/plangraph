@@ -71,7 +71,8 @@ impl Runs {
         review_args["role"] = role.clone();
         let mode = crate::prompt::configured_mode(role.as_str().unwrap_or(""));
         let repos = crate::prompt::repos();
-        if mode == "shadow" && leg["review_mode"] != "inline_only" {
+        let native_review = role == "review" && crate::cli_review::eligible(&leg);
+        if !native_review && mode == "shadow" && leg["review_mode"] != "inline_only" {
             let mut shadow: crate::launch::LaunchSpec = serde_json::from_value(json!({
                 "argv":launch.argv,"cwd":launch.cwd,"env":launch.env,"stdin":launch.stdin,
                 "prompt":launch.prompt,"warnings":null,"events":null
@@ -86,8 +87,12 @@ impl Runs {
                 usize::from(would_inline)
             );
         }
-        crate::prompt::prepare_review(&review_args, &leg, &mut launch, &repos, mode == "on")
-            .map_err(|e| internal(&e.to_string()))?;
+        // Native CLI reviews read the stamped checkout; optional inline rollout
+        // belongs to the other transports and must not rewrite their JSON stream.
+        if !native_review {
+            crate::prompt::prepare_review(&review_args, &leg, &mut launch, &repos, mode == "on")
+                .map_err(|e| internal(&e.to_string()))?;
+        }
         let review_head = if role == "review" && crate::cli_review::eligible(&leg) && !dry {
             crate::cli_review::prepare(args, &mut launch, &leg)?
         } else {

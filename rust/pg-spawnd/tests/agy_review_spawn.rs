@@ -60,7 +60,7 @@ fn review_kind_spawns_a_stamped_repository_review_and_records_it() {
         ),
     );
     let launch = state.path().join("launch");
-    let spec = json!({"argv":[program], "cwd":repo, "env":{}, "stdin":"review", "prompt":"review"});
+    let spec = json!({"argv":[program, "--input-format", "stream-json"], "cwd":repo, "env":{}, "stdin":format!("{}\n", json!({"event":"user", "message":{"role":"user", "content":"review"}})), "prompt":"review"});
     executable(
         &launch,
         &format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' '{spec}'\n"),
@@ -74,7 +74,7 @@ fn review_kind_spawns_a_stamped_repository_review_and_records_it() {
         .env("PG_SPAWND_ADAPTER", &route)
         .env("PG_SPAWND_LAUNCH_CMD", &launch)
         .env("PLANGRAPH_RELIABILITY_LEG_REF", "on")
-        .env("PLANGRAPH_INLINE_REVIEW_DIFF", "off")
+        .env("PLANGRAPH_RELIABILITY_INLINE_REVIEW_DIFF", "on")
         .spawn()
         .unwrap();
     let _guard = ChildGuard { child };
@@ -87,7 +87,7 @@ fn review_kind_spawns_a_stamped_repository_review_and_records_it() {
     client.initialize();
     let request = json!({"name":"plangraph_agent_spawn", "arguments":{
         "role":"review", "leg":"agy-cli", "writer_families":["openai"], "prompt":"review",
-        "card":{"item_key":"demo:AGY", "estimate_tokens":1000, "cwd":repo, "diff_ref":{"repo":repo, "head":"HEAD"}}, "wait_seconds":5
+        "card":{"item_key":"demo:AGY", "estimate_tokens":1000, "cwd":repo, "diff_ref":{"repo":repo, "base":"HEAD", "head":"HEAD"}}, "wait_seconds":5
     }});
     let missing_stamp = client.request("tools/call", request.clone());
     assert!(
