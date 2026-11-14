@@ -1,6 +1,6 @@
 """Response-side served-model witness from the OmniRoute call log (D-3226).
 
-A review seat on an ``omniroute`` provider sends ``x-omniroute-session-id:
+An OpenCode run on an ``omniroute`` provider sends ``x-omniroute-session-id:
 plangraph-<job_id>``; the gateway stores it as the call log's ``sessionTag``.
 After the child exits, the runner (a trusted in-process adapter) reads the
 call log rows with that tag and records the model the gateway served. The

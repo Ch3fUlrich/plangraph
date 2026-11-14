@@ -323,6 +323,17 @@ process cwd and child PWD use that path. With the flag off, cwd is unchanged;
 dry runs create nothing. No worktrees are removed, no pg-reap lock sharing is
 implemented, and enabling by default and the Rust port remain later slices.
 
+OpenCode gateway runs carry a per-job session tag for every role, including Sol
+writers and effort variants. After exit (successful or failed), the parent reads
+the response-side gateway call log independently of review tool permissions. Only
+a unique admitted model from successful rows for that tag supplies a witness;
+missing, mismatched tags, failed rows and unknown model IDs stay unwitnessed.
+The child-writable OpenCode store remains review-only request-side evidence.
+Run `python -m pytest -q -s tests/test_gateway_witness.py -k route_table_witness_paths`
+to list default and explicit legs without a witness path, including disabled
+legs. The check uses synthetic rows, assumes gateway-backed MiMo, and also checks
+model-family admission; it never contacts a gateway or reads management keys.
+
 Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
 chosen leg, served model/family with witness kind (a structured claude `system/init` model is a native witness; a mismatch with the requested leg sets `served_model_mismatch`), writer family, status, started/ended timestamps,
 attempts with provider stop details, job id, pid, and stdout tail.

@@ -109,7 +109,8 @@ def test_gateway_endpoint_normalizer_is_named_function():
 
 
 @pytest.mark.parametrize('spelling', ['provider', 'providers'])
-def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch, spelling):
+@pytest.mark.parametrize('role', ['review', 'implement'])
+def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch, spelling, role):
     import asyncio
     from fake_pid import FAKE_PID
     from plangraph.spawner import resolver
@@ -144,7 +145,7 @@ def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch, spelling):
 
     async def run():
         seat = await runner.spawn('synthetic', model_or_combo='mimo/mimo-v2.6-pro',
-                                  role='review', client='opencode', cwd=str(tmp_path),
+                                  role=role, client='opencode', cwd=str(tmp_path),
                                   wait_seconds=3)
         await runner._tasks[seat.job_id]
         return seat

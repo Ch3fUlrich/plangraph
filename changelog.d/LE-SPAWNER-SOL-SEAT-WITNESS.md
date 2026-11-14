@@ -1,0 +1,1 @@
+- Extend response-side gateway session tagging and call-log witnesses to OpenCode writers and all Sol effort legs; retain fail-closed evidence checks and add a synthetic route-table witness-path report.

@@ -10,6 +10,7 @@ from fake_pid import FAKE_PID
 pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: FAKE_PID exceeds the host PID range; no live process can match
 
 from plangraph.spawner import gateway_witness as gw
+from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
 
 
 class _Runner:
@@ -189,3 +190,106 @@ def test_key_file_owner_only_check_refuses_windows_modes():
     assert not gw._owner_only(info, windows=True)  # Windows reports 0o666: never trust the mode there
     info = SimpleNamespace(st_mode=stat.S_IFREG | 0o644)
     assert not gw._owner_only(info, windows=False)
+
+
+_SOL_LEGS = [leg for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS)
+             if leg.id.startswith('cx-gpt-6.1-sol')]
+
+
+@pytest.mark.parametrize('leg', _SOL_LEGS, ids=lambda leg: leg.id)
+@pytest.mark.parametrize('role', ['implement', 'review'])
+@pytest.mark.parametrize('row_kind', ['matching', 'prefixed', 'base-model', 'failed-run',
+                                      'missing', 'wrong-tag', 'failed', 'unknown-model'])
+def test_sol_gateway_witness_for_every_route_leg(tmp_path, monkeypatch, leg, role, row_kind):
+    import asyncio
+    from plangraph.spawner import resolver
+    from plangraph.spawner.runner import SpawnerRunner
+    from plangraph.routing_support import host_keys, opencode_render
+
+    async def probe(*args, **kwargs):
+        return None
+
+    def render(env, model):
+        env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'provider': {'omniroute': {'options': {}}}})
+
+    monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
+    monkeypatch.setattr(opencode_render, 'render_gateway_providers', render)
+    monkeypatch.setattr(host_keys, 'add_host_keys', lambda *a, **kw: None)
+    monkeypatch.setattr(gw.time, 'sleep', lambda _: None)
+    seen = {}
+    served = leg.model.removeprefix('omniroute/cx-')
+    if row_kind == 'base-model':
+        served = 'gpt-6.1-sol'
+
+    def fetch(tag, env):
+        seen['fetched'] = True
+        if row_kind == 'missing':
+            return []
+        return [{'sessionTag': tag if row_kind != 'wrong-tag' else 'another-session',
+                 'status': 503 if row_kind == 'failed' else 200,
+                 'provider': 'cx',
+                 'model': ('unknown-model' if row_kind == 'unknown-model' else
+                           'cx/' + served if row_kind == 'prefixed' else served)}]
+
+    monkeypatch.setattr(gw, 'fetch_rows', fetch)
+
+    async def factory(*args, **kwargs):
+        seen['env'] = kwargs['env']
+        async def communicate(input=None):
+            return b'VERDICT: ACCEPT', b''
+        return SimpleNamespace(pid=FAKE_PID, returncode=1 if row_kind == 'failed-run' else 0,
+                               communicate=communicate)
+
+    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
+
+    async def run():
+        job = await runner.spawn('fixture', model_or_combo=leg.model, role=role,
+                                 client=leg.harness, cwd=str(tmp_path), wait_seconds=3)
+        await runner._tasks[job.job_id]
+        return job
+
+    job = asyncio.run(run())
+    assert gw.tagged(seen['env']['OPENCODE_CONFIG_CONTENT'], job.job_id, 'omniroute')
+    assert seen.get('fetched')
+    if row_kind in ('matching', 'prefixed', 'base-model', 'failed-run'):
+        assert job.served_model == 'cx/' + served
+        assert job.served_family == 'gpt'
+        assert job.witness_kind == gw.WITNESS_KIND
+    else:
+        assert job.served_model in (None, '', 'unwitnessed')
+        assert job.served_family in (None, '', 'unwitnessed')
+        assert any(e['event'] == 'gateway_witness_unavailable' for e in job.events)
+
+
+def test_route_table_witness_paths():
+    """Run with -s to list all legs without an authenticated witness path.
+
+    Includes disabled and explicit legs so route changes cannot hide gaps.
+    Gateway capability assumes the MiMo endpoint is the configured gateway.
+    """
+    from plangraph.spawner.runner import SpawnerRunner
+    from plangraph.spawner.served_telemetry import native_models
+
+    missing = []
+    for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS):
+        cfg = {'provider': {'omniroute': {}, 'mimo': {}}}
+        gw.tag_session(cfg, 'coverage')
+        env = {'OPENCODE_CONFIG_CONTENT': json.dumps(cfg), 'OMNIROUTE_BASE_URL': '/gateway/v1'}
+        if leg.harness == 'opencode' and gw.gateway_leg(leg.model, env):
+            runner = SpawnerRunner()
+            job = _job(leg.model)
+            runner.jobs['coverage'] = job
+            runner._adapter_tokens['coverage'] = object()
+            rows = [{'sessionTag': gw.session_tag('coverage'), 'status': 200, 'model': leg.model}]
+            gw.witness(runner, 'coverage', job, env, fetch=lambda *a: rows)
+            if job.served_family is None:
+                missing.append(leg.id)
+            else:
+                assert job.served_family == leg.family, leg.id
+        elif native_models(leg.harness, json.dumps(
+                {'type': 'system', 'subtype': 'init', 'model': leg.model})):
+            continue
+        else:
+            missing.append(leg.id)
+    print('Route-table legs without a witness path (including disabled legs):\n' + '\n'.join(missing))
+    assert not set(missing).intersection(leg.id for leg in _SOL_LEGS), missing

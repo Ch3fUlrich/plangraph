@@ -445,8 +445,6 @@ class SpawnerRunner:
                         raise ValueError('not an object')
                     cfg['permission'] = {tool: 'deny' for tool in ('*',) + _DENIED_TOOLS}
                     cfg.update(mcp={}, plugin=[])   # D-2921 F1: drop every MCP server and plugin
-                    from .gateway_witness import tag_session
-                    tag_session(cfg, job_id)   # D-3226: the gateway logs this run's sessionTag
                     child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
@@ -455,6 +453,15 @@ class SpawnerRunner:
                     render_reason = 'reasoning_output_limit: no supported reasoning cap'
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
+            # Response-side gateway evidence applies to writers as well as reviews.
+            # Tag after the final provider merge and review permission changes.
+            try:
+                cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
+                from .gateway_witness import tag_session
+                tag_session(cfg, job_id)
+                child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
+            except (ValueError, TypeError, AttributeError):
+                pass  # An unparseable config cannot supply a session-tag witness.
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
         if render_reason is None:
@@ -768,9 +775,10 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-opencode-store'
                 elif oc_dir and denied:
                     job.events.append({'event': 'opencode_witness_unavailable'})
-                if denied:   # D-3226 response-side, any exit code: the gateway call log names the model
-                    from .gateway_witness import witness
-                    await asyncio.to_thread(witness, self, job_id, job, env)
+            # The trusted response-side log is independent of child tool permissions.
+            if is_opencode(job):
+                from .gateway_witness import witness
+                await asyncio.to_thread(witness, self, job_id, job, env)
 
             if job.command and job.command[0] == 'claude' and last_stop_reason(stdout_text) == 'refusal':
                 answer = final_text(stdout_text)
