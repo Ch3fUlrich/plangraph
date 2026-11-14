@@ -17,9 +17,7 @@ pub(super) fn spawn_tree() -> ! {
         .env("PG_FAKE_CHILD", "tree-leaf")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        // spawn_grouped runs our parent without a console. Creation flags are
-        // not inherited: suppress the leaf's console too, so Windows cannot
-        // add a console host to this test's otherwise two-process job.
+        // Match spawn_grouped's console creation behavior for the leaf too.
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .unwrap();
@@ -81,11 +79,27 @@ pub(super) fn member_names(pids: &[u32]) -> String {
         .join(", ")
 }
 
+pub(super) fn tree_members(pids: &[u32], child: u32, grandchild: u32) -> bool {
+    // CREATE_NO_WINDOW can add a console host to the job for each console process.
+    let extras: Vec<_> = pids
+        .iter()
+        .copied()
+        .filter(|&pid| pid != child && pid != grandchild)
+        .collect();
+    pids.contains(&child)
+        && pids.contains(&grandchild)
+        && extras.len() <= 2
+        && extras.iter().all(|&pid| {
+            image_name(pid)
+                .is_ok_and(|image| image.to_ascii_lowercase().ends_with("\\system32\\conhost.exe"))
+        })
+}
+
 pub(super) fn assert_tree_members(pids: &[u32], child: u32, grandchild: u32) -> String {
     let names = member_names(pids);
     assert!(
-        pids.len() == 2 && pids.contains(&child) && pids.contains(&grandchild),
-        "expected only child {child} and grandchild {grandchild}; job members: {names}"
+        tree_members(pids, child, grandchild),
+        "expected child {child}, grandchild {grandchild}, and at most two System32 console hosts; job members: {names}"
     );
     names
 }
