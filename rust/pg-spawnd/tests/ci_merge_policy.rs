@@ -50,3 +50,19 @@ with tempfile.TemporaryDirectory() as tmp:
         git('reset', '--hard', base)
 "#);
 }
+
+#[test]
+fn browser_selection_and_failure_are_enforced() {
+    python(r#"
+import sys
+sys.path.insert(0, 'tools')
+import ci_select as ci
+assert ci.select(['src/plangraph/keeper/store.py'])['browser'] is False
+for path in ['src/plangraph/web/app.js', 'tests/browser/test_ui.py', 'requirements-ci.txt', '.github/workflows/tests.yml', 'vendor/htmx.js', 'tests/conftest.py', 'pyproject.toml']:
+    assert ci.select([path])['browser'] is True, path
+needs = {'select': {'result': 'success', 'outputs': {s: 'true' for s in ci.SUITES}}}
+needs.update({s: {'result': 'success'} for s in ci.ALWAYS + ci.SUITES})
+needs['browser']['result'] = 'failure'
+assert 'browser: failure' in ci.gate(needs)
+"#);
+}

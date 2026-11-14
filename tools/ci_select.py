@@ -18,6 +18,7 @@ SUITES: tuple[str, ...] = (
     "rust",
     "rust-worker",
     "rust-spike",
+    "browser",
 )
 
 KNOWN_PREFIXES: tuple[str, ...] = (
@@ -123,6 +124,8 @@ def select(paths: list[str]) -> dict[str, bool]:
     res["full"] = False
 
     for p in norm_paths:
+        if p.startswith(("src/plangraph/web/", "tests/browser/", "vendor/")) or p in ("tests/conftest.py", "pyproject.toml"):
+            res["browser"] = True
         if any(fnmatchcase(p, pattern) for pattern in RUST_INPUTS):
             res["rust"] = True
         if p.startswith("skills/") and p.endswith(".md"):
