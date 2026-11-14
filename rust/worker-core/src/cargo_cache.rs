@@ -85,7 +85,10 @@ fn user_home(_: &str) -> io::Result<PathBuf> {
 pub(crate) fn try_exclusive_lease(target: &Path) -> io::Result<Option<File>> {
     use std::os::fd::AsRawFd;
     let mut name = target
-        .file_name()
+        .components()
+        .next_back()
+        .map(|c| c.as_os_str())
+        .filter(|name| *name != OsStr::new("/"))
         .ok_or_else(|| io::Error::other("cache root needs a name"))?
         .to_os_string();
     name.push(".plangraph-lock");
@@ -93,7 +96,12 @@ pub(crate) fn try_exclusive_lease(target: &Path) -> io::Result<Option<File>> {
         .read(true)
         .append(true)
         .create(true)
-        .open(target.with_file_name(name))?;
+        .open(
+            target
+                .parent()
+                .ok_or_else(|| io::Error::other("cache root needs a parent"))?
+                .join(name),
+        )?;
     // SAFETY: lease owns a valid descriptor; flock does not retain pointers.
     if unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
         return Ok(Some(lease));

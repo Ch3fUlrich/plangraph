@@ -216,26 +216,24 @@ fn clean_caches(
             .push(format!("{}: dirty or tracked cache", path.display()));
         return Ok(());
     }
-    let ignored = git(
-        path,
-        &[
-            "ls-files",
-            "--others",
-            "--ignored",
-            "--exclude-standard",
-            "--directory",
-            "-z",
-            "--",
-            ".",
-            ":(exclude)target/",
-            ":(exclude)node_modules/",
-        ],
-    )?;
-    if ignored
-        .split('\0')
-        .filter(|s| !s.is_empty())
-        .any(|s| !relative.iter().any(|cache| Path::new(s).starts_with(cache)))
-    {
+    // Enumerate only ignored non-cache data. --directory also emits untracked
+    // ancestors of nested ignored caches (e.g. src/), so do not use it here.
+    let exclusions: Vec<_> = relative
+        .iter()
+        .map(|cache| format!(":(top,literal,exclude){cache}"))
+        .collect();
+    let mut ignored_args = vec![
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "-z",
+        "--",
+        ".",
+    ];
+    ignored_args.extend(exclusions.iter().map(String::as_str));
+    let ignored = git(path, &ignored_args)?;
+    if !ignored.is_empty() {
         report
             .skipped
             .push(format!("{}: ignored non-cache files", path.display()));
