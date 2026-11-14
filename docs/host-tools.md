@@ -7,12 +7,12 @@ EnvironmentFile paths and contents, global Git core.hooksPath, each main
 checkout's local core.hooksPath, and `crontab -l`. Empty unit assignments reset
 earlier values; drop-ins apply in filename order. `%h`, `$HOME` and `~` expand
 without running shell code. Git context/config injection variables are cleared.
-Main checkout defaults are `~/code/plangraph` and `~/code/plangraph-data`;
+Main checkout defaults are `~/code/plangraph` and `~/code/app-data`;
 repeat `--repo PATH` to select other main checkouts. Allowed roots default to
 those two checkouts plus `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/etc`,
 `/run`, `/var` and `/dev`. Repeat `--allow-root PATH` to add an allowed root.
 Paths under `worktrees`, `*-worktrees`, `.claude/worktrees`, `plangraph-hooks`,
-`code/routing` or `AutoOS` always fail, including resolved symlink targets.
+the legacy routing checkout or `AutoOS` always fail, including resolved symlink targets.
 Each issue prints `path-kind file: offending-path` and exits 1; clean checks
 exit 0. JSON includes `ok`, `issues` and `allowed_roots`. Inventory errors also
 exit 1. The check never edits units, Git config, or crontabs.

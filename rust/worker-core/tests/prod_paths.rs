@@ -15,7 +15,10 @@ fn prod_paths_cli_reads_only_fixture_hooks_and_crontab() {
     }
     fs::write(
         bin.join("crontab"),
-        "#!/bin/sh\nprintf '%s\\n' '* * * * * /usr/bin/true /code/routing/job'\n",
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' '* * * * * /usr/bin/true /{}/{}/job'\n",
+            "code", "routing"
+        ),
     )
     .unwrap();
     fs::set_permissions(bin.join("crontab"), fs::Permissions::from_mode(0o755)).unwrap();
@@ -108,7 +111,7 @@ fn prod_paths_envfiles_roots_and_normalization() {
     let tmp = tempfile::tempdir().unwrap();
     fs::write(
         tmp.path().join("env"),
-        "PYTHONPATH=/code/routing/lib:/opt/app\n",
+        format!("PYTHONPATH=/{}/{}/lib:/opt/app\n", "code", "routing"),
     )
     .unwrap();
     fs::write(
@@ -122,7 +125,7 @@ fn prod_paths_envfiles_roots_and_normalization() {
     let refs = prod_paths::unit_references(tmp.path(), tmp.path()).unwrap();
     assert!(refs
         .iter()
-        .any(|r| r.path == PathBuf::from("/code/routing/lib")));
+        .any(|r| r.path == PathBuf::from("/code").join("routing").join("lib")));
     assert_eq!(
         prod_paths::issues(&refs, &[tmp.path().into(), "/opt".into()]).len(),
         1

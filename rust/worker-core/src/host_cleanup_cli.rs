@@ -37,13 +37,10 @@ fn check_paths() -> io::Result<bool> {
         }
     }
     if repos.is_empty() {
-        repos = [
-            home.join("code/plangraph"),
-            home.join("code/plangraph-data"),
-        ]
-        .into_iter()
-        .filter(|p| p.exists())
-        .collect();
+        repos = [home.join("code/plangraph"), home.join("code/app-data")]
+            .into_iter()
+            .filter(|p| p.exists())
+            .collect();
     }
     let refs = prod_paths::inventory(&units, &home, &repos)?;
     let issues = prod_paths::issues(&refs, &roots);

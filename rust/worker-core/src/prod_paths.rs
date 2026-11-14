@@ -43,18 +43,15 @@ pub fn normalize(path: &Path, home: &Path) -> PathBuf {
 }
 
 pub fn default_roots(home: &Path) -> Vec<PathBuf> {
-    [
-        home.join("code/plangraph"),
-        home.join("code/plangraph-data"),
-    ]
-    .into_iter()
-    .chain(
-        [
-            "/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/run", "/var", "/dev",
-        ]
-        .map(PathBuf::from),
-    )
-    .collect()
+    [home.join("code/plangraph"), home.join("code/app-data")]
+        .into_iter()
+        .chain(
+            [
+                "/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/run", "/var", "/dev",
+            ]
+            .map(PathBuf::from),
+        )
+        .collect()
 }
 
 pub fn forbidden(path: &Path) -> bool {
