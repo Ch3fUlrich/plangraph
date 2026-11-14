@@ -152,6 +152,67 @@ fn read_log(record: &RunRecord) -> std::io::Result<String> {
     std::fs::read_to_string(path)
 }
 
+fn quota_args(record: &RunRecord, leg: &Value) -> Option<Vec<String>> {
+    // stderr remains useful when logging failed, was disabled, or rotated away.
+    let log = read_log(record).unwrap_or_default();
+    let mut errors = Vec::new();
+    let mut reset = None;
+    for frame in log
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+    {
+        if frame["event"] == "result" && frame["result"]["status"] != "SUCCESS" {
+            if let Some(error) = frame["result"]["error"].as_str() {
+                errors.push(error.to_owned());
+            }
+        } else if frame["type"] == "result" && frame["is_error"] == true {
+            if let Some(error) = frame["result"].as_str() {
+                errors.push(error.to_owned());
+            }
+        } else if frame["type"] == "rate_limit_event" {
+            use pg_worker_core::outcome::{
+                markers::{scan, Input},
+                Marker,
+            };
+            let line = frame.to_string();
+            if scan(&Input {
+                exit: 1,
+                stdout: &line,
+                stderr: "",
+                headers: &[],
+                response_date: None,
+                ts: 0.0,
+            })
+            .is_some_and(|hit| matches!(hit.marker, Marker::Quota | Marker::RateLimit))
+            {
+                errors.push("Error: quota exceeded.".into());
+                reset = frame["rate_limit_info"]["resetsAt"].as_f64();
+            }
+        }
+    }
+    if let Some(stderr) = record
+        .get("stderr_tail")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        errors.push(stderr.to_owned());
+    }
+    if errors.is_empty() {
+        return None;
+    }
+    let mut argv = vec![
+        "quota-result".into(),
+        "--model".into(),
+        leg["model"].as_str()?.into(),
+        "--error".into(),
+        errors.join("\n").chars().take(8192).collect(),
+    ];
+    if let Some(reset) = reset {
+        argv.extend(["--reset-at".into(), reset.to_string()]);
+    }
+    Some(argv)
+}
+
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     if record.get("role").and_then(Value::as_str) != Some("review")
         || !eligible(leg)
@@ -171,29 +232,12 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     let text = crate::review_artifacts::review_text(state, &value).unwrap_or_default();
     // Book provider errors through the existing store/parser, never answer prose.
     if status != Status::Completed || text.is_empty() || text.contains("VERDICT: HALT") {
-        if let Ok(log) = read_log(record) {
-            let mut argv = vec![
-                "quota-result".into(),
-                "--model".into(),
-                leg["model"].as_str().unwrap().into(),
-            ];
-            let mut errors: Vec<_> = log
-                .lines()
-                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-                .filter(|v| v["event"] == "result" && v["result"]["status"] != "SUCCESS")
-                .filter_map(|v| v["result"]["error"].as_str().map(str::to_owned))
-                .collect();
-            if let Some(stderr) = value["stderr_tail"].as_str().filter(|s| !s.is_empty()) {
-                errors.push(stderr.to_owned());
-            }
-            if !errors.is_empty() && leg["harness"] == "agy" {
-                argv.extend(["--error".into(), errors.join("\n")]);
-                if !matches!(
-                    crate::adapter::Adapter(state).run(&argv, Duration::from_secs(10)),
-                    Ok((0, _, _))
-                ) {
-                    record.set("quota_record_error", json!(true));
-                }
+        if let Some(argv) = quota_args(record, leg) {
+            if !matches!(
+                crate::adapter::Adapter(state).run(&argv, Duration::from_secs(10)),
+                Ok((0, _, _))
+            ) {
+                record.set("quota_record_error", json!(true));
             }
         }
         return;

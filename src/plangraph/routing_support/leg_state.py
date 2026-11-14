@@ -30,6 +30,8 @@ def quota_key(leg):
     """D-5966: effort variants share one quota within each agy model, never across models."""
     if not isinstance(leg, str):
         return leg
+    if leg == "claude-sonnet-5-5-high":
+        leg = "agy/" + leg  # D-5966: the native Sonnet fallback uses this model seat quota.
     return re.sub(r'^agy[/:]((?:gemini-4-(?:hydrogen|argon)|claude-sonnet-5-5))(?:-(?:low|medium|high|xhigh|max))?$',
                   r'agy:\1', leg)
 

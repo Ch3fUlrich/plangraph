@@ -29,16 +29,18 @@ hydrogen = route()
 store.record_harness_limit('agy/gemini-4-argon-medium',
     'Individual quota reached. Resets in 2h.', 'fixture')
 argon = route()
-store.record_harness_limit('agy/claude-sonnet-5-5-high',
+store.record_harness_limit('claude-sonnet-5-5-high',
     'Individual quota reached. Resets in 1h.', 'fixture')
 legacy = LegStateStore(store.path.with_name('legacy.sqlite'))
 with legacy._connect() as db:
     db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)",
                ('agy/gemini-4-hydrogen-high', None, None, 429, 'old quota', 36000, 36010, 10, 'fixture', 'harness-stderr'))
 legacy_state = legacy.leg_status('agy:gemini-4-hydrogen', now=7*3600)
+snapshot = plan_spawn(card, role='review', writer_families=['openai'], now=42, catalog_rows=[],
+    leg_reader=lambda model, **kw: dict(state='limited' if model == 'gemini-4-hydrogen-high' else 'ok', evidence=dict(ts=kw['now']))).to_dict()
 sonnet_only = plan_spawn(card, role='review', writer_families=['openai'], catalog_rows=[],
     leg_reader=lambda model, **kw: dict(state='ok' if model == 'claude-sonnet-5-5-high' else 'limited', evidence=None)).to_dict()
-print(json.dumps(dict(legacy=legacy_state, sonnet_only=sonnet_only, initial=initial, hydrogen=hydrogen, argon=argon, final=route(), later=store.leg_status('agy:gemini-4-hydrogen', now=store.leg_status('agy:gemini-4-hydrogen')['evidence']['ts'] + 7*3600))))
+print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet_only, initial=initial, hydrogen=hydrogen, argon=argon, final=route(), later=store.leg_status('agy:gemini-4-hydrogen', now=store.leg_status('agy:gemini-4-hydrogen')['evidence']['ts'] + 7*3600))))
 "#,
         ])
         .output()
@@ -62,6 +64,19 @@ print(json.dumps(dict(legacy=legacy_state, sonnet_only=sonnet_only, initial=init
         "console-deepseek/deepseek-flash"
     );
     assert_eq!(result["later"]["state"], "limited");
+    assert_eq!(
+        result["snapshot"]["agy_quota_states"]["agy:gemini-4-hydrogen"]["state"],
+        "limited"
+    );
+    assert_eq!(
+        result["snapshot"]["agy_quota_states"]["agy:gemini-4-hydrogen"]["evidence"]["ts"],
+        42
+    );
+    assert!(!result["final"]["legs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|l| l["model"] == "claude-sonnet-5-5-high"));
     assert_eq!(result["legacy"]["state"], "limited");
     assert_eq!(
         result["sonnet_only"]["first_leg"]["model"],

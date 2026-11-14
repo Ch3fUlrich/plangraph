@@ -56,6 +56,8 @@ class Route:
     cross_family: bool
     reasons: tuple[str, ...]
 
+    agy_quota_states: dict = field(default_factory=dict)
+
     @property
     def first_leg(self) -> Leg:
         return self.legs[0]
@@ -239,9 +241,6 @@ class SpawnPlan:
         for field in ('writer_groups', 'seat_coverage'):
             if not getattr(self, field): result.pop(field)
         result["first_leg"] = asdict(self.first_leg) if self.first_leg else None
-        from plangraph.routing_support.leg_state import leg_status
-        result["agy_quota_states"] = {"agy:" + model: leg_status("agy:" + model)
-            for model in ("gemini-4-hydrogen", "gemini-4-argon", "claude-sonnet-5-5")}
         return result
 
 
@@ -343,6 +342,11 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         return st
 
     states = {l.id: _leg_status(l) for l in candidates}
+    quota_states = {"agy:" + model: (states[leg_id] if leg_id in states else
+        reader("agy:" + model, now=now, account=card.get("account"), combo=card.get("combo")))
+        for model, leg_id in (("gemini-4-hydrogen", REVIEW_ORDER[0]),
+                             ("gemini-4-argon", REVIEW_ORDER[1]),
+                             ("claude-sonnet-5-5", REVIEW_ORDER[-1]))}
     limited = {key for key, state in states.items() if unavailable(state)}
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
                        "evidence": {"kind": "leg_disabled", "reason": l.disabled}}
@@ -385,7 +389,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                            exclude_families=excluded, role=role, now=now)
     except RouteError as exc:
         return SpawnPlan((), tuple(skipped), "operator-order", (),
-                         tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details), placement=placement)
+                         tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details), placement=placement, agy_quota_states=quota_states)
     ordered = list(route.legs)
     reasons, source = [*route.reasons, *bench_reasons], "operator-order"
     if benchmark is not None:
@@ -452,7 +456,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     threshold = admit_fixer_threshold(card=card)
     groups = split_findings(card.get('findings', ()), limit=threshold) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
-                     tuple(candidate_details), groups, coverage, placement)
+                     tuple(candidate_details), groups, coverage, placement, quota_states)
 
 
 def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller=None):

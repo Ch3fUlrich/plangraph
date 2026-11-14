@@ -128,6 +128,7 @@ def main(argv=None):
     p = commands.add_parser('quota-result')
     p.add_argument('--model', required=True)
     p.add_argument('--error', required=True)
+    p.add_argument('--reset-at', type=float)
     commands.add_parser('launch-spec')
     p = commands.add_parser('probe')
     p.add_argument('--leg', action='append', default=[])
@@ -145,6 +146,8 @@ def main(argv=None):
         from .leg_state import record_harness_limit
         line = harness_limit_line(1, '', args.error)
         if line:
+            if args.reset_at is not None and args.reset_at > time.time():
+                line += f' Resets in {args.reset_at - time.time()}s.'
             record_harness_limit('agy/' + args.model, line, 'pg-spawnd:cli-result')
         print('{}')
         return 0

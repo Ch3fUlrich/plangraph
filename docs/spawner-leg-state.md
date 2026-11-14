@@ -110,3 +110,6 @@ quota snapshots do not suppress these native CLI models.
 Legacy agy/<model>-<effort> events remain readable under the canonical key.
 Explicit agy resets survive the generic six-hour evidence TTL, up to the existing
 24-hour booking cap.
+The native Sonnet-high fallback reads and books the declared agy:claude-sonnet-5-5
+seat key, including structured CLI limits and provider reset timestamps. Route
+JSON carries the planning reader/clock snapshot rather than rereading global state.
