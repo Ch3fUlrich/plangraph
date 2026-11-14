@@ -22,7 +22,7 @@ from registry_route_util import CARD, live_policy  # noqa: F401
 
 #: The policy restated literally.  Widening claude_env.CLAUDE_ENV_ALLOW has to change this list too.
 POLICY = (
-    'APPDATA', 'CLAUDE_CONFIG_DIR', 'COMSPEC', 'HOME', 'HOMEDRIVE', 'HOMEPATH', 'HTTPS_PROXY', 'HTTP_PROXY',
+    'APPDATA', 'CARGO_TARGET_DIR', 'CLAUDE_CONFIG_DIR', 'COMSPEC', 'HOME', 'HOMEDRIVE', 'HOMEPATH', 'HTTPS_PROXY', 'HTTP_PROXY',
     'LANG', 'LANGUAGE', 'LOCALAPPDATA', 'LOGNAME', 'NODE_EXTRA_CA_CERTS', 'NO_PROXY', 'PATH', 'PATHEXT',
     'PROGRAMDATA', 'PWD', 'SHELL', 'SSL_CERT_DIR', 'SSL_CERT_FILE', 'SYSTEMDRIVE', 'SYSTEMROOT', 'TEMP',
     'TERM', 'TMP', 'TMPDIR', 'TZ', 'USER', 'USERNAME', 'USERPROFILE', 'WINDIR',
@@ -130,7 +130,7 @@ def test_spawn_path_child_env_is_exactly_the_allowlist(monkeypatch, tmp_path):
                          extra_env={'SMUGGLED_BY_CALLER': 'v', 'XDG_DATA_HOME': '/d'})
     assert env is not None
     check_env(env)
-    expected = {name for name in os.environ if policy_allows(name)} | {'PWD', 'XDG_DATA_HOME'}
+    expected = {name for name in os.environ if policy_allows(name)} | {'PWD', 'XDG_DATA_HOME', 'CARGO_TARGET_DIR'}
     assert set(env) == expected, 'allowlisted names went missing: ' + ', '.join(sorted(expected - set(env)))
     home_ok, cfg_ok = env.get('HOME') == '/h', env.get('CLAUDE_CONFIG_DIR') == '/cfg'
     pwd_ok, xdg_ok = env.get('PWD') == str(tmp_path), env.get('XDG_DATA_HOME') == '/d'

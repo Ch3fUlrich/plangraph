@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
+import math
 import subprocess
 import sys
 import time
@@ -17,6 +19,120 @@ from .private_io import atomic_write_private
 
 HOST_TIMEOUT = 120
 MAX_AGE = 600
+
+
+def shared_cargo_target():
+    return Path(os.environ.get('PLANGRAPH_CARGO_TARGET_DIR',
+                               '~/.cache/plangraph/cargo-target')).expanduser().absolute()
+
+
+def cargo_child_env(env):
+    return dict(env, CARGO_TARGET_DIR=str(shared_cargo_target()))
+
+
+def disk_free_gb(path):
+    path = Path(path).expanduser().absolute()
+    while not path.exists():
+        path = path.parent
+    return shutil.disk_usage(path).free / (1024 ** 3)
+
+
+def cargo_target_size_gb(path):
+    # Do not follow links into another cache or repository.
+    total = 0
+    if not path.exists():
+        return 0
+    def unreadable(exc):
+        if not isinstance(exc, FileNotFoundError):
+            raise exc
+    for root, dirs, files in os.walk(path, onerror=unreadable):
+        dirs[:] = [d for d in dirs if not (Path(root) / d).is_symlink()]
+        for name in files:
+            entry = Path(root) / name
+            if not entry.is_symlink():
+                try:
+                    total += entry.stat().st_size
+                except FileNotFoundError:
+                    pass  # Cargo renames and unlinks temporary files during builds.
+    return total / (1024 ** 3)
+
+
+def _windows_cargo_lease(path, exclusive):
+    # Shared handles admit concurrent readers; an exclusive cleanup handle
+    # cannot open while any run holds a read handle. Closing releases the lease.
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                       wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    create.restype = wintypes.HANDLE
+    handle = create(str(path), 0xC0000000 if exclusive else 0x80000000,
+                    0 if exclusive else 1, None, 4, 0x80, None)
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY)
+    except BaseException:
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle(handle)
+        raise
+    return os.fdopen(fd, 'rb')
+
+
+def cargo_lease(exclusive=False):
+    target = shared_cargo_target()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    path = target.with_name(target.name + '.plangraph-lock')
+    if os.name == 'nt':
+        return _windows_cargo_lease(path, exclusive)
+    lease = path.open('a+b')
+    try:
+        import fcntl
+        fcntl.flock(lease, (fcntl.LOCK_EX | fcntl.LOCK_NB) if exclusive else fcntl.LOCK_SH)
+        return lease
+    except BaseException:
+        lease.close()
+        raise
+
+
+def local_disk_refusal(worktree, service):
+    """Check the worktree filesystem and bound the host's shared build cache."""
+    try:
+        floor = float(os.environ.get('PLANGRAPH_DISK_FLOOR_GB', '5'))
+        cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
+        if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
+            raise ValueError('invalid disk limits')
+        target = shared_cargo_target()
+        checkout, cache = Path(worktree).resolve(), target.resolve()
+        if (target.is_symlink() or checkout.is_relative_to(cache) or
+                cache.is_relative_to(checkout) or cache == Path.home().resolve()):
+            raise ValueError('unsafe cache directory')
+        size = cargo_target_size_gb(target)
+        if size > cap:
+            from .runner import is_terminal
+            if any(r.get('survivors') or (r.get('status') != 'queued' and not is_terminal(r.get('status')))
+                   for r in service.ps()['runs']):
+                return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy'
+            try:
+                with cargo_lease(exclusive=True):
+                    if target.exists():
+                        shutil.rmtree(target)
+            except OSError:
+                return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy or cleanup unavailable'
+        paths = [worktree]
+        if getattr(service, 'state', None) is not None:
+            from plangraph.settings import _policy_data
+            policy = _policy_data(worktree) or {}
+            paths.append(policy.get('worktree_root') or service.state / 'worktrees')
+            paths.append(service.state / 'trees')
+        free = min(disk_free_gb(p) for p in paths)
+        if free < floor:
+            return f'disk_low: free {free:.2f} GB, floor {floor:g} GB'
+    except (OSError, ValueError, TypeError, KeyError):
+        return 'disk_low: measurement or configuration unavailable'
+    return None
 
 
 def fresh(record, now=None):
@@ -139,8 +255,8 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                 record['live_runs'] = sum(r['status'] == 'running' for r in runs)
             if record['mem_available_mb'] is not None and record['mem_available_mb'] < config['floor_mb']:
                 fail('memory', 'below_floor')
-            if record['disk_free_gb'] == 0:
-                fail('disk', 'full')
+            if record['disk_free_gb'] is not None and record['disk_free_gb'] < config.get('disk_floor_gb', 5):
+                fail('disk', f"disk_low: free {record['disk_free_gb']} GB")
         else:
             reachability_failed = True
     except (MemoryError, RecursionError):

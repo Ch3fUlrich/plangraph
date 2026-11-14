@@ -17,7 +17,7 @@ from typing import Mapping
 #: Exact names (upper-case) the claude child may inherit.
 CLAUDE_ENV_ALLOW = frozenset({
     # identity, shell and working directory (PWD: D-3505, the project dir comes from $PWD)
-    'HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'PWD', 'TERM',
+    'HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'PWD', 'TERM', 'CARGO_TARGET_DIR',
     # locale and time zone
     'LANG', 'LANGUAGE', 'TZ',
     # scratch space

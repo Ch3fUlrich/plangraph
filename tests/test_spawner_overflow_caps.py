@@ -132,3 +132,192 @@ def test_missing_swap_readings_have_named_refusal(monkeypatch, text):
 def test_spawn_exit_code(status, exit_code, expected):
     from plangraph.spawner.base_fresh import spawn_exit_code
     assert spawn_exit_code(dict(status=status, exit_code=exit_code)) == expected
+
+
+@pytest.mark.parametrize('free,refused', [(4.99, True), (5, False), (5.01, False)])
+def test_disk_floor_admission(tmp_path, monkeypatch, free, refused):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h, seat_spawn
+    monkeypatch.delenv('PLANGRAPH_DISK_FLOOR_GB')
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'shared'))
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: free)
+    monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 99999))
+    monkeypatch.setattr(o, 'registry_caps', lambda: {})
+    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(tmp_path / 'absent'))
+    service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(tmp_path / 'checkout')),
+                              ps=lambda: {'runs': []})
+    result = seat_spawn.admit(service, {})
+    assert (result is not None) == refused
+    if refused:
+        assert 'disk_low' in result['reason'] and '4.99' in result['reason']
+
+
+@pytest.mark.parametrize('busy', [False, True])
+def test_shared_target_cap_idle_clears_busy_refuses(tmp_path, monkeypatch, busy):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+    target = tmp_path / 'shared'
+    target.mkdir()
+    (target / 'artifact').write_text('cached build')
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(target))
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '12')
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 100)
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 13)
+    service = SimpleNamespace(ps=lambda: {'runs': [{'status': 'running'}] if busy else []})
+    reason = h.local_disk_refusal(tmp_path / 'checkout', service)
+    assert bool(reason) == busy
+    if busy:
+        assert 'cargo_target_cap' in reason and '13' in reason
+    assert (target / 'artifact').exists() == busy
+
+
+def test_shared_target_env_overrides_worktree_target(tmp_path, monkeypatch):
+    from plangraph.spawner.host_ready import cargo_child_env
+    from plangraph.spawner.claude_env import claude_child_env
+    target = tmp_path / 'shared'
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(target))
+    env = cargo_child_env({'CARGO_TARGET_DIR': str(tmp_path / 'worktree/rust/target')})
+    assert env['CARGO_TARGET_DIR'] == str(target)
+    assert claude_child_env(env)['CARGO_TARGET_DIR'] == str(target)
+
+
+def test_cache_lease_blocks_idle_cleanup(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+    target = tmp_path / 'shared'
+    target.mkdir()
+    (target / 'artifact').write_text('keep active build')
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(target))
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 13)
+    service = SimpleNamespace(ps=lambda: {'runs': []})
+    with h.cargo_lease():
+        assert 'cargo_target_cap' in h.local_disk_refusal(tmp_path / 'checkout', service)
+        assert (target / 'artifact').exists()
+    assert h.local_disk_refusal(tmp_path / 'checkout', service) is None
+    assert not target.exists()
+
+
+def test_disk_measurement_covers_configured_worktree_filesystem(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+    from plangraph import settings
+    root = tmp_path / 'other-filesystem'
+    monkeypatch.setattr(settings, '_policy_data', lambda repo: {'worktree_root': str(root)})
+    monkeypatch.setenv('PLANGRAPH_DISK_FLOOR_GB', '30')
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 5 if path == str(root) else 100)
+    service = SimpleNamespace(state=tmp_path / 'state')
+    assert 'disk_low: free 5.00 GB' in h.local_disk_refusal(tmp_path / 'checkout', service)
+
+
+def test_remote_low_disk_uses_next_host():
+    rows = {name: dict(ssh=name, ok=True, fresh=True, live_runs=0,
+                      mem_available_mb=10000, role_mb=2048, floor_mb=3000,
+                      disk_free_gb=free) for name, free in [('low', 4), ('room', 5)]}
+    assert o.decide(10000, 2048, 3000, rows, True,
+                    local_refusal='disk_low: free 20 GB').host == 'room'
+    decision = o.decide(10000, 2048, 3000, {'low': rows['low']}, True,
+                        local_refusal='disk_low: free 20 GB')
+    assert decision.host is None and 'disk_low: free 4 GB' in decision.reason
+
+
+def test_shared_target_defaults_to_host_cache(tmp_path, monkeypatch):
+    from plangraph.spawner.host_ready import cargo_child_env
+    monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_DIR')
+    monkeypatch.setenv('HOME', str(tmp_path))
+    assert cargo_child_env({})['CARGO_TARGET_DIR'] == str(tmp_path / '.cache/plangraph/cargo-target')
+
+
+@pytest.mark.parametrize('field', ['disk_free_gb', 'disk_floor_gb'])
+@pytest.mark.parametrize('bad', ['not numeric', {}, False, -1, float('nan'), float('inf')])
+def test_bad_disk_readiness_skips_host(field, bad):
+    low = dict(ssh='bad', ok=True, fresh=True, live_runs=0, mem_available_mb=12000,
+               role_mb=2048, floor_mb=3000, disk_free_gb=40, disk_floor_gb=30)
+    good = dict(low, ssh='good')
+    low[field] = bad
+    decision = o.decide(4000, 2048, 3000, {'bad': low, 'good': good}, True)
+    assert decision.host == 'good'
+    refused = o.decide(4000, 2048, 3000, {'bad': low}, True)
+    assert refused.host is None and 'malformed readiness' in refused.reason
+
+
+def test_cache_scan_ignores_vanished_build_artifacts(tmp_path, monkeypatch):
+    from plangraph.spawner import host_ready as h
+    def racing_walk(path, onerror):
+        onerror(FileNotFoundError('incremental directory was renamed'))
+        yield str(path), [], ['removed-during-build']
+    monkeypatch.setattr(h.os, 'walk', racing_walk)
+    assert h.cargo_target_size_gb(tmp_path) == 0
+
+
+def test_cache_scan_does_not_ignore_permission_errors(tmp_path, monkeypatch):
+    from plangraph.spawner import host_ready as h
+    def unreadable_walk(path, onerror):
+        onerror(PermissionError('cache unreadable'))
+        return iter(())
+    monkeypatch.setattr(h.os, 'walk', unreadable_walk)
+    with pytest.raises(PermissionError):
+        h.cargo_target_size_gb(tmp_path)
+
+
+@pytest.mark.parametrize('kind', ['inside', 'ancestor', 'home-link', 'source-link'])
+def test_cache_cleanup_rejects_source_paths(tmp_path, monkeypatch, kind):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+    worktree = tmp_path / 'checkout'
+    worktree.mkdir()
+    home = tmp_path / 'home'
+    home.mkdir()
+    monkeypatch.setenv('HOME', str(home))
+    if kind == 'inside':
+        target = worktree / 'src'
+        target.mkdir()
+    elif kind == 'ancestor':
+        target = tmp_path
+    elif kind == 'home-link':
+        link = tmp_path / 'home-alias'
+        link.symlink_to(home, target_is_directory=True)
+        monkeypatch.setenv('HOME', str(link))
+        target = home
+    else:
+        link = tmp_path / 'source-alias'
+        link.symlink_to(worktree, target_is_directory=True)
+        target = link / 'src'
+        target.mkdir()
+    artifact = target / 'precious'
+    artifact.write_text('source')
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(target))
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 13)
+    reason = h.local_disk_refusal(worktree, SimpleNamespace(ps=lambda: {'runs': []}))
+    assert reason and 'configuration unavailable' in reason
+    assert artifact.read_text() == 'source'
+
+@pytest.mark.parametrize('source', ['argument', 'card'])
+def test_local_disk_uses_launch_cwd(tmp_path, monkeypatch, source):
+    from plangraph.spawner import host_ready as h
+    root = tmp_path
+    card = root / 'card.json'
+    card.write_text('{}')
+    prompt = root / 'prompt.txt'
+    prompt.write_text('task')
+    args = ['spawn', '--repo', str(root), '--card', str(card), '--prompt', str(prompt)]
+    monkeypatch.setattr(o, 'registry_caps', lambda: {})
+    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(root / 'missing'))
+    cwd = str(root / 'other-filesystem')
+    o.Path(cwd).mkdir()
+    o.subprocess.run(['git', 'init', '-q', cwd], check=True)
+    o.subprocess.run(['git', '-C', cwd, '-c', 'user.name=Test', '-c',
+                      'user.email=test@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'init'], check=True)
+    if source == 'argument':
+        args += ['--cwd', cwd]
+    else:
+        card = root / 'card.json'
+        card.write_text(json.dumps({'cwd': cwd}))
+    monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
+    seen = []
+    def disk(worktree, service):
+        seen.append(worktree)
+        return None if worktree == cwd else 'disk_low'
+    monkeypatch.setattr(h, 'local_disk_refusal', disk)
+    monkeypatch.setattr(o.cli, 'main', lambda argv: 3)
+    assert o.main(args) == 3
+    assert seen == [cwd]
