@@ -90,3 +90,31 @@ def test_caller_cannot_choose_successful_gate_or_skip_preview(monkeypatch, tmp_p
         admit_daily_budget(replace(DEFAULT_LEGS[0], tier='paid'), dry_run=dry_run)
     assert calls and calls[0][0] != untrusted
     assert ('--dry-run' in calls[0]) == dry_run
+
+
+def test_unadmitted_combo_is_refused_before_budget(monkeypatch, tmp_path):
+    from plangraph.planner import routing
+    from plangraph.spawner.runner import SpawnerRunner
+    monkeypatch.setattr(routing, 'validate_model', lambda model: model)
+    monkeypatch.setattr('plangraph.spawner.resolver.get_catalog_models', lambda: [])
+    def gate(*args, **kwargs):
+        pytest.fail('an unadmitted combo must be refused before budget checks')
+    monkeypatch.setattr('plangraph.spawner.target.admit_daily_budget', gate)
+    with pytest.raises(SpawnRefused, match='no admitted legs for combo'):
+        asyncio.run(SpawnerRunner(default_cwd=str(tmp_path)).spawn(
+            'fixture', model_or_combo='l2-worker', dry_run=True))
+
+
+def test_admitted_paid_preview_still_requires_budget(monkeypatch, tmp_path):
+    from plangraph.spawner.runner import SpawnerRunner
+    paid = next(leg for leg in DEFAULT_LEGS if leg.id == 'deepseek')
+    calls = []
+    def gate(leg, **kwargs):
+        calls.append((leg, kwargs))
+        raise SpawnRefused('fixture gate refused')
+    monkeypatch.setattr('plangraph.spawner.target.admit_daily_budget', gate)
+    monkeypatch.setattr('plangraph.spawner.resolver.get_catalog_models', lambda: [])
+    with pytest.raises(SpawnRefused, match='fixture gate refused'):
+        asyncio.run(SpawnerRunner(default_cwd=str(tmp_path)).spawn(
+            'fixture', model_or_combo=paid.model, dry_run=True))
+    assert calls and calls[0][1]['dry_run'] is True

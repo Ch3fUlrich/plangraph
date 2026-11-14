@@ -50,3 +50,7 @@ overwriting new state. Originals stay for rollback. `cost-gate overlap-start`
 records a durable start; `overlap-check` stays nonzero for the first 24 hours.
 After that minimum overlap and operator verdict comparison, remove the old
 cost-gate timer/service and repoint routerctl. These commands never change units.
+
+Dry-run combos must first have an admitted model. An empty/unadmitted combo
+keeps its routing refusal instead of reporting a budget error. Once a preview
+has an admitted paid target, its read-only budget check remains mandatory.

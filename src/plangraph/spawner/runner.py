@@ -314,6 +314,21 @@ class SpawnerRunner:
             client = leg.harness
         from .target import admit_daily_budget
         validate_model(model_or_combo)
+        if dry_run:
+            served_model = model_or_combo
+            served_family = detect_model_family(model_or_combo)
+            if "/" not in model_or_combo and not any(l.model == model_or_combo for l in (*DEFAULT_LEGS, *EXPLICIT_LEGS)):
+                from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
+                combo_legs = [
+                    m for m in get_catalog_models()
+                    if model_or_combo in (m.get("combos") or []) and catalog_row_admitted(m)
+                ]
+                if combo_legs:
+                    served_model = combo_legs[0]["id"]
+                    served_family = detect_model_family(served_model)
+                else:
+                    from plangraph.routing_errors import SpawnRefused
+                    raise SpawnRefused('no admitted legs for combo: ' + model_or_combo)
         await asyncio.to_thread(admit_daily_budget, leg, model=model_or_combo, dry_run=dry_run)
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
             prompt = IMPLEMENT_HEADER + "\n\n" + prompt
@@ -454,20 +469,6 @@ class SpawnerRunner:
 
         try:
             if dry_run:
-                served_model = model_or_combo
-                served_family = detect_model_family(model_or_combo)
-                if "/" not in model_or_combo and not any(l.model == model_or_combo for l in (*DEFAULT_LEGS, *EXPLICIT_LEGS)):
-                    from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
-                    combo_legs = [
-                        m for m in get_catalog_models()
-                        if model_or_combo in (m.get("combos") or []) and catalog_row_admitted(m)
-                    ]
-                    if combo_legs:
-                        served_model = combo_legs[0]["id"]
-                        served_family = detect_model_family(served_model)
-                    else:
-                        from plangraph.routing_errors import SpawnRefused
-                        raise SpawnRefused('no admitted legs for combo: ' + model_or_combo)
                 stdin_note = f" [stdin: {len(prompt.encode('utf-8'))} bytes]"
                 job = JobInfo(
                     job_id=job_id,

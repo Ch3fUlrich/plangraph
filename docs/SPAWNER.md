@@ -684,3 +684,6 @@ subscription harness `claude -p`). Explicit picks use normal run records/stdout
 and host admission. Any Claude/Anthropic writer part fences it, including mixed
 writer families and `review_of` evidence. Its review command always sets
 `--tools ""` and strict empty MCP config, including explicit tool-mode requests.
+
+Dry-run combo admission resolves before cost admission, so an unadmitted combo
+retains its routing refusal. Valid paid previews still require budget admission.

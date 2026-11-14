@@ -1,0 +1,1 @@
+- Resolve dry-run combo admission before daily budget checks, retaining no-admitted-legs refusals while keeping valid paid previews gated.
