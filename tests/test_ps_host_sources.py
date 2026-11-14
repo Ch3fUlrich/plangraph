@@ -104,7 +104,7 @@ assert os.environ['PATH'] == before
 @pytest.fixture
 def ssh(tmp_path, monkeypatch):
     binary = tmp_path / 'ssh'
-    binary.write_text('#!/usr/bin/env python3\n'
+    binary.write_text(f'#!{sys.executable}\n'
                       'import os, sys, time\n'
                       'print("PRIVATE-DIAGNOSTIC", file=sys.stderr)\n'
                       'time.sleep(float(os.environ.get("SSH_DELAY", "0")))\n'
@@ -204,7 +204,7 @@ def test_doctor_deadline_many_hosts(monkeypatch):
 
 def test_stderr_does_not_control_result(ssh):
     binary, hosts = ssh
-    binary.write_text('#!/usr/bin/env python3\nimport sys\n'
+    binary.write_text(f'#!{sys.executable}\nimport sys\n'
                       'sys.stderr.write("No module named plangraph" * 100000)\n'
                       'print(\'{"runs": []}\')\n')
     assert remote_ps._fetch(hosts[0], remote_ps.query_host) == []
