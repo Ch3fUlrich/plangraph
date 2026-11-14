@@ -65,9 +65,16 @@ Run `tools/hooks/install_hooks.sh --git` with the host's shared
 `CARGO_TARGET_DIR` set. It builds the Rust `commit-msg` executable, installs it
 into the checkout's `tools/hooks`, and sets `core.hooksPath` to that directory
 (including its existing pre-push). Re-run after changing the Rust entry point.
-The binary calls `tools/ci_commit_gate.py commit-message` in the current
-worktree: both CI and Git use `message_violations` for Writer, strict Hand-Edit,
-and `Changelog: skip (<reason>)` validation. Merge commits bypass the hook.
+The binary calls `tools/ci_commit_gate.py commit-message` beside the installed binary
+(in `tools/ci_commit_gate.py`): both CI and Git use `message_violations` for Writer, strict Hand-Edit,
+and `Changelog: skip (<reason>)` validation. An active merge (`MERGE_HEAD`) bypasses the hook.
 Missing files, interpreters, and failed Git probes refuse the commit.
 Git editor comments are stripped for validation with `git stripspace --strip-comments`
 (respecting `core.commentChar`); the original message file stays intact.
+Verbose editor scissors sections are excluded too.
+
+Git does not tell commit-msg whether the invocation is `--amend`. Once
+`MERGE_HEAD` is gone, amending a trailerless merge requires adding attribution
+or using Git's explicit `--no-verify` override. Inferring an amendment from
+HEAD or matching messages would also exempt new non-merge commits after a merge;
+the hook keeps those guarded. CI still exempts all actual merge objects.

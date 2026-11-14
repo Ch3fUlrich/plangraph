@@ -17,7 +17,7 @@
 # (symlinks resolved where realpath exists), so a dotted or symlinked path
 # cannot get past the check.
 #
-# This script only copies files: it registers nothing and never edits Claude
+# The default mode only copies files: it registers nothing and never edits Claude
 # Code settings. Register each hook entry point yourself, always through the
 # guarded command form
 #
@@ -71,6 +71,7 @@ case ${1:-} in
         : "${CARGO_TARGET_DIR:?set the shared host CARGO_TARGET_DIR before installing Git hooks}"
         cargo build --manifest-path "$git_root/rust/Cargo.toml" -p pg-hook --bin commit-msg
         cp -- "$CARGO_TARGET_DIR/debug/commit-msg" "$SELF_DIR/commit-msg"
+        chmod +x "$SELF_DIR/commit-msg"
         git -C "$git_root" config core.hooksPath "$SELF_DIR"
         echo "Git hooks installed: $SELF_DIR"
         exit 0

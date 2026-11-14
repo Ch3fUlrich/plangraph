@@ -17,7 +17,9 @@ fn git(root: &Path, args: &[&str]) -> Output {
 fn repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     assert!(git(dir.path(), &["init", "-b", "main"]).status.success());
-    let hooks = dir.path().join("hooks");
+    let tools = dir.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    let hooks = tools.join("hooks");
     std::fs::create_dir(&hooks).unwrap();
     std::fs::copy(env!("CARGO_BIN_EXE_commit-msg"), hooks.join("commit-msg")).unwrap();
     assert!(git(
@@ -26,8 +28,6 @@ fn repo() -> tempfile::TempDir {
     )
     .status
     .success());
-    let tools = dir.path().join("tools");
-    std::fs::create_dir(&tools).unwrap();
     std::fs::copy(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/ci_commit_gate.py"),
         tools.join("ci_commit_gate.py"),
@@ -113,12 +113,15 @@ fn editor_comments_do_not_hide_valid_trailers() {
                 .status
                 .success()
         );
+        std::fs::write(dir.path().join("staged.txt"), comment_char).unwrap();
+        assert!(git(dir.path(), &["add", "staged.txt"]).status.success());
         let output = Command::new("git")
             .current_dir(dir.path())
             .args([
                 "commit",
                 "--allow-empty",
                 "--edit",
+                "--verbose",
                 "-m",
                 "editor commit\n\nWriter: codex",
             ])
@@ -131,4 +134,62 @@ fn editor_comments_do_not_hide_valid_trailers() {
             .unwrap();
         assert!(output.status.success(), "{output:?}");
     }
+}
+
+#[test]
+fn installed_validator_works_in_an_older_linked_worktree() {
+    let dir = repo();
+    assert!(git(
+        dir.path(),
+        &["commit", "--allow-empty", "-m", "base\n\nWriter: codex"]
+    )
+    .status
+    .success());
+    let linked = tempfile::tempdir().unwrap();
+    assert!(git(
+        dir.path(),
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            linked.path().to_str().unwrap()
+        ]
+    )
+    .status
+    .success());
+    // No gate script exists in this older worktree. The installed pair owns policy.
+    assert!(!linked.path().join("tools/ci_commit_gate.py").exists());
+    let output = git(
+        linked.path(),
+        &["commit", "--allow-empty", "-m", "x\n\nWriter: codex"],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let output = git(linked.path(), &["commit", "--allow-empty", "-m", "x"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("missing Writer trailer"));
+}
+
+#[test]
+fn a_new_commit_after_a_merge_still_requires_attribution() {
+    let dir = repo();
+    for args in [
+        vec!["commit", "--allow-empty", "-m", "base\n\nWriter: codex"],
+        vec!["checkout", "-b", "other"],
+        vec!["commit", "--allow-empty", "-m", "other\n\nWriter: codex"],
+        vec!["checkout", "main"],
+        vec!["merge", "--no-ff", "other", "-m", "merge without trailers"],
+    ] {
+        assert!(git(dir.path(), &args).status.success());
+    }
+    let output = git(
+        dir.path(),
+        &["commit", "--allow-empty", "-m", "merge without trailers"],
+    );
+    assert!(!output.status.success());
+    let output = git(
+        dir.path(),
+        &["commit", "--allow-empty", "--amend", "--no-edit"],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("missing Writer trailer"));
 }
