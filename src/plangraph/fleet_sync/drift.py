@@ -9,6 +9,12 @@ from pathlib import Path
 
 from .release import git
 
+# Runtime reads: planner routing/catalog admission and resolver host probes.
+KEEPER_DATA = frozenset({'src/plangraph/routing_support/catalog_schema.sql',
+                         'src/plangraph/planner/route_policy.json',
+                         'configuration/opencode/providers.json'})
+
+
 def transport(host):
     live = host['repos']['plangraph']['live_dir']
     command = ['git', '-C', live, 'rev-parse', 'HEAD']
@@ -99,7 +105,7 @@ def import_closure(repo, revision, *, roots=None):
 
 def keeper_changes(repo, loaded, target):
     old_paths = set(repo_git(repo, 'ls-tree', '-r', '-z', '--name-only', loaded).stdout.split('\0'))
-    watched = import_closure(repo, loaded) | import_closure(repo, target, roots=old_paths)
+    watched = import_closure(repo, loaded) | import_closure(repo, target, roots=old_paths) | KEEPER_DATA
     changed = repo_git(repo, 'diff', '--no-renames', '-z', '--name-only', loaded, target).stdout.split('\0')
     return sorted(path for path in changed if path in old_paths
                   and (path.startswith('src/plangraph/keeper/') or path in watched))

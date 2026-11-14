@@ -115,3 +115,6 @@ user unit absent. See the state contract for the verified launch inventory.
 
 The `main-ff --repo CHECKOUT --keeper-state STATE` command holds clean main
 updates when existing keeper imports change; unreadable state holds, Git failures refuse.
+
+Missing state now requires conclusive unit/process absence; recheck before merging.
+Changes to existing keeper runtime data also hold main updates.
