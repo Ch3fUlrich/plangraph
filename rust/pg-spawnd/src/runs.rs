@@ -55,6 +55,11 @@ impl Runs {
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;
         let leg = plan["first_leg"].clone();
+        let cwd = if role == "review" && crate::cli_review::eligible(&leg) {
+            crate::cli_review::cwd(args, cwd)?
+        } else {
+            cwd
+        };
         let mut launch = launch(
             state,
             &json!({

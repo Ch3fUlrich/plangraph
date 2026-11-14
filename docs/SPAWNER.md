@@ -726,3 +726,6 @@ stamp, binds head_sha, and records verdict/findings plus cli_reported provenance
 For agy this is the CLI-selected model, not authenticated provider telemetry;
 Claude must report a single Sonnet model in its stream. Repository HEAD and
 tracked cleanliness are rechecked at completion. Failed/quota streams never count.
+Native CLI reviews use card.cwd (or the legacy diff_ref.repo checkout), falling
+back to the daemon checkout only when neither is supplied. Symbolic diff heads
+resolve in that checkout and must equal its stamped HEAD.

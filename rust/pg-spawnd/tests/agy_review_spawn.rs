@@ -87,7 +87,7 @@ fn review_kind_spawns_a_stamped_repository_review_and_records_it() {
     client.initialize();
     let request = json!({"name":"plangraph_agent_spawn", "arguments":{
         "role":"review", "leg":"agy-cli", "writer_families":["openai"], "prompt":"review",
-        "card":{"item_key":"demo:AGY", "estimate_tokens":1000, "head_sha":head}, "wait_seconds":5
+        "card":{"item_key":"demo:AGY", "estimate_tokens":1000, "cwd":repo, "diff_ref":{"repo":repo, "head":"HEAD"}}, "wait_seconds":5
     }});
     let missing_stamp = client.request("tools/call", request.clone());
     assert!(

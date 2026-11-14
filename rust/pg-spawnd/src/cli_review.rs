@@ -43,6 +43,24 @@ pub(crate) fn select(args: &Args, text: String) -> Result<String, ToolError> {
     plan["legs"] = json!(legs);
     Ok(plan.to_string())
 }
+pub(crate) fn cwd(
+    args: &Args,
+    fallback: std::path::PathBuf,
+) -> Result<std::path::PathBuf, ToolError> {
+    let requested = args["card"]
+        .get("cwd")
+        .or_else(|| args["card"]["diff_ref"].get("repo"));
+    let Some(requested) = requested else {
+        return Ok(fallback);
+    };
+    let path = requested
+        .as_str()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute() && p.is_dir())
+        .ok_or_else(|| parameter("CLI review cwd must be an existing absolute checkout"))?;
+    Ok(path)
+}
+
 fn git(cwd: &Path, args: &[&str]) -> Result<String, ToolError> {
     let result = pg_worker_core::workspace_resolver::git_command(cwd)
         .args(args)
@@ -69,10 +87,26 @@ pub(crate) fn prepare(
     let head = clean_head(&launch.cwd)?;
     let expected = args["card"]
         .get("head_sha")
-        .or_else(|| args["card"]["diff_ref"].get("head_sha"))
-        .or_else(|| args["card"]["diff_ref"].get("head"));
+        .or_else(|| args["card"]["diff_ref"].get("head_sha"));
     if expected.is_some_and(|v| v.as_str() != Some(head.as_str())) {
         return Err(parameter("CLI review head does not match worktree"));
+    }
+    if let Some(reference) = args["card"]["diff_ref"].get("head") {
+        let reference = reference
+            .as_str()
+            .ok_or_else(|| parameter("invalid review head"))?;
+        let resolved = git(
+            &launch.cwd,
+            &[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{reference}^{{commit}}"),
+            ],
+        )?;
+        if resolved != head {
+            return Err(parameter("CLI review diff head does not match worktree"));
+        }
     }
     let gitdir = git(&launch.cwd, &["rev-parse", "--absolute-git-dir"])?;
     if !Path::new(&gitdir).join("fast-checks").join(&head).is_file() {

@@ -36,7 +36,13 @@ fn precondition_binds_exact_stamped_head_and_rejects_dirty_tree() {
         warnings: None,
         events: None,
     };
-    let args = json!({"card":{}});
+    let args = json!({"card":{"diff_ref":{"head":"HEAD"}, "cwd":dir.path()}});
+    assert_eq!(
+        cwd(args.as_object().unwrap(), std::env::temp_dir())
+            .ok()
+            .unwrap(),
+        dir.path()
+    );
     assert!(prepare(
         args.as_object().unwrap(),
         &mut launch,
