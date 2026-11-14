@@ -2169,6 +2169,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg-repo-sync"
+version = "0.1.0"
+
+[[package]]
 name = "pg-spawnd"
 version = "0.1.0"
 dependencies = [
