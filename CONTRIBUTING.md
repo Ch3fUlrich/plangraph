@@ -91,6 +91,7 @@ SHA explicitly in a reviewed PR when needed, not the shared Rust release pin.
 
 Completed Rust ports remove only their own Python waiver from
 `tools/new_code_allowlist.txt`; preserve unrelated exceptions when merging main.
+Merge in-flight test entries additively so each active lane retains its own coverage.
 SPAWNER-RUST-PORT slice 2 also removes the stale doctor-source waiver retired by
 slice 1; its changelog fragment accounts for all four named Python waivers.
 Doctor source-filter goldens live in `tests/fixtures/doctor_sources.json` and run
@@ -173,6 +174,10 @@ Every commit message ends with one trailer paragraph — no blank lines inside i
 Plan-Item: plangraph:<KEY>
 Co-Authored-By: <author> <noreply@example.com>
 ```
+
+A merged commit whose trailers fail the CI commit gate is never rewritten. A router decision adds its full sha to
+`tools/ci_commit_exempt.txt` in a commit that carries `Gate-Edit: D-<id>` in the same trailer paragraph. The gate reads
+the list from the base commit, so the row has to merge to `main` before the pull request that holds the commit can pass.
 
 ## No secrets in the history
 
@@ -308,3 +313,8 @@ Run its hermetic contracts with `cargo test --manifest-path rust/Cargo.toml -p
 pg-worker-core --test turn_budget_hook --test turn_budget_poll --test
 turn_budget_alert --test turn_budget_watchdog`. Tests never install hooks, read
 live session state, or change permissions/settings files.
+
+Package R Python files already in flight are individually listed in
+`tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
+
+Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
