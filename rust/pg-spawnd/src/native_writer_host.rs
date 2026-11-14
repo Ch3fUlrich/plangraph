@@ -197,7 +197,11 @@ impl Driver for Host {
             "check_changelog_docs.py",
         ] {
             let path = self.cwd.join("tools").join(gate);
-            output(Command::new("python3").arg(path).current_dir(&self.cwd))?;
+            output(
+                Command::new(if cfg!(windows) { "python" } else { "python3" })
+                    .arg(path)
+                    .current_dir(&self.cwd),
+            )?;
         }
         Ok(())
     }
