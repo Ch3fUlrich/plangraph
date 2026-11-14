@@ -11,11 +11,20 @@ fn round_refusal_is_saved_before_launch_and_does_not_consume_a_round() {
     cfg.max_runs = 1;
     let runs = Runs::new(Arc::new(Supervisor::new(cfg).unwrap()));
     for index in 1..=5 {
+        let source = dir.path().join(format!("verdict-{index}.json"));
+        std::fs::write(
+            &source,
+            json!({"writer_run_id":format!("run-r{index}"),
+            "item_key":"p:I", "pr":null, "verdict":"REQUEST_CHANGES",
+            "findings":[]})
+            .to_string(),
+        )
+        .unwrap();
         create(
             dir.path(),
             &format!("run-r{index}"),
             "fixture",
-            json!({"role":"implement", "item_key":"p:I", "writer_round":index}),
+            json!({"role":"implement", "item_key":"p:I", "writer_round":index, "round_verdict_file":source}),
             Status::Completed,
         )
         .ok()

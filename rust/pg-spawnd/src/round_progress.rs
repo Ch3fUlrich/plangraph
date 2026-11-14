@@ -146,9 +146,6 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
     history.sort_by_key(|r| r["writer_round"].as_u64().unwrap());
     let next = history.len() as u64 + 1;
     let used_exception = history.iter().any(|r| r["narrow_fix"] == true);
-    if next > 5 || used_exception {
-        return Err(refused("round_cap"));
-    }
     let mut summaries = vec![];
     for (index, record) in history.iter().enumerate() {
         if record["writer_round"] != index as u64 + 1 || record["round_pr"] != pr {
@@ -186,11 +183,17 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
         .iter()
         .map(|s| s["confirmed_blockers"].as_u64().unwrap())
         .collect();
+    if next > 5 {
+        return Err(refused("round_cap"));
+    }
     if summaries
         .last()
         .is_some_and(|s| s["verdict"]["verdict"] == "ACCEPT")
     {
         return Err(refused("round_accepted"));
+    }
+    if used_exception {
+        return Err(refused("round_cap"));
     }
     let reason = stop_reason(&counts, next, false);
     let narrow = card["narrow_fix"] == true;

@@ -11,7 +11,9 @@ R-batch-02: Every brief names the goal, Plan-Item keys, scope files, checks, com
 R-batch-03: Run fast checks on the exact head before review; require its fast-checks stamp before starting the seat.
   (why: review and CI must not find gate failures first; source: plan-order/bin/fast-checks.sh and agy-review.sh)
 R-batch-04: Start an other-family review with repository access on the exact head, fix confirmed HIGH/MED findings and repeat while progress permits.
-  Native spawner admission: `rust/pg-spawnd/src/round_progress.rs` records confirmed HIGH+MED per writer round. Two consecutive counts not below the earlier best refuse the next writer with `no_progress`; round 5 refuses with `round_cap`, and round 6 always refuses.
+  Native admission: `rust/pg-spawnd/src/round_progress.rs` records confirmed HIGH+MED per writer round.
+  Two consecutive counts not below the earlier best refuse the next writer with `no_progress`.
+  Round 5 refuses with `round_cap`, and round 6 always refuses.
   See `docs/SPAWNER.md` for verdict-file binding and the single narrow fix exception.
   At the cap, close the PR unmerged and have the strongest available planner define slices <=800 changed lines (excluding Cargo.lock and generated files) with all open findings verbatim.
   Exception: one or two confirmed MED findings with clear fixes permit one narrow fix round. A HIGH, three or more MED, or a second miss closes and replans.

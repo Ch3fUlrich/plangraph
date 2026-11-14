@@ -117,6 +117,15 @@ fn narrow_med_exception_is_explicit_and_single_use() {
         }
         let admission = admit(dir.path(), &args).ok().unwrap();
         let mut fields = admission.fields.clone();
+        let source = dir.path().join("next.json");
+        std::fs::write(
+            &source,
+            json!({"writer_run_id":"run-exception", "item_key":"p:I",
+            "pr":"https://forge/p/1", "verdict":"REQUEST_CHANGES", "findings":[
+                {"severity":"MED", "confirmed":true, "clear_fix":true, "text":"remaining"}]})
+            .to_string(),
+        )
+        .unwrap();
         fields["role"] = json!("implement");
         fields["item_key"] = json!("p:I");
         crate::runs::create(
@@ -130,6 +139,10 @@ fn narrow_med_exception_is_explicit_and_single_use() {
         .unwrap();
         drop(admission);
         assert!(reason(admit(dir.path(), &args)).starts_with("round_cap"));
+        assert!(dir
+            .path()
+            .join("runs/run-exception/round-verdict.json")
+            .is_file());
     }
     let dir = tempfile::tempdir().unwrap();
     let mut args = history(dir.path(), &[2, 2, 2], false);
@@ -167,4 +180,24 @@ fn fifth_round_exception_and_acceptance() {
     verdict["verdict"] = json!("ACCEPT");
     std::fs::write(source, verdict.to_string()).unwrap();
     assert!(reason(admit(dir.path(), &args)).starts_with("round_accepted"));
+}
+
+#[test]
+fn final_narrow_round_is_not_a_stop_while_running_or_after_acceptance() {
+    let dir = tempfile::tempdir().unwrap();
+    let args = history(dir.path(), &[2, 2, 2, 0], true);
+    let path = dir.path().join("runs/run-r4/record.json");
+    let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    record["narrow_fix"] = json!(true);
+    record["status"] = json!("running");
+    std::fs::write(&path, record.to_string()).unwrap();
+    assert!(reason(admit(dir.path(), &args)).starts_with("round_in_flight"));
+    record["status"] = json!("completed");
+    std::fs::write(path, record.to_string()).unwrap();
+    let source = dir.path().join("verdict-4.json");
+    let mut verdict: Value = serde_json::from_slice(&std::fs::read(&source).unwrap()).unwrap();
+    verdict["verdict"] = json!("ACCEPT");
+    std::fs::write(source, verdict.to_string()).unwrap();
+    assert!(reason(admit(dir.path(), &args)).starts_with("round_accepted"));
+    assert!(dir.path().join("runs/run-r4/round-verdict.json").is_file());
 }
