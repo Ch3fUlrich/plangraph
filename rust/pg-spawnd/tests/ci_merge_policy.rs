@@ -89,7 +89,10 @@ needs['rust-windows'] = {'result': 'skipped'}
 assert ci.gate(needs) == ['rust-windows: skipped'], ci.gate(needs)
 "#,
     );
-    let workflow = std::fs::read_to_string(root().join(".github/workflows/tests.yml")).unwrap();
+    // A Windows checkout may carry CRLF line ends; the job scan below splits on LF.
+    let workflow = std::fs::read_to_string(root().join(".github/workflows/tests.yml"))
+        .unwrap()
+        .replace("\r\n", "\n");
     let jobs = workflow.split_once("\njobs:\n").unwrap().1;
     let names: std::collections::BTreeSet<_> = jobs
         .lines()
