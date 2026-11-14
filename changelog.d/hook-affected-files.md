@@ -1,0 +1,1 @@
+Keep local pre-push selection to explicit affected files with bounded suite-control smoke checks and the existing 240-second limit; preserve CI full-suite fallback and remove hook Git context before Rust checks.

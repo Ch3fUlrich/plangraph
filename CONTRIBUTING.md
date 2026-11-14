@@ -6,8 +6,8 @@ and affected tests, in that order. Each family ends with a timed PASS/FAIL/SKIP/
 summary; failed checks with HTTP 5xx output in any family (including policy) are
 inferred as INFRA and retried once; persistent INFRA exits 3, other failures exit 1.
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
-affected pytest has 900 seconds. The hook has no additional overall preflight bound.
-Use `--keep-going` to collect all failures or `--fast`
+affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
+Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
 to skip affected tests. The existing pre-push hook runs preflight too; set
 `PREFLIGHT_FAST=1` for its fast mode or `PREFLIGHT_SKIP=1` to bypass only that hook
 invocation (not the existing scrub/ref/file-size gates or direct CLI runs). Private
@@ -17,9 +17,12 @@ when neither is present, public rules still run but scrub reports SKIP with a re
 The revision controls `FILESIZE_REQUIRE_BASE`, `NEWCODE_BASE` and `CHANGELOG_BASE`
 are scoped to policy checks. Other families receive none of these controls,
 including inherited values, so nested Git test fixtures own their revision bases.
-Affected tests also clear Git's repository-local environment reported by
-`git rev-parse --local-env-vars`, including indexed configuration pairs. Policy
-checks retain the caller's Git context; test repositories keep their own hooks.
+The pre-push affected gate clears every name reported by
+`git rev-parse --local-env-vars`, all `GIT_CONFIG*` variables and `GIT_PREFIX`
+before starting the selector. The selector repeats this before pytest, and the
+pytest session clears inherited bindings before collection and test fixtures.
+Discovery failures refuse to launch tests. The hook's own Git and policy calls
+retain the caller's context; temporary test repositories keep their own hooks.
 
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
@@ -147,8 +150,7 @@ A tracked source, test, script or doc file stays at or under 400 lines; over 400
 by responsibility before adding more. `python3 tools/check_file_size.py` enforces this in CI
 and in the pre-push hook. Files that were larger when the gate landed are listed in
 `.filesize-baseline`: such a file may shrink, never grow, and the baseline itself only
-shrinks: `--update-baseline` writes it once when none exists, afterwards only lowers
-counts, and CI refuses an entry added or raised against the change's base (`origin/main`
+shrinks: `--update-baseline` writes it once when none exists, afterwards only lowers counts or removes entries that fit the 400-line cap, and CI refuses an entry added or raised against the change's base (`origin/main`
 on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
 (today only `CHANGELOG.md`, an append-only ledger).
@@ -318,3 +320,5 @@ Python files already in flight are individually listed in
 `tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
 
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
+
+Local controls run every named consumer plus a bounded smoke set; policy checks use origin/main when available, including inherited stack changes. Preflight clears the complete GIT_CONFIG namespace before selector launch.

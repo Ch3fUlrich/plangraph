@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import stat
 import subprocess
 import sys
 
@@ -93,3 +94,75 @@ def test_missing_git_environment_discovery_refuses_tests(repo, monkeypatch, caps
     assert "FAIL tests " in capsys.readouterr().out
     assert not any(Path(command[1]).name == "affected_tests.py"
                    for command, _, _ in calls)
+
+
+def test_preflight_restores_user_cargo_path(repo, monkeypatch):
+    cargo_bin = repo / '.cargo/bin'
+    cargo_bin.mkdir(parents=True)
+    monkeypatch.setenv('PATH', '/usr/bin')
+    calls = fake_runner(monkeypatch)
+    assert preflight.main(['--base', 'HEAD', '--fast'], repo) == 0
+    assert calls[0][2]['PATH'].split(os.pathsep)[0] == str(cargo_bin)
+
+
+def test_hook_restores_user_cargo_path(repo, monkeypatch):
+    import io
+    import runpy
+    cargo_bin = repo / '.cargo/bin'
+    cargo_bin.mkdir(parents=True)
+    monkeypatch.setenv('PATH', '/usr/bin')
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(''))
+    hook = runpy.run_path(str(Path(preflight.__file__).with_name('hooks') / 'pre-push'))
+    assert hook['push_main']() == 0
+    assert os.environ['PATH'].split(os.pathsep)[0] == str(cargo_bin)
+
+
+def test_missing_cargo_stops_selected_placement_tests(repo, monkeypatch, capsys):
+    from test_affected_tests import selector
+    from types import SimpleNamespace
+    test = repo / 'tests/test_placement_example.py'
+    test.parent.mkdir()
+    test.write_text('def test_example(): pass\n')
+    monkeypatch.setenv('PATH', str(repo / 'empty-bin'))
+    module = selector()
+    calls = []
+    monkeypatch.setattr(module.subprocess, 'run', lambda *a, **k: calls.append(a) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(sys, 'argv', ['affected_tests', '--base', 'HEAD', '--changed',
+                                   'tests/test_placement_example.py', '--run'])
+    assert module.main(root=repo) == 1
+    assert not calls
+    assert capsys.readouterr().err.splitlines() == ['CARGO FAIL: cargo is required for selected placement tests']
+
+
+def test_preflight_keeps_scrub_base_separate_from_affected_base(repo, monkeypatch):
+    calls = fake_runner(monkeypatch)
+    assert preflight.main(['--base', 'HEAD', '--scrub-base', 'scrub-start', '--fast'], repo) == 0
+    command = calls[0][0]
+    assert command[command.index('--base') + 1] == 'scrub-start'
+    policy = next(command for command, _, _ in calls if Path(command[1]).name == 'ci_commit_gate.py')
+    assert policy[policy.index('--base') + 1] == 'HEAD'
+
+
+def test_rust_checks_receive_no_hook_git_environment(repo, monkeypatch):
+    context = dict(GIT_DIR=str(repo / '.git'), GIT_WORK_TREE=str(repo),
+                   GIT_INDEX_FILE=str(repo / '.git/index'), GIT_CONFIG_COUNT='1',
+                   GIT_CONFIG_KEY_0='core.bare', GIT_CONFIG_VALUE_0='false',
+                   GIT_FUTURE_HOOK_SENTINEL='must not reach rust')
+    for key, value in context.items():
+        monkeypatch.setenv(key, value)
+    calls = fake_runner(monkeypatch)
+    monkeypatch.setattr(preflight, 'rust_commands', lambda *a: [['cargo', 'test', '-p', 'fixture']])
+    assert preflight.main(['--base', 'HEAD', '--fast'], repo) == 0
+    rust_env = next(env for command, _, env in calls if command[0] == 'cargo')
+    assert not any(key.upper().startswith('GIT_') for key in rust_env)
+
+
+_NO_AUTO_MAINTENANCE = (
+    ('maintenance.auto', 'false'), ('maintenance.autoDetach', 'false'),
+    ('gc.auto', '0'), ('gc.autoDetach', 'false'),
+)
+
+
+def _fixture_git(repo, env, *args):
+    return subprocess.run(['git', '-C', str(repo), *args], env=env,
+                          capture_output=True, check=True)

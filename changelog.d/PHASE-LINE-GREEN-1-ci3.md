@@ -1,0 +1,1 @@
+- Resolve the root pytest conftest plugin explicitly despite nested module-name collisions, retaining Git-environment scrub assertions; move detailed prompt-delivery documentation into the existing prompt-rules guide to keep the spawner overview within its unchanged limit after merging main.
