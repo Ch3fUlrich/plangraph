@@ -1,5 +1,6 @@
 """Ownership and output disclosure regression probes for Dell CI."""
 import json
+import sys
 import subprocess
 import os
 from pathlib import Path
@@ -154,7 +155,7 @@ def test_isolated_script_quotes_paths_and_preserves_command(tmp_path, monkeypatc
     assert shlex.split(bundle)[2] == str(source)
     invocation = script.splitlines()[-1]
     # Evaluate the generated shell quoting without launching a sandbox.
-    capture = 'capture() { python3 -c \'import json,sys; print(json.dumps(sys.argv[1:]))\' "$@"; }; '
+    capture = 'capture() { ' + shlex.quote(sys.executable) + ' -c \'import json,sys; print(json.dumps(sys.argv[1:]))\' "$@"; }; '
     monkeypatch.setenv('scratch', str(job))
     monkeypatch.setenv('toolchain', str(tmp_path / 'rust space'))
     monkeypatch.setenv('cargo_bin', '/usr/bin')

@@ -19,6 +19,7 @@ an allowed one as silent exit 0 - proving the wrapper runs the hook rather
 than swallowing it.
 """
 import json
+import shlex
 import subprocess
 import sys
 import unittest
@@ -33,7 +34,7 @@ WRAPPER = "test -f \"$1\" || exit 1; exec python3 \"$1\""
 
 def run_wrapped(path, stdin_text=""):
     """The wrapper form: `sh -c ...` with the hook path as $1 and payload on stdin."""
-    return subprocess.run(["sh", "-c", WRAPPER, "_", str(path)], input=stdin_text,
+    return subprocess.run(["sh", "-c", WRAPPER.replace("python3", shlex.quote(sys.executable)), "_", str(path)], input=stdin_text,
                           capture_output=True, text=True, timeout=20)
 
 
