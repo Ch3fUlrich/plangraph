@@ -95,14 +95,21 @@ def test_invalid_hand_back_is_validation(w, target, run):
 
 def test_clear_audit_uses_verb_actor_and_time(w):
     key, = seed(w, [("A", [])])
-    to_claimed(w, key, "workerA")
+    epoch = to_claimed(w, key, "workerA")
     w.store.worker_complete(w.p("workerA"), complete(key, **RUN1))
     due = w.clock() + 8000
-    w.store.reap(w.p("system"), now=due)
+    before = dict(w.store._item(key))
+    events_before = w.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    assert w.store.reap(w.p("system"), now=due)["expired"] == []
+    assert dict(w.store._item(key)) == before
+    assert w.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == events_before
+    # Explicit release, not lease expiry, clears and audits a live owner.
+    w.clock.advance(8000)
+    w.store.release(w.p("workerA"), key, epoch)
     event = w.conn.execute(
         "SELECT actor,ts FROM events WHERE key=? AND type='exec_owner_changed'"
         " ORDER BY seq DESC LIMIT 1", (key,)).fetchone()
-    assert tuple(event) == ("system", w.store._iso(due))
+    assert tuple(event) == ("workerA", w.store._iso(due))
 
 
 @pytest.mark.parametrize("park_first", [False, True])

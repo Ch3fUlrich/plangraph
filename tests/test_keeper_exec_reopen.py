@@ -48,11 +48,12 @@ def claimed_owner(w, key):
     return epoch
 
 
+@pytest.mark.parametrize("release_by", ["workerA", "router"])
 @pytest.mark.parametrize("late_run_first", [False, True])
-def test_lapsed_lease_late_retired_run_is_refused(w, doors, late_run_first):
+def test_lapsed_lease_late_retired_run_is_refused(w, doors, late_run_first, release_by):
     """RT-P1 sq5 fix 2 (V1-1/V5-1): a clear keeps a retired-run fence.
 
-    Reap clears the owner; the retired ``(run_id, max attempt)`` fence stays,
+    Explicit release clears the owner; the retired fence stays,
     so a late call from the old run is refused ``exec_stale`` and cannot
     reacquire -- even when it is the first call at the cleared card.  A NEW
     run still gets the card.  (Renamed from
@@ -60,13 +61,17 @@ def test_lapsed_lease_late_retired_run_is_refused(w, doors, late_run_first):
     the retired run's 204 acceptance as correct.)
     """
     key, = seed(w, [("A", [])])
-    claimed_owner(w, key)
+    epoch = claimed_owner(w, key)
     body = park(key, **RUN2)
     status, response = doors.http("workerA", "POST", "/v1/park", body)
     assert (status, response["error"]) == (409, "exec_stale")
     assert owner(w, key) == RUN1
 
-    assert w.store.reap(w.p("system"), w.clock.advance(7201))["expired"] == [key]
+    before = dict(w.store._item(key))
+    assert w.store.reap(w.p("system"), w.clock.advance(7201))["expired"] == []
+    assert dict(w.store._item(key)) == before
+    assert owner(w, key) == RUN1
+    w.store.release(w.p(release_by), key, epoch)
     assert owner(w, key) == (None, None, None)
     refused("forbidden", w.store.worker_park, w.p("workerA"), body)
     late = {"workflow_id": RUN1[0], "run_id": RUN1[1], "attempt": RUN1[2]}

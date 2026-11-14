@@ -295,11 +295,14 @@ def test_claim_and_release_never_touch_exec_ownership(w):
 
 
 @pytest.mark.parametrize("door", ["release", "reap"])
-def test_claim_reopen_uses_owner_clear_helper(w, monkeypatch, door):
+@pytest.mark.parametrize("live_owner", [False, True])
+def test_claim_reopen_uses_owner_clear_helper(w, monkeypatch, door, live_owner):
     key, = seed(w, [("A", [])])
     epoch = to_claimed(w, key)
-    with w.store._write():
-        w.store._exec_record(w.conn, key, *RUN1, w.p("workerA"))
+    if live_owner:
+        with w.store._write():
+            w.store._exec_record(w.conn, key, *RUN1, w.p("workerA"))
+    before = dict(w.store._item(key))
     calls = []
     clear = w.store._exec_clear
 
@@ -315,11 +318,37 @@ def test_claim_reopen_uses_owner_clear_helper(w, monkeypatch, door):
                                (key,)).fetchone()[0]
         w.store.reap(w.p("system"),
                      now=w.store._parse_iso(lease).timestamp() + 1)
+    if door == "reap" and live_owner:
+        assert calls == []
+        assert dict(w.store._item(key)) == before
+        assert owner(w, key) == RUN1
+        return
     assert calls == [(w.conn, key)]
+    assert w.store._item(key)["state"] == "open"
     assert owner(w, key) == (None, None, None)
 
 
 # ------------------------------------------------- the fence never forgets
+def test_reap_preserves_lapsed_claim_with_live_exec_owner(w):
+    """SQ12 finding 3: lease expiry does not retire a live execution."""
+    key, = seed(w, [("A", [])])
+    to_claimed(w, key, "workerA")
+    with w.store._write():
+        w.store._exec_record(w.conn, key, *RUN1, w.p("workerA"))
+    before = dict(w.conn.execute("SELECT * FROM items WHERE key=?",
+                                 (key,)).fetchone())
+    now = w.store._parse_iso(before["lease_until"]).timestamp() + 1
+    events_before = list(w.conn.execute("SELECT * FROM events ORDER BY seq"))
+    result = w.store.reap(w.p("system"), now=now)
+    assert key not in result["expired"]
+    assert list(w.conn.execute("SELECT * FROM events ORDER BY seq")) == events_before
+    after = dict(w.conn.execute("SELECT * FROM items WHERE key=?",
+                                (key,)).fetchone())
+    assert after == before
+    assert owner(w, key) == RUN1
+    assert retired_runs(w, key) == []
+
+
 def check_retired_fence_remembers_every_run(w):
     """RT-P1 sq12 fix 1: the retired-run fence has no bound (V1-1/V5-1).
 

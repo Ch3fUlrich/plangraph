@@ -25,6 +25,9 @@ class ReapMixin:
                 if item["state"] == "claimed" and item["lease_until"]:
                     due = self._parse_iso(item["lease_until"])
                     if due is not None and due.timestamp() < now:
+                        # Lease expiry is not an explicit execution hand-back.
+                        if item["exec_run_id"] is not None:
+                            continue
                         self._append(principal, item["key"], "lease_expired", {}, now)
                         self.conn.execute(
                             "UPDATE items SET state='open', claimed_by=NULL,"
