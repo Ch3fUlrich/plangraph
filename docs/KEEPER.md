@@ -22,6 +22,8 @@ Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12
 
 Keeper startup warns once when `repos.decisions` is missing; new devstack configs require `PLANGRAPH_DECISIONS_REPO` and emit its checkout path with ref `origin/main`, while existing valid configs are reused if it is unset and explicit updates preserve unrelated settings (see [install config](RUNBOOK.md#1-init-and-config)). Critical-path stall alerts notify owners and routing without mutating keeper state; see [configuration and delivery semantics](keeper/crit-path-stall.md). [Repository mirrors](repo-mirror.md) are a standalone `pg-ctx` Rust slice; keeper mirror wiring and scheduling/timers are later slices, not daemon startup.
 
+The daemon publishes [loaded-code identity for guarded main fast-forwards](keeper/main-fast-forward.md) beside its DB anchor, and removes it on clean shutdown. Critical-path stall alerts notify owners and routing without mutating keeper state; see [configuration and delivery semantics](keeper/crit-path-stall.md). [Repository mirrors](repo-mirror.md) are a standalone `pg-ctx` Rust slice; keeper mirror wiring and scheduling/timers are later slices, not daemon startup.
+
 ## Tables (all in one SQLite file)
 `principals(name PK, role, projects json, family, token_sha256, active)` ·
 `items(key PK, project, id, title, kind, track, owner, estimate_h, estimate_src, done_criteria, evidence_kinds json, operator,

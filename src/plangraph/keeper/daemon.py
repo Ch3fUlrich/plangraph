@@ -13,10 +13,14 @@ import os
 import signal
 import sys
 import threading
+import time
 from contextlib import suppress
 from pathlib import Path
 
-from . import anchor, api, config as config_mod, db as kdb, outage
+from plangraph._loaded_identity import CODE_TREE, LOADED_IDENTITY, code_identity
+
+from . import anchor, api, backup_retention, config as config_mod, db as kdb, outage
+from .snapshot_io import _atomic_write
 from .errors import KeeperLocked
 from .store import Store
 
@@ -41,7 +45,6 @@ def _backup_prune_loop(settings: dict, stop: threading.Event, log=None) -> None:
     Exits promptly when *stop* is set; any exception is logged and never
     propagates (a retention problem must not take the keeper down).
     """
-    from . import backup_retention
     if log is None:
         def log(msg):
             print(msg, file=sys.stderr)
@@ -79,6 +82,27 @@ def _make_store(conn, cfg):
     return store
 
 
+def write_loaded_state(cfg):
+    """Publish code identity before serving; the main-ff guard reads this file."""
+    from plangraph.fleet_sync.drift import pid_start
+    from plangraph.routing_support.private_io import atomic_write_private
+
+    sha, branch, dirty = code_identity(CODE_TREE)
+    if (sha, branch, dirty) != LOADED_IDENTITY and not dirty:
+        sha, branch, dirty = None, None, None
+    path = Path(cfg.db).with_name(Path(cfg.db).name + '.loaded.json')
+    row = {'loaded_sha': sha, 'pid': os.getpid(), 'start_time': time.time(),
+           'pid_start': pid_start(os.getpid()), 'loaded_branch': branch, 'dirty': dirty}
+    try:
+        atomic_write_private(path, json.dumps(row) + '\n')
+        if code_identity(CODE_TREE) != (sha, branch, dirty):
+            row.update(loaded_sha=None, loaded_branch=None, dirty=None)
+            atomic_write_private(path, json.dumps(row) + '\n')
+    except OSError as exc:
+        raise RuntimeError(f'REFUSED loaded-state publication: {exc}') from None
+    return path
+
+
 def run(cfg, *, host=None, port=None, ready=None):
     """Start the server and block until a signal; returns 0 on clean shutdown."""
     if not cfg.repos.get('decisions'):
@@ -88,7 +112,9 @@ def run(cfg, *, host=None, port=None, ready=None):
     conn = kdb.open_db(cfg.db, **cfg.db_options)
     server = None
     cleanup_started = False
+    loaded_state = None
     try:
+        loaded_state = write_loaded_state(cfg)
         store = _make_store(conn, cfg)
         server = api.make_server(store, cfg, host=host, port=port)
         # M1: fail() may already have been recorded while the server was being
@@ -171,9 +197,15 @@ def run(cfg, *, host=None, port=None, ready=None):
                     os._exit(75)
                 return 75
             if cleaner.is_alive():
+                if loaded_state is not None:
+                    with suppress(OSError):
+                        loaded_state.unlink(missing_ok=True)
                 os._exit(0)
             return 0
     finally:
+        if loaded_state is not None:
+            with suppress(OSError):
+                loaded_state.unlink(missing_ok=True)
         if server is not None and not cleanup_started:
             with suppress(Exception):
                 server.stop_reaper()
@@ -203,7 +235,6 @@ def main(argv=None) -> int:
     try:
         def ready(server):
             if args.ready_file is not None:
-                from .snapshot_io import _atomic_write
                 host, port = server.server_address[:2]
                 _atomic_write(args.ready_file, json.dumps({"host": host, "port": port}).encode())
 
