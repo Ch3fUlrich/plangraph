@@ -1,5 +1,5 @@
 use super::*;
-use pg_worker_core::workspace_resolver::git_command;
+use pg_worker_core::git_test_support::command as git_command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[path = "mirror_safety_tests.rs"]
@@ -10,14 +10,8 @@ mod transport;
 static COMMIT: AtomicU64 = AtomicU64::new(0);
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = git_command(dir)
+    let out = pg_worker_core::git_test_support::command(dir)
         .args(args)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", dir.join("absent-config"))
-        .env("GIT_AUTHOR_NAME", "Mirror Test")
-        .env("GIT_COMMITTER_NAME", "Mirror Test")
-        .env("GIT_AUTHOR_EMAIL", "mirror@example.invalid")
-        .env("GIT_COMMITTER_EMAIL", "mirror@example.invalid")
         .output()
         .unwrap();
     assert!(
