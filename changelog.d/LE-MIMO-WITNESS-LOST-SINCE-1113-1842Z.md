@@ -1,0 +1,1 @@
+Plain-shell gateway witnessing shares the child endpoint resolver with a private config-file fallback, retains specific unwitnessed reasons through native telemetry, and health reports alert when a leg’s witnessed share collapses across adjacent six-hour windows.

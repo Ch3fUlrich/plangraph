@@ -52,7 +52,7 @@ def test_witness_skips_a_leg_not_served_by_the_gateway():
     # Seat finding (qwen run-5ce67bc0): every config holds an omniroute block, so a mimo leg was probed.
     runner, job = _Runner('job-1'), _job('mimo/mimo-v2.6-pro')
     gw.witness(runner, 'job-1', job, _env('job-1'), fetch=pytest.fail)
-    assert job.events == [{'event': 'gateway_witness_unavailable', 'reason': 'mimo leg not routed through gateway'}]
+    assert job.events == [{'event': 'gateway_witness_unavailable', 'reason': 'gateway endpoint not configured'}]
     assert not runner.calls
 
 
@@ -105,7 +105,8 @@ def test_witness_skips_untagged_or_witnessed_jobs():
 
 def test_fetch_rows_needs_spawner_token_and_sends_it(tmp_path):
     with pytest.raises(LookupError, match='no ' + gw.TOKEN_ENV):
-        gw.fetch_rows('plangraph-job-1', {}, secrets={gw.TOKEN_FILE_ENV: str(tmp_path / 'missing')})
+        gw.fetch_rows('plangraph-job-1', {}, secrets={gw.TOKEN_FILE_ENV: str(tmp_path / 'missing'),
+            'OMNIROUTE_BASE_URL': 'https://gateway.invalid/v1'})
     sent = []
     def opener(request, timeout):
         sent.append(request)

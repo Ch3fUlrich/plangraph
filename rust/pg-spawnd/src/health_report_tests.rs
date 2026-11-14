@@ -209,3 +209,29 @@ fn skip_fraction_over_all_launches() {
         build_report(&[], &[], 0, 1).unwrap()["totals"]["overrides"]["skip_fraction"].is_null()
     );
 }
+
+#[test]
+fn witnessed_share_collapse_is_reported_per_leg() {
+    let until = 100_000;
+    for (recent, total, expected) in [(0, 8, 1), (7, 8, 0), (0, 3, 0)] {
+        let mut records = Vec::new();
+        for (window, count, witnessed) in [(0, 10, 9), (1, total, recent)] {
+            for index in 0..count {
+                records.push(json!({"run_id":format!("run-{window}-{index}"),
+                    "status":"completed", "ended":until - if window == 0 { 32400 } else { 10800 },
+                    "chosen_leg":{"id":"mimo-fixture"},
+                    "served_model":if index < witnessed { "mimo/mimo-v2.6-pro" } else { "unwitnessed" },
+                    "witness_kind":if index < witnessed { "response-side-gateway-call-log" } else { "" }}));
+            }
+        }
+        let report = build_report(&records, &[], 0, until).unwrap();
+        let alerts = report["witness_alerts"]
+            .as_array()
+            .expect("witness alerts array");
+        assert_eq!(alerts.len(), expected);
+        if expected == 1 {
+            assert!(alerts[0].as_str().unwrap().starts_with("ALERT "));
+            assert!(alerts[0].as_str().unwrap().contains("mimo-fixture"));
+        }
+    }
+}

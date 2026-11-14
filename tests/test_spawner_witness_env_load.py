@@ -8,7 +8,7 @@ from plangraph.spawner import gateway_witness as gw
 
 @pytest.mark.parametrize('provider,served,tagged,reason', [
     ('direct', None, True, 'not a gateway leg: provider direct'),
-    ('mimo', None, True, 'mimo leg not routed through gateway'),
+    ('mimo', None, True, 'gateway endpoint not configured'),
     ('omniroute', 'other/model', True, 'served_model already set'),
     ('omniroute', None, False, 'final config carries no session tag'),
     ('omniroute', None, True, 'no ' + gw.TOKEN_ENV),

@@ -10,8 +10,8 @@ FETCH_ROWS = gw.fetch_rows
 
 
 @pytest.fixture(autouse=True)
-def isolated(monkeypatch):
-    monkeypatch.setattr(gw.os, 'environ', {})
+def isolated(monkeypatch, tmp_path):
+    monkeypatch.setattr(gw.os, 'environ', {'HOME': str(tmp_path), 'XDG_CONFIG_HOME': str(tmp_path / 'config')})
     monkeypatch.setattr(gw, 'fetch_rows', lambda *a: pytest.fail('transport not injected'))
     monkeypatch.setattr(gw.time, 'sleep', lambda _: None)
 
@@ -85,7 +85,7 @@ def test_missing_management_access(tmp_path):
     seat = job()
     gw.witness(SimpleNamespace(), 'seat', seat, config(),
                fetch=lambda tag, env: FETCH_ROWS(tag, env, secrets={
-                   gw.TOKEN_FILE_ENV: str(tmp_path / 'missing')}, opener=pytest.fail))
+                   gw.TOKEN_FILE_ENV: str(tmp_path / 'missing'), 'OMNIROUTE_BASE_URL': '/gateway/v1'}, opener=pytest.fail))
     assert seat.events == [{'event': 'gateway_witness_unavailable', 'reason': 'no ' + gw.TOKEN_ENV}]
 
 

@@ -32,3 +32,9 @@ Live startup-token savings: not measured. No live measurement run IDs exist in
 the repository's records, so a fixed 25k saving is not claimed.
 Open step: three-run before/after token probe with recorded run IDs and token
 counts for each run. Runner structure is unchanged.
+
+Gateway URL resolution is shared by child configuration and response-side witness
+reads: OMNIROUTE_BASE_URL, then PLANGRAPH_GATEWAY_URL / the existing gateway_url
+config mapping, then plangraph/omniroute-base-url in XDG_CONFIG_HOME (else
+HOME/.config). This file fallback supports plain-shell spawn CLI runs without
+launcher exports. File read failures mean unconfigured; no URL or key is logged.

@@ -123,10 +123,16 @@ def native_models(harness, text):
 
 def record_native(job, harness, models, requested):
     """Record native provenance without promoting it to a gateway witness."""
+    if job.served_model not in (None, "", "unwitnessed"):
+        return
     if len(models) != 1:
         reason = ('non-unanimous native models' if models else
                   'emits no verified structured served-model telemetry')
-        job.served_witness_reason = f'{harness}: {reason}'
+        gateway = next((e.get('reason') for e in reversed(job.events)
+                        if e.get('event') == 'gateway_witness_unavailable'
+                        and not str(e.get('reason', '')).startswith('not a gateway leg:')), None)
+        job.served_witness_reason = (gateway.replace('no call log row', 'no call-log row')
+                                     if gateway else f'{harness}: {reason}')
         return
     model = next(iter(models))
     job.served_model, job.served_family = model, detect_model_family(model)

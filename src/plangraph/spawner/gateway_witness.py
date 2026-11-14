@@ -87,12 +87,9 @@ def _config(content):
 
 
 def _gateway(env):
-    for name in URL_ENVS:
-        value = env.get(name)
-        normalized = value.strip().rstrip('/') if isinstance(value, str) else ''
-        if normalized:
-            return normalized
-    return None
+    from plangraph.routing_support.clients import effective_gateway_base_url
+    value = effective_gateway_base_url(env)
+    return value.rstrip('/') if value else None
 
 
 def _gateway_mimo(env, mimo_endpoints=None):
@@ -189,16 +186,16 @@ def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=No
     the child's. ``build_child_env`` drops the token.
     """
     secrets = os.environ if secrets is None else secrets
-    token = load_token(secrets)
     base = _gateway(secrets)
     if not base:
         raise LookupError('gateway endpoint not configured')
+    token = load_token(secrets)
     if base.endswith('/v1'):
         base = base[:-3]
     query = urllib.parse.urlencode({'sessionTag': tag, 'limit': 200})
-    request = urllib.request.Request(f'{base}/api/usage/call-logs?{query}',
-                                     headers={'Authorization': 'Bearer ' + token})
     try:
+        request = urllib.request.Request(f'{base}/api/usage/call-logs?{query}',
+                                         headers={'Authorization': 'Bearer ' + token})
         with opener(request, timeout=timeout) as response:
             return json.loads(response.read().decode('utf-8'))
     except (OSError, ValueError) as exc:
@@ -293,9 +290,14 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
     # omniroute block to every config, so the tag alone does not mean a gateway leg.
     provider = str(getattr(job, 'model_or_combo', '') or '').split('/', 1)[0]
     def unavailable(reason):
+        if provider in ('mimo', 'omniroute'):
+            job.served_witness_reason = reason.replace('no call log row', 'no call-log row')
         job.events.append({'event': 'gateway_witness_unavailable', 'reason': reason})
     mimo_endpoints = _mimo_endpoints(env) if provider == 'mimo' else None
     if not gateway_leg(job.model_or_combo, env, mimo_endpoints=mimo_endpoints):
+        if provider == 'mimo' and not _gateway(env):
+            unavailable('gateway endpoint not configured')
+            return
         if provider == 'mimo' and mimo_endpoints[1]:
             unavailable('explicit direct mimo endpoint')
             return
@@ -333,7 +335,7 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
             return
         if attempt + 1 < attempts:
             time.sleep(delay)
-    job.events.append({'event': 'gateway_witness_unavailable', 'reason': reason[:200]})
+    unavailable(reason[:200])
 
 
 def witness_gate(card, role, model, env=None, *, secrets=None):

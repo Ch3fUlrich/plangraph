@@ -325,3 +325,11 @@ Job accounting user plus kernel time feeds the existing CPU sampler and recovery
 activity clock; unavailable accounting never fabricates activity. Off does no
 recovery work; shadow only reports adoption without signals or durable writes.
 This does not authorize enabling reconciliation on a live host.
+
+Health reports add `witness_alerts` and print one `ALERT` line per collapsed leg
+in the human report. Two adjacent six-hour windows ending at `--until` each
+need at least five runs; witnessed share must move strictly above 80% to
+strictly below 20%. Runs are deduplicated per leg, and dry runs / unlaunched
+attempts are excluded. Served model witnesses count; child-writable session
+store identity does not. JSON mode remains one JSON document with the alert
+array. The check is advisory and does not change routing.
