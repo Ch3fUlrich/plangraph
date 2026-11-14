@@ -1,0 +1,14 @@
+[
+  {
+    "id": "phase-batch-package-writer",
+    "prompt": "Brief a writer for several related plan items in one repository.",
+    "must": ["One commit per task", "One status line per task", "Never wait, poll, push or fetch"],
+    "must_not": ["push after each task", "one PR per task"]
+  },
+  {
+    "id": "phase-batch-checkpoint-review",
+    "prompt": "A checkpoint review found several problems. Plan the fix and handoff.",
+    "must": ["One fix brief with every finding", "One re-review of the delta", "Never a fourth writer round"],
+    "must_not": ["restart an unlimited review loop", "merge without a GO"]
+  }
+]

@@ -1,6 +1,6 @@
 # Plan graph data contract (shared by import, views, page, later the keeper) — v1
 
-Python 3.12, stdlib only (+ pytest for tests). Package `src/plangraph/`; each file ≤ 400 lines. Tests in `tests/`.
+Python 3.12, stdlib only (+ pytest for tests). Package `src/plangraph/`; each file ≤ 800 lines. Tests in `tests/`.
 
 ## Item (one dict; the same shape in the import YAML and in the snapshot JSON)
 | field | type | notes |
@@ -26,7 +26,7 @@ Snapshot-only (keeper-written, never in the import): `epoch` int, `claimed_by`/`
 `lease_until` iso|null, `evidence` list[{kind,ref,verified,at}], `model` str|null, `updated_at` iso, `corrected_by` list[key].
 Terminal states: `done`, `cancelled`. `done` satisfies a dependency; `cancelled` does not (the validator flags it).
 
-## Import YAML (directory `data/plan-v3/`: `T0.yaml` … `T7.yaml`, `gates.yaml`; each file ≤ 400 lines, each `{meta?, items: [...]}`; the loader merges them)
+## Import YAML (directory `data/plan-v3/`: `T0.yaml` … `T7.yaml`, `gates.yaml`; each file ≤ 800 lines, each `{meta?, items: [...]}`; the loader merges them)
 ```yaml
 meta: {source: routing docs/plan v3 @29a032d, generated_by: <model>, date: 2026-10-01}
 items:

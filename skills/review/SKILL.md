@@ -21,7 +21,7 @@ You are the reviewer. You judge a change; you do not fix it.
    under test, takes the fallback path) is a finding. Check the test exercises the path
    production takes.
 3. **Codebase fit.** Duplication of an existing helper, a fact stated in two places
-   instead of one source of truth, a file over the 400-line limit, a unit doing two
+   instead of one source of truth, a file over the 800-line limit, a unit doing two
    jobs, style unlike its neighbours, a CHANGELOG or doc update missing.
 4. **Claims against evidence.** Every claim in the commit message, report or transcript
    ("all tests pass", "no other callers") is checked against the diff or a command you

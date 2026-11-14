@@ -237,8 +237,8 @@ Rule values retain RuleReport's u64 JSON representation. Browser consumers must
 reject integers outside their safe integer range rather than silently round.
 No auth-door paths, admission policies or host-registry defaults change here.
 
-The 400-line budget counts production lines only; sibling tests do not count
-against that budget, and every file independently remains at most 400 lines.
+The 800-line budget counts production lines only; sibling tests do not count
+against that budget, and every file independently remains at most 800 lines.
 Cargo builds the executable for the integration tests; no separate pre-build
 or nested Cargo invocation is needed. Run `cargo test -p pg-worker-core
 placement_rule`: the integration tests execute and reap Cargo's binary with

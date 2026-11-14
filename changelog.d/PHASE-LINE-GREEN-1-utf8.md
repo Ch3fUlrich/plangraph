@@ -1,0 +1,1 @@
+- Decode fresh-worktree Git subprocess text explicitly as UTF-8 with replacement, matching the existing spawner-wide locale-independent transport contract.

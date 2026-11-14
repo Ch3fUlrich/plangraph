@@ -100,4 +100,4 @@ audited without evidence or state changes. All other states, including a
 second call on DONE, refuse `bad_state`; all other roles refuse `forbidden`.
 This is not a batch op and changes no `verdict`, `claim`, `evidence`, or `close`
 rule. The Python MCP schema table lives in `mcp_tools.py` so the stdio
-transport stays below its 400-line limit without unrelated formatting churn.
+transport stays below its 800-line limit without unrelated formatting churn.
