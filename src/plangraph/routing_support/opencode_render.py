@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 import os
 import urllib.parse
+import urllib.request
+from ipaddress import ip_address
 from typing import Any
 
 from plangraph.mimo_policy import ACCEPTED_MIMO_IDS
@@ -51,6 +53,37 @@ def _is_valid_url(url: str) -> bool:
     if "@" in p.netloc or p.username or p.password or p.query or p.fragment:
         return False
     return True
+
+
+class _NoManagementRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Never forward the management credential beyond the validated URL.
+        return None
+
+
+def valid_gateway_endpoint(value):
+    """Shared credential endpoint policy: TLS, or HTTP on loopback only."""
+    if not _is_valid_url(value) or any(ord(c) <= 32 or ord(c) == 127 for c in value):
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        if not parsed.hostname or parsed.port == 0:
+            return False
+        if parsed.scheme == 'https' or parsed.hostname == 'localhost':
+            return True
+        return ip_address(parsed.hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def gateway_management_base_url(url: str) -> str:
+    """Remove only a final API-version path segment; preserve the authority."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return url  # Leave malformed input intact for endpoint validation.
+    path = parsed.path.rstrip('/').removesuffix('/v1')
+    return urllib.parse.urlunsplit(parsed._replace(path=path))
 
 
 def _normalize_gateway_url(url: str) -> str:

@@ -162,3 +162,31 @@ def overlay_env(base_env):
         if name not in env and name in os.environ:
             env[name] = os.environ[name]
     return env
+
+
+#: No child-side ``settings`` node exists to honour: no ``OPENCODE_CONFIG_CONTENT``,
+#: unparsable content, or a provider block ``build_child_env`` builds from scratch.
+_ABSENT = object()
+
+
+def _child_settings(env):
+    """The ``providers.omniroute.settings`` node the child's config already holds.
+
+    Whatever JSON value sits under ``settings`` is returned as-is: a ``dict`` is
+    what ``build_child_env`` merges into with ``setdefault``, any other value
+    blocks the ``baseURL`` write outright.  ``_ABSENT`` means there is nothing
+    to honour yet, so the deployment-config sources decide instead.
+    """
+    raw = (env or {}).get("OPENCODE_CONFIG_CONTENT")
+    if not isinstance(raw, str) or not raw.strip():
+        return _ABSENT
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return _ABSENT
+    node = parsed
+    for key in ("providers", "omniroute", "settings"):
+        if not isinstance(node, dict) or key not in node:
+            return _ABSENT
+        node = node[key]
+    return node

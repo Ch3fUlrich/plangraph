@@ -19,6 +19,9 @@ import urllib.parse
 import urllib.request
 
 from plangraph.routing_support.opencode_overlay import _strip_jsonc
+from plangraph.routing_support.opencode_render import (
+    _NoManagementRedirect, gateway_management_base_url, valid_gateway_endpoint,
+)
 from .gateway_models import (  # compatibility re-exports for callers
     PROVIDER_ALIASES, model_segment, served_family, served_models,
 )
@@ -87,12 +90,9 @@ def _config(content):
 
 
 def _gateway(env):
-    for name in URL_ENVS:
-        value = env.get(name)
-        normalized = value.strip().rstrip('/') if isinstance(value, str) else ''
-        if normalized:
-            return normalized
-    return None
+    from plangraph.routing_support.clients import effective_child_base_url
+    value = effective_child_base_url(env)
+    return value.rstrip('/') if value else None
 
 
 def _gateway_mimo(env, mimo_endpoints=None):
@@ -101,7 +101,7 @@ def _gateway_mimo(env, mimo_endpoints=None):
         return False
     seen, endpoints = _mimo_endpoints(env) if mimo_endpoints is None else mimo_endpoints
     def normalize(value):
-        return value.rstrip('/').removesuffix('/v1') if isinstance(value, str) else None
+        return gateway_management_base_url(value) if isinstance(value, str) else None
     # No explicit endpoint means the template default routes through the gateway.
     return seen and all(normalize(e) == normalize(gateway) for e in endpoints)
 
@@ -173,32 +173,38 @@ def require_witness(model, env=None, *, secrets=None):
     try:
         if reason:
             raise LookupError(reason)
-        load_token(secrets)
-        if not _gateway(env) or not _gateway(secrets):
+        child, parent = _gateway(env), _gateway(secrets)
+        if not child or not parent:
             raise LookupError('gateway endpoint not configured')
-        if _gateway(env).rstrip('/').removesuffix('/v1') != _gateway(secrets).rstrip('/').removesuffix('/v1'):
+        if gateway_management_base_url(child) != gateway_management_base_url(parent):
             raise LookupError('child gateway endpoint differs from witness endpoint')
+        if not valid_gateway_endpoint(parent):
+            raise LookupError('gateway endpoint must use HTTP(S) with a host and HTTPS outside loopback')
+        load_token(secrets)
     except LookupError as exc:
         raise SpawnRefused('witness required: ' + str(exc)) from None
 
 
-def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=None):
+def fetch_rows(tag, env, *, timeout=5, opener=None, secrets=None):
     """Call-log rows for ``tag``; raises LookupError naming why they are unreadable.
 
     Both URL and token come from the spawner's own env (``secrets``), never
     the child's. ``build_child_env`` drops the token.
     """
     secrets = os.environ if secrets is None else secrets
-    token = load_token(secrets)
     base = _gateway(secrets)
     if not base:
         raise LookupError('gateway endpoint not configured')
-    if base.endswith('/v1'):
-        base = base[:-3]
+    if not valid_gateway_endpoint(base):
+        raise LookupError('gateway endpoint must use HTTP(S) with a host and HTTPS outside loopback')
+    token = load_token(secrets)
+    base = gateway_management_base_url(base)
     query = urllib.parse.urlencode({'sessionTag': tag, 'limit': 200})
-    request = urllib.request.Request(f'{base}/api/usage/call-logs?{query}',
-                                     headers={'Authorization': 'Bearer ' + token})
     try:
+        request = urllib.request.Request(f'{base}/api/usage/call-logs?{query}',
+                                         headers={'Authorization': 'Bearer ' + token})
+        if opener is None:
+            opener = urllib.request.build_opener(_NoManagementRedirect()).open
         with opener(request, timeout=timeout) as response:
             return json.loads(response.read().decode('utf-8'))
     except (OSError, ValueError) as exc:
@@ -293,9 +299,14 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
     # omniroute block to every config, so the tag alone does not mean a gateway leg.
     provider = str(getattr(job, 'model_or_combo', '') or '').split('/', 1)[0]
     def unavailable(reason):
+        if provider in ('mimo', 'omniroute'):
+            job.served_witness_reason = reason.replace('no call log row', 'no call-log row')
         job.events.append({'event': 'gateway_witness_unavailable', 'reason': reason})
     mimo_endpoints = _mimo_endpoints(env) if provider == 'mimo' else None
     if not gateway_leg(job.model_or_combo, env, mimo_endpoints=mimo_endpoints):
+        if provider == 'mimo' and not _gateway(env):
+            unavailable('gateway endpoint not configured')
+            return
         if provider == 'mimo' and mimo_endpoints[1]:
             unavailable('explicit direct mimo endpoint')
             return
@@ -333,7 +344,7 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
             return
         if attempt + 1 < attempts:
             time.sleep(delay)
-    job.events.append({'event': 'gateway_witness_unavailable', 'reason': reason[:200]})
+    unavailable(reason[:200])
 
 
 def witness_gate(card, role, model, env=None, *, secrets=None):

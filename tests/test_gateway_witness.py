@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -34,7 +35,8 @@ def _job(model='omniroute/cx-gpt-6-luna'):
 def _env(job_id):
     cfg = {'providers': {'omniroute': {'options': {}}}, 'permission': {'*': 'deny'}}
     gw.tag_session(cfg, job_id)
-    return {'OPENCODE_CONFIG_CONTENT': json.dumps(cfg)}
+    return {'OPENCODE_CONFIG_CONTENT': json.dumps(cfg),
+            'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']}
 
 
 def test_tag_session_sets_header_on_omniroute_provider_only():
@@ -52,7 +54,7 @@ def test_witness_skips_a_leg_not_served_by_the_gateway():
     # Seat finding (qwen run-5ce67bc0): every config holds an omniroute block, so a mimo leg was probed.
     runner, job = _Runner('job-1'), _job('mimo/mimo-v2.6-pro')
     gw.witness(runner, 'job-1', job, _env('job-1'), fetch=pytest.fail)
-    assert job.events == [{'event': 'gateway_witness_unavailable', 'reason': 'mimo leg not routed through gateway'}]
+    assert job.events == [{'event': 'gateway_witness_unavailable', 'reason': 'gateway endpoint not configured'}]
     assert not runner.calls
 
 
@@ -105,15 +107,16 @@ def test_witness_skips_untagged_or_witnessed_jobs():
 
 def test_fetch_rows_needs_spawner_token_and_sends_it(tmp_path):
     with pytest.raises(LookupError, match='no ' + gw.TOKEN_ENV):
-        gw.fetch_rows('plangraph-job-1', {}, secrets={gw.TOKEN_FILE_ENV: str(tmp_path / 'missing')})
+        gw.fetch_rows('plangraph-job-1', {}, secrets={gw.TOKEN_FILE_ENV: str(tmp_path / 'missing'),
+            'OMNIROUTE_BASE_URL': 'https://gateway.invalid/v1'})
     sent = []
     def opener(request, timeout):
         sent.append(request)
         return io.BytesIO(b'[{"sessionTag": "plangraph-job-1"}]')
-    rows = gw.fetch_rows('plangraph-job-1', {'OMNIROUTE_BASE_URL': 'http://gw:20128/v1'},
-                         opener=opener, secrets={gw.TOKEN_ENV: 'tok', 'OMNIROUTE_BASE_URL': 'http://gw:20128/v1'})
+    rows = gw.fetch_rows('plangraph-job-1', {'OMNIROUTE_BASE_URL': 'https://gw:8443/v1'},
+                         opener=opener, secrets={gw.TOKEN_ENV: 'tok', 'OMNIROUTE_BASE_URL': 'https://gw:8443/v1'})
     assert rows == [{'sessionTag': 'plangraph-job-1'}]
-    assert sent[0].full_url.startswith('http://gw:20128/api/usage/call-logs?sessionTag=plangraph-job-1')
+    assert sent[0].full_url.startswith('https://gw:8443/api/usage/call-logs?sessionTag=plangraph-job-1')
     assert sent[0].get_header('Authorization') == 'Bearer tok'
 
 
@@ -131,7 +134,8 @@ def test_management_url_is_parent_only(monkeypatch):
     assert sent[0].full_url.startswith('https://parent.example/api/usage/call-logs?')
     assert sent[0].get_header('Authorization') == 'Bearer parent-token'
     with pytest.raises(LookupError, match='endpoint'):
-        gw.fetch_rows('tag', child, secrets={gw.TOKEN_ENV: 'parent-token'}, opener=pytest.fail)
+        gw.fetch_rows('tag', child, secrets={gw.TOKEN_ENV: 'parent-token',
+                                                  'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']}, opener=pytest.fail)
 
 
 @pytest.mark.parametrize('returncode', [0, 1])   # r2 seat (mimo-pro): a failed seat is witnessed too

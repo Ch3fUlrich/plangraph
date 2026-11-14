@@ -2,16 +2,18 @@
 
 Model providers use the configured local gateway (``effective_gateway_base_url``).
 Direct CLI spawning is an emergency fallback when gateway_online=False.
-
 Preserves Windows SystemRoot/COMSPEC/PATHEXT/TEMP environment variables (D-2090 BUG-B).
 """
 from __future__ import annotations
 
 import json
 import os
+import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+from .opencode_render import valid_gateway_endpoint
 
 from plangraph.retired_models import check_retired
 from plangraph.routing_support.claude_seat import claude_access_args
@@ -59,39 +61,34 @@ def effective_gateway_base_url(env: Mapping[str, str] | None = None,
     environment by default) wins, else ``gateway_url`` (``PLANGRAPH_GATEWAY_URL``,
     then the *config* mapping's ``gateway_url`` key).  ``build_child_env`` and
     the ``plangraph_agent_health`` report both call this helper, so the reported
-    URL cannot diverge from the effective one.
+    URL cannot diverge from the effective one. If neither env nor config names
+    an endpoint, read plangraph/omniroute-base-url under XDG_CONFIG_HOME (or
+    HOME/.config). Missing/unreadable/non-regular or oversized files mean unconfigured.
     """
     source = os.environ if env is None else env
     override = ((source or {}).get(OMNIROUTE_BASE_URL_ENV_VAR) or "").strip()
-    return override or gateway_url(source, config)
-
-
-#: No child-side ``settings`` node exists to honour: no ``OPENCODE_CONFIG_CONTENT``,
-#: unparsable content, or a provider block ``build_child_env`` builds from scratch.
-_ABSENT = object()
-
-
-def _child_settings(env: Mapping[str, str]) -> Any:
-    """The ``providers.omniroute.settings`` node the child's config already holds.
-
-    Whatever JSON value sits under ``settings`` is returned as-is: a ``dict`` is
-    what ``build_child_env`` merges into with ``setdefault``, any other value
-    blocks the ``baseURL`` write outright.  ``_ABSENT`` means there is nothing
-    to honour yet, so the deployment-config sources decide instead.
-    """
-    raw = (env or {}).get("OPENCODE_CONFIG_CONTENT")
-    if not isinstance(raw, str) or not raw.strip():
-        return _ABSENT
+    override = override if override.rstrip("/") else ""
+    configured = override or gateway_url(source, config)
+    if configured:
+        return configured
     try:
-        parsed = json.loads(raw)
-    except ValueError:
-        return _ABSENT
-    node: Any = parsed
-    for key in ("providers", "omniroute", "settings"):
-        if not isinstance(node, dict) or key not in node:
-            return _ABSENT
-        node = node[key]
-    return node
+        config_home = source.get('XDG_CONFIG_HOME')
+        root = (Path(config_home) if config_home else
+                Path(source.get('HOME') or Path.home()) / '.config') / 'plangraph'
+        # Nonblocking open also covers a file replaced with a FIFO after lookup.
+        fd = os.open(root / 'omniroute-base-url', os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0))
+        with os.fdopen(fd, 'rb') as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                return None
+            value = stream.read(8193)
+        if len(value) > 8192:
+            return None
+        value = value.decode('utf-8').strip()
+        return value if valid_gateway_endpoint(value) else None
+    except (OSError, UnicodeError, ValueError, RuntimeError):
+        return None
+
+from .opencode_overlay import _ABSENT, _child_settings
 
 
 def effective_child_base_url(env: Mapping[str, str] | None = None,
@@ -172,6 +169,10 @@ def build_child_env(
     redirection (GIT_DIR and kin) that a plain update cannot express.
     """
     env = dict(os.environ)
+    gateway = effective_gateway_base_url(env, config)
+    if gateway and not (gateway_url(env, config) or
+                        str(env.get(OMNIROUTE_BASE_URL_ENV_VAR) or "").strip().rstrip("/")):
+        env[GATEWAY_URL_ENV_VAR] = gateway
 
     if os.name == "nt":
         critical_windows_vars = (

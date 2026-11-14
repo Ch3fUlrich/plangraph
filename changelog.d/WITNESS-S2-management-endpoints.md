@@ -1,0 +1,1 @@
+- **WITNESS-S2-CLI-GATEWAY-URL:** Validate provider-state and quota management endpoints before reading the gateway key; refuse redirects so bearer credentials cannot reach redirect targets.
