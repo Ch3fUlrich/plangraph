@@ -38,7 +38,7 @@ def test_run_call_sites_require_prompt_record(root=None):
         ('leg_probe.py', 'launch', "runner.spawn(prompt=PROMPT, role='implement', model_or_combo=leg.model, client=leg.harness, cwd=root, extra_env=CHILD_ISOLATION, watchdog=dict(stall_s=timeout + 60, first_edit_s=timeout + 60, max_s=timeout + 60, interval=1))"): 'Liveness probe has no run record.',
         ('launch_spec.py', 'build', "service.runner.spawn(prompt=prompt, model_or_combo=leg.model, role=request['role'], dry_run=True, client=leg.harness, extra_env=writer_env, prepare_launch=True)"): 'Dry preparation only; Rust records the actual run before dispatch.',
         ('mcp.py', 'call_tool', "self.service.spawn(card=arguments.get('card'), prompt=arguments['prompt'], role=arguments.get('role', 'implement'), model=arguments.get('model_or_combo'), override_reason=arguments.get('override_reason'), review_of=arguments.get('review_of'), writer_families=arguments.get('writer_families', ()), review_scope=arguments.get('review_scope'), seats=arguments.get('seats', False), dry_run=arguments.get('dry_run', False), wait_seconds=arguments.get('wait_seconds', 0), no_fallthrough=arguments.get('no_fallthrough', False), **options)"): 'Service entry point creates the run record.',
-        ('cli.py', 'run', 'service.spawn(**payload, wait_seconds=0)'): 'Service entry point creates the run record.',
+        ('base_fresh.py', 'wait', 'service.spawn(**payload, wait_seconds=0)'): 'Service entry point creates the run record before acknowledging admission.',
         ('cli.py', 'main', 'service.spawn(**payload, wait_seconds=None)'): 'Service entry point creates the run record.',
     }
     check_run_call_sites(root, Counter({site: 1 for site in allow}))

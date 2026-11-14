@@ -738,7 +738,7 @@ mod tests {
         include!("attempt_pilot_tests.rs");
     }
     use super::*;
-    use std::process::{Command, Stdio};
+    use std::process::Command;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::time::Duration;
@@ -850,25 +850,10 @@ mod tests {
         run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap()
     }
 
-    /// Local git runner: worker-core's helper is `pub(crate)` there and its
-    /// hermetic env only applies inside worker-core's own tests, so pin the
-    /// identity here with `-c`.
+    /// All fixture Git commands use worker-core's shared test environment.
     fn git(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .args([
-                "-c",
-                "user.name=tester",
-                "-c",
-                "user.email=t@example.com",
-                "-c",
-                "commit.gpgsign=false",
-            ])
+        let out = pg_worker_core::git_test_support::command(dir)
             .args(args)
-            .current_dir(dir)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .stdin(Stdio::null())
             .output()
             .expect("git runs");
         assert!(

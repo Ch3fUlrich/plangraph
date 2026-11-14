@@ -1,5 +1,7 @@
 import json
 import hashlib
+import os
+import shutil
 import shlex
 import subprocess
 import sys
@@ -9,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.spawner import overflow as o
+from test_spawner_base_fresh import repository  # noqa: F401 local Git origin fixture
 
 
 def healthy(**changes):
@@ -83,8 +86,9 @@ def inputs(tmp_path, monkeypatch):
     card.write_text(json.dumps({'diff_ref': {'repo': str(tmp_path), 'base': 'abc', 'head': 'def'}}))
     prompt = tmp_path / 'prompt.txt'
     prompt.write_text('a prompt')
-    monkeypatch.setattr(o, 'local_resources', lambda: (4, 4000))
-    return tmp_path, config, ['spawn', '--repo', str(tmp_path), '--card', str(card), '--prompt', str(prompt)]
+    monkeypatch.setattr(o, 'local_resources', lambda state: (4, 4000))
+    return tmp_path, config, ['spawn', '--state', str(tmp_path / 'state'), '--repo', str(tmp_path),
+                              '--card', str(card), '--prompt', str(prompt)]
 
 
 @pytest.mark.parametrize('config', [{}, {'public_repos': []}])
@@ -92,17 +96,18 @@ def test_private_never_copies(inputs, monkeypatch, capsys, config):
     root, path, args = inputs
     path.write_text(json.dumps(config))
     monkeypatch.setattr(o, 'remote_spawn', lambda *a: pytest.fail('private copy'))
-    assert o.main(args) == 5
+    assert o.main(args) == 2
     assert 'not public' in capsys.readouterr().out
 
 
 def test_local_cli_identical(inputs, monkeypatch):
     root, path, args = inputs
-    monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
+    monkeypatch.setattr(o, 'local_resources', lambda state: (0, 6000))
     calls = []
     monkeypatch.setattr(o.cli, 'main', lambda argv: calls.append(argv) or 3)
     assert o.main(args + ['--leg', 'invented-leg']) == 3
-    assert calls == [['spawn', '--card', '@' + str(root / 'card.json'), 'a prompt', '--leg', 'invented-leg']]
+    assert calls == [['--state', str(root / 'state'), 'spawn', '--card', '@' + str(root / 'card.json'),
+                      'a prompt', '--leg', 'invented-leg']]
 
 
 def test_retry_and_queue_reasons(inputs, monkeypatch, capsys):
@@ -118,9 +123,13 @@ def test_retry_and_queue_reasons(inputs, monkeypatch, capsys):
     assert calls == ['ash', 'birch']
     assert json.loads(capsys.readouterr().out)['host'] == 'birch'
     monkeypatch.setattr(o, 'remote_spawn', lambda *a: None)
-    assert o.main(args) == 5
+    assert o.main(args) == 2
     output = capsys.readouterr().out
     assert 'ash: remote spawn failed' in output and 'birch: remote spawn failed' in output
+    record = json.loads(output)
+    for field in ('overflow_reason', 'error'):
+        assert record[field].count('ash: remote spawn failed') == 1
+        assert record[field].count('birch: remote spawn failed') == 1
 
 
 @pytest.mark.parametrize('contents', ['bad json', '{}', 'stale'])
@@ -145,7 +154,7 @@ def test_local_before_card_parsing(inputs, monkeypatch, card):
         (root / 'card.json').unlink()
     else:
         (root / 'card.json').write_text(card)
-    monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
+    monkeypatch.setattr(o, 'local_resources', lambda state: (0, 6000))
     monkeypatch.setattr(o, 'ready_records', lambda config: pytest.fail('local readiness read'))
     monkeypatch.setattr(o.cli, 'main', lambda argv: 3)
     assert o.main(args) == 3
@@ -234,7 +243,7 @@ local_resources_real = o.local_resources
 
 def test_local_real_cli_card_and_prompt(inputs, monkeypatch, capsys):
     root, _, args = inputs
-    monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
+    monkeypatch.setattr(o, 'local_resources', lambda state: (0, 6000))
     calls = []
 
     async def spawn(**payload):
@@ -281,15 +290,15 @@ def test_record_host(tmp_path, monkeypatch):
     assert record['host'] == 'invented-local'
 
 
-@pytest.mark.parametrize('hosts,code', [({'invented': 'alias'}, 5), ([], 1), (None, 1)])
+@pytest.mark.parametrize('hosts,code', [({'invented': 'alias'}, 2), ([], 1), (None, 1)])
 def test_malformed_host_config(inputs, monkeypatch, capsys, hosts, code):
     root, path, args = inputs
     path.write_text(json.dumps({'hosts': hosts, 'public_repos': [str(root)]}))
     monkeypatch.setattr(o, 'remote_spawn', lambda *a: pytest.fail('malformed host copied'))
     assert o.main(args) == code
     output = capsys.readouterr()
-    if code == 5:
-        assert 'queue:' in output.out and 'malformed readiness' in output.out
+    if code == 2:
+        assert 'refused:' in output.out and 'malformed readiness' in output.out
     else:
         assert 'input or resource check failed' in output.err
 
@@ -299,21 +308,23 @@ def test_malformed_host_config(inputs, monkeypatch, capsys, hosts, code):
 def test_local_limits_coerce_or_default(inputs, monkeypatch, key, value):
     _, path, args = inputs
     path.write_text(json.dumps({key: value}))
-    monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
+    monkeypatch.setattr(o, 'local_resources', lambda state: (0, 6000))
     monkeypatch.setattr(o.cli, 'main', lambda argv: 3)
     assert o.main(args) == 3
 
 
 @pytest.mark.parametrize('prompt', ['trailing\n', 'trailing\n\n', 'literal $(false) .\n', 'x' * (300 * 1024)],
                          ids=['newline', 'blank-line', 'shell-literal', '300KiB'])
-def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
+def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt, repository):
     stage = tmp_path / 'stage with spaces'
     stage.mkdir()
     binary_dir = tmp_path / 'bin'
     binary_dir.mkdir()
     policy = tmp_path / 'route-policy.json'
     policy.write_text('{"banned_families": [], "off_families": [], "paused_harnesses": {}}')
-    env = dict(PATH=str(binary_dir), HOME=str(tmp_path), AUTOOS_ROOT=str(tmp_path),
+    env = dict(PATH=str(binary_dir) + os.pathsep + str(o.Path(shutil.which('git')).parent),
+               GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
+               HOME=str(tmp_path), AUTOOS_ROOT=str(tmp_path),
                XDG_STATE_HOME=str(tmp_path / 'state'), PLANGRAPH_OMNIROUTE_LEG_STATE='0',
                PLANGRAPH_ROUTE_POLICY=str(policy))
     real_run = subprocess.run
@@ -344,7 +355,7 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
             return result
         return SimpleNamespace(returncode=0, stdout=str(stage) if argv[-1] == 'mktemp -d' else '{}')
     monkeypatch.setattr(o.subprocess, 'run', run)
-    host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src=str(source))
+    host = dict(ssh='invented-alias', repo=str(repository[1]), spawner_src=str(source))
     options = ['--role', 'review', '--leg', 'agy-gemini-3.8-flash', '--writer-family', 'gpt',
                '--override-reason', 'hermetic prompt transport regression', '--dry-run', '--json']
     record = o.remote_spawn('invented', host, {'estimate_tokens': 1000}, prompt, options)

@@ -17,6 +17,7 @@ tokio = { version = "1.53", features = ["rt", "net", "io-util", "macros", "time"
 libc = "0.2"
 
 [dev-dependencies]
+pg-worker-core = { path = "../worker-core", features = ["test-support"] }
 syn = { version = "2", features = ["full", "visit"] }
 
 [target.'cfg(windows)'.dependencies]

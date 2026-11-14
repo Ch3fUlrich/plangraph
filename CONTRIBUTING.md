@@ -6,8 +6,8 @@ and affected tests, in that order. Each family ends with a timed PASS/FAIL/SKIP/
 summary; failed checks with HTTP 5xx output in any family (including policy) are
 inferred as INFRA and retried once; persistent INFRA exits 3, other failures exit 1.
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
-affected pytest has 900 seconds. The hook has no additional overall preflight bound.
-Use `--keep-going` to collect all failures or `--fast`
+affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
+Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
 to skip affected tests. The existing pre-push hook runs preflight too; set
 `PREFLIGHT_FAST=1` for its fast mode or `PREFLIGHT_SKIP=1` to bypass only that hook
 invocation (not the existing scrub/ref/file-size gates or direct CLI runs). Private
@@ -17,9 +17,12 @@ when neither is present, public rules still run but scrub reports SKIP with a re
 The revision controls `FILESIZE_REQUIRE_BASE`, `NEWCODE_BASE` and `CHANGELOG_BASE`
 are scoped to policy checks. Other families receive none of these controls,
 including inherited values, so nested Git test fixtures own their revision bases.
-Affected tests also clear Git's repository-local environment reported by
-`git rev-parse --local-env-vars`, including indexed configuration pairs. Policy
-checks retain the caller's Git context; test repositories keep their own hooks.
+The pre-push affected gate clears every name reported by
+`git rev-parse --local-env-vars`, all `GIT_CONFIG*` variables and `GIT_PREFIX`
+before starting the selector. The selector repeats this before pytest, and the
+pytest session clears inherited bindings before collection and test fixtures.
+Discovery failures refuse to launch tests. The hook's own Git and policy calls
+retain the caller's context; temporary test repositories keep their own hooks.
 
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
@@ -27,7 +30,7 @@ plangraph is public; the plans it tracks usually are not. Keep that difference c
 
 Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so there is no
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
-The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
+The MCP snapshot guard and D-5661 Python freshness gate have path-specific `tools/new_code_allowlist.txt` entries
 with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
 The D-5504/D-5506 `mcp_tools.py` exception only splits schema data out of the full Python MCP transport; it also retires with MCP-RUST.
 Interim (operator D-5830): `**/*.py` and `**/*.sh` are allowlisted, so new Python and shell files pass the new-code gate; Rust stays the preferred language for new code, and the gate, its CI job and its tests stay in place for the other blocked extensions. Keep both OOM diagnostic regression and quota snapshot module/test entries in `tools/new_code_allowlist.txt` when merging these concurrent in-flight changes.
@@ -41,7 +44,7 @@ python -m pytest -q -n auto tests            # main merge + nightly full suite
 The affected selector falls back to the full suite for shared fixtures and suite
 configuration; unmapped code selects a bounded smoke set (tests naming its directory,
 at most 12, plus `tests/test_affected_tests.py`), and CI/main keep the full suite; documentation, `changelog.d/` fragments,
-status and build artifacts, and `.md`/`.rst`/`.txt` files no test names, select no tests. Do not bypass a conservative fallback on PRs.
+build artifacts, and `.md`/`.rst`/`.txt` files no test names, select no tests. Under `docs/` and `status/` only documentation files (`.md`, `.rst`, images) select no tests; any other file there (`docs/conf.py`, `status/x.toml`) goes through the normal mapping. Do not bypass a conservative fallback on PRs.
 Pass `--head <revision>` for a committed-only comparison, excluding staged,
 worktree and untracked changes; omit it to include checkout changes.
 Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
@@ -105,6 +108,8 @@ A finished review seat's verdict is forwarded to the keeper by the spawner (`too
 Seat records bind manual `tools/seat_verdict.py --key` posting to their recorded `item_key`; a different key or an explicit null is refused before token reads or network I/O. Older records without the field remain usable through the manual CLI. Card/environment identity validation never infers a target from prompt text. For an opencode seat, the review text is the text parts after the last step-start event of the JSON `live.log`, plain-text logs are used unchanged, and the `VERDICT` line must still be the last line (F8, D-3420). Lifecycle events decide event mode: at least one JSON object with `type` equal to `step_start` or `step_finish` and an object-valued `part` is required; `text`/`tool_use` lines, quoted JSON and other typed objects alone leave a plain-text log unchanged.
 The `evidence.json` path applies the same refusal to every supplied `item_key` or `key`, including explicit nulls and conflicting aliases; evidence without either identity field retains the legacy manual path. Reviewer tokens belong to the seat's model family, not the `--writer-family` being reviewed.
 When evidence and a record coexist, the record's `item_key` remains binding even if evidence omits or replaces it; an unreadable or malformed companion record is refused. The record identity check also runs independently of evidence derivation on the record-only path. `--key` is required for all manual invocations, including legacy records; omitting it exits 2 before seat/token reads or network I/O.
+Windows skips POSIX record ownership/mode checks; WSL `/mnt/<drive>/` paths skip only synthetic mode checks, using resolved real record paths, including symlink targets; other POSIX paths still require current-uid ownership and no group/other write access.
+Record-only posting re-reads pending completion fields, torn UTF-8/JSON and transient read locks for at most 30 seconds, rechecking identity each time, then posts the persisted verdict or prints one refusal. A deleted record refuses immediately. Empty lifecycle steps never fall back to a stale stdout tail; a stop-completed answer survives later empty stop or unfinished steps until new text, tool activity or a non-stop finish invalidates it.
 
 Record-derived finish evidence uses a nonempty string from `record.finish_reason`
 first, then `completion.finish_reason`, then the last `opencode_step_finish` in
@@ -143,12 +148,11 @@ New Python files require a reasoned rule 9.14 entry in `tools/new_code_allowlist
 
 ## File size
 
-A tracked source, test, script or doc file stays at or under 400 lines; over 400, split it
+A tracked source, test, script or doc file stays at or under 800 lines; over 800, split it
 by responsibility before adding more. `python3 tools/check_file_size.py` enforces this in CI
 and in the pre-push hook. Files that were larger when the gate landed are listed in
 `.filesize-baseline`: such a file may shrink, never grow, and the baseline itself only
-shrinks: `--update-baseline` writes it once when none exists, afterwards only lowers
-counts, and CI refuses an entry added or raised against the change's base (`origin/main`
+shrinks: `--update-baseline` writes it once when none exists, afterwards only lowers counts or removes entries that fit the 800-line cap, and CI refuses an entry added or raised against the change's base (`origin/main`
 on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
 (today only `CHANGELOG.md`, an append-only ledger).
@@ -312,7 +316,36 @@ pg-worker-core --test turn_budget_hook --test turn_budget_poll --test
 turn_budget_alert --test turn_budget_watchdog`. Tests never install hooks, read
 live session state, or change permissions/settings files.
 
+For a new remote branch, pre-push selects the nearest known origin branch merge-base for affected tests, falling back to `origin/main`.
+
+Pre-push preflight passes `--base`/`--head` to scrub, which reads changed blobs from the pushed tip even when checkout files differ or are deleted; manual scrub without a range still scans the worktree.
+
+Pre-push and preflight prepend an existing `~/.cargo/bin` to PATH. Missing Cargo refuses selected Rust or placement checks immediately with one `CARGO FAIL:` line before running those checks.
+
+Test fixtures set a Git discovery ceiling at their temporary root; settings discovery honors that ceiling so temporary policies remain isolated even when TMPDIR is inside the checkout.
+
+Operator D-5830 keeps Rust preferred while accepting Python and shell through `**/*.py` and `**/*.sh` in `tools/new_code_allowlist.txt`.
+
+New stacked branches select affected tests from the nearest remote merge-base, while scrub starts at `origin/main` (the whole tip when main is unknown); the hook passes a separate `--scrub-base` to preflight.
+
+Pytest uses a session-owned temporary global Git config and disables system Git config; session teardown detects shared or worktree repository config changes without invoking Git on the real checkout.
+
+Event-log seat reviews use completed step text only. A stop answer survives empty trailing steps, but new unfinished text or tool activity cannot supply a verdict; plain-text logs retain their existing path.
+
+CI runs pytest in three deterministic `PYTEST_SHARD=INDEX/COUNT` shards while keeping xdist groups together and loadgroup scheduling; PR runs stop at ten failures within each pytest job. Empty shards succeed without broadening the selected tests. Whole-run cancellation is not installed. Synthetic sensitivity sweeps never consult host quota databases.
+
+CI timing measurements and pending PR-run evidence are tracked in `docs/ci-performance.csv`. Sensitivity reproducibility runs one case per seed so all five seeds retain coverage across workers.
+
+Python sessions compare only registrations pointing under their temporary test root, so other sessions may move worktrees concurrently; shared and per-worktree config bytes remain guarded. Rust workspace/writer fixtures compare the real checkout’s worktree registry metadata before and after tests. Worktree tests must create their repositories inside temporary roots; the guard reads metadata directly and never runs Git on the real checkout.
+
+The pre-push hook and preflight print their Python interpreter. They prefer `.venv/bin/python` (or `.venv/Scripts/python.exe`), then `PREFLIGHT_PYTHON`, then `python3` on PATH. Set `PREFLIGHT_PYTHON` to an absolute environment interpreter when the checkout shares another repository environment. A selected test run without pytest reports `FAIL pytest-missing` and its install command.
+
+Rust Git fixtures share `pg_worker_core::git_test_support` (unit tests or the `test-support` feature). It clears inherited and preconfigured `GIT_*` controls before setting a null global/system config, fixture HOME/XDG paths and test identity. Test consumers enable the feature through dev-dependencies; fixture helpers must not construct unprotected Git commands.
+
+Local preflight invokes `affected_tests.py --files-only`: changed test files and reverse-import consumers remain explicit files, while workflow/config/shared-fixture changes add bounded smoke coverage instead of selecting `tests/`. An unreadable graph refuses local selection. CI keeps the conservative full-suite fallback. The affected-test limit remains 240 seconds; Rust checks also receive an environment without inherited `GIT_*` controls.
+
 Python files already in flight are individually listed in
 `tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
-
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
+
+Local preflight combines `--local` shared-asset consumer traversal with `--files-only` bounded suite-control checks, using `origin/main` for test selection when available. Scrub and policy retain their pushed-range baselines.

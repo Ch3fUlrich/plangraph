@@ -25,7 +25,7 @@
   {"subject":"leg:cx-gpt-6.1-sol-medium@omniroute/cx-gpt-6.1-sol-medium","effort":"medium","problems":["missing_row"],"reason":"Explicit medium-effort Sol 6.1 leg has no matching row."},
   {"subject":"leg:cx-gpt-6.1-sol-xhigh@omniroute/cx-gpt-6.1-sol-xhigh","effort":"xhigh","problems":["missing_row"],"reason":"Default xhigh-effort Sol 6.1 writer has no matching benchmark row."},
   {"subject":"leg:deepseek@omniroute/deepseek-direct-flash","effort":null,"problems":["missing_row"],"reason":"No row for omniroute/deepseek-direct-flash; direct upstream keys do not prove this alias."},
-  {"subject":"leg:omniroute-deepseek-flash@omniroute/deepseek-flash","effort":null,"problems":["missing_row"],"reason":"No row for the gateway DeepSeek alias; upstream release identity is not established."},
+  {"subject":"leg:omniroute-deepseek-flash@omniroute/deepseek-v4.1-flash","effort":null,"problems":["missing_row"],"reason":"No row for the gateway DeepSeek alias; upstream release identity is not established."},
   {"subject":"leg:omniroute-grok-4.7@omniroute/gc/grok-4.7","effort":null,"problems":["missing_row"],"reason":"Registered Grok review leg has no benchmark row."},
   {"subject":"leg:omniroute-muse-spark@omniroute/muse-spark-1.3-contributor","effort":null,"problems":["missing_row"],"reason":"No row for the gateway Muse alias; opencode-go is a different route key."},
   {"subject":"leg:opencode-big-pickle@opencode/big-pickle","effort":null,"problems":["missing_row"],"reason":"Registered Big Pickle review leg has no benchmark row."},

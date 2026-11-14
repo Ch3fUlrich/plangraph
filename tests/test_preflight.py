@@ -131,9 +131,37 @@ def test_all_families_after_scrub_failure(repo, monkeypatch, capsys):
     calls = fake_runner(monkeypatch, "scrub_check.py")
     monkeypatch.setattr(preflight, "rust_commands", lambda *a: [["cargo", "fmt"]])
     assert preflight.main(["--base", "HEAD"], repo) == 1
-    assert len(calls) == 7
-    assert re.findall(r'^(?:PASS|FAIL|SKIP) (\w+) ', capsys.readouterr().out, re.M) == [
-        'scrub', 'policy', 'rust', 'tests']
+    assert len(calls) == 6 and not any(Path(c[0][1]).name == "affected_tests.py" for c in calls)
+    out = capsys.readouterr().out
+    assert re.findall(r'^(?:PASS|FAIL|SKIP) (\w+) ', out, re.M) == ['scrub', 'policy', 'rust', 'tests']
+    assert re.search(r"^SKIP tests ", out, re.M)  # scrub refused the push: no point running tests
+
+
+def test_policy_reports_every_failing_check(repo, monkeypatch, capsys):
+    def run(command, cwd, env):
+        name = Path(command[1]).name
+        bad = {"check_file_size.py": "FAIL a.py: too long\nmore", "check_changelog_docs.py": "FAIL no changelog entry"}
+        return (1, bad[name] + "\n") if name in bad else (0, "")
+
+    monkeypatch.setattr(preflight, "run", run)
+    monkeypatch.setattr(preflight, "rust_commands", lambda *a: [["cargo", "fmt"]])
+    assert preflight.main(["--base", "HEAD"], repo) == 1
+    out = capsys.readouterr().out
+    assert "policy: 2 check(s) failed:" in out
+    assert "  check_file_size.py: FAIL a.py: too long" in out
+    assert "  check_changelog_docs.py: FAIL no changelog entry" in out
+    assert re.search(r"^FAIL policy ", out, re.M)
+
+
+def test_affected_timeout_names_step_bound_and_count(monkeypatch, repo):
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"], output=b'{"tests": ["a", "b", "c"]}\n')
+
+    monkeypatch.setattr(preflight.subprocess, "run", timeout)
+    code, text = preflight.run(["python3", "tools/affected_tests.py"], repo, {})
+    assert code == 1
+    assert text == (f"tests: affected-tests step exceeded its {preflight.TEST_TIMEOUT} second bound "
+                    "(3 selected test paths)\n")
 
 
 def test_retry_recovers(repo, monkeypatch, capsys):
@@ -203,9 +231,9 @@ def test_cargo_absent(repo, monkeypatch, capsys, rust_changed):
     base = "HEAD~1" if rust_changed else "HEAD"
     assert preflight.main(["--base", base, "--fast"], repo) == int(rust_changed)
     output = capsys.readouterr().out
-    reason = ("rust: FAIL: missing required tool: cargo" if rust_changed
+    reason = ("CARGO FAIL: cargo is required for Rust checks" if rust_changed
               else "rust: SKIP: no rust changes")
-    assert [line for line in output.splitlines() if line.startswith("rust:")] == [reason]
+    assert [line for line in output.splitlines() if line.startswith(("rust:", "CARGO FAIL:"))] == [reason]
     assert re.search(rf"^{'FAIL' if rust_changed else 'SKIP'} rust ", output, re.M)
 
 
@@ -295,6 +323,7 @@ def test_real_affected_argv(repo, monkeypatch):
     monkeypatch.setattr(preflight, "run", run)
     assert preflight.main(["--base", "HEAD", "--head", "HEAD"], repo) == 0
     assert seen and seen[0][seen[0].index("--head") + 1] == "HEAD"
+    assert "--files-only" in seen[0]
 
 
 def test_timeout_is_failure(monkeypatch, repo):
@@ -358,12 +387,46 @@ def test_summary_is_immediate(repo, monkeypatch, capsys):
     assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
 
 
+@pytest.mark.parametrize('source', ['venv', 'configured', 'path'])
+def test_python_interpreter_order(tmp_path, monkeypatch, source):
+    import runpy
+    configured = tmp_path / 'configured-python'
+    monkeypatch.setenv('PREFLIGHT_PYTHON', str(configured))
+    env_python = tmp_path / '.venv/bin/python'
+    if source == 'venv':
+        env_python.parent.mkdir(parents=True)
+        env_python.touch()
+    elif source == 'path':
+        monkeypatch.delenv('PREFLIGHT_PYTHON')
+    expected = str(env_python if source == 'venv' else configured) if source != 'path' else shutil.which('python3') or 'python3'
+    hook = runpy.run_path(str(Path(preflight.__file__).with_name('hooks') / 'pre-push'))
+    assert preflight.python_interpreter(tmp_path) == expected
+    assert hook['python_interpreter'](tmp_path) == expected
+    calls = fake_runner(monkeypatch)
+    assert preflight.main(['--base', 'HEAD', '--fast'], tmp_path) == 0
+    assert all(command[0] == expected for command, _, _ in calls)
+
+
+def test_shared_manifest_selects_only_workspace_members(repo, monkeypatch):
+    rust = repo / 'rust'
+    for directory, name in [('one', 'one'), ('worker', 'pg-worker')]:
+        crate = rust / directory
+        crate.mkdir(parents=True)
+        (crate / 'Cargo.toml').write_text('[package]\nname = "' + name + '"\n')
+    (rust / 'Cargo.toml').write_text('[workspace]\nmembers = ["one"]\n')
+    subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
+    subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                    'commit', '-qm', 'workspace'], cwd=repo, check=True)
+    monkeypatch.setattr(preflight.shutil, 'which', lambda _: '/fake/cargo')
+    commands = preflight.rust_commands(repo, 'HEAD~1', 'HEAD')
+    assert commands[2] == ['cargo', 'test', '-p', 'one']
+
 def test_local_tests_use_main_while_policy_keeps_push_base(repo, monkeypatch):
     subprocess.run(['git', 'update-ref', 'refs/remotes/origin/main', 'HEAD'], cwd=repo, check=True)
     calls = fake_runner(monkeypatch)
     assert preflight.main(['--base', 'HEAD'], repo) == 0
     tests = next(cmd for cmd, _, _ in calls if Path(cmd[1]).name == 'affected_tests.py')
     assert tests[tests.index('--base') + 1] == 'origin/main'
-    assert '--local' in tests
+    assert '--local' in tests and '--files-only' in tests
     assert all(env['FILESIZE_REQUIRE_BASE'] == 'HEAD' for cmd, _, env in calls
                if Path(cmd[1]).name == 'check_file_size.py')

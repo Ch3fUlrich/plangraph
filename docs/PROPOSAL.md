@@ -126,7 +126,7 @@ path highlighted; DONE collapsed; on phone widths the first tab is the ready / b
 **Pilot:** import plan v3 — 84 distinct lane ids (`grep -o "^| T[0-9]-[A-Z0-9-]*" T*.md | sort -u`; STATUS says "~76"),
 owners from file headers, dependencies from the Order sections + phase gates (L2 writer drafts the YAML, reviewed, never
 auto-trusted); legacy "done ✓" rows without a sha import as `in_review`, flagged. Views: ready, blocked-by, waves
-(graphlib layers), critical path by estimate, % done. CLI + MCP + routing hook. Modules ≤ 400 lines each (db+triggers,
+(graphlib layers), critical path by estimate, % done. CLI + MCP + routing hook. Modules ≤ 800 lines each (db+triggers,
 state machine, evidence verifier, views, CLI, MCP, import, render, page), est. 1,000–1,500 lines total (hash chain, signing, outbox, tokens, epochs, validator, MCP, import, render).
 **Tests:** (1a) agent-path attacks — edit/delete/reopen/re-point a DONE item via CLI and MCP, forged token/actor, other
 agent's token, replayed outbox, stale epoch → refused + logged; (1b) OS-path — real autoos agents cannot read/write the DB file, have no sudo;

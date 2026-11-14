@@ -48,3 +48,84 @@ def test_strict_routing_child_stat_errors(tmp_path, monkeypatch, child, damage):
             roots._scan_routing_tree(tmp_path, True)
     finally:
         tmp_path.chmod(0o700)
+
+
+def test_session_git_configuration_is_isolated():
+    assert os.environ.get('GIT_CONFIG_NOSYSTEM') == '1'
+    path = Path(os.environ['GIT_CONFIG_GLOBAL'])
+    assert path.name == 'global.gitconfig' and path.is_file()
+
+
+@pytest.mark.parametrize('worktree', [False, True])
+def test_git_config_guard_detects_change_at_teardown(tmp_path, worktree, config_guard):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    if worktree:
+        metadata = tmp_path / 'metadata'
+        gitdir = metadata / 'worktrees/lane'
+        gitdir.mkdir(parents=True)
+        (repo / '.git').write_text('gitdir: ' + str(gitdir) + '\n')
+        (gitdir / 'commondir').write_text('../..\n')
+    else:
+        metadata = repo / '.git'
+        metadata.mkdir()
+    config = metadata / 'config'
+    config.write_text('[core]\n bare = false\n')
+    with pytest.raises(AssertionError, match='repository .git/config changed during pytest session'):
+        with config_guard(repo):
+            config.write_text('[core]\n bare = true\n')
+
+
+def test_pytest_shards_preserve_groups_and_cover_every_case(shard_selector):
+    from types import SimpleNamespace
+    def item(name, group=None):
+        return SimpleNamespace(nodeid=name, get_closest_marker=lambda _: SimpleNamespace(args=(group,), kwargs={}) if group else None)
+    items = [item('a', 'together'), item('b', 'together'), item('c'), item('d')]
+    shards = [shard_selector(items, f'{n}/3') for n in range(3)]
+    assert sorted(x.nodeid for shard in shards for x in shard) == ['a', 'b', 'c', 'd']
+    assert sum(any(x.nodeid == 'a' for x in shard) and any(x.nodeid == 'b' for x in shard) for shard in shards) == 1
+    assert [[x.nodeid for x in shard_selector(list(reversed(items)), f'{n}/3')][::-1] for n in range(3)] == [[x.nodeid for x in shard] for shard in shards]
+
+
+@pytest.mark.parametrize('linked', [False, True])
+@pytest.mark.parametrize('change', ['add', 'remove', 'relocate'])
+def test_guard_detects_worktree_registry_changes(tmp_path, config_guard, linked, change):
+    repo, common = tmp_path / 'repo', tmp_path / 'metadata'
+    repo.mkdir()
+    (common / 'worktrees/old').mkdir(parents=True)
+    (common / 'config').write_text('[core]\n')
+    entry = common / 'worktrees/old/gitdir'
+    entry.write_text(str(tmp_path / 'old/tree/.git') + '\n')
+    if linked:
+        (repo / '.git').write_text('gitdir: ' + str(common / 'worktrees/old') + '\n')
+        (common / 'worktrees/old/commondir').write_text('../..\n')
+    else:
+        (repo / '.git').symlink_to(common, target_is_directory=True)
+    with pytest.raises(AssertionError, match='worktree registry changed'):
+        with config_guard(repo, registry_roots=(tmp_path,)):
+            if change == 'add':
+                (common / 'worktrees/new').mkdir()
+                (common / 'worktrees/new/gitdir').write_text(str(tmp_path / 'new/tree/.git') + '\n')
+            elif change == 'remove':
+                entry.unlink()
+            else:
+                entry.write_text(str(tmp_path / 'moved/tree/.git') + '\n')
+
+
+def test_guard_ignores_other_sessions_worktree_moves(tmp_path, config_guard, monkeypatch):
+    repo = tmp_path / 'repo'
+    metadata = repo / '.git'
+    other = metadata / 'worktrees/other'
+    other.mkdir(parents=True)
+    (metadata / 'config').write_text('[core]\n')
+    (metadata / 'HEAD').write_text('ref: refs/heads/main\n')
+    (other / 'gitdir').write_text(str(tmp_path / 'other/.git'))
+    with config_guard(repo, registry_roots=(tmp_path / 'test-owned',)):
+        (metadata / 'HEAD').write_text('ref: refs/heads/another-session\n')
+        (other / 'HEAD').write_text('b' * 40)
+        (other / 'gitdir').write_text(str(tmp_path / 'elsewhere/.git'))
+        read_text = Path.read_text
+        def disappearing(path, *args, **kwargs):
+            if path == other / 'gitdir': path.unlink()
+            return read_text(path, *args, **kwargs)
+        monkeypatch.setattr(Path, 'read_text', disappearing)

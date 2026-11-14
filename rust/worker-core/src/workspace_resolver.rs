@@ -23,7 +23,11 @@ pub enum ResolveError {
 }
 
 pub fn git_command(root: &Path) -> Command {
+    #[cfg(any(test, feature = "test-support"))]
+    let mut cmd = crate::git_test_support::command(root);
+    #[cfg(not(any(test, feature = "test-support")))]
     let mut cmd = Command::new("git");
+    #[cfg(not(any(test, feature = "test-support")))]
     for (key, _) in std::env::vars_os() {
         if key
             .to_string_lossy()
@@ -36,10 +40,6 @@ pub fn git_command(root: &Path) -> Command {
     cmd.current_dir(root)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null());
-    #[cfg(test)]
-    cmd.env("HOME", root)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", root.join("absent-config"));
     cmd
 }
 

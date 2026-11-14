@@ -102,8 +102,8 @@ def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
     explicit = {s['leg'] for s in routed.skipped if s['reason'] == 'explicit_only'}
     assert explicit == set(listed)
     if role == 'implement':
-        from test_route_free_first import WRITERS
-        assert [leg.id for leg in routed.legs] == WRITERS
+        from test_route_free_first import LIVE_WRITERS
+        assert [leg.id for leg in routed.legs] == LIVE_WRITERS
 
 
 @pytest.mark.parametrize('role', ['review', 'implement'])

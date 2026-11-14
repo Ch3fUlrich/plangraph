@@ -142,7 +142,7 @@ def test_no_config_below_floor_refuses_spawn(setup, monkeypatch, capsys, cli_mix
         result = asyncio.run(shared.spawn(prompt='Implement the requested change.'))
     elif entry == 'mcp':
         from plangraph.spawner.mcp import MCPSpawnerServer
-        server = object.__new__(MCPSpawnerServer)
+        server = MCPSpawnerServer(state=service.state)
         server.service = shared
         result = asyncio.run(server.call_tool('plangraph_agent_spawn', {
             'card': {'task': 'test'}, 'prompt': 'Implement the requested change.'}))
@@ -212,7 +212,7 @@ def test_shared_spawn_admission(setup, monkeypatch, entry):
     shared = SharedService()
     shared.runner, shared._save = service.runner, service._save
     if entry == 'mcp':
-        server = object.__new__(MCPSpawnerServer)
+        server = MCPSpawnerServer(state=service.state)
         server.service = shared
         result = asyncio.run(server.call_tool('plangraph_agent_spawn', {
             'card': {'task': 'test'}, 'prompt': 'Implement the requested change.'}))
@@ -393,7 +393,8 @@ def test_orchestration_cli_remote_first(orchestration, monkeypatch, capsys, cli_
         card, prompt = path.parent / 'card.json', path.parent / 'prompt.txt'
         card.write_text('{"task":"test"}')
         prompt.write_text('task')
-        args = ['spawn', '--repo', str(path.parent), '--card', str(card), '--prompt', str(prompt)]
+        args = ['spawn', '--state', str(service.state), '--repo', str(path.parent),
+                '--card', str(card), '--prompt', str(prompt)]
     assert (overflow.main if entry == 'overflow' else cli.main)(args) == 0
     assert json.loads(capsys.readouterr().out)['placement']['host'] == 'host-b'
     remote.assert_called_once()

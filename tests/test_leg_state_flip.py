@@ -146,6 +146,8 @@ def test_factory_preserves_adapter_and_hung_rank(boundary, tmp_path, reason):
 
 def test_fixture_disabled_reader_matches_main_plan(tmp_path, monkeypatch):
     import plangraph.planner.routing as routing
+    from plangraph.routing_support.leg_state_flag import live_default_legs
+    live = live_default_legs('implement')
     original = routing.plan_spawn
     seen = []
 
@@ -155,7 +157,7 @@ def test_fixture_disabled_reader_matches_main_plan(tmp_path, monkeypatch):
 
     monkeypatch.setattr(routing, 'plan_spawn', spy)
     s = service(tmp_path)
-    baseline = original(CARD, role='implement', leg_reader=None)
+    baseline = original(CARD, role='implement', leg_reader=None, legs=live)
     assert asdict(s._route(CARD)) == asdict(baseline)
     assert len(seen) == 1 and callable(seen[0])
     assert seen[0]('sample') == dict(state='ok', evidence=None)

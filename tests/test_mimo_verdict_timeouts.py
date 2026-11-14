@@ -53,7 +53,7 @@ def test_mimo_verdict_seat_passes_review_role_to_thresholds(
     if max_min is not None:
         card['max_min'] = max_min
     expected_max = max_min * 60 if max_min is not None else {
-        None: 1500, '': 5400, '7': 7}[timeout]
+        None: 600, '': 600, '7': 7}[timeout]
     threshold_calls = []
 
     def observed_thresholds(card=None, *, role=None):
@@ -218,7 +218,7 @@ def test_missing_and_unknown_finish_policy_is_documented():
     assert 'whitespace-only' in section
 
 
-@pytest.mark.parametrize('timeout,max_s', [(None, 1500), ('', 5400), ('7', 7)])
+@pytest.mark.parametrize('timeout,max_s', [(None, 600), ('', 600), ('7', 7)])
 def test_review_without_card_cap_always_has_hard_wall(monkeypatch, timeout, max_s):
     from plangraph.spawner.run_watchdog import Watchdog
     if timeout is not None:

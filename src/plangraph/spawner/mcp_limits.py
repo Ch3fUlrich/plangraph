@@ -1,5 +1,14 @@
-"""Compact MCP views and a transport-safe reply size guard."""
+"""Compact MCP views, a transport-safe reply size guard and the source-change guard."""
+import hashlib
+import importlib
 import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import uuid
+
+from plangraph.routing_errors import SpawnRefused
 
 MAX_REPLY_BYTES = 8 * 1024 * 1024
 PS_ENDED_LIMIT = 20
@@ -37,3 +46,82 @@ def encode_reply(reply):
             'message': f'ReplyTooLarge: reply size {size} bytes exceeds cap {MAX_REPLY_BYTES} bytes',
             'data': {'type': 'ReplyTooLarge', 'exit_code': 1}}})
     return encoded
+
+
+def _fingerprint(root):
+    """Cheap (path, size, mtime_ns) digest of package source and assets.
+
+    Any read failure yields a fresh token, so the identity differs on every call
+    and real runs are refused (fail closed) instead of ignoring the file."""
+    digest = hashlib.sha256()
+    try:
+        if not root.is_dir():
+            raise OSError('package tree is unavailable')
+        for path in sorted(root.rglob('*')):
+            if any(part in ('.git', '__pycache__') for part in path.relative_to(root).parts) or path.suffix in ('.pyc', '.pyo'):
+                continue
+            if path.is_dir():
+                continue
+            info = path.stat()
+            digest.update(f'{path.relative_to(root).as_posix()}\0{info.st_size}\0{info.st_mtime_ns}\0'.encode())
+    except OSError:
+        digest.update(uuid.uuid4().bytes)
+    return digest.hexdigest()
+
+
+def current_source_identity(source=None):
+    """Identify the ``plangraph`` package tree real runs import: Git HEAD (when
+    available, ignoring cwd and inherited GIT_*) combined with a file fingerprint."""
+    source = Path(source) if source is not None else Path(__file__).resolve().parents[1]
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    head = ''
+    try:
+        out = subprocess.run(['git', '-C', str(source), 'rev-parse', '--verify', 'HEAD'],
+                             env=env, capture_output=True, text=True, encoding='utf-8',
+                             errors='replace', check=True, timeout=2).stdout.strip()
+        if re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', out):
+            head = out
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return hashlib.sha256((head + _fingerprint(source)).encode()).hexdigest()[:12]
+
+
+SPAWN_MODULES = (
+    'plangraph.planner.routing', 'plangraph.planner.legs', 'plangraph.planner.seats',
+    'plangraph.planner.measured_down', 'plangraph.routing_errors', 'plangraph.settings',
+    'plangraph.routing_support.clients', 'plangraph.routing_support.liveness',
+    'plangraph.routing_support.leg_state_flag', 'plangraph.routing_support.opencode_render',
+    'plangraph.routing_support.host_keys',
+    *('plangraph.spawner.' + name for name in (
+        'runner', 'service', 'leg_state', 'target', 'private_io', 'opencode_overlay',
+        'opencode_isolation', 'gateway_witness', 'opencode_answer', 'resolver', 'probe_cleanup',
+        'run_watchdog', 'win_recorded', 'proc_kill', 'env_redact', 'question_bridge',
+        'cancel_job', 'hung_capture', 'seat_artifact', 'stall_watchdog', 'fixer', 'inline_diff',
+        'context_pack', 'prompt_guard')))
+GUARDED_TOOLS = ('plangraph_agent_spawn', 'plangraph_session_launch', 'plangraph_session_relaunch')
+
+
+class SourceChanged(SpawnRefused):
+    """The MCP process must reconnect before launching from a changed source tree."""
+
+
+class SourceGuard:
+    def __init__(self, identity=None):
+        for name in SPAWN_MODULES:  # lazy spawn-path imports must not straddle a tree update
+            importlib.import_module(name)
+        self.identity = identity or current_source_identity
+        self.started = self.identity()
+
+    def restart_required(self):
+        current = self.identity()
+        if current != self.started:
+            return f'restart required: {self.started[:12]} -> {current[:12]}, run /mcp reconnect'
+        return None
+
+    def check(self, name, arguments):
+        """Refuse tools that start a real run or session; dry runs, route, ps, status,
+        cancel, probe, session stop/list/mark_ready stay available."""
+        dry = name in ('plangraph_agent_spawn', 'plangraph_session_launch') and arguments.get('dry_run') is True
+        if name in GUARDED_TOOLS and not dry:
+            if message := self.restart_required():
+                raise SourceChanged(message)

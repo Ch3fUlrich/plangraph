@@ -10,6 +10,7 @@ import argparse
 from contextvars import ContextVar
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -43,7 +44,7 @@ def tick(runs, claims, activity, *, now=None, deliver=None, state=None, dry_run=
             if finding:
                 findings.append(finding)
                 if deliver:
-                    deliver(dict(finding, kind='completion'))
+                    deliver(dict(finding, kind='stall' if finding['rule'] == 'run-silent' else 'completion'))
         parent = run.get('parent_session')
         ended = run.get('ended')
         if not parent or ended is None or run.get('status') in ('running', 'queued'):
@@ -91,8 +92,32 @@ def tick(runs, claims, activity, *, now=None, deliver=None, state=None, dry_run=
 def status(findings):
     return '\n'.join('! stall ' + json.dumps(f, sort_keys=True) for f in findings)
 
+def _expire_queue(record, now):
+    if record.get('status') not in ('queued', 'queue_claimed'):
+        return record
+    number = lambda value: type(value) in (int, float) and math.isfinite(value)
+    deadline = record.get('queued_until')
+    if deadline is None:
+        started, bound = record.get('started', 0), record.get('queue_bound_s', 900)
+        if not number(started) or not number(bound) or bound <= 0:
+            return record
+        deadline = started + bound
+    if not number(deadline) or now < deadline:
+        return record
+    return dict(record, status='failed', reason='queue_timeout', error='queue_timeout',
+                ended=now, exit_code=1)
+
 def read_runs(state, *, dry_run=False):
+    """Read run snapshots without expiry, diagnostics writes or delivery."""
+    return _read_runs(state, dry_run=dry_run)
+
+def sweep_runs(state, *, dry_run=False):
+    """Expire abandoned queues and report corrupt records during watchdog ticks."""
+    return _read_runs(state, dry_run=dry_run, sweep=True)
+
+def _read_runs(state, *, dry_run=False, sweep=False):
     from .item_key import valid_item
+    from .notify import inbox_lock
     from .private_io import atomic_write_private, read_text_retry
     runs, bad = [], []
     for path in sorted((Path(state) / 'runs').glob('run-*/record.json')):
@@ -100,6 +125,16 @@ def read_runs(state, *, dry_run=False):
             record = json.loads(read_text_retry(path))
             if not isinstance(record, dict) or not isinstance(record.get('run_id'), str):
                 raise ValueError('invalid run record')
+            expired = _expire_queue(record, time.time()) if sweep else record
+            if expired != record and not dry_run:
+                with inbox_lock(path):
+                    record = json.loads(read_text_retry(path))
+                    if not isinstance(record, dict) or not isinstance(record.get('run_id'), str):
+                        raise ValueError('invalid run record')
+                    expired = _expire_queue(record, time.time())
+                    if expired != record:
+                        atomic_write_private(path, json.dumps(expired, indent=2))
+            record = expired
             completion = record.get('completion') if isinstance(record.get('completion'), dict) else {}
             if completion.get('parent_session') and not record.get('parent_session'):
                 record['parent_session'] = completion['parent_session']
@@ -112,10 +147,10 @@ def read_runs(state, *, dry_run=False):
             bad.append(dict(path=str(path), error=type(exc).__name__))
             if dry_run:
                 runs.append(dict(run_id=path.parent.name))
-            else:
+            elif sweep:
                 finding = probe_run(state, dict(run_id=path.parent.name), time.time())
                 deliver_event(state, dict(finding, kind='completion'), budget=_budget.get())
-    if bad and not dry_run:
+    if bad and sweep and not dry_run:
         atomic_write_private(Path(state) / 'watchdog/bad-records.json', json.dumps(bad))
     return runs
 
@@ -318,7 +353,7 @@ def main(argv=None, *, hung_config=None):
     deliver = lambda e: deliver_event(state, e, budget=budget)
     token = _budget.set(budget)
     try:
-        runs = read_runs(state, dry_run=True) if args.dry_run else read_runs(state)
+        runs = sweep_runs(state, dry_run=True) if args.dry_run else sweep_runs(state)
     finally:
         _budget.reset(token)
     findings = tick(runs, [], lambda s: read_activity(state, s),
@@ -355,7 +390,7 @@ def main(argv=None, *, hung_config=None):
         warning = (warning + '; ' if warning else '') + 'delivery-bridge-unconfigured'
     if command and pending:
         error = error or 'delivery-bridge-failed'
-    text = status(findings)
+    text = status(findings) or 'watchdog ok'
     if not command:
         text += ('\n' if text else '') + f'outbox {pending}, no bridge'
     if warning:

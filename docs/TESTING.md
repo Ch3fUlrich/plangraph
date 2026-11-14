@@ -75,3 +75,27 @@ pass through. Direct systemd-run commands selecting that slice remain allowed.
 Python interpreter option values, Cargo toolchain selectors, and wrapper option
 values are skipped before checking the test command; quoted option values are
 not commands. An unresolvable home directory counts as an absent marker.
+
+Git hook callers must not bind tests to their repository. The pre-push gate
+passes a clean environment to the selector, which cleans it again for pytest;
+the session guard also removes inherited bindings before collection and fixtures.
+Each boundary removes Git-advertised local variables, `GIT_CONFIG*` and
+`GIT_PREFIX`. Environment-discovery errors stop test launches. Regression tests
+use throwaway caller repositories and verify refs, HEAD and config byte for byte.
+
+Rust publish fixtures create commits through the shared isolated Git command and
+then explicitly set both author and committer identity. Git identity environment
+variables override `-c user.name` / `user.email`; fixture identities must not depend
+on inherited variables or on the production publish helper's environment filtering.
+The exact author and committer checks cover both fixture commits with all caller
+`GIT_*` variables unset.
+
+Caller-repository snapshot fixtures configure `maintenance.auto=false`,
+`maintenance.autoDetach=false`, `gc.auto=0` and `gc.autoDetach=false` locally
+before their first commit, including the child checkout after Git environment
+scrubbing. This prevents commit-triggered detached maintenance from racing a
+snapshot. The shared snapshot in `tests/test_preflight_git_env.py` ignores only
+Git-internal lock files; it retains metadata/object bytes, modes, symlinks and
+working-tree contents. Missing non-lock entries remain mutation evidence.
+Mutation probes cover HEAD, refs, index, config, reachable objects, tracked and
+untracked worktree files (including worktree files named with a `.lock` suffix).

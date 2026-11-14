@@ -22,7 +22,6 @@ EXPECTED_MISSING = {
     'cx-gpt-6.1-sol-max': OWNER_ITEM,
     'cx-gpt-6.1-sol-medium': OWNER_ITEM,
     'cx-gpt-6.1-sol-xhigh': OWNER_ITEM,
-    'deepseek-flash': OWNER_ITEM,
     'cx-gpt-6.1-terra-medium': OWNER_ITEM,
     'cx-gpt-6.1-terra-xhigh': OWNER_ITEM,
     'gc/grok-4.7': OWNER_ITEM,

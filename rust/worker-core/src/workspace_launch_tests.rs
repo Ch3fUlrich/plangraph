@@ -55,12 +55,14 @@ pub(super) fn launch(
     prepare_launch(cmd, &f.repo, &f.ws, tree, "seat", f.tmp.path(), None)
 }
 pub(super) struct Fixture {
+    _repo_guard: crate::test_repo_guard::RepoGuard,
     pub(super) tmp: TempDir,
     pub(super) repo: RepoEntry,
     pub(super) ws: Workspace,
 }
 impl Fixture {
     pub(super) fn new() -> Self {
+        let repo_guard = crate::test_repo_guard::RepoGuard::real();
         let tmp = tempdir().unwrap();
         let root = tmp.path().join("repo");
         let trees = tmp.path().join("trees");
@@ -76,6 +78,7 @@ impl Fixture {
         git(&root, &["commit", "-m", "fixture"]).unwrap();
         let sha = git(&root, &["rev-parse", "HEAD"]).unwrap();
         Self {
+            _repo_guard: repo_guard,
             tmp,
             repo: RepoEntry {
                 live_dir: None,

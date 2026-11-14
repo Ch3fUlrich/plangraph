@@ -9,12 +9,15 @@ re-checks the chain over HTTP (head after each write == sha256(previous head + e
 head against SQLite through the adapter.
 """
 import re
+import hashlib
 import atexit
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
+from contextlib import contextmanager
 import pytest
 from pathlib import Path
 from pgtest_shm import _sweep_dead_pgtest_dirs
@@ -95,6 +98,89 @@ def no_leaked_keeper_threads(request, no_leaked_keeper_fixture_threads):
     no_leaked_keeper_fixture_threads(request.node)
     with thread_scope(request):
         yield
+
+
+@contextmanager
+def git_config_guard(root, registry_roots=None):
+    """Watch shared/worktree config bytes without invoking Git on the checkout."""
+    def snapshot():
+        entry = Path(root) / '.git'
+        metadata = entry
+        if entry.is_file():
+            metadata = (Path(root) / entry.read_text().removeprefix('gitdir:').strip()).resolve()
+        common = metadata
+        if (metadata / 'commondir').is_file():
+            common = (metadata / (metadata / 'commondir').read_text().strip()).resolve()
+        configs = tuple((str(path), path.read_bytes() if path.exists() else None)
+                        for path in (common / 'config', metadata / 'config.worktree'))
+        # The registry is what supplies `git worktree list`; read metadata directly.
+        paths = [common / 'HEAD'] if registry_roots is None else []
+        for entry in sorted((common / 'worktrees').glob('*')):
+            if registry_roots is not None:
+                try:
+                    target = Path((entry / 'gitdir').read_text().strip()).resolve()
+                except FileNotFoundError:
+                    continue  # another session may remove its registration during this scan
+                if not any(target.is_relative_to(Path(root).resolve()) for root in registry_roots):
+                    continue
+            paths.extend(entry / name for name in ('gitdir', 'HEAD', 'locked'))
+        registry = tuple((str(path), path.read_bytes() if path.exists() else None) for path in paths)
+        return configs, registry
+    before = snapshot()
+    try:
+        yield
+    finally:
+        after = snapshot()
+        if after[0] != before[0]:
+            raise AssertionError('repository .git/config changed during pytest session')
+        if after[1] != before[1]:
+            raise AssertionError('repository worktree registry changed during pytest session')
+
+
+def _test_environment(root, env):
+    """Detach test subprocesses from every Git-advertised repository binding."""
+    local = set(subprocess.check_output(
+        ['git', 'rev-parse', '--local-env-vars'], cwd=root, env=env,
+        text=True, stderr=subprocess.DEVNULL, timeout=30).upper().splitlines())
+    local.add('GIT_PREFIX')
+    return {key: value for key, value in env.items()
+            if key.upper() not in local and not key.upper().startswith('GIT_CONFIG')}
+
+
+def _clear_inherited_git_environment():
+    clean = _test_environment(tempfile.gettempdir(), dict(os.environ))
+    for key in set(os.environ) - clean.keys():
+        del os.environ[key]
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_sessionstart(session):
+    # Collection can import fixtures that invoke Git before session fixtures run.
+    _clear_inherited_git_environment()
+
+
+@pytest.fixture(scope='session', autouse=True)
+def detached_git_environment():
+    _clear_inherited_git_environment()
+
+
+@pytest.fixture(scope='session', autouse=True)
+def isolated_git_session(tmp_path_factory, detached_git_environment):
+    config = tmp_path_factory.mktemp('git-session') / 'global.gitconfig'
+    config.touch(mode=0o600)
+    patch = pytest.MonkeyPatch()
+    patch.setenv('GIT_CONFIG_GLOBAL', str(config))
+    patch.setenv('GIT_CONFIG_NOSYSTEM', '1')
+    try:
+        with git_config_guard(Path(__file__).resolve().parents[1], (tmp_path_factory.getbasetemp(),)):
+            yield
+    finally:
+        patch.undo()
+
+
+@pytest.fixture
+def config_guard():
+    return git_config_guard
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -244,6 +330,7 @@ def pytest_configure(config):
         atexit.register(_remove_windows_basetemp, root)
     config.addinivalue_line('markers', 'real_probe: exercise the real served-model probe, not the host stub')
     config.addinivalue_line('markers', 'writer_change_check: keep the D-3236 writer no-change check live')
+    config.addinivalue_line('markers', 'real_base_fresh: use real admission against a local origin')
 
 
 @pytest.fixture
@@ -261,6 +348,7 @@ def fixed_catalog_rows(monkeypatch):
 @pytest.fixture(autouse=True)
 def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     """UNKNOWN host; tests opt into providers with PLANGRAPH_PROVIDERS_FILE."""
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path_factory.getbasetemp()))
     root = tmp_path_factory.mktemp('empty-autoos')
     monkeypatch.setenv('AUTOOS_ROOT', str(root))
     providers = tmp_path_factory.mktemp('empty-providers') / 'providers.json'
@@ -323,8 +411,15 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     yield
     probe.cache_clear()
 
-_PG = os.environ.get("PG_KEEPER_BACKEND") == "postgres"
+@pytest.fixture(autouse=True)
+def fake_base_fresh(monkeypatch, request):
+    if request.node.get_closest_marker('real_base_fresh') is None:
+        from plangraph.spawner import base_fresh
+        fresh = lambda *a, **k: dict(ok=True, reason=None, origin_sha='0' * 40, base_sha='0' * 40, behind=0)
+        monkeypatch.setattr(base_fresh, 'base_fresh', fresh)
+        monkeypatch.setattr(base_fresh, '_check', fresh)
 
+_PG = os.environ.get("PG_KEEPER_BACKEND") == "postgres"
 #: tests that read the SQLite file itself (contract: dump/copy ``keeper.db`` via stdlib sqlite3).
 _READS_SQLITE_FILE = {
     "tests/test_keeper_brief.py::test_brief_stats_reports_median_and_p90",   # opens the file mode=ro
@@ -360,7 +455,30 @@ def pytest_ignore_collect(collection_path, config):
     return None
 
 
+def shard_items(items, shard):
+    try:
+        index, count = map(int, shard.split('/'))
+        if not 0 <= index < count:
+            raise ValueError
+    except (ValueError, AttributeError):
+        raise pytest.UsageError('PYTEST_SHARD must be INDEX/COUNT with 0 <= INDEX < COUNT') from None
+    def bucket(item):
+        group = item.get_closest_marker('xdist_group')
+        key = str(group.kwargs.get('name', group.args[0] if group.args else 'default')) if group else item.nodeid
+        return int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], 'big') % count
+    return [item for item in items if bucket(item) == index]
+
+@pytest.fixture
+def shard_selector():
+    return shard_items
+
+
 def pytest_collection_modifyitems(config, items):
+    if os.environ.get('PYTEST_SHARD'):
+        selected = shard_items(items, os.environ['PYTEST_SHARD'])
+        identities = {id(item) for item in selected}
+        config.hook.pytest_deselected(items=[item for item in items if id(item) not in identities])
+        items[:] = selected
     if sys.platform == "win32":
         from win_skips import skip_reason
         for item in items:
@@ -389,3 +507,9 @@ def fake_ownership(monkeypatch):
     born = real_stat(os.getpid())[4]   # only processes started after this test session exist for the stubbed view
     monkeypatch.setattr(proc_kill, '_stat', lambda pid, root='/proc': (lambda st: st if st and st[4] >= born else None)(real_stat(pid, root)))
     monkeypatch.setattr(SpawnerRunner, 'identity_provider', staticmethod(lambda pid, **k: real_identity(pid, **k) or 'fake-token'))
+
+
+def pytest_sessionfinish(session, exitstatus):
+    # An affected selection can legitimately assign no items to this shard.
+    if exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and os.environ.get('PYTEST_SHARD'):
+        session.exitstatus = pytest.ExitCode.OK

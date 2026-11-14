@@ -119,3 +119,25 @@ def test_dispatch_paths(tmp_path, hardened):
                 assert 'finish one' in call['prompt']
                 assert call['cwd'] == str(tmp_path)
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('role', ['review', 'judge', 'orchestrate', 'implement'])
+@pytest.mark.parametrize('output', ['- [ ] fix the bug', 'Remaining gaps: fix the bug'])
+@pytest.mark.parametrize('fresh', [False, True])
+def test_only_implement_parent_can_start_fixer(tmp_path, monkeypatch, role, output, fresh):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from plangraph.spawner import service as service_module
+    spawn = AsyncMock(return_value=SimpleNamespace(job_id='job-child', status='completed', exit_code=0, stdout='done'))
+    runner = SimpleNamespace(default_cwd=str(tmp_path), spawn=spawn, _tasks={})
+    service = service_module.SpawnService(runner, state=tmp_path / 'state')
+    admit = AsyncMock(return_value=fresh)
+    monkeypatch.setattr(service_module, 'admit_base', admit)
+    parent = dict(run_id='run-parent', role=role, status='completed', exit_code=0,
+                  cwd=str(tmp_path), chosen_leg=dict(model='test/model', harness='opencode'))
+    asyncio.run(service._continue_writer(parent, output))
+    assert spawn.await_count == int(role == 'implement' and fresh)
+    assert admit.await_count == (2 if fresh else 1) * int(role == 'implement')
+    assert ('continuation_run_id' in parent) == (role == 'implement')
+    if role != 'implement':
+        assert parent['continuation_reason'] == 'not_writer'

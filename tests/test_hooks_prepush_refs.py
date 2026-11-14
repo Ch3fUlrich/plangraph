@@ -229,3 +229,41 @@ def test_sha256_new_branch_and_delete(tmp_path):
     res = run_hook(r, [push_line("feature", zero, head)])
     assert res.returncode == 1
     assert "refused delete" in res.stderr
+
+
+@pytest.mark.parametrize('stacked', ['none', 'behind', 'ahead', 'unrelated'])
+def test_new_branch_preflight_uses_nearest_remote_base(repo, monkeypatch, stacked):
+    import runpy
+    r, main = repo
+    git(r, 'update-ref', 'refs/remotes/origin/main', main)
+    phase = commit_file(r, 'phase.py', 'phase = 1\n')
+    if stacked != 'none':
+        remote = phase
+        if stacked in ('ahead', 'unrelated'):
+            tree = git(r, 'rev-parse', phase + '^{tree}').strip()
+            remote = git(r, 'commit-tree', tree, '-p', phase if stacked == 'ahead' else main,
+                         '-m', 'remote advancement').strip()
+        git(r, 'update-ref', 'refs/remotes/origin/phase/line-green-1', remote)
+    head = commit_file(r, 'feature.py', 'feature = 1\n')
+    monkeypatch.chdir(r)
+    hook = runpy.run_path(str(HOOK))
+    base = hook['affected_base_commit'](ZERO, head)
+    assert base == (phase if stacked in ('behind', 'ahead') else main)
+    paths = git(r, 'diff', '--name-only', base, head).splitlines()
+    assert paths == (['feature.py'] if stacked in ('behind', 'ahead') else ['feature.py', 'phase.py'])
+
+
+@pytest.mark.parametrize('known_main', [False, True])
+def test_new_stacked_branch_scrubs_inherited_phase_additions(repo, tmp_path, known_main):
+    r, main = repo
+    if known_main:
+        git(r, 'update-ref', 'refs/remotes/origin/main', main)
+    phase = commit_file(r, 'phase.txt', fake_word() + '\n')
+    git(r, 'update-ref', 'refs/remotes/origin/phase/line-green-1', phase)
+    head = commit_file(r, 'feature.txt', 'clean feature\n')
+    words = tmp_path / 'words.txt'
+    words.write_text(fake_word() + '\n')
+    result = run_hook(r, [push_line('stacked', head, ZERO)], {'PLANGRAPH_SCRUB_WORDS': str(words)})
+    assert result.returncode == 1, result.stderr
+    assert ':1: private-word' in result.stdout + result.stderr
+    assert fake_word() not in result.stdout + result.stderr

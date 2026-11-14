@@ -16,6 +16,10 @@ if str(SRC_ROOT) not in sys.path:
 
 from plangraph.spawner.resolver import resolve_model_for_task  # noqa: E402
 
+def offline_leg_state(*args, **kwargs):
+    """Synthetic catalogs have no host-side quota state."""
+    return {'state': 'ok'}
+
 SEED = 20261022
 STABILITY_SEEDS = (20261022, 11, 22, 33, 44)
 RISKS = ("low", "normal", "high", "critical")
@@ -58,6 +62,7 @@ def _resolve_id(role: str, risk: str, rows: list[dict[str, Any]]) -> str | None:
             risk=risk,
             combo_name="l2-worker",
             db=FakeDB(rows),
+            leg_state_reader=offline_leg_state,
             relax_floor=True,
             relax_reason="sweep",
         )
@@ -78,6 +83,7 @@ def _resolve_id_fail_closed(
             risk=risk,
             combo_name="l2-worker",
             db=FakeDB(rows),
+            leg_state_reader=offline_leg_state,
             relax_floor=False,
         )
     except ValueError:
@@ -195,11 +201,11 @@ def run(catalogs: int, seed: int = SEED) -> dict[str, Any]:
         "summary": summary,
     }
 
-def stability_seeds(catalogs: int) -> dict[str, Any]:
+def stability_seeds(catalogs: int, baseline=None) -> dict[str, Any]:
     seeds = list(STABILITY_SEEDS)
     rates: dict[str, dict[str, float]] = {}
     for seed in STABILITY_SEEDS:
-        result = run(catalogs, seed)
+        result = baseline if baseline is not None and seed == baseline['seed'] else run(catalogs, seed)
         intel_pm1 = result["perturbations"]["intel_pm1"]
         rates[str(seed)] = {
             risk: max(
@@ -224,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--catalogs must be >= 1")
 
     result = run(args.catalogs)
-    result["stability_seeds"] = stability_seeds(args.catalogs)
+    result["stability_seeds"] = stability_seeds(args.catalogs, result)
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")

@@ -18,7 +18,7 @@ file extension, no placeholders) is checked by `tests/test_skills_roles.py`.
 
 ## Rules the gates enforce
 
-- A tracked file stays at or under 400 lines: `tools/check_file_size.py`, rule in `CONTRIBUTING.md`; oversize legacy files are in `.filesize-baseline` and may only shrink.
+- A tracked file stays at or under 800 lines: `tools/check_file_size.py`, rule in `CONTRIBUTING.md`; oversize legacy files are in `.filesize-baseline` and may only shrink.
 - Every merged change adds a `CHANGELOG.md` entry under Unreleased (D-653): merged changes only, newest first.
 - Every commit ends with a `Plan-Item: plangraph:<KEY>` trailer (`CONTRIBUTING.md`, "Commits").
 - Public scrub: no hostname, IP, e-mail address, key or home path in a diff or message; the pre-push hook `tools/hooks/pre-push` runs `tools/split/scrub_check.py`.
