@@ -137,7 +137,8 @@ def test_environment(root, env):
     local = set(subprocess.check_output(
         ["git", "rev-parse", "--local-env-vars"], cwd=root, env=env,
         text=True, stderr=subprocess.DEVNULL, timeout=CHECK_TIMEOUT).upper().splitlines())
-    local.add("GIT_PREFIX")
+    local.update({"GIT_PREFIX", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES",
+                  "GIT_DISCOVERY_ACROSS_FILESYSTEM"})
     return {key: value for key, value in env.items()
             if key.upper() not in local
             and not key.upper().startswith("GIT_CONFIG")}

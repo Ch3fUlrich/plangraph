@@ -3,6 +3,7 @@
 
 Runs scrub rules over committed blobs in the pushed range, including preflight;
 new branches scrub from origin/main and select affected test files from their nearest remote base.
+Missing preflight refuses main pushes; topic and tag pushes retain the other gates.
 Preflight uses file-only local selection; suite-control smoke checks stay bounded, with full coverage in CI.
 When origin/main is available, identical upstream/base blobs and inherited lines
 are excluded; without it the stricter whole-file scan remains in effect.
@@ -177,35 +178,6 @@ def python_interpreter(root):
     return str(Path(configured).expanduser().absolute()) if configured else shutil.which('python3') or 'python3'
 
 
-def test_environment(root, env):
-    """Detach test subprocesses from every Git-advertised repository binding."""
-    local = set(subprocess.check_output(
-        ['git', 'rev-parse', '--local-env-vars'], cwd=root, env=env,
-        text=True, stderr=subprocess.DEVNULL, timeout=30).upper().splitlines())
-    local.add('GIT_PREFIX')
-    return {key: value for key, value in env.items()
-            if key.upper() not in local and not key.upper().startswith('GIT_CONFIG')}
-
-
-def affected_gate(root, base, head, timeout=240):
-    """Local pushes select explicit affected files; the full suite belongs to CI."""
-    selector = Path(root) / 'tools/affected_tests.py'
-    if not selector.is_file():
-        print('pre-push: tools/affected_tests.py missing: push refused', file=sys.stderr)
-        return 1
-    if timeout <= 0:
-        print('pre-push: affected-test budget exhausted: push refused', file=sys.stderr)
-        return 1
-    command = [PYTHON, str(selector), '--root', str(root), '--base', base,
-               '--head', head, '--files-only', '--run', '--workers', '2']
-    try:
-        env = test_environment(root, os.environ)
-    except (OSError, subprocess.SubprocessError):
-        print('pre-push: cannot discover test Git environment: push refused', file=sys.stderr)
-        return 1
-    return subprocess.run(command, cwd=root, env=env, timeout=min(timeout, 240)).returncode
-
-
 def main():
     try:
         return push_main()
@@ -322,13 +294,13 @@ def push_main():
             if os.environ.get("PREFLIGHT_FAST") == "1":
                 command.append("--fast")
             # Per-check deadlines govern, including the possible INFRA retry.
-            result = subprocess.run(command, env=test_environment(root, os.environ))
+            result = subprocess.run(command)
             if result.returncode:
                 return result.returncode
     elif os.environ.get("PREFLIGHT_SKIP") == "1":
         print("pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)",
               file=sys.stderr)
-    else:
+    elif any(rec[2] == "refs/heads/main" for rec in refs):
         print("pre-push: tools/preflight.py missing: push refused", file=sys.stderr)
         return 1
     return 0

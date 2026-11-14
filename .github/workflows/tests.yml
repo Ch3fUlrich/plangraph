@@ -58,7 +58,7 @@ jobs:
       - name: scrub_check (public patterns)
         run: python tools/split/scrub_check.py . --rules tools/split/manifest.toml --rules tools/split/scrub_ci.toml
 
-  # AO-400LOC (D-3198): a file over 800 lines needs a .filesize-baseline entry
+  # AO-400LOC (D-3198): a file over 400 lines needs a .filesize-baseline entry
   # that only shrinks vs the base: PR origin/main, push the pushed-over sha, else HEAD~1.
   file-size:
     runs-on: ubuntu-24.04
@@ -288,6 +288,18 @@ jobs:
           git config --global user.name "plangraph-ci"
           git config --global user.email "ci@example.invalid"
           git config --global init.defaultBranch main
+      - name: Check nonempty collection
+        if: matrix.shard == 0
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
+                  | xargs grep -L sqlite3 | tr '\n' ' ')
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PYTEST_SHARD= python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run --collect-only
+          else
+            PYTEST_SHARD= python -m pytest -q --collect-only tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES
+          fi
       - name: pytest (contract suite + keeper storage tests on Postgres)
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

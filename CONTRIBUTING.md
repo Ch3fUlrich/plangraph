@@ -17,10 +17,12 @@ when neither is present, public rules still run but scrub reports SKIP with a re
 The revision controls `FILESIZE_REQUIRE_BASE`, `NEWCODE_BASE` and `CHANGELOG_BASE`
 are scoped to policy checks. Other families receive none of these controls,
 including inherited values, so nested Git test fixtures own their revision bases.
-The pre-push affected gate clears every name reported by
-`git rev-parse --local-env-vars`, all `GIT_CONFIG*` variables and `GIT_PREFIX`
+Preflight clears every name reported by
+`git rev-parse --local-env-vars`, all `GIT_CONFIG*` variables, `GIT_PREFIX`, `GIT_NAMESPACE`,
+`GIT_CEILING_DIRECTORIES` and `GIT_DISCOVERY_ACROSS_FILESYSTEM`
 before starting the selector. The selector repeats this before pytest, and the
-pytest session clears inherited bindings before collection and test fixtures.
+pytest session clears inherited bindings and disables global/system Git config
+before collection and test fixtures.
 Discovery failures refuse to launch tests. The hook's own Git and policy calls
 retain the caller's context; temporary test repositories keep their own hooks.
 
@@ -323,8 +325,9 @@ Local preflight tests compare the branch against origin/main, follow shared asse
 
 Local controls run every named consumer plus a bounded smoke set; policy checks use origin/main when available, including inherited stack changes. Preflight clears the complete GIT_CONFIG namespace before selector launch.
 
-CI validates collection once without `PYTEST_SHARD` on shard 0, using the PR
+Both pytest CI jobs validate collection once without `PYTEST_SHARD` on shard 0, using the PR
 affected selection or the full push/nightly suite. Empty individual shards remain
 valid; a nonempty file selection that collects no tests fails the job. Local
 preflight timeouts terminate the selector and its pytest descendants. Missing
-`tools/preflight.py` refuses branch pushes unless `PREFLIGHT_SKIP=1` is explicit.
+`tools/preflight.py` refuses pushes to main unless `PREFLIGHT_SKIP=1` is explicit.
+Topic and tag pushes without preflight still run the scrub, ref and file-size gates.

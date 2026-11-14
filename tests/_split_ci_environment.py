@@ -47,7 +47,8 @@ def _test_environment(root, env):
     local = set(subprocess.check_output(
         ['git', 'rev-parse', '--local-env-vars'], cwd=root, env=env,
         text=True, stderr=subprocess.DEVNULL, timeout=30).upper().splitlines())
-    local.add('GIT_PREFIX')
+    local.update({'GIT_PREFIX', 'GIT_NAMESPACE', 'GIT_CEILING_DIRECTORIES',
+                  'GIT_DISCOVERY_ACROSS_FILESYSTEM'})
     return {key: value for key, value in env.items()
             if key.upper() not in local and not key.upper().startswith('GIT_CONFIG')}
 
@@ -56,6 +57,8 @@ def _clear_inherited_git_environment():
     clean = _test_environment(tempfile.gettempdir(), dict(os.environ))
     for key in set(os.environ) - clean.keys():
         del os.environ[key]
+    os.environ['GIT_CONFIG_GLOBAL'] = os.devnull
+    os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 
 
 @pytest.hookimpl(tryfirst=True)

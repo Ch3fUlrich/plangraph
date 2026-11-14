@@ -166,3 +166,30 @@ _NO_AUTO_MAINTENANCE = (
 def _fixture_git(repo, env, *args):
     return subprocess.run(['git', '-C', str(repo), *args], env=env,
                           capture_output=True, check=True)
+
+
+@pytest.mark.parametrize('source', ['preflight', 'selector', 'session'])
+def test_git_discovery_and_namespace_controls_are_detached(repo, source):
+    from test_affected_tests import selector
+    from _split_ci_environment import _test_environment
+    cleaner = {'preflight': preflight.test_environment,
+               'selector': selector().test_environment,
+               'session': _test_environment}[source]
+    names = ('GIT_NAMESPACE', 'GIT_CEILING_DIRECTORIES', 'GIT_DISCOVERY_ACROSS_FILESYSTEM')
+    env = dict(os.environ, **dict.fromkeys(names, 'inherited'))
+    clean = cleaner(repo, env)
+    assert not set(names).intersection(clean)
+    assert all(env[name] == 'inherited' for name in names)
+
+
+def test_git_config_is_isolated_before_collection(monkeypatch):
+    import _split_ci_environment as session_env
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', 'caller-config')
+    monkeypatch.delenv('GIT_CONFIG_NOSYSTEM', raising=False)
+    session_env.pytest_sessionstart(None)
+    assert os.environ['GIT_CONFIG_GLOBAL'] == os.devnull
+    assert os.environ['GIT_CONFIG_NOSYSTEM'] == '1'
+    # Session fixture cleanup must not reopen caller config after collection.
+    session_env._clear_inherited_git_environment()
+    assert os.environ['GIT_CONFIG_GLOBAL'] == os.devnull
+    assert os.environ['GIT_CONFIG_NOSYSTEM'] == '1'

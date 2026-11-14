@@ -1,0 +1,1 @@
+- Restore missing-preflight refusal to main pushes while retaining topic/tag scrub and size gates; remove the unused affected gate and test the live preflight path. Guard Postgres shard collection against empty selections, preserve policy Git context, detach namespace/discovery controls before tests, and isolate Git configuration before collection.
