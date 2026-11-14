@@ -179,9 +179,9 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            PYTEST_SHARD= python tools/affected_tests.py --base "$BASE_SHA" --run --collect-only
+            PYTEST_SHARD= PYTEST_ADDOPTS="-q -o faulthandler_timeout=180" timeout 600 python tools/affected_tests.py --base "$BASE_SHA" --run --collect-only < /dev/null
           else
-            PYTEST_SHARD= python -m pytest -q --collect-only tests
+            PYTEST_SHARD= timeout 600 python -m pytest -q --collect-only tests < /dev/null
           fi
       - name: pytest
         env:
