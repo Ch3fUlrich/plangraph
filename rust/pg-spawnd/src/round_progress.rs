@@ -142,6 +142,9 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
                 if record["role"] == "implement"
                     && record["item_key"] == item
                     && record["writer_round"].is_u64()
+                    && !(record["round_void"] == true
+                        && crate::runs::terminal(&record)
+                        && record["status"] != "completed")
                     && !matches!(record["status"].as_str(), Some("dry_run" | "refused"))
                 {
                     history.push(record);
@@ -249,4 +252,83 @@ pub(crate) fn record_refusal(
         pg_worker_core::run::record::Status::Refused,
     )
     .map(|r| r.to_value())
+}
+
+pub(crate) fn work_fingerprint(cwd: &Path) -> Option<String> {
+    use std::{
+        process::{Command, Stdio},
+        time::Duration,
+    };
+    let git = |args: &[&str]| {
+        let mut cmd = Command::new("git");
+        cmd.current_dir(cwd)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        crate::prompt_git::collect_diff(cmd.spawn().ok()?, 8 * 1024 * 1024, Duration::from_secs(5))
+            .ok()
+    };
+    let mut hash = Sha256::new();
+    let mut add = |bytes: &[u8]| {
+        hash.update(bytes.len().to_le_bytes());
+        hash.update(bytes);
+    };
+    add(&git(&["rev-parse", "HEAD"])?);
+    add(&git(&[
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--binary",
+        "HEAD",
+        "--",
+    ])?);
+    let files = git(&["ls-files", "--others", "--exclude-standard", "-z"])?;
+    add(&files);
+    let mut remaining = 8 * 1024 * 1024;
+    for file in files.split(|b| *b == 0).filter(|s| !s.is_empty()) {
+        let path = cwd.join(std::str::from_utf8(file).ok()?);
+        let file = crate::records::open_record(&path).ok()?;
+        let mut bytes = vec![];
+        file.take(remaining + 1).read_to_end(&mut bytes).ok()?;
+        remaining = remaining.checked_sub(bytes.len() as u64)?;
+        add(&bytes);
+    }
+    Some(format!("{:x}", hash.finalize()))
+}
+
+pub(crate) fn finish_round(
+    record: &mut pg_worker_core::run::record::RunRecord,
+    status: pg_worker_core::run::record::Status,
+) {
+    use pg_worker_core::run::record::Status;
+    if record.get("writer_round").is_none() || status == Status::Completed {
+        return;
+    }
+    let before = record.get("round_work_before").and_then(Value::as_str);
+    let unchanged = before.is_some_and(|before| {
+        record
+            .get("cwd")
+            .and_then(Value::as_str)
+            .and_then(|cwd| work_fingerprint(Path::new(cwd)))
+            .as_deref()
+            == Some(before)
+    });
+    let guarded = record
+        .get("reason")
+        .and_then(Value::as_str)
+        .is_some_and(|s| s.starts_with("gitconfig_"));
+    record.set(
+        "round_void",
+        json!(
+            status.is_terminal()
+                && status != Status::Completed
+                && !guarded
+                && (record.get("pid").is_none_or(Value::is_null) || unchanged)
+        ),
+    );
 }

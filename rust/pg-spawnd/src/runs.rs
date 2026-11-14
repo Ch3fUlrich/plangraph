@@ -93,6 +93,9 @@ impl Runs {
         base.as_object_mut()
             .unwrap()
             .extend(admission.fields.as_object().unwrap().clone());
+        if !dry && base["writer_round"].is_u64() {
+            base["round_work_before"] = json!(crate::round_progress::work_fingerprint(&launch.cwd));
+        }
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
@@ -287,6 +290,7 @@ fn book_attempt(base: &mut Value, leg: &Value) -> u32 {
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
     let diagnostic = crate::gitconfig_guard::guard_diagnostic(record, status, leg, attempt_id);
     let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
+    crate::round_progress::finish_round(record, status);
     let mut attempts = match record.get("attempts") {
         None if attempt_id == 1 => vec![json!({"legacy_normalized":true})],
         None => Vec::new(),

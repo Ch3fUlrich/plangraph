@@ -225,3 +225,72 @@ fn prompt_only_run_directory_does_not_block_writers() {
     std::fs::write(orphan.join("record.json"), "{").unwrap();
     assert!(reason(admit(dir.path(), &args)).starts_with("round_history_unavailable"));
 }
+
+#[test]
+fn failed_round_without_work_does_not_consume_round_or_add_zero_baseline() {
+    let dir = tempfile::tempdir().unwrap();
+    let args = history(dir.path(), &[3, 2], false);
+    crate::runs::create(
+        dir.path(),
+        "run-void",
+        "fixture",
+        json!({"role":"implement", "item_key":"p:I", "writer_round":3,
+            "round_void":true, "pid":42}),
+        pg_worker_core::run::record::Status::Failed,
+    )
+    .ok()
+    .unwrap();
+    let admission = admit(dir.path(), &args).ok().unwrap();
+    assert_eq!(admission.fields["writer_round"], 3);
+    assert_eq!(
+        admission.fields["previous_confirmed_blockers"],
+        json!([3, 2])
+    );
+}
+#[test]
+fn work_fingerprint_detects_commits_tracked_and_untracked_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .envs([
+                ("GIT_AUTHOR_NAME", "Fixture"),
+                ("GIT_AUTHOR_EMAIL", "fixture@example.test"),
+                ("GIT_COMMITTER_NAME", "Fixture"),
+                ("GIT_COMMITTER_EMAIL", "fixture@example.test"),
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+    };
+    git(&["init", "-q"]);
+    git(&["commit", "-qm", "initial", "--allow-empty"]);
+    let initial = work_fingerprint(dir.path()).unwrap();
+    std::fs::write(dir.path().join("work"), "one").unwrap();
+    assert_ne!(work_fingerprint(dir.path()).unwrap(), initial);
+    git(&["add", "work"]);
+    git(&["commit", "-qm", "work"]);
+    let committed = work_fingerprint(dir.path()).unwrap();
+    std::fs::write(dir.path().join("work"), "two").unwrap();
+    assert_ne!(work_fingerprint(dir.path()).unwrap(), committed);
+    let state = tempfile::tempdir().unwrap();
+    let mut record = crate::runs::create(
+        state.path(),
+        "run-failed",
+        "fixture",
+        json!({"writer_round":1, "pid":42, "cwd":dir.path(),
+            "round_work_before":work_fingerprint(dir.path())}),
+        pg_worker_core::run::record::Status::Running,
+    )
+    .ok()
+    .unwrap();
+    finish_round(&mut record, pg_worker_core::run::record::Status::Failed);
+    assert_eq!(record.get("round_void"), Some(&json!(true)));
+    std::fs::write(dir.path().join("work"), "three").unwrap();
+    finish_round(&mut record, pg_worker_core::run::record::Status::Failed);
+    assert_eq!(record.get("round_void"), Some(&json!(false)));
+    record.set("pid", Value::Null);
+    finish_round(&mut record, pg_worker_core::run::record::Status::Failed);
+    assert_eq!(record.get("round_void"), Some(&json!(true)));
+}

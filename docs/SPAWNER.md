@@ -775,3 +775,12 @@ at most 800 changed lines excluding Cargo.lock and generated files. Preserve
 findings verbatim and report one routing line after all effects succeed;
 retry safely without duplicate jobs, PR closes, slice definitions or reports.
 Until then, the orchestrator performs that stop procedure from R-batch-04.
+
+A spawner-owned `round_void: true` excludes failed rounds that never launched
+(no PID), or whose bounded Git fingerprint proves HEAD, tracked diff and
+untracked contents unchanged from admission. Voided attempts consume neither
+rounds nor progress counts; they never introduce a zero baseline. Successful
+runs and failures with changed files still need review. Unavailable fingerprints
+stay conservative; gitconfig guard failures are never voided. The card cannot
+set this marker. Use one writer per checkout; unrelated concurrent edits can
+prevent the unchanged proof, so review that diff rather than inventing a count.
