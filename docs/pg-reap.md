@@ -69,9 +69,15 @@ read as last fetched; the retention run does not refresh them. The caller must
 fetch the repository separately when a fresh remote view is required.
 Terminal outcomes do not prove idleness: immediately before backup and again
 before removal, Linux procfs scans compare process start tokens around cwd reads
-and protect processes anywhere inside the tree. An unreadable process inventory
-refuses cleanup; the worker must have permission to inspect all live processes. The CLI always scans real `/proc`;
-isolated namespace/procfs fixtures are available to library tests.
+and protect this user's processes anywhere inside the tree. Procfs directory
+ownership is read first: another UID is skipped, and processes that vanish with
+ENOENT or ESRCH are skipped. An unreadable cwd or identity for the same UID still
+refuses cleanup. The worker needs visibility into its own user's live processes;
+some hosts restrict even same-UID service/SSH processes, so the UID filter alone
+does not guarantee cleanup there. The CLI always scans real `/proc`; isolated
+procfs fixtures are available to library tests. The real-procfs regression checks
+success when same-UID processes are readable and the required refusal when
+persistent same-UID restrictions are independently observed.
 
 The orphan executor has a real-child pidfd regression: a living parent and a
 wrong start token both refuse signals; the matching orphan is killed and its
