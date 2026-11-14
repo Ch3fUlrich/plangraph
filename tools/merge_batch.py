@@ -45,7 +45,7 @@ import sys
 import merge_batch_build as build
 import merge_batch_land as land
 from merge_batch_plan import high_patterns, plan_batches, render_table
-from merge_batch_util import (BATCH_READY, EXIT_REFUSED, PR_FIELDS, MergeBatchError, add_extra_paths, fetch_pr,
+from merge_batch_util import (BATCH_READY, EXIT_REFUSED, PR_FIELDS, MergeBatchError, refresh_diff, fetch_pr,
                               gh_json, norm_pr, parse_prs, repo_info)
 
 
@@ -61,7 +61,7 @@ def cmd_plan(args):
         raw = gh_json("pr", "list", "--repo", repo, "--state", "open", "--label", args.label,
                       "--limit", "200", "--json", PR_FIELDS)
         prs = [norm_pr(item) for item in raw]
-    add_extra_paths(base, prs)  # the old paths of renames: a keeper file moved away is still a keeper change
+    refresh_diff(base, prs)  # Git owns sizes and paths, including both ends of renames
     plan = plan_batches(prs, base, args.max_prs, args.max_lines, patterns)
     plan.update(repo=repo, label=None if args.prs else args.label)
     print(json.dumps(plan, indent=2) if args.json else render_table(plan))
