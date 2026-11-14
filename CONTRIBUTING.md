@@ -349,3 +349,5 @@ Gemini retirement regressions preserve historical record reads while checking re
 admission and catalog filtering; AGY capability/witness activation requires evidence.
 
 Standalone Rust workspaces, including rust/worker, receive manifest-specific preflight checks.
+Preflight selects changed crates and their transitive path dependents across workspaces;
+the Temporal spike keeps its CI replay-only check and is skipped for unrelated workspace changes.

@@ -89,7 +89,26 @@ def first_error(output):
     return (marked or lines or ["no output"])[0]
 
 
+def rust_path_dependencies(manifest, data, workspace_dir, workspace):
+    """Resolve normal, dev, build and target-specific Cargo path dependencies."""
+    dependencies = set()
+    sections = [data, *data.get('target', {}).values()]
+    for section in sections:
+        for kind in ('dependencies', 'dev-dependencies', 'build-dependencies'):
+            for name, dependency in section.get(kind, {}).items():
+                if not isinstance(dependency, dict):
+                    continue
+                directory = manifest.parent
+                if dependency.get('workspace'):
+                    dependency = (workspace or {}).get('dependencies', {}).get(name, {})
+                    directory = workspace_dir
+                if isinstance(dependency, dict) and 'path' in dependency:
+                    dependencies.add((directory / dependency['path']).resolve())
+    return dependencies
+
+
 def rust_commands(root, base, head, env=None):
+    root = root.resolve()
     try:
         changed = subprocess.check_output(
             ["git", "diff", "--name-only", "--no-renames", f"{base}...{head}"],
@@ -113,32 +132,44 @@ def rust_commands(root, base, head, env=None):
                               for excluded in workspace.get('exclude', []))}
         if 'package' in tomllib.loads(workspace_file.read_text()):
             members.add(workspace_file.parent.resolve())
-    manifests, standalone = {}, []
+    manifests, standalone, crates = {}, {}, {}
     for manifest in (root / "rust").rglob("Cargo.toml"):
         if "target" in manifest.parts:
             continue
         data = tomllib.loads(manifest.read_text())
-        if members is not None and manifest.parent.resolve() not in members:
-            if "workspace" in data and "package" in data:
-                standalone.append(manifest)
+        owner = manifest.parent.relative_to(root).as_posix()
+        if members is not None and manifest.parent not in members:
+            if "workspace" not in data or "package" not in data:
+                continue
+            standalone[owner] = manifest
+        elif "package" in data:
+            manifests[owner] = data["package"]["name"]
+        else:
             continue
-        if "package" in data:
-            manifests[manifest.parent.relative_to(root).as_posix()] = data["package"]["name"]
+        crates[owner] = rust_path_dependencies(
+            manifest, data, manifest.parent if owner in standalone else workspace_file.parent,
+            data.get('workspace') if owner in standalone else workspace)
     selected = set()
     for path in changed:
-        owners = [p for p in manifests if path.startswith(p + "/")]
+        owners = [p for p in crates if path.startswith(p + "/")]
         selected.update([max(owners, key=len)] if owners else manifests)
-    packages = [arg for p in sorted(selected) for arg in ("-p", manifests[p])]
+    # A changed dependency requires checking every consumer, across workspaces.
+    while True:
+        directories = {root / owner for owner in selected}
+        dependents = {owner for owner, deps in crates.items() if deps & directories}
+        if dependents <= selected:
+            break
+        selected.update(dependents)
+    packages = [arg for p in sorted(selected & manifests.keys()) for arg in ("-p", manifests[p])]
     commands = ([["cargo", "fmt", "--check"],
                  ["cargo", "clippy", *packages, "--all-targets", "--", "-D", "warnings"],
-                 ["cargo", "test", *packages]] if selected else [])
-    shared = any(not any(path.startswith(owner + "/") for owner in manifests) and
-                 not any(path.startswith(m.parent.relative_to(root).as_posix() + "/") for m in standalone)
-                 for path in changed)
-    for manifest in sorted(standalone):
-        owner = manifest.parent.relative_to(root).as_posix()
-        if shared or any(path.startswith(owner + "/") for path in changed):
-            target = ["--manifest-path", str(manifest)]
+                 ["cargo", "test", *packages]] if packages else [])
+    for owner in sorted(selected & standalone.keys()):
+        target = ["--manifest-path", str(standalone[owner])]
+        if owner == 'rust/spikes/temporal-spike':
+            # This experiment's CI contract is replay only (tests.yml rust-spike).
+            commands.append(["cargo", "test", *target, "--test", "replay"])
+        else:
             commands += [["cargo", "fmt", *target, "--check"],
                          ["cargo", "clippy", *target, "--all-targets", "--", "-D", "warnings"],
                          ["cargo", "test", *target]]
