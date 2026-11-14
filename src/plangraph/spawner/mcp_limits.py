@@ -1,14 +1,19 @@
 """Compact MCP views, a transport-safe reply size guard and the source-change guard."""
+import ast
+from collections.abc import Mapping
 import hashlib
 import importlib
+import importlib.machinery
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import uuid
 
-from plangraph.routing_errors import SpawnRefused
+from plangraph.routing_errors import ParameterRefused, SpawnRefused
 
 MAX_REPLY_BYTES = 8 * 1024 * 1024
 PS_ENDED_LIMIT = 20
@@ -86,18 +91,66 @@ def current_source_identity(source=None):
     return hashlib.sha256((head + _fingerprint(source)).encode()).hexdigest()[:12]
 
 
-SPAWN_MODULES = (
-    'plangraph.planner.routing', 'plangraph.planner.legs', 'plangraph.planner.seats',
-    'plangraph.planner.measured_down', 'plangraph.routing_errors', 'plangraph.settings',
-    'plangraph.routing_support.clients', 'plangraph.routing_support.liveness',
-    'plangraph.routing_support.leg_state_flag', 'plangraph.routing_support.opencode_render',
-    'plangraph.routing_support.host_keys',
-    *('plangraph.spawner.' + name for name in (
-        'runner', 'service', 'leg_state', 'target', 'private_io', 'opencode_overlay',
-        'opencode_isolation', 'gateway_witness', 'opencode_answer', 'resolver', 'probe_cleanup',
-        'run_watchdog', 'win_recorded', 'proc_kill', 'env_redact', 'question_bridge',
-        'cancel_job', 'hung_capture', 'seat_artifact', 'stall_watchdog', 'fixer', 'inline_diff',
-        'context_pack', 'prompt_guard')))
+def _spawn_modules(root=None, entries=('plangraph.spawner.mcp',), sources=None):
+    """Follow package imports at every nesting depth before capturing identity.
+
+    Include transitive imports and package initializers, including imports inside
+    functions and platform branches. Resolve only local source modules: imported
+    attributes and external dependencies are left to Python's normal importer.
+    Read/parse failures abort startup rather than silently weakening the guard.
+    """
+    root = root or Path(__file__).resolve().parents[1]
+    pending, found = list(entries), set()
+    while pending:
+        name = pending.pop()
+        if name in found or not (name == 'plangraph' or name.startswith('plangraph.')):
+            continue
+        path = root.joinpath(*name.split('.')[1:])
+        source = path / '__init__.py' if path.is_dir() else path.with_suffix('.py')
+        if not source.is_file():
+            continue  # An imported attribute, not a source module.
+        found.add(name)
+        package = name if source.name == '__init__.py' else name.rpartition('.')[0]
+        if name != 'plangraph':
+            pending.append(name.rpartition('.')[0])
+        text = source.read_text(encoding='utf-8')
+        if sources is not None:
+            sources[name] = (source, text)
+        for node in ast.walk(ast.parse(text, filename=str(source))):
+            if isinstance(node, ast.Import):
+                pending.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                base = importlib.util.resolve_name('.' * node.level + (node.module or ''), package)
+                pending.append(base)
+                pending.extend(base + '.' + alias.name for alias in node.names if alias.name != '*')
+    return tuple(sorted(found))
+
+
+_SPAWN_SOURCES = {}
+SPAWN_MODULES = _spawn_modules(sources=_SPAWN_SOURCES)
+
+
+class _FrozenLoader(importlib.machinery.SourceFileLoader):
+    def get_code(self, fullname):
+        path, text = _SPAWN_SOURCES[fullname]
+        return compile(text, str(path), 'exec', dont_inherit=True)
+
+
+class _FrozenSpawnImports:
+    """Keep lazy execution/platform checks while pinning source at MCP import.
+
+    Eager execution of the whole closure would import optional POSIX keeper code
+    on Windows. A source snapshot instead prevents both disk and .pyc reloads
+    after a checkout update without executing otherwise unused modules.
+    """
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in _SPAWN_SOURCES:
+            source, _ = _SPAWN_SOURCES[fullname]
+            return importlib.util.spec_from_file_location(
+                fullname, source, loader=_FrozenLoader(fullname, str(source)))
+
+
+sys.meta_path.insert(0, _FrozenSpawnImports())
 GUARDED_TOOLS = ('plangraph_agent_spawn', 'plangraph_session_launch', 'plangraph_session_relaunch')
 
 
@@ -107,8 +160,6 @@ class SourceChanged(SpawnRefused):
 
 class SourceGuard:
     def __init__(self, identity=None):
-        for name in SPAWN_MODULES:  # lazy spawn-path imports must not straddle a tree update
-            importlib.import_module(name)
         self.identity = identity or current_source_identity
         self.started = self.identity()
 
@@ -121,7 +172,10 @@ class SourceGuard:
     def check(self, name, arguments):
         """Refuse tools that start a real run or session; dry runs, route, ps, status,
         cancel, probe, session stop/list/mark_ready stay available."""
-        dry = name in ('plangraph_agent_spawn', 'plangraph_session_launch') and arguments.get('dry_run') is True
+        dry = (name in ('plangraph_agent_spawn', 'plangraph_session_launch')
+               and isinstance(arguments, Mapping) and arguments.get('dry_run') is True)
         if name in GUARDED_TOOLS and not dry:
             if message := self.restart_required():
                 raise SourceChanged(message)
+            if not isinstance(arguments, Mapping):
+                raise ParameterRefused('arguments must be an object')

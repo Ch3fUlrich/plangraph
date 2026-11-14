@@ -724,4 +724,4 @@ Both inherit the agy Claude capability bounds and remain unwitnessed: AGY emits 
 Historical records remain readable; the retired benchmark model row exists only
 for benchmark foreign keys and never appears in the model list.
 
-Checkpoint 8: MCP source guard is included in this checkpoint.
+Checkpoint 8: MCP source guard snapshots the derived transitive import closure, including function-level imports; lazy modules execute startup source after checkout updates while optional platform dependencies stay lazy. Non-object launch arguments return Invalid params on fresh servers and SourceChanged on stale servers.

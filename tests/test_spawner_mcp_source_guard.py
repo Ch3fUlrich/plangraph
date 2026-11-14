@@ -159,31 +159,79 @@ def test_session_starts_are_guarded_other_tools_are_not(tmp_path, name):
         server._source_guard.check(open_tool, {})
 
 
-def test_server_import_eagerly_loads_spawn_dependencies(tmp_path):
+def test_server_pins_lazy_spawn_dependencies_without_optional_posix_imports(tmp_path):
     script = r"""
-import asyncio, sys
+import importlib, sys
 from pathlib import Path
 from plangraph.spawner.mcp import MCPSpawnerServer
-from plangraph.spawner import base_fresh, seat_spawn
-from plangraph.planner.legs import DEFAULT_LEGS
-from plangraph.planner.routing import SpawnPlan
-server = MCPSpawnerServer(state=Path.cwd() / 'state')
-base_fresh._check = lambda *a, **k: dict(ok=True, origin_sha='b'*40, base_sha='b'*40, behind=0, reason=None)
-seat_spawn.resources = lambda *a: (0, 1000000)
-leg = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-xhigh')
-server.service._route = lambda *a, **k: SpawnPlan((leg,), (), 'test', (), ())
-before = set(sys.modules)
-result = asyncio.run(server.service.spawn(card={'estimate_tokens':100}, prompt='Implement a tested change',
-    dry_run=True, wait_seconds=None))
-assert result['status'] == 'dry_run', result
-loaded = {name for name in sys.modules if name.startswith('plangraph.')}
-assert not loaded.difference(before), sorted(loaded.difference(before))
+from plangraph.spawner import mcp_limits
+sys.modules['fcntl'] = None
+server = MCPSpawnerServer(state=Path.cwd() / 'state', source_identity=lambda: 'old')
+names = ('planner.route_policy', 'review.family', 'keeper.coverage', 'keeper.evidence_repo',
+         'review.gateway', 'spawner.overflow', 'fleet_sync.genconfig', 'spawner.cli',
+         'routing_support.served_fresh', 'keeper.evidence_decisions')
+assert all('plangraph.' + name in mcp_limits.SPAWN_MODULES for name in names)
+# Package source/bytecode loading must never read the updated tree.
+original_get_code = importlib.machinery.SourceFileLoader.get_code
+def guarded_get_code(loader, name):
+    assert not name.startswith('plangraph.'), 'read live package source after startup'
+    return original_get_code(loader, name)
+importlib.machinery.SourceFileLoader.get_code = guarded_get_code
+for name in names:
+    importlib.import_module('plangraph.' + name)
+assert 'plangraph.keeper.db' not in sys.modules
 """
-    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src'),
-           'PLANGRAPH_OVERFLOW_HOSTS': str(tmp_path / 'absent-overflow.json')}
+    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src')}
     done = subprocess.run([sys.executable, '-c', script], cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=30)
     assert done.returncode == 0, done.stderr
+
+
+def test_new_lazy_imports_and_transitive_sources_are_derived_and_pinned(tmp_path, monkeypatch):
+    import importlib
+    root = tmp_path / 'plangraph'
+    package = root / 'guard_fixture'
+    package.mkdir(parents=True)
+    (root / '__init__.py').write_text('')
+    (package / '__init__.py').write_text('')
+    entry = package / 'entry.py'
+    entry.write_text('def run():\n    from . import child\n    return child.value\n')
+    child = package / 'child.py'
+    child.write_text('from plangraph.guard_fixture.leaf import value\n')
+    leaf = package / 'leaf.py'
+    leaf.write_text('value = "old"\n')
+    sources = {}
+    modules = mcp_limits._spawn_modules(root, ('plangraph.guard_fixture.entry',), sources)
+    assert set(modules) == {'plangraph', 'plangraph.guard_fixture',
+                            'plangraph.guard_fixture.entry', 'plangraph.guard_fixture.child',
+                            'plangraph.guard_fixture.leaf'}
+    monkeypatch.setattr(mcp_limits, '_SPAWN_SOURCES', sources)
+    entry.write_text('raise AssertionError("new entry executed")\n')
+    child.write_text('raise AssertionError("new child executed")\n')
+    leaf.unlink()
+    try:
+        module = importlib.import_module('plangraph.guard_fixture.entry')
+        assert 'plangraph.guard_fixture.child' not in sys.modules
+        assert module.run() == 'old'
+    finally:
+        for name in modules:
+            if name.startswith('plangraph.guard_fixture'):
+                sys.modules.pop(name, None)
+
+
+@pytest.mark.parametrize('name', ['plangraph_agent_spawn', 'plangraph_session_launch',
+                                  'plangraph_session_relaunch'])
+@pytest.mark.parametrize('arguments', [None, [], 'invalid', 1])
+@pytest.mark.parametrize('stale', [False, True])
+def test_non_object_launch_arguments_are_rpc_refusals(tmp_path, name, arguments, stale):
+    identity = Mock(return_value=OLD)
+    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+    if stale:
+        identity.return_value = NEW
+    reply = asyncio.run(server.handle_rpc_request({'jsonrpc': '2.0', 'id': 1,
+        'method': 'tools/call', 'params': {'name': name, 'arguments': arguments}}))
+    assert reply['error']['code'] == (-32000 if stale else -32602)
+    assert reply['error']['data']['type'] == ('SourceChanged' if stale else 'ParameterRefused')
 
 
 def test_stale_session_relaunch_cannot_use_unadvertised_dry_run(tmp_path, monkeypatch):
