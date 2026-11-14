@@ -328,7 +328,9 @@ writers and effort variants. After exit (successful or failed), the parent reads
 the response-side gateway call log independently of review tool permissions. Only
 a unique admitted model from successful rows for that tag supplies a witness;
 missing, mismatched tags, failed rows and unknown model IDs stay unwitnessed.
-Admission matches exact model segments in the route table, stripping transport
+Model identity admission and call-log row parsing live in `spawner/gateway_models.py`;
+`spawner/gateway_witness.py` retains compatible re-exports and owns session tagging,
+transport and witness orchestration. Admission matches exact model segments in the route table, stripping transport
 provider prefixes and the registered `cx-` GPT alias prefix. A different admitted
 model keeps its family witness and records `served_model_mismatch` with the raw
 requested and served IDs, including when an effort variant serves its base model.

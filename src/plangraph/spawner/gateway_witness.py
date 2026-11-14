@@ -15,18 +15,18 @@ import os
 from pathlib import Path
 import stat
 import time
-import types
 import urllib.parse
 import urllib.request
 
 from plangraph.routing_support.opencode_overlay import _strip_jsonc
+from .gateway_models import (  # compatibility re-exports for callers
+    PROVIDER_ALIASES, model_segment, served_family, served_models,
+)
 
 SESSION_HEADER = 'x-omniroute-session-id'
 TOKEN_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN'
 TOKEN_FILE_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN_FILE'
 URL_ENVS = ('OMNIROUTE_BASE_URL', 'PLANGRAPH_GATEWAY_URL')
-# Rows come from the gateway's own call log, so xiaomi-mimo is its connection, never a direct leg.
-PROVIDER_ALIASES = types.MappingProxyType({'xiaomi-mimo': 'mimo'})
 WITNESS_KIND = 'response-side-gateway-call-log'
 
 
@@ -180,44 +180,6 @@ def require_witness(model, env=None, *, secrets=None):
             raise LookupError('child gateway endpoint differs from witness endpoint')
     except LookupError as exc:
         raise SpawnRefused('witness required: ' + str(exc)) from None
-
-
-def model_segment(model):
-    """Provider-independent identity; cx- is the route table's GPT alias prefix."""
-    segment = str(model or '').rsplit('/', 1)[-1]
-    return segment.removeprefix('cx-') if segment.startswith('cx-gpt-') else segment
-
-
-def served_family(model):
-    """Admit exact route-table model segments, never substrings in provider names."""
-    from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
-    families = {leg.family for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS)
-                if model_segment(leg.model) == model_segment(model)}
-    if len(families) == 1:
-        family = families.pop()
-        return 'gpt' if family == 'openai' else family
-    return None
-
-
-def served_models(rows, tag):
-    """Every model the gateway served (2xx rows) for ``tag``, as ``provider/model``."""
-    served = set()
-    for row in rows if isinstance(rows, list) else ():
-        if not isinstance(row, dict) or row.get('sessionTag') != tag:
-            continue
-        try:
-            ok = 200 <= int(row.get('status')) < 300
-        except (TypeError, ValueError):
-            ok = False
-        model = str(row.get('model') or '').strip()
-        if ok and model:
-            provider = str(row.get('provider') or '').strip()
-            provider = PROVIDER_ALIASES.get(provider, provider)
-            head, sep, rest = model.partition('/')
-            if sep and head in PROVIDER_ALIASES:
-                model = PROVIDER_ALIASES[head] + '/' + rest
-            served.add(model if '/' in model or not provider else f'{provider}/{model}')
-    return served
 
 
 def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=None):

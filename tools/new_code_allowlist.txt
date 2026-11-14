@@ -36,3 +36,4 @@ src/plangraph/keeper/mcp_tools.py | D-5504/D-5506 rule 9.14: schema-only split r
 **/*.sh | OPERATOR D-5830 interim: Rust preferred, shell accepted
 
 tests/test_keeper_origin_git_env.py | D-5847 in-flight
+src/plangraph/spawner/gateway_models.py | D-5840 rule 9.14: responsibility-only extraction of existing gateway model admission and row parsing below the 400-line gate; no new behaviour
