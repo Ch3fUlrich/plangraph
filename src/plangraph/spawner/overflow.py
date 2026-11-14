@@ -22,6 +22,7 @@ from plangraph.routing_errors import ParameterRefused
 
 from .private_io import atomic_write_private
 
+
 def __getattr__(name):
     # Keep the compatibility attribute without loading the executable module on import.
     if name == 'cli':
@@ -29,12 +30,15 @@ def __getattr__(name):
         return import_module('.cli', __package__)
     raise AttributeError(name)
 
+
 class Decision(NamedTuple):
     host: str | None
     reason: str
 
+
 class RemoteRefusal(ValueError):
     """Safe, value-free remote failure reason."""
+
 
 def failure_reason(exc):
     """Describe the failure without exposing exception values or private paths."""
@@ -46,6 +50,7 @@ def failure_reason(exc):
         return 'remote spawn input has an invalid type'
     return 'remote spawn input or receipt has an invalid value'
 
+
 def registry_caps():
     """Read the same registry location and JSON format as fleet-sync."""
     try:
@@ -56,6 +61,7 @@ def registry_caps():
     except (OSError, ValueError, KeyError, TypeError):
         logging.warning('hosts registry missing or malformed; overflow disabled, local RAM defaults 3000/2048 MB')
         return {'hosts': [], 'self': None}
+
 
 def host_config(registry, name):
     for host in registry.get('hosts', []):
@@ -69,6 +75,7 @@ def host_config(registry, name):
         return host
     return {}
 
+
 def placement_policy(registry, config):
     name = os.environ.get('PLANGRAPH_HOST_NAME') or registry.get('self')
     host = host_config(registry, name)
@@ -77,6 +84,7 @@ def placement_policy(registry, config):
     local = hosts.get(name, {}) if isinstance(hosts, dict) else {}
     return name, (host.get('orchestration_only') is True or
                   isinstance(local, dict) and local.get('orchestration_only') is True)
+
 
 def host_caps(registry, name, role='implement'):
     host = host_config(registry, name)
@@ -91,11 +99,13 @@ def host_caps(registry, name, role='implement'):
     logging.warning('host %r: missing or malformed registry caps; not an overflow target', name)
     return None
 
+
 def local_limits(registry, role='implement'):
     caps = host_caps(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry.get('self'), role)
     if caps is None:
         logging.warning('local admission using conservative RAM defaults: floor 3000 MB, role 2048 MB')
     return caps or (2048, 3000)
+
 
 def memory_refusal(free_mb, reservation_mb, floor_mb):
     """Worker-core mem_fit: effective_free_mb - reservation_mb >= mem_floor_mb.
@@ -107,11 +117,13 @@ def memory_refusal(free_mb, reservation_mb, floor_mb):
         return None
     return f'memory: free {free_mb} MB, floor {floor_mb} MB, role {reservation_mb} MB'
 
+
 def memory_floor_record(memory, role_mb, floor, detail, role='implement'):
     return dict(run_id='run-' + uuid.uuid4().hex, status='refused', role=role,
                 reason='host_memory_floor', overflow_reason=detail, exit_code=2,
                 mem_available_mb=memory, floor_mb=floor, role_mb=role_mb, ended=time.time(),
                 error=f'host_memory_floor: MemAvailable {memory} MB, floor {floor} MB, role {role_mb} MB; {detail}')
+
 
 def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
             remote_first=False, local_refusal=None, host_order=()):
@@ -134,6 +146,12 @@ def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
                 reason = 'failed readiness'
             elif row.get('fresh') is not True:
                 reason = 'stale readiness'
+            elif row.get('disk_free_gb') is not None and any(
+                    type(value) not in (int, float) or not 0 <= value < float('inf')
+                    for value in (row['disk_free_gb'], row.get('disk_floor_gb', 5))):
+                reason = 'malformed readiness'
+            elif row.get('disk_free_gb') is not None and row['disk_free_gb'] < row.get('disk_floor_gb', 5):
+                reason = f"disk_low: free {row['disk_free_gb']} GB"
             elif any(type(row.get(key)) is not int or row[key] < 0
                      for key in ('live_runs', 'mem_available_mb')):
                 reason = 'malformed readiness'
@@ -154,6 +172,7 @@ def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
         return Decision(None, local_reason or 'local_fallback_no_remote')
     return Decision(None, local_reason + '; queue: ' + ('; '.join(refused) or 'no overflow hosts configured'))
 
+
 def ready_records(config, role='implement'):
     records = {}
     registry = registry_caps()
@@ -169,7 +188,7 @@ def ready_records(config, role='implement'):
             age = (datetime.now(timezone.utc) - stamp).total_seconds()
             if data['host'] != name:
                 raise ValueError('host mismatch')
-            row.update({key: data.get(key) for key in ('ok', 'live_runs', 'mem_available_mb')})
+            row.update({key: data.get(key) for key in ('ok', 'live_runs', 'mem_available_mb', 'disk_free_gb')})
             row['fresh'] = 0 <= age <= 600
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             row['refusal'] = 'missing or malformed readiness'
@@ -346,11 +365,18 @@ def main(argv=None):
             return cli.main([*local, Path(args.prompt).read_text(), *options])
         role_mb, floor_mb = local_limits(registry_caps(), args.role)
         _, memory = local_resources(args.state) if args.state is not None else local_resources()
-        if decide(memory, role_mb, floor_mb, {}, False).reason == 'local room':
-            return cli.main([*local, Path(args.prompt).read_text(), *options])
-        card = json.loads(Path(args.card).read_text())
+        from .host_ready import local_disk_refusal
+        try:
+            card = json.loads(Path(args.card).read_text())
+        except (OSError, ValueError):
+            card = None  # Local CLI owns malformed input diagnostics.
         from .prompt_input import resolve_cwd
         cwd = resolve_cwd(args.cwd, card)
+        disk = local_disk_refusal(cwd or args.repo, cli.SpawnService(state=args.state))
+        if decide(memory, role_mb, floor_mb, {}, False, local_refusal=disk).reason == 'local room':
+            return cli.main([*local, Path(args.prompt).read_text(), *options])
+        if card is None:
+            card = json.loads(Path(args.card).read_text())
         repo = Path(cwd or args.repo).resolve()
         diff = card.get('diff_ref')
         public = repos_public(config, repo, diff)
@@ -360,7 +386,7 @@ def main(argv=None):
         records = ready_records(config, args.role)
         attempts = 0
         while True:
-            decision = decide(memory, role_mb, floor_mb, records, public)
+            decision = decide(memory, role_mb, floor_mb, records, public, local_refusal=disk)
             if decision.host is None or attempts == 2:
                 detail = decision.reason if decision.host is None else 'refused: retry limit'
                 detail = detail.replace('; queue:', '; refused:')
