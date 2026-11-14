@@ -90,7 +90,7 @@ def test_render_shell(tmp_path):
 
 
 @pytest.mark.parametrize("hours,priority,state,expected", [
-    (25, 9, "ready", True), (24, 9, "ready", True), (23, 9, "ready", False),
+    (25, 10, "ready", True), (25, 9, "ready", True), (24, 9, "ready", True), (23, 9, "ready", False),
     (25, 8, "ready", False), (25, 9, "done", False)])
 def test_stale(w, hours, priority, state, expected):
     w.conn.execute("UPDATE items SET priority=?, state=? WHERE key='demo:TOP'",

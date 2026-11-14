@@ -198,9 +198,8 @@ class OpsMixin:
         if not isinstance(op.get("key"), str):
             raise Refused("validation", f"{name} needs a key")
         if name == "priority":
-            n = op.get("priority")
-            if isinstance(n, bool) or not isinstance(n, int):
-                raise Refused("validation", "priority must be an integer")
+            from .store_create import CreateMixin
+            CreateMixin._checked_priority(op.get("priority"))
         if name == "set_kind" and not isinstance(op.get("kind"), str):
             raise Refused("validation", "set_kind needs a kind")
         if name in ("add_dep", "remove_dep") \

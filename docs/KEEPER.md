@@ -604,3 +604,5 @@ indexes become `*_retired_v11` under migration and exclusive table locks.
 Preserve audit rows; reapplication requires an explicit restore plan.
 SQLite rollback retains tables; C4 owns forward audit events, not item events.
 Mandatory ephemeral PostgreSQL CI must pass before merge; storage is not closure.
+
+Priority is an integer from 0 to 10: 0 is optional and 10 is most important. Define, edits and priority operations refuse values outside this range, including atomic batches. Operator stale-step oversight treats priority 9-10 as high priority.

@@ -1,0 +1,1 @@
+Keeper priority is an integer 0-10, with 0 optional and 10 most important. Define, edit, priority and atomic operations reject out-of-range and non-integer values before mutation. Operator oversight retains the high-priority threshold of 9.

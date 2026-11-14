@@ -181,3 +181,29 @@ def test_batch_file_tampered_inside_lock_rolls_back_earlier_ops(tmp_path):
     assert snap(w) == before
     assert w.store._item("demo:X") is None
     w.close()
+
+
+@pytest.mark.parametrize('priority', [-1, 11, True, 1.5, '3', None])
+def test_priority_range_refuses_all_write_paths_atomically(w, priority):
+    before = snap(w)
+    attempts = [
+        lambda: w.store.create_items(w.p('router'), [defn('NEW', kind='goal', priority=priority)]),
+        lambda: w.store.set_priority(w.p('router'), 'demo:A', priority),
+        lambda: w.store.edit_definition(w.p('router'), 'demo:A', {'priority': priority}),
+        lambda: w.store.apply_ops(w.p('router'), [{'op': 'priority', 'key': 'demo:A', 'priority': priority}]),
+        lambda: w.store.apply_ops(w.p('router'), [create('NEW', kind='goal', priority=priority)]),
+    ]
+    for attempt in attempts:
+        with pytest.raises(Refused) as exc:
+            attempt()
+        assert exc.value.code == 'validation'
+        assert snap(w) == before
+
+
+@pytest.mark.parametrize('priority', [0, 10])
+def test_priority_bounds_accepted_by_define_and_priority(w, priority):
+    w.store.create_items(w.p('router'), [defn('NEW', kind='goal', priority=priority)])
+    assert w.store._item('demo:NEW')['priority'] == priority
+    w.store.set_priority(w.p('router'), 'demo:A', priority)
+    assert w.store._item('demo:A')['priority'] == priority
+    w.store.apply_ops(w.p('router'), [{'op': 'priority', 'key': 'demo:NEW', 'priority': priority}])

@@ -171,7 +171,7 @@ def test_set_priority_race_cancelled_refused_no_event(w):
         router2 = auth.authenticate(conn2, w.tok("router"))
         _arm(w.store, lambda: store2.cancel(router2, key, "race"))
         with pytest.raises(Refused) as exc:
-            w.store.set_priority(w.p("router"), key, 99)
+            w.store.set_priority(w.p("router"), key, 10)
         assert exc.value.code == "locked"
         item = w.store._item(key)
         assert item["state"] == "cancelled"
@@ -190,7 +190,7 @@ def test_set_priority_race_done_refused_no_event(w):
         reviewer2 = auth.authenticate(conn2, w.tok("reviewer"))
         _arm(w.store, lambda: store2.verdict(reviewer2, key, True, "ok"))
         with pytest.raises(Refused) as exc:
-            w.store.set_priority(w.p("router"), key, 99)
+            w.store.set_priority(w.p("router"), key, 10)
         assert exc.value.code == "locked"
         item = w.store._item(key)
         assert item["state"] == "done"

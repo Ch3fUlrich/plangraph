@@ -104,6 +104,7 @@ def r8_operator(conn, now):
                     continue
                 seen.add(target)
                 candidate = items[target]
+                # D-5840: high priority on the bounded 0-10 scale is 9-10.
                 if candidate["priority"] >= 9:
                     gated.append(candidate)
                 todo.extend(successors.get(target, ()))

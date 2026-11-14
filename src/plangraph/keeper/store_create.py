@@ -275,6 +275,7 @@ class CreateMixin:
         return gate
 
     def _normalise_create(self, raw, principal):
+        self._checked_priority(raw.get("priority", 0))
         definition = self._normalise(raw)
         definition["review_tier"] = self._tier_for(raw, definition, principal)
         return definition
@@ -676,6 +677,8 @@ class CreateMixin:
     def _checked_priority(n):
         if isinstance(n, bool) or not isinstance(n, int):
             raise Refused("validation", "priority must be an integer")
+        if not 0 <= n <= 10:
+            raise Refused("validation", "priority must be between 0 and 10 (0 optional, 10 most important)")
         return int(n)
 
     def _apply_priority(self, principal, key, n, now):

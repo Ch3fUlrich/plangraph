@@ -196,9 +196,9 @@ def _add_writes(sub):
     rehome.add_argument("project", help="the new project")
     rehome.add_argument("--host", default=None, help="host of the moved item")
 
-    priority = _p(sub, "priority", help="set an item's priority")
+    priority = _p(sub, "priority", help="set priority 0-10 (0 optional, 10 most important)")
     priority.add_argument("key")
-    priority.add_argument("n", type=int)
+    priority.add_argument("n", type=int, choices=range(11), help="0 optional; 10 most important")
 
     define = _p(sub, "define", help="create or edit definitions from JSON")
     define.add_argument("key", nargs="?")
