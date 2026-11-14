@@ -118,3 +118,17 @@ def test_admitted_paid_preview_still_requires_budget(monkeypatch, tmp_path):
         asyncio.run(SpawnerRunner(default_cwd=str(tmp_path)).spawn(
             'fixture', model_or_combo=paid.model, dry_run=True))
     assert calls and calls[0][1]['dry_run'] is True
+
+
+def test_shared_gate_fixture_admits_paid_preview_without_host_state(tmp_path):
+    paid = replace(DEFAULT_LEGS[0], tier='paid')
+    admit_daily_budget(paid)
+    admit_daily_budget(paid, dry_run=True)
+    assert not list(tmp_path.iterdir())
+
+
+def test_shared_gate_fixture_does_not_accept_unrelated_commands():
+    import subprocess
+    import sys
+    result = subprocess.run([sys.executable, '-c', 'raise SystemExit(7)'])
+    assert result.returncode == 7

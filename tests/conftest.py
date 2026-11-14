@@ -268,6 +268,15 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     state = tmp_path_factory.mktemp('xdg-state')  # never the production spawner/leg state (D-2844)
     monkeypatch.setenv('XDG_STATE_HOME', str(state))
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
+    # Hermetic cost-gate transport; budget tests replace it with refusal/failure fixtures.
+    import subprocess
+    actual_run = subprocess.run
+    def gate_run(argv, *args, **kwargs):
+        if (isinstance(argv, (list, tuple)) and list(argv[1:3]) == ['cost-gate', 'admit']
+                and Path(argv[0]).parts[-3:] in (('.local', 'bin', 'plangraph'), ('.local', 'bin', 'plangraph.exe'))):
+            return subprocess.CompletedProcess(argv, 0)
+        return actual_run(argv, *args, **kwargs)
+    monkeypatch.setattr(subprocess, 'run', gate_run)
     monkeypatch.setenv('PLANGRAPH_CATALOG_DB', str(state / 'absent-catalog.db'))
     from plangraph.routing_support import catalog_db
     monkeypatch.setattr(catalog_db, 'DEFAULT_DB_PATH', state / 'absent-catalog.db')

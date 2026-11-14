@@ -1,0 +1,1 @@
+- Give hermetic spawner tests a shared gate transport fixture while retaining production fail-closed admission and explicit refusal/unavailable coverage; unrelated commands and recorded fallthrough assertions remain unchanged.

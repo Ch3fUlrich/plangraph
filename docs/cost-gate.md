@@ -54,3 +54,5 @@ cost-gate timer/service and repoint routerctl. These commands never change units
 Dry-run combos must first have an admitted model. An empty/unadmitted combo
 keeps its routing refusal instead of reporting a budget error. Once a preview
 has an admitted paid target, its read-only budget check remains mandatory.
+
+Hermetic spawner tests stub only the installed gate admission subprocess in the shared host fixture. Other subprocesses still execute normally; budget-boundary tests replace the stub with refused or unavailable results. Production has no test environment bypass and still refuses missing gate evidence, including previews.
