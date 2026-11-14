@@ -18,7 +18,7 @@ _tests.rs and .test.ts/.test.js suffixes. Binary files contribute zero LOC.
 `.entropy-baseline.json` holds numeric thresholds; existing values may only
 shrink. A deleted/malformed baseline refuses. `--baseline` prints the current
 committed ratio and standard thresholds for initial review; it writes nothing.
-The checker is repository-independent and can be installed in plangraph-data
+The checker is repository-independent and can be installed in another repository
 with its own measured baseline and workflow. That repository is not bundled here.
 The literal all-test-file rule also exposes existing files above 400 lines;
 these must be split before this gate can pass. A Plan-Slice reason does not waive
