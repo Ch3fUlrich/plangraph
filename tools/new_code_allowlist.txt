@@ -36,3 +36,5 @@ tools/seat_backfill.py | D-5062 rule 9.14: responsibility-only extraction of exi
 src/plangraph/keeper/mcp_tools.py | D-5504/D-5506 rule 9.14: schema-only split required to add close_merged without growing the 400-line Python MCP transport; retired by MCP-RUST
 **/*.py | OPERATOR D-5830 interim: Rust preferred, Python accepted
 **/*.sh | OPERATOR D-5830 interim: Rust preferred, shell accepted
+
+tests/test_keeper_origin_git_env.py | D-5847 in-flight
