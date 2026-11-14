@@ -1,4 +1,6 @@
 # Exceptions for Python regression tests of existing modules and the thin gate.
+src/plangraph/keeper/quota_alarms.py | D-5847 in-flight
+tests/test_quota_alarms.py | D-5847 in-flight
 tests/test_spawner_run_worktree.py | RUN-WORKTREE regression coverage (D-5062), retired by SPAWNER-RUST-PORT
 # A single * matches only within a directory; ** matches recursively.
 tests/test_*.py | Regression tests for existing Python modules
@@ -40,6 +42,7 @@ src/plangraph/spawner/replan_job.py | D-5847 in-flight
 tests/test_round_cap.py | D-5847 in-flight
 tests/test_round_cap_replan.py | D-5847 in-flight
 src/plangraph/spawner/skipped_attempts.py | D-5847 in-flight
+tests/test_spawner_oom_reason.py | D-5847 in-flight
 src/plangraph/routing_support/quota_snapshots.py | D-5847 in-flight
 tests/test_spawner_quota_failfast.py | D-5847 in-flight
 tests/test_keeper_origin_git_env.py | D-5847 in-flight

@@ -230,8 +230,9 @@ def normalize(text):
 
 def first_reason(text):
     """First diagnostic, excluding the OOM wrapper's structured telemetry."""
+    from .proc_kill import oom_envelope
     return next((line.strip() for line in normalize(text).splitlines()
-                 if line.strip() and not re.search(r'\{\s*"plangraph_oom"\s*:', line)), '')
+                 if line.strip() and oom_envelope(line) is None), '')
 
 
 def opencode_limit(text):
@@ -295,9 +296,8 @@ def early_refusal(complete_text):
 
     Streamed while the child still runs, so a refused dispatch ends at once
     instead of showing 'running' until a watchdog fires (D-3605 a).  Both
-    streams need an error-shaped line ('Error:' / 'HTTP nnn:' prefix) plus a
-    quota marker: a start-anchored retry log ('Rate limit reached, retrying')
-    or marker prose under an error shape never kills a healthy run (F1).
+    streams need an error shape plus a quota marker, or a known gateway
+    refusal shape. Retry logs and quota prose never kill a healthy run (F1).
     """
     structured = opencode_limit(complete_text)
     if structured:
