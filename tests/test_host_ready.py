@@ -10,7 +10,7 @@ from plangraph.spawner import host_ready as h
 from plangraph.spawner import host_ready_source as source
 
 CONFIG = dict(ssh='invented-alias', repo='/invented/repo', spawner_src='/invented/source',
-              env_file='/invented/env', run_cap=4, floor_mb=3000, session_unit='worker')
+              env_file='/invented/env', disk_floor_gb=0, run_cap=4, floor_mb=3000, session_unit='worker')
 
 
 @pytest.fixture(autouse=True)

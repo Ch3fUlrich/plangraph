@@ -21,7 +21,8 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
     binary = tmp_path / 'agy'
     binary.write_text(
         f'#!{sys.executable}\n'
-        'import hashlib, json, sys\n'
+        'import hashlib, json, os, sys\n'
+        f'assert os.environ["CARGO_TARGET_DIR"] == {str(tmp_path / "shared-cargo")!r}\n'
         'data = sys.stdin.buffer.read()\n'
         'prompt = json.loads(data)["message"]["content"].encode()\n'
         'digest = hashlib.sha256(prompt).hexdigest()\n'
@@ -34,6 +35,7 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
     # No inherited PATH, gateway endpoint, state, credentials, or notification hook.
     for name in list(os.environ):
         monkeypatch.delenv(name)
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'shared-cargo'))
     monkeypatch.setenv('PATH', str(tmp_path))
     monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setenv('PLANGRAPH_OMNIROUTE_LEG_STATE', '0')

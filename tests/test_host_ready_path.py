@@ -27,7 +27,7 @@ case "$script" in
       *) echo ok;;
     esac;;
   *meminfo*) echo 'MemAvailable: 8000000 kB';;
-  *"df -Pk"*) echo 'fake 9000000 0 9000000 0% /';;
+  *"df -Pk"*) echo 'fake 90000000 0 90000000 0% /';;
   git*) exec sh -c "$script";;
   *"doctor --json"*) echo '{"ok":true,"checks":[{"name":"keeper_whoami","status":"pass"}]}';;
   *"cli ps"*) echo '{"runs":[]}';;

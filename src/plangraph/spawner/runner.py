@@ -317,8 +317,8 @@ class SpawnerRunner:
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
-        # D-3505: harnesses take their project dir from an inherited $PWD over the
-        # process cwd; a caller's PWD put probe commits into the caller's worktree.
+        from .host_ready import cargo_child_env
+        child_env = cargo_child_env(child_env)
         child_env['PWD'] = _abspath(work_dir)
         if cmd[0] == 'claude':   # D-3605: subscription login only; D-3649: an allowlisted env, never a scrubbed copy
             child_env = claude_child_env(child_env)
@@ -497,6 +497,9 @@ class SpawnerRunner:
                     self._git_guards[job_id] = guard
                 from .opencode_isolation import record_baseline
                 await asyncio.to_thread(record_baseline, job, work_dir, list(self.jobs.values()))   # D-3236
+            from .host_ready import cargo_lease
+            self._cargo_leases = getattr(self, '_cargo_leases', {})
+            self._cargo_leases[job_id] = await asyncio.to_thread(cargo_lease)
             try:
                 proc = await self.process_factory(
                     resolved_exe,
@@ -565,8 +568,9 @@ class SpawnerRunner:
 
             return self.jobs[job_id]
         finally:
-            # A running monitor owns the environment until output is scrubbed.
             if job_id not in self._tasks:
+                lease = getattr(self, '_cargo_leases', {}).pop(job_id, None)
+                if lease is not None: lease.close()
                 self._child_envs.pop(job_id, None)
                 self._git_guards.pop(job_id, None)
                 self._stdin_payloads.pop(job_id, None)
@@ -701,7 +705,6 @@ class SpawnerRunner:
                 denied = _opencode_tools_denied(
                     env.get('OPENCODE_CONFIG_CONTENT') or '', env)
                 # R2: the store read may block up to its 2s sqlite timeout on a
-                # locked db; a thread keeps the monitor loop responsive.
                 m = (await asyncio.to_thread(_opencode_served_model,
                                              Path(oc_dir) / 'opencode' / 'opencode.db',
                                              f'plangraph-{job_id}')
@@ -711,7 +714,6 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-opencode-store'
                 elif oc_dir and denied:
                     job.events.append({'event': 'opencode_witness_unavailable'})
-            # The trusted response-side log is independent of child tool permissions.
             if is_opencode(job):
                 from .gateway_witness import witness
                 await asyncio.to_thread(witness, self, job_id, job, env)
@@ -726,12 +728,10 @@ class SpawnerRunner:
                 if m is not None and m == requested_model:
                     job.request_side_model = m
                     job.witness_kind = 'request-side-claude-stream'
-                # D-3649: the review text (VERDICT line) is the stream's final result, not the raw stream.
                 await asyncio.to_thread(render_review_output, job, stdout_text,
                                         lambda text: redact_output(env_redact.redact_env_values(text, env)))
 
             await witness_native(self, job_id, job, stdout_text, requested_model)
-            # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
             job.served_model = job.served_model or 'unwitnessed'
             job.served_family = job.served_family or 'unwitnessed'
         except asyncio.CancelledError:
@@ -751,6 +751,9 @@ class SpawnerRunner:
                 await self._reap_process(job_id, proc)
             except Exception:
                 pass
+            if not getattr(job, 'survivors', ()):
+                lease = getattr(self, '_cargo_leases', {}).pop(job_id, None)
+                if lease is not None: lease.close()
             self._check_git_config_guard(job_id)
             self._git_guards.pop(job_id, None)
             self._stdin_payloads.pop(job_id, None)
@@ -796,7 +799,6 @@ class SpawnerRunner:
         if job_id not in self.jobs:
             return {'ok': False, 'steered': False, 'error': 'unknown job'}
         job = self.jobs[job_id]
-        # Audit attempted instructions; success is reported separately.
         message = redact(message)
         job.steer_messages.append(message)
 
@@ -961,7 +963,6 @@ def spawn_service(*args, **kwargs):
             if rounds_exhausted(self, card, role):
                 from plangraph.routing_errors import SpawnRefused
                 raise SpawnRefused('question_rounds_exhausted')
-            # Let the base service handle audited overrides, which never fall through.
             if seats or model is not None or leg is not None or not card:
                 return await super()._spawn(
                     card=card, prompt=prompt, role=role, writer_families=writer_families,
@@ -972,7 +973,6 @@ def spawn_service(*args, **kwargs):
                 )
             from plangraph.settings import admit_review_scope
             admit_review_scope(card, role, review_scope)
-            # A seat run (_plan from _spawn_seats) keeps to its own legs on re-route.
             def restrict(p, tried):
                 from .seat_artifact import restrict_seat_plan
                 return p if _plan is None else restrict_seat_plan(p, _plan, tried)

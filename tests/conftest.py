@@ -356,9 +356,7 @@ def pytest_ignore_collect(collection_path, config):
             if "sqlite3" in text and "test_keeper_pg_" not in collection_path.name:
                 return True
     return None
-
 from _split_ci_environment import shard_items, shard_selector
-
 def pytest_collection_modifyitems(config, items):
     if os.environ.get('PYTEST_SHARD'):
         selected = shard_items(items, os.environ['PYTEST_SHARD'])
@@ -379,7 +377,6 @@ def pytest_collection_modifyitems(config, items):
     if dropped:
         config.hook.pytest_deselected(items=dropped)
         items[:] = kept
-
 @pytest.fixture
 def fake_ownership(monkeypatch):
     """r3 V3: stub pids are "ours" (fixed token) and invisible in /proc, so no test depends on which
@@ -388,12 +385,15 @@ def fake_ownership(monkeypatch):
     from plangraph.spawner import proc_kill
     from plangraph.spawner.runner import SpawnerRunner
     real_stat, real_identity = proc_kill._stat, proc_kill.root_identity
-
     born = real_stat(os.getpid())[4]   # only processes started after this test session exist for the stubbed view
     monkeypatch.setattr(proc_kill, '_stat', lambda pid, root='/proc': (lambda st: st if st and st[4] >= born else None)(real_stat(pid, root)))
     monkeypatch.setattr(SpawnerRunner, 'identity_provider', staticmethod(lambda pid, **k: real_identity(pid, **k) or 'fake-token'))
-
 def pytest_sessionfinish(session, exitstatus):
     # An affected selection can legitimately assign no items to this shard.
     if exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and os.environ.get('PYTEST_SHARD'):
         session.exitstatus = pytest.ExitCode.OK
+@pytest.fixture(autouse=True)
+def isolated_build_cache(tmp_path, monkeypatch):
+    """Spawner tests use their own cache and do not depend on host disk space."""
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'cargo-target'))
+    monkeypatch.setenv('PLANGRAPH_DISK_FLOOR_GB', '0')

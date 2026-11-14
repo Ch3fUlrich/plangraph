@@ -130,6 +130,12 @@ def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
                 reason = 'failed readiness'
             elif row.get('fresh') is not True:
                 reason = 'stale readiness'
+            elif row.get('disk_free_gb') is not None and any(
+                    type(value) not in (int, float) or not 0 <= value < float('inf')
+                    for value in (row['disk_free_gb'], row.get('disk_floor_gb', 30))):
+                reason = 'malformed readiness'
+            elif row.get('disk_free_gb') is not None and row['disk_free_gb'] < row.get('disk_floor_gb', 30):
+                reason = f"disk_low: free {row['disk_free_gb']} GB"
             elif any(type(row.get(key)) is not int or row[key] < 0
                      for key in ('live_runs', 'mem_available_mb')):
                 reason = 'malformed readiness'
@@ -166,7 +172,7 @@ def ready_records(config, role='implement'):
             age = (datetime.now(timezone.utc) - stamp).total_seconds()
             if data['host'] != name:
                 raise ValueError('host mismatch')
-            row.update({key: data.get(key) for key in ('ok', 'live_runs', 'mem_available_mb')})
+            row.update({key: data.get(key) for key in ('ok', 'live_runs', 'mem_available_mb', 'disk_free_gb')})
             row['fresh'] = 0 <= age <= 600
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             row['refusal'] = 'missing or malformed readiness'
@@ -339,7 +345,9 @@ def main(argv=None):
                              Path(args.prompt).read_text(), *options])
         role_mb, floor_mb = local_limits(registry_caps(), args.role)
         _, memory = local_resources()
-        if decide(memory, role_mb, floor_mb, {}, False).reason == 'local room':
+        from .host_ready import local_disk_refusal
+        disk = local_disk_refusal(args.repo, cli.SpawnService())
+        if decide(memory, role_mb, floor_mb, {}, False, local_refusal=disk).reason == 'local room':
             return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
         card = json.loads(Path(args.card).read_text())
         from .prompt_input import resolve_cwd
@@ -353,7 +361,7 @@ def main(argv=None):
         records = ready_records(config, args.role)
         attempts = 0
         while True:
-            decision = decide(memory, role_mb, floor_mb, records, public)
+            decision = decide(memory, role_mb, floor_mb, records, public, local_refusal=disk)
             if decision.host is None:
                 print(json.dumps({'overflow_reason': decision.reason}))
                 return 5

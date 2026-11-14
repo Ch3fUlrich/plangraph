@@ -15,14 +15,12 @@ from pathlib import Path
 
 from .seat_artifact import reserve_seat_families, seat_reasons, sync_seat, sync_seat_group
 
-
 def resources(service):
     from .overflow import available_memory_mb
     return 0, available_memory_mb()
 
-
 def admit(service, options, *, card=None, preview=False):
-    """Enforce RAM admission even without an overflow configuration."""
+    """Enforce disk and RAM admission even without overflow configuration."""
     if options.get('dry_run'):
         return None
     from . import overflow
@@ -41,11 +39,13 @@ def admit(service, options, *, card=None, preview=False):
         return None
     role_mb, floor = overflow.local_limits(registry, role)
     _, memory = resources(service)
-    if not remote_first and not overflow.memory_refusal(memory, role_mb, floor):
-        return None
     repo = Path(options.get('cwd') or (card or {}).get('cwd') or
                 ((card or {}).get('diff_ref') or {}).get('repo') or
                 getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
+    from .host_ready import local_disk_refusal
+    disk = local_disk_refusal(repo, service)
+    if not remote_first and not disk and not overflow.memory_refusal(memory, role_mb, floor):
+        return None
     public = overflow.repos_public(config, repo, (card or {}).get('diff_ref'))
     benchmark_local = remote_first and options.get('benchmark') is not None
     if benchmark_local:
@@ -54,7 +54,7 @@ def admit(service, options, *, card=None, preview=False):
     if remote_first:
         rows = {name: row for name, row in rows.items()
                 if name != local and overflow.host_config(registry, name).get('id') != local}
-    health = overflow.local_health_refusal(config, memory) if remote_first else None
+    health = disk or (overflow.local_health_refusal(config, memory) if remote_first else None)
     flags = []
     for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope'):
         if options.get(key) is not None:
@@ -133,7 +133,6 @@ def _refuse_oversized_diff(exc, leg):
         raise PromptBoundError(
             f'prompt_too_large: inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
             f'max_request_tokens {leg.max_request_tokens}') from None
-
 
 class SeatSpawnMixin:
 
