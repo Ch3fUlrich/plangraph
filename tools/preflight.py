@@ -170,9 +170,12 @@ def rust_commands(root, base, head, env=None):
             # This experiment's CI contract is replay only (tests.yml rust-spike).
             commands.append(["cargo", "test", *target, "--test", "replay"])
         else:
+            # Worker integration tests require a real Temporal server/CLI. CI
+            # supplies those through ci-temporal; local checks stay offline.
+            tests = ["--lib", "--bins"] if owner == 'rust/worker' else []
             commands += [["cargo", "fmt", *target, "--check"],
                          ["cargo", "clippy", *target, "--all-targets", "--", "-D", "warnings"],
-                         ["cargo", "test", *target]]
+                         ["cargo", "test", *target, *tests]]
     return commands
 
 

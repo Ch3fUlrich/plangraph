@@ -396,7 +396,7 @@ def test_worker_test_environment_defaults_are_scoped(repo, monkeypatch, configur
     target = ['--manifest-path', str(repo / 'rust/worker/Cargo.toml')]
     commands = [['cargo', 'fmt', *target, '--check'],
                 ['cargo', 'clippy', *target, '--all-targets', '--', '-D', 'warnings'],
-                ['cargo', 'test', *target], ['cargo', 'test', '-p', 'pg-worker-core'],
+                ['cargo', 'test', *target, '--lib', '--bins'], ['cargo', 'test', '-p', 'pg-worker-core'],
                 ['cargo', 'test', '--manifest-path',
                  str(repo / 'rust/spikes/temporal-spike/Cargo.toml'), '--test', 'replay']]
     calls = fake_runner(monkeypatch)

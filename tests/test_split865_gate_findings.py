@@ -63,7 +63,7 @@ def standalone_checks(manifest):
     target = ['--manifest-path', str(manifest)]
     return [['cargo', 'fmt', *target, '--check'],
             ['cargo', 'clippy', *target, '--all-targets', '--', '-D', 'warnings'],
-            ['cargo', 'test', *target]]
+            ['cargo', 'test', *target, '--lib', '--bins']]
 
 
 def test_standalone_crate_is_checked(rust_selection):

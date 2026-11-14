@@ -375,3 +375,5 @@ Worker preflight tests default to the CI test-only unjailed environment when no 
 configuration is supplied; explicit jail settings are preserved and other check commands are unaffected.
 
 Rust test builds, including nested admission checks and Python placement fixtures, inherit `CARGO_TARGET_DIR`; keep the host shared target when it is configured.
+
+Local worker preflight runs library and binary unit tests offline. CI runs the full worker suite, including Temporal-dependent integrations, through `ci-temporal`.

@@ -26,7 +26,7 @@ def rules_binary(tmp_path_factory):
     cargo = shutil.which('cargo')
     if cargo is None:
         pytest.fail('cargo is required to build the real pg-placement-rules helper')
-    target = Path(os.environ.get('CARGO_TARGET_DIR', root / 'rust/target'))
+    target = Path(os.environ.get('CARGO_TARGET_DIR') or root / 'rust/target')
     binary = (root / 'rust' / target / 'debug/pg-placement-rules').resolve()
     shared = tmp_path_factory.getbasetemp()
     if shared.name.startswith('popen-gw'):

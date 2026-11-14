@@ -6,3 +6,5 @@ Preflight distinguishes standalone workspace ownership, follows path dependents 
 Worker cargo test subprocesses also receive CI-compatible test-only jail defaults without changing caller settings or other check environments.
 
 Refresh validation respects the shared Cargo target in placement fixtures and nested admission checks; live scope tests accept an empty isolated HOME.
+
+Worker preflight selects offline library and binary tests; the complete Temporal integration suite remains in CI with its isolated server wrapper.
