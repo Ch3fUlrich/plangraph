@@ -66,14 +66,16 @@ class SpawnerRecordAdapter:
             if (not family or model == "unwitnessed" or pinned or record.get("override_reason")
                     or record.get("status") != "completed"
                     or type(record.get("exit_code")) is not int or record["exit_code"] != 0
-                    or not isinstance(completion, dict) or completion.get("head_sha") != head
+                    or not isinstance(completion, dict)
+                    or completion.get("head_sha") not in ([head] if isinstance(head, str) else head)
                     or finish not in ("stop", "end_turn")
                     or not isinstance(attempts, list) or len(attempts) != 1
                     or not isinstance(text, str) or parse_verdict(text) != "pass"
                     or not re.search(r"(?im)^TEST[_-]GAMING:\s*no\s*$", text)
                     or record.get("served_family", family) != family):
                 raise ValueError(f"{run_id}: review is not a passing witnessed seat")
-            seats.append({"model": model, "verdict": "pass", "run_id": run_id})
+            seats.append({"model": model, "verdict": "pass", "run_id": run_id,
+                          "head": completion["head_sha"]})
         if not seats:
             raise ValueError("no cited review witnesses")
         return seats

@@ -102,11 +102,12 @@ def _split(key):
     return (project or None), bare
 
 
-def plan_item_commits(git, project, key, *, fetch=True):
+def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
     """Commits on the default ref with a ``Plan-Item: <key>`` trailer, newest first.
 
     Returns ``None`` when unknown (no repo, malformed key, git failure), else a
-    list of ``{sha, date, subject}`` (at most :data:`COMMIT_LIMIT`); the newest
+    list of ``{sha, date, subject}`` (at most *limit*, default :data:`COMMIT_LIMIT`);
+    ``limit=None`` reads the complete matching history and annotates every merge. The newest
     carries ``merge`` = ``{sha, subject, pr}`` when a merge on the ref's
     first-parent chain brought it in.  git itself selects only messages with
     a ``Plan-Item:`` line equal to the full key or the bare id (anchored
@@ -126,7 +127,7 @@ def plan_item_commits(git, project, key, *, fetch=True):
     out = _ok(git, repo, [
         "log", "--no-show-signature", "-E", "--grep",
         f"^Plan-Item:[[:space:]]*{prefix}{_ere(bare)}[[:space:]]*$",
-        "-n", str(_GREP_WINDOW),
+        *(["-n", str(_GREP_WINDOW)] if limit is not None else []),
         "--format=%H%x1f%cI%x1f%s%x1f%(trailers:key=Plan-Item,valueonly,separator=%x1e)%x1d",
         "--end-of-options", ref])
     if out is None:
@@ -141,14 +142,14 @@ def plan_item_commits(git, project, key, *, fetch=True):
         names = {value.strip() for value in trailers.split("\x1e") if value.strip()}
         if (key in names or bare in names) and valid_commit_ref(sha.strip()):
             commits.append({"sha": sha.strip(), "date": date, "subject": subject})
-        if len(commits) >= COMMIT_LIMIT:
+        if limit is not None and len(commits) >= limit:
             break
-    if not commits and seen >= _GREP_WINDOW:
+    if limit is not None and not commits and seen >= _GREP_WINDOW:
         return None              # window full of near misses: not proven absent
-    if commits:
-        merge = _merge_of(git, repo, ref, commits[0]["sha"])
+    for commit in (commits[:1] if limit is not None else commits):
+        merge = _merge_of(git, repo, ref, commit["sha"])
         if merge:
-            commits[0]["merge"] = merge
+            commit["merge"] = merge
     return commits
 
 

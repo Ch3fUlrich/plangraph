@@ -1,9 +1,90 @@
 """Fail-closed and concurrency contracts for the router-only merged close."""
 from types import SimpleNamespace
 import pytest
+from plangraph.keeper.errors import Refused
 
 from test_keeper_close_merged import (HEAD, KEY, MERGE, _at_write_lock, _close,
                                       _counts, _refused, doors, unseated_w, w)
+
+
+@pytest.mark.parametrize("state", ["open", "claimed"])
+def test_active_merged_close_is_dry_run_until_applied(w, monkeypatch, state):
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    # Fold and SQL both see the fixture's historical active state.
+    w.conn.execute("UPDATE items SET state=? WHERE key=?", (state, KEY))
+    before = _counts(w)
+    result = w.store.close_merged(w.p("router"), KEY, "D-5504", ["google"], from_open=True)
+    assert result["state"] == state and result["would_close"] is True
+    assert _counts(w) == (before[0], before[1], before[2] + 1)
+    result = w.store.close_merged(w.p("router"), KEY, "D-5504", ["google"],
+                                  from_open=True, apply=True)
+    assert result["state"] == "done"
+    assert w.store._evidence(KEY)[-1]["ref"]["prs"] == [
+        {"pr": 1, "head": HEAD, "decision_id": "D-5504"}]
+    assert w.store.verify_integrity() == []
+
+
+def test_active_merged_without_go_refuses(w, monkeypatch):
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    w.conn.execute("UPDATE items SET state='open' WHERE key=?", (KEY,))
+    w.decision_path.write_text(f"| D-5504 | demo | HOLD {HEAD} |\n")
+    with pytest.raises(Refused, match="go_row_not_go"):
+        w.store.close_merged(w.p("router"), KEY, "D-5504", ["google"], from_open=True, apply=True)
+    assert w.store._item(KEY)["state"] == "open"
+
+
+def test_active_close_cli_tsv_reports_proposal_and_refusal(w, doors, monkeypatch):
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    w.conn.execute("UPDATE items SET state='open' WHERE key=?", (KEY,))
+    args = ("close-merged", KEY, "D-5504", "--from-open", "--family", "google")
+    code, out, err = doors.pg("router", *args)
+    assert code == 0, err
+    assert "key\tclass\treason" in out and f"{KEY}\tWOULD-CLOSE\t" in out
+    code, out, err = doors.pg("workerA", *args, "--apply")
+    assert code == 2 and "forbidden" in out
+    w.decision_path.write_text(f"| D-5504 | demo | HOLD {HEAD} |\n")
+    code, out, err = doors.pg("router", *args)
+    assert code == 2 and "go_row_not_go" in out
+
+
+@pytest.mark.parametrize("lanes", [None, [{"branch": "lane/pending"}]])
+def test_active_close_refuses_unknown_or_unmerged_lanes(w, monkeypatch, lanes):
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: lanes)
+    w.conn.execute("UPDATE items SET state='open' WHERE key=?", (KEY,))
+    with pytest.raises(Refused, match="unmerged_work_or_lanes_unknown"):
+        w.store.close_merged(w.p("router"), KEY, "D-5504", ["google"], from_open=True, apply=True)
+    assert w.store._item(KEY)["state"] == "open"
+
+
+@pytest.mark.parametrize("second_go", [True, False])
+def test_active_close_requires_go_for_every_merged_pr(w, monkeypatch, second_go):
+    from test_keeper_close_merged import MergedGit
+    other = "b" * 40
+
+    class Git(MergedGit):
+        def merge_commit_of(self, repo, sha, ref):
+            return (MERGE if sha == HEAD else "3" * 40, "fixture@example.invalid")
+
+        def _run(self, repo, args):
+            return SimpleNamespace(returncode=0, stdout=f"{'2' * 40} " +
+                                   (HEAD if args[-1] == MERGE else other))
+
+    w.store.ctx["git"] = Git()
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", lambda *a, **kw: [
+        {"sha": HEAD, "merge": {"pr": 1}}, {"sha": other, "merge": {"pr": 2}}])
+    w.conn.execute("UPDATE items SET state='open' WHERE key=?", (KEY,))
+    if second_go:
+        with w.decision_path.open("a") as handle:
+            handle.write(f"| D-5505 | demo | GO {other} |\n")
+        assert w.store.close_merged(w.p("router"), KEY, "D-5504", ["google"],
+                                    from_open=True, apply=True)["state"] == "done"
+        assert len(w.store._evidence(KEY)[-1]["ref"]["prs"]) == 2
+    else:
+        with pytest.raises(Refused, match="merged_pr_go_missing"):
+            w.store.close_merged(w.p("router"), KEY, "D-5504", ["google"],
+                                 from_open=True, apply=True)
+        assert w.store._item(KEY)["state"] == "open"
 
 
 def test_unknown_key_refuses(w):

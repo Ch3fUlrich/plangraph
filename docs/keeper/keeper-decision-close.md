@@ -113,3 +113,13 @@ Implementation records supply no seats. Missing, ambiguous, invalid or
 unwitnessed records refuse `NO-WITNESS <key>` without changing state or events.
 The close rechecks witnesses under its transaction and records the recovered
 run bundle and each family verdict before passing the item atomically.
+
+`pg close-merged KEY D-NNNN --from-open [--family FAMILY]` checks an open or
+claimed item without changing it and emits `key`, `class`, `reason` TSV.
+Use `--apply` to close after the same checks. This router-only path scans the
+complete default-ref Plan-Item history, requires every introducing PR to have
+a head-bound GO, and refuses unmerged lanes or unavailable lane information.
+It uses the same seat rules (including cited-run recovery when families are
+omitted), records all PR numbers, heads and GO decisions in evidence, and
+atomically submits then passes the item. It does not require a new claim.
+HTTP `/v1/close_merged` accepts boolean `from_open` and `apply` for this path.

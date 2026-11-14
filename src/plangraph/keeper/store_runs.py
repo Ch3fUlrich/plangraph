@@ -98,8 +98,54 @@ def normalise_run(run) -> dict:
 class RunsMixin:
     """The spawner-only ``record_run`` verb."""
 
+    def _merged_open_prs(self, item, decision_id, head, now):
+        try:
+            return self._merged_open_prs_checked(item, decision_id, head, now)
+        except Refused:
+            raise
+        except Exception:
+            raise Refused("evidence_unverified", "merged_pr_proof_unavailable") from None
+
+    def _merged_open_prs_checked(self, item, decision_id, head, now):
+        from . import context_sources
+        from .evidence_types import valid_commit_ref
+        git = self._adapter("git")
+        if context_sources.open_lanes(git, item["project"], item["key"]) != []:
+            raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
+        commits = context_sources.plan_item_commits(
+            git, item["project"], item["key"], fetch=False, limit=None)
+        proofs = {}
+        for commit in commits or ():
+            merge = commit.get("merge") or {}
+            if type(merge.get("pr")) is not int or merge["pr"] <= 0:
+                raise Refused("evidence_unverified", "merged_pr_missing")
+            merged = git.merge_commit_of(git.repo_path(item["project"]), commit["sha"],
+                                         git.repo_ref(item["project"]))
+            proc = git._run(git.repo_path(item["project"]),
+                            ["show", "-s", "--format=%P", "--end-of-options", merged[0]]) if merged else None
+            parents = proc.stdout.strip().split() if proc and proc.returncode == 0 else []
+            if len(parents) != 2 or not all(valid_commit_ref(p) for p in parents):
+                raise Refused("evidence_unverified", "merged_pr_head_missing")
+            proofs[parents[1]] = {"pr": merge["pr"], "head": parents[1]}
+        if not proofs or head not in proofs:
+            raise Refused("evidence_unverified", "merged_pr_missing")
+        proofs[head]["decision_id"] = decision_id
+        for did in sorted(self._ctx(item, now).decisions.decisions()):
+            if all("decision_id" in p for p in proofs.values()):
+                break
+            try:
+                other_head, _ = self._merged_go_proof(item, did, now, all_work=True)
+            except Refused:
+                continue
+            if other_head in proofs:
+                proofs[other_head].setdefault("decision_id", did)
+        if any("decision_id" not in p for p in proofs.values()):
+            raise Refused("evidence_unverified", "merged_pr_go_missing")
+        return sorted(proofs.values(), key=lambda p: (p["pr"], p["head"]))
+
     def _record_merged_seats(self, principal, item, decision_id, seats, now):
         """Mirror a verified historical seat bundle while holding the close lock."""
+        seats = [{k: s[k] for k in ("model", "verdict", "run_id")} for s in seats]
         run_id = f"merged-{decision_id}"
         self._append(principal, item["key"], "run_recorded", {
             "run_id": run_id, "phase": "finished", "rc": 0, "seats": seats}, now)
