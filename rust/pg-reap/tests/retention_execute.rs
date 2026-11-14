@@ -1,5 +1,5 @@
 #![cfg(target_os = "linux")]
-use std::{fs, io::Write, path::Path, process::Command};
+use std::{fs, path::Path, process::Command};
 fn command(root: &Path, name: &str) -> Command {
     let mut c = Command::new(name);
     c.env_clear()
@@ -71,25 +71,10 @@ fn executes_outcomes_and_backs_up_dirty_attempts() {
             fs::write(path.join("untracked"), "precious").unwrap();
         }
         let request = serde_json::json!({"repo":repo,"root":host,"path":path,"branch":"lane/test","outcome":outcome,"age_seconds":age,"open_pr":protected,"live_claim":false});
-        let mut child = command(root, env!("CARGO_BIN_EXE_pg-reap"))
-            .arg("finish-attempt")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(&serde_json::to_vec(&request).unwrap())
-            .unwrap();
-        let output = child.wait_with_output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let proc_root = root.join("proc-fixture");
+        fs::create_dir(&proc_root).unwrap();
+        let typed_request = serde_json::from_value(request.clone()).unwrap();
+        pg_reap::retention::execute_with_procfs(&typed_request, &proc_root).unwrap();
         assert_eq!(!path.exists(), removed);
         if dirty && removed {
             let backup = host.join("backups/attempt-test");
@@ -107,18 +92,8 @@ fn executes_outcomes_and_backs_up_dirty_attempts() {
             assert!(!git(root, &repo, &["rev-parse", "refs/heads/lane/test"]).is_empty());
             let mut later = request.clone();
             later["age_seconds"] = serde_json::json!(14 * 86400);
-            let mut child = command(root, env!("CARGO_BIN_EXE_pg-reap"))
-                .arg("finish-attempt")
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-                .unwrap();
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(&serde_json::to_vec(&later).unwrap())
-                .unwrap();
-            assert!(child.wait().unwrap().success());
+            let typed_request = serde_json::from_value(later).unwrap();
+            pg_reap::retention::execute_with_procfs(&typed_request, &proc_root).unwrap();
             assert!(!command(root, "git")
                 .arg("-C")
                 .arg(&repo)
@@ -182,7 +157,7 @@ fn attempt(
 
 #[test]
 fn expired_unpushed_commit_is_refused_but_pushed_tip_can_be_deleted() {
-    use pg_reap::retention::{execute, Action, Outcome};
+    use pg_reap::retention::{execute, execute_with_procfs, Action, Outcome};
     for outcome in [Outcome::Failed, Outcome::Cancelled] {
         let (temp, req) = attempt(outcome);
         git(
@@ -199,7 +174,10 @@ fn expired_unpushed_commit_is_refused_but_pushed_tip_can_be_deleted() {
             tip
         );
         git(temp.path(), &req.repo, &["push", "origin", "lane/review"]);
-        assert_eq!(execute(&req).unwrap(), Action::RemoveAndDeleteBranch);
+        assert_eq!(
+            execute_with_procfs(&req, &empty_proc(temp.path())).unwrap(),
+            Action::RemoveAndDeleteBranch
+        );
         assert!(!req.path.exists());
         assert_eq!(
             git(
@@ -236,7 +214,7 @@ fn live_child_in_nested_cwd_refuses_terminal_cleanup() {
 
 #[test]
 fn branch_only_expiry_still_requires_a_published_tip() {
-    use pg_reap::retention::{execute, Action, Outcome};
+    use pg_reap::retention::{execute, execute_with_procfs, Action, Outcome};
     let (temp, mut req) = attempt(Outcome::Failed);
     git(
         temp.path(),
@@ -245,14 +223,40 @@ fn branch_only_expiry_still_requires_a_published_tip() {
     );
     let tip = git(temp.path(), &req.repo, &["rev-parse", "lane/review"]);
     req.age_seconds = 1;
-    assert_eq!(execute(&req).unwrap(), Action::RemoveAndKeepBranch);
+    assert_eq!(
+        execute_with_procfs(&req, &empty_proc(temp.path())).unwrap(),
+        Action::RemoveAndKeepBranch
+    );
     assert!(!req.path.exists());
     req.age_seconds = 14 * 86400;
-    assert!(execute(&req).unwrap_err().to_string().contains("unpushed"));
+    let error = execute(&req).unwrap_err();
+    assert!(error.to_string().contains("unpushed"), "{error:?}");
     assert_eq!(
         git(temp.path(), &req.repo, &["rev-parse", "lane/review"]),
         tip
     );
     git(temp.path(), &req.repo, &["push", "origin", "lane/review"]);
-    assert_eq!(execute(&req).unwrap(), Action::RemoveAndDeleteBranch);
+    assert_eq!(
+        execute_with_procfs(&req, &empty_proc(temp.path())).unwrap(),
+        Action::RemoveAndDeleteBranch
+    );
+}
+
+fn empty_proc(root: &Path) -> std::path::PathBuf {
+    let proc_root = root.join("empty-proc");
+    fs::create_dir_all(&proc_root).unwrap();
+    proc_root
+}
+
+#[test]
+fn incomplete_process_inventory_refuses_removal() {
+    use pg_reap::retention::{execute_with_procfs, Outcome};
+    let (temp, request) = attempt(Outcome::Merged);
+    assert!(execute_with_procfs(&request, &temp.path().join("missing-procfs")).is_err());
+    assert!(request.path.exists());
+    let proc_root = empty_proc(temp.path());
+    fs::create_dir(proc_root.join("123")).unwrap();
+    fs::write(proc_root.join("123/stat"), "malformed process identity").unwrap();
+    assert!(execute_with_procfs(&request, &proc_root).is_err());
+    assert!(request.path.exists());
 }

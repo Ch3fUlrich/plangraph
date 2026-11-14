@@ -18,6 +18,7 @@ fn identity(path: &Path) -> io::Result<Option<u64>> {
     Ok(Some(start))
 }
 pub fn tree_in_use(proc_root: &Path, tree: &Path) -> io::Result<bool> {
+    let mut unreadable = false;
     for entry in fs::read_dir(proc_root)? {
         let entry = entry?;
         if !entry
@@ -40,14 +41,16 @@ pub fn tree_in_use(proc_root: &Path, tree: &Path) -> io::Result<bool> {
         match sample() {
             Ok(true) => return Ok(true),
             Ok(false) => {}
-            // Processes outside this worker's procfs visibility cannot be inspected.
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
-                ) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => unreadable = true,
             Err(e) => return Err(e),
         }
+    }
+    if unreadable {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "process_visibility_incomplete",
+        ));
     }
     Ok(false)
 }

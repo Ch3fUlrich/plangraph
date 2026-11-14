@@ -55,6 +55,16 @@ pub struct Request {
 
 #[cfg(target_os = "linux")]
 pub fn execute(request: &Request) -> std::io::Result<Action> {
+    execute_with_procfs(request, std::path::Path::new("/proc"))
+}
+
+/// Alternate procfs roots support isolated process namespaces and test fixtures.
+/// The command-line executor always uses the real /proc; requests cannot override it.
+#[cfg(target_os = "linux")]
+pub fn execute_with_procfs(
+    request: &Request,
+    proc_root: &std::path::Path,
+) -> std::io::Result<Action> {
     use std::{fs, io, os::fd::AsRawFd, process::Command};
     let refuse = || io::Error::other("worktree_cleanup_refused");
     let root = request.root.canonicalize()?;
@@ -168,10 +178,25 @@ pub fn execute(request: &Request) -> std::io::Result<Action> {
         request.live_claim,
         dirty,
     );
-    if action != Action::Retain
-        && exists
-        && crate::process_use::tree_in_use(std::path::Path::new("/proc"), &path)?
+    if decide(
+        request.outcome,
+        request.age_seconds,
+        request.open_pr,
+        request.live_claim,
+        false,
+    ) == Action::RemoveAndDeleteBranch
     {
+        let remote = git(&[
+            "for-each-ref",
+            "--format=%(refname)",
+            &format!("--contains={head}"),
+            "refs/remotes/",
+        ])?;
+        if remote.iter().all(u8::is_ascii_whitespace) {
+            return Err(io::Error::other("worktree_unpushed_commits"));
+        }
+    }
+    if action != Action::Retain && exists && crate::process_use::tree_in_use(proc_root, &path)? {
         return Err(io::Error::other("worktree_in_use_by_process"));
     }
     match action {
@@ -217,17 +242,6 @@ pub fn execute(request: &Request) -> std::io::Result<Action> {
         request.live_claim,
         false,
     );
-    if action == Action::RemoveAndDeleteBranch {
-        let remote = git(&[
-            "for-each-ref",
-            "--format=%(refname)",
-            &format!("--contains={head}"),
-            "refs/remotes/",
-        ])?;
-        if remote.iter().all(u8::is_ascii_whitespace) {
-            return Err(io::Error::other("worktree_unpushed_commits"));
-        }
-    }
     if action == Action::PushAndRetain {
         git(&["push", "origin", &format!("{branch_ref}:{branch_ref}")])?;
     }
@@ -237,7 +251,7 @@ pub fn execute(request: &Request) -> std::io::Result<Action> {
         return Err(refuse());
     }
     if exists {
-        if crate::process_use::tree_in_use(std::path::Path::new("/proc"), &path)? {
+        if crate::process_use::tree_in_use(proc_root, &path)? {
             return Err(io::Error::other("worktree_in_use_by_process"));
         }
         git(&["worktree", "remove", "--force", path_text])?;

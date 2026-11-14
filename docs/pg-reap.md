@@ -67,8 +67,9 @@ the branch, including when its worktree was already removed. Backup archives
 are not substitutes for this commit-history witness.
 Terminal outcomes do not prove idleness: immediately before backup and again
 before removal, Linux procfs scans compare process start tokens around cwd reads
-and protect processes anywhere inside the tree. The scan covers procfs-visible
-processes; the worker must have permission to inspect every writer process.
+and protect processes anywhere inside the tree. An unreadable process inventory
+refuses cleanup; the worker must have permission to inspect all live processes. The CLI always scans real `/proc`;
+isolated namespace/procfs fixtures are available to library tests.
 
 The orphan executor has a real-child pidfd regression: a living parent and a
 wrong start token both refuse signals; the matching orphan is killed and its
