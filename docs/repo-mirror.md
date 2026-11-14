@@ -3,6 +3,7 @@
 Keeper ready/claim repository indexing is documented in [Repository truth](keeper/repository-truth.md).
 The offline [merged-work reconciler](keeper/reconcile-merged.md) shares that index and reuses the router close verb.
 `pg-ctx lint` and cancellation disposition checks are described in [Keeper hygiene](keeper/hygiene.md).
+`pg-ctx backfill-plan` generates the [historical refusal-class plan](keeper/inreview-class-plan.md) from complete exported evidence.
 
 `pg-ctx::mirror::Mirror::from_repos(config, root)` reads `repos.json` as a JSON
 object, e.g. `{"demo":"https://example.invalid/demo.git"}`. Names start with an
