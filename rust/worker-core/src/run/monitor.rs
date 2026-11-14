@@ -154,6 +154,9 @@ fn attempt(
         let mut last = Instant::now();
         let mut seq = 0;
         let (exit, was_cancelled) = loop {
+            if cancelled() {
+                break (None, true);
+            }
             if record.get("role").and_then(Value::as_str) == Some("review") {
                 if let Some(reason) = c.review_quota_reason() {
                     record.set("reason", json!(reason));
@@ -164,9 +167,6 @@ fn attempt(
                 Ok(Some(s)) => break (Some(s), false),
                 Err(_) => break (None, false),
                 _ => {}
-            }
-            if cancelled() {
-                break (None, true);
             }
             if last.elapsed() >= rt.cfg.save_every {
                 let next = c.snapshot().seq;
@@ -224,6 +224,9 @@ fn attempt(
         (1, false, stop)
     });
     let held = matches!(stop, StopOutcome::Survivors(_));
+    // Cancellation can arrive while stopping the group or draining readers.
+    let cancelled =
+        cancelled || cancel.load(Ordering::SeqCst) || record_dir_cancelled(&rt, &spec.run_id);
     let next = finalize::finish(
         record,
         &mut spec.finish,

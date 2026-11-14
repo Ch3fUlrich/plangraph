@@ -32,6 +32,7 @@ pub(crate) fn hook(args: Args, leg: Value, attempt: u32) -> FinishHook {
         runs::finish(record, status, &leg, attempt);
         if quota.is_none()
             || status == Status::Cancelled
+            || record.path().with_file_name("cancelled").exists()
             || record.get("survivors").is_some()
             || args.get("no_fallthrough") == Some(&json!(true))
             || status == Status::DryRun
@@ -60,15 +61,57 @@ fn next(
         return Ok(None);
     };
     let writers = args.get("writer_families").and_then(Value::as_array);
-    let next = legs.unwrap()[index + 1..].iter().find(|leg| {
-        !writers.is_some_and(|writers| writers.contains(&leg["family"]))
-            && !value["attempts"]
-                .as_array()
-                .is_some_and(|attempts| attempts.iter().any(|a| a["leg"]["id"] == leg["id"]))
-    });
-    let Some(leg) = next.cloned() else {
-        return Ok(None);
-    };
+    for leg in &legs.unwrap()[index + 1..] {
+        if writers.is_some_and(|writers| {
+            writers
+                .iter()
+                .any(|writer| family(writer) == family(&leg["family"]))
+        }) || record
+            .get("attempts")
+            .and_then(Value::as_array)
+            .is_some_and(|attempts| attempts.iter().any(|a| a["leg"]["id"] == leg["id"]))
+        {
+            continue;
+        }
+        if record.path().with_file_name("cancelled").exists() {
+            return Ok(None);
+        }
+        match prepare(record, &args, &leg) {
+            Ok(_) if record.path().with_file_name("cancelled").exists() => return Ok(None),
+            Ok((job_id, launch)) => {
+                return advance(record, args, previous, attempt, leg.clone(), job_id, launch)
+                    .map(Some)
+            }
+            Err(error) => {
+                let mut attempts = record.get("attempts").cloned().unwrap_or(json!([]));
+                attempts
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"leg":leg,"status":"skipped",
+                    "skip_reason":error.into_error_data().message}));
+                record.set("attempts", attempts);
+            }
+        }
+    }
+    Ok(None)
+}
+fn family(value: &Value) -> String {
+    let low = value.as_str().unwrap_or("").trim().to_ascii_lowercase();
+    match low.as_str() {
+        "gpt" | "codex" => "openai".into(),
+        "claude" => "anthropic".into(),
+        "mimo" => "xiaomi".into(),
+        "qwen" => "alibaba".into(),
+        "gemini" => "google".into(),
+        _ => low,
+    }
+}
+fn prepare(
+    record: &RunRecord,
+    args: &Args,
+    leg: &Value,
+) -> Result<(String, crate::launch::LaunchSpec), crate::errors::ToolError> {
+    let value = record.to_value();
     let state = record
         .path()
         .parent()
@@ -91,13 +134,42 @@ fn next(
         crate::prompt::configured_mode("review") == "on",
     )
     .map_err(|e| crate::errors::ToolError::Internal(e.to_string()))?;
+    Ok((job_id, launch))
+}
+fn advance(
+    record: &mut RunRecord,
+    args: Args,
+    previous: &Value,
+    attempt: u32,
+    leg: Value,
+    job_id: String,
+    mut launch: crate::launch::LaunchSpec,
+) -> Result<RunSpec, crate::errors::ToolError> {
+    let value = record.to_value();
+    let state = record
+        .path()
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .unwrap();
+    let run_id = value["run_id"].as_str().unwrap();
     let mut metadata = json!({});
     runs::store_prompt(state, run_id, &mut launch, &mut metadata, false)?;
+    let log = record.path().with_file_name("live.log");
+    let archive = record
+        .path()
+        .with_file_name(format!("live-attempt-{attempt}.log"));
+    if log.exists() {
+        std::fs::rename(&log, &archive).map_err(|_| {
+            crate::errors::ToolError::Internal("could not archive review attempt log".into())
+        })?;
+    }
     for (key, val) in metadata.as_object().unwrap() {
         record.set(key, val.clone());
     }
     let mut attempts = value["attempts"].as_array().unwrap().clone();
     attempts.push(json!({"leg":leg,"status":"running"}));
+    let next_attempt = attempts.len() as u32;
     record.set("attempts", json!(attempts));
     for key in [
         "reason",
@@ -128,7 +200,7 @@ fn next(
     record.save().map_err(|_| {
         crate::errors::ToolError::Internal("could not save review fallthrough".into())
     })?;
-    Ok(Some(RunSpec {
+    Ok(RunSpec {
         run_id: run_id.into(),
         job_id,
         program: launch.argv[0].clone().into(),
@@ -142,8 +214,8 @@ fn next(
         stdin: launch.stdin.map(String::into_bytes),
         base: Default::default(),
         events: vec![],
-        finish: Some(hook(args, leg, attempt + 1)),
-    }))
+        finish: Some(hook(args, leg, next_attempt)),
+    })
 }
 
 pub(crate) fn witness(record: &mut RunRecord, leg: &Value, attempt: u32) {

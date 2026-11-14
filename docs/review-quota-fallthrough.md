@@ -13,7 +13,10 @@ Python base and routed dispatch preserve their existing route eligibility and
 seat reservation rules. Native `pg-spawnd` advances quota attempts through its
 admitted route without creating another supervisor run or releasing its admission
 slot to a queued run; writer families remain excluded. Each attempt retains its
-output and refusal reason. The final
+output and refusal reason. Native completed-attempt logs are archived as
+`live-attempt-N.log` so `live.log` renders only the current substitute's review.
+Unavailable launch candidates are recorded as skipped, and family aliases stay
+excluded before the next candidate is prepared. The final
 `chosen_leg` and response-side `served_model` identify the substitute that served.
 Claude's system-init model metadata is used as a native witness; an agy request
 without response-side model metadata remains `unwitnessed`.

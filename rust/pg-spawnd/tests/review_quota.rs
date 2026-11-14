@@ -17,7 +17,7 @@ fn review_quota_falls_through_without_waiting_and_names_served_model() {
         let mut f = Fixture::new("exit 1", json!("review"), &[]);
         let first = json!({"id":"agy-hydrogen","harness":"agy","model":"gemini-4-hydrogen","family":"google"});
         let next = json!({"id":"sonnet","harness":"claude","model":"claude-sonnet-5-5","family":"anthropic"});
-        let plan = json!({"first_leg":first,"legs":[first,{"id":"writer","harness":"codex","model":"gpt-6.1-sol","family":"openai"},next],"skipped":[]});
+        let plan = json!({"first_leg":first,"legs":[first,{"id":"writer","harness":"codex","model":"gpt-6.1-sol","family":"gpt"},{"id":"unavailable","harness":"missing","model":"unavailable","family":"deepseek"},next],"skipped":[]});
         std::fs::write(
             f.state.path().join("route"),
             format!("#!/bin/sh\nprintf '%s' '{plan}'\n"),
@@ -25,8 +25,8 @@ fn review_quota_falls_through_without_waiting_and_names_served_model() {
         .unwrap();
         let quota = "RESOURCE_EXHAUSTED (code 429): Individual quota reached";
         let bad = json!({"argv":["/bin/sh","-c",format!("printf '%s' '{quota}' >&2; {ending}")],"cwd":f.state.path(),"env":{},"prompt":"review","stdin":"review","warnings":null,"events":null});
-        let good = json!({"argv":["/bin/sh","-c","printf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-sonnet-5-5\"}' '{\"type\":\"result\",\"is_error\":false,\"result\":\"VERDICT: ACCEPT\"}'"],"cwd":f.state.path(),"env":{},"prompt":"review","stdin":"review","warnings":null,"events":null});
-        std::fs::write(f.state.path().join("launch"), format!("#!/bin/sh\nrequest=$(cat)\ncase \"$request\" in *gemini-4-hydrogen*) printf '%s' '{bad}';; *) printf '%s' '{good}';; esac\n").replace(&format!("'{bad}'"), &shell_quote(&bad.to_string())).replace(&format!("'{good}'"), &shell_quote(&good.to_string()))).unwrap();
+        let good = json!({"argv":["/bin/sh","-c","printf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-sonnet-5-5\"}' '{\"type\":\"result\",\"is_error\":false,\"result\":\"VERDICT: PASS\"}'"],"cwd":f.state.path(),"env":{},"prompt":"review","stdin":"review","warnings":null,"events":null});
+        std::fs::write(f.state.path().join("launch"), format!("#!/bin/sh\nrequest=$(cat)\ncase \"$request\" in *gemini-4-hydrogen*) printf '%s' '{bad}';; *unavailable*) exit 1;; *) printf '%s' '{good}';; esac\n").replace(&format!("'{bad}'"), &shell_quote(&bad.to_string())).replace(&format!("'{good}'"), &shell_quote(&good.to_string()))).unwrap();
         let r = payload(f.call("spawn", json!({"prompt":"review","card":{"x":1},"role":"review","writer_families":["openai"],"wait_seconds":1.5,"no_fallthrough":no_fallthrough})));
         assert_eq!(
             r["status"],
@@ -43,7 +43,7 @@ fn review_quota_falls_through_without_waiting_and_names_served_model() {
             .contains(quota));
         assert_eq!(
             r["attempts"].as_array().unwrap().len(),
-            if no_fallthrough { 1 } else { 2 }
+            if no_fallthrough { 1 } else { 3 }
         );
         assert_eq!(
             std::fs::read_dir(f.state.path().join("runs"))
@@ -55,8 +55,21 @@ fn review_quota_falls_through_without_waiting_and_names_served_model() {
             assert_eq!(r["chosen_leg"], next);
             assert_eq!(r["served_model"], "claude-sonnet-5-5");
             assert_eq!(r["served_family"], "anthropic");
-            assert_eq!(r["attempts"][1]["served_model"], r["served_model"]);
+            assert_eq!(r["attempts"][1]["status"], "skipped");
+            assert!(r["attempts"][1]["skip_reason"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()));
+            assert_eq!(r["attempts"][2]["served_model"], r["served_model"]);
             assert!(r["reason"].is_null());
+            let seat = std::path::Path::new(r["seat_dir"].as_str().unwrap());
+            assert_eq!(
+                std::fs::read_to_string(seat.join("review.txt")).unwrap(),
+                "VERDICT: PASS"
+            );
+            let run = seat.parent().unwrap();
+            assert!(std::fs::read_to_string(run.join("live-attempt-1.log"))
+                .unwrap()
+                .contains(quota));
         }
     }
 }
@@ -144,7 +157,7 @@ with TemporaryDirectory() as tmp:
     adapter.record = lambda *_: record
     seats = adapter.review_seats(dict(key='project:item', run_ids='["run-quota"]'), head, '')
     assert len(seats) == 1 and seats[0]['model'] == final['served_model'], seats
-    for quota in ['quota reached', 'HTTP 429: slow down', 'Error: provider quota refusal',
+    for quota in ['quota reached', 'spinner\rRESOURCE_EXHAUSTED (code 429): Individual quota reached', 'HTTP 429: slow down', 'Error: provider quota refusal',
                   '{"autoos_provider_response":{"status":429}}']:
         record['attempts'][0]['stderr_tail'] = quota
         assert len(adapter.review_seats(dict(key='project:item', run_ids='["run-quota"]'), head, '')) == 1

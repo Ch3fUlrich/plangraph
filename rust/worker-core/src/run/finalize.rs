@@ -80,7 +80,7 @@ pub fn finish(
             code = 7;
         }
     }
-    let status = match stop {
+    let mut status = match stop {
         StopOutcome::Survivors(mut pids) => {
             pids.sort_unstable();
             if code == 0 {
@@ -127,7 +127,11 @@ pub fn finish(
     record.set("exit_code", json!(code));
     if let Some(h) = hook.take() {
         match catch_unwind(AssertUnwindSafe(|| h(record, status))) {
-            Ok(Some(next)) if !cancelled && record.get("survivors").is_none() => {
+            Ok(Some(next))
+                if !cancelled
+                    && record.get("survivors").is_none()
+                    && !record.path().with_file_name("cancelled").exists() =>
+            {
                 record.set("exit_code", serde_json::Value::Null);
                 return Some(next);
             }
@@ -136,6 +140,11 @@ pub fn finish(
             }
             _ => {}
         }
+    }
+    if record.get("survivors").is_none() && record.path().with_file_name("cancelled").exists() {
+        status = Status::Cancelled;
+        record.set("reason", json!("cancelled"));
+        record.set("exit_code", json!(1));
     }
     let _ = record.transition(status, now());
     for attempt in 0..3 {

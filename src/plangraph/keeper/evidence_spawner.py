@@ -30,7 +30,7 @@ def _passing_review(text):
 
 def _quota_refusal(text):
     """Read only provider-shaped quota evidence; keeper never imports runtime."""
-    text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
+    text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text).replace('\r', '\n')
     marker = r'RESOURCE_EXHAUSTED(?: \(code \d{3}\):|:|$)|HTTP 429\b|(?:individual )?quota (?:reached|exceeded|exhausted|refusal)|usage limit (?:reached|exceeded)|too many requests|rate limit|quota policy filtered \d+ account|All \S+ accounts reached configured quota'
     if re.search(r'(?im)^\s*(?:error:\s*)?(?:' + marker + ')', text):
         return True

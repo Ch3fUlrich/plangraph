@@ -322,3 +322,33 @@ fn continuation_keeps_its_slot_ahead_of_queued_runs() {
     );
     assert_eq!(s.counts().total_started, 2);
 }
+
+#[test]
+fn cancellation_during_finish_blocks_continuation_and_releases_slot() {
+    let d = tempfile::tempdir().unwrap();
+    let s = Supervisor::new(config(d.path(), 1, 2)).unwrap();
+    let next = spec(d.path(), 0, "touch unexpected-substitute");
+    let mut first = spec(
+        d.path(),
+        0,
+        &format!("{HOLD}; printf 'HTTP 429: quota reached' >&2"),
+    );
+    first
+        .base
+        .insert("role".into(), serde_json::json!("review"));
+    first.finish = Some(Box::new(move |record, _| {
+        std::fs::write(record.path().with_file_name("cancelled"), "").unwrap();
+        Some(next)
+    }));
+    s.start(first).unwrap();
+    until(|| s.counts().running == 1);
+    s.start(spec(d.path(), 1, "touch queued-finished")).unwrap();
+    until(|| s.counts().queued == 1);
+    std::fs::write(d.path().join("go"), "").unwrap();
+    assert!(s.wait_finished("run-0", Duration::from_secs(4)));
+    assert!(s.wait_finished("run-1", Duration::from_secs(4)));
+    assert_eq!(read(&s, 0)["status"], "cancelled");
+    assert!(!d.path().join("unexpected-substitute").exists());
+    assert!(d.path().join("queued-finished").exists());
+    assert_eq!(s.counts().running, 0);
+}
