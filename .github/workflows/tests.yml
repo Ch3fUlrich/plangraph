@@ -303,7 +303,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          # The dev profile lives in rust/Cargo.toml: a profile change must not reuse a target directory built with the old one.
+          key: rust-dev-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
       - name: cargo fmt --check
         run: cargo fmt --check
       - name: cargo clippy
@@ -334,7 +335,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          # The dev profile lives in rust/Cargo.toml: a profile change must not reuse a target directory built with the old one.
+          key: rust-dev-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
       - name: cargo test -p pg-spawnd
         run: cargo test -p pg-spawnd
       - name: cargo test -p pg-worker-core
@@ -361,7 +363,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/worker/target
-          key: rust-worker-${{ runner.os }}-${{ hashFiles('rust/worker/Cargo.lock', 'rust/worker-core/Cargo.toml') }}
+          key: rust-worker-dev-${{ runner.os }}-${{ hashFiles('rust/worker/Cargo.lock', 'rust/worker/Cargo.toml', 'rust/worker-core/Cargo.toml', 'rust/Cargo.toml') }}
       - uses: ./.github/actions/setup-temporal
       - name: Start Temporal dev server
         run: |
@@ -387,6 +389,8 @@ jobs:
           # Unit tests run attempts without the jail helper; the jail is covered by the rust job.
           PG_JAIL: "off"
           PG_TEST_ALLOW_UNJAILED: "1"
+          # Inside the cached rust/worker/target: the guard's nested cargo checks stay warm between runs.
+          PG_ADMISSION_GUARD_TARGET_DIR: ${{ github.workspace }}/rust/worker/target/admission-guard
         run: cargo test
       - name: Dev server log tail
         if: always()
