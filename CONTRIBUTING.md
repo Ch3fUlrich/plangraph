@@ -334,3 +334,5 @@ Rust Git fixtures share `pg_worker_core::git_test_support` (unit tests or the `t
 Local preflight invokes `affected_tests.py --files-only`: changed test files and reverse-import consumers remain explicit files, while workflow/config/shared-fixture changes add bounded smoke coverage instead of selecting `tests/`. An unreadable graph refuses local selection. CI keeps the conservative full-suite fallback. The affected-test limit remains 240 seconds; Rust checks also receive an environment without inherited `GIT_*` controls.
 
 Hook, selector, preflight, and pytest entry share `tools/affected_tests.py::test_environment`; Git discovery failure refuses test launch, and the hook's own Git calls retain their original context.
+
+The hook starts its affected selector in a separate process group. Timeout or interruption kills the group (Windows uses `taskkill /T`) and reaps the selector, so pytest/xdist workers cannot outlive a refused push.

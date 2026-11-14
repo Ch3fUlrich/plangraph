@@ -461,8 +461,13 @@ def test_affected_gate_is_file_only_and_time_bounded(tmp_path, monkeypatch):
     monkeypatch.setenv('PREFLIGHT_SKIP', '1')
     monkeypatch.setenv('GIT_DIR', str(tmp_path / 'caller.git'))
     calls = []
-    monkeypatch.setattr(subprocess, 'run', lambda command, **kw:
-                        calls.append((command, kw)) or SimpleNamespace(returncode=0))
+    def popen(command, **kw):
+        calls.append((command, kw))
+        def wait(timeout):
+            kw['timeout'] = timeout
+            return 0
+        return SimpleNamespace(wait=wait)
+    monkeypatch.setattr(subprocess, 'Popen', popen)
     monkeypatch.setattr(subprocess, 'check_output', lambda *a, **k: 'GIT_DIR\n')
     hook = runpy.run_path(str(HOOK))
     assert hook['affected_gate'](tmp_path, 'base', 'head') == 0
@@ -473,3 +478,82 @@ def test_affected_gate_is_file_only_and_time_bounded(tmp_path, monkeypatch):
     forwarded_git_dir = options['env'].get('GIT_DIR')
     assert forwarded_git_dir is None
     assert 'preflight.py' not in ' '.join(command)
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='real process-group check uses proc state')
+def test_selector_timeout_kills_its_worker_group(tmp_path):
+    import runpy
+    import signal
+    import time
+    selector = tmp_path / 'tools/affected_tests.py'
+    selector.parent.mkdir()
+    marker = tmp_path / 'worker.pid'
+    selector.write_text('import subprocess, sys, time\nfrom pathlib import Path\n'
+        "worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)', 'd2-child-fixture'])\n"
+        f'Path({str(marker)!r}).write_text(str(worker.pid))\ntime.sleep(30)\n')
+    hook = runpy.run_path(str(HOOK))
+    def alive(pid):
+        path = Path('/proc') / str(pid) / 'stat'
+        try:
+            return path.read_text().rsplit(')', 1)[1].split()[0] != 'Z'
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            hook['affected_gate'](tmp_path, 'base', 'head', timeout=.8)
+        assert marker.is_file(), 'fixture worker did not start before the timeout'
+        pid = int(marker.read_text())
+        until = time.monotonic() + 1
+        while alive(pid) and time.monotonic() < until:
+            time.sleep(.01)
+        assert not alive(pid), 'selector worker survived hook refusal'
+    finally:
+        if marker.exists():
+            pid = int(marker.read_text())
+            command = Path('/proc') / str(pid) / 'cmdline'
+            try:
+                owned = b'd2-child-fixture' in command.read_bytes()
+            except (FileNotFoundError, ProcessLookupError):
+                owned = False
+            if owned:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+
+@pytest.mark.parametrize('platform', ['posix', 'nt'])
+@pytest.mark.parametrize('interrupted', [False, True])
+def test_selector_timeout_uses_group_cleanup_on_each_platform(tmp_path, monkeypatch, platform, interrupted):
+    import runpy
+    from types import SimpleNamespace
+    hook = runpy.run_path(str(HOOK))
+    (tmp_path / 'tools').mkdir()
+    (tmp_path / 'tools/affected_tests.py').touch()
+    created, killed, commands = [], [], []
+    class Process:
+        pid = 987654
+        waits = 0
+        def wait(self, timeout):
+            self.waits += 1
+            if self.waits == 1:
+                if interrupted: raise KeyboardInterrupt
+                raise subprocess.TimeoutExpired('selector', timeout)
+            return -9
+        def kill(self):
+            killed.append('parent')
+    monkeypatch.setattr(subprocess, 'Popen', lambda command, **kw: created.append(kw) or Process())
+    monkeypatch.setattr(subprocess, 'run', lambda command, **kw: commands.append(command) or SimpleNamespace(returncode=0))
+    globals_ = hook['affected_gate'].__globals__
+    monkeypatch.setitem(globals_, 'test_environment', lambda *a: {})
+    monkeypatch.setitem(globals_, 'os', SimpleNamespace(name=platform, environ={}, killpg=lambda *a: killed.append(a)))
+    monkeypatch.setitem(globals_, 'signal', SimpleNamespace(SIGKILL=9))
+    with pytest.raises(KeyboardInterrupt if interrupted else subprocess.TimeoutExpired):
+        hook['affected_gate'](tmp_path, 'base', 'head', timeout=.1)
+    if platform == 'nt':
+        assert created[0]['creationflags'] == getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x200)
+        assert commands == [['taskkill', '/F', '/T', '/PID', '987654']]
+    else:
+        assert created[0]['start_new_session'] is True
+        assert killed[0] == (987654, 9)
+    assert killed[-1] == 'parent'
