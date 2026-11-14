@@ -26,7 +26,7 @@ In the full tier, skipped jobs fail the gate. `merge_batch land` additionally
 reads the latest tests workflow run on the exact saved batch head, requires
 all jobs and shards green with none skipped, and refuses missing environments.
 `--checks` cannot bypass that proof. Rerun attempts and their job names are
-appended to the batch PR before landing; explain them with the flake fix or
+recorded in an idempotent batch PR comment before landing; explain them with the flake fix or
 quarantine Plan-Item, rather than silently rerunning a known failure.
 
 ## Red main and runner switches

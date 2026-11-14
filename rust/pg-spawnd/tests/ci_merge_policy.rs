@@ -225,7 +225,7 @@ with patch.object(land, 'gh_json', side_effect=api), tempfile.TemporaryDirectory
 }
 
 #[test]
-fn rerun_audit_preserves_the_body_and_sends_file_contents() {
+fn rerun_audit_uploads_file_contents_to_a_comment() {
     python(
         r#"
 import pathlib, sys
@@ -238,10 +238,11 @@ def gh(*args):
     payload = args[args.index('-F') + 1]
     assert payload.startswith('body=@')
     body = pathlib.Path(payload[len('body=@'):]).read_text()
-    assert body.startswith('Original PR body')
+    assert args[:4] == ('api', '--method', 'POST', 'repos/o/r/issues/7/comments')
+    assert body.startswith('CI reruns')
     assert 'rust-windows' in body and 'attempt 2' in body
     calls.append(args)
-with patch.object(land, 'gh_json', return_value={'body': 'Original PR body'}), patch.object(land, 'gh', side_effect=gh):
+with patch.object(land, 'gh_json', return_value=[]), patch.object(land, 'gh', side_effect=gh):
     land.record_reruns('o/r', 7, ['tests run 7 attempt 2: rust-windows'])
 assert len(calls) == 1
 "#,
@@ -265,6 +266,35 @@ for response, expected in [(SimpleNamespace(returncode=1, stdout='', stderr='off
 with patch.dict(g, git_out=lambda *a: 'b' * 40), patch.object(g['subprocess'], 'run', return_value=SimpleNamespace(returncode=1, stdout='bad trailers', stderr='')) as run:
     assert f('a' * 40) != 0
     assert run.call_count == 1
+"#,
+    );
+}
+
+#[test]
+fn rerun_audit_does_not_trigger_an_edited_workflow_and_is_idempotent() {
+    python(
+        r#"
+import pathlib, sys
+from unittest.mock import patch
+sys.path.insert(0, 'tools')
+import merge_batch_land as land
+comments, calls = [], []
+def read(*args):
+    assert args[0] == 'api' and '/issues/7/comments?' in args[1]
+    return comments
+
+def post(*args):
+    assert args[:4] == ('api', '--method', 'POST', 'repos/o/r/issues/7/comments'), args
+    assert '-F' in args
+    payload = args[args.index('-F') + 1]
+    body = pathlib.Path(payload[len('body=@'):]).read_text()
+    assert 'run 7 attempt 2' in body and 'rust-windows' in body
+    comments.append({'body': body})
+    calls.append(args)
+with patch.object(land, 'gh_json', side_effect=read), patch.object(land, 'gh', side_effect=post):
+    land.record_reruns('o/r', 7, ['tests run 7 attempt 2: rust-windows'])
+    land.record_reruns('o/r', 7, ['tests run 7 attempt 2: rust-windows'])
+assert len(calls) == 1, calls
 "#,
     );
 }

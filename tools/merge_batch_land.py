@@ -213,14 +213,22 @@ def require_full_run(repo, head, branch):
 def record_reruns(repo, number, reruns):
     if not reruns:
         return
-    body = gh_json("pr", "view", str(number), "--repo", repo, "--json", "body")["body"]
-    additions = [line for line in reruns if line not in body]
+    comments, page = [], 1
+    endpoint = f"repos/{repo}/issues/{number}/comments"
+    while True:
+        batch = gh_json("api", f"{endpoint}?per_page=100&page={page}")
+        comments.extend(c.get("body") or "" for c in batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    additions = [line for line in reruns if not any(line in body for body in comments)]
     if additions:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp, "body.md")
-            path.write_text(body + "\n\nCI reruns (must be explained by a flake fix/quarantine item):\n"
+            path.write_text("CI reruns (must be explained by a flake fix/quarantine item):\n"
                             + "\n".join("- " + line for line in additions) + "\n", encoding="utf-8")
-            gh("api", "--method", "PATCH", f"repos/{repo}/pulls/{number}", "-F", f"body=@{path}")
+            # A comment is auditable without triggering pull_request: edited.
+            gh("api", "--method", "POST", endpoint, "-F", f"body=@{path}")
 
 
 def require_main_green(repo, head, go_row=None):
@@ -304,9 +312,9 @@ def cmd_land(args):
         if pr.get("baseRefName") != "main":
             raise MergeBatchError("full_ci: batch PR must target main")
         reruns = require_full_run(repo, st["head"], st["branch"])
-        record_reruns(repo, number, reruns)
         require_green(repo, number, [c for c in (args.checks or "").split(",") if c])
         require_main_green(repo, st["head"], args.go_row)
+        record_reruns(repo, number, reruns)
         gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"])
     elif pr["state"] != "MERGED":
         raise MergeBatchError(f"batch PR #{number} is {pr['state']}")
