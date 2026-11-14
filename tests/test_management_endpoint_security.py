@@ -8,7 +8,7 @@ from plangraph.routing_support import omniroute_state, quota_snapshots
 
 
 @pytest.mark.parametrize('reader', ['state', 'quota'])
-@pytest.mark.parametrize('endpoint', ['http://gw.example:20128/v1',
+@pytest.mark.parametrize('endpoint', ['http://gw.example:8080/v1',
                                      'ftp://gw.example/v1',
                                      'https://ops:secret@gw.example/v1',
                                      'https://[invalid'])
