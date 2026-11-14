@@ -96,3 +96,5 @@ files: `139 passed in 63.38s (0:01:03)`. The untouched argv-limit file reproduce
 `2 failed, 44 passed in 5.38s`, both at its digest-versus-redaction assertion
 on line 57. The full suite was not run, following the brief's final prohibition
 on whole-suite runs; no test was skipped or weakened to hide those failures.
+
+Historical fallthrough replay captures retain their recorded identities, including retired Argon seats; they do not define lane policy. Current lane order tables exclude Argon, preserve Sol/Hydrogen/Sonnet implementation priority and keep MiMo Pro before OpenCode, Haiku, Ember and DeepSeek review fallbacks. Full replay must reach the paid seat through the hermetic cost-gate fixture rather than stop early for missing host budget state.

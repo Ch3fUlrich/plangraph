@@ -280,3 +280,15 @@ def test_order_handoff_distinguishes_tables_from_registry(statement):
     from pathlib import Path
     doc = (Path(__file__).resolve().parents[1] / 'docs/routing.md').read_text()
     assert statement in doc
+
+
+def test_lane_tables_exclude_argon_and_keep_review_fallback_order():
+    """Historical fallthrough captures cannot define the current lane seat policy."""
+    from plangraph.routing_support.catalog_seed import OPERATOR_ROUTE_ORDERS
+    tables = OPERATOR_ROUTE_ORDERS
+    tail = ('mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'claude-haiku-5.5',
+            'muse-ember-max', 'omniroute-deepseek-flash')
+    for order in tables['review'].values():
+        assert tuple(id for id in order if id in tail) == tail
+    assert not any('argon' in id for order in (
+        tables['implement'], tables['planning'], *tables['review'].values()) for id in order)

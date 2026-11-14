@@ -1,0 +1,1 @@
+- Preserve historical fallthrough assertions and verify current lane tables exclude Argon and retain review fallback priority; the replay truncation was missing hermetic paid-gate transport, not a route-order change.
