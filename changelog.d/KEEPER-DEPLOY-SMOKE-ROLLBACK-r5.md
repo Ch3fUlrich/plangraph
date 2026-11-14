@@ -1,0 +1,1 @@
+- Require explicit `--apply` for keeper deployment; persist and report drop-in backups before writes, recover on interruption, report restore failures, retry probe release and reject unsafe unit arguments.

@@ -58,7 +58,7 @@ A reviewer whose family equals the claimant's or delegate's is refused.
 a write still exits 3.  MCP is stdio JSON-RPC (`tools/list`, `tools/call`) and
 never logs the token.
 
-Switch the live keeper to a new tree with `python tools/keeper_deploy.py --tag T --sha S --tree DIR --probe-key KEY`
+Preview the keeper deployment with `python tools/keeper_deploy.py --tag T --sha S --tree DIR --probe-key KEY`; add `--apply` to deploy
 (PG_URL and PG_TOKEN_FILE set): it replaces stale `live-sync-*.conf` overrides with `zzzz-plangraph-live-sync.conf`, restarts, verifies effective WorkingDirectory and PYTHONPATH, and within 60 s smokes
 `/v1/health`, a claim+release of the dedicated probe item (reads origin decisions) and the expected `forbidden` response from router-only `close_merged` (or its explicit dry-run answer for an authorized session). Claimant and router roles remain disjoint.
 The smoke uses one overall deadline for all API calls; malformed responses and all exceptions restore the previous drop-ins.
@@ -215,3 +215,5 @@ directory for the status file:
     WantedBy=default.target
 
     systemctl --user daemon-reload && systemctl --user enable --now md-sync.timer md-sync.path
+
+Keeper deployment saves every previous `.conf` in a timestamped sibling backup directory before changing the active drop-ins and prints its location. Rollback restores from that disk copy after exceptions, SIGINT or SIGTERM; SIGKILL cannot run rollback, so retain the printed backup for manual recovery. Arguments for tag, SHA and tree must contain no whitespace, control characters or systemd percent specifiers. A failed restore is reported as `ROLLBACK FAILED`, and service reload/restart is still attempted. Failed probe release receives one bounded best-effort retry.
