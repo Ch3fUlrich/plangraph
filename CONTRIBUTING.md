@@ -342,6 +342,8 @@ Local preflight tests compare the branch against origin/main, follow shared asse
 Local preflight combines `--local` shared-asset consumer traversal with `--files-only` bounded suite-control checks, using `origin/main` for test selection when available. Scrub and policy retain their pushed-range baselines.
 
 The Python context guard announces every parsed compaction boundary, including
-interactive transcripts without fleet identity or usage metadata. Above the hard
+interactive transcripts without fleet identity or usage metadata. The scanner
+returns optional identity; a missing session name or identity never suppresses
+the handoff requirement, even below the cap. Above the hard
 cap it retains `HARD-CAP` and also emits `HANDOFF-NOW`. Fake transcript coverage
 is in `tests/hooks/test_context_guard_compaction.py`; no live sessions are needed.
