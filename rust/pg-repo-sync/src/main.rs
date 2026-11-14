@@ -124,6 +124,9 @@ fn run() -> Result<bool, &'static str> {
     }
     repos.sort();
     repos.dedup();
+    if repos.is_empty() {
+        return Ok(false);
+    }
     let live = if !check_config || also_sync {
         drift::live_paths()
     } else {
@@ -166,6 +169,7 @@ fn run() -> Result<bool, &'static str> {
                     "SKIP {:?} live-unit or unreadable unit protection",
                     repo.display().to_string()
                 );
+                alerts |= live.is_err();
                 continue;
             }
             if let Err(reason) = sync(&repo) {

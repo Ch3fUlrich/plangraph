@@ -146,8 +146,28 @@ pub fn live_paths() -> Result<Vec<std::path::PathBuf>, ()> {
         ])?;
         for unit in units.lines().filter_map(|s| s.split_whitespace().next()) {
             let dir = query(&["show", "--property=WorkingDirectory", "--value", unit])?;
-            if !dir.trim().is_empty() {
-                paths.push(std::fs::canonicalize(dir.trim()).map_err(|_| ())?);
+            let optional = dir.trim().starts_with(['!', '-']);
+            let dir = dir.trim().trim_start_matches(['!', '-']);
+            if dir.is_empty() {
+                continue;
+            }
+            let path = if dir == "~" {
+                if scope.is_none() {
+                    return Err(());
+                }
+                std::env::var_os("HOME")
+                    .map(std::path::PathBuf::from)
+                    .ok_or(())?
+            } else {
+                std::path::PathBuf::from(dir)
+            };
+            if !path.is_absolute() {
+                return Err(());
+            }
+            match std::fs::canonicalize(path) {
+                Ok(path) => paths.push(path),
+                Err(e) if optional && e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(()),
             }
         }
     }

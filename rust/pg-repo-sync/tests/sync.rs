@@ -275,3 +275,54 @@ fn excluded_alias_or_pinned_checkout_is_reported_without_fetch() {
         assert_eq!(git(&repo, &["rev-parse", "HEAD"]), before);
     }
 }
+#[cfg(unix)]
+#[test]
+fn systemd_optional_and_home_directories_do_not_disable_sync() {
+    use std::os::unix::fs::PermissionsExt;
+    for value in ["!", "~", "!/no-such-pg-repo-sync-directory"] {
+        let tmp = fixture();
+        let value = if value == "!" {
+            format!("!{}", tmp.path().display())
+        } else {
+            value.into()
+        };
+        fs::write(tmp.path().join("bin/systemctl"), format!("#!/bin/sh\ncase \"$*\" in --user*list-units*) echo 'other.service loaded active running Other';; *show*) echo '{}';; esac\n", value)).unwrap();
+        fs::set_permissions(
+            tmp.path().join("bin/systemctl"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
+            .current_dir(tmp.path())
+            .args(["--repo", "checkout"])
+            .env("HOME", tmp.path())
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    tmp.path().join("bin").display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .output()
+            .unwrap();
+        assert!(out.status.success() && out.stdout.is_empty(), "{:?}", out);
+        assert_eq!(
+            git(&tmp.path().join("checkout"), &["rev-parse", "HEAD"]),
+            git(&tmp.path().join("source"), &["rev-parse", "HEAD"])
+        );
+    }
+}
+#[cfg(unix)]
+#[test]
+fn unreadable_unit_protection_fails_closed_with_nonzero_exit() {
+    for script in ["exit 1", "case \"$*\" in *list-units*) echo 'bad.service loaded active running Bad';; *show*) echo '/no-such-pg-repo-sync-directory';; esac"] {
+        let tmp = fixture();
+        fs::write(tmp.path().join("bin/systemctl"), format!("#!/bin/sh\n{script}\n")).unwrap();
+        let before = git(&tmp.path().join("checkout"), &["rev-parse", "origin/main"]);
+        let out = run(tmp.path(), &["--repo", "checkout"]);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(String::from_utf8(out.stdout).unwrap().contains("SKIP"));
+        assert_eq!(git(&tmp.path().join("checkout"), &["rev-parse", "origin/main"]), before);
+    }
+}

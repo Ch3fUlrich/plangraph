@@ -21,3 +21,6 @@ fails closed with a `SKIP` report. Config-only inspection remains read-only.
 Repeat `--exclude PATH` to skip a checkout (canonical paths match symlink aliases),
 or create `.repo-sync-pin` in it. Both report `SKIP` before any Git operation.
 No sync timer is installed or enabled by this change; deployment remains separate.
+Systemd's optional-directory `!` marker is decoded; a missing optional directory
+cannot protect a checkout. User-manager `~` resolves to HOME; unresolved system
+manager homes fail closed. Unreadable unit protection also returns exit 1.
