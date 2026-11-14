@@ -24,6 +24,40 @@ import uuid
 from plangraph.routing_errors import SpawnRefused
 from .prompt_input import checkout_env
 
+CODE_TREE = Path(__file__).resolve().parents[3]
+
+
+def read_code_identity(repo=CODE_TREE):
+    """One bounded Git read while loading the spawner, before async dispatch."""
+    try:
+        # Installed packages must not inherit an enclosing project's identity.
+        if not (Path(repo) / '.git').exists():
+            raise ValueError('code path is not a checkout root')
+        result = subprocess.run(
+            ['git', '-C', str(repo), 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'],
+            check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=1, env=checkout_env())
+        sha, branch = result.stdout.strip().splitlines()
+        if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', sha):
+            raise ValueError('invalid code tree SHA')
+        return {'tree_sha': sha, 'tree_branch': 'detached' if branch == 'HEAD' else branch}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {'tree_sha': None, 'tree_branch': None}
+
+
+# Pin provenance to code load, not a potentially newer checkout at record time.
+CODE_IDENTITY = read_code_identity()
+
+
+def annotate_tree(record):
+    """Copy cached process provenance; persistence never starts a subprocess."""
+    for key, value in CODE_IDENTITY.items():
+        record.setdefault(key, value)
+    if record['tree_sha'] is None:
+        warning = 'spawner code checkout identity unavailable at process startup'
+        if warning not in record.setdefault('warnings', []):
+            record['warnings'].append(warning)
+
 
 class RunWorktreeDependencyNotMerged(SpawnRefused):
     """A declared finished dependency is absent from the fetched main history."""

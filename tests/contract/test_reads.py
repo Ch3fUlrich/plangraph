@@ -45,7 +45,7 @@ def test_ready_agent_flag_drops_operator_items(kp):
     op_tag = uid()
     ok(kp.post("create_items", "router", {"items": [{
         "project": "demo", "id": "OP-" + op_tag, "kind": "question", "title": "ask " + op_tag,
-        "depends_on": [], "evidence_kinds": ["decision"]}, {
+        "depends_on": [], "evidence_kinds": ["any"]}, {
         "project": "demo", "id": "G2-" + op_tag, "kind": "goal", "title": "g " + op_tag,
         "depends_on": ["OP-" + op_tag]}]}), "Created")
     everything = _keys(ok(kp.get("/v1/ready?all=1&fmt=json", "reader"), "Ready")["items"])

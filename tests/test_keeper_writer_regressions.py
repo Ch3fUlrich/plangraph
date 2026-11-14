@@ -95,7 +95,7 @@ def test_changelog_exemption_rejects_merges_and_deletions(monkeypatch, parents, 
 
 
 def test_system_without_writer_retains_writer_unknown(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     item = dict(w.store._item(key), claimed_by="system")
     with pytest.raises(Refused) as exc:
         w.store._reviewer_family_ok(w.p("rGoogle"), item)
@@ -104,7 +104,7 @@ def test_system_without_writer_retains_writer_unknown(w):
 
 def test_unknown_model_codes_distinguish_evidence_from_metadata(w):
     """Preserve the specified metadata family_unknown / evidence writer_unknown API."""
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     item = dict(w.store._item(key), writer_model="unknown-model")
     with pytest.raises(Refused) as exc:
         w.store._reviewer_family_ok(w.p("rGoogle"), item)
@@ -204,7 +204,7 @@ def test_change_request_is_allowed_on_every_family_tier(
     token = auth.add_principal(w.conn, "rMeta", "reviewer", ["demo"],
                                family="meta")
     w.principals["rMeta"] = auth.authenticate(w.conn, token)
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     to_in_review(w, key, who="claimant")
     w.conn.execute(
         "UPDATE items SET claimed_by='legacy-owner', owner_family=?,"

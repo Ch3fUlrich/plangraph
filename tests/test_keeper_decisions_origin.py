@@ -274,7 +274,7 @@ def test_real_store_attaches_decision_pushed_from_worktree(data_repos, tmp_path)
     world = World(tmp_path / "keeper")
     try:
         world.store = Store(world.conn, clock=world.clock, ctx=repos.ctx)
-        (key,) = seed(world, [("A", [])], evidence_kinds=("decision",))
+        (key,) = seed(world, [("A", [])], evidence_kinds=("any",))
         epoch = to_claimed(world, key)
         result = world.store.add_evidence(
             world.p("l1main"), key, epoch, "decision", {"id": "D-5571"})

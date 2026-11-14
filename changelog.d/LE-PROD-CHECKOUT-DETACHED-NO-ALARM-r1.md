@@ -1,0 +1,1 @@
+Production checkout auditing now runs an isolated, bounded, failure-tolerant state-directory snapshot once per HEAD move, with linked-worktree identity and log rotation; keeper-alert commands receive deduplicated fault/recovery notices, hidden or unmerged code alarms, and record provenance is cached at spawner code load without persistence-time Git I/O.
