@@ -2,13 +2,9 @@
 """Scan a tree for leaks before it goes public (M2c split).
 
 Rules: hostname, ipv4, ipv6, email, token-shape, high-entropy, credential-shape,
-home-path, private-word, symlink.  Output is ``path:line: rule`` only -- the
-matched value is never printed, stored or returned.  Exit 0 clean, 1 on any hit,
-2 on a usage/config error.
-
-    scrub_check.py TREE [--rules rules.toml] [--words private_words.txt]
-                        [--hash-hits]
-
+home-path, private-word, symlink.  Output is ``path:line: rule`` only; the matched
+value is never printed.  Exit 0 clean, 1 on any hit, 2 on a usage/config error.
+    scrub_check.py TREE [--rules rules.toml] [--words private_words.txt] [--hash-hits]
 ``rules.toml`` (merged over the built-in defaults, lists are extended)::
 
     [scrub]
@@ -23,18 +19,14 @@ matched value is never printed, stored or returned.  Exit 0 clean, 1 on any hit,
     rule = "token-shape"                                  # one known rule id
     value_sha256 = "<sha256 hex of the exact matched text>"
     why = "reviewed synthetic fixture"                    # required; never printed
-
 A value allowance suppresses a hit only when *path*, *rule* and the sha256 of the
-matched text all match (matched text = the whole regex match, in tree-relative
-line context).  A missing or empty key, a glob in *path*, an unknown rule or a
+matched text (the whole regex match, tree-relative line context) all match.  A missing or empty key, a glob in *path*, an unknown rule or a
 malformed hash is a ``ValueError`` naming the entry number only -- neither path
-nor value is echoed.  ``--hash-hits`` appends `` sha256=<hex>`` to every hit line,
-so an allowance can be written without anyone seeing the value.  Symlink hits are
-never allow-listable (path-wide or per value) and carry no hash.
-
+nor value is echoed.  ``--hash-hits`` appends `` sha256=<hex>`` to every hit line, so an
+allowance can be written without seeing the value.  Symlink hits are never allow-listable
+(path-wide or per value) and carry no hash.
 The private word list (one word per line, ``#`` comments, ``re:`` prefix for a
 regex) is kept private by the caller; only its path is passed in.
-
 A path that itself contains a private word (and every ``private-word`` hit on a
 path, and every "binary file not scanned" note) is printed as
 ``<path-hash:sha256(path)[:12]>`` so the word never reaches the output;
@@ -46,6 +38,7 @@ import argparse
 import hashlib
 import math
 import re
+import subprocess
 import sys
 import tomllib
 from collections import namedtuple
@@ -311,17 +304,24 @@ def _value_allows(entries):
     return out
 
 
+def _tracked(root):  # index plus HEAD names; None (scan everything) when git cannot answer
+    runs = [subprocess.run(["git", "-C", str(root), *a], capture_output=True, text=True)
+            for a in (("ls-files", "-z"), ("ls-tree", "-r", "--name-only", "-z", "HEAD"))]
+    names = set(filter(None, "\0".join(r.stdout for r in runs).split("\0")))
+    return names if names and all(r.returncode == 0 for r in runs) else None
+
+
 def scan_tree(root, cfg, with_skipped=False):
-    """Hits for every file under *root* (``.git`` skipped, symlinks never followed).
+    """Hits for *root* files (``.git`` skipped, no symlinks followed; tracked only in a checkout).
 
     A rule that is not path-wide allowed still drops its hit only when *every*
     value it matched on the line is allowed by ``[[scrub.allow_value]]``."""
     root = Path(root)
-    find_shapes = _shape_finder()
-    hits, skipped = [], []
+    find_shapes, hits, skipped = _shape_finder(), [], []
+    tracked = _tracked(root) if (root / ".git").exists() else None
     for p in sorted(root.rglob("*")):
         rel = p.relative_to(root).as_posix()
-        if ".git" in p.relative_to(root).parts:
+        if ".git" in p.relative_to(root).parts or (tracked is not None and rel not in tracked and not p.is_dir()):
             continue
         skip = _allowed(rel, cfg)
         if any(w.search(rel) for w in cfg["_words"]) and "private-word" not in skip:

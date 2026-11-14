@@ -43,9 +43,10 @@ def admit(service, options, *, card=None, preview=False):
     _, memory = resources(service)
     if not remote_first and not overflow.memory_refusal(memory, role_mb, floor):
         return None
-    repo = Path(((card or {}).get('diff_ref') or {}).get('repo') or
+    repo = Path(options.get('cwd') or (card or {}).get('cwd') or
+                ((card or {}).get('diff_ref') or {}).get('repo') or
                 getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
-    public = str(repo) in [str(Path(p).expanduser().resolve()) for p in config.get('public_repos', [])]
+    public = overflow.repos_public(config, repo, (card or {}).get('diff_ref'))
     benchmark_local = remote_first and options.get('benchmark') is not None
     if benchmark_local:
         public = False  # A local-only database makes every remote ineligible.
@@ -87,6 +88,8 @@ def admit(service, options, *, card=None, preview=False):
             break
         name = decision.host
         try:
+            if options.get('cwd') is not None or 'cwd' in (card or {}):
+                raise overflow.RemoteRefusal('explicit cwd cannot overflow to another checkout')
             result = overflow.remote_spawn(name, config['hosts'][name], card or {},
                                            options.get('prompt', ''), flags)
             refusal = 'remote spawn failed'
@@ -104,15 +107,7 @@ def admit(service, options, *, card=None, preview=False):
     return record
 
 
-# These children expose skill tools, but no repository/shell tools (D-4681).
-INLINE_DIFF_HARNESSES = frozenset({'opencode'})
-
-
-def _needs_inline_diff(leg, card):
-    return (getattr(leg, 'tool_mode', 'tools') == 'inline-only'
-            or (getattr(leg, 'tool_mode', 'tools') == 'prompt-only' and card.get('diff_ref') is not None)
-            or (getattr(leg, 'harness', None) in INLINE_DIFF_HARNESSES
-                and card.get('diff_ref') is not None))
+from .prompt_guard import INLINE_DIFF_HARNESSES, _needs_inline_diff, _refuse_oversized_diff
 
 
 def annotate_review_warning(record):
@@ -123,14 +118,6 @@ def annotate_review_warning(record):
         warning = 'review_unfit: ' + model
         if warning not in record.setdefault('warnings', []):
             record['warnings'].append(warning)
-
-
-def _refuse_oversized_diff(exc, leg):
-    from .context_pack import PromptBoundError
-    if exc.chars is not None:
-        raise PromptBoundError(
-            f'prompt_too_large: inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
-            f'max_request_tokens {leg.max_request_tokens}') from None
 
 
 class SeatSpawnMixin:
@@ -153,11 +140,15 @@ class SeatSpawnMixin:
             bound = inspect.signature(self._spawn).bind(*args, **kwargs)
             options = dict(bound.arguments)
             card = options.get('card')
+            from .prompt_input import resolve_cwd
+            cwd = await asyncio.to_thread(resolve_cwd, options.get('cwd'), card)
+            if cwd is not None:
+                options['cwd'] = bound.arguments['cwd'] = cwd
             from .prompt_guard import admit_prompt
             from plangraph.planner.routing import SpawnRefused
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
-            admitted = self.admit_spawn(options, card=card)
+            admitted = await asyncio.to_thread(self.admit_spawn, options, card=card)
             if admitted is not None:
                 return admitted
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
@@ -175,9 +166,10 @@ class SeatSpawnMixin:
                     return {'writers': await asyncio.gather(*(dispatch(g, b) for g, b in zip(groups, briefs)))}
                 options['prompt'] = briefs[0]
                 return await self._spawn(**options)
+            dispatch_kwargs = bound.kwargs
             if '_placement' in options:
-                kwargs['_placement'] = options['_placement']
-            return await self._spawn(*args, **kwargs)
+                dispatch_kwargs['_placement'] = options['_placement']
+            return await self._spawn(*bound.args, **dispatch_kwargs)
         except Exception as exc:
             self.save_refusal(exc, options.get('role', kwargs.get('role', args[2] if len(args) > 2 else 'implement')),
                               card=options.get('card', kwargs.get('card', args[0] if args else None)),
@@ -209,6 +201,8 @@ class SeatSpawnMixin:
 
     async def _launch_leg(self, record, chosen, *, routed=False, **options):
         """One normal launch, at most one capped review retry; never recurse or reroute."""
+        if record.get('cwd') is not None:
+            options.setdefault('cwd', record['cwd'])
         async def launch(prompt_record, **kwargs):
             job = await self.runner.spawn(prompt_record=prompt_record, **kwargs)
             self._running_records[job.job_id] = record

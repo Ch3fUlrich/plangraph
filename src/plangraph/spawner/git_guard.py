@@ -22,6 +22,7 @@ import time
 import uuid
 
 from plangraph.routing_errors import SpawnRefused
+from .prompt_input import checkout_env
 
 
 class RunWorktreeDependencyNotMerged(SpawnRefused):
@@ -61,6 +62,100 @@ def run_worktree_lock(root):
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
 
+@contextmanager
+def run_tree(state, repo=None):
+    """Select fetched main without moving live trees; lease until context exit."""
+    from contextlib import ExitStack
+    from .runner import is_terminal
+    import json
+    state = Path(state).resolve()
+    repo = Path(repo or os.environ.get('PLANGRAPH_SPAWNER_REPO') or
+                Path(__file__).resolve().parents[3])
+    root = state / 'trees'
+    def git(*args):
+        return subprocess.run(['git', '-C', str(repo), *map(str, args)], check=True,
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=10 if args[0] == 'fetch' else 30).stdout.strip()
+    def valid(path):
+        return (not path.is_symlink() and path.is_dir() and
+                re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', path.name))
+    stale = None
+    # Fetches serialize independently of creation; neither waits for live runs.
+    with run_worktree_lock(root / '.fetch'):
+        try:
+            git('fetch', '--no-write-fetch-head', 'origin',
+                '+refs/heads/main:refs/remotes/origin/main')
+        except (OSError, subprocess.SubprocessError) as exc:
+            stale = 'fetch_timeout' if isinstance(exc, subprocess.TimeoutExpired) else 'fetch_failed'
+        # Even offline, prefer the verified tracking ref, never directory mtimes.
+        sha = git('rev-parse', '--verify', 'refs/remotes/origin/main^{commit}')
+    if not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', sha):
+        raise RuntimeError('run_tree_invalid_sha')
+    path = root / sha
+    with ExitStack() as resources:
+        # Slow creation at A cannot monopolize selection/creation at B.
+        with run_worktree_lock(root / '.locks' / sha):
+            if path.is_symlink() or (path.exists() and not valid(path)):
+                raise RuntimeError('run_tree_invalid')
+            if not path.exists():
+                # Reuse only this missing registration; never prune other trees.
+                git('worktree', 'add', '--detach', '--force', '--force', path, sha)
+            if not (path / '.git').is_file():
+                raise RuntimeError('run_tree_invalid')
+            if git('-C', path, 'rev-parse', '--verify', 'HEAD^{commit}') != sha:
+                raise RuntimeError('run_tree_invalid_head')
+            os.utime(path, None)  # Grace for callers that persist after lease release.
+            if os.name != 'nt':
+                import fcntl
+                lease = resources.enter_context((root / (sha + '.lease')).open('a+b'))
+                fcntl.flock(lease, fcntl.LOCK_SH)
+        # Unknown identities and unreadable records withhold cleanup, not admission.
+        live = set()
+        try:
+            for record in (state / 'runs').glob('*/record.json'):
+                row = json.loads(record.read_text(encoding='utf-8'))
+                if row.get('survivors') or not is_terminal(row.get('status')):
+                    identity = row.get('tree_sha')
+                    if not isinstance(identity, str) or not re.fullmatch(
+                            r'(?:[0-9a-f]{40}|[0-9a-f]{64})', identity):
+                        live = None
+                        break
+                    live.add(identity)
+        except (OSError, ValueError, TypeError, AttributeError):
+            live = None
+        # Windows has no shared lease here: selection works, cleanup stays off.
+        for old in root.iterdir() if live is not None and os.name != 'nt' else ():
+            try:
+                if old == path or old.name in live or not valid(old):
+                    continue
+                # Never wait behind another SHA's slow creation or active cleanup.
+                import fcntl
+                with (root / '.locks' / old.name / '.lock').open('a+b') as lock:
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        continue
+                    _cleanup_tree(old, root, git)
+            except (OSError, subprocess.SubprocessError):
+                continue  # A dirty/unreadable candidate must not starve the others.
+        yield dict(tree_sha=sha, tree_path=str(path), **({'tree_stale': stale} if stale else {}))
+
+
+def _cleanup_tree(old, root, git):
+    """Remove only expired, clean trees whose POSIX lease is exclusively available."""
+    import fcntl
+    if time.time() - old.stat().st_mtime <= 7 * 86400:
+        return
+    lease_path = root / (old.name + '.lease')
+    with lease_path.open('a+b') as lease:
+        try:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        git('worktree', 'remove', old)  # Never force-remove a dirty tree.
+    lease_path.unlink(missing_ok=True)
+
+
 def create(root, repo, lane_branch, continuation=False, *, finished_dependencies=()):
     """Create one attempt without resetting a branch or removing an earlier worktree.
 
@@ -71,7 +166,7 @@ def create(root, repo, lane_branch, continuation=False, *, finished_dependencies
     def git(*args, check=True, failure='run_worktree_create_failed'):
         try:
             return subprocess.run(['git', '-C', str(repo), *args], check=check,
-                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, env=checkout_env())
         except subprocess.TimeoutExpired:
             raise SpawnRefused('run_worktree_fetch_timeout' if args[0] == 'fetch'
                                else 'run_worktree_git_timeout') from None
@@ -108,13 +203,24 @@ def create(root, repo, lane_branch, continuation=False, *, finished_dependencies
         return dict(path=str(path), branch=lane_branch, base_sha=base)
 
 
-async def prepare_worktree(service, record, card, enabled, *, continuation=False):
+def selected_checkout(service, record):
+    """Recover the pre-worktree default for legacy attempt records, even if pruned."""
+    cwd = record.get('cwd')
+    attempt = (record.get('run_worktree') or {}).get('path')
+    if cwd and attempt and Path(cwd).resolve() == Path(attempt).resolve():
+        cwd = None
+    return record.setdefault('selected_cwd', str(
+        cwd or getattr(service.runner, 'default_cwd', None) or os.getcwd()))
+
+
+async def prepare_worktree(service, record, card, enabled, *, continuation=False, repo=None):
     """Persist creation evidence before launch; off/dry-run callers do no Git I/O."""
     if not enabled:
         return {}
     import asyncio
     from plangraph.settings import _policy_data
-    repo = getattr(service.runner, 'default_cwd', None) or os.getcwd()
+    repo = repo or selected_checkout(service, record)
+    record.setdefault('selected_cwd', str(repo))
     config = _policy_data(repo) or {}
     root = config.get('worktree_root') or service.state / 'worktrees'
     previous = record.get('run_worktree')
@@ -144,7 +250,7 @@ DANGEROUS = re.compile(
 
 def _list(path):
     result = subprocess.run(['git', 'config', '--file', str(path), '--no-includes',
-                             '--list', '-z'], capture_output=True, check=True)
+                             '--list', '-z'], capture_output=True, check=True, env=checkout_env())
     values = {}
     for item in result.stdout.decode('utf-8', errors='surrogateescape').split('\0'):
         if item:
@@ -158,7 +264,7 @@ def init_guard(work_dir):
         return None
     try:
         result = subprocess.run(['git', '-C', str(work_dir), 'rev-parse', '--git-common-dir'],
-                                capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, env=checkout_env())
         path = (Path(work_dir) / result.stdout.strip()).resolve() / 'config'
         baseline = None
         # Close before git opens it, including on Windows.
@@ -195,12 +301,12 @@ def check_guard(guard, job):
     for key in offending:
         try:
             result = subprocess.run(['git', 'config', '--file', str(path), '--unset-all', key],
-                                    capture_output=True)
+                                    capture_output=True, env=checkout_env())
             if result.returncode not in (0, 5):
                 raise ValueError('unset failed')
             for value in baseline.get(key, []):
                 subprocess.run(['git', 'config', '--file', str(path), '--add', key, value],
-                               capture_output=True, check=True)
+                               capture_output=True, check=True, env=checkout_env())
         except (OSError, ValueError, subprocess.SubprocessError):
             job.events.append({'event': 'git_config_warning',
                                'reason': 'config_unset_failed', 'keys': [key]})

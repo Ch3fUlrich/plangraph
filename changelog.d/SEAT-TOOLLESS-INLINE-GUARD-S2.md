@@ -1,1 +1,2 @@
 - Refuse tool-less file requests without inline evidence and tool-call markup before verdict posting; preserve live inline-only judges and exclude judge cut-file metadata from request checks.
+- Keep inline-diff admission helpers with the prompt guard so seat dispatch stays within the source-size gate.

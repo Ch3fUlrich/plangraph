@@ -67,3 +67,21 @@ def admit_prompt(prompt, refuse):
                 line += 1
             previous = char
     return prompt
+
+
+# These children expose skill tools, but no repository/shell tools (D-4681).
+INLINE_DIFF_HARNESSES = frozenset({'opencode'})
+
+def _needs_inline_diff(leg, card):
+    return (getattr(leg, 'tool_mode', 'tools') == 'inline-only'
+            or (getattr(leg, 'tool_mode', 'tools') == 'prompt-only' and card.get('diff_ref') is not None)
+            or (getattr(leg, 'harness', None) in INLINE_DIFF_HARNESSES
+                and card.get('diff_ref') is not None))
+
+
+def _refuse_oversized_diff(exc, leg):
+    from .context_pack import PromptBoundError
+    if exc.chars is not None:
+        raise PromptBoundError(
+            f'prompt_too_large: inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
+            f'max_request_tokens {leg.max_request_tokens}') from None
