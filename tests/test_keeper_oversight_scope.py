@@ -147,7 +147,7 @@ def fresh(pid, *, kind="lane", tier="standard", deps=(), evidence=None,
         "project": P, "id": pid, "kind": kind, "title": f"title {pid}",
         "description": f"description {pid}", "note": f"note {pid}",
         "done_criteria": "criteria", "evidence_kinds":
-            evidence or (["decision"] if tier == "none" else ["any"]),
+            evidence or (["decision", "commit"] if tier == "none" else ["any"]),
         "depends_on": list(deps), "priority": 0, "owner": "tester",
     }
     if not drop_tier:
@@ -464,7 +464,7 @@ def test_every_write_verb_is_classified_for_oversight():
 # ----------------------------------------------------- allowed op seam
 @pytest.mark.parametrize("kind,tier,evidence", [
     ("lane", "standard", ["any"]),
-    ("question", "none", ["decision"]),
+    ("question", "none", ["decision", "commit"]),
     ("question", "standard", ["any"]),
 ])
 def test_create_allowed_kinds_and_tiers(w, monkeypatch, kind, tier, evidence):
@@ -1967,7 +1967,7 @@ def test_prepared_mints_allocate_generation_only_at_commit(w, monkeypatch):
 @pytest.mark.parametrize("raw", [
     fresh("DEFAULTS"),
     {k: v for k, v in fresh("DEFAULTS").items() if k != "kind"},
-    fresh("DEFAULTS", kind="question", tier="none", evidence=["decision"]),
+    fresh("DEFAULTS", kind="question", tier="none", evidence=["decision", "commit"]),
     dict(fresh("DEFAULTS"), project="demo"),
     dict(fresh("DEFAULTS"), title="security auth"),
 ])

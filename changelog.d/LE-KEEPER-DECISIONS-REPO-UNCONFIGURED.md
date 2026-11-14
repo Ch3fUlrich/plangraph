@@ -1,0 +1,1 @@
+Keeper install examples and the devstack config writer now include the decisions checkout at origin/main; missing repos.decisions emits one non-fatal startup warning naming the key and configuration fix.

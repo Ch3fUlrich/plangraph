@@ -1,0 +1,1 @@
+Decision-only declarations now require router authorization on create/edit, including mixed-to-decision-only edits of existing none-tier items and the oversight question-create seam; authorization is rechecked under the write lock, with existing origin/main token and epoch refusal coverage retained.

@@ -63,7 +63,7 @@ class E2E:
             self.tokens[name] = token
             self.principals[name] = auth.authenticate(self.conn, token)
         self.store.import_items(self.principals["router"],
-                                importer.load_dir(FIXTURE))
+                                [dict(item, evidence_kinds=["any"]) if item.get("evidence_kinds") == ["decision"] else item for item in importer.load_dir(FIXTURE)])
         if with_sizes:
             self._add_size_items()
         self.server = self.thread = None

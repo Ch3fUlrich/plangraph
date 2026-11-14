@@ -228,3 +228,25 @@ def verifier_context(cfg: Config):
     """The real verifier adapters built from *cfg* (no I/O until called)."""
     from . import evidence
     return evidence.default_context(cfg)
+
+
+def write_devstack_config(path, dsn, *, state, port, decisions_repo):
+    """Create/update privately; reuse an established config when no repo is supplied."""
+    from plangraph.routing_support.private_io import atomic_write_private
+
+    path = Path(path)
+    existing = load_config(path)._data if path.exists() else {}
+    if not decisions_repo or not str(decisions_repo).strip():
+        if path.exists():
+            return  # Keep the validated established configuration byte-for-byte.
+        raise ConfigError('set PLANGRAPH_DECISIONS_REPO to the decisions repository checkout')
+    repos = dict(existing.get('repos') or {})
+    repos.setdefault('decisions', {
+        'path': str(Path(decisions_repo).expanduser().resolve()), 'ref': 'origin/main'})
+    data = dict(existing) if path.exists() else {
+        'backend': 'postgres', 'dsn': dsn, 'bind': f'127.0.0.1:{int(port)}',
+        'snapshot': str(Path(state) / 'plan.snapshot.json'),
+    }
+    data['repos'] = repos
+    Config(data, Path(path).resolve().parent)
+    atomic_write_private(path, json.dumps(data) + '\n')

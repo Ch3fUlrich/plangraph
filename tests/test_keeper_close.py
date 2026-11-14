@@ -310,9 +310,11 @@ def test_open_item_must_be_moved_first(tmp_path):
 
 
 @pytest.mark.parametrize("tier,kinds", [("standard", ("any",)),
-                                        ("high", ("decision",))])
+                                        ("high", ("any",)), ("high", ("decision",))])
 def test_tier_not_none_refused(tmp_path, tier, kinds):
-    w = _world(tmp_path, CLOSES, tier=tier, kinds=kinds)
+    w = _world(tmp_path, CLOSES, tier="none" if kinds == ("decision",) else tier, kinds=kinds)
+    # A historical reviewed decision-only row bypasses new-definition policy.
+    w.conn.execute("UPDATE items SET review_tier=? WHERE key=?", (tier, KEY))
     exc = _refuse(w, "bad_state")
     assert tier in exc.msg
 
