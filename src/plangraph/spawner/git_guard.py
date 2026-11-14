@@ -62,6 +62,100 @@ def run_worktree_lock(root):
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
 
+@contextmanager
+def run_tree(state, repo=None):
+    """Select fetched main without moving live trees; lease until context exit."""
+    from contextlib import ExitStack
+    from .runner import is_terminal
+    import json
+    state = Path(state).resolve()
+    repo = Path(repo or os.environ.get('PLANGRAPH_SPAWNER_REPO') or
+                Path(__file__).resolve().parents[3])
+    root = state / 'trees'
+    def git(*args):
+        return subprocess.run(['git', '-C', str(repo), *map(str, args)], check=True,
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=10 if args[0] == 'fetch' else 30).stdout.strip()
+    def valid(path):
+        return (not path.is_symlink() and path.is_dir() and
+                re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', path.name))
+    stale = None
+    # Fetches serialize independently of creation; neither waits for live runs.
+    with run_worktree_lock(root / '.fetch'):
+        try:
+            git('fetch', '--no-write-fetch-head', 'origin',
+                '+refs/heads/main:refs/remotes/origin/main')
+        except (OSError, subprocess.SubprocessError) as exc:
+            stale = 'fetch_timeout' if isinstance(exc, subprocess.TimeoutExpired) else 'fetch_failed'
+        # Even offline, prefer the verified tracking ref, never directory mtimes.
+        sha = git('rev-parse', '--verify', 'refs/remotes/origin/main^{commit}')
+    if not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', sha):
+        raise RuntimeError('run_tree_invalid_sha')
+    path = root / sha
+    with ExitStack() as resources:
+        # Slow creation at A cannot monopolize selection/creation at B.
+        with run_worktree_lock(root / '.locks' / sha):
+            if path.is_symlink() or (path.exists() and not valid(path)):
+                raise RuntimeError('run_tree_invalid')
+            if not path.exists():
+                # Reuse only this missing registration; never prune other trees.
+                git('worktree', 'add', '--detach', '--force', '--force', path, sha)
+            if not (path / '.git').is_file():
+                raise RuntimeError('run_tree_invalid')
+            if git('-C', path, 'rev-parse', '--verify', 'HEAD^{commit}') != sha:
+                raise RuntimeError('run_tree_invalid_head')
+            os.utime(path, None)  # Grace for callers that persist after lease release.
+            if os.name != 'nt':
+                import fcntl
+                lease = resources.enter_context((root / (sha + '.lease')).open('a+b'))
+                fcntl.flock(lease, fcntl.LOCK_SH)
+        # Unknown identities and unreadable records withhold cleanup, not admission.
+        live = set()
+        try:
+            for record in (state / 'runs').glob('*/record.json'):
+                row = json.loads(record.read_text(encoding='utf-8'))
+                if row.get('survivors') or not is_terminal(row.get('status')):
+                    identity = row.get('tree_sha')
+                    if not isinstance(identity, str) or not re.fullmatch(
+                            r'(?:[0-9a-f]{40}|[0-9a-f]{64})', identity):
+                        live = None
+                        break
+                    live.add(identity)
+        except (OSError, ValueError, TypeError, AttributeError):
+            live = None
+        # Windows has no shared lease here: selection works, cleanup stays off.
+        for old in root.iterdir() if live is not None and os.name != 'nt' else ():
+            try:
+                if old == path or old.name in live or not valid(old):
+                    continue
+                # Never wait behind another SHA's slow creation or active cleanup.
+                import fcntl
+                with (root / '.locks' / old.name / '.lock').open('a+b') as lock:
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        continue
+                    _cleanup_tree(old, root, git)
+            except (OSError, subprocess.SubprocessError):
+                continue  # A dirty/unreadable candidate must not starve the others.
+        yield dict(tree_sha=sha, tree_path=str(path), **({'tree_stale': stale} if stale else {}))
+
+
+def _cleanup_tree(old, root, git):
+    """Remove only expired, clean trees whose POSIX lease is exclusively available."""
+    import fcntl
+    if time.time() - old.stat().st_mtime <= 7 * 86400:
+        return
+    lease_path = root / (old.name + '.lease')
+    with lease_path.open('a+b') as lease:
+        try:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        git('worktree', 'remove', old)  # Never force-remove a dirty tree.
+    lease_path.unlink(missing_ok=True)
+
+
 def create(root, repo, lane_branch, continuation=False, *, finished_dependencies=()):
     """Create one attempt without resetting a branch or removing an earlier worktree.
 

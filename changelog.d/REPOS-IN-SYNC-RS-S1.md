@@ -1,1 +1,2 @@
 - Add `pg-repo-sync`: discover direct `$HOME/code` repositories (including dangling `.git` entries) or use `--repo` labels, fetch/fast-forward silently with hooks/fsmonitor disabled, sort and losslessly escape alert labels within the five closed reasons, and diagnose usage errors with exit 2.
+- Select Rust CI when the sync command documentation changes, matching the command documentation contract test.

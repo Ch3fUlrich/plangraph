@@ -35,6 +35,7 @@ RUST_INPUTS: tuple[str, ...] = (
     ".docs-map",
     "docs/schemas/**",
     "docs/flow-watchdog.md",
+    "docs/fleet-sync.md",
     "docs/placement-rules.md",
     "docs/rust-hooks.md",
     "docs/spawner-reliability.md",

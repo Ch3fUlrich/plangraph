@@ -59,7 +59,24 @@ def filter_within(selected_tests, within):
     return sorted(set(matched))
 
 
-def select_tests(root, changed, within=None):
+SMOKE_LIMIT = 12
+SMOKE_TEST = "tests/test_affected_tests.py"
+
+
+def smoke_tests(texts, path):
+    """Bounded stand-in for the whole suite when a code file maps to no test.
+
+    Tests naming the file's directory (two or more path parts deep, at most
+    SMOKE_LIMIT, sorted) plus the selector's own test; CI keeps the full suite.
+    """
+    parent = Path(path).parent.as_posix()
+    near = sorted(s for s, text in texts.items() if s.startswith("tests/")
+                  and Path(s).name.startswith("test_") and len(Path(parent).parts) > 1
+                  and parent in text)[:SMOKE_LIMIT]
+    return set(near) | ({SMOKE_TEST} if SMOKE_TEST in texts else set())
+
+
+def select_tests(root, changed, within=None, *, local=False):
     root = Path(root)
     paths = sorted(p for folder in ("src", "tests") for p in (root / folder).rglob("*.py"))
     modules = {}
@@ -121,7 +138,7 @@ def select_tests(root, changed, within=None):
             continue
         if p.parts[0] not in {"src", "tests", "tools"}:
             if p.name != "conftest.py":
-                if p.parts[0] in {"docs", "status"}:
+                if p.parts[0] in {"docs", "status"} or (p.parts[0] == "changelog.d" and p.suffix == ".md"):
                     continue
                 if not revision_asset(root, path, asset_cache):
                     continue
@@ -132,10 +149,11 @@ def select_tests(root, changed, within=None):
             # scratch files stay skippable here.
             if not revision_asset(root, path, asset_cache):
                 continue
-        if p.name == "conftest.py" or (path.startswith("tests/") and not p.name.startswith("test_")):
+        if p.name == "conftest.py" or (not local and path.startswith("tests/") and not p.name.startswith("test_")):
             return fallback("shared fixture")
         if p.parts[0] in {"src", "tests", "tools"} and path not in texts and p.suffix == ".py":
-            return fallback("unmapped file")
+            selected.update(smoke_tests(texts, path))
+            continue
         seen, todo = set(), [path]
         while todo:
             current = todo.pop()
@@ -148,8 +166,11 @@ def select_tests(root, changed, within=None):
         hits.update(s for s, text in texts.items() if s.startswith("tests/")
                     and Path(s).name.startswith("test_")
                     and (p.name in text or path in text))
+        if not hits and p.suffix in {".md", ".rst"}:
+            continue  # prose no test names cannot change a test result (D-5827)
         if not hits:
-            return fallback("no mapped tests")
+            selected.update(smoke_tests(texts, path))
+            continue
         selected.update(hits)
     selected = {t for t in selected if not t.startswith("tests/browser/")}  # own CI job (D-2821)
     return {"tests": filter_within(sorted(selected), within), "reason": "reverse imports and explicit file references"}
@@ -170,6 +191,7 @@ def main(root=None):
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
     parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
     parser.add_argument("-n", "--workers", default="auto")
     parser.add_argument("--within", nargs="+", action="extend", help="restrict selection to given paths")
@@ -185,8 +207,11 @@ def main(root=None):
             if not (root / w).exists():
                 print(f"unknown --within path: {w}", file=sys.stderr)
                 return 2
-    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within)
+    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, local=args.local)
     print(json.dumps(plan), flush=True)
+    if args.local and args.run and "tests" in plan["tests"]:
+        print('local preflight refuses the full suite; specify affected test files with --within', file=sys.stderr)
+        return 2
     if args.within is not None and not plan["tests"]:
         print("no pg-affected tests")
         return 0
