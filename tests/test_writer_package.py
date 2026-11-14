@@ -14,6 +14,6 @@ def test_package_rules_cover_gate_trailers():
         assert pattern.pattern in rules['trailer_patterns']
     assert 'Writer: {writer}' in rules['template']
     assert 'Plan-Item: plangraph:{key}' in rules['template']
-    for text in ('Sergej Maul', '71930650+Ch3fUlrich' + '@' + 'users.noreply.github.com',
+    for text in ('$AUTHOR_NAME', '$AUTHOR_EMAIL',
                  'STATUS-', '800', 'Rust', 'affected', 'ALL DONE'):
         assert text in rules['template']

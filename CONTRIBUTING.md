@@ -357,3 +357,7 @@ The hook prints `SKIPPED PLANGRAPH_HOOK_DISABLE=1` and exits successfully. Unset
 or any other value runs normal checks. Do not disable a hook by changing its
 executable bit: that creates a tracked mode change and can block fast-forwards.
 `PREFLIGHT_SKIP=1` remains the narrower preflight-only bypass.
+
+Writer package commit commands use `AUTHOR_NAME` and `AUTHOR_EMAIL` from the
+task instructions; set both before committing. Public templates carry placeholders
+rather than personal author identities.

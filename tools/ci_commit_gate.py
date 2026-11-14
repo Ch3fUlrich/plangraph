@@ -516,8 +516,9 @@ def package_rules():
     """Machine-readable package contract, exported by the trailer authority."""
     patterns = [WRITER_RE.pattern, HAND_EDIT_RE.pattern,
                 GATE_EDIT_RE.pattern, TEST_REMOVAL_RE.pattern]
-    template = '''Every task is one commit with this identity:
-git -c user.name="Sergej Maul" -c user.email="71930650+Ch3fUlrich''' + '@' + '''users.noreply.github.com" commit
+    template = '''Every task is one commit with the author identity supplied in the task instructions.
+Set AUTHOR_NAME and AUTHOR_EMAIL to those values before committing:
+git -c user.name="$AUTHOR_NAME" -c user.email="$AUTHOR_EMAIL" commit
 Put both trailers in the final paragraph, with exact spelling and spacing:
 Plan-Item: plangraph:{key}
 Writer: {writer}
