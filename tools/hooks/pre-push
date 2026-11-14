@@ -205,7 +205,7 @@ def test_environment(root, env):
 
 
 def affected_gate(root, base, head, timeout=240):
-    """Run at most 40 explicit files within 240s; timeout refuses and CI owns the rest."""
+    """Target 40 files, retaining source coverage floors; 240s timeout still refuses."""
     selector = Path(root) / 'tools/affected_tests.py'
     if not selector.is_file():
         print('pre-push: tools/affected_tests.py missing: push refused', file=sys.stderr)

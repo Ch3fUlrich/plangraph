@@ -3,13 +3,20 @@
 Before pushing, run `python3 tools/affected_tests.py --base origin/main --head HEAD --files-only --run`.
 The pre-push hook runs this selector automatically with a shared 240-second test
 budget, after ref safety, pushed-tree size policy, commit identity and scrub gates.
-Local selection has a hard cap of 40 explicit test files: changed tests first,
-then direct importers and file-reference consumers, then transitive consumers,
-sorted within each group. Shared test controls (conftest, pytest configuration,
-selector, hook and preflight) select their own coverage plus hook/preflight tests,
-rather than the implicit global fixture fanout. The selector prints one line with
-the count left to CI when capped; `--max-files` may lower the cap but cannot raise
-it or disable it. Timeout still refuses the push and kills the selector's worker
+Local selection targets 40 explicit test files while preserving a per-source
+coverage floor: every changed source with mapped tests keeps its most direct
+test, using shortest reverse-import distance and treating file references as
+direct coverage. Shared floor tests count once. If these floors alone exceed the
+bound, it grows to their unique test count. Remaining slots go to changed tests,
+then direct importers and file-reference consumers, then transitive consumers;
+output uses the same ranking, sorted within each group. Shared test controls
+(conftest, pytest configuration, selector, hook and preflight) select their own
+coverage plus hook/preflight tests, rather than the implicit global fixture
+fanout. When capped, one clear line reports the deferred count, effective bound,
+and changed files whose coverage was reduced to one floor test (or none).
+The JSON plan also includes `floors`, `floor_only`, and the effective `limit`.
+`--max-files` may lower the base bound but cannot raise it or disable it; only
+mandatory source floors can grow it. Timeout still refuses the push and kills the selector's worker
 group. The hook never invokes the full suite or `tools/preflight.py`. `PREFLIGHT_SKIP` and `PREFLIGHT_FAST` do not bypass it.
 GitHub CI runs full verification. The standalone preflight command remains an
 explicit diagnostic tool, with its own per-family policy and timeouts. Private

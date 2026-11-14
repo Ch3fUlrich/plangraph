@@ -554,7 +554,7 @@ def test_local_cap_reports_files_left_to_ci_once(tmp_path, monkeypatch, capsys):
     assert len(selected) == 40
     assert [arg for arg in launched[0][0] if arg.endswith('.py')] == selected
     assert launched[0][1]['env'] == {'FIXTURE': 'clean'}
-    assert output.err.splitlines() == ['affected tests: 5 files left to CI (local cap: 40 files)']
+    assert output.err.splitlines() == ['affected tests: 5 files left to CI (local cap: 40 files; effective bound: 40 files; coverage reduced to floor: none)']
 
 
 @pytest.mark.parametrize('cap', [0, -1, 41])
@@ -574,3 +574,100 @@ def test_local_global_support_keeps_explicit_direct_importers_only(tmp_path):
         'tests/test_a_indirect.py': 'from test_z_direct import VALUE\n'})
     plan = selector().select_tests(tmp_path, ['tests/conftest.py'], files_only=True)
     assert plan['tests'] == ['tests/test_z_direct.py']
+
+
+def _floor_tree(root, groups=5, per_file=12):
+    changes, consumers = [], {}
+    for i in range(groups):
+        source = f'src/pkg/core{i}.py'
+        names = [f'tests/test_{i:02}_{j:02}.py' for j in range(per_file)]
+        _local_tree(root, {source: 'VALUE = 1\n',
+            **{name: f'from pkg.core{i} import VALUE\n' for name in names}})
+        changes.append(source)
+        consumers[source] = names
+    return changes, consumers
+
+
+def test_local_floor_keeps_coverage_that_ranks_last(tmp_path):
+    changes, consumers = _floor_tree(tmp_path)
+    module = selector()
+    result = module.select_tests(tmp_path, changes, files_only=True)
+    assert len(result['tests']) == 40
+    assert result['deferred'] == 20
+    for names in consumers.values():
+        assert names[0] in result['tests']
+    assert result['floor_only'] == [changes[-1]]
+    assert module.select_tests(tmp_path, reversed(changes), files_only=True) == result
+
+
+def test_local_floors_grow_bound_when_more_than_forty_are_needed(tmp_path, monkeypatch, capsys):
+    changes, consumers = _floor_tree(tmp_path, groups=45, per_file=1)
+    _local_tree(tmp_path, {f'tests/test_extra_{i:02}.py': 'from pkg.core0 import VALUE\n'
+                          for i in range(10)})
+    module = selector()
+    result = module.select_tests(tmp_path, changes, files_only=True)
+    assert result['tests'] == sorted(names[0] for names in consumers.values())
+    assert result['limit'] == 45
+    assert result['deferred'] == 10
+    assert result['floor_only'] == [changes[0]]
+
+    import json
+    import sys
+    from types import SimpleNamespace
+    launched = []
+    monkeypatch.setattr(module, 'test_environment', lambda *a: {})
+    monkeypatch.setattr(module.subprocess, 'run', lambda command, **kw:
+                        launched.append(command) or SimpleNamespace(returncode=0))
+    args = ['affected_tests', '--base', 'unused', '--files-only', '--run']
+    for source in changes:
+        args.extend(['--changed', source])
+    monkeypatch.setattr(sys, 'argv', args)
+    assert module.main(root=tmp_path) == 0
+    output = capsys.readouterr()
+    assert json.loads(output.out.splitlines()[0])['tests'] == result['tests']
+    assert [arg for arg in launched[0] if arg.endswith('.py')] == result['tests']
+    assert output.err.splitlines() == [
+        f'affected tests: 10 files left to CI (local cap: 40 files; effective bound: 45 files; '
+        f'coverage reduced to floor: {changes[0]})']
+
+
+def test_local_floor_uses_each_sources_shortest_import_path(tmp_path):
+    _local_tree(tmp_path, {'src/pkg/core.py': 'VALUE = 1\n',
+        'src/pkg/other.py': 'VALUE = 2\n',
+        'src/pkg/bridge.py': 'from pkg.core import VALUE\n',
+        'tests/test_a.py': 'from pkg.bridge import VALUE\nfrom pkg.other import VALUE\n',
+        'tests/test_z.py': 'from pkg.core import VALUE\n'})
+    result = selector().select_tests(tmp_path, ['src/pkg/core.py', 'src/pkg/other.py'],
+                                     files_only=True, max_files=1)
+    # test_a is globally direct for other.py but only transitive for core.py.
+    assert result['tests'] == ['tests/test_a.py', 'tests/test_z.py']
+    assert result['floors'] == {'src/pkg/core.py': 'tests/test_z.py',
+                                'src/pkg/other.py': 'tests/test_a.py'}
+
+
+def test_local_floor_deduplicates_shared_test_and_keeps_changed_tests_first(tmp_path):
+    _local_tree(tmp_path, {'src/pkg/core.py': 'VALUE = 1\n',
+        'src/pkg/other.py': 'VALUE = 2\n',
+        'tests/test_a.py': 'from pkg.core import VALUE\nfrom pkg.other import VALUE\n',
+        'tests/test_z_written.py': ''})
+    result = selector().select_tests(tmp_path,
+        ['src/pkg/core.py', 'src/pkg/other.py', 'tests/test_z_written.py'],
+        files_only=True, max_files=2)
+    assert result['tests'] == ['tests/test_z_written.py', 'tests/test_a.py']
+    assert result['limit'] == 2
+
+
+def test_local_deferred_line_names_floor_only_sources(tmp_path, monkeypatch, capsys):
+    import json
+    import sys
+    changes, _ = _floor_tree(tmp_path)
+    args = ['affected_tests', '--base', 'unused', '--files-only']
+    for source in changes:
+        args.extend(['--changed', source])
+    monkeypatch.setattr(sys, 'argv', args)
+    assert selector().main(root=tmp_path) == 0
+    out = capsys.readouterr()
+    assert json.loads(out.out)['floor_only'] == [changes[-1]]
+    assert out.err.splitlines() == [
+        f'affected tests: 20 files left to CI (local cap: 40 files; effective bound: 40 files; '
+        f'coverage reduced to floor: {changes[-1]})']
