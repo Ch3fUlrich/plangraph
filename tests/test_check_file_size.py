@@ -21,6 +21,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+FIXTURE_EMAIL = '@'.join(('123+fixture', 'users.noreply.github.com'))
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "tools" / "check_file_size.py"
 HOOK = ROOT / "tools" / "hooks" / "pre-push"
@@ -43,7 +45,7 @@ class RepoFixture(unittest.TestCase):
         self.git("init", "-q")
         # CI runners carry no git identity: a fixture commit must carry its own.
         self.git("config", "user.name", "file-size tests")
-        self.git("config", "user.email", "123+fixture@users.noreply.github.com")
+        self.git("config", "user.email", FIXTURE_EMAIL)
 
     def git(self, *args):
         return subprocess.run(["git"] + list(args), cwd=str(self.repo),

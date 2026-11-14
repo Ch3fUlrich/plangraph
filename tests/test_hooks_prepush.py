@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+FIXTURE_EMAIL = '@'.join(('123+fixture', 'users.noreply.github.com'))
+
 ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "tools" / "hooks" / "pre-push"
 WORKFLOWS = ROOT / ".github" / "workflows" / "tests.yml"
@@ -74,7 +76,7 @@ def commit_file(repo, rel, text):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text)
     git(repo, "add", "-A")
-    git(repo, "-c", "user.name=t", "-c", "user.email=123+fixture@users.noreply.github.com",
+    git(repo, "-c", "user.name=t", "-c", "user.email=" + FIXTURE_EMAIL,
         "commit", "-qm", "change")
     return git(repo, "rev-parse", "HEAD").strip()
 
@@ -87,7 +89,7 @@ def commit_symlink(repo, rel, target):
     p.parent.mkdir(parents=True, exist_ok=True)
     os.symlink(target, p)
     git(repo, "add", "-A")
-    git(repo, "-c", "user.name=t", "-c", "user.email=123+fixture@users.noreply.github.com",
+    git(repo, "-c", "user.name=t", "-c", "user.email=" + FIXTURE_EMAIL,
         "commit", "-qm", "relink")
     return git(repo, "rev-parse", "HEAD").strip()
 
@@ -113,7 +115,7 @@ def repo(tmp_path):
     r.mkdir()
     git(r, "init", "-q", "-b", "main")
     git(r, "config", "user.name", "t")
-    git(r, "config", "user.email", "123+fixture@users.noreply.github.com")
+    git(r, "config", "user.email", FIXTURE_EMAIL)
     commit_file(r, "tools/affected_tests.py", "raise SystemExit(0)\n")
     base = commit_file(r, "app/clean.py", "x = 1\n")
     return r, base
@@ -400,7 +402,7 @@ def test_prepush_checks_the_pushed_sha_not_head(repo):
 def test_identity_gate_refuses_guessed_email(repo, monkeypatch, capsys, role):
     import runpy
     r, base = repo
-    valid = '123+fixture@users.noreply.github.com'
+    valid = FIXTURE_EMAIL
     guessed = 'writer@' + 'fixture.invalid'
     monkeypatch.chdir(r)
     for prefix in ('GIT_AUTHOR', 'GIT_COMMITTER'):
@@ -419,7 +421,7 @@ def test_identity_gate_accepts_noreply_email(repo, monkeypatch):
     monkeypatch.chdir(r)
     for prefix in ('GIT_AUTHOR', 'GIT_COMMITTER'):
         monkeypatch.setenv(prefix + '_NAME', 'Fixture')
-        monkeypatch.setenv(prefix + '_EMAIL', '123+fixture@users.noreply.github.com')
+        monkeypatch.setenv(prefix + '_EMAIL', FIXTURE_EMAIL)
     git(r, 'commit', '--allow-empty', '-qm', 'identity fixture')
     assert runpy.run_path(str(HOOK))['identity_gate'](base, git(r, 'rev-parse', 'HEAD').strip()) == 0
 

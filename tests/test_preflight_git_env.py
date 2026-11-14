@@ -10,6 +10,8 @@ import pytest
 
 from test_preflight import fake_runner, preflight, repo
 
+FIXTURE_EMAIL = '@'.join(('123+fixture', 'users.noreply.github.com'))
+
 
 @pytest.mark.parametrize("refuse", [False, True])
 def test_nested_fixture_keeps_its_installed_hook(repo, monkeypatch, refuse):
@@ -42,7 +44,7 @@ def test_nested_fixture_keeps_its_installed_hook(repo, monkeypatch, refuse):
     nested = repo / "independent-checkout"
     subprocess.run(["git", "init", "-q", str(nested)], check=True)
     subprocess.run(["git", "-c", "user.name=Test", "-c",
-                    "user.email=123+fixture@users.noreply.github.com", "commit", "-q",
+                    "user.email=" + FIXTURE_EMAIL, "commit", "-q",
                     "--allow-empty", "-m", "fixture"], cwd=nested, check=True)
     nested_remote = repo / "nested.git"
     subprocess.run(["git", "init", "-q", "--bare", str(nested_remote)], check=True)

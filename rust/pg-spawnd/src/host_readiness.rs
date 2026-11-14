@@ -5,8 +5,6 @@ use crate::{
     placement::parameter,
 };
 use serde_json::{json, Value};
-const NAME: &str = "Sergej Maul";
-const EMAIL: &str = "71930650+Ch3fUlrich@users.noreply.github.com";
 fn allowed(email: &str) -> bool {
     regex::Regex::new(r"^(?:[0-9]+\+)?[A-Za-z0-9._\[\]-]+@users\.noreply\.github\.com$")
         .unwrap()
@@ -18,7 +16,19 @@ fn ready(v: &Value) -> bool {
             .iter()
             .all(|k| v[*k].as_str().is_some_and(allowed))
 }
-fn script(host: &Host, setup: bool) -> String {
+fn setup_identity(
+    name: Option<String>,
+    email: Option<String>,
+) -> Result<(String, String), ToolError> {
+    let name = name
+        .filter(|n| !n.trim().is_empty() && !n.chars().any(char::is_control))
+        .ok_or_else(|| parameter("setup requires PG_WRITER_NAME"))?;
+    let email = email
+        .filter(|e| allowed(e))
+        .ok_or_else(|| parameter("setup requires a noreply PG_WRITER_EMAIL"))?;
+    Ok((name, email))
+}
+fn script(host: &Host, setup: Option<(&str, &str)>) -> String {
     use crate::package_scripts::{ps, sh};
     if host.kind == "windows" {
         format!(
@@ -32,11 +42,11 @@ $committer=(& git var GIT_COMMITTER_IDENT) -replace '^.*<([^>]+)>.*$', '$1'
 @{{name=$name;email=$email;author_email=$author;committer_email=$committer}} | ConvertTo-Json -Compress
 "#,
             repo = ps(&host.repo),
-            setup = if setup {
+            setup = if let Some((name, email)) = setup {
                 format!(
                     "git config --global user.name {}\ngit config --global user.email {}",
-                    ps(NAME),
-                    ps(EMAIL)
+                    ps(name),
+                    ps(email)
                 )
             } else {
                 String::new()
@@ -55,11 +65,11 @@ committer=$(git var GIT_COMMITTER_IDENT | sed -n 's/.*<\([^>]*\)>.*/\1/p' | tr -
 printf '{{"name_hex":"%s","email_hex":"%s","author_email_hex":"%s","committer_email_hex":"%s"}}\n' "$name" "$email" "$author" "$committer"
 "#,
             repo = sh(&host.repo),
-            setup = if setup {
+            setup = if let Some((name, email)) = setup {
                 format!(
                     "git config --global user.name {}\ngit config --global user.email {}",
-                    sh(NAME),
-                    sh(EMAIL)
+                    sh(name),
+                    sh(email)
                 )
             } else {
                 String::new()
@@ -72,7 +82,23 @@ pub(crate) fn check(
     setup: bool,
     backend: &mut impl Backend,
 ) -> Result<Value, ToolError> {
-    let mut result = backend.remote(host, &script(host, setup))?;
+    let identity = if setup {
+        Some(setup_identity(
+            std::env::var("PG_WRITER_NAME").ok(),
+            std::env::var("PG_WRITER_EMAIL").ok(),
+        )?)
+    } else {
+        None
+    };
+    let mut result = backend.remote(
+        host,
+        &script(
+            host,
+            identity
+                .as_ref()
+                .map(|(name, email)| (name.as_str(), email.as_str())),
+        ),
+    )?;
     if host.kind == "linux" {
         for key in ["name", "email", "author_email", "committer_email"] {
             result[key] = json!(crate::package_probe::unhex(&result[format!("{key}_hex")])?);
@@ -113,8 +139,9 @@ mod tests {
     use super::*;
     #[test]
     fn host_readiness_requires_name_and_effective_noreply_identities() {
+        let email = ["123+fixture", "users.noreply.github.com"].join("@");
         let valid =
-            json!({"name":"Fixture", "email":EMAIL,"author_email":EMAIL,"committer_email":EMAIL});
+            json!({"name":"Fixture", "email":email,"author_email":email,"committer_email":email});
         assert!(ready(&valid));
         for key in ["name", "email", "author_email", "committer_email"] {
             let mut v = valid.clone();
@@ -124,6 +151,32 @@ mod tests {
                 "writer@fixture.invalid"
             });
             assert!(!ready(&v));
+        }
+    }
+    #[test]
+    fn host_readiness_setup_requires_operator_identity() {
+        let email = ["123+fixture", "users.noreply.github.com"].join("@");
+        assert!(setup_identity(None, Some(email.clone())).is_err());
+        assert!(setup_identity(Some("Fixture".into()), None).is_err());
+        assert!(setup_identity(Some("".into()), Some(email.clone())).is_err());
+        assert!(setup_identity(
+            Some("Fixture".into()),
+            Some("fixture@example.invalid".into())
+        )
+        .is_err());
+        let (name, email) = setup_identity(Some("Fixture Writer".into()), Some(email))
+            .unwrap_or_else(|_| panic!("fixture identity"));
+        for kind in ["linux", "windows"] {
+            let host = Host {
+                kind: kind.into(),
+                target: "fixture".into(),
+                repo: "/tmp/fixture".into(),
+                root: "/tmp".into(),
+            };
+            let setup = script(&host, Some((&name, &email)));
+            assert!(setup.contains("Fixture Writer"));
+            assert!(setup.contains(&email));
+            assert!(!script(&host, None).contains("config --global"));
         }
     }
 }

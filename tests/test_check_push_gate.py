@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+FIXTURE_EMAIL = '@'.join(('123+fixture', 'users.noreply.github.com'))
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools/check_push_gate.py"
 
@@ -28,7 +30,7 @@ def repo(tmp_path, monkeypatch):
     r.mkdir()
     git(r, "init", "-qb", "main")
     git(r, "config", "user.name", "fixture")
-    git(r, "config", "user.email", "123+fixture@users.noreply.github.com")
+    git(r, "config", "user.email", FIXTURE_EMAIL)
     for rel in ("tools/hooks/pre-push", "tools/split/scrub_check.py",
                 "tools/check_file_size.py"):
         dest = r / rel

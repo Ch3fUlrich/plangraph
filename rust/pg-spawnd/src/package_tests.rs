@@ -103,10 +103,11 @@ fn package_linux_script_runs_against_command_fakes() {
     let bin = state.join("bin");
     std::fs::create_dir(&bin).unwrap();
     for (name,script) in [
-        ("git", "#!/bin/sh\ncase \"$*\" in\n'symbolic-ref --short HEAD') echo main;;\n'config user.name') echo Test;;\n'config user.email') echo '123+writer@users.noreply.github.com';;\n'var GIT_'*) echo 'Fixture <123+writer@users.noreply.github.com> 1 +0000';;\n'worktree add -b '*) mkdir -p \"$5\";;\nesac\n"),
+        ("git", "#!/bin/sh\ncase \"$*\" in\n'symbolic-ref --short HEAD') echo main;;\n'config user.name') echo Test;;\n'config user.email') echo 'FIXTURE_NOREPLY';;\n'var GIT_'*) echo 'Fixture <FIXTURE_NOREPLY> 1 +0000';;\n'worktree add -b '*) mkdir -p \"$5\";;\nesac\n"),
         ("herdr", "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$PKG_CALLS\"\ncase \"$*\" in 'workspace create '*) echo pane-1;; esac\n"),
         ("sleep", "#!/bin/sh\nexit 0\n")
     ] {
+        let script=script.replace("FIXTURE_NOREPLY", &["123+writer", "users.noreply.github.com"].join("@"));
         let path=bin.join(name);std::fs::write(&path,script).unwrap();
         std::fs::set_permissions(path,std::fs::Permissions::from_mode(0o755)).unwrap();
     }

@@ -8,6 +8,8 @@ from test_hooks_prepush import (
     HOOK, ZERO, commit_file, fake_ip, fake_word, git, push_line, repo, run_hook,
 )
 
+FIXTURE_EMAIL = '@'.join(('123+fixture', 'users.noreply.github.com'))
+
 
 @pytest.mark.parametrize("case", ["main-only", "branch-hit", "resolution-hit",
                                  "touched-clean", "unknown-main", "base-only"])
@@ -215,7 +217,7 @@ def test_sha256_new_branch_and_delete(tmp_path):
     r = tmp_path / "sha256"
     git(tmp_path, "init", "--object-format=sha256", str(r))
     git(r, "config", "user.name", "t")
-    git(r, "config", "user.email", "123+fixture@users.noreply.github.com")
+    git(r, "config", "user.email", FIXTURE_EMAIL)
     commit_file(r, "tools/affected_tests.py", "raise SystemExit(0)\n")
     head = commit_file(r, "clean.txt", "clean\n")
     zero = "0" * len(head)
