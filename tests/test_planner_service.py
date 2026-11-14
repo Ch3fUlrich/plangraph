@@ -63,7 +63,7 @@ def test_ready_card_moves_to_ready(w, repo):
     result = gate(w, repo, key)
     assert result.ready and result.acted and result.state == "ready"
     assert result.question_id is None and result.route_error is None
-    assert (result.route.first_leg.harness, result.route.first_leg.tier) == ("agy", "free")
+    assert (result.route.first_leg.harness, result.route.first_leg.tier) == ("opencode", "free")
     assert all(leg.harness != "qodercli" for leg in result.route.legs)
     assert state_of(w, key) == "ready"
     assert gate(w, repo, key).state == "ready"
@@ -262,7 +262,7 @@ def test_route_for_card_prefers_qodercli(w):
     (key,) = seed(w, [("A", [])])
     put(w, key, estimate_tokens=40000, risk_tags=[])
     route = service.route_for_card(w.store, w.p("router"), key, legs=DEFAULT_LEGS)
-    assert (route.first_leg.harness, route.first_leg.tier) == ("agy", "free")
+    assert (route.first_leg.harness, route.first_leg.tier) == ("opencode", "free")
     assert all(leg.harness != "qodercli" for leg in route.legs)
     assert route.window_class == "128k"
 
@@ -298,11 +298,11 @@ def test_keeper_readiness_does_not_enable_implementation_fallbacks(w, repo, entr
         route = gate(w, repo, key).route
     else:
         route = service.route_for_card(w.store, w.p("router"), key, legs=DEFAULT_LEGS)
-    assert route.first_leg.id == "agy-gemini-3.8-flash"
+    assert route.first_leg.id == "opencode-big-pickle"
     # D-5206 replaces plain Sol with xhigh without lifting keeper-only admission.
     assert {leg.id for leg in route.legs if leg.roles == ("implement",)} == {"cx-gpt-6.1-sol-xhigh"}
     # D-5212 changes worker priority, not S5's registered free/paid fallbacks.
     worker = service.route_for_card(w.store, w.p("router"), key,
                                     legs=DEFAULT_LEGS, role="implement")
-    assert [leg.id for leg in worker.legs[:2]] == ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash"]
+    assert [leg.id for leg in worker.legs[:2]] == ["cx-gpt-6.1-sol-xhigh", "openrouter-free"]
     assert worker.legs[-1].id == "deepseek"

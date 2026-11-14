@@ -1,3 +1,7 @@
+> Historical snapshot: Gemini Flash references below preserve prior decisions and
+> benchmark evidence only. Operator order 2026-11-14 retires every version; none
+> is an available route. Hydrogen medium awaits capability and AGY witness evidence.
+
 # Tier order and windows (TORDER) — the folded predecessor rule
 
 This is the folded-in predecessor skill's rule, kept in substance (TORDER

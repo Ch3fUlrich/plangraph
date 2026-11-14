@@ -1,15 +1,17 @@
 # Implement route defaults (D-5206)
 
-An implement card uses `cx-gpt-6.1-sol-xhigh` (model `omniroute/cx-gpt-6.1-sol-xhigh`,
-effort `xhigh`), then `agy-gemini-3.8-flash` (agy harness). Quota, cooldown, or a
+The declared writer order uses `cx-gpt-6.1-sol-xhigh` (model `omniroute/cx-gpt-6.1-sol-xhigh`,
+effort `xhigh`), then `agy-gemini-4-hydrogen-medium` (agy harness). Hydrogen is
+still disabled: capability evidence and AGY served-model telemetry are missing;
+this position does not admit it. Quota, cooldown, or a
 confirmed availability refusal advances without an override; safety refusals,
 cancellation, and guards still stop dispatch. Eligibility and harness policy apply first.
 Both designated writers precede all other cost tiers, even when catalog tiers
-change: Sol xhigh, then Gemini Flash (rule 3.23a / D-5212). Other eligible legs
+change: Sol xhigh, then Hydrogen medium (rule 3.23a / D-5212). Other eligible legs
 retain cost-tier order, with subscriptions before pay-as-you-go.
 Writer and review payment ordering uses one classification function for the
 payment class of raw and catalog-projected legs, treating muse-amber as paid:
-after the implement writer prefix (Sol, then Gemini Flash), no pay-as-you-go leg
+after the implement writer prefix (Sol, then Hydrogen medium), no pay-as-you-go leg
 precedes a subscription-class leg, and muse-amber precedes paid DeepSeek.
 The designated writers keep that prefix even when catalog tiers reprice them as
 pay-as-you-go; review has no writer prefix. A trial or free slot keeps its position
@@ -61,7 +63,7 @@ Ember, high/complex review-prefix and planning Fable positive paths are syntheti
 tests of upstream admission, not real-registry coverage. Real-registry assertions
 pin their absence and missing roles (plus permanent disables for declarations).
 
-## Replan-0438 CI reconciliation
+## Replan-0438 CI reconciliation (historical validation)
 
 All existing test names and #763 checks remain. The lane diff was searched for
 the same role-stripping and two-writer-only assumptions; its registry, policy,
@@ -96,3 +98,18 @@ files: `139 passed in 63.38s (0:01:03)`. The untouched argv-limit file reproduce
 `2 failed, 44 passed in 5.38s`, both at its digest-versus-redaction assertion
 on line 57. The full suite was not run, following the brief's final prohibition
 on whole-suite runs; no test was skipped or weakened to hide those failures.
+
+## Gemini retirement (operator 2026-11-14)
+
+Every Gemini Flash version is retired. Requests and stored target overrides fail
+with `gemini_flash_retired: model retired by operator order 2026-11-14; use
+agy-gemini-4-hydrogen (medium: agy-gemini-4-hydrogen-medium)`.
+Hydrogen medium replaces the retired writer position and intended free review seat,
+but is not admitted: D-5696 leaves roles, windows, max_request_tokens and
+trains_on_data unestablished, and AGY emits no verified served-model telemetry
+(`served_telemetry.native_models`). Review requires capability evidence and a
+response-side witness before activation. No Flash route is retained as fallback.
+Earlier reconciliation notes above describe historical behavior, not current admission.
+
+Deployment retirement tombstones are cleanup history: apply prunes the removed
+model-named combos and clean routes that have no remaining servable legs.

@@ -104,14 +104,13 @@ def test_payment_order_unmodified_registry_names_every_drop(catalog):
             agy-gemini-4-hydrogen-high agy-gemini-4-hydrogen-medium cx-gpt-6.1-terra-medium
             cx-gpt-6.1-terra-xhigh muse-ember-max claude-fable-5.2-high''',
         'not_in_order': '''qodercli-qwen3.8-flash opencode-deepseek-v4.1-flash-free
-            opencode-glm-5.3-flash-free cx-gpt-6-luna agy-gemini-3.8-flash agy-gemini-4-argon
+            opencode-glm-5.3-flash-free cx-gpt-6-luna agy-gemini-4-argon
             opencode-big-pickle agy-gpt-oss-120b agy-sonnet-5.5 agy-claude-opus agy-opus-5.5
             omniroute-muse-spark agy-opus opencode-gemini-4-argon opencode-go-gemini-4-argon
             opencode-go-glm-5.2 opencode-go-qwen3.8-max omniroute-grok-4.7 opencode-go-muse-spark
-            opencode-console-muse-spark omniroute-gemini-3.8-flash agy-claude-sonnet-5-5-low
+            opencode-console-muse-spark agy-claude-sonnet-5-5-low
             agy-claude-sonnet-5-5-medium agy-claude-sonnet-5-5-high agy-claude-opus-5-5-low
-            agy-claude-opus-5-5-medium agy-claude-opus-5-5-high agy-gemini-3.8-flash-low
-            agy-gemini-3.8-flash-medium agy-gemini-3.8-flash-high cx-gpt-6-luna-low
+            agy-claude-opus-5-5-medium agy-claude-opus-5-5-high cx-gpt-6-luna-low
             cx-gpt-6-luna-medium cx-gpt-6-luna-high cx-gpt-6-luna-xhigh cx-gpt-6-luna-max''',
         'writer_family': 'mimo-v2.6-pro mimo-v2.6-flash', 'diff_size': 'claude-haiku-5.5'}
     dropped = {id: reason for reason, ids in reasons.items() for id in ids.split()}
@@ -262,7 +261,7 @@ def test_fixed_order_refuses_legacy_with_replacement(catalog, model, replacement
 
 
 def test_live_legacy_door_keeps_d5696_open(catalog):
-    # Only opt-in fixed ordering is fenced here; live routing belongs to LIVE-FENCE.
+    # Retirement now fences both fixed ordering and live request admission.
     with pytest.raises(ValueError, match='gemini-4-hydrogen'):
         ordered((replace(catalog['cx-gpt-6.1-sol-xhigh'], model='gemini-3.8-flash'),), 'implement')
 

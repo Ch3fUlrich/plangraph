@@ -47,17 +47,17 @@ def test_tier_first_and_swap(monkeypatch, gemini_tier):
     data = {l.model: {'aa_intelligence': 40 + i * 10,
                      'cost_per_task_usd': 0, 'pool_burn_weight': 0}
             for i, l in enumerate(writers)}
-    # D-5212: both designated writers precede free legs, even at subscription cost.
-    catalog = () if gemini_tier == 'free' else ({'id': 'agy/gemini-3.8-flash', 'tier': gemini_tier},)
+    # Sol keeps its prefix; Hydrogen is disabled, so remaining legs follow cost tiers.
+    catalog = () if gemini_tier == 'free' else ({'id': 'agy/gemini-4-argon-high', 'tier': gemini_tier},)
     plan = plan_spawn(CARD, role='implement', benchmark=data, catalog_rows=catalog)
-    expected = ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash', 'opencode-big-pickle', 'openrouter-free',
+    expected = ('cx-gpt-6.1-sol-xhigh', 'opencode-big-pickle', 'openrouter-free',
                 'opencode-glm-5.3-flash-free', 'opencode-deepseek-v4.1-flash-free',
                 'omniroute-muse-spark', 'omniroute-deepseek-flash', 'mimo-v2.6-pro', 'mimo-v2.6-flash',
                 'agy-gemini-4-argon', 'deepseek')
     assert tuple(l.id for l in plan.legs) == expected
     data[writers[0].model], data[writers[6].model] = data[writers[6].model], data[writers[0].model]
     swapped = plan_spawn(CARD, role='implement', benchmark=data, catalog_rows=catalog)
-    assert tuple(l.id for l in swapped.legs) == (*expected[:2], expected[5], *expected[3:5], expected[2], *expected[6:])
+    assert tuple(l.id for l in swapped.legs) == (*expected[:1], expected[4], *expected[1:4], *expected[5:8], expected[9], expected[8], expected[10])
 
 
 def test_candidate_json_and_limit(monkeypatch):

@@ -20,7 +20,7 @@ def test_disabled_writer_refusal(tmp_path, leg):
 
 
 def test_sol_xhigh_then_agy_fallback_and_all_limited_refused():
-    assert WRITER_ORDER == ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash')
+    assert WRITER_ORDER == ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-medium')
     plan = plan_spawn({'estimate_tokens': 100}, role='implement')
     from test_route_free_first import WRITERS
     assert [l.id for l in plan.legs] == WRITERS
@@ -31,7 +31,7 @@ def test_sol_xhigh_then_agy_fallback_and_all_limited_refused():
 
 def test_sol_only_and_no_fallback():
     # Keep main's test name and exhaustion coverage under the merged writer order.
-    assert WRITER_ORDER == ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash')
+    assert WRITER_ORDER == ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-medium')
     plan = plan_spawn({'estimate_tokens': 100}, role='implement')
     from test_route_free_first import WRITERS
     assert [l.id for l in plan.legs] == WRITERS

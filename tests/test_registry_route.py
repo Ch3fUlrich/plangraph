@@ -192,10 +192,10 @@ def test_route_skips_paused_harness_per_role():
     review = plan_spawn(CARD, role="review", writer_families=("mimo",))
     ids = [leg.id for leg in review.legs]
     assert "qodercli-qwen3.8-flash" not in ids
-    assert "agy-gemini-3.8-flash" in ids  # D-4699/D-4703: agy review pause lifted
+    assert "agy-gemini-4-argon" in ids  # D-4699/D-4703: agy review pause lifted
     pause = RoutePolicy(paused_harnesses={"agy": ("implement",)})
     held = plan_spawn(CARD, role="review", writer_families=("mimo",), policy=pause)
-    assert {s["leg"]: s["reason"] for s in held.skipped}["agy-gemini-3.8-flash"] == "paused_harness"
+    assert {s["leg"]: s["reason"] for s in held.skipped}["agy-gemini-4-argon"] == "paused_harness"
     writer = plan_spawn(CARD, role="implement")
     assert writer.first_leg.id == "cx-gpt-6.1-sol-xhigh"  # D-5206: eligible lead precedes free tier
     # Sol also uses opencode: pausing that harness must exclude the lead,
@@ -210,7 +210,7 @@ def test_route_skips_paused_harness_per_role():
     reasons = {s["leg"]: s["reason"] for s in paused.skipped}
     assert {leg_id: reasons[leg_id] for leg_id in paused_ids} == dict.fromkeys(
         paused_ids, "paused_harness")
-    assert [leg.id for leg in paused.legs] == ['agy-gemini-3.8-flash', 'agy-gemini-4-argon']
+    assert [leg.id for leg in paused.legs] == ['agy-gemini-4-argon']
 
 
 def test_explicit_policy_argument_wins():

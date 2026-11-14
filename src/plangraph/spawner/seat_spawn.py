@@ -136,7 +136,6 @@ def _refuse_oversized_diff(exc, leg):
 
 
 class SeatSpawnMixin:
-    """Needs ``_spawn``, ``_route``, ``_save``, ``save_refusal`` and ``state`` from the service."""
 
     _seat_reasons = staticmethod(seat_reasons)
     _sync_seat = staticmethod(sync_seat)
@@ -155,6 +154,9 @@ class SeatSpawnMixin:
             bound = inspect.signature(self._spawn).bind(*args, **kwargs)
             options = dict(bound.arguments)
             card = options.get('card')
+            from plangraph.retired_models import check_retired
+            check_retired(options)
+            check_retired(card)
             from .prompt_input import resolve_cwd
             cwd = await asyncio.to_thread(resolve_cwd, options.get('cwd'), card)
             if cwd is not None:

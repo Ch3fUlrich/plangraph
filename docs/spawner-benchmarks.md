@@ -1,3 +1,7 @@
+> Historical snapshot: Gemini Flash references below preserve prior decisions and
+> benchmark evidence only. Operator order 2026-11-14 retires every version; none
+> is an available route. Hydrogen medium awaits capability and AGY witness evidence.
+
 ## 4. 5-Rung Tier Priority Order & Quota Pools
 
 Every model candidate is assigned a tier according to its billing and quota consumption profile:

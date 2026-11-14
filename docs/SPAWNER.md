@@ -407,7 +407,7 @@ import `plangraph.spawner` at runtime; the boundary is enforced by
 
 `planner.routing.plan_spawn(card, role="implement"|"review")` applies the
 canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
-Writers use Sol xhigh then agy Gemini Flash (`WRITER_ORDER`); plain Sol is explicit-only. See [implement route defaults](routing.md); banned/off families are skipped for writers too.
+The declared `WRITER_ORDER` is Sol xhigh then agy Hydrogen medium; Hydrogen remains disabled pending D-5696 capability and AGY witness evidence; plain Sol is explicit-only. See [implement route defaults](routing.md); banned/off families are skipped for writers too.
 Other roles and the remaining implementation fallbacks put eligible free inputs before subscriptions and paid inputs (D-5092). Catalog cost tiers project onto registered legs without changing their roles, safety exclusions, or family metadata. Sonnet, main's Opus registration, high-effort Opus, gateway DeepSeek/Muse, personal Argon, and Big Pickle remain registered (D-5113). Grok's manual-only gate, both Zen free legs' exact permanent D-4196/D-3828 disables, and Qoder's stop remain enforced; Muse retains main's implementation/review/orchestration admission, and Big Pickle retains its GLM family. Sonnet retains orchestration/review, high-effort Opus review only, and medium-effort Opus review/orchestration. No Claude-family leg may enter an automatic implement route, including custom role-bearing tables; explicitly audited effort-variant writer picks remain available.
 
 `plan_spawn` shares one catalog snapshot for admission and tier projection.
@@ -416,7 +416,7 @@ an empty snapshot uses the registered leg tiers and still rejects unknown models
 Exact-order tests pin this input and isolate benchmark discovery from host files. Role-neutral keeper routes over the default table retain main's D-3828 readiness admission; S5's implementation fallbacks apply to role-bearing routes, not readiness. Custom tables remain explicit inputs.
 Review ordering preserves main's cost-first, per-leg measurement gate: measured rows precede missing rows within the same tier; unmeasured rows retain MiMo's existing role preference and Haiku's last-within-tier fallback. Provider-qualified tier identities win over unrelated bare names. Neither Haiku nor a measured paid row crosses a cheaper tier. A no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat. A review without a writer family refuses (D-1533). The `claude` harness (Haiku review leg, D-3605) runs with an allowlisted env (`claude_env.py`: HOME, PATH, PWD, locale, XDG_*, proxies, `CLAUDE_CONFIG_DIR`; every other variable is dropped whatever its case), and a host without the `claude` binary skips the leg as `harness_missing: claude` (D-3649). A finished claude run's stdout (the record's `stdout_tail`) is the final text of its stream-json `result` event (else the last assistant text), so `tools/seat_verdict.py` finds the `VERDICT:` line; the raw stream is kept as `claude-stream.jsonl` beside the run's `live.log`, which still carries the raw activity feed.
 Claude 5.5 and effort-variant legs (operator 2026-11-09): `agy-claude-{sonnet,opus}-5-5-{low,medium,high}`
-(agy harness, review and implement), `agy-gemini-3.8-flash-{low,medium,high}` (review),
+(agy harness, review and implement), Hydrogen remains a disabled declaration (see retirement below),
 `cx-gpt-6-luna-{low,medium,high,xhigh,max}` (inline-only review) and
 `cx-gpt-6.1-sol-{low,medium,high,xhigh,max}` (implement). The ids are what `agy models` and
 OmniRoute `/v1/models` served that day; agy serves no Sonnet xhigh and cx serves no `-ultra`, so neither is a leg.
@@ -694,3 +694,11 @@ an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
 OOM wrapper lines are recognized by their known event shape, including `wrapper:` prefixes and extra metadata. The known event is retained in `events`; extra metadata is redacted into an `oom_telemetry_detail` event. Unknown or diagnostic-bearing envelopes remain in stderr. These untrusted telemetry events confer no provider identity or authorization. OpenCode structured `type=error` messages survive display-text decoding and supply attempt diagnostics. When all legs fail, the run reason selects the last real attempt before accumulated errors or stderr. The three Dell incident captures are replayed by `tests/test_spawner_oom_reason.py` using `tests/fixtures/spawner_dell_oom.json`. Failure classification also uses the route harness for jobs without command metadata and filters progress from a stored final-attempt reason.
 
 Quota polling considers only the newest request of a session, including a 429 without text. Timestamp-less pool observations keep their first-seen hold until recovery; database reads select the latest row per window.
+
+Gemini Flash retirement (operator 2026-11-14): all versions and effort variants
+are refused with `gemini_flash_retired` before dispatch, including card targets,
+CLI overrides and MCP requests. The model list filters retired rows even from
+older databases. Hydrogen medium owns the replacement order position but remains
+disabled under D-5696: capability fields and AGY served-model witness are missing.
+Historical records remain readable; the retired benchmark model row exists only
+for benchmark foreign keys and never appears in the model list.

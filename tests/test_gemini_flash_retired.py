@@ -1,0 +1,142 @@
+"""Operator 2026-11-14: retirement applies to requests, never record reads."""
+import asyncio
+import dataclasses
+import json
+import re
+from pathlib import Path
+
+import pytest
+
+from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS, WRITER_ORDER, load_legs
+from plangraph.planner.routing import SpawnRefused, plan_spawn, validate_model
+from plangraph.spawner.service import SpawnService
+
+IDS = ('agy-gemini-3.8-flash', 'gemini-3.8-flash-medium',
+       'omniroute/gemini-3.8-flash', 'vertex/gemini-2.5-flash', 'GEMINI-9-FLASH-high')
+CAUSE = 'gemini_flash_retired.*retired by operator order.*agy-gemini-4-hydrogen'
+
+
+@pytest.mark.parametrize('target', IDS)
+def test_model_refused_even_with_catalog_admission(target):
+    with pytest.raises(SpawnRefused, match=CAUSE):
+        validate_model(target, catalog_rows=[dict(id=target, available=1, active=True)])
+
+
+@pytest.mark.parametrize('target', IDS[:3])
+@pytest.mark.parametrize('field', ['leg', 'model'])
+def test_cli_refuses_retired_target(tmp_path, capsys, field, target):
+    from plangraph.spawner.cli import main
+    assert main(['--state', str(tmp_path), 'spawn', '--card', '{"estimate_tokens":1000}',
+                 '--' + field, target, '--dry-run', '--override-reason', 'operator test override', 'task']) == 2
+    captured = capsys.readouterr()
+    assert re.search(CAUSE, captured.out + captured.err)
+
+
+@pytest.mark.parametrize('target', IDS[:3])
+@pytest.mark.parametrize('verb', ['spawn', 'route'])
+@pytest.mark.parametrize('card_target', [False, True])
+def test_mcp_retirement(tmp_path, verb, card_target, target):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    card = dict(estimate_tokens=1000)
+    options = dict(card=card, prompt='task', dry_run=True, override_reason='operator test override')
+    if card_target or verb == 'route':
+        card['model'] = target
+    else:
+        options['model_or_combo'] = target
+    with pytest.raises(SpawnRefused, match=CAUSE):
+        asyncio.run(MCPSpawnerServer(state=tmp_path).call_tool('plangraph_agent_' + verb, options))
+
+
+@pytest.mark.parametrize('field', ['id', 'model'])
+def test_stored_leg_override_refused(tmp_path, field):
+    row = dataclasses.asdict(DEFAULT_LEGS[0])
+    row[field] = IDS[0]
+    path = tmp_path / 'legs.json'
+    path.write_text(json.dumps(dict(legs=[row])))
+    with pytest.raises(ValueError, match=CAUSE):
+        load_legs(path)
+
+
+def test_guard_leg_catalog_and_configuration_data():
+    from plangraph.catalog_data import SEED_MODELS
+    from plangraph.routing_support.catalog_seed import SEED_ROUTE_LEGS
+    from plangraph.routing_support.resolver import DEFAULT_FALLBACK_MODELS, get_catalog_models
+    def flash(value):
+        return re.search('gemini[^ ]*flash', str(value), re.I)
+    assert not any(flash((l.id, l.model)) for l in (*DEFAULT_LEGS, *EXPLICIT_LEGS))
+    # Retired catalog rows exist solely for benchmark foreign keys, never model lists.
+    for row in SEED_MODELS:
+        if flash(row):
+            assert row['model_id'] == 'agy/gemini-3.8-flash-tiered-high'
+            assert (row['status'], row['available']) == ('retired', 0)
+            assert 'history' in row['unavailable_reason']
+    assert not any(flash(r) for r in [*SEED_ROUTE_LEGS, *DEFAULT_FALLBACK_MODELS, *get_catalog_models()])
+    root = Path(__file__).resolve().parents[1]
+    for name in ('configuration/opencode/providers.json', 'deploy/omniroute/combos.json',
+                 'deploy/omniroute/context-overrides.json'):
+        data = json.loads((root / name).read_text())
+        if name.endswith('combos.json'):
+            data.pop('retired')  # Cleanup tombstones, never spawnable candidates.
+        assert not flash(json.dumps(data)), name
+
+
+def test_hydrogen_replaces_writer_position_without_inventing_admission():
+    assert WRITER_ORDER[:2] == ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-medium')
+    hydrogen = next(l for l in EXPLICIT_LEGS if l.id == WRITER_ORDER[1])
+    assert hydrogen.disabled and hydrogen.roles == ()
+    plan = plan_spawn(dict(estimate_tokens=1000), role='implement', catalog_rows=())
+    assert not any('gemini' in l.model and 'flash' in l.model for l in plan.legs)
+
+
+def test_old_record_still_loads(tmp_path):
+    service = SpawnService(state=tmp_path)
+    path = service._path('run-historical')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dict(run_id='run-historical', model=IDS[0], status='completed')))
+    assert service.result('run-historical')['model'] == IDS[0]
+
+
+def test_stale_database_cannot_restore_mcp_models(tmp_path):
+    from plangraph.routing_support.resolver import get_catalog_models, catalog_row_admitted
+    class OldCatalog:
+        def list_models(self, **kwargs):
+            return [dict(id=IDS[0], model_id=IDS[0], available=1, active=True,
+                         status='active', family='gemini')]
+    assert get_catalog_models(OldCatalog()) == []
+    assert not catalog_row_admitted(dict(id=IDS[0], available=1, active=True))
+
+
+@pytest.mark.parametrize('target', IDS)
+def test_command_and_runner_boundaries_refuse(target, tmp_path):
+    from plangraph.routing_support.clients import build_command, build_opencode_command
+    from plangraph.spawner.runner import SpawnerRunner
+    for call in (lambda: build_command('task', target),
+                 lambda: build_opencode_command('task', target),
+                 lambda: asyncio.run(SpawnerRunner().spawn('task', target, dry_run=True))):
+        with pytest.raises(SpawnRefused, match=CAUSE):
+            call()
+
+
+def test_fixed_order_cannot_hide_retired_candidate():
+    from plangraph.planner.review_order import payment_order
+    leg = dataclasses.replace(DEFAULT_LEGS[0], id='agy-gemini-4-hydrogen-medium',
+                              model='gemini-2.5-flash', roles=('review',))
+    with pytest.raises(SpawnRefused, match=CAUSE):
+        payment_order((leg,), 'review', order_class='high', writer_families=('gpt',))
+
+
+@pytest.mark.parametrize('target', ['deepseek/deepseek-v4-flash-max', 'mimo/mimo-v2.6-flash',
+                                  'opencode-go/qwen3.8-flash', 'opencode/glm-5.3-flash-free'])
+def test_other_flash_families_remain_admissible(target):
+    assert validate_model(target, catalog_rows=[dict(id=target, available=1, active=True)]) == target
+
+
+def test_deployment_prunes_removed_combos_instead_of_leaving_stale_routes():
+    root = Path(__file__).resolve().parents[1]
+    data = json.loads((root / 'deploy/omniroute/combos.json').read_text())
+    assert {'gemini-3.8-flash', 'vertex-gemini-3.8-flash'} <= set(data['retired'])
+    assert {'l1-orchestrator-clean', 'l2-orchestrator-clean', 'l2-worker-clean',
+            'l3-driver-clean'} <= set(data['omitted'])
+    pruned = set(data['retired']) | set(data['omitted'])
+    assert not pruned & {row['name'] for row in data['combos']}
+    assert not pruned & set(data['d657_combos'])

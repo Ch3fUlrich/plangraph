@@ -15,7 +15,7 @@ AMBER_MODEL = 'console-meta/muse-spark-1.3-contributor'
 def muse_legs():
     specs = (
         ('cx-gpt-6.1-sol-xhigh', 'subscription', 'omniroute/cx-gpt-6.1-sol-xhigh', 'gpt'),
-        ('agy-gemini-3.8-flash', 'free', 'gemini-3.8-flash', 'gemini'),
+        ('agy-gemini-4-hydrogen-medium', 'free', 'gemini-4-hydrogen-medium', 'gemini'),
         ('agy-gemini-4-argon', 'subscription', 'gemini-4-argon-high', 'gemini'),
         ('mimo-v2.6-pro', 'subscription', 'mimo/mimo-v2.6-pro', 'mimo'),
         ('omniroute-muse-spark', 'subscription', 'omniroute/muse-spark-1.3-contributor', 'muse'),
@@ -58,11 +58,11 @@ def test_subscription_boundary_promotes_free_writer_prefix_only_for_implement(mu
     legs = tuple(reversed(legs))
     before = tuple(vars(leg).copy() for leg in legs)
     result = review_order.payment_order(legs, role)
-    assert ids(result) == (('cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash',
+    assert ids(result) == (('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-medium',
                            'omniroute-muse-spark', 'mimo-v2.6-pro', 'agy-gemini-4-argon',
                            AMBER_ID, 'deepseek') if role == 'implement' else
                           ('omniroute-muse-spark', 'mimo-v2.6-pro', 'agy-gemini-4-argon',
-                           'cx-gpt-6.1-sol-xhigh', AMBER_ID, 'agy-gemini-3.8-flash', 'deepseek'))
+                           'cx-gpt-6.1-sol-xhigh', AMBER_ID, 'agy-gemini-4-hydrogen-medium', 'deepseek'))
     assert review_order.payment_order(result, role) == result
     assert tuple(vars(leg) for leg in legs) == before
 

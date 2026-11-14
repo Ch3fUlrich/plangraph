@@ -318,3 +318,6 @@ Python files already in flight are individually listed in
 `tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
 
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
+
+Gemini retirement regressions preserve historical record reads while checking request
+admission and catalog filtering; AGY capability/witness activation requires evidence.

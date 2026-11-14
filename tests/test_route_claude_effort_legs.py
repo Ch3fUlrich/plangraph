@@ -25,8 +25,7 @@ SOL = {f"cx-gpt-6.1-sol-{e}": f"omniroute/cx-gpt-6.1-sol-{e}"
        for e in ("low", "medium", "high", "xhigh", "max")}
 LUNA = {f"cx-gpt-6-luna-{e}": f"omniroute/cx-gpt-6-luna-{e}"
         for e in ("low", "medium", "high", "xhigh", "max")}
-GEMINI = {f"agy-gemini-3.8-flash-{e}": f"gemini-3.8-flash-{e}"
-          for e in ("low", "medium", "high")}
+GEMINI = {}  # Gemini effort variants retired; Claude/Sol/Luna retain effort coverage.
 NEW = {**CLAUDE, **SOL, **LUNA, **GEMINI}
 MANUAL = (set(NEW) - {LEAD_WRITER}) | {'cx-gpt-6.1-sol'}
 
@@ -61,10 +60,7 @@ def test_leg_data():
         leg = BY_ID[leg_id]
         assert (leg.harness, leg.model, leg.family, leg.roles, leg.tool_mode) == (
             'opencode', model, 'gpt', ('review',), 'inline-only'), leg_id
-    for leg_id, model in GEMINI.items():
-        leg = BY_ID[leg_id]
-        assert (leg.harness, leg.model, leg.family, leg.roles) == (
-            'agy', model, 'gemini', ('review',)), leg_id
+    assert not any("flash" in leg.model and "gemini" in leg.model for leg in BY_ID.values())
     ids = [leg.id for leg in spawnable_legs()]
     assert len(ids) == len(set(ids))
 
@@ -134,7 +130,7 @@ def test_explicit_claude_review_seat(tmp_path, leg_id):
             override_reason='operator 2026-11-09 claude seats'))
 
 
-@pytest.mark.parametrize('leg_id', ['agy-claude-opus-5-5-high', 'cx-gpt-6.1-sol', *SOL, 'agy-gemini-3.8-flash'])
+@pytest.mark.parametrize('leg_id', ['agy-claude-opus-5-5-high', 'cx-gpt-6.1-sol', *SOL, 'agy-gemini-4-argon'])
 def test_explicit_writer_implement_allowed(tmp_path, leg_id):
     result = asyncio.run(_svc(tmp_path).spawn(
         card={'estimate_tokens': 20000}, prompt='Implement public code', role='implement',
@@ -158,7 +154,7 @@ def test_agy_prefixed_model_resolves_to_its_leg(leg_id):
 
 
 @pytest.mark.parametrize('model,leg_id', [
-    ('agy/gemini-3.8-flash-high', 'agy-gemini-3.8-flash-high'),
+    ('agy/gemini-4-argon-high', 'agy-gemini-4-argon'),
     # agy-sonnet-5.5 (orchestrate only) shares this model; the seat leg wins.
     ('agy/claude-sonnet-5-5-medium', 'agy-claude-sonnet-5-5-medium')])
 def test_agy_prefixed_model_prefers_the_seat_leg(model, leg_id):
@@ -221,7 +217,7 @@ def test_effort_variant_takes_its_base_model_limit():
 
 
 @pytest.mark.parametrize('model', ['omniroute/cx-gpt-6.1-sol', 'omniroute/cx-gpt-6-luna',
-                                   'omniroute/agy/gemini-3.8-flash-high',
+                                   'omniroute/agy/gemini-4-argon-high',
                                    'omniroute/cx-gpt-6.1-sol-ultra'])
 def test_base_and_unknown_models_get_no_entry(model):
     assert _render(model) == {}

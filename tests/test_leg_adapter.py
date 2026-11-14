@@ -32,7 +32,7 @@ def adapter(tmp_path, *, available=True, served=('opencode-go/sample',), enabled
 
 
 # Recorded from origin/main with an empty local evidence store.
-MAIN_ORDER = ['opencode-go/gemini-4-argon', 'mimo/mimo-v2.6-pro', 'opencode-go/qwen3.8-max', 'opencode-go/muse-spark-1.3-contributor', 'opencode-go/deepseek-v4.1-flash', 'Qwen3.8-Flash', 'opencode/deepseek-v4.1-flash-free', 'opencode/glm-5.3-flash-free', 'openrouter/free', 'omniroute/cx-gpt-6.1-sol', 'omniroute/cx-gpt-6-luna', 'gemini-3.8-flash', 'mimo/mimo-v2.6-flash', 'claude-sonnet-5-5-medium', 'opencode-go/glm-5.2', 'omniroute/deepseek-direct-flash', 'claude-haiku-5-5']
+MAIN_ORDER = ['opencode-go/gemini-4-argon', 'mimo/mimo-v2.6-pro', 'opencode-go/qwen3.8-max', 'opencode-go/muse-spark-1.3-contributor', 'opencode-go/deepseek-v4.1-flash', 'Qwen3.8-Flash', 'opencode/deepseek-v4.1-flash-free', 'opencode/glm-5.3-flash-free', 'openrouter/free', 'omniroute/cx-gpt-6.1-sol', 'omniroute/cx-gpt-6-luna', 'gemini-4-argon-high', 'mimo/mimo-v2.6-flash', 'claude-sonnet-5-5-medium', 'opencode-go/glm-5.2', 'omniroute/deepseek-direct-flash', 'claude-haiku-5-5']
 
 
 @pytest.mark.parametrize('available,expected', [(True, True), (False, False)])
@@ -114,7 +114,6 @@ def test_catalog_policy_is_not_mutated(tmp_path):
     # New review seats extend the catalog, never reorder the existing entries.
     expected = MAIN_ORDER.copy()
     expected[expected.index('omniroute/cx-gpt-6.1-sol')] = 'omniroute/cx-gpt-6.1-sol-xhigh'
-    expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'gemini-4-argon-high')
     expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'opencode/big-pickle')
     expected.insert(expected.index('mimo/mimo-v2.6-flash'), 'gpt-oss-120b-medium')
     expected[expected.index('opencode-go/glm-5.2'):expected.index('opencode-go/glm-5.2')] = [
@@ -123,7 +122,6 @@ def test_catalog_policy_is_not_mutated(tmp_path):
     expected.insert(expected.index('omniroute/deepseek-direct-flash'), 'omniroute/gc/grok-4.7')
     expected.insert(expected.index('omniroute/deepseek-direct-flash'),
                     'console-meta/muse-spark-1.3-contributor')
-    expected.insert(expected.index('omniroute/deepseek-direct-flash'), 'omniroute/gemini-3.8-flash')
     assert first == second == expected
     assert resolver.DEFAULT_FALLBACK_MODELS == before
     assert not calls

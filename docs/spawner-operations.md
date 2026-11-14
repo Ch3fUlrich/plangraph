@@ -86,8 +86,9 @@ reviews skip writer edit/CPU scans, while retaining their wall-clock deadline.
 Prompt packaging runs off the RPC loop; its Git timeout and await are bounded by
 the remaining review budget. Invalid, empty or oversized diffs still refuse.
 
-The canonical `gemini-3.8-flash` route is translated only at the native AGY command
-boundary to `gemini-3.8-flash-high`. Explicit effort-qualified SKUs are preserved.
+Gemini Flash models are retired by operator order (2026-11-14); requests fail
+with `gemini_flash_retired` and name `agy-gemini-4-hydrogen` as replacement.
+Hydrogen medium remains disabled pending capability and served-model evidence.
 After changing server source or configured environment forwarding, reconnect the
 MCP client before treating a live review as validation of the update. A fresh
 stdio test server and a previously connected client can be running different

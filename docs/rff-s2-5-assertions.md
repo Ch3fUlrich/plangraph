@@ -1,3 +1,7 @@
+> Historical snapshot: Gemini Flash references below preserve prior decisions and
+> benchmark evidence only. Operator order 2026-11-14 retires every version; none
+> is an available route. Hydrogen medium awaits capability and AGY witness evidence.
+
 # RFF S2-S5 assertion reconciliation
 
 D-5092 removes single-writer and subscription-before-free pins; D-5113 adds

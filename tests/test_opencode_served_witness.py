@@ -211,7 +211,7 @@ def test_title_flag_on_opencode_leg_and_not_on_plain_leg(tmp_path):
         runner = SpawnerRunner(default_cwd=str(tmp_path))
         opencode_job = await runner.spawn('p', model_or_combo=REQUESTED, client='opencode',
                                           cwd=str(tmp_path), dry_run=True)
-        plain_job = await runner.spawn('p', model_or_combo='gemini-3.8-flash', client='agy',
+        plain_job = await runner.spawn('p', model_or_combo='gemini-4-argon-high', client='agy',
                                        cwd=str(tmp_path), dry_run=True)
         return opencode_job, plain_job
     opencode_job, plain_job = asyncio.run(run())
