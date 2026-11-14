@@ -1,15 +1,12 @@
 """Read-only snapshot shaping and validated item filters (S1)."""
 from __future__ import annotations
-
 from datetime import datetime
 import re
-
 from .errors import Refused
 from .item_fields import MODEL_FIELDS, parse_choices, parse_kg_refs
 from ..views_progress import progress
-
 FIELDS = tuple((
-    "project id key title description host wait choices kg_refs waits_on_operator "
+    "project id key title description host wait choices kg_refs risk_tag until needs_you_hidden waits_on_operator "
     "kind track owner state estimate_h estimate_src depends_on corrects "
     "done_criteria evidence_kinds operator priority review_tier source note epoch "
     "claimed_by worker_run reviewer_run lease_until model review_waiver reviews "
@@ -128,6 +125,7 @@ def _full(store, now, values=None):
                            done_at=done_ts.get(item["key"])) for item in items]
     selected = [item for item in items if _selected(item, done_ts.get(item["key"]), values)]
     out = []
+    hidden = store._operator_hidden(selected, now)
     for item in selected:
         reviews = [{"reviewer": v.get("reviewer"), "family": v.get("family")}
                    for v in store._current_round(item, verdicts.get(item["key"], []))]
@@ -135,6 +133,8 @@ def _full(store, now, values=None):
             "project": item["project"], "id": item["id"], "key": item["key"],
             "title": item["title"], "description": item["description"],
             "host": item["host"], "wait": item.get("wait"),
+            "risk_tag": item.get("risk_tag"), "until": item.get("until"),
+            "needs_you_hidden": item["key"] in hidden,
             **{name: item.get(name) for name in MODEL_FIELDS},
             "choices": parse_choices(item.get("choices")),
             "kg_refs": parse_kg_refs(item.get("kg_refs")),

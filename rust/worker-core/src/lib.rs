@@ -69,6 +69,7 @@ pub mod slots;
 pub mod stall;
 pub mod turn_budget;
 pub mod usage_census;
+pub mod operator_owner_gate;
 pub mod plan_lint;
 pub mod watch;
 pub mod workspace;

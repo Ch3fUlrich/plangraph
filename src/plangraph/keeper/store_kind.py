@@ -19,7 +19,6 @@ from .item_fields import KIND_DEFAULTS
 
 __all__ = ["KindMixin", "SETTABLE_KINDS"]
 
-#: The only kinds ``set_kind`` may move a lane to.
 SETTABLE_KINDS = ("question", "operator_task")
 
 
@@ -45,6 +44,7 @@ class KindMixin:
                 raise Refused("validation",
                               f"{key} is a {item['kind']}; only a lane can change kind")
             wait = item["wait"] if item["wait"] is not None else KIND_DEFAULTS[kind][1]
+            warnings = self._operator_owner_gate(dict(item, kind=kind, operator=True), before=item, now=now)
             cursor = self.conn.execute(
                 "UPDATE items SET kind=?, operator=1, wait=?, updated_at=?"
                 " WHERE key=? AND state='open' AND kind='lane' AND epoch=?",
@@ -52,4 +52,4 @@ class KindMixin:
             self._row_guard(cursor, key, "open", item["epoch"])
             self._append(principal, key, "kind_set",
                          {"kind": kind, "was": "lane", "operator": True, "wait": wait}, now)
-        return {"key": key, "kind": kind, "was": "lane"}
+        return {"key": key, "kind": kind, "was": "lane", **({"warnings": warnings} if warnings else {})}

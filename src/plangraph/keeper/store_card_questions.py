@@ -35,7 +35,6 @@ class CardQuestionsMixin:
             item = self._get_or_refuse(key)
             self._may_act_in(principal, item["project"])
             self._assert_unlocked(item)
-            # Compare the observed state before _exec_check can record an owner.
             if expected_state is not None:
                 self._exec_expect_state(item, expected_state, principal, now=now,
                                         claim_checked=principal.role == "worker")
@@ -45,9 +44,6 @@ class CardQuestionsMixin:
                                       "attempt": exec_attempt}, principal,
                                 record=False)
                 self._park_guard(principal, item, None, now)
-            # RT-P1-EXEC-OWNERSHIP: an ask carrying any exec field is checked
-            # against the recorded owner (a first ask records it; a stale run
-            # or a backwards attempt is refused and inserts no question).  A
             # worker/spawner that omits all three on an owned card names no
             # run, so it is refused as exec_stale; router/l1/system callers
             # (planner, router) never are.
@@ -126,6 +122,10 @@ class CardQuestionsMixin:
             self.conn.execute(
                 "INSERT INTO answers(question_id,ts,actor,text,source) VALUES(?,?,?,?,?)",
                 (question_id, self._iso(now), principal.name, body, source))
+            item = self._get_or_refuse(row["key"])
+            self._append(principal, row["key"], "question_answered", {
+                "source": source, "question_id": question_id,
+                "risk_tag": item.get("risk_tag"), "epoch": item["epoch"]}, now)
         return {"question_id": question_id, "state": state, "source": source,
                 "text": body}
 

@@ -45,7 +45,7 @@ def test_migration_appends_without_rewriting_prior_steps():
     # Shipped _V1 from git blob d9942f65, independently pinned, not an alias.
     assert hashlib.sha256(schema_pg.MIGRATIONS[0].sql.encode()).hexdigest() == (
         'd5b853cc2d7780f2c4305f276db14713aa8fd77d3fc76d6bb20aa6ae2c96e7b0')
-    assert [m.version for m in schema_pg.MIGRATIONS] == list(range(1, 13))
+    assert [m.version for m in schema_pg.MIGRATIONS] == list(range(1, 14))
 
 
 def test_pg_sqlite_columns_match(pg):
@@ -88,7 +88,7 @@ def test_keeper_migration_gates_documented():
 
 def test_upgrade_idempotent(pg):
     raw, name = pg
-    assert db_pg.migrate(raw, name) == [11, 12]
+    assert db_pg.migrate(raw, name) == [11, 12, 13]
     assert db_pg.migrate(raw, name) == []
     for table in rules.TABLES:
         assert raw.execute(f'SELECT count(*) FROM {table}').fetchone() == (0,)

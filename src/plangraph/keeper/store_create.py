@@ -30,26 +30,23 @@ from .store_tiers import (
     validated_review_tier,
 )
 
-#: F4: the fields the router may edit while an item is claimed/in_review --
-#: D-434's two tier fields plus these two.  Anyone else fails on authorisation.
 _ACTIVE_EDITABLE = _TIER_FIELDS | frozenset(("done_criteria", "depends_on"))
 
 _EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id",
              "phase_kind", "fixes", "choices", "kg_refs", "estimate_h", "estimate_src",
              "done_criteria", "evidence_kinds",
-             "depends_on", "track", "owner", "note", "review_tier")
+             "depends_on", "track", "owner", "operator", "risk_tag", "until", "note", "review_tier")
 _MAX_BATCH = 500
 _MAX_DEPS = 200
-#: B3: every field ``Store._normalise`` reads; anything else folds into ``note``.
 KNOWN_ITEM_FIELDS = frozenset(
     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
      "agent_id", "phase_kind", "fixes", "choices", "kg_refs", "kind", "track", "owner", "owner_family",
      "estimate_h", "estimate_src", "depends_on", "under", "corrects", "done_criteria",
      "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
-     "state"))
+     "state", "risk_tag", "until"))
 _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait", "layer", "role",
                  "agent_id", "phase_kind", "fixes", "choices", "kg_refs", "kind", "track", "owner",
-                 "owner_family",
+                 "owner_family", "risk_tag", "until",
                  "estimate_h", "estimate_src", "done_criteria", "evidence_kinds",
                  "operator", "priority", "review_tier", "source", "note",
                  "corrects", "state",
@@ -101,8 +98,6 @@ def creation_tier(raw, definition, principal):
                                   definition.get("title"), definition.get("track"))
     if explicit is not None:
         tier = validated_review_tier(explicit)
-        # Oversight may only RAISE tiers, never lower below default
-        # But oversight can set tier='none' for questions (per policy)
         allowed_lowering = principal.role == "router"
         oversight_can_set_none = (principal.role == "oversight"
                                  and tier == "none"
@@ -110,14 +105,10 @@ def creation_tier(raw, definition, principal):
         if tier_needs_router(tier) and not (allowed_lowering or oversight_can_set_none):
             raise Refused("forbidden",
                           "only the router may set review_tier='none'")
-        # Check if explicit tier is lower than default
-        # Order: none < standard < high (none already handled above)
         tier_order = {"standard": 1, "high": 2}
         if tier != default and tier_order.get(tier, 0) < tier_order.get(default, 0):
             if not (allowed_lowering or oversight_can_set_none):
                 if principal.role == "oversight":
-                    # Raise-only grant: a below-default tier is refused, never
-                    # silently stored as the default.
                     raise Refused(
                         "forbidden",
                         f"oversight:tier_below_default review_tier={tier!r} is"
@@ -134,7 +125,6 @@ def creation_tier(raw, definition, principal):
 class CreateMixin:
     """Create, import and edit item definitions."""
 
-    # -------------------------------------------------------- create/import
     def create_items(self, principal, items):
         """Router (any project) or L1 (own project): create definitions.
 
@@ -165,13 +155,15 @@ class CreateMixin:
             raise Refused("validation", f"batch exceeds {_MAX_BATCH} items")
         if legacy and any(isinstance(raw, dict) and raw.get("under") is not None
                           for raw in items):
-            # ``under`` is a create-only attachment; a legacy import may not
-            # smuggle one in (checked before _normalise resolves it).
+            # Import cannot accept a create-only gate attachment.
             raise Refused("validation", "import_items does not accept 'under'")
         defs = [self._normalise_create(raw, principal) for raw in items]
         for raw in items:
             if isinstance(raw, dict):
                 validate_family(raw.get("owner_family"))
+        gate_warnings = []
+        for definition in defs:
+            gate_warnings.extend(self._operator_owner_gate(definition, now=now))
         for definition in defs:
             self._may_manage(principal, definition["project"])
         if principal.role != "router":
@@ -249,7 +241,9 @@ class CreateMixin:
                                    "under": gate["key"]}
                                   for definition, gate in attach]
         if any(not definition.get("description") for definition in defs):
-            result["warnings"] = ["description missing: brief will be empty"]
+            gate_warnings.append("description missing: brief will be empty")
+        if gate_warnings:
+            result["warnings"] = gate_warnings
         return result
 
     def _under_gate(self, principal, definition):
@@ -303,6 +297,7 @@ class CreateMixin:
             "kind": definition.get("kind", "lane"), "track": definition.get("track"),
             "owner": definition.get("owner"),
             "owner_family": definition.get("owner_family"),
+            "risk_tag": definition.get("risk_tag"), "until": definition.get("until"),
             "estimate_h": definition.get("estimate_h"),
             "estimate_src": definition.get("estimate_src"),
             "done_criteria": definition.get("done_criteria"),
@@ -395,6 +390,8 @@ class CreateMixin:
         unknown = set(rest) - set(_EDITABLE)
         if unknown:
             raise Refused("validation", f"not editable: {sorted(unknown)}")
+        if set(rest) & {"risk_tag", "until", "operator"}:
+            self._require_role(principal, "router")
         edit_fields = dict(rest)
         self._check_text(edit_fields, key)        # caps + credential guard (incl. estimate_src)
         # PG-ESTIMATE-SRC-EDIT: an estimate needs a stated source, otherwise the
@@ -505,6 +502,7 @@ class CreateMixin:
             check_seat_clause_tier(
                 edit_fields.get("done_criteria", item.get("done_criteria")),
                 resulting_tier)
+        gate_warnings = self._operator_owner_gate(me, before=item, now=now)
         check_fix_limit(candidate, {key})
         self._validate_change(candidate, before, affected={key})
         assignments = [field for field in edit_fields if field != "depends_on"]
@@ -518,6 +516,7 @@ class CreateMixin:
             # Re-read inside the transaction: a competitor may have claimed or
             # otherwise moved the item between the read above and here.
             fresh = self._get_or_refuse(key)
+            gate_warnings = self._operator_owner_gate(dict(fresh, **edit_fields), before=fresh, now=now)
             audit_before = {name: fresh.get(name) for name in edit_fields}
             self._assert_unlocked(fresh)
             # ``tier_edit`` implies router; guard the write on the states the read passed.
@@ -611,6 +610,7 @@ class CreateMixin:
         result = {"key": key}
         if bump_epoch:
             result["epoch"] = new_epoch
+        dropped.extend(gate_warnings)
         if dropped:
             # Only when something was actually dropped: every caller (the HTTP
             # door, the CLI, apply_ops' results) keeps reading ``{"key": ...}``.

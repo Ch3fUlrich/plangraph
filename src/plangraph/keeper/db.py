@@ -60,7 +60,6 @@ def _denied_actions() -> set:
 
 _DENY = _denied_actions()
 
-# Pragmas that can weaken the triggers/authorizer itself.  A *write* (arg2 is a
 # value) is denied; the read form (``PRAGMA foreign_keys``) is still allowed.
 _WRITE_PRAGMAS = frozenset({
     "recursive_triggers", "foreign_keys", "trusted_schema",
@@ -106,7 +105,8 @@ _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
                   ("items", "layer", "TEXT"), ("items", "role", "TEXT"),
                   ("items", "agent_id", "TEXT"), ("items", "phase_kind", "TEXT"),
                   ("items", "fixes", "TEXT"), ("items", "choices", "TEXT"),
-                  ("items", "kg_refs", "TEXT"),
+                  ("items", "kg_refs", "TEXT"), ("items", "risk_tag", "TEXT"),
+                  ("items", "until", "TEXT"),
                   ("items", "exec_workflow_id", "TEXT"),
                   ("items", "exec_run_id", "TEXT"),
                   ("items", "exec_attempt", "INTEGER"),
