@@ -142,7 +142,7 @@ def test_run_record_and_runner_cwd(repository, tmp_path, monkeypatch, hardened, 
         runner = SpawnerRunner(default_cwd=str(repo), process_factory=factory)
         service = (spawn_service if hardened else SpawnService)(runner=runner, state=tmp_path / 'state')
         # D-5206: Sol xhigh is the routed default; plain Sol is now explicit-only.
-        chosen = next(leg for leg in DEFAULT_LEGS if leg.id == 'cx-gpt-6.1-sol-xhigh')
+        chosen = next(leg for leg in DEFAULT_LEGS if leg.id == 'cx-gpt-6.1-sol-medium')
         service._route = lambda *a, **k: SpawnPlan((chosen,), (), 'test', (), ())
         if configured_root:
             settings = tmp_path / 'settings.json'
@@ -206,7 +206,7 @@ def test_cli_flag_is_opt_in(tmp_path, monkeypatch, capsys):
     from plangraph.planner.routing import SpawnPlan
     from plangraph.planner.legs import DEFAULT_LEGS
     # D-5206: use the promoted default, not the explicit-only plain Sol leg.
-    chosen = next(leg for leg in DEFAULT_LEGS if leg.id == 'cx-gpt-6.1-sol-xhigh')
+    chosen = next(leg for leg in DEFAULT_LEGS if leg.id == 'cx-gpt-6.1-sol-medium')
     monkeypatch.setattr(SpawnService, '_route', lambda *a, **k: SpawnPlan((chosen,), (), 'test', (), ()))
     for flag in ([], ['--run-worktree']):
         assert cli.main(['--state', str(tmp_path), 'spawn', '--card', '{"estimate_tokens":100}',
@@ -235,7 +235,7 @@ def test_cli_overflow_forwards_worktree_flag(repository, tmp_path, monkeypatch, 
         ssh='invented', ok=True, fresh=True, live_runs=0, mem_available_mb=6000, role_mb=2048, floor_mb=3000)})
     monkeypatch.setenv('PLANGRAPH_HOST', 'invented-local')
     # D-5206: overflow forwards the worktree flag with the new Sol xhigh default.
-    chosen = next(leg for leg in DEFAULT_LEGS if leg.id == 'cx-gpt-6.1-sol-xhigh')
+    chosen = next(leg for leg in DEFAULT_LEGS if leg.id == 'cx-gpt-6.1-sol-medium')
     monkeypatch.setattr(SpawnService, '_route', lambda *a, **k: SpawnPlan((chosen,), (), 'test', (), ()))
     received = []
     def remote(name, host, card, prompt, flags):

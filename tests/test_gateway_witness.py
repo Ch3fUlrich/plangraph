@@ -25,7 +25,7 @@ class _Runner:
         self.calls.append(model)
 
 
-def _job(model='omniroute/cx-gpt-6-luna'):
+def _job(model='omniroute/cx-gpt-6-luna-medium'):
     return SimpleNamespace(model_or_combo=model, served_model=None, served_family=None, served_witness_reason=None,
                            witness_kind=None, events=[])
 
@@ -156,7 +156,7 @@ def test_runner_review_seat_on_omniroute_is_witnessed_from_call_log(tmp_path, mo
         return SimpleNamespace(pid=FAKE_PID, returncode=returncode, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
     async def run():
-        job = await runner.spawn('prompt', model_or_combo='omniroute/cx-gpt-6-luna', role='review',
+        job = await runner.spawn('prompt', model_or_combo='omniroute/cx-gpt-6-luna-medium', role='review',
                                  client='opencode', cwd=str(tmp_path),
                                  extra_env={'XDG_DATA_HOME': str(tmp_path)}, wait_seconds=3)
         await runner._tasks[job.job_id]

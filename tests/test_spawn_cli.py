@@ -155,7 +155,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
         assert next(a for a in record['attempts'] if isinstance(a['leg'], dict)
                     and a['leg']['model'] == 'opencode/big-pickle')['skip_reason'] == 'earlier_leg_succeeded'
-        assert models[:3] == ['omniroute/cx-gpt-6.1-sol-xhigh',
+        assert models[:3] == ['omniroute/cx-gpt-6.1-sol-medium',
                               'opencode/deepseek-v4.1-flash-free', 'opencode/glm-5.3-flash-free']
         attempted_ids = {a['leg']['id'] for a in record['attempts']}
         for leg in service.route({'estimate_tokens': 1000}).legs:

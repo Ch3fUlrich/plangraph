@@ -43,8 +43,8 @@ def inline_seat_table(monkeypatch):
 
 def test_inline_only_leg_skipped_without_diff_ref():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
-    assert "cx-gpt-6-luna" not in [leg.id for leg in plan.review_seats]
-    assert {s["leg"]: s["reason"] for s in plan.skipped}["cx-gpt-6-luna"] == "inline_only_needs_diff"
+    assert "cx-gpt-6-luna-medium" not in [leg.id for leg in plan.review_seats]
+    assert {s["leg"]: s["reason"] for s in plan.skipped}["cx-gpt-6-luna-medium"] == "inline_only_needs_diff"
 
 
 @pytest.mark.parametrize("ref", [
@@ -271,7 +271,7 @@ def _leg(leg_id):
 def test_spares_use_keeper_families(tmp_path, monkeypatch):
     # luna HIGH: gpt and openai legs are one keeper family; a gpt seat's family is no spare.
     svc = _service(tmp_path / "state", monkeypatch)
-    luna, qwen, mimo = map(_leg, ("cx-gpt-6-luna", "qodercli-qwen3.8-flash", "mimo-v2.6-flash"))
+    luna, qwen, mimo = map(_leg, ("cx-gpt-6-luna-medium", "qodercli-qwen3.8-flash", "mimo-v2.6-flash"))
     oss = replace(luna, id="openai-spare", family="openai")
     base = plan_spawn(HIGH, role="review", writer_families=("claude",))
     plan = replace(base, legs=(luna, qwen, oss, mimo), review_seats=(luna, qwen), error=None)
@@ -305,7 +305,7 @@ def test_unknown_writer_family_is_refused():
         plan_spawn(HIGH, role="review", writer_families=("nosuchfamily",))
 
 
-@pytest.mark.parametrize("model", [None, "omniroute/cx-gpt-6-luna"])
+@pytest.mark.parametrize("model", [None, "omniroute/cx-gpt-6-luna-medium"])
 def test_review_without_writer_family_is_refused(tmp_path, monkeypatch, model):
     # Round-3 qwen MED: no writer named = no family excluded; refuse, fail closed.
     svc = _service(tmp_path / "state", monkeypatch)

@@ -149,7 +149,7 @@ def test_probe_reports_leak_when_the_writer_commits_into_the_caller_repo(tmp_pat
 
 
 @pytest.mark.parametrize('client, binary, model', [
-    ('opencode', 'opencode', 'omniroute/cx-gpt-6-luna'),
+    ('opencode', 'opencode', 'omniroute/cx-gpt-6-luna-medium'),
     ('agy', 'agy', 'gemini-3.8-flash'),
     ('qodercli', 'qodercli', 'fixture-qoder-model'),
 ])

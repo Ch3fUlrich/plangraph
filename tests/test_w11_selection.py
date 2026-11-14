@@ -50,7 +50,7 @@ def test_tier_first_and_swap(monkeypatch, gemini_tier):
     # D-5212: both designated writers precede free legs, even at subscription cost.
     catalog = () if gemini_tier == 'free' else ({'id': 'agy/gemini-3.8-flash', 'tier': gemini_tier},)
     plan = plan_spawn(CARD, role='implement', benchmark=data, catalog_rows=catalog)
-    expected = ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash', 'opencode-big-pickle', 'openrouter-free',
+    expected = ('cx-gpt-6.1-sol-medium', 'agy-gemini-3.8-flash', 'opencode-big-pickle', 'openrouter-free',
                 'opencode-glm-5.3-flash-free', 'opencode-deepseek-v4.1-flash-free',
                 'omniroute-muse-spark', 'omniroute-deepseek-flash', 'mimo-v2.6-pro', 'mimo-v2.6-flash',
                 'agy-gemini-4-argon', 'deepseek')

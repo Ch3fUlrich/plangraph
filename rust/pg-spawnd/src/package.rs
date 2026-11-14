@@ -61,12 +61,10 @@ pub(crate) fn effort(args: &Args) -> Result<&str, ToolError> {
 }
 pub(crate) fn admit_leg_effort(args: &Args, leg: &Value) -> Result<(), ToolError> {
     let model = leg["model"].as_str().unwrap_or("");
-    let effective = leg["effort"].as_str().or_else(|| {
-        ["xhigh", "high", "max"]
-            .into_iter()
-            .find(|e| model.ends_with(&format!("-{e}")))
-    });
-    if let Some(effective) = effective {
+    let suffix = ["xhigh", "high", "max"]
+        .into_iter()
+        .find(|e| model.ends_with(&format!("-{e}")));
+    for effective in [leg["effort"].as_str(), suffix].into_iter().flatten() {
         let mut args = args.clone();
         args.insert("effort".into(), json!(effective));
         effort(&args)?;
@@ -175,6 +173,7 @@ fn launch(
     {
         return Err(parameter("invalid package model"));
     }
+    admit_leg_effort(args, &json!({"model":model,"effort":effort}))?;
     let keys = args
         .get("keys")
         .and_then(Value::as_array)
@@ -230,7 +229,7 @@ fn launch(
     let status = format!("{work}{sep}STATUS-package-{id}.txt");
     let text=format!("# Package {id}\n\nExecute tasks in order, effort {effort}. Do not push.\nNew production code in Rust only; existing Python fixes and MCP glue allowed. File cap 800.\nRun affected tests only, in tmp roots with fakes; never SSH or use the real repository Git metadata in tests.\nNo host names in tracked text; use Linux worker host / Windows worker host.\nCommit with -c user.name=\"Sergej Maul\" -c user.email=\"71930650+Ch3fUlrich@users.noreply.github.com\".\nEach commit: Plan-Item: <keeper key> and Writer: codex/{model}-{effort} (native CLI, D-5840).\nKeep {status} untracked. Each task: time key DONE|SKIPPED|REFUTED sha +/- tests failing-first choice. Finish with ALL DONE.\nRead STEER before each task.\n\n{}\n{}",items.join("\n"),args.get("extra_text").and_then(Value::as_str).unwrap_or(""));
     let mut run = json!({"run_id":id,"agent_name":format!("pkg-{}", &id[4..28]),"kind":"package","host":host_name,"platform":host.kind,"base_ref":base,"branch":branch,"worktree":work,
-        "keys":accepted,"refused":refused,"model":model,"effort":effort,"package_path":package,"package_text":text,
+        "keys":accepted,"refused":refused,"model":model,"effort":effort,"effort_decision":args.get("card").and_then(|c|c.get("effort_decision")),"package_path":package,"package_text":text,
         "status_path":status,"log_path":format!("{work}{sep}package.log"),"steer_path":format!("{work}{sep}STEER"),
         "pid_path":format!("{work}{sep}package.pid"),"runner_path":format!("{work}{sep}package.ps1"),"status":"launching","started":now()});
     save(state, &run)?;

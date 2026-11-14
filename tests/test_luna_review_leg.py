@@ -13,16 +13,16 @@ from plangraph.planner.routing import plan_spawn
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 
 CARD = {"estimate_tokens": 20000, "risk_tags": []}
-LUNA = "cx-gpt-6-luna"
+LUNA = "cx-gpt-6-luna-medium"
 
 
 def test_luna_leg_in_default_legs():
     leg = next((leg for leg in DEFAULT_LEGS if leg.id == LUNA), None)
     assert leg is not None
     assert (leg.family, leg.harness, leg.model, leg.roles) == (
-        "gpt", "opencode", "omniroute/cx-gpt-6-luna", ("review",))
+        "gpt", "opencode", "omniroute/cx-gpt-6-luna-medium", ("review",))
     ids = [leg.id for leg in DEFAULT_LEGS]
-    assert ids[ids.index("cx-gpt-6.1-sol-xhigh") + 1] == LUNA
+    assert ids[ids.index("cx-gpt-6.1-sol-medium") + 1] == LUNA
 
 
 def test_luna_never_writes():

@@ -110,7 +110,7 @@ DEFAULT_LEGS = (
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
-    Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-medium",
+    Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-high",
         "gemini", ("128k", "256k", "1m"), 900000, False, roles=("implement", "review")),
     Leg("opencode-big-pickle", "free", "opencode", "opencode/big-pickle",
         "glm", ("128k",), 100000, True, roles=("implement", "review")),
@@ -123,7 +123,7 @@ DEFAULT_LEGS = (
     _replace(_legacy["agy-sonnet-5.5"], roles=("orchestrate", "review")),
     Leg("agy-claude-opus", "subscription", "agy", "claude-opus-4-6-thinking",
         "claude", ("128k", "256k"), 180000, False, claude_family=True, roles=("review",)),
-    Leg("agy-opus-5.5", "subscription", "agy", "claude-opus-5-5-medium",
+    Leg("agy-opus-5.5", "subscription", "agy", "claude-opus-5-5-high",
         "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
         roles=("review",)),
     Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-v4.1-flash",
@@ -168,10 +168,6 @@ DEFAULT_LEGS = (
         tool_mode="prompt-only",
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
-
-# D-5840: reviewer reasoning defaults to medium, including plain model seats.
-DEFAULT_LEGS = tuple(_replace(leg, effort='medium') if 'review' in leg.roles
-                     and leg.effort is None else leg for leg in DEFAULT_LEGS)
 
 # Preserve role-neutral keeper admission before applying implement-only policy.
 READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
@@ -218,6 +214,13 @@ DEFAULT_LEGS = tuple(_sol_medium if leg.id == _plain_sol.id else leg for leg in 
 EXPLICIT_LEGS = (_plain_sol, *(leg for leg in EXPLICIT_LEGS if leg.id != LEAD_WRITER))
 # Keeper readiness keeps its existing admission, but uses the current routed id.
 READINESS_LEGS = tuple(_sol_medium if leg.id == _plain_sol.id else leg for leg in READINESS_LEGS)
+# Codex reviewer reasoning uses the already registered medium variant too.
+_plain_luna = next(leg for leg in DEFAULT_LEGS if leg.id == 'cx-gpt-6-luna')
+_medium_luna = _replace(next(leg for leg in EXPLICIT_LEGS if leg.id == 'cx-gpt-6-luna-medium'), effort='medium')
+DEFAULT_LEGS = tuple(_medium_luna if leg.id == _plain_luna.id else leg for leg in DEFAULT_LEGS)
+READINESS_LEGS = tuple(_medium_luna if leg.id == _plain_luna.id else leg for leg in READINESS_LEGS)
+EXPLICIT_LEGS = (_plain_luna, *(leg for leg in EXPLICIT_LEGS if leg.id != _medium_luna.id))
+
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
     leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)

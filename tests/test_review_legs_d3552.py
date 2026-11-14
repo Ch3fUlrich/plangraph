@@ -105,7 +105,7 @@ def test_implement_route_still_skips_banned_and_off(tmp_path):
     assert reasons['omniroute-deepseek-flash'] == 'banned_family'
     assert next(row['reason'] for row in plan.candidates
                 if row['leg'] == 'omniroute-deepseek-flash') == 'banned_family'
-    assert plan.first_leg.id == 'cx-gpt-6.1-sol-xhigh'
+    assert plan.first_leg.id == 'cx-gpt-6.1-sol-medium'
     for leg_id in ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.2"):
         expected = r"leg disabled: .*D-3605" if "glm" in leg_id else r"writer disabled \(D-3828\)"
         with pytest.raises(SpawnRefused, match=expected):

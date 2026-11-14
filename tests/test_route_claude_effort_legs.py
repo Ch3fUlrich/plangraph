@@ -28,7 +28,20 @@ LUNA = {f"cx-gpt-6-luna-{e}": f"omniroute/cx-gpt-6-luna-{e}"
 GEMINI = {f"agy-gemini-3.8-flash-{e}": f"gemini-3.8-flash-{e}"
           for e in ("low", "medium", "high")}
 NEW = {**CLAUDE, **SOL, **LUNA, **GEMINI}
-MANUAL = (set(NEW) - {LEAD_WRITER}) | {'cx-gpt-6.1-sol'}
+MANUAL = (set(NEW) - {LEAD_WRITER, 'cx-gpt-6-luna-medium'}) | {'cx-gpt-6.1-sol', 'cx-gpt-6-luna'}
+
+
+@pytest.fixture(autouse=True)
+def hermetic_spawn_boundaries(monkeypatch, tmp_path):
+    async def admit(*args, **kwargs):
+        return True
+    async def prompt(self, text, *args, **kwargs):
+        return text
+    monkeypatch.setattr('plangraph.spawner.service.admit_base', admit)
+    monkeypatch.setattr('plangraph.spawner.seat_spawn.admit', lambda *a, **k: None)
+    monkeypatch.setattr('plangraph.spawner.service.SpawnService._annotate_spawn', lambda *a, **k: None)
+    monkeypatch.setattr('plangraph.spawner.service.SpawnService._prepare_leg_prompt', prompt)
+    monkeypatch.chdir(tmp_path)
 
 
 @pytest.fixture
@@ -77,7 +90,7 @@ def test_explicit_legs_stay_out_of_every_route():
     assert {leg.id for leg in EXPLICIT_LEGS} == MANUAL | declarations
     assert all(leg.disabled and not leg.roles and leg.expires is None
                for leg in EXPLICIT_LEGS if leg.id in declarations)
-    assert {leg.id for leg in DEFAULT_LEGS} & set(NEW) == {LEAD_WRITER}
+    assert {leg.id for leg in DEFAULT_LEGS} & set(NEW) == {LEAD_WRITER, 'cx-gpt-6-luna-medium'}
     assert spawnable_legs() == DEFAULT_LEGS + EXPLICIT_LEGS
 
 
@@ -93,7 +106,7 @@ def test_spawnable_legs_follow_a_rebound_default_table(monkeypatch):
     assert EXPLICIT_WRITERS == (frozenset(CLAUDE) | frozenset(SOL) | {'cx-gpt-6.1-sol'}) - {LEAD_WRITER}
 
 
-@pytest.mark.parametrize('role,listed', [('review', {**CLAUDE, **GEMINI, **LUNA}),
+@pytest.mark.parametrize('role,listed', [('review', (set(CLAUDE) | set(GEMINI) | set(LUNA) | {'cx-gpt-6-luna'}) - {'cx-gpt-6-luna-medium'}),
                                          ('implement', (set(CLAUDE) | set(SOL) | {'cx-gpt-6.1-sol'}) - {LEAD_WRITER})])
 def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
     writers = ('xiaomi',) if role == 'review' else ()
@@ -123,13 +136,13 @@ def _svc(tmp_path):
 @pytest.mark.parametrize('leg_id', ['agy-claude-sonnet-5-5-high', 'agy-claude-opus-5-5-high'])
 def test_explicit_claude_review_seat(tmp_path, leg_id):
     result = asyncio.run(_svc(tmp_path).spawn(
-        card={'estimate_tokens': 20000}, prompt='Review public code', role='review',
+        card={'estimate_tokens': 20000, 'effort': 'high', 'effort_decision': 'D-5840'}, prompt='Review public code', role='review',
         writer_families=('gpt',), leg=leg_id, dry_run=True,
         override_reason='operator 2026-11-09 claude seats'))
     assert result['chosen_leg']['id'] == leg_id
     with pytest.raises(SpawnRefused, match='excluded writer family'):
         asyncio.run(_svc(tmp_path).spawn(
-            card={'estimate_tokens': 20000}, prompt='Review public code', role='review',
+            card={'estimate_tokens': 20000, 'effort': 'high', 'effort_decision': 'D-5840'}, prompt='Review public code', role='review',
             writer_families=('claude',), leg=leg_id, dry_run=True,
             override_reason='operator 2026-11-09 claude seats'))
 
@@ -137,7 +150,7 @@ def test_explicit_claude_review_seat(tmp_path, leg_id):
 @pytest.mark.parametrize('leg_id', ['agy-claude-opus-5-5-high', 'cx-gpt-6.1-sol', *SOL, 'agy-gemini-3.8-flash'])
 def test_explicit_writer_implement_allowed(tmp_path, leg_id):
     result = asyncio.run(_svc(tmp_path).spawn(
-        card={'estimate_tokens': 20000}, prompt='Implement public code', role='implement',
+        card={'estimate_tokens': 20000, 'effort': BY_ID[leg_id].effort, 'effort_decision': 'D-5840'}, prompt='Implement public code', role='implement',
         leg=leg_id, dry_run=True, override_reason='operator 2026-11-09 explicit writer'))
     assert result['chosen_leg']['id'] == leg_id
 
@@ -171,7 +184,7 @@ def test_claude_seat_refused_for_a_claude_run_named_by_review_of(tmp_path, monke
     monkeypatch.setattr(svc, 'result', lambda *a, **k: {'given_writer_families': ['claude'],
                                                         'writer_family': 'claude'})
     with pytest.raises(SpawnRefused, match='excluded writer family'):
-        asyncio.run(svc.spawn(card={'estimate_tokens': 20000}, prompt='Review public code',
+        asyncio.run(svc.spawn(card={'estimate_tokens': 20000, 'effort': 'high', 'effort_decision': 'D-5840'}, prompt='Review public code',
                               role='review', review_of='run-' + '0' * 32,
                               leg='agy-claude-opus-5-5-high', dry_run=True,
                               override_reason='operator 2026-11-09 claude seats'))

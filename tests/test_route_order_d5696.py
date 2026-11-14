@@ -39,16 +39,16 @@ def test_catalog_efforts_are_explicit(catalog, id, effort):
 def test_implement_order_efforts_and_limited_fallthrough(catalog):
     from plangraph.routing_support.catalog_seed import OPERATOR_ROUTE_ORDERS
     assert OPERATOR_ROUTE_ORDERS['implement'] == (
-        'cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high', 'agy-claude-sonnet-5-5-high')
+        'cx-gpt-6.1-sol-medium', 'agy-gemini-4-hydrogen-high', 'agy-claude-sonnet-5-5-high')
     legs = [catalog[id] for id in OPERATOR_ROUTE_ORDERS['implement']]
     assert signature(ordered(legs, 'implement')) == [
-        ('cx-gpt-6.1-sol-xhigh', 'xhigh'), ('agy-claude-sonnet-5-5-high', 'high')]
+        ('cx-gpt-6.1-sol-medium', 'medium'), ('agy-claude-sonnet-5-5-high', 'high')]
     assert ordered(legs[1:], 'implement') == (legs[2],)  # Cannot resurrect absent Sol.
     assert not ordered([catalog[id] for id in (
         'mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash')], 'implement')
     # Synthetic-only positive Hydrogen path; this does not admit its registration.
     admitted = [replace(leg, roles=('implement',)) for leg in legs]
-    assert signature(ordered(admitted, 'implement')) == [(legs[0].id, 'xhigh'),
+    assert signature(ordered(admitted, 'implement')) == [(legs[0].id, 'medium'),
         (legs[1].id, 'high'), (legs[2].id, 'high')]
 
 
@@ -194,7 +194,7 @@ def test_order_never_bypasses_role_admission(catalog):
 
 @pytest.mark.parametrize('effort', [None, 'low', 'max'])
 def test_order_preserves_registered_effort_not_id_suffix(catalog, effort):
-    leg = replace(catalog['cx-gpt-6.1-sol-xhigh'], effort=effort)
+    leg = replace(catalog['cx-gpt-6.1-sol-medium'], effort=effort)
     assert ordered((leg,), 'implement')[0] is leg
 
 
@@ -258,13 +258,13 @@ def test_d5712_sonnet_source_and_position_2_to_4(catalog):
     ('omniroute/gemini-3.8-flash-high', 'gemini-4-hydrogen'), ('cxa/gpt-6-luna-high', 'gpt-6.1-terra')])
 def test_fixed_order_refuses_legacy_with_replacement(catalog, model, replacement):
     with pytest.raises(ValueError, match=replacement):
-        ordered((replace(catalog['cx-gpt-6.1-sol-xhigh'], model=model),), 'implement')
+        ordered((replace(catalog['cx-gpt-6.1-sol-medium'], model=model),), 'implement')
 
 
 def test_live_legacy_door_keeps_d5696_open(catalog):
     # Only opt-in fixed ordering is fenced here; live routing belongs to LIVE-FENCE.
     with pytest.raises(ValueError, match='gemini-4-hydrogen'):
-        ordered((replace(catalog['cx-gpt-6.1-sol-xhigh'], model='gemini-3.8-flash'),), 'implement')
+        ordered((replace(catalog['cx-gpt-6.1-sol-medium'], model='gemini-3.8-flash'),), 'implement')
 
 
 def test_unknown_capability_declarations_are_not_live_admissions(catalog):

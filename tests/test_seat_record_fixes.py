@@ -145,13 +145,13 @@ def test_fail_without_finish_reason_posts(tmp_path, capsys):
 
 # F2 (build-L1 (1)): a non-free leg never witnesses a family (D-2905); the refusal names D-2905 and the leg id/model.
 def test_non_free_leg_unwitnessed_refused(tmp_path, capsys):
-    leg = {"id": "cx-gpt-6-luna", "tier": "subscription", "harness": "opencode",
-           "model": "omniroute/cx-gpt-6-luna", "family": "gpt"}
+    leg = {"id": "cx-gpt-6-luna-medium", "tier": "subscription", "harness": "opencode",
+           "model": "omniroute/cx-gpt-6-luna-medium", "family": "gpt"}
     seat = rec_dir(tmp_path, "run-44444444444444444444444444444444", leg=leg,
                    writer_family="gpt")
     assert sv.main(argv_for(seat)) == 2
     err = capsys.readouterr().err
-    assert "D-2905" in err and "'cx-gpt-6-luna'" in err and "omniroute/cx-gpt-6-luna" in err
+    assert "D-2905" in err and "'cx-gpt-6-luna-medium'" in err and "omniroute/cx-gpt-6-luna-medium" in err
 
 # F2: a witnessed served_model is used as before, any family.
 def test_witnessed_served_model_any_family_accepted(tmp_path, capsys):

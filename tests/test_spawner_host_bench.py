@@ -168,8 +168,8 @@ def test_implement_order_unchanged_by_benchmark(tmp_path):
     assert {leg["id"] for leg in with_bench["legs"]} == {leg["id"] for leg in bare["legs"]}
     from plangraph.planner.legs import TIERS
     for plan in (with_bench, bare):
-        assert [l["id"] for l in plan["legs"][:2]] == ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash"]
-        assert plan["first_leg"]["effort"] == "xhigh"
+        assert [l["id"] for l in plan["legs"][:2]] == ["cx-gpt-6.1-sol-medium", "agy-gemini-3.8-flash"]
+        assert plan["first_leg"]["effort"] == "medium"
         tiers = [TIERS.index(l["tier"]) for l in plan["legs"][2:]]
         assert tiers == sorted(tiers)
 

@@ -11,6 +11,19 @@ from plangraph.planner.routing import plan_spawn
 from plangraph.spawner.service import SpawnService
 
 
+@pytest.fixture(autouse=True)
+def hermetic_spawn_boundaries(monkeypatch, tmp_path):
+    async def admit(*args, **kwargs):
+        return True
+    async def prompt(self, text, *args, **kwargs):
+        return text
+    monkeypatch.setattr('plangraph.spawner.service.admit_base', admit)
+    monkeypatch.setattr('plangraph.spawner.seat_spawn.admit', lambda *a, **k: None)
+    monkeypatch.setattr('plangraph.spawner.service.SpawnService._annotate_spawn', lambda *a, **k: None)
+    monkeypatch.setattr('plangraph.spawner.service.SpawnService._prepare_leg_prompt', prompt)
+    monkeypatch.chdir(tmp_path)
+
+
 def sol_row(**fields):
     row = dict(id="cx-gpt-6.1-sol-xhigh", tier="subscription", harness="opencode",
                model="omniroute/cx-gpt-6.1-sol-xhigh", family="gpt",
@@ -35,7 +48,7 @@ def test_json_effort_reaches_implement_route_and_saved_record(tmp_path, monkeypa
     model = "omniroute/cx-gpt-6.1-sol" + ("-" + effort if effort else "")
     leg = load_row(tmp_path, sol_row(id=model.split("/", 1)[1], model=model, effort=effort))
     assert leg.effort == effort
-    card = {"estimate_tokens": 1000}
+    card = {"estimate_tokens": 1000, "effort": effort, "effort_decision": "D-5840"}
     reader = lambda *a, **kw: {"state": "available", "evidence": None}
     plan = plan_spawn(card, role="implement", legs=(leg,), policy=RoutePolicy(),
                       leg_reader=reader, catalog_rows=())

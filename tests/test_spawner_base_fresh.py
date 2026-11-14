@@ -63,7 +63,7 @@ def dispatch(repository, tmp_path, monkeypatch):
         monkeypatch.setattr('plangraph.spawner.' + name, ready)
     monkeypatch.setattr('plangraph.spawner.resolver.plan_for_launch_async', planned)
     monkeypatch.setattr('plangraph.spawner.seat_spawn.resources', lambda service: (0, 1000000))
-    chosen = next(leg for leg in DEFAULT_LEGS if leg.id == 'cx-gpt-6.1-sol-xhigh')
+    chosen = next(leg for leg in DEFAULT_LEGS if leg.id == 'cx-gpt-6.1-sol-medium')
     def create(hardened):
         runner = SpawnerRunner(default_cwd=str(repository[1]), process_factory=factory)
         service = (spawn_service if hardened else SpawnService)(runner=runner, state=tmp_path / 'state')
@@ -101,7 +101,7 @@ def test_launch_variants_cannot_bypass(repository, dispatch, hardened, mode):
     service, calls = dispatch[0](hardened), dispatch[1]
     card, options = {'estimate_tokens': 100}, {}
     if mode == 'pinned':
-        options = dict(leg='cx-gpt-6.1-sol-xhigh', override_reason='hermetic admission test')
+        options = dict(leg='cx-gpt-6.1-sol-medium', override_reason='hermetic admission test')
     elif mode != 'seats_plain':
         git(repo, 'fetch', 'origin', 'main')
         git(repo, 'merge', '--ff-only', 'origin/main')
@@ -178,7 +178,7 @@ async def factory(**kwargs):
     await asyncio.sleep(3)
     return JobInfo('job-test', 'completed', kwargs['prompt'], kwargs['model_or_combo'], exit_code=0)
 service = SpawnService(runner=SimpleNamespace(default_cwd={str(repo)!r}, spawn=factory, _tasks={{}}, _processes={{}}, provider_responses={{}}), state={str(service.state)!r})
-service._route = lambda *a, **k: SpawnPlan((next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-xhigh'),), (), 'test', (), ())
+service._route = lambda *a, **k: SpawnPlan((next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-medium'),), (), 'test', (), ())
 cli.SpawnService = lambda **k: service
 raise SystemExit(cli.main(['--supervise']))
 '''

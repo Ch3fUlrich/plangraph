@@ -113,7 +113,18 @@ mod tests {
         git(&source, &["commit", "--allow-empty", "-qm", "new main"]);
         git(&hooks, &["fetch", "-q", "origin"]);
         assert_eq!(run(&hooks, true).unwrap()["behind"], 1);
-        assert_eq!(cli(vec!["--hooks-checkout".into(), hooks.to_string_lossy().into(), "--check".into()], &mut Vec::new()).unwrap_err(), "hook checkout drift alarm");
+        assert_eq!(
+            cli(
+                vec![
+                    "--hooks-checkout".into(),
+                    hooks.to_string_lossy().into(),
+                    "--check".into()
+                ],
+                &mut Vec::new()
+            )
+            .unwrap_err(),
+            "hook checkout drift alarm"
+        );
         assert_eq!(run(&hooks, false).unwrap()["behind"], 0);
         assert_eq!(
             git(&hooks, &["rev-parse", "HEAD"]),

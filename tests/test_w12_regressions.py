@@ -80,7 +80,7 @@ def test_sweep_bad_structure(text, tmp_path):
 def test_override_own_leg(tmp_path):
     from plangraph.spawner.service import SpawnService
     from plangraph.planner.legs import DEFAULT_LEGS
-    target = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-xhigh')
+    target = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-medium')
     result = asyncio.run(SpawnService(state=tmp_path).spawn(card={'estimate_tokens': 100}, model=target.model, override_reason='test audited override', dry_run=True))
     assert result['chosen_leg']['harness'] == target.harness
     assert result['chosen_leg']['tier'] == target.tier

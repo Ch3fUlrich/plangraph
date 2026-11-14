@@ -170,7 +170,7 @@ from plangraph.planner.routing import SpawnPlan
 server = MCPSpawnerServer(state=Path.cwd() / 'state')
 base_fresh._check = lambda *a, **k: dict(ok=True, origin_sha='b'*40, base_sha='b'*40, behind=0, reason=None)
 seat_spawn.resources = lambda *a: (0, 1000000)
-leg = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-xhigh')
+leg = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-medium')
 server.service._route = lambda *a, **k: SpawnPlan((leg,), (), 'test', (), ())
 before = set(sys.modules)
 result = asyncio.run(server.service.spawn(card={'estimate_tokens':100}, prompt='Implement a tested change',
@@ -213,3 +213,14 @@ def test_package_asset_edit_invalidates_source(tmp_path, monkeypatch, git_tree):
     server = _guarded(tmp_path, root)
     asset.write_text('value = 222222\n')
     _assert_refuses_real_but_not_dry(server, monkeypatch)
+
+
+def test_changed_source_refuses_package_launch_before_rust_dispatch(tmp_path, monkeypatch):
+    identity = Mock(return_value=OLD)
+    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+    identity.return_value = NEW
+    dispatch = AsyncMock(side_effect=AssertionError('package dispatched'))
+    monkeypatch.setattr(server, '_package_tool', dispatch)
+    with pytest.raises(mcp_limits.SourceChanged, match='restart required'):
+        asyncio.run(server.call_tool('plangraph_package_launch', {}))
+    dispatch.assert_not_called()

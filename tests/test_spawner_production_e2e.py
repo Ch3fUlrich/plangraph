@@ -705,7 +705,7 @@ def test_production_e2e_mcp_server_workflow(live_gateway: GatewayServerInfo, mon
     async def _test():
         from dataclasses import replace
         from plangraph.planner import legs
-        monkeypatch.setattr(legs, 'DEFAULT_LEGS', tuple(replace(l, model='mimo/mimo-v2.6-pro') if l.id == 'cx-gpt-6.1-sol-xhigh' else l for l in legs.DEFAULT_LEGS if l.model != 'mimo/mimo-v2.6-pro'))
+        monkeypatch.setattr(legs, 'DEFAULT_LEGS', tuple(replace(l, model='mimo/mimo-v2.6-pro') if l.id == 'cx-gpt-6.1-sol-medium' else l for l in legs.DEFAULT_LEGS if l.model != 'mimo/mimo-v2.6-pro'))
         runner = ProductionGatewayChildRunner(gateway_url=live_gateway.base_url)
         mcp_server = MCPSpawnerServer(runner=runner)
 
@@ -729,7 +729,7 @@ def test_production_e2e_mcp_server_workflow(live_gateway: GatewayServerInfo, mon
                     "model_or_combo": "mimo/mimo-v2.6-pro",
                     "card": {"estimate_tokens": 1000},
                     "override_reason": "Hermetic gateway telemetry contract test",
-                "role": "implement", "leg": "cx-gpt-6.1-sol-xhigh",
+                "role": "implement", "leg": "cx-gpt-6.1-sol-medium",
                 "risk": "normal",
                 "dry_run": False,
                 "wait_seconds": 8.0,

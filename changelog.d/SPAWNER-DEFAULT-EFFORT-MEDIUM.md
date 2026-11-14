@@ -1,0 +1,1 @@
+Codex writer and reviewer defaults use registered medium variants, with explicit card effort and decision IDs required for elevated reasoning. Model suffixes cannot bypass the gate through a lower effort field. Routing regressions follow the new defaults while exact benchmark identities remain intact.

@@ -51,6 +51,12 @@ def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card,
     assert all(not leg.claude_family and leg.family not in ("claude", "anthropic")
                and not any(name in leg.model.lower() for name in ("claude", "fable", "opus", "sonnet", "haiku"))
                for leg in plan.legs)
+    chosen = next(l for l in DEFAULT_LEGS if l.id == expected[0])
+    if chosen.model.endswith(('-high', '-xhigh', '-max')):
+        from plangraph.routing_errors import SpawnRefused
+        with pytest.raises(SpawnRefused, match='explicit card effort and D-id'):
+            asyncio.run(service.spawn(card=card, prompt="Implement public code", dry_run=True))
+        return
     record = asyncio.run(service.spawn(card=card, prompt="Implement public code", dry_run=True))
     assert record["chosen_leg"]["id"] == expected[0]
     assert record["chosen_leg"]["effort"] == next(l.effort for l in DEFAULT_LEGS if l.id == expected[0])
@@ -230,4 +236,4 @@ def test_live_default_review_route_never_uses_argon(service, card, family):
 
 def test_live_default_legs_keep_pinnable_legs_in_registry():
     ids = {leg.id for leg in legs.DEFAULT_LEGS}
-    assert {'agy-gemini-3.8-flash', 'cx-gpt-6-luna', 'agy-gemini-4-argon'} <= ids
+    assert {'agy-gemini-3.8-flash', 'cx-gpt-6-luna-medium', 'agy-gemini-4-argon'} <= ids

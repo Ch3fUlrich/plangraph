@@ -162,3 +162,30 @@ fn package_all_stale_claims_return_reasons_without_remote_work() {
     assert!(list(&state).is_empty());
     std::fs::remove_dir_all(state).unwrap();
 }
+
+#[test]
+fn package_medium_field_cannot_mask_high_model_suffix() {
+    assert!(admit_leg_effort(
+        &json!({"card":{}}).as_object().unwrap().clone(),
+        &json!({"model":"gpt-6.1-sol-high","effort":"medium"})
+    )
+    .is_err());
+}
+
+#[test]
+fn package_explicit_higher_effort_keeps_its_decision() {
+    let state = temp();
+    let mut fake = Fake::default();
+    let args = json!({"host":"fixture","base_ref":"origin/main","branch":"phase/test","keys":["p:OK"],
+        "effort":"high","card":{"effort":"high","effort_decision":"D-5840"}});
+    let run = launch(&state, args.as_object().unwrap(), &host(false), &mut fake)
+        .unwrap_or_else(|_| panic!("authorized high launch"));
+    assert_eq!(run["effort_decision"], "D-5840");
+    assert!(fake
+        .calls
+        .last()
+        .unwrap()
+        .1
+        .contains("model_reasoning_effort=high"));
+    std::fs::remove_dir_all(state).unwrap();
+}

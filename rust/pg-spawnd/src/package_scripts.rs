@@ -42,6 +42,7 @@ mkdir -p {root}
 git worktree add -b {branch} {work} {base}
 printf '%s' {text} > {package}
 git -C {work} rev-parse HEAD > {work}/.package-base
+printf '' > {work}/STEER
 herdr workspace create --cwd {work} --label {id}
 "#,
         root = sh(&host.root),
@@ -107,6 +108,7 @@ New-Item -ItemType Directory -Force -Path {root} | Out-Null
 Git worktree add -b {branch} {work} {base}
 [IO.File]::WriteAllText({package}, {text})
 Git -C {work} rev-parse HEAD | Set-Content -LiteralPath (Join-Path {work} .package-base)
+[IO.File]::WriteAllText((Join-Path {work} STEER), '')
 [IO.File]::WriteAllText({runner_path}, {runner})
 {schedule}
 Start-Sleep -Seconds 30

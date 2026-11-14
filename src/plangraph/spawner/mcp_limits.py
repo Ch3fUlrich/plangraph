@@ -98,7 +98,8 @@ SPAWN_MODULES = (
         'run_watchdog', 'win_recorded', 'proc_kill', 'env_redact', 'question_bridge',
         'cancel_job', 'hung_capture', 'seat_artifact', 'stall_watchdog', 'fixer', 'inline_diff',
         'context_pack', 'prompt_guard')))
-GUARDED_TOOLS = ('plangraph_agent_spawn', 'plangraph_session_launch', 'plangraph_session_relaunch')
+GUARDED_TOOLS = ('plangraph_agent_spawn', 'plangraph_session_launch',
+                 'plangraph_session_relaunch', 'plangraph_package_launch')
 
 
 class SourceChanged(SpawnRefused):

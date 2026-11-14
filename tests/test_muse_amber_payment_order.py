@@ -14,7 +14,7 @@ AMBER_MODEL = 'console-meta/muse-spark-1.3-contributor'
 @pytest.fixture
 def muse_legs():
     specs = (
-        ('cx-gpt-6.1-sol-xhigh', 'subscription', 'omniroute/cx-gpt-6.1-sol-xhigh', 'gpt'),
+        ('cx-gpt-6.1-sol-medium', 'subscription', 'omniroute/cx-gpt-6.1-sol-medium', 'gpt'),
         ('agy-gemini-3.8-flash', 'free', 'gemini-3.8-flash', 'gemini'),
         ('agy-gemini-4-argon', 'subscription', 'gemini-4-argon-high', 'gemini'),
         ('mimo-v2.6-pro', 'subscription', 'mimo/mimo-v2.6-pro', 'mimo'),
@@ -58,11 +58,11 @@ def test_subscription_boundary_promotes_free_writer_prefix_only_for_implement(mu
     legs = tuple(reversed(legs))
     before = tuple(vars(leg).copy() for leg in legs)
     result = review_order.payment_order(legs, role)
-    assert ids(result) == (('cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash',
+    assert ids(result) == (('cx-gpt-6.1-sol-medium', 'agy-gemini-3.8-flash',
                            'omniroute-muse-spark', 'mimo-v2.6-pro', 'agy-gemini-4-argon',
                            AMBER_ID, 'deepseek') if role == 'implement' else
                           ('omniroute-muse-spark', 'mimo-v2.6-pro', 'agy-gemini-4-argon',
-                           'cx-gpt-6.1-sol-xhigh', AMBER_ID, 'agy-gemini-3.8-flash', 'deepseek'))
+                           'cx-gpt-6.1-sol-medium', AMBER_ID, 'agy-gemini-3.8-flash', 'deepseek'))
     assert review_order.payment_order(result, role) == result
     assert tuple(vars(leg) for leg in legs) == before
 
@@ -165,7 +165,7 @@ def test_every_recognized_writer_tier_has_a_movable_prefix_slot(muse_legs, tier)
 
 @pytest.mark.parametrize('role', ('implement', 'review'))
 @pytest.mark.parametrize('tier', ('missing', None, 'unknown'))
-@pytest.mark.parametrize('id', ('legacy', 'cx-gpt-6.1-sol-xhigh', None, 'missing'))
+@pytest.mark.parametrize('id', ('legacy', 'cx-gpt-6.1-sol-medium', None, 'missing'))
 def test_tierless_and_unknown_legs_stay_in_place(muse_legs, role, tier, id):
     legacy = SimpleNamespace(**({} if id == 'missing' else {'id': id}),
                              **({} if tier == 'missing' else {'tier': tier}))

@@ -394,7 +394,7 @@ def test_main_policy_gpt_first_and_retained_routes():
         assert "deepseek" in {leg.family for leg in review.legs}
         assert "glm" not in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {
-        "qodercli-qwen3.8-flash", *FREE, *SUBS, "cx-gpt-6-luna", "agy-sonnet-5.5", "agy-gemini-4-argon", "opencode-big-pickle",
+        "qodercli-qwen3.8-flash", *FREE, *SUBS, "cx-gpt-6-luna-medium", "agy-sonnet-5.5", "agy-gemini-4-argon", "opencode-big-pickle",
         "agy-opus", "agy-opus-5.5", "omniroute-deepseek-flash", "omniroute-muse-spark", "opencode-gemini-4-argon",
         "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
         "omniroute-grok-4.7", "opencode-console-muse-spark",

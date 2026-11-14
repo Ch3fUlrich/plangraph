@@ -91,7 +91,7 @@ def test_migration_adds_columns_to_an_old_catalog(tmp_path):
 
 def test_legs_carry_tool_mode():
     by_id = {leg.id: leg for leg in DEFAULT_LEGS}
-    assert by_id["cx-gpt-6-luna"].tool_mode == "inline-only"
+    assert by_id["cx-gpt-6-luna-medium"].tool_mode == "inline-only"
     assert by_id["mimo-v2.6-pro"].tool_mode == "inline-only"
     assert by_id["qodercli-qwen3.8-flash"].tool_mode == "tools"
 
@@ -179,7 +179,7 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
         if role == "implement":
             assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
             assert reasons["opencode-glm-5.3-flash-free"] == "off_family"
-            assert plan.first_leg.id == 'cx-gpt-6.1-sol-xhigh'
+            assert plan.first_leg.id == 'cx-gpt-6.1-sol-medium'
             from plangraph.planner.routing import SpawnRefused
             from plangraph.spawner.service import SpawnService
             with pytest.raises(SpawnRefused, match=r"leg disabled: .*D-4196"):
@@ -197,7 +197,7 @@ def test_route_skips_paused_harness_per_role():
     held = plan_spawn(CARD, role="review", writer_families=("mimo",), policy=pause)
     assert {s["leg"]: s["reason"] for s in held.skipped}["agy-gemini-3.8-flash"] == "paused_harness"
     writer = plan_spawn(CARD, role="implement")
-    assert writer.first_leg.id == "cx-gpt-6.1-sol-xhigh"  # D-5206: eligible lead precedes free tier
+    assert writer.first_leg.id == "cx-gpt-6.1-sol-medium"  # D-5206: eligible lead precedes free tier
     # Sol also uses opencode: pausing that harness must exclude the lead,
     # not merely leave a first-leg assertion that passes without filtering.
     paused = plan_spawn(CARD, role="implement", policy=RoutePolicy(
@@ -240,7 +240,7 @@ def test_default_policy_seats_deepseek_for_review():
 def test_seat_never_shares_family_with_a_single_writer():
     plan = plan_spawn(RCARD, role="review", writer_families=("gpt",))
     assert "gpt" not in _families(plan)
-    assert any(s["leg"] == "cx-gpt-6-luna" and s["reason"] == "excluded_family" for s in plan.skipped)
+    assert any(s["leg"] == "cx-gpt-6-luna-medium" and s["reason"] == "excluded_family" for s in plan.skipped)
 
 
 def test_seat_excludes_every_writer_family(pre_d3552_policy):
