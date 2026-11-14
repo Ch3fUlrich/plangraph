@@ -126,7 +126,7 @@ fn attempt(
         record.set("live_log", json!(log));
         record.set("last_activity_ts", Value::Null);
         let _ = record.transition(Status::Running, finalize::now());
-        finalize::save(&record);
+        finalize::save(record);
         let c = Arc::new(Capture::new(CaptureCfg {
             live_log: Some(log),
             live_cfg: Default::default(),
@@ -172,7 +172,7 @@ fn attempt(
                 let next = c.snapshot().seq;
                 if next != seq {
                     finalize::output(record, &c, false);
-                    if finalize::save(&record) {
+                    if finalize::save(record) {
                         seq = next;
                     }
                 }
