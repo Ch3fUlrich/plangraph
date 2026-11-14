@@ -10,3 +10,4 @@ tools/split/scrub_ci.toml exception ledger, one exact entry per path, rule and h
 tests/test_dell_ci_run.py one Fake-runner suite for tools/dell_ci_run.py; its fixtures (Fake, invoke) live in the file, a split would duplicate them (DELL-CI-ISOLATION-2B r3)
 configuration/opencode/plugins/bash-guard/index.mjs byte copy of the AutoOS OpenCode plugin @f806c42b (D-4844); split only with its AutoOS original
 docs/plans/2026-10-16-orchestration-setup.md imported plan-base design (SU-DOCS, D-4910); plan items cite its sections by number, a split would break those references
+tests/test_spawner_base_fresh.py D-5848 reviewed split part 4 real-git admission regression suite

@@ -328,6 +328,9 @@ Python files already in flight are individually listed in
 
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
 
+The standalone fresh-base admission carry is listed as D-5848 in
+`tools/new_code_allowlist.txt` until the spawner Rust port.
+
 Local controls run every named consumer plus a bounded smoke set; policy checks use origin/main when available, including inherited stack changes. Preflight clears the complete GIT_CONFIG namespace before selector launch.
 
 Both pytest CI jobs validate collection once without `PYTEST_SHARD` on shard 0, using the PR

@@ -23,10 +23,8 @@ LIVE_LOG_ERRORS = 3           # record at most this many live.log failures per r
 READER_GRACE_S = 5.0          # bounded drain once the run is gone (M6)
 EDIT_RETRY_S = 15.0           # retry cadence while the edit baseline is unreadable (Q7)
 
-
 def terminal_status(status, role):
     return 'timed_out' if status == 'timeout' and role == 'review' else status
-
 
 def terminal_record(record, job):
     if job.status not in ('stalled', 'timeout'):
@@ -37,16 +35,13 @@ def terminal_record(record, job):
                   events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s and earlier legs' events
     return True
 
-
 def prepare_run(service, record, card):
     record['live_log'] = str(service._path(record['run_id']).parent / 'live.log')
     return thresholds(card, role=record.get('role')), record['live_log']
 
-
 def is_activity(line):
     line = ANSI.sub('', line).strip()
     return bool(line and not HEADER.match(line))
-
 
 class Watchdog:
     def __init__(self, limits, start, edit, writer=True):
@@ -120,7 +115,6 @@ class Watchdog:
                         unavailable=(['cpu'] if cpu is None else []) + (['edit'] if edit is None else []),
                         **{k: self.limits[k] for k in ('stall_s', 'first_edit_s', 'max_s')})
 
-
 def edit_signature(cwd):
     try:
         count = size = newest = entries = 0
@@ -148,7 +142,6 @@ def edit_signature(cwd):
     except (OSError, subprocess.TimeoutExpired):
         return None
 
-
 async def run_gone(proc):
     """Resolve once the run has exited. ``Process.wait()`` cannot signal this: asyncio resolves
     its waiters only after every pipe transport disconnects (CPython base_subprocess._try_finish),
@@ -157,7 +150,6 @@ async def run_gone(proc):
     while getattr(proc, 'returncode', None) is None:
         await asyncio.sleep(delay)
         delay = min(2.0, delay * 2)
-
 
 class LiveLog:
     """Batched, error-tolerant live.log appender (Q4/M3/Q5)."""
@@ -202,7 +194,6 @@ class LiveLog:
                 self.job.events.append({'event': 'live_log_error', 'error': type(exc).__name__})
             except Exception:
                 pass
-
 
 async def collect(runner, job_id, proc):
     from .runner import redact
@@ -398,3 +389,9 @@ async def collect(runner, job_id, proc):
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+def watchdog_reason(job):
+    if job.status != 'stalled':
+        return job.status
+    return next((e['rule'] for e in reversed(job.events)
+                 if e.get('rule') in ('tool_loop', 'stuck') and e.get('event') == 'watchdog_stalled'), job.status)

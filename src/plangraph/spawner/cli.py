@@ -13,7 +13,7 @@ _start_supervisor = subprocess.Popen
 from .runner import spawn_service as SpawnService, redact_output
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
 from plangraph.routing_support import background_process_options
-
+from .base_fresh import admitted_spawn, spawn_runs, spawn_exit_code
 
 def _drain_chunks(chunks, write, observe=lambda size: None):
     """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""
@@ -48,7 +48,6 @@ def _drain_chunks(chunks, write, observe=lambda size: None):
     if pending:
         write(clean(pending.decode('utf-8')))
 
-
 def _prune_supervisor_logs(state):
     logs = []
     for path in state.glob('supervisor-*.stderr.log'):
@@ -73,13 +72,12 @@ def _prune_supervisor_logs(state):
             except OSError:
                 pass
 
-
 def _supervise():
     payload = json.loads(sys.stdin.readline())
     service = SpawnService(state=payload.pop('state'))
     async def run():
         try:
-            record = await service.spawn(**payload, wait_seconds=0)
+            record = await admitted_spawn(service, payload)
         except Exception as exc:
             record = next((r for r in service.ps()['runs'] if r.get('error') == str(exc)), None)
             if record is None:
@@ -88,16 +86,14 @@ def _supervise():
             return record['exit_code']
         print(json.dumps(record), flush=True)
         sys.stdout.close()
-        for run in record.get('seats') or [record]:
+        for run in spawn_runs(record):
             if run['run_id'] in service.tasks:
                 await service.tasks[run['run_id']]
-        return 0
+        return spawn_exit_code(record)
     return asyncio.run(run())
-
 
 def _card(value):
     return json.loads(Path(value[1:]).read_text(encoding='utf-8') if value.startswith('@') else value)
-
 
 def main(argv=None):
     if (argv if argv is not None else sys.argv[1:]) == ['--supervise']:
@@ -355,11 +351,11 @@ raise SystemExit(code)
                                          ('\n' + tail if tail else ''))
                 result = json.loads(line)
                 deadline = time.monotonic() + max(0, args.wait)
-                runs = result['seats'] if 'seats' in result else [result]   # --seats: group envelope
+                runs = spawn_runs(result)
                 while any(r.get('status') == 'running' for r in runs) and time.monotonic() < deadline:
                     time.sleep(min(.02, max(0, deadline - time.monotonic())))
-                    runs[:] = [service.result(r['run_id']) if r.get('status') == 'running' else r for r in runs]
-                result = result if 'seats' in result else runs[0]
+                    for run in runs:
+                        if run.get('status') == 'running': run.update(service.result(run['run_id']))
         elif args.verb == 'ps':
             from .remote_ps import list_runs
             result = {'runs': list_runs(service.ps()['runs'])}
@@ -383,6 +379,10 @@ raise SystemExit(code)
                     seen.add(line)
         print(json.dumps(result, indent=2))
         if isinstance(result, dict):
+            if 'writers' in result:
+                for run in spawn_runs(result):
+                    if run.get('reason'): print(run['run_id'] + ': ' + run['reason'], file=sys.stderr)
+                return spawn_exit_code(result)
             if 'seats' in result:
                 # rc 0 only while some seat can still deliver a verdict (planned, running or completed).
                 return 0 if any(r.get('status') in ('dry_run', 'running', 'completed') for r in result['seats']) else 1
@@ -394,7 +394,6 @@ raise SystemExit(code)
     except (ValueError, KeyError, OSError, SpawnRefused) as exc:
         print(((f'{args.run_id}: ' if hasattr(args, 'run_id') else '') + type(exc).__name__) if isinstance(exc, PermissionError) else str(exc), file=sys.stderr)
         return 3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1
-
 
 if __name__ == '__main__':
     raise SystemExit(main())

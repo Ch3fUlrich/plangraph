@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import time
 import urllib.parse
@@ -24,9 +25,19 @@ async def main():
     # A real, cheap harness child, not --dry-run (which starts no process).
     # Keep records for build-L1 diagnostics; never print credentials.
     state = Path(tempfile.mkdtemp(prefix='.notify-smoke-', dir=Path.cwd()))
-    service = spawn_service(runner=SpawnerRunner(), state=state)
+    origin, repo = state / 'origin.git', state / 'repo'
+    def git(cwd, *args):
+        subprocess.run(['git', '-C', str(cwd), '-c', 'user.name=Test', '-c',
+                        'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', *args],
+                       check=True, capture_output=True)
+    git(state, 'init', '--bare', '-b', 'main', str(origin))
+    git(state, 'clone', str(origin), str(repo))
+    git(repo, 'commit', '--allow-empty', '-m', 'initial')
+    git(repo, 'push', 'origin', 'HEAD:main')
+    service = spawn_service(runner=SpawnerRunner(default_cwd=str(repo)), state=state)
     with patch('plangraph.spawner.runner.build_command',
-               return_value=[sys.executable, '-c', 'print("notify smoke OK")']):
+               return_value=[sys.executable, '-c',
+                             'from pathlib import Path; Path("notify-smoke.txt").write_text("OK\\n"); print("notify smoke OK")']):
         record = await service.spawn(
             card={'estimate_tokens': 1000},
             prompt='Reply OK only', model='omniroute/cx-gpt-6.1-sol',
