@@ -325,3 +325,12 @@ Job accounting user plus kernel time feeds the existing CPU sampler and recovery
 activity clock; unavailable accounting never fabricates activity. Off does no
 recovery work; shadow only reports adoption without signals or durable writes.
 This does not authorize enabling reconciliation on a live host.
+
+Health reports add `witness_alerts` and one human `ALERT` line per leg when
+fewer than 20% of at least five distinct runs in the recent six hours are
+witnessed. The previous six hours supply context, not a prerequisite: sustained
+loss and 0/N in both windows continue to alert. Four recent runs or exactly 20%
+is quiet. Runs are deduplicated per leg; dry/unlaunched attempts are excluded.
+Served models (including native telemetry) count, except child-writable OpenCode
+store identity. Missing identity/time fields are skipped. JSON stays one document;
+alerts are advisory and do not change routing.

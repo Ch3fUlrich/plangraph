@@ -209,3 +209,107 @@ fn skip_fraction_over_all_launches() {
         build_report(&[], &[], 0, 1).unwrap()["totals"]["overrides"]["skip_fraction"].is_null()
     );
 }
+
+#[test]
+fn witnessed_share_collapse_is_reported_per_leg() {
+    let until = 100_000;
+    for (recent, total, expected) in [(0, 8, 1), (7, 8, 0), (0, 3, 0)] {
+        let mut records = Vec::new();
+        for (window, count, witnessed) in [(0, 10, 9), (1, total, recent)] {
+            for index in 0..count {
+                records.push(json!({"run_id":format!("run-{window}-{index}"),
+                    "status":"completed", "ended":until - if window == 0 { 32400 } else { 10800 },
+                    "chosen_leg":{"id":"mimo-fixture"},
+                    "served_model":if index < witnessed { "mimo/mimo-v2.6-pro" } else { "unwitnessed" },
+                    "witness_kind":if index < witnessed { "response-side-gateway-call-log" } else { "" }}));
+            }
+        }
+        let report = build_report(&records, &[], 0, until).unwrap();
+        let alerts = report["witness_alerts"]
+            .as_array()
+            .expect("witness alerts array");
+        assert_eq!(alerts.len(), expected);
+        if expected == 1 {
+            assert!(alerts[0].as_str().unwrap().starts_with("ALERT "));
+            assert!(alerts[0].as_str().unwrap().contains("mimo-fixture"));
+        }
+    }
+}
+
+#[test]
+fn witnessed_share_strict_boundaries_and_minimum_five_runs() {
+    let until = 100_000;
+    // Recent share must be below 20%; five recent runs suffice regardless of history.
+    for (before, before_total, recent, recent_total, expected) in [
+        (4, 5, 0, 5, 1),
+        (5, 5, 1, 5, 0),
+        (5, 5, 0, 5, 1),
+        (4, 4, 0, 5, 1),
+        (5, 5, 0, 4, 0),
+        (0, 10, 0, 10, 1),
+        (0, 0, 0, 5, 1),
+        (0, 10, 0, 4, 0),
+    ] {
+        let mut records = Vec::new();
+        for (window, total, witnessed) in [(0, before_total, before), (1, recent_total, recent)] {
+            for index in 0..total {
+                records.push(json!({"run_id":format!("run-{window}-{index}"),
+                    "status":"completed", "ended":until - if window == 0 { 32400 } else { 10800 },
+                    "chosen_leg":{"id":"boundary-fixture"},
+                    "served_model":if index < witnessed { "mimo/mimo-v2.6-pro" } else { "unwitnessed" },
+                    "witness_kind":if index < witnessed { "response-side-gateway-call-log" } else { "" }}));
+            }
+        }
+        let report = build_report(&records, &[], 0, until).unwrap();
+        assert_eq!(report["witness_alerts"].as_array().unwrap().len(), expected);
+    }
+}
+
+#[test]
+fn witness_loss_persists_across_report_cutoffs() {
+    let records: Vec<_> = (0..60)
+        .map(|i| {
+            json!({
+                "run_id":format!("run-{i}"), "ended":i * 3600,
+                "chosen_leg":{"id":"leg"}, "status":"completed",
+                "served_model":if i < 10 {"model"} else {"unwitnessed"}
+            })
+        })
+        .collect();
+    for until in [16 * 3600, 24 * 3600, 48 * 3600, 60 * 3600] {
+        let report = build_report(&records, &[], until - 3600, until).unwrap();
+        assert_eq!(report["witness_alerts"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn witness_missing_fields_native_taxonomy_and_run_deduplication() {
+    for (kind, expected) in [
+        ("native-claude", 0),
+        ("request-side-claude-stream", 0),
+        ("response-side-gateway-call-log", 0),
+        ("request-side-opencode-store", 1),
+    ] {
+        let mut records: Vec<_> = (0..10)
+            .map(|i| {
+                json!({
+                    "run_id":format!("run-{i}"), "ts":100_000 - if i < 5 {32400} else {10800},
+                    "leg_key":"leg", "served_model":"model", "witness_kind":kind
+                })
+            })
+            .collect();
+        records.extend([
+            json!({}),
+            Value::Null,
+            json!({"run_id":"missing-leg","ts":90000}),
+        ]);
+        let report = build_report(&records, &[], 0, 100_000).unwrap();
+        assert_eq!(report["witness_alerts"].as_array().unwrap().len(), expected);
+    }
+    let records = vec![json!({"run_id":"only-run", "ended":90000,
+        "chosen_leg":{"id":"leg"}, "attempts":vec![json!({"ts":90000}); 6]})];
+    assert_eq!(
+        build_report(&records, &[], 0, 100_000).unwrap()["witness_alerts"],
+        json!([])
+    );
+}
