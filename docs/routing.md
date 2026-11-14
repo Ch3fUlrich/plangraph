@@ -105,7 +105,7 @@ Every Gemini Flash version is retired. Requests and stored target overrides fail
 with `gemini_flash_retired: model retired by operator order 2026-11-14; use
 agy-gemini-4-hydrogen (medium: agy-gemini-4-hydrogen-medium)`.
 D-5903 enables `agy-gemini-4-hydrogen-high` for implement after Sol and
-`agy-gemini-4-hydrogen-medium` for inline-only review in the retired Flash slot.
+`agy-gemini-4-hydrogen-medium` for read-only tools review (agy plan mode) in the retired Flash slot.
 Both use subscription tier, no training on data, windows 128k/256k/1m and
 max_request_tokens 900000 from the existing agy Claude 5.5 legs (same Antigravity
 subscription and harness). `clients.build_standalone_fallback_command` uses an
