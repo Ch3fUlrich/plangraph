@@ -458,6 +458,7 @@ def test_affected_gate_is_file_only_and_time_bounded(tmp_path, monkeypatch):
     tools.mkdir()
     (tools / 'affected_tests.py').touch()
     monkeypatch.setenv('PREFLIGHT_SKIP', '1')
+    monkeypatch.setenv('GIT_DIR', str(tmp_path / 'caller.git'))
     calls = []
     monkeypatch.setattr(subprocess, 'run', lambda command, **kw:
                         calls.append((command, kw)) or SimpleNamespace(returncode=0))
@@ -468,4 +469,6 @@ def test_affected_gate_is_file_only_and_time_bounded(tmp_path, monkeypatch):
     assert '--files-only' in command and '--run' in command
     assert Path(command[1]).name == 'affected_tests.py'
     assert options['timeout'] <= 240
+    forwarded_git_dir = options['env'].get('GIT_DIR')
+    assert forwarded_git_dir is None
     assert 'preflight.py' not in ' '.join(command)
