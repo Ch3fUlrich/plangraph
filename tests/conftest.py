@@ -395,5 +395,5 @@ def pytest_sessionfinish(session, exitstatus):
 @pytest.fixture(autouse=True)
 def isolated_build_cache(tmp_path, monkeypatch):
     """Spawner tests use their own cache and do not depend on host disk space."""
-    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'cargo-target'))
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path.with_name(tmp_path.name + '-cargo-target')))
     monkeypatch.setenv('PLANGRAPH_DISK_FLOOR_GB', '0')

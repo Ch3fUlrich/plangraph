@@ -64,3 +64,32 @@ def test_recorded_survivors_without_runner_job_are_kill_incomplete(tmp_path, mon
         'failed', 'kill_incomplete', [12345])
     assert out['events'][-1] == dict(event='kill_incomplete', survivors=[12345])
     assert service.result('run-survivor') == out
+
+
+@pytest.mark.parametrize('survivors', [[], [123]])
+def test_cancel_before_monitor_starts_releases_cache_only_after_reap(tmp_path, monkeypatch, survivors):
+    from plangraph.spawner import host_ready as h
+    async def run():
+        runner = SpawnerRunner(default_cwd=str(tmp_path))
+        job = SimpleNamespace(status='running', exit_code=None, survivors=[], events=[])
+        runner.jobs['j'] = job
+        lease = h.cargo_lease()
+        runner._cargo_leases = {'j': lease}
+        entered = []
+        async def monitor():
+            entered.append(True)
+        runner._tasks['j'] = asyncio.create_task(monitor())
+        runner._processes['j'] = object()
+        async def reap(*args):
+            assert not lease.closed
+            job.survivors = survivors
+        monkeypatch.setattr('plangraph.spawner.runner.reap', reap)
+        await runner.cancel('j')
+        assert not entered
+        assert lease.closed == (not survivors)
+        assert ('j' in runner._cargo_leases) == bool(survivors)
+        if not survivors:
+            with h.cargo_lease(exclusive=True):
+                pass
+        lease.close()
+    asyncio.run(run())

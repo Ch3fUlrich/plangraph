@@ -132,9 +132,9 @@ def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
                 reason = 'stale readiness'
             elif row.get('disk_free_gb') is not None and any(
                     type(value) not in (int, float) or not 0 <= value < float('inf')
-                    for value in (row['disk_free_gb'], row.get('disk_floor_gb', 30))):
+                    for value in (row['disk_free_gb'], row.get('disk_floor_gb', 5))):
                 reason = 'malformed readiness'
-            elif row.get('disk_free_gb') is not None and row['disk_free_gb'] < row.get('disk_floor_gb', 30):
+            elif row.get('disk_free_gb') is not None and row['disk_free_gb'] < row.get('disk_floor_gb', 5):
                 reason = f"disk_low: free {row['disk_free_gb']} GB"
             elif any(type(row.get(key)) is not int or row[key] < 0
                      for key in ('live_runs', 'mem_available_mb')):
@@ -346,12 +346,17 @@ def main(argv=None):
         role_mb, floor_mb = local_limits(registry_caps(), args.role)
         _, memory = local_resources()
         from .host_ready import local_disk_refusal
-        disk = local_disk_refusal(args.repo, cli.SpawnService())
-        if decide(memory, role_mb, floor_mb, {}, False, local_refusal=disk).reason == 'local room':
-            return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
-        card = json.loads(Path(args.card).read_text())
+        try:
+            card = json.loads(Path(args.card).read_text())
+        except (OSError, ValueError):
+            card = None  # Local CLI owns malformed input diagnostics.
         from .prompt_input import resolve_cwd
         cwd = resolve_cwd(args.cwd, card)
+        disk = local_disk_refusal(cwd or args.repo, cli.SpawnService())
+        if decide(memory, role_mb, floor_mb, {}, False, local_refusal=disk).reason == 'local room':
+            return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
+        if card is None:
+            card = json.loads(Path(args.card).read_text())
         repo = Path(cwd or args.repo).resolve()
         diff = card.get('diff_ref')
         public = repos_public(config, repo, diff)

@@ -100,12 +100,14 @@ def cargo_lease(exclusive=False):
 def local_disk_refusal(worktree, service):
     """Check the worktree filesystem and bound the host's shared build cache."""
     try:
-        floor = float(os.environ.get('PLANGRAPH_DISK_FLOOR_GB', '30'))
+        floor = float(os.environ.get('PLANGRAPH_DISK_FLOOR_GB', '5'))
         cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
         if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
             raise ValueError('invalid disk limits')
         target = shared_cargo_target()
-        if target.is_symlink() or Path(worktree).resolve().is_relative_to(target.resolve()) or target == Path.home():
+        checkout, cache = Path(worktree).resolve(), target.resolve()
+        if (target.is_symlink() or checkout.is_relative_to(cache) or
+                cache.is_relative_to(checkout) or cache == Path.home().resolve()):
             raise ValueError('unsafe cache directory')
         size = cargo_target_size_gb(target)
         if size > cap:
@@ -253,7 +255,7 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                 record['live_runs'] = sum(r['status'] == 'running' for r in runs)
             if record['mem_available_mb'] is not None and record['mem_available_mb'] < config['floor_mb']:
                 fail('memory', 'below_floor')
-            if record['disk_free_gb'] is not None and record['disk_free_gb'] < config.get('disk_floor_gb', 30):
+            if record['disk_free_gb'] is not None and record['disk_free_gb'] < config.get('disk_floor_gb', 5):
                 fail('disk', f"disk_low: free {record['disk_free_gb']} GB")
         else:
             reachability_failed = True

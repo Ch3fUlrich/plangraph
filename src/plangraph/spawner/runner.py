@@ -319,6 +319,8 @@ class SpawnerRunner:
         child_env = build_child_env(extra_env, headers=envelope_headers)
         from .host_ready import cargo_child_env
         child_env = cargo_child_env(child_env)
+        # D-3505: harnesses take their project dir from an inherited $PWD over the
+        # process cwd; a caller's PWD put probe commits into the caller's worktree.
         child_env['PWD'] = _abspath(work_dir)
         if cmd[0] == 'claude':   # D-3605: subscription login only; D-3649: an allowlisted env, never a scrubbed copy
             child_env = claude_child_env(child_env)
@@ -568,6 +570,7 @@ class SpawnerRunner:
 
             return self.jobs[job_id]
         finally:
+            # A running monitor owns the environment until output is scrubbed.
             if job_id not in self._tasks:
                 lease = getattr(self, '_cargo_leases', {}).pop(job_id, None)
                 if lease is not None: lease.close()
@@ -622,6 +625,10 @@ class SpawnerRunner:
             return
         reaped.add(job_id)
         await reap(self, job_id, proc)
+        # Reap also runs when cancellation beats the monitor's first step.
+        if not getattr(self.jobs[job_id], 'survivors', ()):
+            lease = getattr(self, '_cargo_leases', {}).pop(job_id, None)
+            if lease is not None: lease.close()
 
     async def _monitor_process(
         self,
@@ -705,6 +712,7 @@ class SpawnerRunner:
                 denied = _opencode_tools_denied(
                     env.get('OPENCODE_CONFIG_CONTENT') or '', env)
                 # R2: the store read may block up to its 2s sqlite timeout on a
+                # locked db; a thread keeps the monitor loop responsive.
                 m = (await asyncio.to_thread(_opencode_served_model,
                                              Path(oc_dir) / 'opencode' / 'opencode.db',
                                              f'plangraph-{job_id}')
@@ -714,6 +722,7 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-opencode-store'
                 elif oc_dir and denied:
                     job.events.append({'event': 'opencode_witness_unavailable'})
+            # The trusted response-side log is independent of child tool permissions.
             if is_opencode(job):
                 from .gateway_witness import witness
                 await asyncio.to_thread(witness, self, job_id, job, env)
@@ -728,10 +737,12 @@ class SpawnerRunner:
                 if m is not None and m == requested_model:
                     job.request_side_model = m
                     job.witness_kind = 'request-side-claude-stream'
+                # D-3649: the review text (VERDICT line) is the stream's final result, not the raw stream.
                 await asyncio.to_thread(render_review_output, job, stdout_text,
                                         lambda text: redact_output(env_redact.redact_env_values(text, env)))
 
             await witness_native(self, job_id, job, stdout_text, requested_model)
+            # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
             job.served_model = job.served_model or 'unwitnessed'
             job.served_family = job.served_family or 'unwitnessed'
         except asyncio.CancelledError:
@@ -751,9 +762,6 @@ class SpawnerRunner:
                 await self._reap_process(job_id, proc)
             except Exception:
                 pass
-            if not getattr(job, 'survivors', ()):
-                lease = getattr(self, '_cargo_leases', {}).pop(job_id, None)
-                if lease is not None: lease.close()
             self._check_git_config_guard(job_id)
             self._git_guards.pop(job_id, None)
             self._stdin_payloads.pop(job_id, None)
@@ -799,6 +807,7 @@ class SpawnerRunner:
         if job_id not in self.jobs:
             return {'ok': False, 'steered': False, 'error': 'unknown job'}
         job = self.jobs[job_id]
+        # Audit attempted instructions; success is reported separately.
         message = redact(message)
         job.steer_messages.append(message)
 
@@ -836,7 +845,6 @@ def spawn_service(*args, **kwargs):
         async def _continue_writer(self, record, output):
             if record.get('status') != 'needs_input':
                 return await super()._continue_writer(record, output)
-
         def __init__(self, *args, completion_sink=None, keeper_sink=None, **kwargs):
             super().__init__(*args, **kwargs)
             from .notify import FileInbox
@@ -847,11 +855,9 @@ def spawn_service(*args, **kwargs):
             if hasattr(self.runner, '__dict__'):
                 self.runner.state = self.state  # probes share this service's run directory
                 self.runner.on_sample = lambda jid: self._save(self._running_records[jid]) if jid in self._running_records else None
-
         async def cancel(self, run_id):   # D-3505: the leg loop of the supervisor stops on this marker
             self._path(run_id).parent.exists() and self._path(run_id).with_name('cancelled').touch()
             return await super().cancel(run_id)
-
         def _save(self, record, *, retry=False):
             import socket
             record.setdefault('host', os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname())
@@ -911,7 +917,6 @@ def spawn_service(*args, **kwargs):
                                 atomic_write_private(marker, 'delivered\n')
                             except Exception:
                                 logging.getLogger(__name__).exception('completion hook failed')
-
         def retry_completions(self):
             """Re-drive durable terminal records after a supervisor/bridge outage."""
             for record in self.ps()['runs']:
@@ -925,7 +930,6 @@ def spawn_service(*args, **kwargs):
                         self._save(record, retry=True)
                     except Exception:
                         logging.getLogger(__name__).exception('completion retry failed')
-
         async def wait(self, run_id, timeout=None):
             if timeout is not None and timeout < 0:
                 raise ValueError('timeout must be nonnegative')
@@ -942,7 +946,6 @@ def spawn_service(*args, **kwargs):
                 if deadline is not None and time.monotonic() >= deadline:
                     raise TimeoutError('run wait timed out: ' + run_id)
                 await asyncio.sleep(.02)
-
         def _route(self, card, role='implement', writer_families=(), review_of=None, **options):
             from . import leg_state
             original = self.leg_reader
@@ -952,7 +955,6 @@ def spawn_service(*args, **kwargs):
                 return super()._route(card, role, writer_families, review_of, **options)
             finally:
                 self.leg_reader = original
-
         async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
@@ -963,6 +965,7 @@ def spawn_service(*args, **kwargs):
             if rounds_exhausted(self, card, role):
                 from plangraph.routing_errors import SpawnRefused
                 raise SpawnRefused('question_rounds_exhausted')
+            # Let the base service handle audited overrides, which never fall through.
             if seats or model is not None or leg is not None or not card:
                 return await super()._spawn(
                     card=card, prompt=prompt, role=role, writer_families=writer_families,
@@ -973,6 +976,7 @@ def spawn_service(*args, **kwargs):
                 )
             from plangraph.settings import admit_review_scope
             admit_review_scope(card, role, review_scope)
+            # A seat run (_plan from _spawn_seats) keeps to its own legs on re-route.
             def restrict(p, tried):
                 from .seat_artifact import restrict_seat_plan
                 return p if _plan is None else restrict_seat_plan(p, _plan, tried)
@@ -998,7 +1002,6 @@ def spawn_service(*args, **kwargs):
                     record['attempts'].append(dict(leg=skipped.get('leg'), status='skipped',
                         skip_reason=skipped.get('skip_reason') or skipped.get('reason')))
             self._save(record)
-
             if not plan.legs or plan.error:
                 host_skips = [s for s in plan.skipped if any(marker in str(s) for marker in ('not_served_on_host', 'harness_missing'))]
                 from plangraph.routing_support.liveness import provider_exhausted
@@ -1009,7 +1012,6 @@ def spawn_service(*args, **kwargs):
                               evidence=plan.to_dict()['skipped'])
                 self._save(record)
                 return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
-
             async def execute():
                 tried = set()
                 current = plan
@@ -1142,7 +1144,6 @@ def spawn_service(*args, **kwargs):
                     terminal_reason(record, job if record.get('job_id') else None)
                     release_attempts(self, record)
                     self._save(record)
-
             task = asyncio.create_task(execute())
             self.tasks[run_id] = task
             if dry_run or wait_seconds is None:
@@ -1153,5 +1154,4 @@ def spawn_service(*args, **kwargs):
                 except asyncio.TimeoutError:
                     pass
             return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
-
     return DispatchService(*args, **kwargs)

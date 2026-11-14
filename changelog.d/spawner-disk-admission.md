@@ -1,1 +1,1 @@
-Spawner disk admission and a bounded shared Cargo target prevent worktree builds filling the host disk.
+Spawner disk admission and a bounded shared Cargo target prevent worktree builds filling the host disk. The configurable free-space floor is 5 GiB; cache cleanup rejects source paths and cancellation releases leases after verified reap.

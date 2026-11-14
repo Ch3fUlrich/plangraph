@@ -10,7 +10,7 @@ from plangraph.spawner import host_ready as h
 from plangraph.spawner import host_ready_source as source
 
 CONFIG = dict(ssh='invented-alias', repo='/invented/repo', spawner_src='/invented/source',
-              env_file='/invented/env', disk_floor_gb=0, run_cap=4, floor_mb=3000, session_unit='worker')
+              env_file='/invented/env', run_cap=4, floor_mb=3000, session_unit='worker')
 
 
 @pytest.fixture(autouse=True)
@@ -329,3 +329,19 @@ def test_fatal_host_errors_propagate(tmp_path, monkeypatch, error, stage):
     with pytest.raises(error, match='secret-value'):
         h.check_host('fiction', CONFIG, tmp_path, broken if stage == 'probe' else runner)
     assert not (tmp_path / 'fiction.json').exists()
+
+
+@pytest.mark.parametrize('floor,free,ok', [(None, 4, False), (None, 5, True),
+                                         (10, 9, False), (10, 10, True)])
+def test_remote_disk_floor(tmp_path, floor, free, ok):
+    config = dict(CONFIG)
+    if floor is not None:
+        config['disk_floor_gb'] = floor
+    def fake(argv, **kwargs):
+        if 'df -Pk' in argv[-1]:
+            return SimpleNamespace(returncode=0, stdout=f'fake 99999999 0 {free * 1024 * 1024} 0% /\n')
+        return runner(argv, **kwargs)
+    result = h.check_host('fiction', config, tmp_path, fake)
+    assert result['ok'] is ok
+    assert result['disk_free_gb'] == free
+    assert result['failures'] == ([] if ok else [f'disk: disk_low: free {free} GB'])

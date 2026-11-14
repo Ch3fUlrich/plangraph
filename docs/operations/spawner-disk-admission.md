@@ -1,10 +1,10 @@
 # Disk admission and Cargo cache limits
 
 Disk admission uses the production Python CLI/MCP path (`seat_spawn.admit` and
-`overflow`), alongside RAM admission. `PLANGRAPH_DISK_FLOOR_GB` defaults to 30
+`overflow`), alongside RAM admission. `PLANGRAPH_DISK_FLOOR_GB` defaults to 5
 (GiB); the checkout, configured `worktree_root`, and state tree filesystems must
 all meet it. A refusal reports `disk_low` and measured GB and uses RAM's overflow
-or queue mechanism. Remote readiness uses `disk_floor_gb` (default 30); the
+or queue mechanism. Remote readiness uses `disk_floor_gb` (default 5); the
 receiving spawner also checks live disk before launching.
 
 Every harness child, including writers and fixers, receives `CARGO_TARGET_DIR`
