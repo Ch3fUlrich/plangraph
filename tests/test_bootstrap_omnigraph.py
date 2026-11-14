@@ -217,3 +217,32 @@ def test_health_404_no_second_guess(host, monkeypatch):
     monkeypatch.setenv('HTTP_STATUS', '404')
     assert 'no alternate attempted' in host[4]().stdout
     assert host[3].read_text().count('curl ') == 1
+
+
+def test_ci_tools_dry_run_does_not_download(tmp_path):
+    result = subprocess.run(['bash', str(ROOT / 'deploy/bootstrap.sh'),
+                             '--ci-tools-only', '--dry-run'],
+                            env={**os.environ, 'HOME': str(tmp_path)},
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert 'gitleaks 8.30.1' in result.stdout and 'SHA-256' in result.stdout
+    assert not (tmp_path / '.local').exists()
+
+
+def test_ci_tools_corrupt_archive_preserves_installed_binary(tmp_path):
+    bins = tmp_path / 'bin'
+    bins.mkdir()
+    curl = bins / 'curl'
+    curl.write_text(f'#!{sys.executable}\nimport pathlib,sys\n'
+                    'pathlib.Path(sys.argv[sys.argv.index("-o")+1]).write_bytes(b"corrupt archive")\n')
+    curl.chmod(0o755)
+    installed = tmp_path / '.local/bin/gitleaks'
+    installed.parent.mkdir(parents=True)
+    installed.write_bytes(b'previous verified binary')
+    result = subprocess.run(['bash', str(ROOT / 'deploy/bootstrap.sh'), '--ci-tools-only'],
+                            env={**os.environ, 'HOME': str(tmp_path),
+                                 'PATH': str(bins) + os.pathsep + os.environ['PATH']},
+                            capture_output=True, text=True)
+    assert result.returncode != 0
+    assert 'FAILED' in result.stdout and 'checksum' in result.stderr
+    assert installed.read_bytes() == b'previous verified binary'

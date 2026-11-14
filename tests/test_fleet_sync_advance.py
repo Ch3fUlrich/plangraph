@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import shlex
 from pathlib import Path
 
@@ -14,12 +15,12 @@ def fleet(tmp_path, monkeypatch):
     binpath = tmp_path / 'bin'
     binpath.mkdir()
     git = binpath / 'git'
-    git.write_text('#!/usr/bin/python3\nimport sys,pathlib\na=sys.argv\n'
+    git.write_text(f'#!{sys.executable}\nimport sys,pathlib\na=sys.argv\n'
                    'if a[1]=="clone": pathlib.Path(a[-1]).mkdir()\n'
                    'elif a[-1]=="HEAD": print("a"*40)\n')
     git.chmod(0o755)
     ssh = binpath / 'ssh'
-    ssh.write_text('#!/usr/bin/python3\nimport subprocess,sys\n'
+    ssh.write_text(f'#!{sys.executable}\nimport subprocess,sys\n'
                    'sys.exit(subprocess.call(sys.argv[-1],shell=True))\n')
     ssh.chmod(0o755)
     monkeypatch.setenv('PATH', str(binpath) + os.pathsep + os.defpath)
@@ -56,7 +57,7 @@ def test_fleet_sync_advance_refuses(fleet, change):
 def test_fleet_sync_advance_rollback(fleet, phase):
     registry, record = fleet
     check = record.parent / 'health'
-    check.write_text('#!/usr/bin/python3\nimport pathlib,sys\n'
+    check.write_text(f'#!{sys.executable}\nimport pathlib,sys\n'
                      f'p=pathlib.Path({str(record.parent / "calls")!r})\n'
                      'n=int(p.read_text())+1 if p.exists() else 1\np.write_text(str(n))\n'
                      f'sys.exit(1 if n=={1 if phase == "pre" else 2} else 0)\n')
@@ -75,7 +76,7 @@ def test_fleet_sync_advance_success_prune(fleet):
     root = fleet[1].parent
     spawn = root / 'spawn'
     calls = root / 'spawn-calls'
-    spawn.write_text('#!/usr/bin/python3\nimport pathlib,sys\n'
+    spawn.write_text(f'#!{sys.executable}\nimport pathlib,sys\n'
                      'assert "--dry-run" in sys.argv\n'
                      f'with pathlib.Path({str(calls)!r}).open("a") as f: f.write("spawn\\n")\n')
     spawn.chmod(0o755)
@@ -105,7 +106,7 @@ def test_fleet_sync_windows_pointer_fake(fleet):
     pointer.write_text(str(root / 'releases' / ('b' * 40)))
     check = root / 'health'
     seen = root / 'switched'
-    check.write_text('#!/usr/bin/python3\nimport pathlib,sys\n'
+    check.write_text(f'#!{sys.executable}\nimport pathlib,sys\n'
                      f'p=pathlib.Path({str(pointer)!r})\n'
                      'if pathlib.Path(p.read_text()).name == "a"*40:\n'
                      f' pathlib.Path({str(seen)!r}).touch()\n sys.exit(1)\n')

@@ -1,4 +1,5 @@
 import json
+import sys
 import subprocess
 from threading import Barrier
 import pytest
@@ -68,7 +69,7 @@ def test_transport_is_bounded_and_noninteractive(monkeypatch, src, distro):
         assert kwargs['stdout'] == subprocess.PIPE
         assert kwargs['stderr'] == subprocess.DEVNULL
         assert kwargs.get('shell', False) is False
-        return original(['python3', '-c', 'print(\'{"runs": []}\', end="")'], **kwargs)
+        return original([sys.executable, '-c', 'print(\'{"runs": []}\', end="")'], **kwargs)
     monkeypatch.setattr(subprocess, 'Popen', run)
     assert remote_ps.query_host(host, 2) == '{"runs": []}'
 
@@ -245,14 +246,14 @@ def test_mixed_config(tmp_path, monkeypatch):
 def test_transport_rejects_overflow_exit_and_timeout(monkeypatch, script, budget, error):
     original = subprocess.Popen
     monkeypatch.setattr(subprocess, 'Popen',
-                        lambda argv, **kw: original(['python3', '-c', script], **kw))
+                        lambda argv, **kw: original([sys.executable, '-c', script], **kw))
     with pytest.raises(error):
         remote_ps.query_host(dict(target='target'), budget)
 def test_transport_overflow_names_host(monkeypatch):
     """Error-path contract guard, not fix coverage: base already names the host."""
     original = subprocess.Popen
     monkeypatch.setattr(subprocess, 'Popen', lambda argv, **kw: original(
-        ['python3', '-c', 'import json; print(json.dumps({"runs": ['
+        [sys.executable, '-c', 'import json; print(json.dumps({"runs": ['
          '{"run_id": "x" * 2097152, "host": "node-a", "status": "running"}]}))'], **kw))
     rows = remote_ps._fetch(dict(name='node-a', target='target'),
                            lambda host, _: remote_ps.query_host(host, 10))
