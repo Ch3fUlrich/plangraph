@@ -28,6 +28,44 @@ def _passing_review(text):
                         for line in lines[verdicts[-1][0] + 1:]))
 
 
+def _quota_refusal(text):
+    """Read only provider-shaped quota evidence; keeper never imports runtime."""
+    text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text).replace('\r', '\n')
+    marker = r'RESOURCE_EXHAUSTED(?: \(code \d{3}\):|:|$)|HTTP 429\b|(?:individual )?quota (?:reached|exceeded|exhausted|refusal)|usage limit (?:reached|exceeded)|too many requests|rate limit|quota policy filtered \d+ account|All \S+ accounts reached configured quota'
+    if re.search(r'(?im)^\s*(?:error:\s*)?(?:' + marker + ')', text):
+        return True
+    if re.search(r'(?im)^\s*error:.*(?:quota (?:reached|exceeded|exhausted|refusal)|exhausted their quota|rate limit|usage limit|too many requests)', text):
+        return True
+    for line in text.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            response = event.get('autoos_provider_response') or (event.get('error') if event.get('type') == 'error' else None)
+            if isinstance(response, dict) and response.get('status') == 429:
+                return True
+    return False
+
+
+def _one_serving_attempt(attempts, model):
+    """D-5924: quota-refused legs do not consume another review on the head."""
+    if not isinstance(attempts, list) or not attempts:
+        return False
+    if len(attempts) == 1:
+        return True  # preserve the legacy single-attempt record contract
+    real = [a for a in attempts if isinstance(a, dict) and a.get('status') != 'skipped']
+    if (len(real) < 2 or any(not isinstance(a, dict) for a in attempts)
+            or real[-1].get('status') != 'completed'
+            or real[-1].get('served_model') != model):
+        return False
+    for attempt in real[:-1]:
+        stdout, stderr = (attempt.get(k) or '' for k in ('stdout_tail', 'stderr_tail'))
+        if attempt.get('status') not in ('failed', 'limited') or not _quota_refusal(stderr + '\n' + stdout):
+            return False
+    return True
+
+
 class SpawnerRecordAdapter:
     def __init__(self, directory, *, uid=None):
         self.directory = Path(directory) if directory else None
@@ -72,6 +110,10 @@ class SpawnerRecordAdapter:
             completion = record.get("completion")
             attempts = record.get("attempts")
             text = record.get("stdout_tail")
+            if isinstance(attempts, list) and len(attempts) > 1:
+                final = next((a for a in reversed(attempts) if isinstance(a, dict)
+                              and a.get('status') != 'skipped'), {})
+                text = final.get('stdout_tail')
             finish = record.get("finish_reason") or (
                 completion.get("finish_reason") if isinstance(completion, dict) else None)
             finishes = [part["finish_reason"] for part in (record, completion)
@@ -87,7 +129,7 @@ class SpawnerRecordAdapter:
                     or completion.get("head_sha") not in ([head] if isinstance(head, str) else head)
                     or finish not in ("stop", "end_turn")
                     or any(value not in ("stop", "end_turn") for value in finishes)
-                    or not isinstance(attempts, list) or len(attempts) != 1
+                    or not _one_serving_attempt(attempts, model)
                     or not _passing_review(text)
                     or record.get("served_family", family) != family):
                 raise ValueError(f"{run_id}: review is not a passing witnessed seat")

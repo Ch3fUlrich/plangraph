@@ -249,7 +249,7 @@ Explicit cwd takes precedence over `diff_ref.repo` for placement; explicit-cwd r
 Never use `pgrep -f` wait loops, including in writer/seat briefs: they can match
 the waiting shell itself. Wait reads atomic run records, not process names;
 its timeout stops waiting, not the writer.
-`--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg.
+`--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg, retaining its quota reason. Review quota refusals advance in the same run immediately, including zero-exit CLI refusals; see [review quota fallthrough](review-quota-fallthrough.md).
 Review/seat routes record each failed, limited or not-served attempt with its reason
 and try the next leg in the same run, failing only after route exhaustion. Ordinary
 failure diagnostics do not book cooldowns, mark legs down or emit LEG_REFUSED; only
