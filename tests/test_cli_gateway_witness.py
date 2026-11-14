@@ -133,7 +133,7 @@ def test_overlay_only_endpoint_is_shared_by_child_and_witness(monkeypatch):
     assert witness.witness_kind == gw.WITNESS_KIND
 
 
-@pytest.mark.parametrize('endpoint', ['file:///tmp/gateway', 'ftp://gateway.invalid', 'gateway.invalid', 'https:///missing-host', 'https://ops:secret@gw.invalid/v1', 'https://gw.invalid/v1?', 'https://gw.invalid/v1#', 'https://gw.invalid/v1?x=1', 'https://gw.invalid/v1#x', 'http://gw.invalid/v1'])
+@pytest.mark.parametrize('endpoint', ['file:///tmp/gateway', 'ftp://gateway.invalid', 'gateway.invalid', 'https:///missing-host', 'https://ops:secret@gw.invalid/v1', 'https://gw.invalid/v1?', 'https://gw.invalid/v1#', 'https://gw.invalid/v1?x=1', 'https://gw.invalid/v1#x', 'http://gw.invalid/v1', 'https://gw.invalid/v1\nx', 'https://gw.invalid/v1\tx', 'https://gw.invalid/v1 x', 'https://gw.invalid/v1\x7f'])
 def test_file_endpoint_requires_http_scheme_before_credentials(isolated_config, monkeypatch, endpoint):
     (isolated_config / 'omniroute-base-url').write_text(endpoint)
     monkeypatch.setattr(gw, 'load_token', lambda *_: pytest.fail('invalid endpoint read management key'))
@@ -169,3 +169,43 @@ def test_loopback_http_file_supports_management_requests(isolated_config, monkey
     assert gw.fetch_rows('plangraph-job', {}, opener=opener) == []
     assert len(requests) == 1
     assert requests[0].get_header('Authorization') == 'Bearer fixture-management-key'
+
+
+@pytest.mark.parametrize('status', [301, 302, 303, 307, 308])
+def test_management_request_refuses_redirects(monkeypatch, status):
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from threading import Thread
+
+    seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((self.path, self.headers.get('Authorization')))
+            if self.path == '/redirected':
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'[]')
+            else:
+                self.send_response(status)
+                # Change the hostname, exercising urllib's cross-host redirect.
+                self.send_header('Location', f'http://127.0.0.1:{self.server.server_port}/redirected')
+                self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(('localhost', 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv('OMNIROUTE_BASE_URL', f'http://localhost:{server.server_port}/v1')
+    monkeypatch.setenv(gw.TOKEN_ENV, 'fixture-management-key')
+    try:
+        with pytest.raises(LookupError, match='call log unreadable: HTTPError'):
+            gw.fetch_rows('plangraph-job', {})
+        assert len(seen) == 1
+        assert seen[0][1] == 'Bearer fixture-management-key'
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        assert not thread.is_alive()

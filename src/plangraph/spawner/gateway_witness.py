@@ -179,7 +179,13 @@ def require_witness(model, env=None, *, secrets=None):
         raise SpawnRefused('witness required: ' + str(exc)) from None
 
 
-def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=None):
+class _NoManagementRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Never forward the management credential beyond the validated URL.
+        return None
+
+
+def fetch_rows(tag, env, *, timeout=5, opener=None, secrets=None):
     """Call-log rows for ``tag``; raises LookupError naming why they are unreadable.
 
     Both URL and token come from the spawner's own env (``secrets``), never
@@ -199,6 +205,8 @@ def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=No
     try:
         request = urllib.request.Request(f'{base}/api/usage/call-logs?{query}',
                                          headers={'Authorization': 'Bearer ' + token})
+        if opener is None:
+            opener = urllib.request.build_opener(_NoManagementRedirect()).open
         with opener(request, timeout=timeout) as response:
             return json.loads(response.read().decode('utf-8'))
     except (OSError, ValueError) as exc:

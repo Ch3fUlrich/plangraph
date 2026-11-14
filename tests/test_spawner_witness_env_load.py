@@ -110,7 +110,8 @@ def test_gate_uses_leg_env_and_skips_other_roles():
     gw.witness_gate(None, 'review', None, {}, secrets=secrets)
     gw.witness_gate(card, 'implement', None, {}, secrets=secrets)
     with pytest.raises(SpawnRefused, match='mimo leg not routed through gateway'):
-        gw.witness_gate(card, 'review', 'mimo/model', {}, secrets=secrets)
+        gw.witness_gate(card, 'review', 'mimo/model',
+                        {'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']}, secrets=secrets)
     env = dict(secrets, OPENCODE_CONFIG_CONTENT=json.dumps(
         {'providers': {'mimo': {'settings': {'baseURL': 'http://gateway/v1'}}}}))
     gw.witness_gate(card, 'review', 'mimo/model', env, secrets=secrets)

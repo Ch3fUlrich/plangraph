@@ -56,7 +56,7 @@ def _is_valid_url(url: str) -> bool:
 
 def valid_gateway_endpoint(value):
     """Shared credential endpoint policy: TLS, or HTTP on loopback only."""
-    if not _is_valid_url(value):
+    if not _is_valid_url(value) or any(ord(c) <= 32 or ord(c) == 127 for c in value):
         return False
     try:
         parsed = urllib.parse.urlsplit(value)

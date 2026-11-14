@@ -1,1 +1,1 @@
-Share gateway endpoint resolution with plain-shell witnesses; validate file endpoints and management requests before credentials, preserving loopback HTTP.
+Share gateway endpoint resolution with plain-shell witnesses; validate file endpoints and management requests before credentials, preserving loopback HTTP. Management call-log requests refuse redirects to keep the token at the validated endpoint.

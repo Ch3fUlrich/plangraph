@@ -43,8 +43,12 @@ The witness endpoint now uses the same effective child-base resolver, including
 an existing `OPENCODE_CONFIG_CONTENT` omniroute settings baseURL. File-derived
 endpoints use the shared URL validator (no userinfo, query or fragment; HTTPS
 except for loopback HTTP) and require a hostname; invalid files stay
-unconfigured and cannot trigger management-key reads or call-log requests.
+unconfigured; `fetch_rows` refuses them before reading the management key or
+making a call-log request.
 
 Before attaching the management Bearer token, `fetch_rows` uses that same validator for every endpoint source, including env, config mappings and child
 overlays. Invalid endpoints are refused before reading the key; file validation
 remains in the shared resolver as well.
+
+Management call-log requests refuse redirects, so the Bearer token cannot be
+forwarded to another endpoint after the initial URL validation.
