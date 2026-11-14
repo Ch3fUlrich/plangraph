@@ -26,6 +26,20 @@ before collection and test fixtures.
 Discovery failures refuse to launch tests. The hook's own Git and policy calls
 retain the caller's context; temporary test repositories keep their own hooks.
 
+`tools/merge_batch.py build --name NAME --prs 1,2 --plan plangraph:KEY` records the
+batch PLAN key; `--deviations TEXT` records nonconformance (forced build exceptions
+also appear as deviations). Record every included part with `review --name NAME
+--pr N --file PATH`: evidence must end in `HEAD: <full part sha>` then
+`VERDICT: ACCEPT` (or `REQUEST_CHANGES` / `REJECT`, which replace an earlier
+ACCEPT and block the request). `push --name NAME --ci-run ID` records the full batch CI run's
+head, status and conclusion; repeat push after CI completes. A push without an ID
+refreshes an existing run only on the same head; a new head clears it.
+`go-req --name NAME` prints one batch GO-REQ with PR, full head, diff stat, part
+reviews, CI and the final PLAN block. It refuses absent/stale ACCEPT evidence,
+non-green or missing CI, and workflow edits whose touching commits lack a
+`Gate-Edit: D-<id>` trailer, including edits introduced by merge resolution. The batch key is explicit; part Plan-Items do not
+stand in for the batch's PLAN key.
+
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
 ## Setup and tests

@@ -77,6 +77,9 @@ def pr_arg():
 cmd = ARGV[:2]
 if cmd == ["repo", "view"]:
     print(json.dumps({"nameWithOwner": S["repo"], "defaultBranchRef": {"name": S["default_branch"]}}))
+elif cmd == ["run", "view"]:
+    run = S.get("runs", {}).get(ARGV[2]) or die("no CI run")
+    print(json.dumps({name: run.get(name) for name in fields(set("databaseId headSha status conclusion".split()))}))
 elif cmd == ["pr", "list"]:
     label, head = opt("--label"), opt("--head")
     print(json.dumps([show(p) for p in S["prs"].values() if p["state"] == "OPEN"
