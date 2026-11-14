@@ -1,0 +1,1 @@
+- **LE-PROD-CHECKOUT-DETACHED-NO-ALARM:** Detach HEAD audit runtimes into a separate session with discarded standard streams, retaining the one-second deadline without making Git wait on stuck audit I/O.

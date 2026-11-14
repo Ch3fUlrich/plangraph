@@ -131,6 +131,7 @@ done
     [ "$after $previous_branch" != "$new $branch" ] || exit 0
 fi
 printf '%s %s %s\\n' "$old" "$new" "$branch" > "$marker" || exit 0''')
+    # Never wait for timeout: even SIGKILL cannot reap uninterruptible I/O.
     return ('#!/bin/sh\n# plangraph HEAD audit v2: observations must never block Git.\n'
             + guard + '\n' + 'state=' + shlex.quote(str(state)) + '\n' + '''
 # Git runs non-bare hooks in the worktree root, including linked worktrees.
@@ -150,9 +151,10 @@ key=main
 marker="$state/last-$key"
 ''' + selection + '\n' + dedupe + '\n'
             + 'command -v timeout >/dev/null 2>&1 || exit 0\n'
+            + 'command -v setsid >/dev/null 2>&1 || exit 0\n'
             + shlex.join(
-                ['timeout', '-s', 'KILL', '1', python, '-I', '-S', str(script), str(state)])
-            + ' "$PWD" "$old" "$new" "$branch" "$gitdir" </dev/null >/dev/null 2>&1 || true\nexit 0\n')
+                ['setsid', 'timeout', '-s', 'KILL', '1', python, '-I', '-S', str(script), str(state)])
+            + ' "$PWD" "$old" "$new" "$branch" "$gitdir" </dev/null >/dev/null 2>&1 &\nexit 0\n')
 
 
 def install_audit(repo, state_dir, *, apply=False):
@@ -169,9 +171,11 @@ def install_audit(repo, state_dir, *, apply=False):
         old_command = [sys.executable, '-m', 'plangraph.fleet_sync', 'head-move',
                        '--repo', str(repo), '--state-dir', str(state_dir), '--hook', name, '--']
         legacy = '#!/bin/sh\nexec ' + shlex.join(old_command) + ' "$@"\n'
-        previous = content.replace('command -v timeout >/dev/null 2>&1 || exit 0\n', '').replace(
+        foreground = content.replace('command -v setsid >/dev/null 2>&1 || exit 0\n', '').replace(
+            'setsid timeout ', 'timeout ', 1).replace(' &\nexit 0\n', ' || true\nexit 0\n')
+        previous = foreground.replace('command -v timeout >/dev/null 2>&1 || exit 0\n', '').replace(
             'timeout -s KILL 1 ', '', 1)
-        if path.exists() and path.read_text() not in (content, previous, legacy):
+        if path.exists() and path.read_text() not in (content, foreground, previous, legacy):
             raise ValueError('existing hook; integrate it explicitly before installing audit')
         hooks[path] = content
     if apply:

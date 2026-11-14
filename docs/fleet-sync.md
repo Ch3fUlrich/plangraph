@@ -42,11 +42,12 @@ Prepared/aborted transactions and file-only checkouts return immediately in sh.
 Only committed HEAD moves start the runtime, at most once per move: per-worktree
 markers suppress the second observer. Linked worktrees use their own HEAD and
 worktree path. Every stub exits zero, including runtime/import/missing-script
-failures; an external `timeout -s KILL 1` bounds interpreter startup and runtime.
-Without `timeout`, the hook skips observation. The runtime also arms its own alarm.
-Git may wait about one second per HEAD move for startup, lock contention or I/O. Audit remains best-effort: deadline
-expiry or errors may omit observations. The marker prevents a second attempt
-from delaying the same move.
+failures. The runtime starts in the background with its own session via `setsid`,
+with stdin, stdout and stderr redirected to `/dev/null`; Git never waits for it.
+An external `timeout -s KILL 1` bounds interpreter startup and runtime, and the
+runtime also arms its own alarm. Without `setsid` or `timeout`, the hook skips
+observation. Audit remains best-effort: deadline expiry or errors may omit
+observations. Uninterruptible runtime I/O cannot hold Git waiting for timeout.
 
 The private JSONL log records UTC time, old/new SHA, worktree path, its branch or
 `detached`, and /proc pid/ppid/command-name chains. Process arguments/environment
