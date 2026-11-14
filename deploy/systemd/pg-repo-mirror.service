@@ -1,0 +1,8 @@
+[Unit]
+Description=Refresh every configured repository mirror
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/pg-repo-mirror %h/.config/plangraph/repos.json %h/.local/state/plangraph/mirrors
+TimeoutStartSec=55s
+NoNewPrivileges=true

@@ -340,3 +340,8 @@ Package R Python files already in flight are individually listed in
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
 
 Local preflight combines `--local` shared-asset consumer traversal with `--files-only` bounded suite-control checks, using `origin/main` for test selection when available. Scrub and policy retain their pushed-range baselines.
+
+The Python context guard announces every parsed compaction boundary, including
+interactive transcripts without fleet identity or usage metadata. Above the hard
+cap it retains `HARD-CAP` and also emits `HANDOFF-NOW`. Fake transcript coverage
+is in `tests/hooks/test_context_guard_compaction.py`; no live sessions are needed.

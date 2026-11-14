@@ -11,3 +11,52 @@ Backslashes/tabs/LF/CR are escaped. Missing facts label `live` and protect. Empt
 Only stdin/stdout/stderr I/O: no git invocation, worktree access, moves, removals or locks. Eligibility is not approval.
 Later slices: quarantine/removal, shared RUN-WORKTREE host locking, detached archive refs, verified patch/untracked backup, live facts, seven-day deletion and routing D-id approval.
 Test: `cargo test -p pg-reap` (hermetic boundary/protection/parser tests and stable report in a read-only temp directory).
+
+## Recorded orphan reaping
+
+On Linux, `pg-reap orphans EVIDENCE.json` accepts an array of
+`{pid,start_ticks,cwd}` captured while the descendant was owned by a run.
+Only a non-zombie orphan with parent 1, the exact recorded start token, and
+exact absolute cwd is eligible. A pidfd is opened before verification so PID
+reuse cannot redirect SIGKILL. Each reap is logged; unreadable ownership or a
+five-second exit deadline fails the sweep as `kill_incomplete`. Unverified
+entries are logged and untouched. This command never deletes directories.
+
+The evidence producer must persist descendant snapshots before their root exits;
+this command cannot recover missing historical identities from cwd alone. The
+existing Python sampler still has a short-process observation gap. Integrating
+persistent ownership evidence and stale probe-directory leases remains required
+before unattended deployment. Do not infer evidence from a PID or directory name.
+For an already verified inventory, an operator can run
+`systemd-run --user --on-calendar='*-*-* *:*:00' --unit=pg-orphan-reap pg-reap orphans "$XDG_STATE_HOME/plangraph/orphan-evidence.json"`.
+Retained probe directories with no ownership record need operator reconciliation.
+
+## Attempt retention decisions
+
+`pg_reap::retention::decide` records the RUN-WORKTREE outcome policy separately
+from the report-only fleet reaper's stricter commit-safety policy: running attempts stay. Terminal worktrees are removed immediately; successful
+branches are pushed and retained, merged branches may be deleted, and failed or
+cancelled branches are retained for 14 days. An open PR or live claim prevents
+branch deletion. Dirty removal candidates require verified patch and
+untracked backup first. This pure function does not push or remove anything.
+Unknown outcomes fail deserialization. A caller must collect current PR/claim
+facts, verify merge ancestry and backups, and take the creation root's `.lock`
+with POSIX flock (or Windows byte lock) before acting. The existing spawner
+creation already takes that exact lock through `run_worktree_lock(root)`.
+
+On Linux, `pg-reap finish-attempt < request.json` executes this attempt policy.
+Required fields: `repo`, `root`, `path`, `branch`, `outcome`, `age_seconds`,
+`open_pr`, `live_claim`. Paths must resolve to a registered non-main attempt
+immediately below the host root, on a unique `lane/` branch; locked/prunable
+registrations refuse. It takes that root's `.lock` nonblockingly, verifies merged
+ancestry, pushes successful branches, removes terminal trees while retaining
+protected/young branches, and compare-deletes eligible branch tips. A later
+request can delete an expired retained branch after its worktree is gone; any
+new registration on that branch refuses cleanup.
+Dirty removal first writes and reads back a binary HEAD patch and makes a full
+worktree tar backup (including ignored/untracked files and symlinks, excluding
+`.git`), verifies it with `tar --compare` and syncs backup files. Backup errors
+retain the worktree. Backups are under `root/backups/<attempt>` and never reused.
+The caller must quiesce the run and collect fresh PR/claim/age facts; the command
+trusts those explicit facts. Automatic run-end invocation and fleet facts
+collection remain unwired. No deployment has been performed.

@@ -90,3 +90,35 @@ checking every probe's child-owned endpoint (including non-200 and OSError
 retries). Keeper mirror wiring remains a later slice.
 
 Mirror test fixtures use worker-core’s shared Git test helper, including integration tests through the `test-support` dev feature. Hook Git redirects and host HOME/XDG configuration cannot select a repository outside their temporary fixture.
+
+## Complete inventory refresh
+
+`pg-repo-mirror REPOS.json MIRROR_ROOT` invokes `Mirror::fetch_all`, refreshing
+every configured repository in stable name order even if an earlier fetch fails.
+Each JSONL output row contains its repo and accepted watermark or `force_push` /
+`fetch_failed` alarm. Any failure makes the command exit 1 after attempting the
+whole inventory. Per-repo quarantine, locks and monotonicity remain unchanged.
+
+The user timer in `deploy/systemd/pg-repo-mirror.{service,timer}` schedules this
+command every minute. It reads `~/.config/plangraph/repos.json` and stores under
+`~/.local/state/plangraph/mirrors`. A 55-second service deadline bounds a stalled
+sweep; a timeout can leave later repositories unvisited, so monitor service errors
+and per-repo watermark age. Systemd never overlaps this oneshot with itself.
+Installing/enabling the timer is a live operator step:
+
+```sh
+cd rust
+cargo build --release -p pg-ctx --bin pg-repo-mirror
+install -Dm755 target/release/pg-repo-mirror "$HOME/.local/bin/pg-repo-mirror"
+cd ..
+install -Dm644 deploy/systemd/pg-repo-mirror.service "$HOME/.config/systemd/user/pg-repo-mirror.service"
+install -Dm644 deploy/systemd/pg-repo-mirror.timer "$HOME/.config/systemd/user/pg-repo-mirror.timer"
+systemctl --user daemon-reload
+systemctl --user enable --now pg-repo-mirror.timer
+systemctl --user start pg-repo-mirror.service
+journalctl --user -u pg-repo-mirror.service -n 50 --no-pager
+```
+
+These units are supplied, not installed. Keeper HTTP exposure and FLOW-WATCHDOG
+alarm ingestion remain separate wiring; JSONL journal rows are not proof of an
+HTTP endpoint or an installed stale-mirror alarm.

@@ -1,0 +1,1 @@
+- Use neutral external-router wording in session documentation and the daily knowledge probe while preserving the 40-rule/10-knowledge inventory.

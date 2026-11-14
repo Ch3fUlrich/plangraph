@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily context retrieval probes on the designated probe host
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/pg-probe daily %h/.config/plangraph/context-probes/pinned.json %h/.config/plangraph/context-probes/probes.jsonl %h/.config/plangraph/context-probes/sources.json %h/.local/state/plangraph/context-probes/runs
+TimeoutStartSec=6h
+NoNewPrivileges=true

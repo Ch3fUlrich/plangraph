@@ -1,0 +1,1 @@
+- Emit HANDOFF-NOW for compaction boundaries without fleet identity or usage metadata, retaining hard-cap guidance; add fake-transcript regressions and document outstanding external launch verification.

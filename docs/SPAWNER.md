@@ -717,3 +717,15 @@ Run monitors require six consecutive completed tool calls with the same name, ca
 `PLANGRAPH_SPAWN_P90_TABLE` optionally names measured JSON data shaped as `{"<card_class>": {"implement": {"stall_min": 30, "max_min": 55}}}`; the numbers here illustrate the format, not measurements. Cards select it with `card_class`. Only positive finite numeric values are accepted, and table values only widen defaults. Unknown classes or malformed configured data refuse launch. No p90 dataset is shipped without evidence.
 
 Freshness admission and refused-worktree cleanup use the shared checkout Git environment, stripping inherited object-store redirects and config injection as well as repository, index, and worktree overrides.
+
+The Linux `pg-reap orphans` primitive consumes previously recorded descendant
+start/cwd evidence. See [pg-reap](pg-reap.md#recorded-orphan-reaping) for the
+ownership boundary and deployment prerequisites; this does not close the Python
+sampler's observation gap or authorize deletion of historical probe directories.
+
+RUN-WORKTREE creation already shares the host root's `.lock` name and flock
+protocol reserved for the reaper. Rust attempt-retention outcome decisions are
+in `pg-reap::retention`; the report-only fleet reaper retains its stronger
+unmerged/unpushed protection. The Linux `pg-reap finish-attempt` executor verifies registrations, merge ancestry
+and dirty backups; run-end wiring still requires fresh PR/claim facts from the
+orchestrator. See [pg-reap](pg-reap.md#attempt-retention-decisions).

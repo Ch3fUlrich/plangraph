@@ -104,3 +104,19 @@ cache creation - from the transcript under `~/.claude/projects/`, reading only t
 On Windows every `claude` invocation - the launch, `claude stop` and the `claude agents` poll -
 must run the real `claude.exe` found via `which`; `.cmd`/`.bat` shims are
 refused because cmd.exe would parse the prompt. Sessions start with `claude --bg`.
+
+Compaction boundaries require a handoff even without `FLEET_SESSION_NAME` or a
+fleet transcript title. The Python context guard prints `HANDOFF-NOW` for those
+boundaries (including boundary-only transcripts), preserving hard-cap guidance
+when applicable. The spawner launch default remains
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000`.
+
+The external `router/bin/fleet-launch` source is outside this
+worktree. Read-only inspection in the adjacent data checkout confirms that its
+default and invalid-value fallback already use `400000`; that part of the D3
+triage is stale and needs no source change. Fresh-shell inheritance still needs
+operator verification on each of the three launch hosts. In each newly launched
+shell run:
+`test "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" = 400000 && printf '%s\n' "$CLAUDE_CODE_AUTO_COMPACT_WINDOW"`.
+Inspect the resulting transcripts for no boundary below 300k and a new session
+after any boundary; local fake-transcript tests do not establish that live fact.
