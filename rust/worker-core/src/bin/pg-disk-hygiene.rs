@@ -102,8 +102,7 @@ fn run() -> io::Result<()> {
     // Resolve the report destination before parsing/collecting any fallible facts.
     let state = args
         .windows(2)
-        .filter(|a| a[0] == "--state")
-        .last()
+        .rfind(|a| a[0] == "--state")
         .map(|a| PathBuf::from(&a[1]))
         .or_else(|| env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/state/plangraph")))
         .ok_or_else(|| io::Error::other("HOME or --state required to write report"))?;
