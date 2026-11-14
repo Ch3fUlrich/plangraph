@@ -1,6 +1,7 @@
 """Bounded, injectable host inspection; unavailable data is never zero drift."""
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -81,17 +82,23 @@ def check_checkout(repo, send, *, state_dir, default_branch=None, now=None):
     fd = os.open(state / (ident + '.lock'), os.O_WRONLY | os.O_CREAT, 0o600)
     with os.fdopen(fd, 'wb') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        old = json.loads(path.read_text()) if path.exists() else {'bad': False, 'sent': 0}
-        if (not isinstance(old, dict) or type(old.get('bad')) is not bool
-                or type(old.get('sent')) not in (int, float)):
-            raise ValueError('invalid production checkout alarm state')
+        repair = False
+        try:
+            old = json.loads(path.read_text())
+            if (not isinstance(old, dict) or type(old.get('bad')) is not bool
+                    or type(old.get('sent')) not in (int, float) or not math.isfinite(old['sent'])):
+                raise ValueError('invalid production checkout alarm state')
+        except (OSError, UnicodeError, ValueError, OverflowError, RecursionError):
+            old, repair = {'bad': False, 'sent': 0}, True
         findings = checkout_findings(repo, default_branch=default_branch)
         bad = bool(findings)
         if bad != old['bad'] or (bad and now - old['sent'] >= 3600):
             kind = 'alarm' if bad and not old['bad'] else 'reminder' if bad else 'clear'
             line = f'production-checkout {kind}: ' + ('; '.join(findings) if bad else 'checkout healthy')
             send(line)  # Only checkpoint an acknowledged delivery.
-            atomic_write_private(path, json.dumps({'bad': bad, 'sent': now}) + '\n')
+            old, repair = {'bad': bad, 'sent': now}, True
+        if repair:
+            atomic_write_private(path, json.dumps(old) + '\n')
         return findings
 
 

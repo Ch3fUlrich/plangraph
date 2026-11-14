@@ -115,3 +115,23 @@ def test_oversight_cannot_declare_decision_only_on_create(w, monkeypatch):
     assert exc.value.code == 'forbidden' and 'router' in exc.value.msg
     verdicts = oversight_policy.check_batch({}, [op('create', item=item)], principal.projects)
     assert any(v.code == 'forbidden' and v.reason == 'decision_only' for v in verdicts)
+
+
+@pytest.mark.parametrize('who', ['l1main', 'workerA', 'reviewer', 'reader', 'system'])
+@pytest.mark.parametrize('include_tier', [False, True])
+def test_non_router_cannot_declare_decision_only_on_claimed_item(w, who, include_tier):
+    w.store.create_items(w.p('router'), [
+        defn('NEW', review_tier='none', evidence_kinds=['decision', 'commit']),
+        defn('NEW-GOAL', ['NEW'], kind='goal')])
+    w.store.claim(w.p('workerA'), 'demo:NEW')
+    before = dict(w.store._get_or_refuse('demo:NEW'))
+    events = w.conn.execute('SELECT COUNT(*) FROM events').fetchone()[0]
+    fields = {'evidence_kinds': ['decision']}
+    if include_tier:
+        fields['review_tier'] = 'none'
+    with pytest.raises(Refused) as exc:
+        w.store.edit_definition(w.p(who), 'demo:NEW', fields)
+    assert exc.value.code == 'forbidden'
+    assert dict(w.store._get_or_refuse('demo:NEW')) == before
+    assert w.conn.execute('SELECT COUNT(*) FROM events').fetchone()[0] == events
+    assert w.store.verify_integrity() == []

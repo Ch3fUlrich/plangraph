@@ -99,3 +99,38 @@ def test_hidden_or_unmerged_production_code_alarms(checkout, tmp_path, condition
     assert drift.check_checkout(repo, sent.append, state_dir=tmp_path / 'state')
     assert len(sent) == 1
     assert ('unmerged' if condition in {'ahead', 'diverged'} else 'hidden') in sent[0]
+
+
+@pytest.mark.parametrize('broken', [
+    '{', '', '[]', '{"bad":1,"sent":0}', '{"bad":true,"sent":"old"}',
+    '{"bad":true,"sent":NaN}',
+    pytest.param("[" * 1500 + "]" * 1500, id="deep-list"),
+])
+def test_corrupt_alarm_state_still_alarms_and_is_replaced(checkout, tmp_path, monkeypatch, broken):
+    import hashlib
+    import os
+    from pathlib import Path
+
+    repo, git = checkout
+    git('checkout', '--detach')
+    state = tmp_path / 'state'
+    state.mkdir()
+    path = state / (hashlib.sha256(str(repo.resolve()).encode()).hexdigest()[:16] + '.json')
+    path.write_text(broken)
+    replace = os.replace
+    replacements = []
+    def atomic_replace(source, destination):
+        source = Path(source)
+        assert destination == path and source.parent == path.parent
+        assert path.read_text() == broken, 'old state must remain intact until rename'
+        assert json.loads(source.read_text()) == {'bad': True, 'sent': 100}
+        replacements.append(destination)
+        replace(source, destination)
+    monkeypatch.setattr(os, 'replace', atomic_replace)
+    sent = []
+    assert drift.check_checkout(repo, sent.append, state_dir=state, now=100)
+    assert len(sent) == 1 and sent[0].startswith('production-checkout alarm:')
+    assert replacements == [path]
+    assert json.loads(path.read_text()) == {'bad': True, 'sent': 100}
+    drift.check_checkout(repo, sent.append, state_dir=state, now=101)
+    assert len(sent) == 1, 'repaired state must resume normal dedupe'

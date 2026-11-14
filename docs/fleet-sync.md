@@ -18,8 +18,10 @@ session address. A missing/unexecutable handler or failed delivery exits nonzero
 the unit failure remains visible. State is private, per checkout and locked:
 one alarm on healthy-to-bad, one clear on recovery, and at most one successful
 reminder per hour while bad. A failed delivery is not checkpointed and retries.
-Corrupt state fails visibly rather than resetting dedupe. Healthy checks require
-an available alert command too, so broken alarm configuration is not silent.
+Unreadable or invalid state resets to a healthy/unsent baseline so bad checkouts
+still alarm; an acknowledged send atomically replaces that state and resumes dedupe.
+Healthy checks require an available alert command too, so broken alarm
+configuration is not silent.
 
 `deploy/systemd/plangraph-prod-checkout.{service,timer}` are uninstalled templates
 with a five-minute interval. Adapt the checkout, Python environment and default
@@ -40,12 +42,15 @@ Only committed HEAD moves start the runtime, at most once per move: per-worktree
 markers suppress the second observer. Linked worktrees use their own HEAD and
 worktree path. Every stub exits zero, including runtime/import/missing-script
 failures; the runtime arms a one-second alarm before dependency imports and I/O.
-Audit is best-effort: busy locks, timeouts or errors may omit observations, and
-the marker deliberately prevents a second attempt from delaying the same move.
+Git may wait up to about one second per HEAD move for lock contention or blocked
+I/O; interpreter startup precedes that timer. Audit remains best-effort: deadline
+expiry or errors may omit observations. The marker prevents a second attempt
+from delaying the same move.
 
 The private JSONL log records UTC time, old/new SHA, worktree path, its branch or
 `detached`, and /proc pid/ppid/command-name chains. Process arguments/environment
-are never read. Appends take a nonblocking lock and never scan the whole log.
+are never read. Appends serialize with rotation under an exclusive lock and use
+one O_APPEND write per complete line; they never scan the whole log.
 At 1 MiB the log rotates to `head-moves.jsonl.1`, retaining one previous file.
 Auditing observes moves; it never authorizes or prevents them. No hooks are
 installed by this package.

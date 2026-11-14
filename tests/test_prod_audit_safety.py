@@ -95,3 +95,49 @@ def test_log_rotation_keeps_one_previous_file(checkout):
     assert json.loads(log.read_text())['new_sha'] == first
     run('update-ref', 'HEAD', run('rev-parse', 'main'))
     assert len(list(state.glob('head-moves.jsonl.*'))) == 1
+
+
+def _concurrent_append(state, branch, ready, outcomes):
+    from plangraph.fleet_sync.head_audit import record
+
+    ready.wait(timeout=10)
+    try:
+        record(state, '/fixture/' + branch, 'a' * 40, 'b' * 40, branch, state, max_bytes=1)
+    except OSError as exc:
+        outcomes.put((branch, type(exc).__name__))
+    else:
+        outcomes.put((branch, None))
+
+
+def test_concurrent_appends_survive_lock_contention_and_rotation(tmp_path):
+    import fcntl
+    import multiprocessing
+    import queue
+
+    context = multiprocessing.get_context('spawn')
+    ready = context.Barrier(3)
+    outcomes = context.Queue()
+    processes = [context.Process(target=_concurrent_append, args=(str(tmp_path), name, ready, outcomes))
+                 for name in ['first', 'second']]
+    with (tmp_path / 'head-audit.lock').open('wb') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            for process in processes:
+                process.start()
+            ready.wait(timeout=10)
+            # Both must wait for the held rotation lock rather than drop a line.
+            with pytest.raises(queue.Empty):
+                outcomes.get(timeout=0.2)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            for process in processes:
+                process.join(timeout=10)
+                if process.is_alive():
+                    process.kill()
+                    process.join(timeout=5)
+    assert all(process.exitcode == 0 for process in processes)
+    assert sorted(outcomes.get(timeout=2) for _ in processes) == [('first', None), ('second', None)]
+    rows = [json.loads(line) for path in tmp_path.glob('head-moves.jsonl*')
+            for line in path.read_text().splitlines()]
+    assert {row['branch'] for row in rows} == {'first', 'second'}
+    assert len(rows) == 2

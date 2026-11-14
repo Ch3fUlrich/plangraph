@@ -25,7 +25,7 @@ def process_chain():
 
 
 def record(state, worktree, old, new, branch, gitdir, *, max_bytes=1024 * 1024):
-    """Nonblocking append/rotation under a dedicated lock; never scan the log."""
+    """Serialize append/rotation under the runtime deadline; never scan the log."""
     import fcntl
     import json
     import os
@@ -53,13 +53,16 @@ def record(state, worktree, old, new, branch, gitdir, *, max_bytes=1024 * 1024):
     line = (json.dumps(row, ensure_ascii=True) + '\n').encode()
     lock_fd = os.open(state / 'head-audit.lock', os.O_WRONLY | os.O_CREAT, 0o600)
     with os.fdopen(lock_fd, 'wb') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(lock, fcntl.LOCK_EX)
         path = state / 'head-moves.jsonl'
         if path.exists() and path.stat().st_size + len(line) > max_bytes:
             os.replace(path, path.with_suffix('.jsonl.1'))
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        with os.fdopen(fd, 'wb') as stream:
-            stream.write(line)
+        try:
+            if os.write(fd, line) != len(line):
+                raise OSError('incomplete audit append')
+        finally:
+            os.close(fd)
 
 
 if __name__ == '__main__':
