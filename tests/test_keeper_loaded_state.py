@@ -20,17 +20,13 @@ def checkout(tmp_path, monkeypatch):
     git(repo, 'init', '-b', 'main')
     git(repo, 'config', 'user.name', 'Fixture')
     git(repo, 'config', 'user.email', 'fixture@example.invalid')
-    files = {'src/plangraph/keeper/daemon.py': 'VALUE = 1\n'}
-    for name, text in files.items():
-        path = repo / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+    path = repo / 'src/plangraph/keeper/daemon.py'
+    path.parent.mkdir(parents=True)
+    path.write_text('VALUE = 1\n')
     git(repo, 'add', '.')
     git(repo, 'commit', '-m', 'loaded')
     loaded = git(repo, 'rev-parse', 'HEAD')
-    state = tmp_path / 'keeper-loaded.json'
-    state.write_text(json.dumps({'loaded_sha': loaded, 'pid': os.getpid(), 'start_time': 1}))
-    return repo, state, loaded
+    return repo, None, loaded
 
 
 def test_daemon_writes_loaded_sha_pid_and_start_time(checkout, tmp_path, monkeypatch):
@@ -47,9 +43,7 @@ def test_daemon_writes_loaded_sha_pid_and_start_time(checkout, tmp_path, monkeyp
 
 def test_daemon_publishes_loaded_state_for_its_lifetime(tmp_path):
     import signal
-
     from test_keeper_daemon import free_port, make_db_and_config, spawn, wait_health
-
     port = free_port()
     db, cfg = make_db_and_config(tmp_path, port)
     path = db.with_name(db.name + '.loaded.json')
@@ -92,12 +86,10 @@ def test_loaded_state_describes_checkout_provenance(checkout, tmp_path, monkeypa
     assert row['loaded_sha'] == (loaded if kind == 'detached' else None)
 
 
-
 @pytest.mark.parametrize('unlink_fails', [False, True])
 def test_bounded_clean_exit_unlinks_state_before_exit_and_lock_release(tmp_path, monkeypatch, unlink_fails):
     import signal
     from test_keeper_daemon import make_db_and_config
-
     db, config_path = make_db_and_config(tmp_path, 0)
     cfg = daemon.config_mod.load_config(config_path)
     state = db.with_name(db.name + '.loaded.json')
@@ -178,23 +170,28 @@ def test_head_moves_during_publication(checkout, tmp_path, monkeypatch):
     assert row['loaded_sha'] is None and row['dirty'] is None
 
 
-def test_head_moves_before_keeper_import(checkout, tmp_path):
+@pytest.mark.parametrize('target', ['views', 'backup_retention'])
+def test_head_moves_before_keeper_import(checkout, tmp_path, target):
     repo, _, _ = checkout
     shutil.copytree(daemon.CODE_TREE / 'src/plangraph', repo / 'src/plangraph', dirs_exist_ok=True)
     git(repo, 'add', '.')
     git(repo, 'commit', '-m', 'package')
     script = """
-import builtins, json, subprocess
+import builtins, json, subprocess, sys, threading
 from types import SimpleNamespace
 original = builtins.__import__
 def importing(name, *args, **kwargs):
-    if name == 'views':
+    if name == sys.argv[1] or (len(args) > 2 and sys.argv[1] in (args[2] or ())):
         subprocess.run(['git', 'commit', '--allow-empty', '-qm', 'moved'], check=True)
     return original(name, *args, **kwargs)
 builtins.__import__ = importing
 from plangraph.keeper import daemon
-print(daemon.write_loaded_state(SimpleNamespace(db='keeper.db')).read_text())
+path = daemon.write_loaded_state(SimpleNamespace(db='keeper.db'))
+stop = threading.Event()
+stop.set()
+daemon._backup_prune_loop({}, stop)
+print(path.read_text())
 """
-    row = json.loads(subprocess.check_output([sys.executable, '-c', script], cwd=repo,
+    row = json.loads(subprocess.check_output([sys.executable, '-c', script, target], cwd=repo,
                      env={**os.environ, 'PYTHONPATH': str(repo / 'src')}, text=True))
     assert row['loaded_sha'] is None and row['dirty'] is None

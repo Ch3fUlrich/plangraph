@@ -19,7 +19,8 @@ from pathlib import Path
 
 from plangraph._loaded_identity import CODE_TREE, LOADED_IDENTITY, code_identity
 
-from . import anchor, api, config as config_mod, db as kdb, outage
+from . import anchor, api, backup_retention, config as config_mod, db as kdb, outage
+from .snapshot_io import _atomic_write
 from .errors import KeeperLocked
 from .store import Store
 
@@ -44,7 +45,6 @@ def _backup_prune_loop(settings: dict, stop: threading.Event, log=None) -> None:
     Exits promptly when *stop* is set; any exception is logged and never
     propagates (a retention problem must not take the keeper down).
     """
-    from . import backup_retention
     if log is None:
         def log(msg):
             print(msg, file=sys.stderr)
@@ -232,7 +232,6 @@ def main(argv=None) -> int:
     try:
         def ready(server):
             if args.ready_file is not None:
-                from .snapshot_io import _atomic_write
                 host, port = server.server_address[:2]
                 _atomic_write(args.ready_file, json.dumps({"host": host, "port": port}).encode())
 
