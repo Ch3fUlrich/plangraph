@@ -79,10 +79,11 @@ class Watchdog:
                                        if self.writer and not self.edited and self.edit is not None
                                        else 0)
 
-    def decide(self, now, edit, activity, cpu, *, stdout_activity=None):
+    def decide(self, now, edit, activity, cpu, *, stdout_activity=None, waiting=False):
+        if waiting: activity = now  # a visible live child CLI can be waiting on its provider
         if cpu is None:
             self.cpu_idle_since = None
-        elif self.cpu is None or cpu != self.cpu:
+        elif waiting or self.cpu is None or cpu != self.cpu:
             self.cpu_idle_since = now
         if edit is not None:
             if self.edit is None:
@@ -104,7 +105,7 @@ class Watchdog:
             rule = 'max'
         elif (self.cpu_idle_since is not None
               and now - max(self.cpu_idle_since, stdout_activity if stdout_activity is not None else activity or self.start)
-              >= self.limits.get('stuck_s', 180)):
+              >= self.limits.get('stuck_s', stall + 300)):
             rule = 'stuck'
         elif not self.writer:
             pass
@@ -165,9 +166,7 @@ def edit_signature(cwd):
 
 
 async def run_gone(proc):
-    """Resolve once the run has exited. ``Process.wait()`` cannot signal this: asyncio resolves
-    its waiters only after every pipe transport disconnects (CPython base_subprocess._try_finish),
-    so a detached grandchild holding the pipes wedges it although the exit code is known (M6)."""
+    """Observe exit even when a detached grandchild holds pipes and Process.wait() open (M6)."""
     delay = .05
     while getattr(proc, 'returncode', None) is None:
         await asyncio.sleep(delay)
@@ -358,7 +357,7 @@ async def collect(runner, job_id, proc):
         async def sample_cpu():
             # A short review cannot reach the stuck threshold; its hard wall has priority.
             remaining = job.start_time + w.budget() - time.time()
-            if (not w.writer and w.budget() <= limits.get('stuck_s', 180)) or remaining <= 0:
+            if (not w.writer and w.budget() <= limits.get('stuck_s', limits['stall_s'] + 300)) or remaining <= 0:
                 return None
             try:
                 return await asyncio.wait_for(cpu_seconds(runner, job_id, getattr(proc, 'pid', None),
@@ -367,7 +366,7 @@ async def collect(runner, job_id, proc):
                 return None
         w.decide(time.time(), baseline, job.last_activity_ts,
                  await sample_cpu(),
-                 stdout_activity=stdout_at)
+                 stdout_activity=stdout_at, waiting=getattr(job, '_watchdog_child_active', False))
         while not task.done():
             # Deadlines stay accurate even with the default 120s sample interval.
             delay = min(sample_interval, max(.001, job.start_time + w.budget() - time.time()))
@@ -409,7 +408,7 @@ async def collect(runner, job_id, proc):
                         if w.writer else None)
                 now = time.time()
                 cpu = await sample_cpu()
-                event = w.decide(now, edit, job.last_activity_ts, cpu, stdout_activity=stdout_at)
+                event = w.decide(now, edit, job.last_activity_ts, cpu, stdout_activity=stdout_at, waiting=getattr(job, '_watchdog_child_active', False))
             gate.progress(w.progress['edit'])   # REMOVE-AT-R10 (D-3769)
             try:
                 callback = getattr(runner, 'on_sample', None)

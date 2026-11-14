@@ -13,13 +13,15 @@ def proc_scan():
         try:
             fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
             result[int(path.name)] = (int(fields[1]), int(fields[3]),
-                                      sum(int(fields[i]) for i in (11, 12, 13, 14)))
+                                      sum(int(fields[i]) for i in (11, 12, 13, 14)), fields[0])
         except (OSError, ValueError, IndexError):
             continue
     return result
 
 
 async def cpu_seconds(runner, job_id, pid, tick):
+    job = getattr(runner, 'jobs', {}).get(job_id)
+    if job is not None: job._watchdog_child_active = False
     try:
         handle = getattr(runner, '_win_jobs', {}).get(job_id)
         if handle is not None:
@@ -39,6 +41,10 @@ async def cpu_seconds(runner, job_id, pid, tick):
                 seen.add(child)
                 child = rows[child][0]
             return False
-        return sum(row[2] for child, row in rows.items() if belongs(child)) / os.sysconf('SC_CLK_TCK')
+        members = [(child, row) for child, row in rows.items() if belongs(child)]
+        if job is not None:
+            job._watchdog_child_active = any(child != pid and len(row) > 3 and row[3] not in ('Z', 'X')
+                                              for child, row in members)
+        return sum(row[2] for _, row in members) / os.sysconf('SC_CLK_TCK')
     except Exception:
         return None

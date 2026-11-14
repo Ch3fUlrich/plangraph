@@ -411,7 +411,7 @@ def test_d1_measured_card_class_widens_defaults(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('cpu', [0, 1, None])
 def test_d1_stuck_requires_silent_stdout_and_proven_zero_cpu_delta(cpu):
-    w = Watchdog(thresholds(role='review'), 0, None, writer=False)
+    w = Watchdog(thresholds({'stuck_min': 3}, role='review'), 0, None, writer=False)
     assert w.decide(0, None, None, 0, stdout_activity=0) is None
     event = w.decide(180, None, 179, cpu, stdout_activity=0)
     if cpu == 0:

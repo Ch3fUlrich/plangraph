@@ -52,7 +52,8 @@ def thresholds(card=None, *, role=None):
     defaults = dict(stall_min=25 if role in ('implement', 'fix') else 20,
                     first_edit_min=15, max_min=10 if role == 'review' else 45 if role in ('implement', 'fix') else 90)
     defaults = class_limits(card, role, defaults)
-    result = dict(hard_max=role in ('implement', 'fix', 'review'), stuck_s=180)
+    defaults['stuck_min'] = defaults['stall_min'] + 5
+    result = dict(hard_max=role in ('implement', 'fix', 'review'))
     if not isinstance(card.get('hard_first_edit', False), bool): raise SpawnRefused('invalid watchdog threshold: hard_first_edit')
     if role != 'review' and card.get('hard_first_edit'): result['hard_first_edit'] = True
     for key, default in defaults.items():
