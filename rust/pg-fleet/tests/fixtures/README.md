@@ -21,6 +21,8 @@ observable. Captured local git replies are complemented by native temporary
 repository integration tests. Fake project labels replace deployment-specific
 labels. Native helper tests carry project-registry schema and session mapping
 cases without copying the private registry or deployment skill prose.
+Router names, keeper principals, project labels and checkout paths are neutral
+fixtures; replacements apply consistently to inputs and expected output.
 
 The fake token strings, placeholder path fragments and temporary commit IDs
 flagged by the public scrubber have exact file/rule/value-hash allowances in

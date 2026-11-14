@@ -16,7 +16,7 @@ A section whose source is missing prints one note line; the script always exits 
             <role>.restart.md (written by ctx-watchdog; the newest wins), else status/*.card.md of the role's cwd or of
             this repo.
   Keeper    ~/.local/share/plangraph/plan.snapshot.json: its age; items claimed/in_review whose claimed_by or owner is the
-            role (`routing` = `routing-00`); the top 10 READY items of the role's project (open, every depends_on done,
+            role (numbered routing sessions map to `routing`); the top 10 READY items of the role's project (open, every depends_on done,
             not the operator's, priority high to low; own items first among equals); the router also gets its open
             operator_task items and the count of open items waiting for an operator answer.
   Operator  relevant operator decision rows after the card's highest D-id, plus active standing orders; newest first,

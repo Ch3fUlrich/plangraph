@@ -37,7 +37,9 @@ pub fn stamp(t: DateTime<Utc>) -> String {
 }
 pub fn role(name: &str) -> String {
     let r = crate::fleet_name::role_of(name);
-    if r == "routing-00" {
+    if r.strip_prefix("routing-")
+        .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
+    {
         "routing".into()
     } else {
         r

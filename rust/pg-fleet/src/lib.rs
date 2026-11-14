@@ -64,11 +64,11 @@ pub fn io_reason(e: &std::io::Error) -> String {
     }
 }
 
-/// The private data checkout remains the source of operational data during cutover.
+/// Operational data can be selected explicitly during cutover.
 pub fn data_home() -> std::path::PathBuf {
     std::env::var_os("RESUME_DIGEST_HOME")
         .filter(|s| !s.is_empty())
-        .map_or_else(|| home().join("code/plangraph-data/router"), Into::into)
+        .map_or_else(|| home().join(".local/share/plangraph/fleet"), Into::into)
 }
 
 pub fn read_json(path: &std::path::Path, limit: u64) -> Option<serde_json::Value> {

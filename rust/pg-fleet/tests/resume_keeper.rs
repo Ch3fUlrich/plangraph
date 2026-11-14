@@ -8,20 +8,20 @@ fn item(key: &str, state: &str, holder: &str) -> Value {
 fn recorded_principal_claims_never_false_lapsed() {
     let d = tempfile::tempdir().unwrap();
     let mut c = Config::isolated(d.path());
-    c.principal = Some("plangraph-L1-main".into());
+    c.principal = Some("fixture-principal".into());
     let mut s = State::fixture(c, "build-L1");
     s.card_text="- claimed: MIMO-REASONING-ONLY-AFTER-781 (claimed), WIN-ATOMIC-WRITE-RENAME-EX (in_review), OTHER, EXPIRED, REVIEW-EXPIRED".into();
     let mut held = item(
         "plangraph:MIMO-REASONING-ONLY-AFTER-781",
         "claimed",
-        "plangraph-L1-main",
+        "fixture-principal",
     );
     held["lease_until"] = json!("2026-10-31T09:40:00Z");
-    let mut expired = item("plangraph:EXPIRED", "claimed", "plangraph-L1-main");
+    let mut expired = item("plangraph:EXPIRED", "claimed", "fixture-principal");
     expired["lease_until"] = json!("2026-10-31T07:00:00Z");
-    let mut review_expired = item("plangraph:REVIEW-EXPIRED", "in_review", "plangraph-L1-main");
+    let mut review_expired = item("plangraph:REVIEW-EXPIRED", "in_review", "fixture-principal");
     review_expired["lease_until"] = json!("2026-10-31T07:00:00Z");
-    let snap = json!({"generated":"2026-10-31T07:58:00Z","items":[held,item("plangraph:WIN-ATOMIC-WRITE-RENAME-EX","in_review","plangraph-L1-main"),item("plangraph:OTHER","claimed","another-principal"),expired,review_expired]});
+    let snap = json!({"generated":"2026-10-31T07:58:00Z","items":[held,item("plangraph:WIN-ATOMIC-WRITE-RENAME-EX","in_review","fixture-principal"),item("plangraph:OTHER","claimed","another-principal"),expired,review_expired]});
     std::fs::write(&s.config.snapshot, snap.to_string()).unwrap();
     let out = pg_fleet::digest_keeper::section(&mut s).join("\n");
     assert!(out.contains("MIMO-REASONING-ONLY-AFTER-781 claimed"));

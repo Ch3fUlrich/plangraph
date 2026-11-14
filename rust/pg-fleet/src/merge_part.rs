@@ -249,6 +249,13 @@ pub fn main(args: &[String]) -> i32 {
         })
         .filter(|p| p.is_file())
         .map_or("go-row-gate".into(), |p| crate::paths::display(&p));
+    let repo = match std::env::var("PG_REPO") {
+        Ok(repo) if !repo.trim().is_empty() => repo,
+        _ => {
+            println!("STOP: PG_REPO must name the target repository");
+            return 1;
+        }
+    };
     let o = Options {
         pr: args[0].clone(),
         want: args[1].clone(),
@@ -256,7 +263,7 @@ pub fn main(args: &[String]) -> i32 {
         go: args[3].clone(),
         subject: args[4].clone(),
         body: args[5].clone().into(),
-        repo: std::env::var("PG_REPO").unwrap_or("Ch3fUlrich/plangraph".into()),
+        repo,
         session: std::env::var("FLEET_SESSION_NAME").ok(),
         no_claim,
         keeper: crate::paths::display(&keeper),

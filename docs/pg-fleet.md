@@ -18,6 +18,11 @@ during replacement overlap. ROUTING_STATE_DIR and FLEET_HOST_POLICY retain their
 meanings. Host records can declare local aliases in `aliases`; deployment-specific
 names stay in the private policy.
 
+Operational data defaults to `~/.local/share/plangraph/fleet`. Set
+RESUME_DIGEST_HOME to the deployed data directory for commands that share it;
+WORK_SUMMARY_HOME can select a separate directory for work-summary. Numbered
+routing session names normalize to the routing role.
+
 `question-count` reads QUESTIONS.md in the operational data directory and retains
 the table row, kind, blocking and priority counting rules.
 
@@ -52,6 +57,8 @@ entries. Explicit PG_PGK and PG_CI_EVIDENCE overrides remain supported.
 the ordered head, gate, keeper, mergeability and body checks, stale-claim retry,
 five pinned REST attempts and evidence handoff. Its wrapper resolver is also
 available as `merge_paths pgk|evidence`.
+Set PG_REPO to the target `owner/repository`; an unset or empty value stops
+before remote commands. Deployment repository names stay in runtime configuration.
 
 `inreview-backfill` retains TSV reports, project filtering, newest first-parent
 merge binding, historical GO forms and missing-row reports. Apply requires

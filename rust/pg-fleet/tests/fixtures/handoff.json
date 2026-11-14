@@ -193,7 +193,7 @@
     "reasons": []
   },
   {
-    "name": "valid Done - 10-31T04:44Z workst-gen:GEN-SRV-P3-DEPLOY-EMPTY aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa verdict ACCEPT",
+    "name": "valid Done - 10-31T04:44Z sample-project:GEN-SRV-P3-DEPLOY-EMPTY aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa verdict ACCEPT",
     "text": "# L1 card · build-L1 · 2026-10-31T05:10Z\n## Goal\nLand SESSION-SPAWN-MCP #248, keep CI green.\n## Keeper\n- claimed: SESSION-SPAWN-MCP (claimed, since 03:10Z)\n- ready next: REGISTRY-ROUTE-FU\n## Done\n- 10-31T04:44Z example:GEN-SRV-P3-DEPLOY-EMPTY aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa verdict ACCEPT\n## In flight\n- SESSION-SPAWN-MCP run-77 since 03:10Z next check 05:40Z\n## Planned\n1. REGISTRY-ROUTE-FU unblocks the console legs\n## Open\n- Q-12 pick leg order | default mimo first | deadline 2026-10-31T12:00Z\n## Traps\n- none\n## Drill-down\n- docs/decisions-log.md D-3290..D-3294\n",
     "reasons": []
   },

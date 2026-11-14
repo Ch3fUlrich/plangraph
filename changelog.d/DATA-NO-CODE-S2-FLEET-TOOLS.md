@@ -6,3 +6,4 @@
 - Port merge-part retries, ordered refusal codes and evidence handoff; add wrapper and hermetic origin/main integration tests.
 - Port inreview-backfill reporting and explicitly authorized apply, with historical binding goldens and native report/apply integration coverage.
 - Port work-summary with 33 recorded source executions, preserve help and usage output, bound inherited subprocess pipes, and document reviewed synthetic parity inputs and deferred host cutover.
+- Remove deployment identities from fleet defaults and parity fixtures; use a neutral data directory, require PG_REPO for merges, and normalize numbered routing sessions.
