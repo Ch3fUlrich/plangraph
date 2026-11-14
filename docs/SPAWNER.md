@@ -700,7 +700,7 @@ Admission timeout removes a created worktree when its worker never reached launc
 
 Refused worktree cleanup uses the attempt record’s selected checkout, including continuations whose repository differs from the runner default.
 
-Review and judge freshness admission requires both the worker checkout HEAD and the reviewed diff head to contain origin’s default branch; the worker checkout witness remains the recorded checked base.
+Review and judge freshness admission requires both the worker checkout HEAD and the reviewed diff head to contain origin’s default branch; the worker checkout witness remains the recorded checked base. Each distinct resolved repository fetches before comparison at both admission boundaries; the same repository reuses the worker fetch, and a separate diff repository failing its fetch is refused.
 
 Run listing is read-only. Watchdog sweeps own queue-timeout persistence and corrupt-record diagnostic delivery; dry sweeps only project the results.
 

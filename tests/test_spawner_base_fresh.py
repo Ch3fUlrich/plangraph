@@ -398,7 +398,7 @@ def test_review_requires_fresh_checkout_and_diff(tmp_path, monkeypatch, role, la
     assert asyncio.run(base_fresh.admit_base(service, record, card, launch=launch)) == (worker_fresh and diff_fresh)
     assert (worker, 'HEAD', True) in calls
     if worker_fresh:
-        assert (reviewed, 'reviewed-head', False) in calls
+        assert (reviewed, 'reviewed-head', True) in calls
     if worker_fresh and diff_fresh:
         assert record['checked_base_sha'] == 'b' * 40
     else:
@@ -442,3 +442,46 @@ def test_phase_worktree_gate_checks_phase_tracking_head(repository):
     with pytest.raises(SpawnRefused, match='base_stale'):
         fresh_worktree_base(repo, base='phase/test', default='phase/test')
     assert fresh_worktree_base(repo, base='origin/phase/test', default='phase/test') != old
+
+
+@pytest.mark.parametrize('role', ['review', 'judge'])
+@pytest.mark.parametrize('launch', [False, True])
+@pytest.mark.parametrize('offline', [False, True])
+def test_separate_review_repository_fetches_before_admission(repository, role, launch, offline):
+    from types import SimpleNamespace
+    from plangraph.spawner.base_fresh import admit_base
+    origin, worker = repository
+    reviewed = worker.parent / 'reviewed'
+    git(worker.parent, 'clone', str(origin), str(reviewed))
+    old = git(reviewed, 'rev-parse', 'HEAD')
+    advance(origin, worker)
+    git(worker, 'fetch', 'origin', 'main')
+    git(worker, 'merge', '--ff-only', 'origin/main')
+    assert git(reviewed, 'rev-parse', 'origin/main') == old
+    if offline:
+        git(reviewed, 'remote', 'set-url', 'origin', str(worker.parent / 'missing-origin'))
+    saved = []
+    service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(worker)), _save=saved.append)
+    record = dict(role=role, cwd=str(worker))
+    card = dict(diff_ref=dict(repo=str(reviewed), head=old))
+    assert not asyncio.run(admit_base(service, record, card, launch=launch))
+    assert record['reason'] == ('base_stale: fetch_failed' if offline else 'base_stale: behind=2')
+    assert git(reviewed, 'rev-parse', 'origin/main') == (old if offline else git(origin, 'rev-parse', 'main'))
+    assert saved == [record]
+
+
+@pytest.mark.parametrize('alias', [False, True])
+def test_same_review_repository_fetches_only_once(tmp_path, monkeypatch, alias):
+    from types import SimpleNamespace
+    from plangraph.spawner import base_fresh
+    worker = str(tmp_path / 'worker')
+    reviewed = str(tmp_path / 'worker/../worker') if alias else worker
+    calls = []
+    def check(repo, default=None, fetch=True, timeout=60, ref='HEAD'):
+        calls.append(fetch)
+        return dict(ok=True, origin_sha='b' * 40, base_sha='b' * 40)
+    monkeypatch.setattr(base_fresh, '_check', check)
+    service = SimpleNamespace(runner=SimpleNamespace(default_cwd=worker), _save=lambda r: None)
+    assert asyncio.run(base_fresh.admit_base(service, dict(role='review', cwd=worker),
+        dict(diff_ref=dict(repo=reviewed, head='HEAD'))))
+    assert calls == [True, False]
