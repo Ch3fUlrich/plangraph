@@ -15,7 +15,7 @@ R-batch-04: Start an other-family review with repository access on the exact hea
   Exception: one or two confirmed MED findings with clear fixes permit one narrow fix round. A HIGH, three or more MED, or a second miss closes and replans.
   (why: an in-session fix loop avoids relaunch cost; source: routing DECISIONS 3.35, D-5909, D-5927)
 R-batch-05: Use Hydrogen high first; on quota try authorized free legs (deepseek-flash, mimo free, beam-free), Sonnet high last, without waiting.
-  Credential/auth/access/secrets reviews require witnessed Sonnet high; every seat's family differs from all writers and its verdict names the exact head.
+  Credential, auth, access and secrets reviews require witnessed Sonnet high; every seat's family differs from all writers and its verdict names the exact head.
   The current plan-order/bin/agy-review.sh and free-seat.sh wrappers provide repository access, including free-leg runs.
   Inline-only spawner legs do not satisfy R-batch-04; the writer-driver port must preserve repository access.
   (why: reviews must progress while preserving seat eligibility; source: routing DECISIONS 3.26, D-5924, D-5925, D-5952)
