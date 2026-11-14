@@ -1,5 +1,6 @@
 """Runner-owned isolation dependencies must reach the extracted gate at call time."""
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,9 +16,12 @@ def review_config(tmp_path, monkeypatch):
     config.write_text('{}')
     managed = tmp_path / 'managed'
     managed.mkdir()
+    (tmp_path / 'opencode').mkdir()
+    monkeypatch.setattr(isolation, 'sys', SimpleNamespace(platform='win32'))
+    monkeypatch.setattr(isolation, '_opencode_managed_dir', lambda env: managed)
     monkeypatch.setattr(runner, '_opencode_managed_dir', lambda env: managed)
     env = {key: str(job) for key in ('HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'OPENCODE_CONFIG_DIR')}
-    env.update(OPENCODE_CONFIG=str(config), OPENCODE_DISABLE_PROJECT_CONFIG='1',
+    env.update(ProgramData=str(tmp_path), OPENCODE_CONFIG=str(config), OPENCODE_DISABLE_PROJECT_CONFIG='1',
                OPENCODE_DISABLE_CLAUDE_CODE='1', OPENCODE_DISABLE_CLAUDE_CODE_SKILLS='1',
                OPENCODE_API_KEY='fixture')
     cfg = {'permission': dict.fromkeys(('*', *isolation._DENIED_TOOLS), 'deny'), 'mcp': {}, 'plugin': []}
@@ -74,6 +78,25 @@ def test_dependency_inputs_do_not_disable_other_checks(review_config, tmp_path, 
         env['OPENCODE_DISABLE_PROJECT_CONFIG'] = '0'
     else:
         env['OPENCODE_UNAPPROVED'] = 'untrusted'
-    assert not isolation._opencode_tools_denied(json.dumps(cfg), env,
-        managed_dir=runner._opencode_managed_dir, denied_tools=runner._DENIED_TOOLS,
-        env_allow=runner._REVIEW_OPENCODE_ENV_ALLOW)
+    assert not runner._opencode_tools_denied(json.dumps(cfg), env)
+
+
+@pytest.mark.parametrize('seam', ['_DENIED_TOOLS', '_REVIEW_OPENCODE_ENV_ALLOW', '_opencode_managed_dir'])
+@pytest.mark.parametrize('explicit_none', [False, True])
+def test_isolation_globals_rebound_for_direct_calls(review_config, tmp_path, monkeypatch, seam, explicit_none):
+    cfg, env = review_config
+    dependencies = {'managed_dir': None, 'denied_tools': None, 'env_allow': None} if explicit_none else {}
+    text = json.dumps(cfg)
+    assert isolation._opencode_tools_denied(text, env, **dependencies)
+    if seam == '_DENIED_TOOLS':
+        value = (*isolation._DENIED_TOOLS, 'fixture_tool')
+    elif seam == '_REVIEW_OPENCODE_ENV_ALLOW':
+        value = tuple(name for name in isolation._REVIEW_OPENCODE_ENV_ALLOW if name != 'OPENCODE_API_KEY')
+    else:
+        managed = tmp_path / 'direct-blocked'
+        managed.mkdir()
+        (managed / 'opencode.json').write_text('{}')
+        def value(env):
+            return managed
+    monkeypatch.setattr(isolation, seam, value)
+    assert not isolation._opencode_tools_denied(text, env, **dependencies)

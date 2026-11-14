@@ -282,8 +282,8 @@ _REVIEW_OPENCODE_ENV_ALLOW = ('OPENCODE_CONFIG_CONTENT', 'OPENCODE_CONFIG',
                               'OPENCODE_DISABLE_AUTOUPDATE', 'OPENCODE_API_KEY')
 
 
-def _opencode_tools_denied(config_json, env, *, managed_dir=_opencode_managed_dir,
-                           denied_tools=_DENIED_TOOLS, env_allow=_REVIEW_OPENCODE_ENV_ALLOW) -> bool:
+def _opencode_tools_denied(config_json, env, *, managed_dir=None,
+                           denied_tools=None, env_allow=None) -> bool:
     """True only when the child's final config AND env prove every tool denied.
 
     Checked, all required: 'permission' maps '*' and every _DENIED_TOOLS key
@@ -299,10 +299,13 @@ def _opencode_tools_denied(config_json, env, *, managed_dir=_opencode_managed_di
     env/config shape: the runtime behaviour of opencode is not proven by this
     function (an L1 runtime probe covers that).
 
-    Only the runner wrapper passes these keyword-only dependency inputs, using
-    its module-level constants and resolver at call time. Direct production
-    callers use the defaults; every validation remains mandatory.
+    Only the runner wrapper supplies explicit keyword-only dependencies from
+    its globals. Omitted inputs or explicit None resolve this module's globals
+    at call time for direct callers; every validation remains mandatory.
     """
+    managed_dir = managed_dir if managed_dir is not None else _opencode_managed_dir
+    denied_tools = denied_tools if denied_tools is not None else _DENIED_TOOLS
+    env_allow = env_allow if env_allow is not None else _REVIEW_OPENCODE_ENV_ALLOW
     try:
         cfg = json.loads(config_json or '{}')
     except (ValueError, TypeError):
