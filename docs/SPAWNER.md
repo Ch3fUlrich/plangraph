@@ -694,3 +694,7 @@ an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
 OOM wrapper lines are recognized by their known event shape, including `wrapper:` prefixes and extra metadata. The known event is retained in `events`; extra metadata is redacted into an `oom_telemetry_detail` event. Unknown or diagnostic-bearing envelopes remain in stderr. These untrusted telemetry events confer no provider identity or authorization. OpenCode structured `type=error` messages survive display-text decoding and supply attempt diagnostics. When all legs fail, the run reason selects the last real attempt before accumulated errors or stderr. The three Dell incident captures are replayed by `tests/test_spawner_oom_reason.py` using `tests/fixtures/spawner_dell_oom.json`. Failure classification also uses the route harness for jobs without command metadata and filters progress from a stored final-attempt reason.
 
 Quota polling considers only the newest request of a session, including a 429 without text. Timestamp-less pool observations keep their first-seen hold until recovery; database reads select the latest row per window.
+
+Checkpoint 3: Run watchdog and stall detection is included in this checkpoint.
+
+Review hard walls default to 25 minutes and implement/fix to 90 minutes; progressing runs retain these prior budgets. Read-only git status/diff/log and GitHub run/status polling do not count as tool loops. Queue expiry preserves records owned by live or unobservable supervisors.

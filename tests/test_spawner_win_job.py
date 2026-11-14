@@ -1,5 +1,6 @@
 """Windows Job Object lifecycle through the real spawn/monitor path (simulated nt)."""
 import asyncio
+import tempfile
 
 import pytest
 from fake_pid import FAKE_PID
@@ -54,14 +55,15 @@ def _run_nt(monkeypatch, api, proc, timeout=None):
             if proc._unblock is not None:
                 proc._unblock.set()
 
-        r = SpawnerRunner(process_factory=factory, tree_killer=tree_killer)
+        r = SpawnerRunner(default_cwd=directory, process_factory=factory, tree_killer=tree_killer)
         r.win_job_api = api
         job = await r.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash')
         if job.job_id in r._tasks:   # a refused run has no monitor
             await r._tasks[job.job_id]
         return r, job, killed
 
-    return asyncio.run(main())
+    with tempfile.TemporaryDirectory() as directory:
+        return asyncio.run(main())
 
 
 @pytest.mark.parametrize('timeout,hang', [(None, False), ('0.05', True)])
@@ -71,8 +73,14 @@ def test_win_job_assigned_on_launch_and_terminated_once_at_reap(monkeypatch, tim
     api = FakeWinJob()
     runner, job, killed = _run_nt(monkeypatch, api, FakeChild(hang=hang), timeout=timeout)
     assert job.exit_code == (124 if hang else 0)
-    assert api.calls == [('create_job', None), ('assign', FAKE_PID),
+    lifecycle = [call for call in api.calls if call[0] != 'cpu_seconds']
+    assert lifecycle == [('create_job', None), ('assign', FAKE_PID),
                          ('terminate', 'job-handle'), ('close', 'job-handle')]
+    # CPU sampling is read-only, but must use the assigned, still-open job.
+    for index, (operation, handle) in enumerate(api.calls):
+        if operation == 'cpu_seconds':
+            assert handle == 'job-handle'
+            assert 1 < index < api.calls.index(('terminate', 'job-handle'))
     assert killed == [FAKE_PID] and runner._win_jobs == {}  # taskkill fallback; job popped
 
 

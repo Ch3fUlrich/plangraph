@@ -386,3 +386,138 @@ def test_review_seat_only_max_rule():
     w = Watchdog(limits, 0, ('files', 'head'), writer=False)
     assert w.decide(1500, ('files', 'head'), None, None) is None
     assert w.decide(90 * 60, ('files', 'head'), None, None)['rule'] == 'max'
+
+
+def test_d1_role_caps_are_hard_walls(monkeypatch):
+    monkeypatch.delenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', raising=False)
+    implement = thresholds(role='implement')
+    review = thresholds(role='review')
+    assert (implement['stall_s'], implement['max_s']) == (1500, 5400)
+    assert review['max_s'] == 1500
+    assert Watchdog(implement, 0, 'before').budget() == 5400
+    assert Watchdog(review, 0, 'before').budget() == 1500
+
+
+def test_d1_measured_card_class_widens_defaults(tmp_path, monkeypatch):
+    import json
+    path = tmp_path / 'p90.json'
+    path.write_text(json.dumps({'large': {'implement': {'stall_min': 30, 'max_min': 110}}}))
+    monkeypatch.setenv('PLANGRAPH_SPAWN_P90_TABLE', str(path))
+    limits = thresholds({'card_class': 'large'}, role='implement')
+    assert (limits['stall_s'], limits['max_s']) == (1800, 6600)
+    assert limits['hard_max'] is True
+    assert thresholds({'card_class': 'large', 'max_min': 2}, role='implement')['max_s'] == 120
+
+
+@pytest.mark.parametrize('cpu', [0, 1, None])
+def test_d1_stuck_requires_silent_stdout_and_proven_zero_cpu_delta(cpu):
+    w = Watchdog(thresholds({'stuck_min': 3}, role='review'), 0, None, writer=False)
+    assert w.decide(0, None, None, 0, stdout_activity=0) is None
+    event = w.decide(180, None, 179, cpu, stdout_activity=0)
+    if cpu == 0:
+        assert event['rule'] == 'stuck'
+    else:
+        assert event is None
+
+
+def test_d1_tool_loop_deduplicates_updates_and_hashes_arguments():
+    import json
+    from plangraph.spawner.stall_probe import ToolLoop
+    gate = ToolLoop()
+    def call(call_id, args, name='bash'):
+        return json.dumps({'type': 'tool_use', 'part': {'callID': call_id, 'tool': name,
+            'state': {'status': 'completed', 'input': args, 'output': 'same'}}})
+    assert not gate.feed(call('a', {'x': 1, 'y': 2}))
+    assert not gate.feed(call('a', {'y': 2, 'x': 1}))
+    assert not gate.feed(call('b', {'y': 2, 'x': 1}))
+    assert not gate.feed(call('c', {'x': 1, 'y': 2}))
+    assert not gate.feed(call('d', {'x': 1, 'y': 2}))
+    assert not gate.feed(call('e', {'x': 1, 'y': 2}))
+    assert gate.feed(call('f', {'x': 1, 'y': 2}))
+    other = ToolLoop()
+    assert not other.feed(call('a', {'x': 1}))
+    assert not other.feed(call('b', {'x': 2}))
+    assert not other.feed(call('c', {'x': 1}))
+    assert not other.feed(call('d', {'x': 1}, 'read'))
+
+
+@pytest.mark.parametrize('transport', ['tool_call', 'opencode', 'claude', 'codex'])
+def test_d1_tool_loop_reaps_fake_harness_within_five_seconds(tmp_path, monkeypatch, transport):
+    import json
+    from types import SimpleNamespace
+    from plangraph.spawner import run_watchdog as monitor
+    async def run():
+        runner, job = _job(tmp_path, {'max_min': 45})
+        proc = SimpleNamespace(stdout=asyncio.StreamReader(), stderr=asyncio.StreamReader(),
+                               pid=None, returncode=None)
+        for n in range(6):
+            call = dict(type='tool_call', id=str(n), name='read', arguments={'path': 'same'}, result='same')
+            if transport == 'opencode':
+                call = dict(type='tool_use', part=dict(callID=str(n), tool='read', state=dict(status='completed', input={'path': 'same'}, output='same')))
+            elif transport == 'claude':
+                call = dict(type='assistant', message=dict(content=[dict(type='tool_use', id=str(n), name='read', input={'path': 'same'})]))
+            elif transport == 'codex':
+                call = dict(type='item.completed', item=call)
+            proc.stdout.feed_data((json.dumps(call) + '\n').encode())
+            if transport == 'claude':
+                proc.stdout.feed_data((json.dumps(dict(type='user', message=dict(content=[dict(type='tool_result', tool_use_id=str(n), content='same')]))) + '\n').encode())
+        async def reap(*args):
+            proc.returncode = -15
+            proc.stdout.feed_eof()
+            proc.stderr.feed_eof()
+        monkeypatch.setattr(runner, '_reap_process', reap)
+        started = time.monotonic()
+        await asyncio.wait_for(monitor.collect(runner, 'j', proc), 5)
+        assert time.monotonic() - started < 5
+        record = {'role': 'implement'}
+        assert monitor.terminal_record(record, job)
+        assert record['reason'] == 'tool_loop'
+        assert job.status == 'stalled'
+    asyncio.run(run())
+
+
+def test_d1_implement_fallthroughs_share_one_hard_deadline(monkeypatch):
+    from plangraph.spawner import run_watchdog_limits as limits
+    monkeypatch.setattr(limits.time, 'time', lambda: 100)
+    cap = thresholds(role='implement')
+    record = {'role': 'implement', 'started': 0}
+    assert limits.leg_limits(record, cap)['deadline'] == 5400
+    monkeypatch.setattr(limits.time, 'time', lambda: 5400)
+    assert limits.leg_limits(record, cap) is None
+    assert record['reason'] == 'timeout'
+
+
+@pytest.mark.parametrize('row', [{'max_min': 0}, {'max_min': True}, {'max_min': '55'}, {'other': 20}])
+def test_d1_bad_p90_rows_refused(tmp_path, monkeypatch, row):
+    import json
+    path = tmp_path / 'p90.json'
+    path.write_text(json.dumps({'large': {'implement': row}}))
+    monkeypatch.setenv('PLANGRAPH_SPAWN_P90_TABLE', str(path))
+    with pytest.raises(SpawnRefused, match='p90'):
+        thresholds({'card_class': 'large'}, role='implement')
+
+
+def test_d1_cancelled_cpu_sample_does_not_cancel_other_monitors(monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import run_cpu
+    async def run():
+        release = asyncio.Event()
+        async def scan(*args):
+            await release.wait()
+            return {}
+        monkeypatch.setattr(run_cpu.asyncio, 'to_thread', scan)
+        runner = SimpleNamespace()
+        one = asyncio.create_task(run_cpu.cpu_seconds(runner, 'one', 123, 0))
+        two = asyncio.create_task(run_cpu.cpu_seconds(runner, 'two', 124, 0))
+        await asyncio.sleep(.01)
+        one.cancel()
+        await asyncio.gather(one, return_exceptions=True)
+        release.set()
+        assert await two == 0
+    asyncio.run(run())
+
+@pytest.mark.parametrize('role,now', [('implement', 3000), ('fix', 3000), ('review', 660)])
+def test_split_progress_survives_previous_shortened_wall(monkeypatch, role, now):
+    monkeypatch.delenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', raising=False)
+    watchdog = Watchdog(thresholds(role=role), 0, 'before', writer=role != 'review')
+    assert watchdog.decide(now, 'after', now, 1, stdout_activity=now) is None

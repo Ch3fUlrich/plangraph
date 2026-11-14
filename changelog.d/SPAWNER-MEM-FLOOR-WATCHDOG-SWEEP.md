@@ -1,0 +1,1 @@
+- Persist expired ownerless and legacy queued runs as queue_timeout during watchdog run reads so they no longer count as live; preserve bounded waits and dry-run safety.
