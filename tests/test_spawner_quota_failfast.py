@@ -178,6 +178,8 @@ def _row(pct, reset, account='a1', window='7d', provider='codex', **extra):
 
 def test_pool_at_zero_percent_is_skipped_until_its_reset_and_routes_again_after(tmp_path):
     from plangraph.planner.routing import plan_spawn
+    # D-5840 uses the registered medium writer; SOL still covers xhigh pool inputs.
+    default_sol = 'omniroute/cx-gpt-6.1-sol-medium'
     now = time.time()
     reset = now + 3600
     stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(reset))
@@ -185,12 +187,12 @@ def test_pool_at_zero_percent_is_skipped_until_its_reset_and_routes_again_after(
     store = LegStateStore(tmp_path / 'legs.sqlite')
     reader = lambda model, **scope: gate.apply(model, store.leg_status(model, **scope), scope.get('now'))
     card = {'estimate_tokens': 1000}
-    assert plan_spawn(card, role='implement', leg_reader=store.leg_status, now=now).legs[0].model == SOL
+    assert plan_spawn(card, role='implement', leg_reader=store.leg_status, now=now).legs[0].model == default_sol
     during = plan_spawn(card, role='implement', leg_reader=reader, now=now + 60)
-    assert SOL not in [leg.model for leg in during.legs]
-    assert any(s['leg'] == 'cx-gpt-6.1-sol-xhigh' and s['reason'] == 'limited' for s in during.skipped)
+    assert default_sol not in [leg.model for leg in during.legs]
+    assert any(s['leg'] == 'cx-gpt-6.1-sol-medium' and s['reason'] == 'limited' for s in during.skipped)
     after = plan_spawn(card, role='implement', leg_reader=reader, now=reset + 1)
-    assert after.legs[0].model == SOL
+    assert after.legs[0].model == default_sol
 
 
 def test_pool_stays_up_while_any_account_can_serve_and_other_pools_are_untouched():
