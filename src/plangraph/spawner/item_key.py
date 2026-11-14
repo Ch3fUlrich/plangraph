@@ -17,6 +17,11 @@ def annotate_item(record, card, *, inherit=False):
     if value is not None and not valid_item(value):
         record.setdefault('warnings', []).append('invalid item_key; stored as null')
         value = None
+    if value is not None:
+        project, _, item = value.partition(':')
+        while item.startswith(project + ':') and item[len(project) + 1:]:
+            item = item[len(project) + 1:]
+        value = project + ':' + item
     record['item_key'] = value
     if value is None and record.get('role') in ('review', 'judge'):
         event = dict(event='seat_item_missing', level='warning')

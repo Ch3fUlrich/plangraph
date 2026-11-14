@@ -49,6 +49,7 @@ _keeper_unconfigured_last_warned = None
 from .env_redact import first_reason, redact, redact_output, _redact_prompt
 from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, refusal_record, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
+from .base_fresh import admit_base
 from . import opencode_isolation as _opencode_isolation
 from .opencode_isolation import (
     _DENIED_TOOLS,
@@ -56,7 +57,7 @@ from .opencode_isolation import (
     _opencode_managed_dir,
 )
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
-from . import proc_kill
+from . import proc_kill, env_redact
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
 from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry, mismatch_flag, witness_native  # re-export: tests import and patch these on runner
 
@@ -635,23 +636,20 @@ class SpawnerRunner:
                                                         or getattr(self.jobs[job_id], 'refusal', None)) else proc.returncode
             job = self.jobs[job_id]
             kept = []
-            from .env_redact import redact_env_values
             for line in stderr_text.splitlines(keepends=True):
-                from .proc_kill import oom_envelope, record_oom_envelope
-                telemetry = oom_envelope(line)
+                telemetry = proc_kill.oom_envelope(line)
                 if telemetry is not None:
-                    record_oom_envelope(job.events, telemetry)
+                    proc_kill.record_oom_envelope(job.events, telemetry)
                     extras = {k: v for k, v in telemetry.items() if k != 'plangraph_oom'}
                     if extras:
                         job.events.append(dict(event='oom_telemetry_detail', detail=redact_output(
-                            redact_env_values(json.dumps(extras), self._child_envs.get(job_id, os.environ)))))
+                            env_redact.redact_env_values(json.dumps(extras), self._child_envs.get(job_id, os.environ)))))
                     continue
+                kept.append(line)
                 try:
                     envelope = json.loads(line)
                 except (ValueError, TypeError):
-                    kept.append(line)
                     continue
-                kept.append(line)
                 if not isinstance(envelope, dict) or set(envelope) != {'autoos_provider_response'}:
                     continue
                 response = envelope['autoos_provider_response']
@@ -672,8 +670,8 @@ class SpawnerRunner:
             from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer, record_steps
             record_steps(job, stdout_text, stderr_text, env)
             decoded, stderr_text, exit_code = native_answer(job, answer_text(stdout_text) if is_opencode(job) else stdout_text, stderr_text, exit_code)
-            job.stdout = redact_output(redact_env_values(decoded, env))
-            job.stderr = redact_output(redact_env_values(stderr_text, env))
+            job.stdout = redact_output(env_redact.redact_env_values(decoded, env))
+            job.stderr = redact_output(env_redact.redact_env_values(stderr_text, env))
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
@@ -730,7 +728,7 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-claude-stream'
                 # D-3649: the review text (VERDICT line) is the stream's final result, not the raw stream.
                 await asyncio.to_thread(render_review_output, job, stdout_text,
-                                        lambda text: redact_output(redact_env_values(text, env)))
+                                        lambda text: redact_output(env_redact.redact_env_values(text, env)))
 
             await witness_native(self, job_id, job, stdout_text, requested_model)
             # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
@@ -958,7 +956,7 @@ def spawn_service(*args, **kwargs):
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
                         seats=False, _plan=None, run_worktree=False, _placement=None, cwd=None):
             from .private_io import SAVE_READ_ATTEMPTS
-            from .run_watchdog import leg_limits, terminal_status, thresholds
+            from .run_watchdog import leg_limits, terminal_status, thresholds, watchdog_reason
             from .question_bridge import rounds_exhausted
             if rounds_exhausted(self, card, role):
                 from plangraph.routing_errors import SpawnRefused
@@ -991,6 +989,7 @@ def spawn_service(*args, **kwargs):
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
             from .context_pack import annotate
             from .item_key import annotate_item
+            if not (run_worktree and not dry_run) and not await admit_base(self, record, card): return self.result(run_id)
             pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
             annotate_item(record, card)
             for skipped in plan.to_dict()['skipped']:
@@ -1041,7 +1040,8 @@ def spawn_service(*args, **kwargs):
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
-                        worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
+                        record['base_admitted'] = False; worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
+                        if not await admit_base(self, record, card, launch=True): return
                         if (watchdog := leg_limits(record, limits)) is None:
                             self._save(record); return
                         job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
@@ -1058,9 +1058,9 @@ def spawn_service(*args, **kwargs):
                             job.status = 'cancelled'   # another process ends the run, never a fall-through leg
                         stop = redact(self.runner.provider_responses.get(job.job_id))
                         if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
-                            record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
+                            record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=watchdog_reason(job),
                                 served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))
-                            record.update(status=terminal_status(job.status, role), exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
+                            record.update(status=terminal_status(job.status, role), exit_code=1 if job.exit_code is None else job.exit_code, reason=watchdog_reason(job),
                                 watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
                                 events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s events
                             return

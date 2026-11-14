@@ -694,6 +694,25 @@ an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
 OOM wrapper lines are recognized by their known event shape, including `wrapper:` prefixes and extra metadata. The known event is retained in `events`; extra metadata is redacted into an `oom_telemetry_detail` event. Unknown or diagnostic-bearing envelopes remain in stderr. These untrusted telemetry events confer no provider identity or authorization. OpenCode structured `type=error` messages survive display-text decoding and supply attempt diagnostics. When all legs fail, the run reason selects the last real attempt before accumulated errors or stderr. The three Dell incident captures are replayed by `tests/test_spawner_oom_reason.py` using `tests/fixtures/spawner_dell_oom.json`. Failure classification also uses the route harness for jobs without command metadata and filters progress from a stored final-attempt reason.
 
 Quota polling considers only the newest request of a session, including a 429 without text. Timestamp-less pool observations keep their first-seen hold until recovery; database reads select the latest row per window.
+Checkpoint 4: Fresh bases and registry guard is included in this checkpoint.
+
+Stale-base waivers require PLANGRAPH_BASE_DECISIONS_FILE configured by the operator. Admission fetches its origin/main, requires one decision row whose DECISION cell contains Source: operator, Waives: spawn-base:<checked-base-sha> and Origin: <fetched-origin-sha>, and refuses missing, duplicate, unreadable or mismatched proof. A card D-id alone never waives lag or failed fetches. Refused-worktree cleanup requires matching created_by_run_id and never removes continuations or admitted workers.
+
+Run-worktree spawns validate the selected creation base before cutting a tree, then
+validate its checkout and any review diff before launch. Caller HEAD does not
+admit or reject a new worktree. Clean main is fast-forwarded when behind; a main
+checkout already at origin/main needs no mutation and may retain local edits.
+Session launch (`src/plangraph/spawner/sessions.py`), routing `bin/fleet-launch`,
+and the external package-worktree script do not call this gate in this part.
+
+Cancellation waits for an in-flight worktree creation thread before returning;
+new unlaunched attempts are removed, and normal Git branch deletion removes the
+new lane only when it is unoccupied and merged into the fetched origin/main.
+Continuation evidence remains protected from automatic removal.
+
+Launch-admission refusals apply the same safe branch cleanup to owned new
+attempts, so a named lane can retry after origin advances during creation.
+
 
 Spawner startup checkout identity reads decode Git output explicitly as UTF-8 with replacement for invalid bytes, matching the other spawner subprocess reads.
 
