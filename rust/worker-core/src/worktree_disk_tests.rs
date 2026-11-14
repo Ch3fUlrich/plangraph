@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
+#[path = "worktree_disk_reap_tests.rs"]
+mod teardown;
+
 #[test]
 fn legacy_target_is_removed_but_shared_cache_is_kept() {
     let root = tempfile::tempdir().unwrap();
@@ -57,7 +61,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from plangraph.spawner import host_ready as h
 from plangraph.spawner.runner import SpawnerRunner, JobInfo
-from plangraph.spawner.proc_kill import root_identity
+from plangraph.spawner.proc_kill import alive, escapees, root_identity
+from plangraph.spawner.winjob import WinJobApi
 
 async def main():
     cwd = Path(sys.argv[1]) / 'checkout'
@@ -66,6 +71,9 @@ async def main():
     target.mkdir()
     runner = SpawnerRunner(default_cwd=str(cwd))
     runner._cargo_leases = {}
+    runner._win_jobs = {}
+    if os.name == 'nt':
+        runner.win_job_api = WinJobApi()
     tasks = []
     processes = []
     for index in range(3):
@@ -82,10 +90,23 @@ async def main():
         runner._processes[key] = proc
         runner._owned = {**getattr(runner, '_owned', {}), key:
             dict(pid=proc.pid, pid_start=root_identity(proc.pid), job_object=False)}
+        if os.name == 'nt':
+            # Match production launch: Windows verification needs a Job Object
+            # after taskkill has removed the root from the process table.
+            handle = runner.win_job_api.create_job()
+            runner._win_jobs[key] = handle
+            runner.win_job_api.assign(handle, proc.pid)
+            runner._owned[key]['job_object'] = handle
+            runner._escapees = {**getattr(runner, '_escapees', {}), key:
+                escapees(proc.pid, runner.win_job_api.pids(handle))}
         runner._cargo_leases[key] = h.cargo_lease()
         tasks.append(asyncio.create_task(h.collect_with_disk_guard(runner, key, proc)))
     try:
         await asyncio.wait_for(asyncio.gather(*tasks), 15)
+        await asyncio.gather(*(proc.wait() for proc in processes))
+        assert not runner._cargo_leases, runner._cargo_leases
+        assert not any(j.survivors for j in runner.jobs.values())
+        assert not any(alive(proc.pid, None) for proc in processes)
         # Even idle service records cannot authorize eviction under a foreign lease.
         with h.cargo_lease():
             busy = h.local_disk_refusal(cwd, SimpleNamespace(ps=lambda: {'runs': []}))
@@ -95,6 +116,8 @@ async def main():
             reasons=[j.refusal for j in runner.jobs.values()], busy=busy, idle=idle,
             size=size, reclaimed=not target.exists())))
     finally:
+        for handle in runner._win_jobs.values():
+            runner.win_job_api.close(handle)
         for proc in processes:
             if proc.returncode is None:
                 proc.kill()
@@ -129,7 +152,7 @@ asyncio.run(main())
         .as_str()
         .unwrap()
         .starts_with("cargo_target_cap:"));
-    assert!(result["idle"].is_null());
+    assert!(result["idle"].is_null(), "{result}");
     assert_eq!(result["reclaimed"], true);
     assert_eq!(result["size"].as_f64().unwrap(), 12.0 / 1024.0);
 }
