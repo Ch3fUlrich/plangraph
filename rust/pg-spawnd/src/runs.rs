@@ -84,7 +84,7 @@ impl Runs {
         crate::prompt::prepare_review(&review_args, &leg, &mut launch, &repos, mode == "on")
             .map_err(|e| internal(&e.to_string()))?;
         let review_head = if role == "review" && crate::cli_review::eligible(&leg) && !dry {
-            crate::cli_review::prepare(args, &mut launch)?
+            crate::cli_review::prepare(args, &mut launch, &leg)?
         } else {
             None
         };

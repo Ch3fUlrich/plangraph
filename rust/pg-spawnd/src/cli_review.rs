@@ -61,7 +61,11 @@ fn clean_head(cwd: &Path) -> Result<String, ToolError> {
     }
     git(cwd, &["rev-parse", "HEAD"])
 }
-pub(crate) fn prepare(args: &Args, launch: &mut LaunchSpec) -> Result<Option<String>, ToolError> {
+pub(crate) fn prepare(
+    args: &Args,
+    launch: &mut LaunchSpec,
+    leg: &Value,
+) -> Result<Option<String>, ToolError> {
     let head = clean_head(&launch.cwd)?;
     let expected = args["card"]
         .get("head_sha")
@@ -78,7 +82,19 @@ pub(crate) fn prepare(args: &Args, launch: &mut LaunchSpec) -> Result<Option<Str
         .prompt
         .as_deref()
         .ok_or_else(|| parameter("missing review prompt"))?;
-    let prompt = format!("Read-only repository review of HEAD {head}. Open callers and tests; never edit. End with exactly VERDICT: PASS or VERDICT: FAIL, then TEST_GAMING: no or TEST_GAMING: yes. Report findings before the verdict.\n\n{old}");
+    let access = if leg["harness"] == "agy" {
+        launch.argv.extend([
+            "--settings".into(),
+            json!({"permissions":{"allow":[
+                "read_file(*)", "list_dir(*)", "grep_search(*)", "find_by_name(*)"
+            ]}})
+            .to_string(),
+        ]);
+        "Use read_file, list_dir, grep_search and find_by_name for repository access. Do not request command tools. "
+    } else {
+        ""
+    };
+    let prompt = format!("{access}Read-only repository review of HEAD {head}. Open callers and tests; never edit. End with exactly VERDICT: PASS or VERDICT: FAIL, then TEST_GAMING: no or TEST_GAMING: yes. Report findings before the verdict.\n\n{old}");
     if launch.stdin.as_deref() == Some(old) {
         launch.stdin = Some(prompt.clone());
     } else {

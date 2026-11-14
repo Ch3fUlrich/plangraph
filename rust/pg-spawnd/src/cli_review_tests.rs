@@ -37,22 +37,43 @@ fn precondition_binds_exact_stamped_head_and_rejects_dirty_tree() {
         events: None,
     };
     let args = json!({"card":{}});
-    assert!(prepare(args.as_object().unwrap(), &mut launch).is_err());
+    assert!(prepare(
+        args.as_object().unwrap(),
+        &mut launch,
+        &json!({"harness":"agy"})
+    )
+    .is_err());
     let head = git(dir.path(), &["rev-parse", "HEAD"]).ok().unwrap();
     let stamps = dir.path().join(".git/fast-checks");
     std::fs::create_dir(&stamps).unwrap();
     std::fs::write(stamps.join(&head), "green").unwrap();
     assert_eq!(
-        prepare(args.as_object().unwrap(), &mut launch)
-            .ok()
-            .unwrap(),
+        prepare(
+            args.as_object().unwrap(),
+            &mut launch,
+            &json!({"harness":"agy"})
+        )
+        .ok()
+        .unwrap(),
         Some(head)
     );
+    assert!(launch.argv.iter().any(|s| s == "--settings"));
+    assert!(!launch.argv.iter().any(|s| s.contains("command(*)")));
     let wrong = json!({"card":{"head_sha":"wrong"}});
-    assert!(prepare(wrong.as_object().unwrap(), &mut launch).is_err());
+    assert!(prepare(
+        wrong.as_object().unwrap(),
+        &mut launch,
+        &json!({"harness":"agy"})
+    )
+    .is_err());
     std::fs::write(dir.path().join("tracked"), "x").unwrap();
     git_ok(dir.path(), &["add", "tracked"]);
-    assert!(prepare(args.as_object().unwrap(), &mut launch).is_err());
+    assert!(prepare(
+        args.as_object().unwrap(),
+        &mut launch,
+        &json!({"harness":"agy"})
+    )
+    .is_err());
 }
 #[test]
 fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {

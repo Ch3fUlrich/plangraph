@@ -60,4 +60,4 @@ Direct CLI command rendering refuses operator-retired Gemini Flash targets befor
 constructing argv; D-5903 enables Hydrogen high for implement and medium for read-only tools review (agy plan mode), both unwitnessed.
 
 Native agy reviews use plan mode for both Hydrogen and Argon. Sonnet high uses
-Claude model claude-sonnet-5-5 with --effort high and plan permissions.
+Claude model claude-sonnet-5-5 with --effort high and restricted review tools.
