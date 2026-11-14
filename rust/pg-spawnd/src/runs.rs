@@ -51,6 +51,10 @@ impl Runs {
         launch: impl FnOnce(&Path, &Value) -> Result<crate::launch::LaunchSpec, ToolError>,
     ) -> Result<Value, ToolError> {
         let (run_id, job_id) = (new_run_id(), new_job_id());
+        let admission = match crate::round_progress::admit(state, args) {
+            Ok(admission) => admission,
+            Err(error) => return crate::round_progress::record_refusal(state, host, args, error),
+        };
         let dry = args.get("dry_run") == Some(&json!(true));
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;
@@ -86,6 +90,12 @@ impl Runs {
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
+        base.as_object_mut()
+            .unwrap()
+            .extend(admission.fields.as_object().unwrap().clone());
+        if !dry && base["writer_round"].is_u64() {
+            base["round_work_before"] = json!(crate::round_progress::work_fingerprint(&launch.cwd));
+        }
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
@@ -162,6 +172,7 @@ impl Runs {
                 Err(_) => return Err(internal("could not start run")),
             }
         }
+        drop(admission);
         self.jobs.lock().unwrap().insert(job_id, run_id.clone());
         wait(state, &run_id, wait_duration(args.get("wait_seconds")))
     }
@@ -279,6 +290,7 @@ fn book_attempt(base: &mut Value, leg: &Value) -> u32 {
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
     let diagnostic = crate::gitconfig_guard::guard_diagnostic(record, status, leg, attempt_id);
     let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
+    crate::round_progress::finish_round(record, status);
     let mut attempts = match record.get("attempts") {
         None if attempt_id == 1 => vec![json!({"legacy_normalized":true})],
         None => Vec::new(),
@@ -361,6 +373,9 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         }
     }
 }
+#[cfg(all(test, unix))]
+#[path = "runs_progress_tests.rs"]
+mod progress_tests;
 #[cfg(all(test, unix))]
 #[path = "runs_record_tests.rs"]
 mod record_tests;
