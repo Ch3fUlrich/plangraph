@@ -229,13 +229,17 @@ def test_hook_binding_never_mutates_caller_repository(tmp_path, boundary):
 
 
 @pytest.mark.parametrize('boundary', ['hook', 'selector', 'pytest'])
-def test_test_environment_uses_git_discovery_and_removes_config_prefix(tmp_path, monkeypatch, boundary):
-    import conftest
+def test_test_environment_uses_git_discovery_and_removes_config_prefix(tmp_path, monkeypatch, boundary, request):
     import runpy
     from test_affected_tests import selector
     root = Path(__file__).resolve().parents[1]
+    # Nested suites register their own conftest under the same Python module name.
+    # Exercise that collision even when this file is selected without those suites.
+    monkeypatch.setitem(sys.modules, 'conftest', object())
+    root_conftest = request.config.pluginmanager.get_plugin(str(root / 'tests/conftest.py'))
+    assert root_conftest is not None
     helper = (runpy.run_path(str(root / 'tools/hooks/pre-push'))['test_environment'] if boundary == 'hook'
-              else selector().test_environment if boundary == 'selector' else conftest._test_environment)
+              else selector().test_environment if boundary == 'selector' else root_conftest._test_environment)
     inherited = dict(GIT_DIR='caller', GIT_FUTURE_BINDING='caller', GIT_PREFIX='prefix/',
                      GIT_CONFIG='caller', GIT_CONFIG_GLOBAL='caller', GIT_CONFIG_NOSYSTEM='1',
                      GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_7='caller', GIT_CONFIG_VALUE_7='caller',
