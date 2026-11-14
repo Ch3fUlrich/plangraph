@@ -243,7 +243,7 @@ def test_claim_with_a_cancelled_dep_names_the_dep_and_reason(w):
 
 
 # ----------------------------------------------------------------- ready
-def test_ready_excludes_merged_items_and_explains_reconciliation(w, repo):
+def test_ready_flags_merged_items_and_sorts_them_last(w, repo):
     keys = seed(w, [("A", []), ("B", [])])
     w.store.set_priority(w.p("router"), keys[0], 5)
     _merge_lane(repo, keys[0])
