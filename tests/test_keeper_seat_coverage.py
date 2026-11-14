@@ -31,7 +31,7 @@ from keeper_seat_helpers import (
     w,  # noqa: F401 - the review world fixture
     writer,
 )
-from keeper_util import seed, to_in_review
+from keeper_util import defn, seed, to_in_review
 from plangraph.keeper import auth
 from plangraph.keeper.errors import Refused
 from plangraph.review import family as review_family
@@ -158,9 +158,7 @@ def test_hand_edit_leaf_identity_is_not_merge_identity(monkeypatch):
     assert git._writer_trailer("repo", SHA_A)["_writer_commit"] == SHA_A
 
 
-# --------------------------------------------------------------------------
 # 1. mixed-writer HIGH item: every writer family must be covered
-# --------------------------------------------------------------------------
 
 def test_high_mixed_writers_close_only_when_every_family_is_covered(w):
     covered, refused = seed(
@@ -190,9 +188,7 @@ def test_high_mixed_writers_close_only_when_every_family_is_covered(w):
     assert len(verdict_events(w, refused)) == 1
 
 
-# --------------------------------------------------------------------------
 # 2. two Claude seats are ONE family, even with a D-217 waiver
-# --------------------------------------------------------------------------
 
 def test_two_claude_seats_are_one_family(w):
     plain, waived = seed(
@@ -224,9 +220,7 @@ def test_two_claude_seats_are_one_family(w):
     assert len(verdict_events(w, waived)) == 0
 
 
-# --------------------------------------------------------------------------
 # 3. a sensitive (HIGH) item can never close on Claude seats alone
-# --------------------------------------------------------------------------
 
 def test_sensitive_high_cannot_close_with_claude_seats_only(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",),
@@ -247,9 +241,7 @@ def test_sensitive_high_cannot_close_with_claude_seats_only(w):
     assert len(verdict_events(w, key)) == 0
 
 
-# --------------------------------------------------------------------------
 # 4. standard item: one seat covers the sole writer, not a mixed pair
-# --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("seat,done,blamed", [
     ("rGoogle", True, None),
@@ -276,9 +268,7 @@ def test_standard_mixed_writers_need_every_family_covered(w, seat, done, blamed)
     assert verdict_events(w, key) == []
 
 
-# --------------------------------------------------------------------------
 # 5. standard item: Claude may review a single non-Claude writer
-# --------------------------------------------------------------------------
 
 def test_standard_single_writer_claude_seat_is_allowed(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
@@ -288,9 +278,7 @@ def test_standard_single_writer_claude_seat_is_allowed(w):
     assert result["reviews_passed"] == 1
 
 
-# --------------------------------------------------------------------------
 # 6. fail closed when a writer family cannot be resolved
-# --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("case", ["missing_writer", "unknown_model",
                                   "trailers_error"])
@@ -327,9 +315,27 @@ def test_writer_family_uses_only_the_first_trailer_token(w, trailer, family):
     assert w.store.verdict(w.p("rAnthropic1"), key, True, "covered")["state"] == "done"
 
 
-# --------------------------------------------------------------------------
-# 7. mixed non-commit evidence has no commit writers
-# --------------------------------------------------------------------------
+# 7. non-commit evidence has no commit writers on either close path
+
+def test_decision_only_item_has_no_commit_writers_and_still_closes(w, monkeypatch):
+    from plangraph.keeper import store_decision_close
+
+    key = "demo:A"
+    w.store.create_items(w.p("router"), [
+        defn("A", evidence_kinds=("decision",), review_tier="none"),
+        defn("GOAL", ["A"], kind="goal")])
+    epoch = w.store.claim(w.p("claimant"), key)["epoch"]
+    w.store.add_evidence_router(w.p("router"), key, "decision", {"id": DECISION})
+    monkeypatch.setattr(store_decision_close, "_row", lambda *args:
+                        (SHA_A, f"| {DECISION} | CLOSE {key} |"))
+    item = w.store._item(key)
+    assert item["review_tier"] == "none" and item["evidence_kinds"] == ["decision"]
+    assert _cov().writer_families(w.store, item, w.store.ctx) == []
+    result = w.store.close_on_decision(w.p("claimant"), key, decision_ref=DECISION, epoch=epoch)
+    assert result["state"] == "done"
+    assert w.store._item(key)["state"] == "done"
+    assert verdict_events(w, key) == []
+
 
 def test_non_commit_item_has_no_commit_writers_and_still_closes(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
@@ -341,9 +347,7 @@ def test_non_commit_item_has_no_commit_writers_and_still_closes(w):
     assert w.store.verdict(w.p("rGoogle"), key, True, "no commits")["state"] == "done"
 
 
-# --------------------------------------------------------------------------
 # 8. ok=False is a change request, never a coverage refusal
-# --------------------------------------------------------------------------
 
 def test_changes_requested_with_uncovered_writer_is_not_refused_for_coverage(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
@@ -355,9 +359,7 @@ def test_changes_requested_with_uncovered_writer_is_not_refused_for_coverage(w):
     assert verdict_events(w, key) == []
 
 
-# --------------------------------------------------------------------------
 # 9. only the CLOSING high verdict is checked; a refusal appends nothing
-# --------------------------------------------------------------------------
 
 def test_first_high_verdict_is_not_checked_and_refusal_is_atomic(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",),
@@ -386,9 +388,7 @@ def test_first_high_verdict_is_not_checked_and_refusal_is_atomic(w):
     assert len(verdict_events(w, key)) == 2
 
 
-# --------------------------------------------------------------------------
 # 10. the pure function: table plus parity with tools/seat_verdict.coverage
-# --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("writers,seats,need,sensitive,want", [
     (["xiaomi"], ["anthropic", "anthropic"], 2, False, ["xiaomi"]),
