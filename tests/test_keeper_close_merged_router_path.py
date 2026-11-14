@@ -43,7 +43,8 @@ def test_cited_witnessed_review_runs_backfill_and_close(unseated_w, tmp_path):
 
 
 @pytest.mark.parametrize("fault", ["missing", "unwitnessed", "wrong-head", "wrong-item",
-                                  "failed", "pinned", "fix", "ambiguous"])
+                                  "failed", "pinned", "fix", "ambiguous", "conflicting",
+                                  "after-verdict", "gaming-yes", "override"])
 def test_cited_review_without_witness_stays_in_review(unseated_w, tmp_path, fault):
     w = unseated_w
     root = mirrored_reviews(w, tmp_path)
@@ -56,7 +57,11 @@ def test_cited_review_without_witness_stays_in_review(unseated_w, tmp_path, faul
                    "wrong-head": {"completion": {"head_sha": "f" * 40}},
                    "wrong-item": {"item_key": KEY}, "failed": {"exit_code": 1},
                    "pinned": {"pinned": True}, "fix": {"stdout_tail": "VERDICT: FIX"},
-                   "ambiguous": {"attempts": [{}, {}]}}
+                   "ambiguous": {"attempts": [{}, {}]},
+                   "conflicting": {"stdout_tail": "VERDICT: FIX\nTEST_GAMING: no\nVERDICT: PASS"},
+                   "after-verdict": {"stdout_tail": "TEST_GAMING: no\nVERDICT: PASS\nmore prose"},
+                   "gaming-yes": {"stdout_tail": "TEST_GAMING: no\nTEST_GAMING: yes\nVERDICT: PASS"},
+                   "override": {"plan": {"p_source": "override"}}}
         record.update(changes[fault])
         path.write_text(json.dumps(record))
     before = w.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]

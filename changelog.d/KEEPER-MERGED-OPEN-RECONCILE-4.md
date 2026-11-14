@@ -1,0 +1,1 @@
+- Add an opt-in historical merged-seat waiver requiring a unique scoped OPERATOR decision naming merged-without-witnesses, pre-cutoff GO/merge dates and unchanged locked proofs; record waiver authority and PRs in evidence without inventing review seats.

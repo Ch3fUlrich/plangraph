@@ -106,6 +106,33 @@ class RunsMixin:
         except Exception:
             raise Refused("evidence_unverified", "merged_pr_proof_unavailable") from None
 
+    def _merged_seat_waiver(self, item, decision_id, waiver_id, prs, now):
+        from .evidence_types import as_epoch
+        try:
+            if not isinstance(waiver_id, str) or not re.fullmatch(r"D-[0-9]+", waiver_id):
+                raise ValueError("operator decision id required")
+            decisions = self._ctx(item, now).decisions
+            row = decisions.fields(waiver_id)
+            if (row.get("class") != "OPERATOR"
+                    or not re.match(r"^Waiver:\s*merged-without-witnesses(?=$|[\s;,.])", row.get("decision", ""))
+                    or not decisions.waives(waiver_id, item["key"])
+                    or not self._verify_evidence(item, "decision", {"id": waiver_id}, now).ok):
+                raise ValueError("operator waiver is not authorized")
+            git = self._adapter("git")
+            cutoff = as_epoch("2026-11-13T00:00:00Z")
+            for proof in prs:
+                go_date = as_epoch(decisions.fields(proof["decision_id"]).get("date"))
+                merge = git.merge_commit_of(git.repo_path(item["project"]), proof["head"],
+                                             git.repo_ref(item["project"]))
+                proc = git._run(git.repo_path(item["project"]),
+                                ["show", "-s", "--format=%cI", "--end-of-options", merge[0]]) if merge else None
+                merge_date = as_epoch(proc.stdout.strip()) if proc and proc.returncode == 0 else None
+                if go_date is None or merge_date is None or max(go_date, merge_date) >= cutoff:
+                    raise ValueError("merged GO must predate 2026-11-13")
+            return {"class": "merged-without-witnesses", "decision_id": waiver_id}
+        except Exception:
+            raise Refused("evidence_unverified", "operator_seat_waiver_invalid_or_ineligible") from None
+
     def _merged_open_prs_checked(self, item, decision_id, head, now):
         from . import context_sources
         from .evidence_types import valid_commit_ref

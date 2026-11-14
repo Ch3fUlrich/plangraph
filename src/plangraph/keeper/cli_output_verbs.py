@@ -12,7 +12,7 @@ from .credential_guard import mask_all
 def cmd_close_merged(args, session):
     from .cli_verbs import write, RefusedCli, Unreachable, _refuse
     body = {"key": args.key, "decision_id": args.decision_id, "families": args.families,
-            "from_open": args.from_open, "apply": args.apply}
+            "from_open": args.from_open, "apply": args.apply, "waive_seats": args.waive_seats}
     if not args.from_open:
         return write(session, "close_merged", body)
     print("key\tclass\treason")

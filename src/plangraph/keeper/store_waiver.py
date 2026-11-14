@@ -40,11 +40,11 @@ def _known_family(value):
 class WaiverMixin:
     """Router decision verbs for reviews: waive a family or close merged work."""
 
-    def close_merged(self, principal, key, decision_id, families=None, *, from_open=False, apply=False):
+    def close_merged(self, principal, key, decision_id, families=None, *, from_open=False, apply=False, waive_seats=None):
         audit_key = key if isinstance(key, str) else None
         return self._run(principal, "close_merged", audit_key,
                          lambda now: self._close_merged(principal, key, decision_id,
-                                                       families, now, from_open, apply))
+                                                       families, now, from_open, apply, waive_seats))
 
     @staticmethod
     def _merged_review_state(item, from_open=False):
@@ -198,7 +198,7 @@ class WaiverMixin:
                 raise Refused("validation", "card_risk_tags_invalid")
         return bool({"auth", "secrets"}.intersection(tags))
 
-    def _close_merged(self, principal, key, decision_id, families, now, from_open=False, apply=False):
+    def _close_merged(self, principal, key, decision_id, families, now, from_open=False, apply=False, waive_seats=None):
         self._require_role(principal, "router")
         if type(from_open) is not bool or type(apply) is not bool:
             raise Refused("validation", "from_open and apply must be booleans")
@@ -210,11 +210,12 @@ class WaiverMixin:
         if not isinstance(decision_id, str) or not re.fullmatch(r"D-[0-9]+", decision_id):
             raise Refused("validation", "decision_id must look like D-NNN")
         head, _ = self._merged_go_proof(item, decision_id, now, all_work=from_open)
-        prs = self._merged_open_prs(item, decision_id, head, now) if from_open else []
-        backfill = families is None
+        prs = self._merged_open_prs(item, decision_id, head, now) if from_open or waive_seats is not None else []
+        waiver = self._merged_seat_waiver(item, decision_id, waive_seats, prs, now) if waive_seats is not None else None
+        backfill = families is None and waiver is None
         witnessed = self._merged_backfill(item, decision_id, head, now, prs) if backfill else []
         families = list(dict.fromkeys(model_family(s["model"]) for s in witnessed)) if backfill else families
-        seats = self._merged_seats(item, families, now, witnessed)
+        seats = self._merged_seats(item, families, now, witnessed) if waiver is None else []
         if from_open and not apply:
             return {"key": key, "state": item["state"], "would_close": True, "prs": prs}
         with self._write():
@@ -230,13 +231,15 @@ class WaiverMixin:
             current_head, result = self._merged_go_proof(fresh, decision_id, now, all_work=from_open)
             if current_head != head:
                 raise Refused("conflict", "merged_on_default_changed")
-            if from_open and self._merged_open_prs(fresh, decision_id, head, now) != prs:
+            if (from_open or waiver) and self._merged_open_prs(fresh, decision_id, head, now) != prs:
                 raise Refused("conflict", "merged_pr_proofs_changed")
+            if waiver:
+                self._merged_seat_waiver(fresh, decision_id, waive_seats, prs, now)
             if backfill:
                 current = self._merged_backfill(fresh, decision_id, head, now, prs)
                 if current != witnessed:
                     raise Refused("conflict", "review_witness_changed")
-            seats = self._merged_seats(fresh, seats, now, witnessed)
+            seats = self._merged_seats(fresh, seats, now, witnessed) if waiver is None else []
             if witnessed:
                 self._record_merged_seats(principal, fresh, decision_id, witnessed, now)
                 for family in seats:
@@ -246,6 +249,8 @@ class WaiverMixin:
                         "source": "cited-run-backfill"}, now)
             ref = {"id": decision_id, "families": seats,
                    "merged_head": head, "caller": principal.name}
+            if waiver:
+                ref.update(waiver=waiver, prs=prs)
             if from_open:
                 ref["prs"] = prs
                 self.conn.execute("UPDATE items SET state='in_review', lease_until=NULL WHERE key=?", (key,))

@@ -123,3 +123,15 @@ It uses the same seat rules (including cited-run recovery when families are
 omitted), records all PR numbers, heads and GO decisions in evidence, and
 atomically submits then passes the item. It does not require a new claim.
 HTTP `/v1/close_merged` accepts boolean `from_open` and `apply` for this path.
+
+Historical missing-witness closes remain disabled unless explicitly requested:
+`pg close-merged KEY GO-D-ID --waive-seats OPERATOR-D-ID`. The authority must
+be a unique indexed decision row with named `CLASS` and `DATE` table columns,
+class exactly `OPERATOR`, a DECISION cell beginning
+`Waiver: merged-without-witnesses; Waives: KEY`, and whole-item waiver scope.
+Router-class rows, missing ids, duplicate rows and other waiver names refuse.
+Every merged PR still needs its head-bound GO; both its merge commit timestamp
+and the GO row's `DATE` must precede 2026-11-13 UTC. Missing dates refuse.
+Authority, scope, dates and PR proofs are checked again under the close lock.
+The item evidence records the waiver class, operator decision id and PR proofs;
+no family verdict is invented. HTTP uses optional `waive_seats: "D-NNNN"`.

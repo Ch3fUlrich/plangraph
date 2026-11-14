@@ -13,6 +13,21 @@ from .evidence_types import Result
 MAX_RECORD_BYTES = 16 * 1024 * 1024
 
 
+def _passing_review(text):
+    from ..review.verdict import _VERDICT_LINE, parse_verdict
+    if not isinstance(text, str) or parse_verdict(text) != "pass":
+        return False
+    lines = text.splitlines()
+    verdicts = [(i, m[1].strip().lower()) for i, line in enumerate(lines)
+                if (m := _VERDICT_LINE.match(line))]
+    gaming = re.compile(r"^TEST[_-]GAMING:[ \t]*(.*)$", re.I)
+    answers = [m[1].strip().lower() for line in lines if (m := gaming.match(line))]
+    return bool(verdicts and len({v for _, v in verdicts}) == 1 and answers
+                and re.fullmatch(r"no(?:\s+-\s+[^|]+)?", answers[-1])
+                and all(not line.strip() or gaming.match(line)
+                        for line in lines[verdicts[-1][0] + 1:]))
+
+
 class SpawnerRecordAdapter:
     def __init__(self, directory, *, uid=None):
         self.directory = Path(directory) if directory else None
@@ -32,7 +47,6 @@ class SpawnerRecordAdapter:
     def review_seats(self, item, head, decision_text):
         """Read cited mirrored review witnesses, never infer a served model."""
         from ..review.family import model_family
-        from ..review.verdict import parse_verdict
         ids = json.loads(item.get("run_ids") or "[]")
         if not isinstance(ids, list) or any(not isinstance(r, str) for r in ids):
             raise ValueError("invalid item run citations")
@@ -64,14 +78,14 @@ class SpawnerRecordAdapter:
                 k in part and part[k] is not False for k in ("pin", "pinned", "spawn_pin"))
                 for part in (record, record.get("plan"), record.get("chosen_leg")))
             if (not family or model == "unwitnessed" or pinned or record.get("override_reason")
+                    or isinstance(record.get("plan"), dict) and record["plan"].get("p_source") == "override"
                     or record.get("status") != "completed"
                     or type(record.get("exit_code")) is not int or record["exit_code"] != 0
                     or not isinstance(completion, dict)
                     or completion.get("head_sha") not in ([head] if isinstance(head, str) else head)
                     or finish not in ("stop", "end_turn")
                     or not isinstance(attempts, list) or len(attempts) != 1
-                    or not isinstance(text, str) or parse_verdict(text) != "pass"
-                    or not re.search(r"(?im)^TEST[_-]GAMING:\s*no\s*$", text)
+                    or not _passing_review(text)
                     or record.get("served_family", family) != family):
                 raise ValueError(f"{run_id}: review is not a passing witnessed seat")
             seats.append({"model": model, "verdict": "pass", "run_id": run_id,
