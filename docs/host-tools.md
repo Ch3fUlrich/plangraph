@@ -40,3 +40,7 @@ binary under `~/.local/bin`. Set `PG_REPO`, `PG_WORKTREES`, `PG_PINS` in
 `~/.config/plangraph/disk-hygiene.env`. Review dry-run output before enabling.
 Live deployment is separate from repository validation. The start admission
 gate belongs to the spawner and is maintained separately.
+
+The same timer also invokes `pg-worktree-sweep --daily --apply`. Install that
+binary and configure `PG_SWEEP_CLAIMS_READER`; see [pg-reap](pg-reap.md#live-merged-worktree-sweep)
+for live protection authority, restore records, and remote-deletion opt-in.

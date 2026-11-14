@@ -48,6 +48,7 @@ pub mod hosts;
 pub mod janitor;
 pub mod live_probe;
 pub mod lockfile;
+pub mod merged_sweep;
 pub mod outcome;
 pub mod packet;
 pub mod pathjail;
@@ -57,6 +58,7 @@ pub mod placement_rules;
 pub mod probe;
 pub mod redact;
 mod redact_tokens;
+pub mod sweep_facts;
 /// Minimum body length redacted for the `gh[pousr]_` token family.
 pub const GITHUB_TOKEN_BODY_FLOOR: usize = redact_tokens::SPECS[1].floor;
 mod redact_wrapped;

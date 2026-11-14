@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- Add a daily merged-worktree sweep using pg-reap policy, live protection readers and pre-deletion restore records; remote deletion is opt-in.
+
 - Add conservative Rust disk hygiene with persistent alarms, 85%/30 GB warning and 88% rebuildable-cache cleanup on a 15-minute timer.
 - **SPAWNER-PROBE-HOST-NOT-READY:** Report missing probe harness binaries as host-not-ready without attempting the leg or recording shared leg events.
 - **KEEPER-SNAP-S1-FILTERS S1b:** Scope decision text to selected evidence before field projection; keep progress over all items with independent columns, preserve legacy snapshots, and close S1a validation/docs LOWs.
