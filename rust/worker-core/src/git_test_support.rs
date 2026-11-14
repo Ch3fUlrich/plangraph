@@ -65,9 +65,64 @@ mod tests {
             "GIT_CONFIG_KEY_0",
             "GIT_CONFIG_VALUE_0",
         ] {
-            assert!(git
-                .get_envs()
-                .any(|(name, value)| name == key && value.is_none()));
+            assert!(
+                git.get_envs()
+                    .any(|(name, value)| name == key && value.is_none())
+            );
         }
+    }
+
+    #[test]
+    fn fixture_overrides_caller_git_controls() {
+        let root = tempfile::tempdir().unwrap();
+        let mut cmd = Command::new("git");
+        cmd.env("GIT_DIR", "/caller/repo")
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+            .env("GIT_CONFIG_VALUE_0", "/caller/hooks");
+        configure(&mut cmd, root.path());
+        let vars: std::collections::BTreeMap<_, _> = cmd.get_envs().collect();
+        for key in [
+            "GIT_DIR",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_KEY_0",
+            "GIT_CONFIG_VALUE_0",
+        ] {
+            assert_eq!(vars[std::ffi::OsStr::new(key)], None);
+        }
+        assert_eq!(cmd.get_current_dir(), Some(root.path()));
+        assert_eq!(
+            vars[std::ffi::OsStr::new("HOME")],
+            Some(root.path().as_os_str())
+        );
+        assert_eq!(
+            vars[std::ffi::OsStr::new("GIT_CONFIG_NOSYSTEM")],
+            Some(std::ffi::OsStr::new("1"))
+        );
+    }
+
+    #[test]
+    fn fixture_git_can_commit_with_pinned_identity() {
+        let root = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["commit", "-qm", "fixture", "--allow-empty"],
+        ] {
+            let out = command(root.path()).args(args).output().unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        let out = command(root.path())
+            .args(["log", "-1", "--format=%an <%ae>"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        assert_eq!(
+            String::from_utf8(out.stdout).unwrap().trim(),
+            "tester <t@example.com>"
+        );
     }
 }
