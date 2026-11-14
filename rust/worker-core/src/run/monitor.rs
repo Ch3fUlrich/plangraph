@@ -23,7 +23,8 @@ pub(super) fn monitor(
     mut record: RunRecord,
     cancel: Arc<AtomicBool>,
 ) {
-    while let Some(next) = attempt(rt.clone(), spec, &mut record, cancel.clone()) {
+    let mut permit = None; // One run keeps its admission slot across review legs.
+    while let Some(next) = attempt(rt.clone(), spec, &mut record, cancel.clone(), &mut permit) {
         spec = next;
     }
 }
@@ -32,37 +33,39 @@ fn attempt(
     mut spec: RunSpec,
     record: &mut RunRecord,
     cancel: Arc<AtomicBool>,
+    permit: &mut Option<Permit>,
 ) -> Option<RunSpec> {
-    let mut permit = None;
     let mut grouped: Option<Grouped> = None;
     let mut capture = None;
     let cancelled = || cancel.load(Ordering::SeqCst) || record_dir_cancelled(&rt, &spec.run_id);
     let result = catch_unwind(AssertUnwindSafe(|| {
-        // Admission can block; mirror CLI markers into the same flag it observes.
-        let admitting = Arc::new(AtomicBool::new(true));
-        let (active, flag, runtime, id) = (
-            admitting.clone(),
-            cancel.clone(),
-            rt.clone(),
-            spec.run_id.clone(),
-        );
-        let watcher = thread::spawn(move || {
-            while active.load(Ordering::SeqCst) {
-                if record_dir_cancelled(&runtime, &id) {
-                    flag.store(true, Ordering::SeqCst);
+        if permit.is_none() {
+            // Admission can block; mirror CLI markers into the same flag it observes.
+            let admitting = Arc::new(AtomicBool::new(true));
+            let (active, flag, runtime, id) = (
+                admitting.clone(),
+                cancel.clone(),
+                rt.clone(),
+                spec.run_id.clone(),
+            );
+            let watcher = thread::spawn(move || {
+                while active.load(Ordering::SeqCst) {
+                    if record_dir_cancelled(&runtime, &id) {
+                        flag.store(true, Ordering::SeqCst);
+                    }
+                    thread::sleep(Duration::from_millis(10));
                 }
-                thread::sleep(Duration::from_millis(10));
+            });
+            let admission = catch_unwind(AssertUnwindSafe(|| {
+                rt.admission.acquire(&spec.run_id, &cancel)
+            }));
+            admitting.store(false, Ordering::SeqCst);
+            let _ = watcher.join();
+            let admission = admission.unwrap_or_else(|p| std::panic::resume_unwind(p));
+            match admission {
+                Admit::Cancelled => return (1, true, StopOutcome::Empty),
+                Admit::Granted(p) => *permit = Some(p),
             }
-        });
-        let admission = catch_unwind(AssertUnwindSafe(|| {
-            rt.admission.acquire(&spec.run_id, &cancel)
-        }));
-        admitting.store(false, Ordering::SeqCst);
-        let _ = watcher.join();
-        let admission = admission.unwrap_or_else(|p| std::panic::resume_unwind(p));
-        match admission {
-            Admit::Cancelled => return (1, true, StopOutcome::Empty),
-            Admit::Granted(p) => permit = Some(p),
         }
         if cancelled() {
             return (1, true, StopOutcome::Empty);
@@ -244,7 +247,6 @@ fn attempt(
             }
         }
     }
-    drop(permit);
     #[cfg(windows)]
     if let Some(g) = &grouped {
         g.group.terminate();

@@ -301,3 +301,24 @@ fn duplicate_run_preserves_live_and_finished_ownership() {
     ));
     assert_eq!(s.counts(), counts);
 }
+
+#[test]
+fn continuation_keeps_its_slot_ahead_of_queued_runs() {
+    let d = tempfile::tempdir().unwrap();
+    let s = Supervisor::new(config(d.path(), 1, 2)).unwrap();
+    let next = spec(d.path(), 0, "echo substitute >> order");
+    let mut first = gated_spec(d.path());
+    first.finish = Some(Box::new(move |_, _| Some(next)));
+    s.start(first).unwrap();
+    until(|| s.counts().running == 1);
+    s.start(spec(d.path(), 1, "echo queued >> order")).unwrap();
+    until(|| s.counts().queued == 1);
+    std::fs::write(d.path().join("go"), "").unwrap();
+    assert!(s.wait_finished("run-0", Duration::from_secs(4)));
+    assert!(s.wait_finished("run-1", Duration::from_secs(4)));
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("order")).unwrap(),
+        "substitute\nqueued\n"
+    );
+    assert_eq!(s.counts().total_started, 2);
+}

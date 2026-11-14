@@ -8,7 +8,7 @@ static QUOTA: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 pub fn reason(stdout: &str, stderr: &str) -> Option<String> {
-    for line in stderr.lines().chain(stdout.lines()) {
+    for line in stderr.split(['\r', '\n']).chain(stdout.split(['\r', '\n'])) {
         let text = super::activity::strip_ansi(line);
         if QUOTA.is_match(&text) {
             return Some(format!("review_quota: {}", text.trim()));
@@ -39,6 +39,7 @@ mod tests {
         for text in [
             "RESOURCE_EXHAUSTED (code 429): Individual quota reached",
             "RESOURCE_EXHAUSTED: quota exhausted",
+            "spinner\rRESOURCE_EXHAUSTED (code 429): Individual quota reached",
             "HTTP 429: Too Many Requests",
             "quota reached, resets in 46m",
             "Error: provider quota refusal",

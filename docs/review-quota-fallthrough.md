@@ -11,8 +11,9 @@ Cancellation and surviving child processes remain terminal.
 
 Python base and routed dispatch preserve their existing route eligibility and
 seat reservation rules. Native `pg-spawnd` advances quota attempts through its
-admitted route without creating another supervisor run; writer families remain
-excluded. Each attempt retains its output and refusal reason. The final
+admitted route without creating another supervisor run or releasing its admission
+slot to a queued run; writer families remain excluded. Each attempt retains its
+output and refusal reason. The final
 `chosen_leg` and response-side `served_model` identify the substitute that served.
 Claude's system-init model metadata is used as a native witness; an agy request
 without response-side model metadata remains `unwitnessed`.
