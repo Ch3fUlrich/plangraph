@@ -374,6 +374,12 @@ Python files already in flight are individually listed in
 
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
 
+Local affected selection always includes the subprocess UTF-8 AST check and the
+file-size, new-code language, and changelog/docs policy tests, even for docs-only
+changes. Explicit `--within` restrictions still apply. CI-FAST-PATH fail fast
+applies to stages, not sibling pytest shards: both pytest matrices finish all
+shards, and any failing shard still fails `ci-gate`.
+
 The standalone fresh-base admission carry is listed as D-5848 in
 `tools/new_code_allowlist.txt` until the spawner Rust port.
 
