@@ -164,3 +164,28 @@ def test_undated_or_late_go_rows_still_refuse(unseated_w, monkeypatch, rows, dat
     with pytest.raises(Refused, match="operator_seat_waiver_go_date_ineligible"):
         two_head_close(unseated_w, monkeypatch, rows)
     assert unseated_w.store._item("demo:H")["state"] == "in_review"
+
+
+LOG_HEADER = "| id | project | decision | by | why / evidence |\n|---|---|---|---|---|\n"
+
+
+def test_single_head_go_dated_in_the_decision_cell_passes_the_d6295_cutoff(unseated_w, monkeypatch):
+    """Grant and waiver rows in the decisions-log grammar (Date: and Cutoff: inside the DECISION cell)."""
+    world = unseated_w
+    grant = (f"| D-6283 | demo | GO {HEAD} demo:H - second retroactive grant row for the keeper close-merged "
+             "check, covering PR #415; the head is the second parent of the merge commit the keeper binds. "
+             "Date: 2026-11-15T19:54:23Z | operator, router | git rev-list on origin main; D-5865 |\n")
+    waiver = ("| D-6295 | demo | Waiver: merged-without-witnesses (second row in the form of D-6142). "
+              "Date: 2026-11-15T19:55:28Z; Basis: the same operator answers; "
+              "Waives-seats: demo:H demo:OTHER; Cutoff: 2026-11-15T19:54:53Z (after every one of those merges). "
+              "Close mechanics: rk.sh close-merged KEY D-id --waive-seats D-6295. | operator | D-5865, D-5909 |\n")
+    world.decision_path.write_text(LOG_HEADER + grant + waiver)
+    git = ScanGit([HEAD])
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits",
+                        lambda *a, **kw: [{"sha": HEAD, "date": "2026-11-05", "merge": {"pr": 415}}])
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    world.store.ctx["git"] = git
+    result = world.store.close_merged(world.p("router"), "demo:H", "D-6283", waive_seats="D-6295")
+    assert result["state"] == "done"
+    assert world.store._evidence("demo:H")[-1]["ref"]["prs"] == [
+        {"pr": 415, "head": HEAD, "decision_id": "D-6283"}]
