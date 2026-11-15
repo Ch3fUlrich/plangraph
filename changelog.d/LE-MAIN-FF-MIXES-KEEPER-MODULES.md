@@ -4,3 +4,4 @@ Port absent-state unit/process checks, runtime-data protection, and the pre-merg
 Restore local drift status via the Rust status reader, retain hourly templates with Cargo on PATH, and port text/JSON/status-path regressions to Rust; select Rust CI for template changes.
 Resolve the linked-worktree status regression's injected Git directory through Git, avoiding a fixture path being misclassified as a repository source input.
 Preserve the bootstrap, dirty/non-Git provenance, exact runtime-data trace, and residual-race operating contract alongside the Rust status/timer instructions.
+Keep unknown drift rows for incomplete local repository metadata while adding optional status, with a Rust integration regression.

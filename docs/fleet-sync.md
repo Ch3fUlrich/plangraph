@@ -226,3 +226,5 @@ catalog SQL, route-policy data, and provider configuration are watched too.
 Local drift status uses the Rust `status CHECKOUT` reader through the existing
 Python command. Missing/unreadable status adds no field; text and JSON display
 the same cached line. Linked worktrees keep independent status files.
+Incomplete local repository metadata continues to produce an unknown drift row
+without a status field.

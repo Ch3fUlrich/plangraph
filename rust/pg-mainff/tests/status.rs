@@ -90,3 +90,19 @@ fn hourly_template_includes_guard_and_rust_path() {
     assert!(timer.contains("OnUnitActiveSec=1h\n"));
     assert!(timer.contains("Unit=plangraph-main-ff.service\n"));
 }
+
+#[test]
+fn malformed_local_repo_metadata_keeps_unknown_drift_row() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let result=Command::new("python3").arg("-c")
+        .arg("from plangraph.fleet_sync.drift import rows; import json; print(json.dumps(rows({'hosts':[{'id':'fixture','transport':'local','repos':None}]}, 'unknown')))")
+        .env("PYTHONPATH",root.join("src")).output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let data: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(data[0]["live_sha"], "unknown");
+    assert!(data[0].get("main_ff").is_none());
+}

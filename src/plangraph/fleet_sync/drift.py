@@ -262,7 +262,10 @@ def rows(registry, release, query=transport, count=None):
             behind = 'unknown'
         row = {'host': host['id'], 'live_sha': live, 'release_sha': release, 'behind': behind}
         if host.get('transport') == 'local':
-            repo = host.get('repos', {}).get('plangraph', {}).get('live_dir')
+            try:
+                repo = host['repos']['plangraph']['live_dir']
+            except (KeyError, TypeError):
+                repo = None
             if repo and (status := main_ff_status(repo)):
                 row['main_ff'] = status
         result.append(row)
