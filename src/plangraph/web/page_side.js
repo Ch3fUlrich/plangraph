@@ -236,36 +236,29 @@
     return b;
   }
 
-  var workModeData = null, workModeBusy = false, workModeError = "";
+  var wm = null, wmBusy = false, wmErr = "", WM = ["auto", "piecewise", "batch"];
   function requestWorkMode(mode) {
-    workModeBusy = true;
-    workModeError = "";
-    var args = mode === undefined ? {} : { work_mode: mode };
+    wmBusy = true;
+    wmErr = "";
+    function done(e) { wmBusy = false; wmErr = e || ""; renderSettings(); }
     try {
       var x = new global.XMLHttpRequest();
       x.open("POST", "/mcp", true);
       x.setRequestHeader("Content-Type", "application/json");
-      function finish(error) {
-        workModeBusy = false;
-        workModeError = error || "";
-        renderSettings();
-      }
       x.onload = function () {
         try {
-          if (x.status !== 200) throw new Error("Request failed");
-          var rpc = JSON.parse(x.responseText);
-          if (rpc.error || !rpc.result || rpc.result.isError) throw new Error("Request refused");
-          var row = JSON.parse(rpc.result.content[0].text);
-          if (["auto", "piecewise", "batch"].indexOf(row.work_mode) < 0) throw new Error("Invalid response");
-          workModeData = row;
+          var r = JSON.parse(x.responseText);
+          var row = JSON.parse(r.result.content[0].text);
+          if (x.status !== 200 || r.result.isError || WM.indexOf(row.work_mode) < 0) throw 0;
+          wm = row;
           pick("workMode", row.work_mode);
-          finish();
-        } catch (e) { finish("Work mode could not be loaded or saved."); }
+          done();
+        } catch (e) { done("Work mode could not be loaded or saved."); }
       };
-      x.onerror = function () { finish("Work mode connection failed."); };
-      x.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call",
-        params: { name: "plangraph_work_mode", arguments: args } }));
-    } catch (e) { workModeBusy = false; workModeError = "Work mode unavailable on this page."; }
+      x.onerror = function () { done("Work mode offline."); };
+      x.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: {
+        name: "plangraph_work_mode", arguments: mode ? { work_mode: mode } : {} } }));
+    } catch (e) { done("Work mode offline."); }
   }
 
   function renderSettings(load) {
