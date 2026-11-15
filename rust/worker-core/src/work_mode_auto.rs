@@ -48,8 +48,25 @@ pub fn resolve(requested: WorkMode, legs: &[WriterLeg]) -> Resolution {
                         leg.unavailable_reason.as_deref().unwrap_or("not served")
                     ),
                 )
+            } else if let Some(leg) = legs
+                .iter()
+                .find(|l| l.served && !l.aa_intelligence.is_some_and(f64::is_finite))
+            {
+                (
+                    WorkMode::Piecewise,
+                    format!(
+                        "auto: writer {} unscored (no catalog score); no strong writer served",
+                        leg.id
+                    ),
+                )
             } else if let Some(leg) = legs.iter().find(|l| l.served) {
-                (WorkMode::Piecewise, format!("auto: writer {} below strong-writer threshold or unscored; no strong writer served", leg.id))
+                (
+                    WorkMode::Piecewise,
+                    format!(
+                        "auto: writer {} below strong-writer threshold; no strong writer served",
+                        leg.id
+                    ),
+                )
             } else {
                 (WorkMode::Piecewise, "auto: no writer legs served".into())
             }
@@ -101,14 +118,14 @@ mod tests {
                 true,
                 None,
                 WorkMode::Piecewise,
-                "writer deciding below",
+                "writer deciding unscored",
             ),
             (
                 Some(f64::NAN),
                 true,
                 None,
                 WorkMode::Piecewise,
-                "writer deciding below",
+                "writer deciding unscored",
             ),
         ] {
             let legs = [WriterLeg {
