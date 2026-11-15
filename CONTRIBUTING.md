@@ -82,6 +82,11 @@ SHAs, worktree paths and branches; moved/skipped parts are excluded. Configure
 protect host state and cleanup errors never fail land. See [pg-reap](docs/pg-reap.md)
 for idle thresholds, run records, restore TSVs and remote SHA leases.
 
+Every writer commit fixing keeper items needs one `Plan-Item` trailer per fixed
+key, including subitems of a larger item. `ci_commit_gate.py check --base BASE
+--head HEAD --item-text PART.txt` warns for uncovered keys; GitHub CI reads the
+matching PR event automatically. See [the commit gate](docs/ci-gate.md).
+
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
 The feeder's `deploy/feeder/house-rules.md` and policy are repository inputs to
