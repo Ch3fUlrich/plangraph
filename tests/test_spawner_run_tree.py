@@ -418,6 +418,7 @@ def test_all_python_entry_records_have_tree_sha_or_reason(tmp_path, monkeypatch,
         assert saved['tree_sha'] == code['tree_sha']
         assert saved.get('tree_absent') == (None if identity else 'spawner code checkout identity unavailable at process startup')
     monkeypatch.setattr(git_guard, 'CODE_TREE', tmp_path)
+    monkeypatch.delenv('PLANGRAPH_SPAWNER_REPO', raising=False)
     assert not cli.live_runner(mcp.SpawnerRunner())
 
 

@@ -25,7 +25,7 @@ def live_runner(runner):
 
 
 async def fresh_spawn(service, options):
-    """Hand off to a durable Popen supervisor; cancellation only detaches after admission."""
+    """Hand off to a durable Popen supervisor; detach once the admission reply arrives."""
     import subprocess, sys
     from contextlib import ExitStack
     from .cli import _drain_chunks, _prune_supervisor_logs
@@ -126,8 +126,7 @@ raise SystemExit(code)
         for record in spawn_runs(result):
             if 'run_id' in record:
                 service.tasks[record['run_id']] = task
-        wait = options.get('wait_seconds', 0)
-        if wait is None:
+        if (wait := options.get('wait_seconds', 0)) is None:
             await asyncio.shield(task)
         elif wait > 0:
             try:
