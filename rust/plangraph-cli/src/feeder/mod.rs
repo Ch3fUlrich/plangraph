@@ -1,5 +1,10 @@
 //! Timer-driven activity boundaries. Selection/admission/briefs are pure;
 //! spawn is an effectful activity behind `Launch` (including compensating release).
+// Runtime callers arrive in part 5; internal adapter tests run in this part.
+#[allow(dead_code)]
+mod adapters;
+#[allow(dead_code)]
+mod quota;
 mod selection;
 mod workflow;
 pub use selection::{decode_task, pick, prepare_ready, validate_ready};
