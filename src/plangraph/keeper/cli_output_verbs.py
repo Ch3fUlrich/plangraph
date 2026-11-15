@@ -29,7 +29,23 @@ def cmd_close_merged(args, session):
         print(f"{args.key}\t{'NO-WITNESS' if 'NO-WITNESS' in reason else 'REFUSED'}\t{reason}")
         return 2
     except Unreachable as exc:
+        if args.apply and _read_back_state(session, args.key) == "done":
+            print(f"{args.key}\tCLOSED\t{_read_back_note(exc)}")
+            return 0
         return _refuse(exc)
+
+
+def _read_back_state(session, key):
+    from .cli_verbs import RefusedCli, Unreachable
+    try:
+        return session.call("GET", "show", {"key": key}).get("state")
+    except (RefusedCli, Unreachable):
+        return None
+
+
+def _read_back_note(exc):
+    return (f"the client gave up waiting ({exc}); the item reads back done, "
+            "closed by this request or a concurrent one")
 
 
 def _close_merged_with_read_back(session, key, body):
@@ -49,13 +65,9 @@ def _close_merged_with_read_back(session, key, body):
     except RefusedCli as exc:
         return _refuse(exc)
     except Unreachable as exc:
-        try:
-            state = session.call("GET", "show", {"key": key}).get("state")
-        except (RefusedCli, Unreachable):
-            state = None
-        if state != "done":
+        if _read_back_state(session, key) != "done":
             return outbox.on_unreachable("close_merged", body, exc, exit_unreachable=EXIT_UNREACHABLE)
-        note = f"the client gave up waiting ({exc}) but the close committed; read back state: done"
+        note = _read_back_note(exc)
         print(note, file=sys.stderr)
         return _emit(session, {"key": key, "state": "done", "note": note},
                      lambda r: f"{r['key']} -> done ({r['note']})")
