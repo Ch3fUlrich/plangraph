@@ -430,7 +430,7 @@ def test_failed_query_reason_carries_safe_stderr(monkeypatch):
     (255, 'ssh: connect timeout', 1), (1, 'remote command failed', 1),
     (44, 'source missing', 1), (0, '', 1),
 ])
-def test_retry_only_ssh_failure(monkeypatch, code, stderr, attempts):
+def test_ssh_failure_is_not_retried(monkeypatch, code, stderr, attempts):
     original = subprocess.Popen
     calls = []
     def run(argv, **kw):
@@ -449,7 +449,7 @@ def test_retry_only_ssh_failure(monkeypatch, code, stderr, attempts):
 
 def test_remote_hosts_use_configured_name():
     payload = json.dumps({'runs': [dict(run_id=str(i), host=h, status='running')
-                                  for i, h in enumerate(['18-de-2053.client.unibas.ch', 'dell'])]})
+                                  for i, h in enumerate(['host-a.example.invalid', 'dell'])]})
     rows = remote_ps._fetch(dict(name='dell'), lambda *a: payload)
     assert [row['host'] for row in rows] == ['dell', 'dell']
 
