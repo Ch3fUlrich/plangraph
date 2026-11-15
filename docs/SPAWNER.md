@@ -680,9 +680,7 @@ OOM wrapper lines are recognized by their known event shape, including `wrapper:
 
 See [admission contracts](operations/spawner-admission-contracts.md) for split admission and cleanup details.
 
-Quota polling considers only the newest request of a session, including a 429 without text. Timestamp-less pool observations keep their first-seen hold until recovery; database reads select the latest row per window.
-
-Gateway session tags retain the full per-launch UUID to avoid truncated-ID collisions across retries or parallel runs; see the [witness-share alert](spawner-reliability.md).
+Quota polling considers only the newest request of a session, including a 429 without text. Timestamp-less pool observations keep their first-seen hold until recovery; database reads select the latest row per window. Gateway session tags retain the full per-launch UUID to avoid truncated-ID collisions across retries or parallel runs; see the [witness-share alert](spawner-reliability.md).
 
 Stale-base waivers require PLANGRAPH_BASE_DECISIONS_FILE configured by the operator. Admission fetches its origin/main, requires one decision row whose DECISION cell contains Source: operator, Waives: spawn-base:<checked-base-sha> and Origin: <fetched-origin-sha>, and refuses missing, duplicate, unreadable or mismatched proof. A card D-id alone never waives lag or failed fetches. Refused-worktree cleanup requires matching created_by_run_id and never removes continuations or admitted workers.
 
