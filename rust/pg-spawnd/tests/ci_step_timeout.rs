@@ -1,9 +1,12 @@
 //! CI regressions execute the workflow's real bounded runner.
 use saphyr::{LoadableYamlNode, Yaml};
-use std::{path::Path, process::Command};
+use std::path::Path;
+#[cfg(unix)]
+use std::process::Command;
 
+#[cfg(unix)]
 fn python(source: &str) {
-    let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let output = Command::new("python3")
         .args(["-c", source])
         .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
         .output()
@@ -24,7 +27,8 @@ fn minutes(node: Option<&Yaml>) -> Option<i64> {
     node.and_then(Yaml::as_integer)
 }
 
-fn assert_pytest_steps_bounded() {
+#[test]
+fn every_pytest_step_has_a_timeout_below_its_job() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/tests.yml");
     let source = std::fs::read_to_string(path).unwrap();
     let docs = Yaml::load_from_str(&source).unwrap();
@@ -69,29 +73,6 @@ fn assert_pytest_steps_bounded() {
         }
     }
     assert!(seen >= 20, "{seen}");
-}
-
-#[test]
-fn every_pytest_step_has_a_timeout_below_its_job() {
-    python(
-        r#"
-import pathlib, yaml
-workflow = yaml.safe_load(pathlib.Path('.github/workflows/tests.yml').read_text())
-seen = 0
-for name, job in workflow['jobs'].items():
-    for step in job.get('steps', []):
-        script = step.get('run', '') + step.get('with', {}).get('command', '')
-        if name.startswith('pytest') or 'pytest' in script:
-            seen += 1
-            limit = step.get('timeout-minutes', 0)
-            assert 0 < limit < job.get('timeout-minutes', 360), (name, step)
-            if 'pytest' in script:
-                assert step.get('uses') == './.github/actions/bounded-step', step
-            if step.get('uses') == './.github/actions/bounded-step':
-                assert 0 < int(step['with']['seconds']) + 1 < limit * 60, step
-assert seen >= 20, seen
-"#,
-    );
 }
 
 #[cfg(unix)]
