@@ -27,6 +27,10 @@ pub fn configure(command: &mut Command, root: &Path) {
     }
     let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
     command
+        // Parallel tests may inject config after the environment scan, so
+        // suppress these entry points even when they were absent at configure.
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS")
         .current_dir(root)
         .stdin(Stdio::null())
         .env("HOME", root)
@@ -100,6 +104,36 @@ mod tests {
         let source = common_dir(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
         std::fs::write(metadata.join("commondir"), source.to_str().unwrap()).unwrap();
         command(root.path());
+    }
+
+    #[test]
+    fn late_parent_git_config_cannot_poison_configured_fixture() {
+        const CHILD: &str = "PG_LATE_GIT_CONFIG_FIXTURE";
+        if std::env::var_os(CHILD).is_none() {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "git_test_support::tests::late_parent_git_config_cannot_poison_configured_fixture", "--nocapture"])
+                .env(CHILD, "1")
+                .env_remove("GIT_CONFIG_COUNT")
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let fixture = tempfile::tempdir().unwrap();
+        let mut git = command(fixture.path());
+        // Only this single-test child changes the process environment. Model
+        // an unrelated parallel test changing Git controls after configure.
+        std::env::set_var("GIT_CONFIG_COUNT", "bogus");
+        let output = git.args(["config", "--list"]).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]

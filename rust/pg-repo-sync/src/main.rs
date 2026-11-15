@@ -1,4 +1,6 @@
 mod drift;
+mod hooks;
+mod refresh;
 use drift::text;
 use std::{
     env, fs,
@@ -82,6 +84,7 @@ fn run() -> Result<bool, &'static str> {
     let mut policy = drift::Policy::default();
     let mut check_config = false;
     let mut also_sync = false;
+    let (mut refresh_prs, mut notify) = (None, None);
     let mut args = env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
@@ -91,12 +94,20 @@ fn run() -> Result<bool, &'static str> {
                 PathBuf::from(args.next().ok_or("missing exclude")?)
                     .canonicalize().map_err(|_| "invalid exclude")?),
             Some("--sync") => also_sync = true,
+            Some("--refresh-prs") => refresh_prs = Some(args.next().ok_or("missing GitHub repository")?.to_string_lossy().into_owned()),
+            Some("--notify") => notify = Some(PathBuf::from(args.next().ok_or("missing notifier")?)),
             Some("--check-config") => check_config = true,
             Some("--host") => policy.host = args.next().ok_or("missing host")?.to_string_lossy().into(),
             Some("--allow-name") => policy.names.push(args.next().ok_or("missing name")?.to_string_lossy().into()),
             Some("--allow-email") => policy.emails.push(args.next().ok_or("missing email")?.to_string_lossy().into()),
             _ => return Err("usage: pg-repo-sync --repo PATH --check-config --host ID --allow-name NAME --allow-email EMAIL"),
         }
+    }
+    if refresh_prs.is_some() != notify.is_some()
+        || (refresh_prs.is_some()
+            && (repos.len() != 1 || !roots.is_empty() || (check_config && !also_sync)))
+    {
+        return Err("--refresh-prs and --notify require one explicit --repo and sync enabled");
     }
     if check_config
         && (policy.host.is_empty() || policy.names.is_empty() || policy.emails.is_empty())
@@ -132,6 +143,12 @@ fn run() -> Result<bool, &'static str> {
     } else {
         Ok(Vec::new())
     };
+    hooks::discover(
+        &mut repos,
+        live.as_ref().ok().map(Vec::as_slice).unwrap_or(&[]),
+        &excludes,
+    )
+    .map_err(|_| "hook checkout discovery failed")?;
     let mut alerts = false;
     for repo in repos {
         if fs::symlink_metadata(repo.join(".repo-sync-pin")).is_ok()
@@ -184,12 +201,29 @@ fn run() -> Result<bool, &'static str> {
                     println!("ALERT {} reason={}", repo.display(), reason.escape_debug());
                 }
                 alerts = true;
+            } else if let (Some(github), Some(notifier)) = (&refresh_prs, &notify) {
+                match refresh::sweep(&repo, github, notifier) {
+                    Ok(problems) => alerts |= problems,
+                    Err(error) => {
+                        eprintln!("PR refresh failed: {error}");
+                        alerts = true;
+                    }
+                }
             }
         }
     }
     Ok(alerts)
 }
 fn main() -> ExitCode {
+    if env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("refresh-prs")) {
+        return match refresh::run(env::args_os().skip(2)) {
+            Ok(problems) => u8::from(problems).into(),
+            Err(error) => {
+                eprintln!("pg-repo-sync: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     match run() {
         Ok(alerts) => u8::from(alerts).into(),
         Err(error) => {

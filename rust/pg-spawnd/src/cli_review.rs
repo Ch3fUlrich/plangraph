@@ -61,7 +61,7 @@ pub(crate) fn cwd(
     Ok(path)
 }
 
-fn git(cwd: &Path, args: &[&str]) -> Result<String, ToolError> {
+pub(crate) fn git(cwd: &Path, args: &[&str]) -> Result<String, ToolError> {
     let result = pg_worker_core::workspace_resolver::git_command(cwd)
         .args(args)
         .output()
@@ -124,11 +124,11 @@ pub(crate) fn prepare(
             ]}})
             .to_string(),
         ]);
-        "Use read_file, list_dir, grep_search and find_by_name for repository access. Do not request command tools. "
+        "Inspect this disposable checkout using file tools and read-only commands; run only bounded tests. "
     } else {
         ""
     };
-    let prompt = format!("{access}Read-only repository review of HEAD {head}. Open callers and tests; never edit. End with exactly VERDICT: PASS or VERDICT: FAIL, then TEST_GAMING: no or TEST_GAMING: yes. Report findings before the verdict.\n\n{old}");
+    let prompt = format!("{access}Read-only repository review of HEAD {head}. Open callers and tests; never edit. Do not run background commands; wait for every command to finish before deciding. Name at least one reviewed path from the diff or a file:line in your review. End with exactly VERDICT: PASS or VERDICT: FAIL, then TEST_GAMING: no or TEST_GAMING: yes. Report findings before the verdict.\n\n{old}");
     if launch.stdin.as_deref() == Some(old) {
         launch.stdin = Some(prompt.clone());
     } else {
@@ -143,6 +143,10 @@ pub(crate) fn prepare(
     launch.prompt = Some(prompt);
     Ok(Some(head))
 }
+
+#[path = "cli_review_checkout.rs"]
+mod checkout;
+pub(crate) use checkout::isolate;
 
 fn read_log(record: &RunRecord) -> std::io::Result<String> {
     let path = record.path().with_file_name("live.log");
@@ -204,6 +208,8 @@ fn quota_args(record: &RunRecord, leg: &Value) -> Option<Vec<String>> {
         "quota-result".into(),
         "--model".into(),
         leg["model"].as_str()?.into(),
+        "--harness".into(),
+        leg["harness"].as_str()?.into(),
         "--error".into(),
         errors.join("\n").chars().take(8192).collect(),
     ];
@@ -226,15 +232,28 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         .parent()
         .and_then(Path::parent)
         .and_then(Path::parent)
+        .map(Path::to_owned)
     else {
         return;
     };
-    let text = crate::review_artifacts::review_text(state, &value).unwrap_or_default();
+    let text = crate::review_artifacts::review_text(&state, &value).unwrap_or_default();
+    let unavailable = leg["harness"] == "agy" && text.starts_with("Agy review unavailable:");
+    if unavailable {
+        record.set("verdict", json!("fail"));
+        record.set("findings", json!(text));
+        if record.get("reason").is_none_or(Value::is_null) {
+            record.set("reason", json!("agy_review_no_output"));
+        }
+    }
     // Book provider errors through the existing store/parser, never answer prose.
-    if status != Status::Completed || text.is_empty() || text.contains("VERDICT: HALT") {
+    if unavailable
+        || status != Status::Completed
+        || text.is_empty()
+        || text.contains("VERDICT: HALT")
+    {
         if let Some(argv) = quota_args(record, leg) {
             if !matches!(
-                crate::adapter::Adapter(state).run(&argv, Duration::from_secs(10)),
+                crate::adapter::Adapter(&state).run(&argv, Duration::from_secs(10)),
                 Ok((0, _, _))
             ) {
                 record.set("quota_record_error", json!(true));
@@ -249,6 +268,12 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         return;
     };
     if clean_head(Path::new(cwd)).ok().as_deref() != Some(head) {
+        return;
+    }
+    if value["review_checkout"]
+        .as_str()
+        .is_some_and(|p| clean_head(Path::new(p)).ok().as_deref() != Some(head))
+    {
         return;
     }
     let mut model = leg["model"].as_str().unwrap().to_owned();
@@ -289,6 +314,15 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         ["FAIL"] => "fail",
         _ => return,
     };
+    let paths =
+        crate::review_citation::diff_paths(Path::new(cwd), value["review_base"].as_str(), head);
+    if verdict == "pass" && !crate::review_citation::names_file(&text, &paths) {
+        record.set("stdout_tail", json!(text));
+        record.set("verdict", json!("no_verdict"));
+        record.set("review_status", json!("no_verdict"));
+        record.set("reason", json!("weak_verdict"));
+        return;
+    }
     let gaming: Vec<_> = text
         .lines()
         .filter_map(|l| l.strip_prefix("TEST_GAMING: "))
@@ -325,5 +359,12 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     );
 }
 #[cfg(test)]
+#[path = "cli_review_isolation_tests.rs"]
+mod isolation_tests;
+#[cfg(test)]
 #[path = "cli_review_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cli_review_weak_tests.rs"]
+mod weak_tests;

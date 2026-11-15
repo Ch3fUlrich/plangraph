@@ -98,6 +98,10 @@ impl Driver for Host {
         Ok(base)
     }
     fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String> {
+        let codex = crate::native_writer_tool::resolve(
+            &std::env::var_os("PATH").unwrap_or_default(),
+            &self.cwd,
+        )?;
         let directory = self
             .record_path
             .parent()
@@ -108,12 +112,19 @@ impl Driver for Host {
             .append(true)
             .open(&log_path)
             .map_err(|e| e.to_string())?;
-        let mut command = Command::new("codex");
+        let mut command = Command::new(codex);
         command.arg("exec");
         if let Some(id) = session {
             command.args(["resume", id]);
         }
         command
+            .env(
+                "CARGO_TARGET_DIR",
+                pg_worker_core::cargo_cache::shared_cache_roots()
+                    .map_err(|e| e.to_string())?
+                    .remove(0),
+            )
+            .env("CARGO_INCREMENTAL", "0")
             .args([
                 "--json",
                 "-m",
@@ -184,7 +195,12 @@ impl Driver for Host {
         self.git(&["rev-parse", "HEAD"])
     }
     fn review(&mut self, head: &str) -> Result<Option<Value>, String> {
-        find_review(&self.reviews, head)
+        let paths = crate::review_citation::diff_paths(
+            &self.cwd,
+            Some(&format!("refs/plangraph/native/{}/base", self.run_id)),
+            head,
+        );
+        find_review(&self.reviews, head, &paths)
     }
     fn gates(&mut self) -> Result<(), String> {
         self.git(&["diff", "--exit-code", "HEAD", "--"])?;
@@ -213,7 +229,11 @@ impl Driver for Host {
             .map_err(|e| e.to_string())
     }
 }
-pub(crate) fn find_review(directory: &Path, head: &str) -> Result<Option<Value>, String> {
+pub(crate) fn find_review(
+    directory: &Path,
+    head: &str,
+    paths: &[String],
+) -> Result<Option<Value>, String> {
     if head.len() < 8 {
         return Err("invalid final head".into());
     }
@@ -242,9 +262,14 @@ pub(crate) fn find_review(directory: &Path, head: &str) -> Result<Option<Value>,
                 "VERDICT: REQUEST_CHANGES" | "VERDICT: REJECT" => "REQUEST_CHANGES",
                 _ => continue,
             };
+            let weak = verdict == "ACCEPT" && !crate::review_citation::names_file(&text, paths);
             matches.push((
                 meta.modified().map_err(|e| e.to_string())?,
-                json!({"path":path,"text":text,"verdict":verdict,"head":head}),
+                if weak {
+                    json!({"path":path,"text":text,"verdict":"no_verdict","status":"no_verdict","reason":"weak_verdict","head":head})
+                } else {
+                    json!({"path":path,"text":text,"verdict":verdict,"head":head})
+                },
             ));
         }
     }

@@ -334,6 +334,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     excluded = family_spellings((writer_set if role == "review" else set())
                                 | set(exclude_families) | claude_writer_fence(role, writer_set), legs)
     def _leg_status(leg_obj):
+        # Sonnet's bare model is also the native Claude subscription identity.
+        if leg_obj.harness == "agy" and leg_obj.model == REVIEW_SONNET:
+            return reader("agy/" + leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         if leg_obj.harness == "agy" and not unavailable(st) and "/" not in leg_obj.model:
             alt = reader("agy/" + leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
@@ -342,7 +345,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         return st
 
     states = {l.id: _leg_status(l) for l in candidates}
-    quota_states = {"agy:" + model: (states[leg_id] if leg_id in states else
+    quota_states = {"agy:" + model: (states[leg_id] if leg_id in states and leg_id != REVIEW_SONNET else
         reader("agy:" + model, now=now, account=card.get("account"), combo=card.get("combo")))
         for model, leg_id in (("gemini-4-hydrogen", REVIEW_HYDROGEN),
                              ("gemini-4-argon", REVIEW_ARGON),
@@ -356,6 +359,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     candidate_details = []
     for leg in candidates:
         reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
+        if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('kind') == 'auth_refused':
+            reason = 'auth_refused'
         if reason:
             pass
         elif leg.family in excluded:

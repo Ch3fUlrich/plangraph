@@ -1,0 +1,1 @@
+Add a tree-wide Rust guard for test-source LF splits of unnormalized file reads and host home literals, with file:line diagnostics. Run it through the existing new-code policy gate in fast checks and CI. Use synthetic home paths in portability/redaction fixtures.
