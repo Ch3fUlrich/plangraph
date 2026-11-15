@@ -356,12 +356,18 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: cargo check (windows-gnu)
         run: cargo check --target x86_64-pc-windows-gnu -p pg-worker-core -p pg-spawnd --all-targets
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
       - name: Build pg-jail helper
         run: cargo build -p pg-jail
       - name: cargo test
         env:
           PG_JAIL_BIN: ${{ github.workspace }}/rust/target/debug/pg-jail
         run: cargo test
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.14"}
+      - name: Native writer lifecycle (Python 3.14)
+        run: cargo test -p pg-spawnd --test native_writer
 
   rust-windows:
     needs: select
