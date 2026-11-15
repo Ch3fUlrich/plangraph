@@ -635,7 +635,9 @@ goals in the same transaction, recording an `item_defined` event on each gate
 with `dropped_cancelled_dependency`. Claimed/in-review gates advance epoch and
 round so old evidence and verdicts cannot survive the dependency change.
 Ordinary work dependencies and frozen done/cancelled gates keep their history.
-A cancellation that would orphan live work rolls back; re-home that work first.
+An edge whose removal would leave live work without a path to a goal is kept
+(cancelling a gate with live children stays legal); `kp check` reports it as
+`CANCELLED-GATE-DEP` until that work is re-homed and the edge removed.
 
 `define` / `create_items` report `refused` entries for new children whose `under`
 gate still holds a cancelled dependency (for example, legacy data), while
