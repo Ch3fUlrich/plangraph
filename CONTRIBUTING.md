@@ -475,5 +475,5 @@ Use a warm `CARGO_TARGET_DIR`; the profile does not install dependencies.
 Each step and the total report wall seconds; exceeding 300 seconds emits a
 warning and returns failure after checks, without interrupting or weakening them.
 This is the cheap local projection of CI; hosted browser, Postgres and Windows
-runners remain CI responsibilities. A coding.vm timing measurement is still
+runners remain CI responsibilities. A typical build host timing measurement is still
 required before claiming that host's five-minute done criterion.
