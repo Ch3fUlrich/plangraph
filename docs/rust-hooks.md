@@ -91,3 +91,11 @@ maintained as a second policy implementation. The hook path is relative within
 the worktree, so moving a worktree preserves its hooks. No-editor commits keep
 comment lines under Git's default cleanup; editor `auto` prefixes are inferred
 from Git's generated comment block when no scissors line exists.
+
+The commit-msg binary reads the installed validator's trailer block and value
+violations through a JSON bridge. It accepts policy trailers followed by a separate
+attribution paragraph, using the same maximal trailing trailer-shaped paragraphs
+as CI and the changelog/docs checker. A `Plan-Item`, `Writer`, `Hand-Edit`,
+`Changelog`, or `Gate-Edit` key outside that block refuses the commit and names
+its line in the cleaned message. Value validation still runs, so misplaced keys
+cannot hide malformed attribution or skip reasons.

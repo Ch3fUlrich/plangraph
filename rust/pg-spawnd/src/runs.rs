@@ -59,6 +59,11 @@ impl Runs {
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;
         let leg = plan["first_leg"].clone();
+        let cwd = if role == "review" && crate::cli_review::eligible(&leg) {
+            crate::cli_review::cwd(args, cwd)?
+        } else {
+            cwd
+        };
         let mut launch = launch(
             state,
             &json!({
@@ -66,30 +71,13 @@ impl Runs {
                 "prompt":args["prompt"],"card":args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
             }),
         )?;
-        let mut review_args = serde_json::to_value(args).map_err(|_| internal("invalid args"))?;
-        review_args["role"] = role.clone();
-        let mode = crate::prompt::configured_mode(role.as_str().unwrap_or(""));
-        let repos = crate::prompt::repos();
-        if mode == "shadow" && leg["review_mode"] != "inline_only" {
-            let mut shadow: crate::launch::LaunchSpec = serde_json::from_value(json!({
-                "argv":launch.argv,"cwd":launch.cwd,"env":launch.env,"stdin":launch.stdin,
-                "prompt":launch.prompt,"warnings":null,"events":null
-            }))
-            .map_err(|_| internal("invalid shadow launch"))?;
-            let would_inline =
-                crate::prompt::prepare_review(&review_args, &leg, &mut shadow, &repos, true)
-                    .is_ok()
-                    && shadow.prompt != launch.prompt;
-            eprintln!(
-                "inline_review_diff would_inline={}",
-                usize::from(would_inline)
-            );
-        }
-        crate::prompt::prepare_review(&review_args, &leg, &mut launch, &repos, mode == "on")
-            .map_err(|e| internal(&e.to_string()))?;
+        let review_head = crate::prompt::prepare_launch(args, &leg, &mut launch, dry)?;
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
+        if let Some(head) = review_head {
+            base["head_sha"] = json!(head);
+        }
         base.as_object_mut()
             .unwrap()
             .extend(admission.fields.as_object().unwrap().clone());
@@ -367,6 +355,7 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         record.set("attempts_error", json!("unknown or invalid attempt id"));
         return;
     };
+    crate::cli_review::finish(record, status, leg);
     let (dry, unwitnessed) = (status == Status::DryRun, json!("unwitnessed"));
     let completion = json!({"leg":leg,"status":status.as_str(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },
@@ -377,6 +366,18 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         "request_side_model":null,"witness_kind":null,
         "skip_reason":if status == Status::Completed || dry { None } else { record.get("reason") },
         "provider_response":null,"stdout_tail":record.get("stdout_tail"),"stderr_tail":record.get("stderr_tail")});
+    let mut completion = completion;
+    if record.get("witness_kind").and_then(Value::as_str) == Some("cli_reported") {
+        for key in [
+            "served_model",
+            "served_family",
+            "witness_kind",
+            "finish_reason",
+            "verdict",
+        ] {
+            completion[key] = record.get(key).cloned().unwrap_or(Value::Null);
+        }
+    }
     attempt
         .as_object_mut()
         .unwrap()
