@@ -326,9 +326,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
             text = store.ready(principal, project=project, n=n, owner=owner, agent=agent)
             if as_text:
                 return text, True
-            items = store._ready_items(project=project, n=n, owner=owner, agent=agent)
-            return {"items": items,
-                    "unblocks": views.unblocks(store._all_items())}, False
+            groups = store._ready_groups(project=project, n=n, owner=owner, agent=agent)
+            return {**groups, "unblocks": views.unblocks(store._all_items())}, False
         if name == "show":
             key = store.resolve_key(self._one(query, "key") or extra)
             return brief.show(store, principal, key,

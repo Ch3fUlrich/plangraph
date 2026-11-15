@@ -25,3 +25,13 @@ A `Commit trailers` step (`tools/ci_commit_gate.py`) checks each PR commit for a
 - The ci-gate step wiring is checked by tools/gate_wiring_check.py, which the merger runs before merging (it compares the ci-gate job and triggers with the base and demands a Gate-Edit trailer, in the trailer block, on every commit that touches the workflow file; it cannot verify the id).
 - Hand-Edit commits are capped at 50 changed lines (interim ceiling, operator 2026-10-25), may not touch the auth/door surface and are listed in the gate log.
 - For a Writer-trailer commit the gate checks the trailer text, not that a writer really ran.
+
+`ci_commit_gate.py check --base BASE --head HEAD --item-text PART.txt` warns
+for each keeper key named in a UTF-8 part/PR description but absent from writer
+commit `Plan-Item` trailers in BASE..HEAD. In GitHub CI the PR title and body
+come from `GITHUB_EVENT_PATH`; local callers supply `--item-text`. Coverage is
+advisory: missing keys print warnings, while unreadable text or Git failures
+fail the check. The policy runs in Rust (`pg-policy --plan-item-trailers BASE HEAD`)
+and requires Cargo. Use a trailer per fixed key, including subitems of a parent;
+legacy `Closes:` tokens and merge-only trailers do not count. Named references
+that the PR does not fix can also warn and should be checked by the reviewer.

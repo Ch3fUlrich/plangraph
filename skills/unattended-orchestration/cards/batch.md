@@ -71,3 +71,14 @@ R-batch-13: Freeze `land` and `merge-part` while main's latest tests run is not
   and record that run, head and labels in the D-row before switching runners.
   See docs/ci-parallel.md for the procedure; router-owned merge-part is external.
   (why: a red main tip hides each new batch's regressions; source: plangraph:LAND-FREEZE-ON-RED-MAIN, docs/ci-parallel.md)
+
+R-batch-14: Every writer commit fixing or implementing keeper items carries one
+  `Plan-Item` trailer per fixed key, even within a larger item. Warn on named keys
+  missing from commits with `ci_commit_gate.py check --base BASE --head HEAD
+  --item-text PART.txt`; CI reads the PR title/body from the GitHub event.
+  Coverage policy: `rust/pg-policy/src/plan_items.rs`, called by `tools/ci_commit_gate.py`.
+  (why: parent-only trailers prevent close-merged proof; source: D-6054)
+R-batch-15: Before plan-order sends DONE, run `pg close-merged KEY GO-D-ID --from-open`
+  without `--apply` for every item being reported DONE. Require WOULD-CLOSE; on
+  refusal report the key and exact refusal reason, keep it open, and do not claim DONE.
+  (why: merged fixes need verifiable keeper evidence; source: D-6054)

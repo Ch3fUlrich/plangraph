@@ -89,9 +89,10 @@ impl Guards {
                 Some(serde_json::Value::Array(pids)) => !pids.is_empty(),
                 Some(_) => return Err(io::Error::other("invalid survivor records")),
             };
-            if survivors
-                || ["queued", "running", "claimed", "unknown", "cancelling"].contains(&status)
-            {
+            if !crate::sweep_runs::known(status) {
+                return Err(io::Error::other("unknown run status"));
+            }
+            if survivors || !crate::sweep_runs::terminal(status) {
                 let path = row["checkout"]
                     .as_str()
                     .or_else(|| row["cwd"].as_str())
@@ -101,26 +102,18 @@ impl Guards {
                     return Err(io::Error::other("active run checkout must be absolute"));
                 }
                 guards.live.push(path);
-            } else if crate::run::record::Status::parse(status).is_none()
-                && ![
-                    "timed_out",
-                    "killed",
-                    "succeeded",
-                    "skipped",
-                    "terminated_after_answer",
-                ]
-                .contains(&status)
-            {
-                return Err(io::Error::other("unknown run status"));
             }
         }
         Ok(guards)
     }
-    pub fn protects(&self, path: &Path) -> bool {
-        if path.components().any(|c| {
+    pub fn protected_name(path: &Path) -> bool {
+        path.components().any(|c| {
             c.as_os_str() == "plangraph-md-sync"
                 || c.as_os_str().to_string_lossy().starts_with("live-")
-        }) {
+        })
+    }
+    pub fn protects(&self, path: &Path) -> bool {
+        if Self::protected_name(path) {
             return true;
         }
         self.pinned.iter().chain(&self.live).any(|p| {

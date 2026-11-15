@@ -81,6 +81,8 @@ role card.
 | R-batch-10 | card | role card: batch | D-5952 one GO per batch, Gate-Edit D-id |
 | R-batch-11 | card | role card: batch | D-5852 lessons become LE items same beat |
 | R-batch-12 | card | role card: batch | D-5952 close merged items, sweep worktrees |
+| R-batch-14 | code | rust/pg-policy/tests/plan_item_trailers.rs::part_description_flags_every_key_missing_a_commit_trailer | D-6054 warn for every named key without a writer trailer |
+| R-batch-15 | card | role card: batch | D-6054 plan-order dry-run proof before DONE |
 | R-worker-01 | card | role card: worker | derive cells from registry render |
 | R-worker-02 | card | role card: worker | portable failing-first tests |
 | R-worker-03 | card | role card: worker | keep runs cheap |

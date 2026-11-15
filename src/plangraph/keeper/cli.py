@@ -64,6 +64,7 @@ HANDLERS = {
     "token": cli_token.cmd_token,
     "digest": cli_verbs.cmd_digest,
     "snapshot": cli_verbs.cmd_snapshot,
+    "sweep-claims": cli_verbs.cmd_sweep_claims,
     "whoami": cli_verbs.cmd_whoami,
     "render": cli_verbs.cmd_render,
 }
@@ -73,6 +74,8 @@ def _add_reads(sub):
     ready = _p(sub, "ready", help="items ready to work now")
     ready.add_argument("--project")
     ready.add_argument("--all", action="store_true")
+    ready.add_argument("--needs-reconcile", action="store_true",
+                       help="only dropped items and their reconciliation reasons")
     ready.add_argument("-n", type=int, default=10)
     ready.add_argument("--brief", action="store_true",
                        help="one compact line per item (the default; beats --json)")
@@ -110,6 +113,7 @@ def _add_reads(sub):
     outbox.add_parser(sub, _p)
     cli_token.add_parser(sub, _p)
     _p(sub, "snapshot", help="the plan snapshot")
+    _p(sub, "sweep-claims", help="fresh all-project sweep protection JSON").add_argument("--state", help="local spawner state for keeper-linked run metadata")
     _p(sub, "whoami", help="the token's principal")
 
 
@@ -199,9 +203,9 @@ def _add_writes(sub):
     rehome.add_argument("project", help="the new project")
     rehome.add_argument("--host", default=None, help="host of the moved item")
 
-    priority = _p(sub, "priority", help="set an item's priority")
+    priority = _p(sub, "priority", help="set priority 0-10 (10 most important, 0 optional)")
     priority.add_argument("key")
-    priority.add_argument("n", type=int)
+    priority.add_argument("n", type=int, help="integer 0-10: 10 most important, 0 optional")
 
     define = _p(sub, "define", help="create or edit definitions from JSON")
     define.add_argument("key", nargs="?")

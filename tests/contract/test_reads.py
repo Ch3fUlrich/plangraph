@@ -33,11 +33,11 @@ def test_ready_filters_and_limit(kp):
 def test_ready_orders_by_priority_first(kp):
     plan = make_plan(kp, 2)
     low, high = plan.lanes
-    ok(kp.post("set_priority", "router", {"key": high, "n": 10 ** 6}), "Priority")
+    ok(kp.post("set_priority", "router", {"key": high, "n": 10}), "Priority")
     items = ok(kp.get("/v1/ready?all=1&fmt=json", "reader"), "Ready")["items"]
     order = _keys(items)
     assert order.index(high) < order.index(low)
-    assert order[0] == high or items[0]["priority"] >= 10 ** 6
+    assert order[0] == high or items[0]["priority"] >= 10
 
 
 def test_ready_agent_flag_drops_operator_items(kp):
