@@ -456,3 +456,7 @@ Fixed brief rules and output contracts precede `=== ITEM CONTEXT`; item-specific
 content follows it so different items reuse the same prompt cache prefix.
 
 Append-only ledger paths are declared once using `merge=union` in the root `.gitattributes` (currently the historical `CHANGELOG.md` ledger, retained for historical merges and releases; current PRs still need fragments). `tools/merge_batch.py build` reads these defaults from the fetched base and persists them for continue/recovery; `--union GLOB` adds extra paths. Union can preserve both old and reworded entries, so review its warnings. Do not apply union to reference docs: edit substantive documentation in place, and put checkpoint/status records in `docs/checkpoints/<ITEM>.md` without updating a central list. See the [append audit](docs/checkpoints/LE-APPEND-ONLY-DOCS-CONFLICT.md).
+
+D-6054: OpenCode catalog integration tests use the shipped provider configuration
+and existing Python rendering helpers. Their inputs are listed in `RUST_INPUTS`
+so changes to catalog identities or rendering select the Rust CI suite.

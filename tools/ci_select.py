@@ -37,6 +37,13 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/routing_errors.py",
     "src/plangraph/keeper/errors.py",
     "src/plangraph/planner/routing.py",
+    # D-6054: rendered OpenCode catalog integration-test inputs.
+    "src/plangraph/planner/legs.py",
+    "src/plangraph/routing_support/__init__.py",
+    "src/plangraph/routing_support/opencode_overlay.py",
+    "src/plangraph/routing_support/opencode_render.py",
+    "src/plangraph/routing_support/resolver.py",
+    "configuration/opencode/providers.json",
     ".github/workflows/**",
     "rust-toolchain.toml",
     ".docs-map",
