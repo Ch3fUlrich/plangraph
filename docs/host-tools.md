@@ -131,3 +131,22 @@ an unsuccessful refresh refuses the push. Missing commit ages follow main’s
 first-parent history, so recent merges of old topics do not cause false alarms.
 An old HEAD with no missing upstream commits is current. Gate changes in a topic
 branch take effect in the shared hook checkout after they merge into main and that checkout syncs.
+
+## Fleet series history (Rust core)
+
+`pg_worker_core::fleet_series` stores minute samples in
+`<state>/fleet/<host>.ndjson` and attributes lost sessions only across adjacent,
+reachable samples with an increasing OOM counter. Terminal run records receive a
+host-specific `oom_kill_delta`, or null when coverage is unavailable.
+
+Per host, append retains the newest 1,440 samples (24 hours at minute cadence),
+limited further to 4 MiB. Reads seek directly to that byte tail and parse only the
+newest complete retained rows, so legacy oversized histories do not cause an
+unbounded scan. Older rows are discarded; summaries cover only retained data and
+run attribution becomes unknown when its baseline has expired. An individual
+sample exceeding 4 MiB is rejected without replacing history. Appends take the
+existing nonblocking host lock and atomically replace the private history file.
+
+This first slice supplies storage, summaries and run attribution. The reference
+branch's collection module, sampler CLI and systemd service/timer remain open;
+no timer or live-host action is installed by this slice.
