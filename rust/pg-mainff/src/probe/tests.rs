@@ -207,6 +207,54 @@ fn windows_liveness_is_non_signaling() {
     }
 }
 #[test]
+fn windows_liveness_never_signals_the_pid() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("loaded.json");
+    // This PID does not exist on POSIX: a kill(2) call would report it dead.
+    let pid = i32::MAX as u32 - 1;
+    fs::write(
+        &path,
+        serde_json::json!({"pid": pid, "loaded_sha": "b".repeat(40)}).to_string(),
+    )
+    .unwrap();
+    let run = Fake(Box::new(move |_| {
+        output(&format!(
+            r#"[{{"ProcessId":{pid},"Name":"python.exe","CommandLine":"python.exe -m plangraph.keeper.daemon"}}]"#
+        ))
+    }));
+    assert_eq!(running(&path, &run, true).unwrap(), Some("b".repeat(40)));
+}
+#[cfg(unix)]
+#[test]
+fn posix_running_arms() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("loaded.json");
+    let run = Fake(Box::new(|_| {
+        panic!("POSIX liveness must not query processes")
+    }));
+    assert_eq!(running(&path, &run, false), Ok(None), "missing state");
+    let write = |pid: u32, start: Option<&str>, sha: &str| {
+        let mut row = serde_json::json!({"pid": pid, "loaded_sha": sha});
+        if let Some(start) = start {
+            row["pid_start"] = start.into();
+        }
+        fs::write(&path, row.to_string()).unwrap();
+    };
+    let me = std::process::id();
+    let sha = "c".repeat(40);
+    write(i32::MAX as u32 - 1, None, &sha);
+    assert_eq!(running(&path, &run, false), Ok(None), "dead pid (ESRCH)");
+    write(me, Some("0"), &sha);
+    assert_eq!(running(&path, &run, false), Ok(None), "pid_start mismatch");
+    write(me, pid_start(me).as_deref(), &sha);
+    assert_eq!(running(&path, &run, false), Ok(Some(sha.clone())));
+    write(me, None, "not-a-sha");
+    assert_eq!(
+        running(&path, &run, false),
+        Err("keeper loaded SHA unavailable".into())
+    );
+}
+#[test]
 fn console_entry_points_match_verified_inventory() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let metadata = fs::read_to_string(root.join("pyproject.toml")).unwrap();
