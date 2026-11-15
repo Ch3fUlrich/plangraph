@@ -1,4 +1,4 @@
-use plangraph_cli::{env, setup};
+use plangraph_cli::{base_fresh, env, setup};
 use std::path::PathBuf;
 
 fn main() {
@@ -9,6 +9,11 @@ fn run() -> i32 {
     if args == ["--version"] {
         println!("plangraph {}", env!("CARGO_PKG_VERSION"));
         return 0;
+    }
+    if let [command, repo] = args.as_slice() {
+        if command == "base-fresh" {
+            return base_fresh::run(repo);
+        }
     }
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -42,7 +47,7 @@ fn run() -> i32 {
         ["setup", "check"] => setup::Mode::Check,
         _ => {
             eprintln!(
-                "usage: plangraph setup apply [--dry-run] | setup check | env check | --version"
+                "usage: plangraph setup apply [--dry-run] | setup check | env check | base-fresh <repo> | --version"
             );
             return 2;
         }
