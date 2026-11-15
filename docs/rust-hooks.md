@@ -47,6 +47,7 @@ resolve Python before clearing the environment; override CLI tests select that a
 interpreter in place with no PATH. The default-interpreter import regression uses a
 temporary Unix PATH containing only a symlink to the resolved interpreter.
 Replay helpers use `-I`; CLI tests clear the environment and use temporary HOME/state.
+The commit-message fixture tests drop every inherited `GIT_*` variable so they cannot act on the hook's own repository.
 The isolated-interpreter CLI regression supplies `-I` through a test-only Unix shim,
 never through production arguments. Import regressions explicitly seed sibling and
 `PYTHONPATH` modules. Echo fixtures use binary streams. Windows corpus substitution
