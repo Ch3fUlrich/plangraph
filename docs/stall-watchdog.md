@@ -78,3 +78,9 @@ Check failures are isolated from completion and claim processing.
 Current role caps and `tool_loop`/`stuck` monitoring are documented in [SPAWNER.md](SPAWNER.md). Host probes use the same role and measured card-class stall limits as run monitors.
 
 Silent-run findings retain the bridge-compatible `completion` kind and distinct event IDs for new stall episodes and cancellation escalations.
+Their durable `watchdog/alerts/*.json` records use `kind=stall` and retain
+`stalled_at` (episode start plus the stall limit) and `noticed_at` (detection time).
+Repeated ticks preserve the same alert until a new episode or cancellation escalation.
+Completed runs without an item still deliver to the parent Inbox; their
+`keeper.delivered` marker records `not-applicable: no item` because the item-event
+API has no target. This holds whether keeper transport is configured or absent.
