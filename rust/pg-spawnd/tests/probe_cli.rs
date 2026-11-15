@@ -1,7 +1,42 @@
+#[path = "common/binary.rs"]
+mod binary;
 use std::process::{Command, Output};
 
 fn cli(args: &[&str]) -> Output {
-    output(Command::new(env!("CARGO_BIN_EXE_pg-spawnd")).args(args))
+    output(Command::new(binary::spawnd()).args(args))
+}
+
+#[test]
+fn cli_builds_stay_with_their_checkout() {
+    let scratch = tempfile::tempdir().unwrap();
+    let shared = scratch.path().join("shared");
+    let mut checkouts = Vec::new();
+    for marker in ["first", "second"] {
+        let root = scratch.path().join(marker);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let manifest = root.join("Cargo.toml");
+        std::fs::write(
+            &manifest,
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[workspace]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main.rs"),
+            format!("fn main() {{ println!({marker:?}); }}"),
+        )
+        .unwrap();
+        let isolated = binary::build(&manifest, &binary::test_target(&manifest), "fixture");
+        binary::build(&manifest, &shared, "fixture");
+        checkouts.push((marker, isolated));
+    }
+    // Both checkouts have built the same package name to the shared target;
+    // the second has replaced its public executable. Each test keeps its own.
+    assert_ne!(checkouts[0].1, checkouts[1].1);
+    for (marker, executable) in checkouts {
+        let result = Command::new(executable).output().unwrap();
+        assert!(result.status.success());
+        assert_eq!(String::from_utf8(result.stdout).unwrap().trim(), marker);
+    }
 }
 
 #[test]
@@ -102,7 +137,7 @@ fn non_utf8_argument_exits_two() {
     use std::os::unix::ffi::OsStrExt;
     for prefix in [vec![], vec!["probe", "--json", "--host-id"]] {
         let output = output(
-            Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+            Command::new(binary::spawnd())
                 .args(prefix)
                 .arg(std::ffi::OsStr::from_bytes(&[0xff])),
         );
