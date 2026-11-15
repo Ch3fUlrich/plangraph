@@ -131,7 +131,7 @@ def main(argv=None):
             p.add_argument('--no-fallthrough', action='store_true')
             p.add_argument('--seats', action='store_true', help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps').add_argument('--all-hosts', action='store_true',
-                                           help='include configured SSH hosts')
+                                           help='no-op alias: plain ps already includes configured SSH hosts')
     commands.add_parser('catalog')
     p = commands.add_parser('quota-result')
     p.add_argument('--model', required=True)
