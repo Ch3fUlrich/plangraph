@@ -113,3 +113,21 @@ CI with the host's existing credentials. No-change sweeps do not push. The
 notifier is one executable, without shell evaluation; delivery failure exits 1.
 Git writes retain normal hook/runtime behavior, without the inspection helper's
 hook suppression or its query timeout. No credentials or Git config are changed.
+
+Hook discovery follows each selected checkout's effective `core.hooksPath`
+(including inherited and relative paths) and symlinked hook files into their
+owning checkout. Targets outside `$HOME/code`, such as a dedicated
+`plangraph-hooks` checkout, are included recursively and printed as `HOOK` lines.
+Running service WorkingDirectory, ExecStart executable and FragmentPath
+checkouts are also listed as `UNIT` lines; existing live-unit protection still prevents their automatic fast-forward.
+Pinned and excluded checkouts are not inspected for hook targets.
+
+Pre-push prints its own checkout HEAD before evaluating pushed refs. If its
+locally fetched `origin/main` contains a missing commit older than 24 hours,
+it refuses with a stale-checkout diagnostic and the `pg-repo-sync --repo PATH`
+repair command. A cached upstream tip older than a day is fetched before
+judging freshness;
+an unsuccessful refresh refuses the push. Missing commit ages follow main’s
+first-parent history, so recent merges of old topics do not cause false alarms.
+An old HEAD with no missing upstream commits is current. Gate changes in a topic
+branch take effect in the shared hook checkout after they merge into main and that checkout syncs.
