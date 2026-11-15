@@ -102,6 +102,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "tools/new_code_allowlist.txt",
     "tools/probe_admission_policy_guard.py",
     "tools/seat_verdict.py",
+    "tools/preflight.py",
+    "tools/preflight_private_scrub.py",
 )
 
 
