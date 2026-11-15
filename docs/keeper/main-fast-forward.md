@@ -39,3 +39,9 @@ is not currently executable. Path matching does not change daemon import setup.
 Arbitrary renamed/frozen wrappers cannot be inferred from their command lines;
 use the configured unit or published loaded state for those deployments.
 A host with conclusive no-unit/no-process results may fast-forward normally.
+
+The revived probe is implemented by `pg-mainff` in `rust/pg-mainff`.
+`cargo run --manifest-path rust/Cargo.toml -p pg-mainff -- probe [UNIT]`
+prints the detected keeper PID as JSON (zero when conclusively absent);
+`running STATE` prints the loaded SHA or null. Query failures return a fixed
+public diagnostic with exit code 2. Windows liveness never signals a process.
