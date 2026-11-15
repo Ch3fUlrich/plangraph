@@ -6,6 +6,20 @@ fn main() {
 }
 fn run() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [command, path] = args.as_slice() {
+        if command == "batch-merge-check" {
+            return match plangraph_cli::batch_merge::run(std::path::Path::new(path)) {
+                Ok(message) => {
+                    println!("{message}");
+                    0
+                }
+                Err(reason) => {
+                    eprintln!("{reason}");
+                    1
+                }
+            };
+        }
+    }
     if args == ["--version"] {
         println!("plangraph {}", env!("CARGO_PKG_VERSION"));
         return 0;
@@ -47,7 +61,7 @@ fn run() -> i32 {
         ["setup", "check"] => setup::Mode::Check,
         _ => {
             eprintln!(
-                "usage: plangraph setup apply [--dry-run] | setup check | env check | base-fresh <repo> | --version"
+                "usage: plangraph setup apply [--dry-run] | setup check | env check | base-fresh <repo> | batch-merge-check FACTS.json | --version"
             );
             return 2;
         }
