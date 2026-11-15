@@ -255,12 +255,12 @@ pub(crate) fn record_refusal(
 }
 
 pub(crate) fn work_fingerprint(cwd: &Path) -> Option<String> {
-    use std::{
-        process::{Command, Stdio},
-        time::Duration,
-    };
+    use std::{process::Stdio, time::Duration};
     let git = |args: &[&str]| {
-        let mut cmd = Command::new("git");
+        #[cfg(test)]
+        let mut cmd = pg_worker_core::git_test_support::command(cwd);
+        #[cfg(not(test))]
+        let mut cmd = std::process::Command::new("git");
         cmd.current_dir(cwd)
             .args(args)
             .stdout(Stdio::piped())

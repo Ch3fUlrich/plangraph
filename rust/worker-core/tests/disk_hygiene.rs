@@ -11,8 +11,7 @@ use std::{
 };
 fn git(repo: &Path, args: &[&str]) {
     host_command::output(
-        Command::new("git")
-            .current_dir(repo)
+        pg_worker_core::git_test_support::command(repo)
             .args([
                 "-c",
                 "user.name=Fixture",

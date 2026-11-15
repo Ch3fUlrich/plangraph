@@ -239,6 +239,9 @@ impl HostEntry {
 }
 
 mod validate;
+
+#[cfg(test)]
+pub(crate) use validate::canonicalize_prefix;
 use validate::*;
 
 #[cfg(test)]

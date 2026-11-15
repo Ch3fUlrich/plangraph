@@ -99,3 +99,5 @@ as CI and the changelog/docs checker. A `Plan-Item`, `Writer`, `Hand-Edit`,
 `Changelog`, or `Gate-Edit` key outside that block refuses the commit and names
 its line in the cleaned message. Value validation still runs, so misplaced keys
 cannot hide malformed attribution or skip reasons.
+
+Rust hook tests construct Git commands through `pg_worker_core::git_test_support` so pre-push repository redirects cannot affect fixture init, config or commits. Fixture commands refuse the source repository and its linked worktrees.

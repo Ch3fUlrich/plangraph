@@ -47,7 +47,7 @@ fn absolute_threshold_boundaries_and_custom_configuration() {
     .validate()
     .is_err());
     // A valid empty repo makes alarms observable below the cleanup threshold.
-    assert!(Command::new("git")
+    assert!(pg_worker_core::git_test_support::command(root.path())
         .args(["init", "-q"])
         .arg(root.path())
         .status()

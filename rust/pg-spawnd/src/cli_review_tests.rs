@@ -3,8 +3,7 @@ use pg_worker_core::run::record::new_run_id;
 use std::process::Command;
 
 fn git_ok(dir: &Path, args: &[&str]) {
-    assert!(Command::new("git")
-        .current_dir(dir)
+    assert!(pg_worker_core::git_test_support::command(dir)
         .args(args)
         .status()
         .unwrap()
@@ -299,7 +298,7 @@ fn real_sonnet_launch_adapter_keeps_the_selected_harness_and_python_rejects_kind
     // CI may have no fetchable default branch in its detached source checkout.
     // Give the fixture its own local origin, pinned to the revision under test.
     let origin = dir.path().join("origin.git");
-    assert!(Command::new("git")
+    assert!(pg_worker_core::git_test_support::command(dir.path())
         .args(["clone", "-q", "--bare", "--shared"])
         .arg(&root)
         .arg(&origin)
@@ -309,7 +308,7 @@ fn real_sonnet_launch_adapter_keeps_the_selected_harness_and_python_rejects_kind
     git_ok(&origin, &["update-ref", "refs/heads/main", "HEAD"]);
     git_ok(&origin, &["symbolic-ref", "HEAD", "refs/heads/main"]);
     let checkout = dir.path().join("checkout");
-    assert!(Command::new("git")
+    assert!(pg_worker_core::git_test_support::command(dir.path())
         .args(["clone", "-q", "--shared"])
         .arg(&origin)
         .arg(&checkout)

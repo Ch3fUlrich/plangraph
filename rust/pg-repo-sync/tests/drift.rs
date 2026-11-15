@@ -1,12 +1,7 @@
 use std::{path::Path, process::Command};
 
 fn git(repo: &Path, args: &[&str]) {
-    let mut cmd = Command::new("git");
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("GIT_") {
-            cmd.env_remove(key);
-        }
-    }
+    let mut cmd = pg_worker_core::git_test_support::command(repo);
     let out = cmd
         .current_dir(repo)
         .args(args)

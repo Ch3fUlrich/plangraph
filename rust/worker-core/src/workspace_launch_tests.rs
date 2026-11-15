@@ -62,8 +62,8 @@ pub(super) struct Fixture {
 }
 impl Fixture {
     pub(super) fn new() -> Self {
-        let repo_guard = crate::test_repo_guard::RepoGuard::real();
         let tmp = tempdir().unwrap();
+        let repo_guard = crate::test_repo_guard::RepoGuard::real(tmp.path());
         let root = tmp.path().join("repo");
         let trees = tmp.path().join("trees");
         fs::create_dir(&root).unwrap();

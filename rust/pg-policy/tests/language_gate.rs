@@ -4,8 +4,7 @@ use std::{
     process::{Command, Output},
 };
 fn git(root: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .current_dir(root)
+    let output = pg_worker_core::git_test_support::command(root)
         .args(args)
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_COMMITTER_NAME", "Test")
