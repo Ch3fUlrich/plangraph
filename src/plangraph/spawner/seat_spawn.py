@@ -22,8 +22,13 @@ def live_runner(runner):
     from .git_guard import CODE_TREE
     return (type(runner) is SpawnerRunner and runner.process_factory is oom_process_factory
             and bool(os.environ.get('PLANGRAPH_SPAWNER_REPO') or (CODE_TREE / '.git').exists()))
-async def fresh_spawn(service, options):
-    """Hand off to a durable Popen supervisor; detach once the admission reply arrives."""
+async def fresh_spawn(service, options, *, admission_passed=False):
+    """Hand off to a durable Popen supervisor; detach once the admission reply arrives.
+
+    The child skips admission, so the caller must state that admission passed.
+    """
+    if admission_passed is not True:
+        raise RuntimeError('fresh_spawn_requires_parent_admission')
     import signal, subprocess, sys
     from contextlib import ExitStack
     from . import cli
@@ -32,7 +37,7 @@ async def fresh_spawn(service, options):
     state = service.state.resolve()
     context = ExitStack()
     acquiring = asyncio.create_task(asyncio.to_thread(context.enter_context, service.code_tree(state)))
-    tree, child, task = None, None, None
+    tree, child, task, handshaking = None, None, None, None
     release = context.close
     try:
         try:
@@ -84,7 +89,8 @@ def service_with_tree(*args, **kwargs):
     service.runner.default_cwd = cwd
     save = service._save
     def save_tree(record):
-        for key, value in tree.items(): record.setdefault(key, value)
+        record.pop('tree_absent', None)
+        record.update(tree)
         return save(record)
     service._save = save_tree
     return service
@@ -111,7 +117,8 @@ raise SystemExit(code)
             child.stdin.write((json.dumps(payload) + '\n').encode()); child.stdin.close()
             return child.stdout.readline()
         from .base_fresh import ADMISSION_TIMEOUT, spawn_runs
-        line = await asyncio.wait_for(asyncio.to_thread(handshake), ADMISSION_TIMEOUT + 5)
+        handshaking = asyncio.ensure_future(asyncio.to_thread(handshake))
+        line = await asyncio.wait_for(asyncio.shield(handshaking), ADMISSION_TIMEOUT + 5)
         if not line:
             tail = []
             _drain_chunks([log.read_bytes()], tail.append)
@@ -153,6 +160,13 @@ raise SystemExit(code)
         raise
     finally:
         if child is not None:
+            if handshaking is not None:
+                # The group is dead or detached; the pipe ends unblock the thread before the close.
+                if child.poll() is not None or not handshaking.done():
+                    try: child.stdin.close()
+                    except OSError: pass
+                try: await asyncio.wait_for(asyncio.shield(handshaking), 5)
+                except BaseException: pass
             child.stdout.close()
 
 def resources(service):
@@ -330,7 +344,7 @@ class SeatSpawnMixin:
                 from .overflow import native_spawn
                 return await native_spawn(self, card, options)
             if getattr(self, 'fresh_tree', False) and not options.get('dry_run'):
-                return await fresh_spawn(self, options)
+                return await fresh_spawn(self, options, admission_passed=admitted is None)
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief
                 from plangraph.settings import admit_fixer_threshold

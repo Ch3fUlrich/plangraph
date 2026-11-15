@@ -257,6 +257,10 @@ def main(argv=None):
                     return result
                 result = asyncio.run(fresh())
             else:
+                if (live_runner(getattr(service, 'runner', None)) and (args.card or {}).get('run_kind') != 'native-codex'
+                        and _start_supervisor is not subprocess.Popen):
+                    print('warning: fresh-tree handoff skipped (supervisor starter replaced); records carry process-load tree identity',
+                          file=sys.stderr)
                 import plangraph
                 env = os.environ.copy()
                 root = str(Path(plangraph.__file__).resolve().parent.parent)

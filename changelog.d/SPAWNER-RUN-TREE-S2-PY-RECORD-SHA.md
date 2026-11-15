@@ -3,3 +3,5 @@
 - Preserve acknowledged supervisors across parent exit and caller cancellation, including bounded redacted stderr and supervisor death evidence; exercise live CLI and MCP handoffs and make package-fallback coverage independent of the operator repo override. Live CLI admission reuses the existing prompt-record boundary and preserves bounded waits.
 
 The fresh-tree supervisor and launch-spec construction keep the host PYTHONPATH after the tree source. A handshake timeout kills the whole supervisor process group. Launch-spec construction from fetched trees (`fresh_main`) is reachable only via `python -m plangraph.spawner.launch_spec` until the Rust slice S3 wires it.
+
+The supervisor's tree identity overrides any tree fields a child record carries, and the fresh handoff refuses to run unless the caller states that admission passed. The handshake thread is joined before the supervisor pipe closes. A skipped fresh-tree handoff (replaced supervisor starter) prints a warning on stderr. Launch-spec construction runs the tree CLI in its own process group, kills the group on timeout, and reports non-JSON stdout as a clear failure.

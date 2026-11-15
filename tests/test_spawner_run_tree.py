@@ -361,10 +361,10 @@ def test_fresh_launch_spec_adds_tree_event_when_child_events_are_null(tmp_path, 
     monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(request)))
     seen = {}
     def run(*a, **k):
-        seen.update(k['env'])
+        seen.update(a[3])
         return SimpleNamespace(returncode=0, stdout=json.dumps({'events': events, 'argv': ['fake']}))
     monkeypatch.setenv('PYTHONPATH', '/host/site')
-    monkeypatch.setattr(subprocess, 'run', run)
+    monkeypatch.setattr(launch_spec, '_run_group', run)
     assert launch_spec.fresh_main() == 0
     assert seen['PYTHONPATH'] == os.pathsep.join([str(tmp_path / 'tree' / 'src'), '/host/site'])
     assert json.loads(capsys.readouterr().out)['events'] == [*(events or []), dict(event='run_tree', **tree)]
@@ -400,7 +400,7 @@ def test_fresh_spawn_releases_context_once_even_after_task_creation(tmp_path, mo
     service = SimpleNamespace(state=tmp_path, code_tree=lambda state: Context(), tasks=Tasks(), result=result,
                               runner=SimpleNamespace(default_cwd=str(tmp_path)))
     async def run():
-        task = asyncio.create_task(fresh_spawn(service, dict(card={}, prompt='review', role='review', wait_seconds=None)))
+        task = asyncio.create_task(fresh_spawn(service, dict(card={}, prompt='review', role='review', wait_seconds=None), admission_passed=True))
         if failure == 'cancel':
             await asyncio.sleep(0)
             task.cancel()
@@ -435,7 +435,7 @@ def test_handshake_timeout_kills_the_supervisor_group(tmp_path, monkeypatch):
     service = SimpleNamespace(state=tmp_path, code_tree=lambda state: Context(), tasks={},
                               runner=SimpleNamespace(default_cwd=None))
     with pytest.raises(asyncio.TimeoutError):
-        asyncio.run(fresh_spawn(service, dict(card={}, prompt='review', role='review')))
+        asyncio.run(fresh_spawn(service, dict(card={}, prompt='review', role='review'), admission_passed=True))
     assert groups == [4242] and not killed
 
 
@@ -500,7 +500,11 @@ from types import SimpleNamespace
 from .private_io import atomic_write_private
 class Service:
     def __init__(self, state): self.state, self.runner = Path(state), SimpleNamespace(default_cwd=None)
-    def _save(self, record): atomic_write_private(self.state / 'runs/run-fixture/record.json', __import__('json').dumps(record))
+    def _save(self, record):
+        from .git_guard import annotate_tree
+        annotate_tree(record)
+        if record.get('tree_sha') is None: record.setdefault('tree_absent', 'unavailable')
+        atomic_write_private(self.state / 'runs/run-fixture/record.json', __import__('json').dumps(record))
 spawn_service = Service
 ''')
     (package / 'cli.py').write_text('''import json, os, pathlib, sys, time
@@ -512,7 +516,7 @@ def main(argv):
     assert not any(key.startswith('_') for key in payload)
     service = SpawnService(payload['state'])
     assert service._parent_admitted
-    record = dict(run_id='run-fixture', status='running', base_admitted=True,
+    record = dict(run_id='run-fixture', status='running', base_admitted=True, tree_sha=None, tree_absent='forged',
                   cwd=payload.get('cwd') or service.runner.default_cwd, version=pathlib.Path('version').read_text(), pythonpath=os.environ['PYTHONPATH'])
     service._save(record)
     assert pathlib.Path(__file__).resolve().is_relative_to(pathlib.Path(record['tree_path']))
@@ -559,3 +563,29 @@ print(json.dumps(asyncio.run(server.call_tool('plangraph_agent_spawn', dict(card
         if saved['status'] == 'completed' and '[autoos:redacted]' in log.read_text(): break
         time.sleep(.02)
     assert saved['status'] == 'completed' and '[autoos:redacted]' in log.read_text() and 'fixture-secret-do-not-log' not in log.read_text() and log.stat().st_size <= 1024 * 1024 and Path(str(log) + '.1').stat().st_size <= 1024 * 1024
+
+
+def test_fresh_spawn_refuses_handoff_without_parent_admission(tmp_path):
+    from plangraph.spawner.seat_spawn import fresh_spawn
+    service = SimpleNamespace(state=tmp_path, code_tree=lambda state: pytest.fail('tree acquired'), tasks={})
+    with pytest.raises(RuntimeError, match='fresh_spawn_requires_parent_admission'):
+        asyncio.run(fresh_spawn(service, dict(card={}, prompt='review', role='review')))
+
+
+def test_launch_spec_group_runner_kills_group_on_timeout(tmp_path):
+    from plangraph.spawner import launch_spec
+    with pytest.raises(subprocess.TimeoutExpired):
+        launch_spec._run_group([sys.executable, '-c', 'import time; time.sleep(30)'], '', str(tmp_path), dict(os.environ), timeout=.3)
+
+
+def test_fresh_launch_spec_reports_non_json_stdout(tmp_path, monkeypatch, capsys):
+    from contextlib import nullcontext
+    from plangraph.spawner import launch_spec
+    tree = dict(tree_sha='a' * 40, tree_path=str(tmp_path / 'tree'))
+    monkeypatch.setattr(git_guard, 'run_tree', lambda state: nullcontext(tree))
+    request = dict(run_id='run-' + 'a' * 32, job_id='job-test', role='review', dry_run=False,
+                   leg={'id': 'fixture'}, prompt='review', card={}, cwd=str(tmp_path), state=str(tmp_path))
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(request)))
+    monkeypatch.setattr(launch_spec, '_run_group', lambda *a: SimpleNamespace(returncode=0, stdout='noise\n{}'))
+    assert launch_spec.fresh_main() == 1
+    assert 'non-JSON stdout' in capsys.readouterr().err
