@@ -225,6 +225,10 @@
   "inputSchema": {
    "additionalProperties": false,
    "properties": {
+    "base_decision": {
+     "description": "Scoped operator decision waiving a stale base, as for spawns",
+     "type": "string"
+    },
     "cwd": {
      "type": "string"
     },

@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from plangraph.routing_errors import ParameterRefused
 from sessions_support import UUID1, UUID2, PROMPT, FakeRun, make, go, write_config, site  # noqa: F401
+from test_spawner_base_fresh import repository  # noqa: F401
 
 
 def _mode(site, mode):
@@ -153,10 +154,13 @@ print(s.launch(name="eps", cwd=cwd, model=MODEL, effort=EFFORT, permission_mode=
 """
 
 
-def test_processes_get_distinct_numbers(rc):
+@pytest.mark.real_base_fresh
+def test_processes_get_distinct_numbers(rc, repository):
+    # Child interpreters use real admission, so give them a fresh local origin.
+    _, repo = repository
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
     procs = [subprocess.Popen(
-        [sys.executable, "-c", _CHILD, str(rc.state), str(rc.cfg), str(rc.proj), str(rc.mcp)], env=env, stdout=subprocess.PIPE, text=True) for _ in range(4)]
+        [sys.executable, "-c", _CHILD, str(rc.state), str(rc.cfg), str(repo), str(rc.mcp)], env=env, stdout=subprocess.PIPE, text=True) for _ in range(4)]
     out = [p.communicate(timeout=60)[0].strip() for p in procs]
     assert {p.returncode for p in procs} == {0}
     assert sorted(out) == [f"eps-{n:04d}" for n in range(1, 5)]
