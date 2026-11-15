@@ -309,8 +309,7 @@ def main(argv=None, root=None):
     elif default_words.exists():
         words = str(default_words)
     if words:
-        scrubs.append(python("preflight_private_scrub.py", "--base", args.scrub_base or args.base,
-                             "--head", args.head, "--words", words))
+        scrub.extend(["--words", words])
     tests = python("affected_tests.py", "--base", test_baseline(root, args.base), "--head", args.head,
                    "--root", str(root), "--files-only", "--local", "--run")
     if importlib.util.find_spec("xdist") is not None:
