@@ -202,6 +202,12 @@ on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
 (today only `CHANGELOG.md`, an append-only ledger).
 The file-size gate refuses malformed Git batch headers with a single reason line.
+Pre-push uses `--head` for each pushed ref, reading its blobs, `.filesize-allow`
+and `.filesize-baseline` from Git. Public scrub rules also come from that head.
+Preflight runs in a temporary detached worktree of the pushed head and removes
+it after success or failure; another checked-out branch or dirty files cannot
+change the policy inputs or tests. `--head` is read-only and cannot be combined
+with `--update-baseline`.
 
 New Python source outside tests needs a `path | reason (D-id)` line in
 `tools/new_code_allowlist.txt`, which `python3 tools/check_new_code_lang.py` reads; for

@@ -109,6 +109,9 @@ class RepoFixture(unittest.TestCase):
 
 def test_malformed_batch_header_refuses(tmp_path):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=Test", "-c",
+                    "user.email=test@example.invalid", "commit", "-qm", "initial",
+                    "--allow-empty"], check=True)
     code = '''
 import runpy
 import subprocess
@@ -116,7 +119,7 @@ import sys
 from unittest.mock import patch
 original = subprocess.run
 def run(argv, **kwargs):
-    if "ls-tree" in argv:
+    if "ls-tree" in argv and "-rz" in argv:
         return subprocess.CompletedProcess(argv, 0, b"100644 blob abc\\ttext.txt\\0")
     if "--batch" in argv:
         return subprocess.CompletedProcess(argv, 0, b"abc missing\\n")
@@ -363,7 +366,7 @@ class GateHookTests(RepoFixture):
         self.assertEqual((ROOT / m.group(1) / "pre-push").resolve(),
                          HOOK.resolve())
         self.assertTrue(os.access(HOOK, os.X_OK), "pre-push not executable")
-        self.assertIn("file_size_gate()", HOOK.read_text(encoding="utf-8"))
+        self.assertIn("file_size_gate(local_sha)", HOOK.read_text(encoding="utf-8"))
 
 
 class RealTreeTests(unittest.TestCase):
