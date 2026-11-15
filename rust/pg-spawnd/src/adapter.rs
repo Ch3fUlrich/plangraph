@@ -94,8 +94,9 @@ impl Adapter<'_> {
         let line = pg_worker_core::redact::redact(
             String::from_utf8_lossy(&stderr)
                 .lines()
-                // Refusal persistence can emit this notification warning first.
-                .find(|line| !line.is_empty() && !line.starts_with("completion delivery skipped:"))
+                // The CLI prints its refusal last; host banners and warnings come first.
+                .rev()
+                .find(|line| !line.trim().is_empty())
                 .unwrap_or(""),
         )
         .chars()
@@ -191,5 +192,24 @@ mod tests {
     #[test]
     fn escaped_descendant_after_timeout_is_bounded() {
         escaped_descendant_is_bounded(Duration::from_millis(300));
+    }
+    #[test]
+    fn refusal_is_the_last_stderr_line() {
+        let _env = ADAPTER_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+        std::fs::create_dir(&dir).unwrap();
+        let script = dir.join("adapter");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho \"host banner\" >&2\necho \"deprecated config\" >&2\necho \"refused: accepted names: codex\" >&2\necho >&2\nexit 2\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("PG_SPAWND_ADAPTER", &script);
+        let result = Adapter(&dir).run(&[], Duration::from_secs(5));
+        std::env::remove_var("PG_SPAWND_ADAPTER");
+        let Ok((code, _, line)) = result else { panic!("adapter failed") };
+        assert_eq!((code, line.as_str()), (2, "refused: accepted names: codex"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
