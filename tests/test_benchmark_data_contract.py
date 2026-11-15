@@ -215,6 +215,10 @@ def _assert_contract(rows, models, legs, pending=()):
         ('leg:console-deepseek-flash@console-deepseek/deepseek-flash', None),
         ('leg:opencode-go-beam-free@opencode-go/beam-free', None),
         ('leg:claude-sonnet-5-5-high@claude/claude-sonnet-5-5-high', 'high'))}
+    # D-6054: corrected gateway identity remains explicitly unmeasured.
+    # Retire its obsolete pending entry without rebaselining the frozen ceiling.
+    operator_admitted.add(('missing_row',
+        'leg:omniroute-muse-spark@omniroute/spark-1.3-contributor', None))
     if issues - allowed - operator_admitted:
         raise AssertionError(f"unlisted benchmark violations: {issues - allowed - operator_admitted}")
     if allowed - issues:

@@ -156,6 +156,11 @@ def reap_stdio(proc):
     proc.communicate(timeout=10)
 
 
+# Match the real handshake test: module startup on a loaded CI host can exceed
+# ten seconds. These tests assert protocol behavior rather than startup speed.
+STDIO_STARTUP_TIMEOUT = 60
+
+
 def test_stdio_open_pipe_tool_round_trip(tmp_path):
     proc = stdio_process(tmp_path)
     answers = queue.Queue()
@@ -166,7 +171,7 @@ def test_stdio_open_pipe_tool_round_trip(tmp_path):
                'params': {'name': 'plangraph_agent_ps', 'arguments': {}}}
         proc.stdin.write(json.dumps(msg).encode() + b'\n')
         proc.stdin.flush()
-        reply = json.loads(answers.get(timeout=10))
+        reply = json.loads(answers.get(timeout=STDIO_STARTUP_TIMEOUT))
         assert reply['id'] == 1 and 'error' not in reply
         assert json.loads(reply['result']['content'][0]['text'])['total'] == 0
         assert proc.poll() is None
@@ -183,7 +188,7 @@ def test_stdio_redirected_file(tmp_path):
     with requests.open('rb') as stdin:
         proc = stdio_process(tmp_path, stdin=stdin)
         try:
-            out, err = proc.communicate(timeout=10)
+            out, err = proc.communicate(timeout=STDIO_STARTUP_TIMEOUT)
             assert proc.returncode == 0, err
             assert [json.loads(line)['id'] for line in out.splitlines()] == [1]
         finally:
@@ -203,7 +208,7 @@ asyncio.run(main())
 '''
     proc = stdio_process(tmp_path, script=script)
     try:
-        assert proc.wait(timeout=10) != 0
+        assert proc.wait(timeout=STDIO_STARTUP_TIMEOUT) != 0
         err = proc.stderr.read()
         assert b'injected server failure' in err
         assert b'Fatal Python error' not in err
@@ -214,7 +219,7 @@ asyncio.run(main())
 def test_stdio_eof_exits_zero(tmp_path):
     proc = stdio_process(tmp_path)
     try:
-        out, err = proc.communicate(input=b'', timeout=10)
+        out, err = proc.communicate(input=b'', timeout=STDIO_STARTUP_TIMEOUT)
         assert proc.returncode == 0, err
         assert out == b''
     finally:

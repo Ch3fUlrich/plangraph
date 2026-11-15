@@ -16,6 +16,10 @@ use std::{
 #[derive(Deserialize)]
 struct Snapshot {
     #[serde(default)]
+    host_idle_capacity: pg_worker_core::host_idle::Snapshot,
+    #[serde(skip)]
+    idle_messages: Vec<String>,
+    #[serde(default)]
     hosts: Vec<hosts::Host>,
     #[serde(flatten)]
     stuck: stuck::Snapshot,
@@ -139,7 +143,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("usage: flow-watchdog SNAPSHOT.json STATE_DIR".into());
     }
     let validated = (|| -> Result<Snapshot, Box<dyn std::error::Error>> {
-        let s: Snapshot = serde_json::from_slice(&fs::read(&args[1])?)?;
+        let mut s: Snapshot = serde_json::from_slice(&fs::read(&args[1])?)?;
+        s.idle_messages = s.host_idle_capacity.messages()?;
         if s.infra_failed > s.ci_failed || s.ci_failed > s.ci_total {
             return Err("inconsistent CI counts".into());
         }
@@ -157,12 +162,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut messages = match &validated {
         Ok(s) => {
             let mut messages = s.stuck.messages();
+            for message in &s.idle_messages {
+                println!("{message}");
+            }
             messages.extend(hosts::messages(&s.hosts));
             let legacy = findings(s).join(",");
             if !legacy.is_empty() {
                 messages.insert(0, legacy);
             }
             let mut alerts: Vec<Alert> = messages.into_iter().map(Alert::from).collect();
+            alerts.extend(s.idle_messages.iter().map(|message| Alert {
+                active: format!("host-idle {}", message.split_whitespace().nth(1).unwrap()),
+                message: message.clone(),
+            }));
             alerts.extend(s.session_activity.alerts());
             alerts
         }

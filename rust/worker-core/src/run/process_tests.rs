@@ -156,11 +156,33 @@ fn periodic_save() {
 }
 #[test]
 fn cancel_flag_and_marker() {
+    struct Launched(std::sync::mpsc::Sender<()>);
+    impl Launcher for Launched {
+        fn launch(
+            &self,
+            unit: &str,
+            spec: &LaunchSpec<'_>,
+            c: &Confinement,
+            l: &RunLimits,
+        ) -> Result<Grouped, LaunchError> {
+            let group = SystemLauncher.launch(unit, spec, c, l)?;
+            self.0.send(()).unwrap();
+            Ok(group)
+        }
+    }
     for marker in [false, true] {
         let (_d, rt, s) = setup("trap '' TERM; sleep 30 & wait");
+        let (sent, launched) = std::sync::mpsc::channel();
+        let rt = Runtime::with(
+            Arc::try_unwrap(rt).ok().unwrap().cfg,
+            Arc::new(NoLimit),
+            Arc::new(Launched(sent)),
+        );
         let began = Instant::now();
         let h = start(&rt, s).unwrap();
-        thread::sleep(Duration::from_millis(200));
+        // Exercise running cancellation, not queued cancellation. Keep the
+        // existing overall five-second bound and all PID/status assertions.
+        launched.recv_timeout(Duration::from_secs(4)).unwrap();
         if marker {
             std::fs::write(rt.cfg.state_dir.join("runs/run-test/cancelled"), b"").unwrap();
         } else {
