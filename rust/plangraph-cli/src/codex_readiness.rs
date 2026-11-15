@@ -128,19 +128,19 @@ impl Host {
             .map_err(|e| e.to_string())?;
         let source = scratch.path().join("source");
         let work = scratch.path().join("work");
-        output(git().args(["init", "--quiet"]).arg(&source))?;
-        let mut base = git();
-        base.current_dir(&source)
-            .args(["commit", "--allow-empty", "-m", "readiness baseline"]);
-        identity(&mut base);
-        output(&mut base)?;
+        output(scratch_git().args(["init", "--quiet"]).arg(&source))?;
+        output(scratch_git().current_dir(&source).args([
+            "commit",
+            "--allow-empty",
+            "-m",
+            "readiness baseline",
+        ]))?;
         output(
-            git()
+            scratch_git()
                 .current_dir(&source)
                 .args(["worktree", "add", "--detach"])
                 .arg(&work),
         )?;
-        // Identity is isolated to the child, not persisted in git config.
         let work_arg = work.to_string_lossy();
         let mut cmd = self.sandbox_command(
             scratch.path(),
@@ -157,7 +157,7 @@ impl Host {
         identity(&mut cmd);
         output(&mut cmd)?;
         let count = output(
-            git()
+            scratch_git()
                 .current_dir(&work)
                 .args(["rev-list", "--count", "HEAD"]),
         )?;
@@ -237,6 +237,11 @@ fn git() -> Command {
     clean_git_env(&mut cmd);
     cmd
 }
+fn scratch_git() -> Command {
+    let mut cmd = git();
+    identity(&mut cmd);
+    cmd
+}
 fn clean_git_env(cmd: &mut Command) {
     for (key, _) in std::env::vars_os() {
         if key.to_string_lossy().starts_with("GIT_") {
@@ -245,10 +250,17 @@ fn clean_git_env(cmd: &mut Command) {
     }
 }
 fn identity(cmd: &mut Command) {
+    // Identity and git config are isolated to the child: no global/system config or
+    // core.hooksPath, so no hook runs and nothing is persisted.
     cmd.env("GIT_AUTHOR_NAME", "Readiness probe")
         .env("GIT_AUTHOR_EMAIL", "readiness@example.invalid")
         .env("GIT_COMMITTER_NAME", "Readiness probe")
-        .env("GIT_COMMITTER_EMAIL", "readiness@example.invalid");
+        .env("GIT_COMMITTER_EMAIL", "readiness@example.invalid")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+        .env("GIT_CONFIG_VALUE_0", "/dev/null");
 }
 fn rpc(
     input: &mut impl Write,
