@@ -126,8 +126,12 @@ impl Protection {
         let cwds = disk_runtime::processes()?.0;
         // Live process cwds are matched below only when inside the candidate.
         let units = unit_paths()?;
-        let claims: Claims =
-            serde_json::from_str(&output(&mut Command::new(reader))?).map_err(io::Error::other)?;
+        let claims: Claims = serde_json::from_str(&output(
+            Command::new("sh")
+                .env("PG_SWEEP_STATE", state)
+                .args(["-c", &reader.to_string_lossy()]),
+        )?)
+        .map_err(io::Error::other)?;
         if claims.paths.iter().any(|p| !p.is_absolute()) {
             return Err(io::Error::other("claims paths must be absolute"));
         }
@@ -140,25 +144,32 @@ impl Protection {
     }
 }
 pub fn pulls(repo: &Path, branch: &str) -> io::Result<Vec<Pull>> {
-    let text = output(Command::new("gh").current_dir(repo).args([
+    // Detached HEADs use an exhaustive open-PR inventory, never search indexing.
+    let branch_name = branch.strip_prefix("refs/heads/");
+    let mut command = Command::new("gh");
+    command.current_dir(repo).args([
         "pr",
         "list",
         "--state",
-        "all",
-        "--head",
-        branch,
-        "--limit",
-        "1000",
-        "--json",
-        "number,state,headRefOid",
-    ]))?;
-    let rows: Vec<Pull> = serde_json::from_str(&text).map_err(io::Error::other)?;
+        if branch_name.is_some() { "all" } else { "open" },
+    ]);
+    if let Some(name) = branch_name {
+        command.args(["--head", name]);
+    }
+    command.args(["--limit", "1000", "--json", "number,state,headRefOid"]);
+    let text = output(&mut command)?;
+    let mut rows: Vec<Pull> = serde_json::from_str(&text).map_err(io::Error::other)?;
     if rows.len() >= 1000
-        || rows
-            .iter()
-            .any(|r| !["OPEN", "CLOSED", "MERGED"].contains(&r.state.as_str()))
+        || rows.iter().any(|r| {
+            !["OPEN", "CLOSED", "MERGED"].contains(&r.state.as_str())
+                || r.sha.len() != 40
+                || !r.sha.bytes().all(|b| b.is_ascii_hexdigit())
+        })
     {
         return Err(io::Error::other("incomplete PR inventory"));
+    }
+    if branch_name.is_none() {
+        rows.retain(|row| row.sha == branch);
     }
     Ok(rows)
 }
@@ -173,13 +184,6 @@ pub fn facts(
     let branch = tree.branch.as_deref().unwrap_or("");
     let meta = fs::symlink_metadata(path)?;
     let canonical = path.canonicalize()?;
-    let gitdir = PathBuf::from(git(path, &["rev-parse", "--absolute-git-dir"])?.trim());
-    let mut newest = fs::metadata(gitdir.join("HEAD"))?.modified()?;
-    match fs::metadata(gitdir.join("index")) {
-        Ok(meta) => newest = newest.max(meta.modified()?),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e),
-    }
     // rev-list covers all reachable commits, including nested batch merge parents.
     let merged = git(
         repo,
@@ -206,7 +210,7 @@ pub fn facts(
         canonical.starts_with(&p) || p.starts_with(&canonical)
     };
     Ok(Facts {
-        idle_hours: now.duration_since(newest).unwrap_or_default().as_secs() / 3600,
+        idle_hours: idle_minutes(tree, now)? / 60,
         clean: git(
             path,
             &[
@@ -228,8 +232,15 @@ pub fn facts(
                 .branches
                 .iter()
                 .any(|b| b == branch || branch.strip_prefix("refs/heads/") == Some(b.as_str())),
-        live_run: protection.guards.protects(&canonical) || protection.guards.protects(path),
-        open_pr: prs.iter().any(|p| p.state == "OPEN"),
+        live_run: protection.guards.protects(&canonical)
+            || protection.guards.protects(path)
+            || tree
+                .branch
+                .as_ref()
+                .is_some_and(|b| Guards::protected_name(Path::new(b))),
+        open_pr: prs
+            .iter()
+            .any(|p| p.state == "OPEN" && (tree.branch.is_some() || p.sha == tree.head)),
         in_use_by_process: protection.cwds.iter().any(|p| p.starts_with(&canonical)),
         in_use_by_unit: protection.units.iter().any(|p| p.starts_with(&canonical)),
         is_clone_path: meta.file_type().is_symlink()
@@ -237,4 +248,22 @@ pub fn facts(
             || branch == "refs/heads/main"
             || branch == "refs/heads/master",
     })
+}
+
+/// Age uses the newest HEAD/index mtime, including detached HEADs.
+pub fn idle_minutes(tree: &Worktree, now: SystemTime) -> io::Result<u64> {
+    let path = Path::new(&tree.path);
+    let gitdir = PathBuf::from(git(path, &["rev-parse", "--absolute-git-dir"])?.trim());
+    let mut newest = fs::metadata(gitdir.join("HEAD"))?.modified()?;
+    match fs::metadata(gitdir.join("index")) {
+        Ok(meta) => newest = newest.max(meta.modified()?),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    Ok(now.duration_since(newest).unwrap_or_default().as_secs() / 60)
+}
+
+/// Run records are checked fresh for both native and legacy layouts.
+pub fn terminal_run(state: &Path, path: &Path) -> io::Result<()> {
+    crate::sweep_runs::check(state, path)
 }

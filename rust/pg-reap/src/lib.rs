@@ -172,6 +172,28 @@ pub fn state(w: &Worktree, f: &Facts, inventory: &[Worktree]) -> State {
 
 /// Facts and the complete inventory belong to one repository; no I/O or clock reads.
 pub fn classify(w: &Worktree, f: &Facts, inventory: &[Worktree]) -> Classification {
+    match classify_with_clean_age(w, f, inventory, f.idle_hours >= 24) {
+        Classification::Eligible {
+            rule: "merged-clean-idle",
+        } => Classification::Eligible {
+            rule: "merged-clean-24h",
+        },
+        Classification::Protected {
+            reason: "idle-below-clean-threshold",
+        } => Classification::Protected {
+            reason: "idle-below-24h",
+        },
+        other => other,
+    }
+}
+
+/// Override only the clean idle threshold; every protection and commit guard is shared.
+pub fn classify_with_clean_age(
+    w: &Worktree,
+    f: &Facts,
+    inventory: &[Worktree],
+    clean_old_enough: bool,
+) -> Classification {
     let reason = live_protection(w, f, inventory)
         .or_else(|| (!f.merged_into_main).then_some("unmerged-commits"))
         .or_else(|| (!f.pushed).then_some("unpushed-commits"));
@@ -181,9 +203,9 @@ pub fn classify(w: &Worktree, f: &Facts, inventory: &[Worktree]) -> Classificati
     let (hours, rule, reason) = if !f.clean {
         (168, "dirty-7d-needs-backup", "idle-below-7d")
     } else {
-        (24, "merged-clean-24h", "idle-below-24h")
+        (24, "merged-clean-idle", "idle-below-clean-threshold")
     };
-    if f.idle_hours >= hours {
+    if (f.clean && clean_old_enough) || (!f.clean && f.idle_hours >= hours) {
         Classification::Eligible { rule }
     } else {
         Classification::Protected { reason }
