@@ -369,17 +369,17 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                 route_card(card, legs=(leg,), role=role, exclude_families=excluded, now=now)
             except RouteError as exc:
                 reason = next(iter(exc.exclusion_reasons), 'routing_error')
-                states[leg.id] = dict(states[leg.id], evidence={'state': states[leg.id]['evidence'], 'error': str(exc)})
+                states[leg.id] = dict(states[leg.id], evidence={'state': states[leg.id].get('evidence'), 'error': str(exc)})
         if reason:
             skipped.append({"leg": leg.id, "reason": reason,
-                            "evidence": states[leg.id]["evidence"]})
+                            "evidence": states[leg.id].get("evidence")})
         row = rows.get(leg.model, rows.get(leg.id))
         detail = {"leg": leg.id, "tier": leg.tier,
                   "u_core": score_model(dict(row, tier=leg.tier), role=role, risk=ranking_risk,
                                         need_tokens=card["estimate_tokens"]) if row is not None else None,
                   "p_source": "measured" if row is not None else "prior"}
         if reason:
-            detail.update(reason=reason, evidence=states[leg.id]["evidence"])
+            detail.update(reason=reason, evidence=states[leg.id].get("evidence"))
         candidate_details.append(detail)
     skipped.extend(disabled_skips)
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (

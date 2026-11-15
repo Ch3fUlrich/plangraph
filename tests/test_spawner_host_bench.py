@@ -105,8 +105,10 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     assert bare["p_source"] == "operator-order"
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
     # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
-    from plangraph.planner.legs import REVIEW_ORDER
-    assert [leg["id"] for leg in bare["legs"]] == list(REVIEW_ORDER[2:-1])
+    # The console deepseek leg is unreachable in the isolated review child (LE-PROBE-ROLE-MISMATCH-REVIEW).
+    from plangraph.planner.legs import REVIEW_ORDER, REVIEW_DEEPSEEK
+    routed = [id for id in REVIEW_ORDER if id != REVIEW_DEEPSEEK]
+    assert [leg["id"] for leg in bare["legs"]] == routed[2:-1]
 
 
 

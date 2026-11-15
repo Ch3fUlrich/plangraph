@@ -33,10 +33,10 @@ def fake_runner(tmp_path, status='completed', stop=None, text='verdict: pass'):
 @pytest.mark.parametrize('free_up,reason', [(True, None), (False, None),
     (True, 'D-4382: no free leg witnesses for this task')])
 def test_paid_pin(tmp_path, monkeypatch, harness, pin, free_up, reason):
-    paid = replace(legs.DEFAULT_LEGS[0], id='paid-test', model='test/paid',
+    paid = replace(legs.DEFAULT_LEGS[0], id='paid-test', model='opencode-go/paid',
                    tier='paid', harness=harness, disabled=None,
                    roles=('review',), family='paid-family', tool_mode='tools')
-    free = replace(paid, id='free-test', model='test/free', tier='free', family='free-family')
+    free = replace(paid, id='free-test', model='opencode-go/free', tier='free', family='free-family')
     use_table(monkeypatch, (paid, free))
     runner = fake_runner(tmp_path)
     service = SpawnService(runner=runner, state=tmp_path, leg_reader=lambda model, **kw:
@@ -71,7 +71,7 @@ def test_only_sol_writes():
 def test_recorded_down_route(tmp_path, monkeypatch, reason):
     import time
     free = replace(legs.DEFAULT_LEGS[1], id='free-test', tool_mode='tools', disabled=None)
-    other = replace(free, id='other', model='test/other', tier='paid', family='glm')
+    other = replace(free, id='other', model='opencode-go/other', tier='paid', family='glm')
     monkeypatch.setattr(legs, 'DEFAULT_LEGS', (free, other))
     import plangraph.planner.routing as routing
     original = routing.plan_spawn
@@ -128,9 +128,9 @@ def test_no_cooldown(tmp_path, monkeypatch, mode):
 def test_paid_pin_measured(tmp_path, monkeypatch, one_up):
     import time
     from plangraph.planner.measured_down import measured_down
-    paid = replace(legs.DEFAULT_LEGS[1], id='paid', model='test/paid', tier='paid', family='paid', tool_mode='tools', disabled=None)
-    free = replace(paid, id='dead-free', model='test/free', tier='free', family='glm')
-    up = replace(free, id='up-free', model='test/up')
+    paid = replace(legs.DEFAULT_LEGS[1], id='paid', model='opencode-go/paid', tier='paid', family='paid', tool_mode='tools', disabled=None)
+    free = replace(paid, id='dead-free', model='opencode-go/free', tier='free', family='glm')
+    up = replace(free, id='up-free', model='opencode-go/up')
     use_table(monkeypatch, (paid, free, up) if one_up else (paid, free))
     service = SpawnService(state=tmp_path, leg_reader=lambda *a, **k: {'state': 'available'})
     ended = time.time()
@@ -169,9 +169,9 @@ def test_paid_pin_measured(tmp_path, monkeypatch, one_up):
 @pytest.mark.parametrize('detail', ['', ': node busy'])
 def test_live_evidence(tmp_path, monkeypatch, status, stop, unavailable, expected, detail):
     from plangraph.planner.measured_down import measured_down
-    free = replace(legs.DEFAULT_LEGS[1], id='free', model='test/free', family='glm',
+    free = replace(legs.DEFAULT_LEGS[1], id='free', model='opencode-go/free', family='glm',
                    tier='free', tool_mode='tools', disabled=None, roles=('review',))
-    use_table(monkeypatch, (free, replace(free, id='other', model='test/other', family='other')))
+    use_table(monkeypatch, (free, replace(free, id='other', model='opencode-go/other', family='other')))
     text = 'prompt: usage limit; credit usage limit; not_served_on_host; model not available'
     runner = fake_runner(tmp_path, status, stop, text)
     if unavailable:
@@ -190,9 +190,9 @@ def test_live_evidence(tmp_path, monkeypatch, status, stop, unavailable, expecte
 @pytest.mark.parametrize('free_up', [True, False])
 @pytest.mark.parametrize('reason', [' ', 'x', '  sufficiently long reason  '])
 def test_reason_normalization(tmp_path, monkeypatch, free_up, reason):
-    paid = replace(legs.DEFAULT_LEGS[1], id='paid', model='test/paid', tier='paid',
+    paid = replace(legs.DEFAULT_LEGS[1], id='paid', model='opencode-go/paid', tier='paid',
                    family='glm', tool_mode='tools', disabled=None)
-    free = replace(paid, id='free', model='test/free', tier='free')
+    free = replace(paid, id='free', model='opencode-go/free', tier='free')
     use_table(monkeypatch, (paid, free) if free_up else (paid,))
     service = SpawnService(state=tmp_path, leg_reader=lambda *a, **k: {'state': 'available'})
     options = dict(card={'estimate_tokens': 100}, role='review', writer_families=['gpt'],
@@ -209,9 +209,9 @@ def test_record_window_and_corruption(tmp_path, monkeypatch):
     import time
     from pathlib import Path
     from plangraph.planner.measured_down import LEG_DOWN_WINDOW_S
-    free = replace(legs.DEFAULT_LEGS[1], id='free', model='test/free', family='glm',
+    free = replace(legs.DEFAULT_LEGS[1], id='free', model='opencode-go/free', family='glm',
                    tier='free', tool_mode='tools', disabled=None)
-    paid = replace(free, id='paid', model='test/paid', tier='paid', family='other')
+    paid = replace(free, id='paid', model='opencode-go/paid', tier='paid', family='other')
     use_table(monkeypatch, (free, paid))
     service = SpawnService(state=tmp_path, leg_reader=lambda *a, **k: {'state': 'available'})
     now = time.time()
@@ -256,11 +256,21 @@ def test_saved_structured_skip(tmp_path, status, reason):
 
 
 def test_paid_pin_uses_route_exclusions(tmp_path, monkeypatch):
-    paid = replace(legs.DEFAULT_LEGS[1], id='paid', model='test/paid', tier='paid',
+    paid = replace(legs.DEFAULT_LEGS[1], id='paid', model='opencode-go/paid', tier='paid',
                    family='glm', tool_mode='tools', disabled=None)
-    excluded = replace(paid, id='excluded-free', model='test/free', tier='free', family='gpt')
+    excluded = replace(paid, id='excluded-free', model='opencode-go/free', tier='free', family='gpt')
     use_table(monkeypatch, (paid, excluded))
     service = SpawnService(state=tmp_path, leg_reader=lambda *a, **k: {'state': 'available', 'evidence': None})
     record = asyncio.run(service.spawn(card={'estimate_tokens': 100}, role='review',
         writer_families=['gpt'], leg='paid', dry_run=True))
     assert record['override_reason'] == 'No eligible free leg is up on this host'
+
+
+def test_unreachable_review_leg_state_without_evidence(tmp_path):
+    bare = replace(legs.DEFAULT_LEGS[1], id='bare', model='console-deepseek/deepseek-flash', tier='free', tool_mode='tools', disabled=None)
+    ok = replace(bare, id='ok', model='opencode-go/beam-free')
+    from plangraph.planner.routing import plan_spawn
+    plan = plan_spawn({'estimate_tokens': 100}, role='review', writer_families=['gpt'], legs=(bare, ok),
+                      leg_reader=lambda *a, **k: {'state': 'available'})
+    assert [l.id for l in plan.legs] == ['ok']
+    assert {s['leg']: s['reason'] for s in plan.skipped}['bare'] == 'review_provider_unreachable'
