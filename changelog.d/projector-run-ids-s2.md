@@ -1,1 +1,2 @@
 - Projected history now establishes execution ownership before worker calls, fences delayed stale runs without blocking the live run, and alarms on retryable ownership conflicts.
+- Keep execution-owner, retry-alarm and stale-run regressions in the existing keeper/projector test modules for the Rust-only new-file policy.
