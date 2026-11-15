@@ -357,10 +357,21 @@ async def native_spawn(self, card, options):
         raise ValueError('native-codex requires implement role and a host-relative card.repo')
     if options.get('dry_run'):
         raise ValueError('native-codex dry-run is not supported')
+    repo = native_repo(card)
+    from plangraph.routing_errors import SpawnRefused
+    binary = _projection_binary()
+    # Resolve on the placed host before creating a run or acknowledging admission.
+    probe = await asyncio.create_subprocess_exec(binary, 'native-tools',
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    tools, error = await probe.communicate()
+    if probe.returncode:
+        raise SpawnRefused(error.decode(errors='replace').strip())
+    tool_environment = json.loads(tools)
     record = dict(run_id='run-' + uuid.uuid4().hex, run_kind='native-codex',
         host=(options.get('_placement') or {}).get('host') or os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname(),
         status='running', started=time.time(), role='implement', writer_family='openai',
-        base_ref=card.get('base_ref'), repo=str(native_repo(card)))
+        base_ref=card.get('base_ref'), repo=str(repo))
+    record.update(tool_environment)
     from .item_key import annotate_item
     annotate_item(record, card)
     directory = self._path(record['run_id']).parent
@@ -368,7 +379,7 @@ async def native_spawn(self, card, options):
     request = dict(record=record, card=card, prompt=options.get('prompt', ''), record_path=str(self._path(record['run_id'])))
     atomic_write_private(directory / 'native-request.json', json.dumps(request))
     try:
-        process = await asyncio.create_subprocess_exec(_projection_binary(), 'native-writer',
+        process = await asyncio.create_subprocess_exec(binary, 'native-writer',
             str(directory / 'native-request.json'), stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE, start_new_session=True)
     except (OSError, RuntimeError):

@@ -16,7 +16,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap().trim().into()
 }
 #[test]
-fn native_writer_pushed_base_handshake_review_resume_and_record() {
+fn native_writer_final_gates_use_recorded_tool_path() {
     let dir = std::env::temp_dir().join(format!("native-writer-e2e-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let remote = dir.join("remote.git");
@@ -24,6 +24,24 @@ fn native_writer_pushed_base_handshake_review_resume_and_record() {
     fs::create_dir_all(&repo).unwrap();
     git(&dir, &["init", "--bare", remote.to_str().unwrap()]);
     git(&repo, &["init", "-b", "main"]);
+    fs::create_dir_all(repo.join("tools")).unwrap();
+    fs::write(
+        repo.join("tools/check_file_size.py"),
+        r#"import json, os, pathlib, subprocess
+record = json.loads((pathlib.Path.cwd().parent / 'record.json').read_text())
+assert os.environ['PATH'] == record['tool_path']
+assert pathlib.Path('writer-path').read_text() == record['tool_path']
+assert subprocess.check_output(['cargo'], text=True).strip() == 'fixture cargo'
+for tool in ('cargo', 'git', 'codex'):
+    import shutil
+    assert shutil.which(tool) == record['resolved_tools'][tool]
+"#,
+    )
+    .unwrap();
+    for gate in ["check_new_code_lang.py", "check_changelog_docs.py"] {
+        fs::write(repo.join("tools").join(gate), "").unwrap();
+    }
+    git(&repo, &["add", "tools"]);
     git(
         &repo,
         &[
@@ -63,12 +81,23 @@ if 'resume' in sys.argv:
     head = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
     pathlib.Path('reviews', head[:8] + '-hydrogen.txt').write_text('VERDICT: ACCEPT\n')
 else:
+    import os
+    pathlib.Path('writer-path').write_text(os.environ['PATH'])
     pathlib.Path('writer.txt').write_text('written on selected host\n')
-    subprocess.run(['git','add','writer.txt'], check=True)
+    subprocess.run(['git','add','writer.txt','writer-path'], check=True)
     subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','writer'], check=True, stdout=subprocess.DEVNULL)
     print(json.dumps({'type':'thread.started','thread_id':'fixture-session'}))
 "#).unwrap();
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::create_dir_all(dir.join("supervisor-bin")).unwrap();
+    // The fixture does not depend on free space on the host's /tmp mount.
+    let df = bin.join("df");
+    fs::write(&df, "#!/bin/sh\nprintf 'fixture 0 0 10485760 0%% /\\n'\n").unwrap();
+    fs::set_permissions(&df, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::copy(&df, dir.join("supervisor-bin/df")).unwrap();
+    let cargo = bin.join("cargo");
+    fs::write(&cargo, "#!/bin/sh\necho 'fixture cargo'\n").unwrap();
+    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let out = Command::new("python3").current_dir(&root).env("PYTHONPATH", root.join("src"))
         .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
@@ -81,6 +110,11 @@ from plangraph.spawner.service import SpawnService
 from plangraph.spawner.base_fresh import admitted_spawn
 from plangraph.spawner import overflow, seat_spawn
 root = pathlib.Path(os.environ['FIXTURE_DIR'])
+original_exec = asyncio.create_subprocess_exec
+async def different_supervisor_path(*args, **kwargs):
+    if len(args) > 1 and args[1] == 'native-writer':
+        kwargs['env'] = dict(kwargs.get('env', os.environ), PATH=str(root/'supervisor-bin') + ':/usr/bin:/bin')
+    return await original_exec(*args, **kwargs)
 async def check():
     service = SpawnService(state=root/'state')
     card = dict(run_kind='native-codex', repo=str(root/'checkout'), base_ref='refs/heads/main')
@@ -130,7 +164,8 @@ async def check():
             import signal
             try: os.killpg(codex_pid, signal.SIGKILL)
             except ProcessLookupError: pass
-asyncio.run(check())
+with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_path), patch('plangraph.spawner.host_ready.disk_free_gb', return_value=10):
+    asyncio.run(check())
 "#]).output().unwrap();
     assert!(
         out.status.success(),

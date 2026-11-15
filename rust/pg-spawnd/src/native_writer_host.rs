@@ -17,6 +17,7 @@ struct Host {
     reviews: PathBuf,
     record_path: PathBuf,
     base_ref: String,
+    tool_path: String,
 }
 fn output(command: &mut Command) -> Result<String, String> {
     let result = command.output().map_err(|e| e.to_string())?;
@@ -29,8 +30,13 @@ fn output(command: &mut Command) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&result.stdout).trim().into())
 }
 impl Host {
+    fn command(&self, program: &str) -> Command {
+        let mut command = Command::new(program);
+        command.env("PATH", &self.tool_path);
+        command
+    }
     fn git(&self, args: &[&str]) -> Result<String, String> {
-        output(Command::new("git").arg("-C").arg(&self.cwd).args(args))
+        output(self.command("git").arg("-C").arg(&self.cwd).args(args))
     }
     fn free(&self) -> Result<u64, String> {
         // State and repository may be on different filesystems. Probe the worktree's
@@ -39,7 +45,7 @@ impl Host {
         while !path.exists() {
             path = path.parent().ok_or("worktree filesystem unavailable")?;
         }
-        let text = output(Command::new("df").args(["-Pk", "--"]).arg(path))?;
+        let text = output(self.command("df").args(["-Pk", "--"]).arg(path))?;
         text.lines()
             .last()
             .and_then(|l| l.split_whitespace().nth(3))
@@ -57,14 +63,14 @@ impl Driver for Host {
             return Err("base_ref must name a pushed refs/heads/ or refs/tags/ ref".into());
         }
         output(
-            Command::new("git")
+            self.command("git")
                 .arg("-C")
                 .arg(&self.repo)
                 .args(["check-ref-format", &self.base_ref]),
         )?;
         // Pin the pushed ref in a per-run namespace: parallel fetches cannot change this base.
         let pin = format!("refs/plangraph/native/{}/base", self.run_id);
-        output(Command::new("git").arg("-C").arg(&self.repo).args([
+        output(self.command("git").arg("-C").arg(&self.repo).args([
             "fetch",
             "--no-write-fetch-head",
             "origin",
@@ -72,12 +78,12 @@ impl Driver for Host {
             "+refs/heads/main:refs/remotes/origin/main",
         ]))?;
         let base = output(
-            Command::new("git")
+            self.command("git")
                 .arg("-C")
                 .arg(&self.repo)
                 .args(["rev-parse", &format!("{pin}^{{commit}}")]),
         )?;
-        output(Command::new("git").arg("-C").arg(&self.repo).args([
+        output(self.command("git").arg("-C").arg(&self.repo).args([
             "merge-base",
             "--is-ancestor",
             "refs/remotes/origin/main",
@@ -87,7 +93,7 @@ impl Driver for Host {
         fs::create_dir_all(self.cwd.parent().ok_or("worktree parent missing")?)
             .map_err(|e| e.to_string())?;
         output(
-            Command::new("git")
+            self.command("git")
                 .arg("-C")
                 .arg(&self.repo)
                 .args(["worktree", "add", "--detach"])
@@ -108,7 +114,7 @@ impl Driver for Host {
             .append(true)
             .open(&log_path)
             .map_err(|e| e.to_string())?;
-        let mut command = Command::new("codex");
+        let mut command = self.command("codex");
         command.arg("exec");
         if let Some(id) = session {
             command.args(["resume", id]);
@@ -198,7 +204,7 @@ impl Driver for Host {
         ] {
             let path = self.cwd.join("tools").join(gate);
             output(
-                Command::new(if cfg!(windows) { "python" } else { "python3" })
+                self.command(if cfg!(windows) { "python" } else { "python3" })
                     .arg(path)
                     .current_dir(&self.cwd),
             )?;
@@ -297,6 +303,10 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
         reviews,
         record_path,
         base_ref: record["base_ref"].as_str().unwrap_or("").into(),
+        tool_path: record["tool_path"]
+            .as_str()
+            .ok_or("tool PATH missing")?
+            .into(),
     };
     host.save(&record)?;
     native_writer::run(

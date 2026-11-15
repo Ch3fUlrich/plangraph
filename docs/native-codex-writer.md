@@ -8,7 +8,16 @@ remote forwarding rewrites `repo` to that host's configured repository. Public
 repository allowlisting, fresh readiness and RAM caps still apply. Native runs
 require at least 5 GiB free; the target checks again before starting and stops
 Codex under 2 GiB. Targets need the updated Python spawner and `pg-spawnd` binary
-on PATH (or built at `rust/target/release/pg-spawnd`), Git and native Codex auth.
+on PATH (or built at `rust/target/release/pg-spawnd`), Cargo, Git and native Codex auth.
+Before a run record is created, target-host admission resolves `cargo`, `git` and
+`codex` on the caller's effective PATH. Missing or non-executable tools refuse
+with `tool_missing: <tool>`. Configure the host's launch environment (the overflow
+host's `env_file` for remote launches) to include the Cargo and nvm Node bin
+paths where needed; admission does not source a login profile or guess paths.
+Records retain `tool_path` and `resolved_tools`. Relative PATH entries are made
+absolute against the caller's directory so they retain their meaning in the
+worktree. The writer, its resumed sessions and final gates all use that recorded
+PATH, including tools launched by gate scripts.
 
 The Rust worker fetches the pushed base into a per-run ref, refuses ancestry
 behind fetched origin/main, and creates a detached worktree in the

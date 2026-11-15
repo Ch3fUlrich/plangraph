@@ -19,6 +19,7 @@ mod launch;
 mod leg_ref;
 mod native_writer;
 mod native_writer_host;
+mod native_writer_tools;
 mod placement;
 mod prompt;
 mod prompt_git;
