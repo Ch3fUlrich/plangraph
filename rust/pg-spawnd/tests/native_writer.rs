@@ -72,7 +72,18 @@ else:
 "#).unwrap();
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let out = Command::new("python3").current_dir(&root).env("PYTHONPATH", root.join("src"))
+    let home = dir.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let mut python = Command::new("python3");
+    for (key, _) in std::env::vars() {
+        if key.starts_with("AUTOOS_") || key.starts_with("PLANGRAPH_") || key.starts_with("XDG_") {
+            python.env_remove(key);
+        }
+    }
+    let out = python.current_dir(&root).env("PYTHONPATH", root.join("src"))
+        .env("HOME", &home).env("XDG_CONFIG_HOME", home.join(".config"))
+        .env("XDG_STATE_HOME", home.join(".local/state")).env("XDG_DATA_HOME", home.join(".local/share"))
+        .env("XDG_CACHE_HOME", home.join(".cache")).env("FIXTURE_HOME", &home)
         .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
         .env("NATIVE_BINARY", binary::spawnd())
         .env("FIXTURE_DIR", &dir).env("FIXTURE_BASE", &base)
@@ -83,6 +94,11 @@ from plangraph.spawner.service import SpawnService
 from plangraph.spawner.base_fresh import admitted_spawn
 from plangraph.spawner import overflow, seat_spawn
 root = pathlib.Path(os.environ['FIXTURE_DIR'])
+# Isolation: no host config, state or credentials can be reached through HOME or XDG.
+assert pathlib.Path.home() == pathlib.Path(os.environ['FIXTURE_HOME']), pathlib.Path.home()
+for name in ('HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME'):
+    assert pathlib.Path(os.environ[name]).is_relative_to(root), (name, os.environ[name])
+assert not [k for k in os.environ if k.startswith(('AUTOOS_', 'PLANGRAPH_'))], sorted(os.environ)
 async def check():
     service = SpawnService(state=root/'state')
     card = dict(run_kind='native-codex', repo=str(root/'checkout'), base_ref='refs/heads/main')

@@ -1,0 +1,1 @@
+The pg-spawnd native writer end-to-end test now runs its Python child with HOME and XDG directories inside the test temp dir and without AUTOOS_, PLANGRAPH_ or XDG_ host variables, and asserts that isolation, so it no longer reads host config or run state.
