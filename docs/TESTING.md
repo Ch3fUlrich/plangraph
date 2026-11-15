@@ -33,6 +33,18 @@ Browser tests retain their separate explicit invocation and dependencies.
 Targets: typical affected run under 3 minutes; full parallel run under 8 minutes.
 These are performance goals, not assertions to weaken when a host is overloaded.
 
+## Preflight Rust target and sccache
+
+`tools/preflight.py` runs its Rust family with a private `CARGO_TARGET_DIR`
+(`preflight-cargo-*` under `PLANGRAPH_PREFLIGHT_RUN_DIR`, default the parent of
+the shared target) so concurrent pushes do not wait on one cargo lock. The
+directory is removed at the end, also on failure or timeout. When free disk
+there is below `PLANGRAPH_PREFLIGHT_MIN_FREE_GB` (default 20), preflight prints
+`rust: shared CARGO_TARGET_DIR (...)` and uses the shared target instead; this
+never fails the push. If `sccache` is on PATH (or `PLANGRAPH_SCCACHE` names it),
+`RUSTC_WRAPPER` is set and `SCCACHE_CACHE_SIZE` comes from
+`PLANGRAPH_SCCACHE_CACHE_SIZE` (default 20G). Without sccache no wrapper is set.
+
 ## Isolation
 
 pytest's tmp_path includes the worker ID. Each worker also gets a private temporary

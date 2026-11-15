@@ -11,11 +11,13 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from plangraph.spawner.host_ready import cargo_child_env, cargo_lease, running_disk_refusal
+from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, disk_free_gb,
+                                          running_disk_refusal, shared_cargo_target)
 
 CHECK_TIMEOUT = 60
 # Measured on a build host: pg-spawnd clippy 17.8 s, shim/windows_pipe tests 48.4 s.
@@ -257,7 +259,53 @@ def policy_baseline(root, fallback):
     return test_baseline(root, fallback)
 
 
+# Per-run Rust target: no shared cargo lock between concurrent pushes.
+# PLANGRAPH_PREFLIGHT_MIN_FREE_GB (default 20): free GB needed for a private target.
+# PLANGRAPH_PREFLIGHT_RUN_DIR: parent of the private target (default: parent of the shared target).
+# PLANGRAPH_SCCACHE: sccache binary (default: sccache on PATH); PLANGRAPH_SCCACHE_CACHE_SIZE (default 20G).
+MIN_FREE_GB_DEFAULT = "20"
+SCCACHE_SIZE_DEFAULT = "20G"
+
+
+def rust_target_env(env, cleanup):
+    """Return env for the Rust family: private target when disk allows, sccache when present.
+
+    cleanup is a list that receives the private directory so the caller removes it.
+    Never raises: any problem falls back to the shared target.
+    """
+    out = dict(env)
+    parent = Path(env.get("PLANGRAPH_PREFLIGHT_RUN_DIR") or shared_cargo_target().parent).expanduser()
+    try:
+        need = float(env.get("PLANGRAPH_PREFLIGHT_MIN_FREE_GB", MIN_FREE_GB_DEFAULT))
+        free = disk_free_gb(parent)
+        if free < need:
+            print(f"rust: shared CARGO_TARGET_DIR (free {free:.1f} GB < {need:g} GB)", flush=True)
+        else:
+            parent.mkdir(parents=True, exist_ok=True)
+            private = tempfile.mkdtemp(prefix="preflight-cargo-", dir=parent)
+            cleanup.append(private)
+            out["CARGO_TARGET_DIR"] = private
+    except (OSError, ValueError) as exc:
+        print(f"rust: shared CARGO_TARGET_DIR ({exc})", flush=True)
+    sccache = env.get("PLANGRAPH_SCCACHE") or shutil.which("sccache", path=env.get("PATH", ""))
+    if sccache:
+        out["RUSTC_WRAPPER"] = sccache
+        out.setdefault("SCCACHE_CACHE_SIZE", env.get("PLANGRAPH_SCCACHE_CACHE_SIZE", SCCACHE_SIZE_DEFAULT))
+    else:
+        out.pop("RUSTC_WRAPPER", None)
+    return out
+
+
 def main(argv=None, root=None):
+    cleanup = []
+    try:
+        return _main(argv, root, cleanup)
+    finally:
+        for path in cleanup:
+            shutil.rmtree(path, ignore_errors=True)
+
+
+def _main(argv, root, cleanup):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="origin/main")
     parser.add_argument("--head", default="HEAD")
@@ -332,8 +380,9 @@ def main(argv=None, root=None):
                     commands = rust_commands(root, args.base, args.head, env)
                 family_env = policy_env if family == "policy" else env
                 if family == 'rust':
-                    print(f"rust CARGO_TARGET_DIR: {env.get('CARGO_TARGET_DIR', root / 'rust/target')}", flush=True)
-                    family_env = {key: value for key, value in env.items()
+                    rust_env = rust_target_env(env, cleanup)
+                    print(f"rust CARGO_TARGET_DIR: {rust_env.get('CARGO_TARGET_DIR', root / 'rust/target')}", flush=True)
+                    family_env = {key: value for key, value in rust_env.items()
                                   if not key.upper().startswith('GIT_')}
                 if family == "tests" and commands:
                     family_env = test_environment(root, env)

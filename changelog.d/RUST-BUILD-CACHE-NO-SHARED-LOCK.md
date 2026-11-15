@@ -1,0 +1,1 @@
+Preflight's Rust step uses a per-run CARGO_TARGET_DIR removed at the end when disk allows (PLANGRAPH_PREFLIGHT_MIN_FREE_GB, default 20), else the shared target; it sets RUSTC_WRAPPER=sccache when sccache is available.

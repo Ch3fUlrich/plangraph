@@ -339,3 +339,65 @@ def test_timeout_is_failure(monkeypatch, repo):
 
     monkeypatch.setattr(preflight.subprocess, "run", timeout)
     assert preflight.run(["hung"], repo, {}) == (1, "check exceeded 60 second timeout\n")
+
+
+def _rust_main(repo, monkeypatch, fail=False):
+    seen = []
+
+    def run(command, cwd, env):
+        if command[0] == "cargo":
+            seen.append(env)
+            return (1, "boom\n") if fail else (0, "")
+        return 0, ""
+
+    monkeypatch.setattr(preflight, "run", run)
+    monkeypatch.setattr(preflight, "rust_commands", lambda *a: [["cargo", "fmt", "--check"]])
+    monkeypatch.setattr(preflight, "cargo_lease", lambda: __import__("contextlib").nullcontext())
+    monkeypatch.setattr(preflight, "running_disk_refusal", lambda root: None)
+    monkeypatch.setenv("PLANGRAPH_PREFLIGHT_RUN_DIR", str(repo / "runs"))
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(repo / "shared"))
+    code = preflight.main(["--base", "HEAD", "--fast"], repo)
+    return code, seen
+
+
+def test_private_target_when_disk_enough_and_removed(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    monkeypatch.setenv("PATH", str(repo / "nobin"))
+    code, seen = _rust_main(repo, monkeypatch)
+    target = Path(seen[0]["CARGO_TARGET_DIR"])
+    assert code == 0 and target.parent == repo / "runs" and target != repo / "shared"
+    assert not target.exists() and "RUSTC_WRAPPER" not in seen[0]
+
+
+def test_private_target_removed_on_failure(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    code, seen = _rust_main(repo, monkeypatch, fail=True)
+    assert code == 1 and not Path(seen[0]["CARGO_TARGET_DIR"]).exists()
+
+
+def test_shared_target_when_disk_low(repo, monkeypatch, capsys):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 1)
+    code, seen = _rust_main(repo, monkeypatch)
+    assert code == 0 and seen[0]["CARGO_TARGET_DIR"] == str(repo / "shared")
+    assert "rust: shared CARGO_TARGET_DIR (free 1.0 GB < 20 GB)" in capsys.readouterr().out
+    assert not (repo / "runs").exists() or not list((repo / "runs").iterdir())
+
+
+def test_min_free_threshold_from_env(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 5)
+    monkeypatch.setenv("PLANGRAPH_PREFLIGHT_MIN_FREE_GB", "3")
+    _, seen = _rust_main(repo, monkeypatch)
+    assert seen[0]["CARGO_TARGET_DIR"] != str(repo / "shared")
+
+
+def test_sccache_wrapper_only_when_found(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    bindir = repo / "bin"
+    bindir.mkdir()
+    tool = bindir / "sccache"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir))
+    monkeypatch.setenv("PLANGRAPH_SCCACHE_CACHE_SIZE", "7G")
+    _, seen = _rust_main(repo, monkeypatch)
+    assert seen[0]["RUSTC_WRAPPER"] == str(tool) and seen[0]["SCCACHE_CACHE_SIZE"] == "7G"
