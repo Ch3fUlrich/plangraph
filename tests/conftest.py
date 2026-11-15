@@ -13,6 +13,7 @@ import hashlib
 import atexit
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -185,11 +186,27 @@ def hermetic_writer_env(monkeypatch):
 @pytest.fixture
 def short_socket_dir():
     """Bound Unix sockets avoid pytest's long per-test directory names."""
-    with tempfile.TemporaryDirectory(prefix="s-", dir=tempfile.gettempdir()) as directory:
+    with tempfile.TemporaryDirectory(prefix="s-", dir="/tmp") as directory:
         path = Path(directory)
-        assert len(os.fsencode(path / "anchor.sock")) < 108
-        assert len(os.fsencode(path / "silent.sock")) < 108
+        assert len(os.fsencode(path / "anchor.sock")) < 100
+        assert len(os.fsencode(path / "silent.sock")) < 100
         yield path
+
+@pytest.fixture(autouse=True)
+def unix_socket_path_guard(monkeypatch, tmp_path_factory):
+    """Filesystem Unix sockets must stay short and outside pytest temp roots."""
+    bind = socket.socket.bind
+
+    def guarded_bind(sock, address):
+        if sock.family == socket.AF_UNIX:
+            encoded = os.fsencode(address)
+            if encoded and not encoded.startswith(b"\0"):
+                path = Path(os.fsdecode(encoded)).absolute()
+                assert (len(os.fsencode(path)) < 100 and not path.resolve().is_relative_to(
+                    tmp_path_factory.getbasetemp().resolve())), "use short_socket_dir for AF_UNIX binds"
+        return bind(sock, address)
+
+    monkeypatch.setattr(socket.socket, "bind", guarded_bind)
 
 from plangraph.spawner import resolver as _resolver
 _real_served_models = getattr(_resolver, '_served_models_real', _resolver.served_models)
