@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import json
+import os
 import re
 import subprocess
 import sys
@@ -527,6 +529,31 @@ def _open_pr_merges(
     return violations
 
 
+def warn_item_trailers(base: str, head: str, item_text: str | None) -> None:
+    """Rust owns coverage policy; accept local part text or the CI PR event."""
+    text = None
+    if item_text:
+        text = Path(item_text).read_text(encoding='utf-8')
+    elif os.environ.get('GITHUB_EVENT_PATH'):
+        event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text(encoding='utf-8'))
+        if 'pull_request' in event:
+            pr = event['pull_request']
+            if pr['head']['sha'] != _git_text(['rev-parse', '--verify', head]).strip():
+                return  # The process may be checking a different repository/range.
+            text = (pr.get('title') or '') + '\n' + (pr.get('body') or '')
+    if text is None:
+        return
+    root = _git_text(['rev-parse', '--show-toplevel']).strip()
+    proc = subprocess.run([
+        'cargo', 'run', '--quiet', '--locked', '--manifest-path',
+        str(Path(root) / 'rust/Cargo.toml'), '-p', 'pg-policy', '--',
+        '--plan-item-trailers', base, head,
+    ], input=text, text=True, capture_output=True)
+    if proc.returncode:
+        raise GateError(f'Plan-Item coverage check failed: {proc.stderr or proc.stdout}')
+    sys.stderr.write(proc.stdout)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest='command')
@@ -537,6 +564,7 @@ def main(argv: list[str] | None = None) -> int:
     check_parser = subparsers.add_parser('check')
     check_parser.add_argument('--base', required=True, help='Base commit SHA')
     check_parser.add_argument('--head', required=True, help='PR head SHA, not GitHub speculative pull_request merge ref (whose second parent is the PR head)')
+    check_parser.add_argument('--item-text', help='UTF-8 PR/part text; warn on keys without commit trailers (CI defaults to GitHub PR event)')
     check_parser.add_argument('--open-heads', help='File regenerated per run from OPEN PRs only; drop closed-unmerged PRs. The PR under test\'s own head may be listed; fetch open PR heads first so each SHA is a local commit. One 40-hex SHA per line, case-insensitive, blanks allowed, UTF-8 BOM accepted. Check is inert until a caller writes and supplies this file.')
     check_parser.add_argument(
         '--exempt',
@@ -573,7 +601,8 @@ def main(argv: list[str] | None = None) -> int:
         violations = check(args.base, args.head, exempt=exempt, cwd=None,
                            open_heads=args.open_heads)
         hand_edits = hand_edit_commits(args.base, args.head, cwd=None)
-    except (ExemptError, GateError) as exc:
+        warn_item_trailers(args.base, args.head, args.item_text)
+    except (ExemptError, GateError, OSError, ValueError) as exc:
         sys.stderr.write(f'ci-commit-gate: {exc}\n')
         return 2
 

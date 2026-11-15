@@ -325,3 +325,48 @@ def test_router_http_well_formed_without_citations_is_audited_no_witness(w, door
     row = w.conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
     assert (row["action"], row["ok"], row["code"]) == ("close_merged", 0, "evidence_unverified")
     assert w.store._item(KEY)["state"] == "in_review"
+
+
+def test_main_trailer_per_fixed_key_allows_close_merged_dry_run(w, doors, monkeypatch, tmp_path):
+    import subprocess
+    from plangraph.keeper.evidence_git import GitAdapter
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.check_output([
+            'git', '-C', str(repo), '-c', 'user.name=Fixture',
+            '-c', 'user.email=fixture@example.invalid', *args], text=True).strip()
+
+    git('init', '-q', '-b', 'main')
+    git('commit', '--allow-empty', '-qm', 'parent only\n\nPlan-Item: demo:PHASE')
+    head = git('rev-parse', 'HEAD')
+
+    class FixtureGit(GitAdapter):
+        def repo_path(self, project):
+            return str(repo)
+
+        def repo_ref(self, project):
+            return 'main'
+
+        def _maybe_fetch(self, repo):
+            pass
+
+    w.store.ctx['git'] = FixtureGit()
+    monkeypatch.setattr('plangraph.keeper.context_sources.plan_item_commits', w.real_plan_item_commits)
+    monkeypatch.setattr('plangraph.keeper.context_sources.open_lanes', lambda *a: [])
+    w.conn.execute("UPDATE items SET state='open' WHERE key=?", (KEY,))
+    w.decision_path.write_text(f'| D-5504 | demo | GO {head} |\n')
+    args = ('close-merged', KEY, 'D-5504', '--from-open', '--family', 'google')
+    code, out, err = doors.pg('router', *args)
+    assert code == 2 and 'merged_on_default_missing' in out, (out, err)
+    git('checkout', '-qb', 'fix')
+    git('commit', '--allow-empty', '-qm', 'fix both\n\nPlan-Item: demo:PHASE\nPlan-Item: demo:A')
+    head = git('rev-parse', 'HEAD')
+    git('checkout', '-q', 'main')
+    git('merge', '--no-ff', '-qm', 'Merge pull request #1 from fixture/fix', 'fix')
+    w.decision_path.write_text(f'| D-5504 | demo | GO {head} |\n')
+    code, out, err = doors.pg('router', *args)
+    assert code == 0 and f'{KEY}\tWOULD-CLOSE\t' in out, (out, err)
+    assert w.store._item(KEY)['state'] == 'open'

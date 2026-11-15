@@ -51,6 +51,11 @@ non-green or missing CI, and workflow edits whose touching commits lack a
 `Gate-Edit: D-<id>` trailer, including edits introduced by merge resolution. The batch key is explicit; part Plan-Items do not
 stand in for the batch's PLAN key.
 
+Every writer commit fixing keeper items needs one `Plan-Item` trailer per fixed
+key, including subitems of a larger item. `ci_commit_gate.py check --base BASE
+--head HEAD --item-text PART.txt` warns for uncovered keys; GitHub CI reads the
+matching PR event automatically. See [the commit gate](docs/ci-gate.md).
+
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
 ## Setup and tests

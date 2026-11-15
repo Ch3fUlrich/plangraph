@@ -1,4 +1,6 @@
 //! New-code language policy. All authority is read from committed revisions.
+mod plan_items;
+
 use regex::Regex;
 use std::{collections::HashMap, env, path::Path, process::Command};
 
@@ -218,12 +220,24 @@ fn run() -> Result<Vec<String>, String> {
 }
 
 fn main() {
-    match run() {
+    let args: Vec<_> = env::args().skip(1).collect();
+    let result = if args
+        .first()
+        .is_some_and(|arg| arg == "--plan-item-trailers")
+    {
+        plan_items::run(&args[1..])
+    } else {
+        run()
+    };
+    let advisory = args
+        .first()
+        .is_some_and(|arg| arg == "--plan-item-trailers");
+    match result {
         Ok(errors) => {
             for error in &errors {
                 println!("{error}");
             }
-            std::process::exit(i32::from(!errors.is_empty()));
+            std::process::exit(i32::from(!advisory && !errors.is_empty()));
         }
         Err(error) => {
             println!("check-new-code-lang: {error}");
