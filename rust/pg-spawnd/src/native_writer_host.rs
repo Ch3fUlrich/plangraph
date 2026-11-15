@@ -98,6 +98,10 @@ impl Driver for Host {
         Ok(base)
     }
     fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String> {
+        let codex = crate::native_writer_tool::resolve(
+            &std::env::var_os("PATH").unwrap_or_default(),
+            &self.cwd,
+        )?;
         let directory = self
             .record_path
             .parent()
@@ -108,7 +112,7 @@ impl Driver for Host {
             .append(true)
             .open(&log_path)
             .map_err(|e| e.to_string())?;
-        let mut command = Command::new("codex");
+        let mut command = Command::new(codex);
         command.arg("exec");
         if let Some(id) = session {
             command.args(["resume", id]);
