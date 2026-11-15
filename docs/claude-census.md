@@ -5,8 +5,9 @@ authenticated `gh`. `--projects` selects transcripts; `--until` pins the exclusi
 UTC endpoint; `--since` accepts days or ISO date/time. `--merged-prs` accepts an offline array of `{number, mergedAt}`.
 
 Weights come from `tools/claude_usage_policy.json`. Agent names/custom titles
-identify router/routing, replan/replanning, L1-build/build-L1, L1/L1-other and L2;
-a numeric suffix is removed. Unknown names remain `unclassified`.
+match by `-` segment after a numeric suffix is removed: router/routing, replan(ning),
+L1 (+build) and L2, so `plangraph-replan-12` is replan. Other names stay `unclassified`
+and `unclassified_sessions` counts them by name (odd names become `other`).
 Subagents sharing parent message IDs (or declaring `forkContext: true`) are
 forks; others are inferred fresh. Copied parent turns are excluded. This inference
 cannot prove a fresh launch when inherited messages are absent from a transcript.

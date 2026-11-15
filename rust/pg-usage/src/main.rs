@@ -60,18 +60,27 @@ fn text(v: &Value) -> String {
     }
 }
 
+fn stem(name: &str) -> &str {
+    name.rsplit_once('-')
+        .filter(|(_, n)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        .map_or(name, |(prefix, _)| prefix)
+}
+
 fn role(name: &str) -> String {
-    let name = name
-        .rsplit_once('-')
-        .filter(|(_, suffix)| !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()))
-        .map_or(name, |(prefix, _)| prefix);
-    match name {
-        "router" | "routing" => "router",
-        "replan" | "replanning" => "replan",
-        "L1-build" | "build-L1" => "L1-build",
-        "L1" | "L1-other" => "L1-other",
-        "L2" => "L2",
-        _ => "unclassified",
+    let lower = stem(name).to_lowercase();
+    let has = |words: &[&str]| lower.split('-').any(|s| words.contains(&s));
+    if has(&["router", "routing"]) {
+        "router"
+    } else if has(&["replan", "replanning"]) {
+        "replan"
+    } else if has(&["l1"]) && has(&["build"]) {
+        "L1-build"
+    } else if has(&["l1"]) {
+        "L1-other"
+    } else if has(&["l2"]) {
+        "L2"
+    } else {
+        "unclassified"
     }
     .into()
 }
