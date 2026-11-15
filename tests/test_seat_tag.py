@@ -127,6 +127,10 @@ def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch, spelling, r
             name: {'headers': {'keep': 'yes'}, 'options': {'headers': {'also': 'yes'}}}
             for name in ('mimo', 'omniroute', 'other')}}
         cfg[spelling]['mimo']['settings'] = {'baseURL': '/gateway/v1'}
+        # As render_gateway_providers does, MiMo's model entry sits under 'providers' (the cap gate needs it).
+        cfg.setdefault('providers', {}).setdefault('mimo', {}).update(
+            package='@opencode/ai/providers/openai-compatible',
+            models={'mimo-v2.6-pro': {'modelID': 'mimo/mimo-v2.6-pro'}})
         assert not gw.tagged(json.dumps(cfg), 'seat')
         env.update(OPENCODE_CONFIG_CONTENT=json.dumps(cfg), OMNIROUTE_BASE_URL='/gateway/v1')
     monkeypatch.setattr(opencode_render, 'render_gateway_providers', render)

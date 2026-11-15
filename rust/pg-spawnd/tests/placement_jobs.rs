@@ -1,4 +1,6 @@
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 mod common;
 #[path = "common/placement.rs"]
 mod placement;
