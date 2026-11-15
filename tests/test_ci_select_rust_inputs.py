@@ -28,6 +28,7 @@ def rust_repo_inputs(root):
     Parent-relative runtime literals are checked from both the source directory
     and Cargo's package working directory. Only existing repository files count,
     so temporary fixture names and path-traversal rejection samples are ignored.
+    Git metadata (.git/...) is never an input: fixtures join it onto temp repos.
     """
     inputs = {}
     for source in sorted((root / "rust").rglob("*.rs")):
@@ -55,7 +56,8 @@ def rust_repo_inputs(root):
             for base in bases:
                 path = (base / value).resolve()
                 if (path.is_file() and path.is_relative_to(root)
-                        and not path.is_relative_to(root / "rust")):
+                        and not path.is_relative_to(root / "rust")
+                        and ".git" not in path.relative_to(root).parts):
                     relative = path.relative_to(root).as_posix()
                     inputs[relative] = f"{source.relative_to(root)}:{before.count(chr(10)) + 1}"
     return inputs
@@ -101,6 +103,16 @@ def test_schema_change_cli_outputs(tmp_path, monkeypatch, capsys):
     expected["full"] = "false"
     assert dict(line.split("=") for line in output.read_text().splitlines()) == expected
     assert capsys.readouterr().out == output.read_text()
+
+
+def test_git_metadata_joined_onto_fixture_is_not_an_input(tmp_path):
+    source = tmp_path / "rust/sample/src/lib.rs"
+    source.parent.mkdir(parents=True)
+    (source.parent.parent / "Cargo.toml").write_text('[package]\nname = "sample"\n')
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git/config").write_text("")
+    source.write_text('fn f(m: &str) { let _ = env!("CARGO_MANIFEST_DIR"); let _ = Path::new(m).join(".git/config"); }\n')
+    assert rust_repo_inputs(tmp_path) == {}
 
 
 @pytest.mark.parametrize("read", [
