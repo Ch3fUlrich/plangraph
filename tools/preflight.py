@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Blocking local CI policy, Rust and affected-test preflight."""
 import argparse
+import asyncio
 import importlib.util
 import json
 import os
@@ -39,13 +40,24 @@ class FailFamily(ValueError):
 
 
 def run_test_process(command, **kwargs):
-    """Run a command and kill its process group on timeout or interruption."""
+    """Kill the command's tree on timeout/interruption, including nested Linux sessions."""
     timeout = kwargs.pop('timeout')
     with subprocess.Popen(command, **kwargs, start_new_session=os.name == 'posix') as process:
         try:
             stdout, stderr = process.communicate(timeout=timeout)
         except BaseException:
-            if os.name == 'posix':
+            if sys.platform.startswith('linux'):
+                # Reuse the spawner's identity-checked snapshot and tree cleanup.
+                # Load from this checkout without requiring an installed package.
+                spec = importlib.util.spec_from_file_location(
+                    'preflight_proc_kill', Path(__file__).resolve().parents[1]
+                    / 'src/plangraph/spawner/proc_kill.py')
+                tree = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(tree)
+                ident = tree.root_identity(process.pid)
+                members = tree.snapshot(process.pid, ident)
+                asyncio.run(tree.finish(process.pid, ident, members))
+            elif os.name == 'posix':
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:

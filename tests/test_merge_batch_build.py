@@ -346,7 +346,8 @@ def test_push_waits_for_slow_hook_and_records_pr(env, tools_importable, monkeypa
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux pidfd liveness check")
-def test_push_timeout_kills_slow_hook_tree(env, tools_importable, monkeypatch):
+@pytest.mark.parametrize("nested_preflight", [False, True])
+def test_push_timeout_kills_slow_hook_tree(env, tools_importable, monkeypatch, nested_preflight):
     import os
     import select
     import signal
@@ -358,6 +359,12 @@ def test_push_timeout_kills_slow_hook_tree(env, tools_importable, monkeypatch):
                     "child = os.fork()\n"
                     f"with open({str(env.tmp / 'hook-pids')!r} + str(os.getpid()), 'w') as f: f.write(str(os.getpid()))\n"
                     "signal.pause()\n")
+    if nested_preflight:
+        payload = hook.read_text()
+        hook.write_text("#!/usr/bin/env python3\nimport sys, subprocess\n"
+                        f"sys.path.insert(0, {tools_importable!r})\nimport preflight\n"
+                        f"preflight.run_test_process([sys.executable, '-c', {payload!r}], "
+                        "stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)\n")
     hook.chmod(0o755)
     for key, value in env.env.items():
         monkeypatch.setenv(key, value)

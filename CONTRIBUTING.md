@@ -10,7 +10,8 @@ affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes,
 `tools/merge_batch.py push` also waits without an overall deadline and forwards
 git and hook output to stderr while the hook enforces its per-step bounds.
 The shared subprocess runner kills the process group on a caller-supplied
-timeout or interruption, then reaps git before reporting the failure.
+timeout or interruption, including nested worker sessions on Linux, then reaps
+git before reporting the failure.
 Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
 to skip affected tests. The existing pre-push hook runs preflight too; set
 `PREFLIGHT_FAST=1` for its fast mode or `PREFLIGHT_SKIP=1` to bypass only that hook
