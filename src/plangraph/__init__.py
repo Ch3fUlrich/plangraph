@@ -1,4 +1,6 @@
 """plangraph — pure, deterministic views over a plan-graph snapshot."""
+from ._loaded_identity import LOADED_IDENTITY  # before any code-bearing package imports
+
 from .views import (
     blocked,
     brief,

@@ -9,6 +9,8 @@ import time
 import pytest
 
 from plangraph.spawner import context_pack as cp
+# Initialize process provenance before the sandbox replaces the shared subprocess module.
+from plangraph.spawner import git_guard  # noqa: F401
 from plangraph.spawner.seat_spawn import SeatSpawnMixin
 
 
@@ -165,10 +167,10 @@ def test_synthetic_replay_exact_reductions(sandbox, monkeypatch):
     after = calls[0]
     assert '\n'.join(lines[100:130]) in after
     assert '# filler' not in after
-    assert (len(before), len(after)) == (9022, 372)
-    assert (len(before.encode()), len(after.encode())) == (9022, 372)
-    assert len(before) - len(after) == 8650
-    assert ((len(before) + 2) // 3, (len(after) + 2) // 3) == (3008, 124)
+    assert (len(before), len(after)) == (9022, 476)
+    assert (len(before.encode()), len(after.encode())) == (9022, 476)
+    assert len(before) - len(after) == 8546
+    assert ((len(before) + 2) // 3, (len(after) + 2) // 3) == (3008, 159)
 
 
 @pytest.fixture

@@ -3,6 +3,11 @@ name: implement
 description: Implement one closed brief test-first, in small commits, inside the listed files, and report with quoted evidence.
 ---
 
+Brief order: use the versioned `src/plangraph/review/{writer,review}_brief.md`
+templates via `plangraph.review.prompt.render_brief`. Keep role, rules, Rust language
+line, gates and commit trailer format first; put item context and task data last.
+A byte-identical fixed prefix lets the prompt cache reuse it across items.
+
 You are the implementer. You do the brief and nothing else.
 
 ## Do

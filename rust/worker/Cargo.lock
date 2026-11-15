@@ -132,9 +132,9 @@ dependencies = [
 
 [[package]]
 name = "bumpalo"
-version = "3.20.4"
+version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87a0cf66fd1eb2fb7b822cb78370d82303750809bc6ba855f3f58e517d3238db"
+checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "bytes"
@@ -1255,6 +1255,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg-reap"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pg-worker"
 version = "0.1.0"
 dependencies = [
@@ -1283,6 +1291,7 @@ dependencies = [
  "chrono",
  "globset",
  "libc",
+ "pg-reap",
  "rand 0.9.5",
  "regex",
  "serde",

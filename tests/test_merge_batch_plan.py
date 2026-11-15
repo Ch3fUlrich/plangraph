@@ -47,7 +47,7 @@ def test_plan_high_split():
     assert by_num[2]["high_paths"] == ["src/plangraph/keeper/store.py"] and by_num[1]["high_paths"] == []
     assert high_patterns(("docs/*",)) != high_patterns()
     cut = plan_batches([P(7, files=["docs/a.md"], changed=300)], "main", patterns=high_patterns())  # gh cut the list
-    assert cut["batches"][0]["tier"] == "HIGH" and cut["prs"][0]["high_paths"] == ["(file list truncated by gh)"]
+    assert cut["batches"][0]["tier"] == "STANDARD" and cut["prs"][0]["high_paths"] == []
 
 
 def test_plan_caps():

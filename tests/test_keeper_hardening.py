@@ -99,7 +99,7 @@ def test_item_key_move_onto_event_locked_key_aborts(w):
 # =============================================================== finding 2
 
 def test_verdict_ignores_stored_unverified_rows(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",), review_tier="high")
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",), review_tier="high")
     w.store.verifiers["decision"] = ref_verifier({"D-BAD"})
     epoch = to_claimed(w, key)
     w.store.add_evidence(w.p("l1main"), key, epoch, "decision", {"id": "D-BAD"})
@@ -111,7 +111,7 @@ def test_verdict_ignores_stored_unverified_rows(w):
 
 
 def test_verdict_ignores_evidence_of_other_epochs(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",), review_tier="high")
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",), review_tier="high")
     verifier = ref_verifier(set())
     w.store.verifiers["decision"] = verifier
     epoch1 = to_claimed(w, key)

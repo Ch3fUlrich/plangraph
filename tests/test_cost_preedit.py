@@ -114,7 +114,7 @@ def test_collect_enforces_deadline_with_injected_transport(monkeypatch):
                                  _stdin_payloads={}, default_cwd='tree', _reap_process=reap)
         real_wait = asyncio.wait
         async def tick(waiters, timeout, return_when):
-            assert timeout == 120
+            assert timeout == 30
             clock.now += timeout
             job.last_activity_ts = clock.now
             return set(), set(waiters)

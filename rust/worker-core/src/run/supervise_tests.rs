@@ -165,6 +165,7 @@ fn outcomes_and_hook_order() {
             assert_eq!(r.status(), Some(Status::Running));
             assert_eq!(r.get("exit_code"), Some(&json!(expected_code)));
             r.set("hook", json!(true));
+            None
         }));
         let survivors = !pids.is_empty();
         finalize::finish(

@@ -147,3 +147,21 @@ fn rejects_injection_and_missing_grants() {
     ws.revision_sha = Some("--all".into());
     assert!(prepare_seat(&repo, &ws, tmp.path(), "run", 1).is_err());
 }
+
+#[test]
+fn cache_reset_fixture_does_not_invoke_commit_signing() {
+    let f = Fixture::with_config(&[
+        ("commit.gpgsign", "true"),
+        ("gpg.program", "plangraph-no-such-signing-program"),
+    ]);
+    assert!(!git(Path::new(&f.repo.root), &["rev-parse", "HEAD"])
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn caches_outside_survive_reset_stress() {
+    for _ in 0..50 {
+        caches_outside_survive_reset();
+    }
+}

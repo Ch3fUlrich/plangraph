@@ -3,7 +3,7 @@
     use crate::keeper::StubKeeper;
     use pg_worker_core::config::Tier;
     use pg_worker_core::worktree;
-    use std::process::{Command, Stdio};
+    use std::process::Command;
     use tempfile::TempDir;
 
     use crate::keeper::KeeperError;

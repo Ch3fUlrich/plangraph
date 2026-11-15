@@ -110,9 +110,9 @@ def test_quota_key_is_harness_aware(tmp_path):
     assert store.leg_status('Qwen3.8-Flash')['state'] == 'limited'
     assert store.leg_status('agy/Qwen3.8-Flash')['state'] == 'ok'
     fallthrough_reason(SimpleNamespace(leg_reader=store),
-                       SimpleNamespace(model='gemini-3.8-flash', harness='agy'),
+                       SimpleNamespace(model='gemini-4-argon-high', harness='agy'),
                        SimpleNamespace(exit_code=3, stdout='', stderr=QUOTA), {})
-    assert store.leg_status('agy/gemini-3.8-flash')['state'] == 'limited'
+    assert store.leg_status('agy/gemini-4-argon-high')['state'] == 'limited'
 
 
 def test_terminal_reason_is_the_final_attempt_outcome():
@@ -155,9 +155,9 @@ def test_routing_reads_a_bare_non_agy_leg_under_its_own_key(tmp_path):
     from plangraph.spawner.leg_probe import read_status
     store = LegStateStore(tmp_path / 'legs.sqlite')
     store.record_harness_limit('Qwen3.8-Flash', QUOTA, 'test')
-    store.record_harness_limit('agy/gemini-3.8-flash', QUOTA, 'test')
+    store.record_harness_limit('agy/gemini-4-argon-high', QUOTA, 'test')
     assert read_status(store.leg_status, 'Qwen3.8-Flash')['state'] == 'limited'
-    assert read_status(store.leg_status, 'gemini-3.8-flash')['state'] == 'limited'
+    assert read_status(store.leg_status, 'gemini-4-argon-high')['state'] == 'limited'
     assert read_status(store.leg_status, 'other-model')['state'] == 'ok'
 
 

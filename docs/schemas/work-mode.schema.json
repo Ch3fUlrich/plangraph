@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Plangraph work-mode setting",
+  "description": "D-5952 / rule 3.41. Repository override takes precedence over user configuration; absent files default to batch. Auto is stored for later selection logic.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["work_mode"],
+  "properties": {
+    "work_mode": {
+      "type": "string",
+      "enum": ["auto", "piecewise", "batch"],
+      "default": "batch",
+      "description": "Extensible setting; unrecognized modes are errors, never silently replaced with the default."
+    }
+  },
+  "examples": [{"work_mode": "batch"}]
+}

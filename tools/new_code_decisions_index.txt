@@ -1,0 +1,5 @@
+# Gate authority snapshot of router/docs/decisions-log.md (D-5912, 2026-11-14).
+# Format: decision id | authority. Only base-revision OPERATOR entries authorize
+# new allowlist lines. Index additions take effect after merging independently.
+# D-5840 and superseded D-5830 are explicitly ineligible.
+D-5912 | OPERATOR

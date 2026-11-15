@@ -26,6 +26,16 @@ EVIDENCE_TTL_S = 6 * 60 * 60
 _SCOPE = "((account IS ? AND combo IS ?) OR (account IS NULL AND combo IS NULL AND source != 'provider-response'))"
 
 
+def quota_key(leg):
+    """D-5966: effort variants share one quota within each agy model, never across models."""
+    if not isinstance(leg, str):
+        return leg
+    if leg == "claude-sonnet-5-5-high":
+        leg = "agy/" + leg  # D-5966: the native Sonnet fallback uses this model seat quota.
+    return re.sub(r'^agy[/:]((?:gemini-4-(?:hydrogen|argon)|claude-sonnet-5-5))(?:-(?:low|medium|high|xhigh|max))?$',
+                  r'agy:\1', leg)
+
+
 def _down_seconds(down_s):
     """Validated PLANGRAPH_LEG_DOWN_S, capped at RESET_CAP_S; never raises.
 
@@ -151,6 +161,7 @@ class LegStateStore:
         return db
 
     def record_provider_response(self, leg, status, body, headers, caller, now=None, account=None, combo=None):
+        leg = quota_key(leg)
         now = time.time() if now is None else now
         headers = {str(k).lower(): v for k, v in (headers or {}).items()}
         if type(status) is not int or status not in (429, 402) or not caller or not str(caller).strip():
@@ -168,6 +179,7 @@ class LegStateStore:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, status, _redact(body), None if reset is None else reset - now, reset, now, caller, "provider-response"))
 
     def record_probe_pass(self, leg, caller, now=None, account=None, combo=None):
+        leg = quota_key(leg)
         if not caller:
             raise LegStateError("requires successful provider response caller")
         with self._connect() as db:
@@ -176,6 +188,7 @@ class LegStateStore:
     def record_probe_fail(self, leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt=''):
         if not leg or not caller or not reason:
             raise LegStateError('requires leg, reason and caller')
+        leg = quota_key(leg)
         now = time.time() if now is None else now
         down_s = None if serving else _down_seconds(down_s)  # capped at RESET_CAP_S
         with self._connect() as db:
@@ -186,6 +199,7 @@ class LegStateStore:
 
     def last_probe_ts(self, leg):
         """Successful probe evidence only: a failed probe is not fresh evidence."""
+        leg = quota_key(leg)
         if not self.path.exists():
             return None
         try:
@@ -196,6 +210,7 @@ class LegStateStore:
 
     def last_probe_attempt_ts(self, leg):
         """The newest probe attempt (pass or fail); single-flight reuse only."""
+        leg = quota_key(leg)
         if not self.path.exists():
             return None
         try:
@@ -210,6 +225,7 @@ class LegStateStore:
         # An elapsed cooldown permits neither a fallback booking nor a reset-less limit.
         if _elapsed_cooldown({}, line):
             return
+        leg = quota_key(leg)
         now = time.time() if now is None else now
         reset = _reset({}, line, now)
         if reset is None and down_s is not None:
@@ -222,6 +238,13 @@ class LegStateStore:
                         None if reset is None else reset - now, reset, now, caller, 'harness-stderr'))
 
     def leg_status(self, leg, now=None, account=None, combo=None):
+        leg = quota_key(leg)
+        agy = isinstance(leg, str) and leg.startswith("agy:")
+        ttl = RESET_CAP_S if agy else EVIDENCE_TTL_S
+        keys = [leg]
+        if agy:
+            base = "agy/" + leg[4:]
+            keys += [base, *(base + "-" + e for e in ("low", "medium", "high", "xhigh", "max"))]
         now = time.time() if now is None else now
         if not self.path.exists() or self.path.stat().st_size == 0:
             return {"state": "ok", "evidence": None}
@@ -229,8 +252,8 @@ class LegStateStore:
             with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
                 db.row_factory = sqlite3.Row
                 rows = db.execute(
-                    "SELECT * FROM leg_events WHERE leg_key=? AND " + _SCOPE + " AND ts<=? ORDER BY ts DESC,id DESC",
-                    (leg, account, combo, now))
+                    "SELECT * FROM leg_events WHERE leg_key IN (" + ",".join("?" for _ in keys) + ") AND " + _SCOPE + " AND ts<=? ORDER BY ts DESC,id DESC",
+                    (*keys, account, combo, now))
                 rows = list(rows)
                 # Serving evidence supersedes older probe failures, NEVER provider limits.
                 serving = next((i for i, r in enumerate(rows) if r['source'] == 'probe_failed_leg_serving'), len(rows))
@@ -241,7 +264,7 @@ class LegStateStore:
                     return {"state": "ok", "evidence": None}
                 evidence = {k: row[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                 evidence["event_id"] = row["id"]
-                if now >= row['ts'] + EVIDENCE_TTL_S:
+                if now >= row['ts'] + ttl:
                     return {'state': 'reprobe', 'evidence': evidence}
                 if row['source'] == 'liveness-probe':
                     # Two consecutive failures book down; serving evidence breaks the streak.
@@ -251,13 +274,13 @@ class LegStateStore:
                         if older['source'] == 'liveness-probe' and older['status'] == 503:
                             # A live predecessor must exist when this failure books
                             # the streak; its later expiry cannot unbook that down window.
-                            streak += int(row['ts'] < min(older['ts'] + EVIDENCE_TTL_S, older['reset_at'] or older['ts']))
+                            streak += int(row['ts'] < min(older['ts'] + ttl, older['reset_at'] or older['ts']))
                         else:
                             behind = older
                             break
                     # Probe failures never hide an older provider limit with a future reset (D-3685).
                     if (behind is not None and behind['source'] in ('harness-stderr', 'provider-response')
-                            and behind['reset_at'] is not None and now < min(behind['reset_at'], behind['ts'] + EVIDENCE_TTL_S)):
+                            and behind['reset_at'] is not None and now < min(behind['reset_at'], behind['ts'] + ttl)):
                         evidence = {k: behind[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                         evidence["event_id"] = behind["id"]
                         return {"state": "limited", "evidence": evidence}
@@ -273,6 +296,7 @@ class LegStateStore:
 
     def last_probe_outcome(self, leg):
         """Newest probe attempt as a reusable single-flight outcome, else None."""
+        leg = quota_key(leg)
         if not self.path.exists():
             return None
         try:
@@ -368,7 +392,7 @@ class LegAdapter:
             self.leg_status(leg)
             self._served.discard(self.identity(leg))
     def leg_status(self, leg, **kwargs):
-        if not self.enabled:
+        if not self.enabled or leg.startswith(("agy:", "agy/")) or leg.startswith(("gemini-4-hydrogen-", "gemini-4-argon-", "claude-sonnet-5-5")):
             return self.store.leg_status(leg, **kwargs)
         from .resolver import OPERATOR_REMOVED_MODELS
         if leg in OPERATOR_REMOVED_MODELS:

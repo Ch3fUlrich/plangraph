@@ -1,0 +1,6 @@
+change,scope,before_seconds,after_seconds,evidence
+CI-FAST-PATH,scanner edge test,1387,65.98,"D1-CIFIX: full 7200 placements, pg-worker-core opt3 and regex deps opt3; local single-test measurement; rebuild 93s; before CI runs 43483805931/43491313057"
+CI-FAST-PATH,sensitivity reproducibility,110,3.92,"local slowest seed; five seeds and all 200 catalogs retained, shardable cases"
+CI-FAST-PATH,nonce and ring capacity,110,0.47,"local authenticated final ring window and full nonce capacity"
+CI-FAST-PATH,global nonce window,110,<0.1,"local seeded window; authenticated overflow and atomic retry; below final slow-list 0.07s cutoff"
+CI-FAST-PATH,PR wall time,1500-1800,pending,"two consecutive green <=600s runs require orchestrator push; no push performed"

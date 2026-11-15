@@ -24,6 +24,8 @@ def test_rust_lock_arguments_from_claim(scoped, tmp_path, monkeypatch):
                          base_branch=phase_branch("demo:PH-X"))
     assert claim["repo"] == str(root)
     source = Path("rust/worker/src/activities.rs").read_text()
+    assert 'include!("activities_merge.rs");' in source
+    source = Path("rust/worker/src/activities_merge.rs").read_text()
     assert 'keeper.acquire_merge_lock(&input.repo, owner, merge_lock_ttl_s(cfg))' in source
     assert 'self.keeper.release_merge_lock(self.repo, &self.fence)' in source
     client = Path("rust/worker/src/keeper.rs").read_text()

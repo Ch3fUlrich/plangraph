@@ -36,3 +36,9 @@ Credential handling is unchanged: config contains environment references, not
 credential values, and rendering does not read or log keys. The shared validator
 refuses URL userinfo, queries, fragments (including bare delimiters), and
 non-HTTP(S) schemes; a refusal leaves the caller's config unchanged.
+
+Plain-shell CLI runs resolve a missing deployment endpoint from
+`plangraph/omniroute-base-url` under XDG_CONFIG_HOME (otherwise HOME/.config).
+The witness and child configuration share the same resolver; private call-log
+credentials stay in the parent. Existing explicit child URLs and config-only
+root-placeholder precedence remain unchanged.

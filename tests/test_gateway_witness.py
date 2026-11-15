@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,7 @@ from fake_pid import FAKE_PID
 pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: FAKE_PID exceeds the host PID range; no live process can match
 
 from plangraph.spawner import gateway_witness as gw
+from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
 
 
 class _Runner:
@@ -33,7 +35,8 @@ def _job(model='omniroute/cx-gpt-6-luna'):
 def _env(job_id):
     cfg = {'providers': {'omniroute': {'options': {}}}, 'permission': {'*': 'deny'}}
     gw.tag_session(cfg, job_id)
-    return {'OPENCODE_CONFIG_CONTENT': json.dumps(cfg)}
+    return {'OPENCODE_CONFIG_CONTENT': json.dumps(cfg),
+            'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']}
 
 
 def test_tag_session_sets_header_on_omniroute_provider_only():
@@ -51,7 +54,7 @@ def test_witness_skips_a_leg_not_served_by_the_gateway():
     # Seat finding (qwen run-5ce67bc0): every config holds an omniroute block, so a mimo leg was probed.
     runner, job = _Runner('job-1'), _job('mimo/mimo-v2.6-pro')
     gw.witness(runner, 'job-1', job, _env('job-1'), fetch=pytest.fail)
-    assert job.events == [{'event': 'gateway_witness_unavailable', 'reason': 'mimo leg not routed through gateway'}]
+    assert job.events == [{'event': 'gateway_witness_unavailable', 'reason': 'gateway endpoint not configured'}]
     assert not runner.calls
 
 
@@ -104,15 +107,16 @@ def test_witness_skips_untagged_or_witnessed_jobs():
 
 def test_fetch_rows_needs_spawner_token_and_sends_it(tmp_path):
     with pytest.raises(LookupError, match='no ' + gw.TOKEN_ENV):
-        gw.fetch_rows('plangraph-job-1', {}, secrets={gw.TOKEN_FILE_ENV: str(tmp_path / 'missing')})
+        gw.fetch_rows('plangraph-job-1', {}, secrets={gw.TOKEN_FILE_ENV: str(tmp_path / 'missing'),
+            'OMNIROUTE_BASE_URL': 'https://gateway.invalid/v1'})
     sent = []
     def opener(request, timeout):
         sent.append(request)
         return io.BytesIO(b'[{"sessionTag": "plangraph-job-1"}]')
-    rows = gw.fetch_rows('plangraph-job-1', {'OMNIROUTE_BASE_URL': 'http://gw:20128/v1'},
-                         opener=opener, secrets={gw.TOKEN_ENV: 'tok', 'OMNIROUTE_BASE_URL': 'http://gw:20128/v1'})
+    rows = gw.fetch_rows('plangraph-job-1', {'OMNIROUTE_BASE_URL': 'https://gw:8443/v1'},
+                         opener=opener, secrets={gw.TOKEN_ENV: 'tok', 'OMNIROUTE_BASE_URL': 'https://gw:8443/v1'})
     assert rows == [{'sessionTag': 'plangraph-job-1'}]
-    assert sent[0].full_url.startswith('http://gw:20128/api/usage/call-logs?sessionTag=plangraph-job-1')
+    assert sent[0].full_url.startswith('https://gw:8443/api/usage/call-logs?sessionTag=plangraph-job-1')
     assert sent[0].get_header('Authorization') == 'Bearer tok'
 
 
@@ -130,7 +134,8 @@ def test_management_url_is_parent_only(monkeypatch):
     assert sent[0].full_url.startswith('https://parent.example/api/usage/call-logs?')
     assert sent[0].get_header('Authorization') == 'Bearer parent-token'
     with pytest.raises(LookupError, match='endpoint'):
-        gw.fetch_rows('tag', child, secrets={gw.TOKEN_ENV: 'parent-token'}, opener=pytest.fail)
+        gw.fetch_rows('tag', child, secrets={gw.TOKEN_ENV: 'parent-token',
+                                                  'XDG_CONFIG_HOME': os.environ['XDG_CONFIG_HOME']}, opener=pytest.fail)
 
 
 @pytest.mark.parametrize('returncode', [0, 1])   # r2 seat (mimo-pro): a failed seat is witnessed too
@@ -147,10 +152,13 @@ def test_runner_review_seat_on_omniroute_is_witnessed_from_call_log(tmp_path, mo
     seen = {}
     def fetch(tag, env):
         seen['tag'] = tag
-        return [{'sessionTag': tag, 'status': 200, 'model': 'gpt-6-luna', 'provider': 'cx'}]
+        return ([{'sessionTag': seen['expected_tag'], 'status': 200,
+                  'model': 'gpt-6-luna', 'provider': 'cx'}]
+                if tag == seen['expected_tag'] else [])
     monkeypatch.setattr(gw, 'fetch_rows', fetch)
     async def factory(*args, **kwargs):
         seen['cfg'] = json.loads(kwargs['env'].get('OPENCODE_CONFIG_CONTENT') or '{}')
+        seen['expected_tag'] = args[args.index('--title') + 1]
         async def communicate(input=None):
             return (b'VERDICT: ACCEPT' if returncode == 0 else b'seat died, no verdict line'), b''   # D-4430: a final verdict at rc 1 completes
         return SimpleNamespace(pid=FAKE_PID, returncode=returncode, communicate=communicate)
@@ -189,3 +197,149 @@ def test_key_file_owner_only_check_refuses_windows_modes():
     assert not gw._owner_only(info, windows=True)  # Windows reports 0o666: never trust the mode there
     info = SimpleNamespace(st_mode=stat.S_IFREG | 0o644)
     assert not gw._owner_only(info, windows=False)
+
+
+_SOL_LEGS = [leg for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS)
+             if leg.id.startswith('cx-gpt-6.1-sol')]
+
+
+@pytest.mark.parametrize('leg', _SOL_LEGS, ids=lambda leg: leg.id)
+@pytest.mark.parametrize('role', ['implement', 'review'])
+@pytest.mark.parametrize('row_kind', ['matching', 'prefixed', 'base-model', 'failed-run',
+                                      'missing', 'wrong-tag', 'failed', 'unknown-model',
+                                      'console-meta/muse-spark-1.3', 'omniroute/resolver-x',
+                                      'different-gpt'])
+def test_sol_gateway_witness_for_every_route_leg(tmp_path, monkeypatch, leg, role, row_kind):
+    import asyncio
+    from plangraph.spawner import resolver
+    from plangraph.spawner.runner import SpawnerRunner
+    from plangraph.routing_support import host_keys, opencode_render
+
+    async def probe(*args, **kwargs):
+        return None
+
+    def render(env, model):
+        env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'provider': {'omniroute': {'options': {}}}})
+
+    monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
+    monkeypatch.setattr(opencode_render, 'render_gateway_providers', render)
+    monkeypatch.setattr(host_keys, 'add_host_keys', lambda *a, **kw: None)
+    monkeypatch.setattr(gw.time, 'sleep', lambda _: None)
+    seen = {}
+    served = leg.model.removeprefix('omniroute/cx-')
+    if row_kind == 'base-model':
+        served = 'gpt-6.1-sol'
+    elif row_kind == 'different-gpt':
+        served = 'gpt-6-luna'
+    elif '/' in row_kind:
+        served = row_kind
+
+    def fetch(tag, env):
+        seen.setdefault('fetch_tags', []).append(tag)
+        if row_kind == 'missing' or tag != seen['expected_tag']:
+            return []
+        return [{'sessionTag': seen['expected_tag'] if row_kind != 'wrong-tag' else 'another-session',
+                 'status': 503 if row_kind == 'failed' else 200,
+                 'provider': 'cx',
+                 'model': ('unknown-model' if row_kind == 'unknown-model' else
+                           'cx/' + served if row_kind == 'prefixed' else served)}]
+
+    monkeypatch.setattr(gw, 'fetch_rows', fetch)
+
+    async def factory(*args, **kwargs):
+        seen['env'] = kwargs['env']
+        seen['expected_tag'] = args[args.index('--title') + 1]
+        async def communicate(input=None):
+            return b'VERDICT: ACCEPT', b''
+        return SimpleNamespace(pid=FAKE_PID, returncode=1 if row_kind == 'failed-run' else 0,
+                               communicate=communicate)
+
+    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
+
+    async def run():
+        job = await runner.spawn('fixture', model_or_combo=leg.model, role=role,
+                                 client=leg.harness, cwd=str(tmp_path), wait_seconds=3)
+        await runner._tasks[job.job_id]
+        return job
+
+    job = asyncio.run(run())
+    assert gw.tagged(seen['env']['OPENCODE_CONFIG_CONTENT'], job.job_id, 'omniroute')
+    assert seen['expected_tag'] in seen.get('fetch_tags', [])
+    assert fetch('wrong-lookup-tag', seen['env']) == []
+    if row_kind in ('matching', 'prefixed', 'base-model', 'failed-run', 'different-gpt'):
+        assert job.served_model == 'cx/' + served
+        assert job.served_family == 'gpt'
+        assert job.witness_kind == gw.WITNESS_KIND
+        mismatches = [e for e in job.events if e['event'] == 'served_model_mismatch']
+        if served != leg.model.removeprefix('omniroute/cx-'):
+            assert mismatches == [dict(event='served_model_mismatch',
+                                       requested_model=leg.model, served_model='cx/' + served)]
+        else:
+            assert mismatches == []
+    else:
+        assert job.served_model in (None, '', 'unwitnessed')
+        assert job.served_family in (None, '', 'unwitnessed')
+        assert any(e['event'] == 'gateway_witness_unavailable' for e in job.events)
+
+
+def test_route_table_witness_paths():
+    """Run with -s to list all legs without an authenticated witness path.
+
+    Includes disabled and explicit legs so route changes cannot hide gaps.
+    Gateway capability assumes the MiMo endpoint is the configured gateway.
+    """
+    from plangraph.spawner.runner import SpawnerRunner
+    from plangraph.spawner.served_telemetry import native_models
+
+    missing = []
+    for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS):
+        cfg = {'provider': {'omniroute': {}, 'mimo': {}}}
+        gw.tag_session(cfg, 'coverage')
+        env = {'OPENCODE_CONFIG_CONTENT': json.dumps(cfg), 'OMNIROUTE_BASE_URL': '/gateway/v1'}
+        if leg.harness == 'opencode' and gw.gateway_leg(leg.model, env):
+            runner = SpawnerRunner()
+            job = _job(leg.model)
+            runner.jobs['coverage'] = job
+            runner._adapter_tokens['coverage'] = object()
+            rows = [{'sessionTag': gw.session_tag('coverage'), 'status': 200, 'model': leg.model}]
+            gw.witness(runner, 'coverage', job, env, fetch=lambda *a: rows)
+            if job.served_family is None:
+                missing.append(leg.id)
+            else:
+                assert job.served_family == leg.family, leg.id
+        elif native_models(leg.harness, json.dumps(
+                {'type': 'system', 'subtype': 'init', 'model': leg.model})):
+            continue
+        else:
+            missing.append(leg.id)
+    print('Route-table legs without a witness path (including disabled legs):\n' + '\n'.join(missing))
+    assert not set(missing).intersection(leg.id for leg in _SOL_LEGS), missing
+
+
+@pytest.mark.parametrize('model', ['console-meta/muse-spark-1.3', 'omniroute/resolver-x'])
+def test_adapter_rejects_unregistered_model_segments(model):
+    from plangraph.spawner.runner import JobInfo, SpawnerRunner
+    runner = SpawnerRunner()
+    job = JobInfo('admission', 'running', 'fixture', 'omniroute/cx-gpt-6.1-sol')
+    runner.jobs[job.job_id] = job
+    token = runner._adapter_tokens[job.job_id] = object()
+    with pytest.raises(ValueError, match='not an admitted model id'):
+        runner.served_witness(job.job_id, model, adapter_token=token)
+    assert job.served_model == job.served_family == 'unwitnessed'
+
+
+@pytest.mark.parametrize('model,family', [
+    ('console-meta/muse-spark-1.3-contributor', 'muse'),
+    ('omniroute/muse-spark-1.3-contributor', 'muse'),
+    ('cx/gpt-6.1-sol-medium', 'gpt'),
+    ('omniroute/cx-gpt-6.1-sol-medium', 'gpt'),
+    ('xiaomi-mimo/mimo-v2.6-flash', 'mimo'),
+])
+def test_adapter_family_uses_registered_model_segment(model, family):
+    from plangraph.spawner.runner import JobInfo, SpawnerRunner
+    runner = SpawnerRunner()
+    job = JobInfo('admission', 'running', 'fixture', model)
+    runner.jobs[job.job_id] = job
+    token = runner._adapter_tokens[job.job_id] = object()
+    runner.served_witness(job.job_id, model, adapter_token=token)
+    assert job.served_family == family

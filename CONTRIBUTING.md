@@ -6,8 +6,8 @@ and affected tests, in that order. Each family ends with a timed PASS/FAIL/SKIP/
 summary; failed checks with HTTP 5xx output in any family (including policy) are
 inferred as INFRA and retried once; persistent INFRA exits 3, other failures exit 1.
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
-affected pytest has 900 seconds. The hook has no additional overall preflight bound.
-Use `--keep-going` to collect all failures or `--fast`
+affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
+Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
 to skip affected tests. The existing pre-push hook runs preflight too; set
 `PREFLIGHT_FAST=1` for its fast mode or `PREFLIGHT_SKIP=1` to bypass only that hook
 invocation (not the existing scrub/ref/file-size gates or direct CLI runs). Private
@@ -17,20 +17,55 @@ when neither is present, public rules still run but scrub reports SKIP with a re
 The revision controls `FILESIZE_REQUIRE_BASE`, `NEWCODE_BASE` and `CHANGELOG_BASE`
 are scoped to policy checks. Other families receive none of these controls,
 including inherited values, so nested Git test fixtures own their revision bases.
-Affected tests also clear Git's repository-local environment reported by
-`git rev-parse --local-env-vars`, including indexed configuration pairs. Policy
-checks retain the caller's Git context; test repositories keep their own hooks.
+Preflight clears every name reported by
+`git rev-parse --local-env-vars`, all `GIT_CONFIG*` variables, `GIT_PREFIX`, `GIT_NAMESPACE`,
+`GIT_CEILING_DIRECTORIES` and `GIT_DISCOVERY_ACROSS_FILESYSTEM`
+before starting the selector. The selector repeats this before pytest, and the
+pytest session clears inherited bindings and disables global/system Git config
+before collection and test fixtures.
+Discovery failures refuse to launch tests. The hook's own Git and policy calls
+retain the caller's context; temporary test repositories keep their own hooks.
+Rust source changes always select `tests/test_spawner_import_guard.py` in affected
+CI runs; its tree-wide scan rejects Python command bodies depending on pytest or test helpers.
+
+`tools/merge_batch.py plan` and `build` fetch origin and measure each PR against
+`origin/<base>...<head sha>` with Git, so refresh merges and GitHub's truncated
+file lists do not inflate sizes or hide HIGH paths. The `GENERATED` column
+reports Cargo.lock, `generated/` trees and minified-file lines separately; these
+lines are also included in `LINES` and the batch cap. Both rename paths count
+for HIGH checks. For stacks, each PR still displays its diff against the batch
+base; the batch cap counts each layer against its parent head once (`batch_lines`
+in JSON), preserving per-PR stack contributions.
+
+`tools/merge_batch.py build --name NAME --prs 1,2 --plan plangraph:KEY` records the
+batch PLAN key; `--deviations TEXT` records nonconformance (forced build exceptions
+also appear as deviations). Record every included part with `review --name NAME
+--pr N --file PATH`: evidence must end in `HEAD: <full part sha>` then
+`VERDICT: ACCEPT` (or `REQUEST_CHANGES` / `REJECT`, which replace an earlier
+ACCEPT and block the request). `push --name NAME --ci-run ID` records the full batch CI run's
+head, status and conclusion; repeat push after CI completes. A push without an ID
+refreshes an existing run only on the same head; a new head clears it.
+`go-req --name NAME` prints one batch GO-REQ with PR, full head, diff stat, part
+reviews, CI and the final PLAN block. It refuses absent/stale ACCEPT evidence,
+non-green or missing CI, and workflow edits whose touching commits lack a
+`Gate-Edit: D-<id>` trailer, including edits introduced by merge resolution. The batch key is explicit; part Plan-Items do not
+stand in for the batch's PLAN key.
 
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
 ## Setup and tests
+
+New devstack keeper configs require `PLANGRAPH_DECISIONS_REPO` naming a decisions
+checkout; existing valid configs are reused when it is unset. Explicit setup
+adds missing `repos.decisions` at `origin/main` privately and preserves all existing values.
+See the [keeper install config](docs/RUNBOOK.md#1-init-and-config).
 
 Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so there is no
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
 with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
 The D-5504/D-5506 `mcp_tools.py` exception only splits schema data out of the full Python MCP transport; it also retires with MCP-RUST.
-Interim (operator D-5830): `**/*.py` and `**/*.sh` are allowlisted, so new Python and shell files pass the new-code gate; Rust stays the preferred language for new code, and the gate, its CI job and its tests stay in place for the other blocked extensions.
+Keep both OOM diagnostic regression and quota snapshot module/test entries in `tools/new_code_allowlist.txt` when merging these concurrent in-flight changes.
 
 ```bash
 python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
@@ -38,35 +73,45 @@ python tools/affected_tests.py --base origin/main --run -n auto  # writers / PR 
 python -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
 
+The selector follows static Python module launches (`-m`) and calls through
+`tools/*.sh`, including imports in shell Python heredocs. Deleted Python modules
+use the base revision’s importer graph; unresolved importers select the full suite,
+including deleted leaf tests. Deleted `conftest.py` files select the full suite for
+implicit fixture consumers. Local preflight refuses these full-suite selections.
 The affected selector falls back to the full suite for shared fixtures and suite
 configuration; unmapped code selects a bounded smoke set (tests naming its directory,
 at most 12, plus `tests/test_affected_tests.py`), and CI/main keep the full suite; documentation, `changelog.d/` fragments,
-status and build artifacts, and `.md`/`.rst`/`.txt` files no test names, select no tests. Do not bypass a conservative fallback on PRs.
+build artifacts, and `.md`/`.rst`/`.txt` files no test names, select no tests. Under `docs/` and `status/` only documentation files (`.md`, `.rst`, images) select no tests; any other file there (`docs/conf.py`, `status/x.toml`) goes through the normal mapping. Do not bypass a conservative fallback on PRs.
 Pass `--head <revision>` for a committed-only comparison, excluding staged,
 worktree and untracked changes; omit it to include checkout changes.
 Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
 the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
 
+Rust review record assertions run on every platform; keeper-backed assertions run only on Unix because the keeper imports POSIX `fcntl`.
+Rust review tests also execute keeper evidence and planner routing code; changes to `src/plangraph/keeper/errors.py` and `src/plangraph/planner/routing.py` select Rust CI through `RUST_INPUTS`.
+
 CI suite selection in `tools/ci_select.py` treats `docs/schemas/**` and its
 `RUST_INPUTS` list as Rust inputs even when they are documentation. These inputs
 select both `rust` and `rust-windows` via the shared `rust` output without changing
 other suites. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
 literals, manifest-relative reads and paths leaving `rust/`; new repository
-inputs must be added to `RUST_INPUTS`, not inline to the workflow.
+inputs must be added to `RUST_INPUTS`, not inline to the workflow. `rust/pg-spawnd/`
+and `rust/Cargo.*` also select `rust-worker`; its helper and tests share the cached target.
 Include paths passed through read helpers too: `pg-hook` reads `.docs-map`,
 `docs/rust-hooks.md`, `tools/new_code_allowlist.txt` and its parity corpus at
 `tests/hooks/parity_payloads.json`; all four are explicit selector inputs.
+`setup/manifest.toml` and `docs/setup.md` select the Rust job because the CLI setup contract test (`rust/plangraph-cli/tests/setup_contract.rs`) reads them.
 
 Run `cargo test -p <crate>` from `rust/` for each affected crate. Documentation
 mapping for a crate covers its own paths, not shared workspace manifests or locks.
 
 ### Rust builds and toolchain bumps
 
-Run Cargo from `rust/` (or a crate directory beneath it) so rustup reads
-`rust/rust-toolchain.toml`, the single Rust release pin shared with all CI jobs
-through `.github/actions/setup-rust`. Passing `--manifest-path` from the repository
-root does not select that toolchain locally. For example:
+The repository-root `rust-toolchain.toml` is the single Rust release pin shared
+with all CI jobs through `.github/actions/setup-rust`, including Windows.
+Rustup selects it from both the repository root and `rust/`, so root-level
+`cargo build --manifest-path rust/Cargo.toml` uses the same compiler as:
 
 ```bash
 cd rust
@@ -75,12 +120,17 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
 
-**Bump step:** open one PR that changes the channel in `rust/rust-toolchain.toml`
+Toolchain-only changes select all CI suites, the Python pin guards, and local Rust
+preflight checks. Dell installs this pin before mounting its direct sysroot.
+
+**Bump step:** open one PR that changes the channel in `rust-toolchain.toml`
 and fixes the new lints, without weakening `-D warnings`. Run every Rust CI job
 (`rust`, `rust-windows`, `rust-worker`, `rust-spike`) and require green before
 merging. Do not duplicate the version in workflows. The regression check is
 `python3 -m pytest -q -n 2 tests/test_ci_rust_toolchain.py`.
-It scans every workflow and local composite action, rejecting case-insensitive
+The Rust integration test `toolchain_pin` checks `rustc --version` from the root
+and `rust/` against that channel, without inherited `RUSTUP_TOOLCHAIN` overrides.
+The Python guard scans every workflow and local composite action, rejecting case-insensitive
 `RUSTUP_TOOLCHAIN` overrides (including container/service environments),
 `cargo +<toolchain>`, `rustup run <toolchain>` and direct rustup installation/selection.
 Only the shared setup may use actions whose names contain `rust` or `toolchain`.
@@ -91,6 +141,7 @@ SHA explicitly in a reviewed PR when needed, not the shared Rust release pin.
 
 Completed Rust ports remove only their own Python waiver from
 `tools/new_code_allowlist.txt`; preserve unrelated exceptions when merging main.
+Merge in-flight test entries additively so each active lane retains its own coverage.
 SPAWNER-RUST-PORT slice 2 also removes the stale doctor-source waiver retired by
 slice 1; its changelog fragment accounts for all four named Python waivers.
 Doctor source-filter goldens live in `tests/fixtures/doctor_sources.json` and run
@@ -142,12 +193,11 @@ New Python files require a reasoned rule 9.14 entry in `tools/new_code_allowlist
 
 ## File size
 
-A tracked source, test, script or doc file stays at or under 400 lines; over 400, split it
+A tracked source, test, script or doc file stays at or under 800 lines; over 800, split it
 by responsibility before adding more. `python3 tools/check_file_size.py` enforces this in CI
 and in the pre-push hook. Files that were larger when the gate landed are listed in
 `.filesize-baseline`: such a file may shrink, never grow, and the baseline itself only
-shrinks: `--update-baseline` writes it once when none exists, afterwards only lowers
-counts, and CI refuses an entry added or raised against the change's base (`origin/main`
+shrinks: `--update-baseline` writes it once when none exists, afterwards only lowers counts or removes entries that fit the 800-line cap, and CI refuses an entry added or raised against the change's base (`origin/main`
 on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
 (today only `CHANGELOG.md`, an append-only ledger).
@@ -156,10 +206,11 @@ The file-size gate refuses malformed Git batch headers with a single reason line
 New Python source outside tests needs a `path | reason (D-id)` line in
 `tools/new_code_allowlist.txt`, which `python3 tools/check_new_code_lang.py` reads; for
 example the keeper's host-sample store stays Python because the keeper is Python (D-5038).
+The `spawner/gateway_models.py` entry covers a responsibility-only extraction of existing Python model admission and row parsing; `gateway_witness.py` keeps compatible re-exports.
 
 ## Changelog and documentation
 
-Every change touching non-documentation paths requires an entry (rule D-653), either as a new or edited fragment that adds an entry line against the merge-base in `changelog.d/<ITEM-KEY>.md` (several parts of one item: `<ITEM-KEY>-<n>.md`) holding the entry line, or as a new non-heading line under `## Unreleased` in `CHANGELOG.md`. Fragment PRs keep open lanes mergeable because each PR adds its own file; `python3 tools/changelog_fold.py` folds all fragments under `## Unreleased` newest first, then deletes only fragments whose entry lines were folded. Fragments must be direct children (no nested paths); README.md is excluded. Uncommitted fragments sort newest by mtime with filename ties, before committed fragments ordered by first-commit date. Empty or heading-only fragments remain in place and are reported; `--check` writes nothing and exits 1 while fragments remain. An empty fragment or deleting the changelog or editing whitespace does not count. A non-doc change may waive this only when every commit that touches non-doc paths carries its own `Changelog: skip (<reason>)` line in its trailer block (last paragraph; merge commits do not count), with a non-empty reason (for typos or format-only edits). Furthermore, repository documentation mappings in `.docs-map` pair path globs with their corresponding doc files; changes touching a mapped path must update at least one of its listed docs. Globs: `*` stays inside one path segment, `**` spans segments; the `# enforce-after:` date is the first day the mapping is an error (earlier days warn). `python3 tools/check_changelog_docs.py` (range `merge-base(base, --head)..head`) verifies this in CI and runs with `--warn-only` on each pushed sha in the pre-push hook.
+Every PR records its changelog only in `changelog.d/<ITEM-KEY>.md` (several parts of one item: `<ITEM-KEY>-<n>.md`). Add a non-heading entry line against the merge-base; fragments must be direct children and README.md is excluded. Do not edit `CHANGELOG.md` in an ordinary PR, including doc-only edits, deletions or edits later reverted in the range. The gate checks each commit; merges may inherit parent ledger edits, but must preserve additions and cannot invent ledger lines or discard common base lines (unless a parent already deleted them) without a release trailer. A release commit is recognized only by a nonempty `Release: <version or release description>` trailer in its trailing trailer block (case-insensitive); body prose and empty trailers do not qualify. Release maintainers run `python3 tools/changelog_fold.py`, then commit the folded changelog and fragment deletions with that trailer. `--check` writes nothing and exits 1 while fragments remain; empty and heading-only fragments remain with a warning. A release trailer permits the CHANGELOG edit but does not waive the fragment requirement for code changes. Non-doc changes may instead carry `Changelog: skip (<reason>)` on every non-doc commit, with a nonempty reason for typos or format-only edits; merge commits do not count. Neither skip trailers nor fragments excuse a non-release CHANGELOG edit. The changelog/docs checker imports `ci_commit_gate._trailer_block_lines`: the block is the maximal trailing run of paragraphs made entirely of trailer-shaped lines. Attribution paragraphs such as `Co-Authored-By` and `Claude-Session` may follow policy trailers across blank lines; prose after a skip ends its eligibility. Furthermore, repository documentation mappings in `.docs-map` pair path globs with their corresponding doc files; changes touching a mapped path must update at least one of its listed docs. Globs: `*` stays inside one path segment, `**` spans segments; the `# enforce-after:` date is the first day the mapping is an error (earlier days warn). `python3 tools/check_changelog_docs.py` (range `merge-base(base, --head)..head`) verifies this in CI and runs with `--warn-only` on each pushed sha in the pre-push hook.
 
 `tests/fixtures/writer_docs_map.json` is the shared glob/parser case table for Rust writer finalization and `test_writer_docs_map_shared_parity` in `tests/test_check_changelog_docs.py`; run the latter with `python3 -m pytest -q -n 2 tests/test_check_changelog_docs.py`. Rust reads the head map; CI additionally retains merge-base rules (see [writer finalization](docs/SPAWNER.md#writer-result-finalization)).
 
@@ -173,6 +224,12 @@ Every commit message ends with one trailer paragraph — no blank lines inside i
 Plan-Item: plangraph:<KEY>
 Co-Authored-By: <author> <noreply@example.com>
 ```
+
+A merged commit whose trailers fail the CI commit gate is never rewritten. A router decision adds its full sha to
+`tools/ci_commit_exempt.txt` in a commit that carries `Gate-Edit: D-<id>` in the same trailer paragraph. The gate reads
+the list from the base commit, so the row has to merge to `main` before the pull request that holds the commit can pass.
+A row for a test-removal failure is added only after the branch asserts the removed behaviour again; the comment line
+above the row names the decision, the pull request and that test.
 
 ## No secrets in the history
 
@@ -198,6 +255,11 @@ An explicit missing or unreadable list refuses pushes to any remote. The env lis
 Remotes are public unless `git config remote.<name>.plangraph-private true` is set:
 that skips private-word matching, not public patterns. Classification uses local config only.
 Diagnostics never show matched values or the words-file path.
+
+For an existing branch refreshed by merging known `origin/main` history, the hook
+selects affected tests from the merge-base with `origin/main` when that base
+descends from the remote branch head. Public scrub still covers the original
+pushed range, passed separately to preflight as `--scrub-base`.
 
 ## Shadow merge decision (D-5252, slice 1)
 
@@ -298,7 +360,8 @@ before the cursor are not detected (transcripts are append-only), and records ov
 1 MiB are skipped.
 
 The standalone Rust `turn-budget-hook` lives in `rust/worker-core`, beside the
-existing watchdog binaries; `tools/hooks/install_hooks.sh` remains Python-only.
+existing watchdog binaries. The default `tools/hooks/install_hooks.sh` mode
+copies Python hooks; its `--git` mode installs the Rust Git hook.
 Build, registration examples, injectable state paths and the polling-recognition
 boundary are documented in [Turn-budget hook](docs/turn-budget-hook.md).
 Run its hermetic contracts with `cargo test --manifest-path rust/Cargo.toml -p
@@ -306,7 +369,70 @@ pg-worker-core --test turn_budget_hook --test turn_budget_poll --test
 turn_budget_alert --test turn_budget_watchdog`. Tests never install hooks, read
 live session state, or change permissions/settings files.
 
-Package R Python files already in flight are individually listed in
+Python files already in flight are individually listed in
 `tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
 
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
+
+The standalone fresh-base admission carry is listed as D-5848 in
+`tools/new_code_allowlist.txt` until the spawner Rust port.
+
+Local controls run every named consumer plus a bounded smoke set; policy checks use origin/main when available, including inherited stack changes. Preflight clears the complete GIT_CONFIG namespace before selector launch.
+
+Both pytest CI jobs validate collection once without `PYTEST_SHARD` on shard 0, using the PR
+affected selection or the full push/nightly suite. Empty individual shards remain
+valid; a nonempty file selection that collects no tests fails the job. Local
+preflight timeouts terminate the selector and its pytest descendants. Missing
+`tools/preflight.py` refuses pushes to main unless `PREFLIGHT_SKIP=1` is explicit.
+Topic and tag pushes without preflight still run the scrub, ref and file-size gates.
+
+The K1-R1 HEAD audit runtime is explicitly stdlib Python so the installer can copy
+it outside the changing checkout; its narrow allowlist entry covers that requirement.
+
+The generated example batch declares tier `none` for new decision-only items; the example builder preserves historical imported plan definitions and their stored tiers.
+
+Gemini retirement regressions preserve historical record reads while checking request
+admission and catalog filtering; AGY capability/witness activation requires evidence.
+
+The 800-line tracked file budget is authorized by D-5840 (95a9ac34); legacy baseline ratchets still apply.
+
+[Per-item checkpoint and status notes](docs/checkpoints/). Add new notes there, one file per item, rather than appending here.
+
+Standalone Rust workspaces, including rust/worker, receive manifest-specific preflight checks.
+Preflight selects changed crates and their transitive path dependents across workspaces;
+the Temporal spike keeps its CI replay-only check and is skipped for unrelated workspace changes.
+
+Worker preflight tests default to the CI test-only unjailed environment when no jail
+configuration is supplied; explicit jail settings are preserved and other check commands are unaffected.
+
+Rust test builds, including nested admission checks and Python placement fixtures, inherit `CARGO_TARGET_DIR`; keep the host shared target when it is configured.
+
+Local worker preflight runs library and binary unit tests offline. CI runs the full worker suite, including Temporal-dependent integrations, through `ci-temporal`.
+
+Install Git message validation with `tools/hooks/install_hooks.sh --git`
+(using the shared host `CARGO_TARGET_DIR`). Non-merge commits require a strict
+`Writer:` or `Hand-Edit:` trailer. See `docs/rust-hooks.md`.
+
+Writer handoffs named `STATUS-*.txt` are ignored at every depth. Keep them
+outside the checkout; the changelog/docs PR gate also rejects added status
+notes, including forced additions and renames into that naming pattern.
+The status-note check also inspects additions in every non-merge commit, so
+adding and then deleting a note within the PR still fails.
+
+The new-code language gate is implemented in Rust (`rust/pg-policy`), with the
+existing Python command retained as a launcher. Added allowlist entries need
+base-revision OPERATOR authority; D-5840 and D-5830 do not count. See
+[the migration plan](docs/PY-TO-RUST-MIGRATION-PLAN.md) for the index and first ports.
+
+The pre-push hook checks commit trailers on `origin/main..head` before scrub and
+preflight, including when `PREFLIGHT_SKIP=1`. It queries open PR heads and checks
+foreign merges when gh/network access is available; offline pushes still run the
+local trailer gate and explicitly report the skipped open-PR check.
+
+Review prompt builders use `src/plangraph/review/review_brief.md` through
+`plangraph.review.prompt.render_brief`. Supply item context explicitly (the judge
+CLI accepts `--context` JSON); missing fields remain visible as unavailable.
+Fixed brief rules and output contracts precede `=== ITEM CONTEXT`; item-specific
+content follows it so different items reuse the same prompt cache prefix.
+
+Append-only ledger paths are declared once using `merge=union` in the root `.gitattributes` (currently the historical `CHANGELOG.md` ledger, retained for historical merges and releases; current PRs still need fragments). `tools/merge_batch.py build` reads these defaults from the fetched base and persists them for continue/recovery; `--union GLOB` adds extra paths. Union can preserve both old and reworded entries, so review its warnings. Do not apply union to reference docs: edit substantive documentation in place, and put checkpoint/status records in `docs/checkpoints/<ITEM>.md` without updating a central list. See the [append audit](docs/checkpoints/LE-APPEND-ONLY-DOCS-CONFLICT.md).

@@ -1,0 +1,1 @@
+Production checkout checks alert routing through fleet-bus for detached HEAD, a non-default branch, dirty tracked files or an unavailable checkout; an uninstalled five-minute timer and dry-run HEAD audit hook installer accompany spawn-time code-tree identity in run records.

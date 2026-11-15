@@ -1,2 +1,3 @@
 tools/fleet-msg text eol=lf
+# Historical append-only ledger; ordinary PRs use changelog.d/<ITEM>.md.
 CHANGELOG.md merge=union

@@ -28,19 +28,10 @@ fn fake_child() {
         return;
     };
     match mode.as_str() {
-        "spawn-sleep" => {
-            let mut child = Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "run::group_windows_tests::fake_child",
-                    "--nocapture",
-                ])
-                .env("PG_FAKE_CHILD", "sleep")
-                .spawn()
-                .unwrap();
-            thread::sleep(Duration::from_secs(30));
-            let _ = child.wait();
-        }
+        "spawn-sleep" => wait::spawn_tree(),
+        "tree-leaf" => loop {
+            thread::park();
+        },
         "sleep" => {
             println!("payload-ready");
             thread::sleep(Duration::from_secs(30));
@@ -176,15 +167,18 @@ fn name_lifetime_collision_and_drop() {
 #[test]
 fn descendants_and_stop() {
     let (mut g, _dir) = launch("pg-win-tree", "spawn-sleep", false, false).unwrap();
-    until(|| g.group.members().unwrap().len() == 2);
+    let (grandchild, output) = wait::tree_ready(&mut g.child);
     let pids = g.group.members().unwrap();
-    assert!(pids.contains(&g.child.id()));
+    let names = wait::assert_tree_members(&pids, g.child.id(), grandchild);
+    wait::assert_stop_requires_kill(&*g.group, &pids, &names);
     assert_eq!(
         stop_group(&*g.group, Duration::ZERO, Duration::from_secs(2)),
-        StopOutcome::Empty
+        StopOutcome::Empty,
+        "job members before stop: {names}"
     );
-    assert!(pids.iter().all(|&pid| gone(pid)));
+    assert!(pids.iter().all(|&pid| gone(pid)), "job members: {names}");
     g.child.wait().unwrap();
+    output.join().unwrap();
 }
 #[test]
 fn pipes_exit_and_assignment() {

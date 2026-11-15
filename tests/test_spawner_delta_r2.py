@@ -58,6 +58,7 @@ def test_failed_review_keeps_leg_not_banner(tmp_path, monkeypatch, stopped, stat
         assert record.get('reason') is None
     if not stopped:
         assert record['reason'] == 'Error: transport failed'
+        assert record['attempts'][0]['skip_reason'] == 'Error: transport failed'
     assert 'VERDICT: CHANGES' in record['attempts'][0]['stdout_tail']
 
 
@@ -69,7 +70,7 @@ def test_watchdog_entrypoint_builds_hung_from_config(tmp_path, monkeypatch):
     from plangraph.spawner import stall_watchdog as w
     from plangraph.spawner.hung_capture import HungBoundary
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
-    monkeypatch.setattr(w, 'read_runs', lambda *a, **kw: [])
+    monkeypatch.setattr(w, 'sweep_runs', lambda *a, **kw: [])
     monkeypatch.setattr(w, 'read_claims', lambda: [])
     seen = []
     def tick(*a, **kw):
