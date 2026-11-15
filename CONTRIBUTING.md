@@ -68,6 +68,11 @@ stand in for the batch's PLAN key.
 
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
+The feeder's `deploy/feeder/house-rules.md` and policy are repository inputs to
+Rust tests. The feeder service is also a Rust contract-test input. Changes to
+these inputs select the Rust CI job through
+`tools/ci_select.py` so template and default-policy checks cannot be skipped.
+
 ## Setup and tests
 
 New devstack keeper configs require `PLANGRAPH_DECISIONS_REPO` naming a decisions

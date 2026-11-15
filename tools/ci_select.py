@@ -35,6 +35,8 @@ KNOWN_PREFIXES: tuple[str, ...] = (
 RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/catalog_data.py",
     "src/plangraph/routing_errors.py",
+    "deploy/feeder/**",
+    "deploy/systemd/pg-feeder.service",
     "src/plangraph/keeper/errors.py",
     "src/plangraph/planner/routing.py",
     ".github/workflows/**",
