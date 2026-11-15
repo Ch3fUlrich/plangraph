@@ -1,2 +1,3 @@
 pg-spawnd CLI tests reuse Cargo's binary for unshared targets and isolate builds under `<shared target>/cli-tests/<checkout path hash>` when a target directory environment variable points outside the checkout, preventing another worktree from replacing their executable without extra builds in ordinary CI. Preflight logs the Rust target directory.
 Canonicalize existing checkout and target paths before deciding CLI isolation, and compare canonical paths in the shared-target regression test so Windows path aliases follow the same rule as Linux.
+The CLI review spawn tests added on main also use the checkout-owned binary resolver when targets are shared.
