@@ -13,6 +13,7 @@ struct Fixture {
     reads: usize,
     fail_logs: bool,
     fail_rerun: bool,
+    run_pages: usize,
 }
 impl Fixture {
     fn new() -> Self {
@@ -24,6 +25,7 @@ impl Fixture {
             reads: 0,
             fail_logs: false,
             fail_rerun: false,
+            run_pages: 0,
         }
     }
 }
@@ -31,10 +33,11 @@ impl Github for Fixture {
     fn pages(&mut self, endpoint: &str, _: Option<&str>) -> Result<Vec<Value>> {
         if endpoint.starts_with("pulls?") {
             Ok(self.prs.clone())
-        } else if endpoint.starts_with("actions/workflows/") {
-            assert!(endpoint.ends_with("&branch=main") || endpoint.ends_with("&head_sha=abc123"));
-            Ok(self.runs.clone())
         } else {
+            assert!(
+                !endpoint.starts_with("actions/workflows/"),
+                "runs must not paginate"
+            );
             assert_eq!(
                 endpoint,
                 format!(
@@ -44,6 +47,12 @@ impl Github for Fixture {
             );
             Ok(serde_json::from_str(JOBS).unwrap())
         }
+    }
+    fn page(&mut self, endpoint: &str, _: Option<&str>) -> Result<Vec<Value>> {
+        assert!(endpoint.starts_with("actions/workflows/"));
+        assert!(endpoint.ends_with("&branch=main") || endpoint.ends_with("&head_sha=abc123"));
+        self.run_pages += 1;
+        Ok(self.runs.clone())
     }
     fn log(&mut self, job: u64) -> Result<String> {
         assert_eq!(job, 100);
@@ -67,6 +76,17 @@ fn tasks(dir: &Path) -> Vec<Task> {
         .lines()
         .map(|s| serde_json::from_str(s).unwrap())
         .collect()
+}
+#[test]
+fn run_history_is_read_one_page_per_query() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut gh = Fixture::new();
+    scan(&mut gh, "o/r", temp.path(), &BTreeMap::new(), true, |_| {
+        Ok(true)
+    })
+    .unwrap();
+    // One open PR head plus main: two single-page requests, never paginated.
+    assert_eq!(gh.run_pages, 2);
 }
 #[test]
 fn failed_pr_rescan_updates_one_task_and_defines_once() {

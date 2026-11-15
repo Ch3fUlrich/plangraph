@@ -1,12 +1,12 @@
 # CI watch
 
 Run `plangraph ci-watch` from a plangraph checkout with authenticated `gh` on PATH.
-It scans completed `tests.yml` runs, paginates open PRs, runs and jobs, and takes
-only the newest completed run per open PR head/event or main branch/event.
+It scans completed `tests.yml` runs, paginates open PRs and jobs, reads one page
+(100 newest) of runs per main branch or open PR head, and takes only the newest completed run per open PR head/event or main branch/event.
 PR runs must match the current open PR head SHA. Successful newest runs suppress
 older failures. Closed PRs are ignored. The repository comes from origin.
-Pagination scans the full completed main history, so API use grows with that
-history; each invocation still runs once and selects only newest runs.
+Run queries are capped at one page (newest first), so API use is one call per
+open PR head plus one for main and does not grow with run history.
 
 `--dry-run` prints proposed actions without writing state, rerunning jobs or
 calling keeper. `--keeper` creates priority 10 lanes under

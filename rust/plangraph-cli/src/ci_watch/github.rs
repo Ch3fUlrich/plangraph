@@ -5,6 +5,8 @@ use std::process::{Command, Stdio};
 
 pub trait Github {
     fn pages(&mut self, endpoint: &str, field: Option<&str>) -> Result<Vec<Value>, String>;
+    /// First page only (newest first), one REST call.
+    fn page(&mut self, endpoint: &str, field: Option<&str>) -> Result<Vec<Value>, String>;
     fn log(&mut self, job: u64) -> Result<String, String>;
     fn rerun(&mut self, run: u64) -> Result<(), String>;
 }
@@ -74,6 +76,10 @@ impl Github for Gh {
                 &format!("repos/{}/{endpoint}", self.repo),
             ],
         )?;
+        parse_pages(&raw, field)
+    }
+    fn page(&mut self, endpoint: &str, field: Option<&str>) -> Result<Vec<Value>, String> {
+        let raw = command("gh", &["api", &format!("repos/{}/{endpoint}", self.repo)])?;
         parse_pages(&raw, field)
     }
     fn log(&mut self, job: u64) -> Result<String, String> {

@@ -157,9 +157,11 @@ fn scan(
         heads.insert(sha, number(&pr, "number")?);
     }
     let workflow = "actions/workflows/tests.yml/runs?status=completed&per_page=100";
-    let mut runs = gh.pages(&format!("{workflow}&branch=main"), Some("workflow_runs"))?;
+    // Only the newest completed run per head/event is used and GitHub lists
+    // newest first, so one page per query bounds API use regardless of history.
+    let mut runs = gh.page(&format!("{workflow}&branch=main"), Some("workflow_runs"))?;
     for sha in heads.keys() {
-        runs.extend(gh.pages(&format!("{workflow}&head_sha={sha}"), Some("workflow_runs"))?);
+        runs.extend(gh.page(&format!("{workflow}&head_sha={sha}"), Some("workflow_runs"))?);
     }
     // GitHub returns newest first, but sorting also makes fixtures/order changes safe.
     runs.sort_by_key(|r| std::cmp::Reverse(r["id"].as_u64().unwrap_or(0)));
