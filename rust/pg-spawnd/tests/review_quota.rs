@@ -1,4 +1,6 @@
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 mod common;
 #[allow(dead_code)]
 #[path = "common/placement.rs"]

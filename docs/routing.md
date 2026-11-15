@@ -141,8 +141,9 @@ D-5903 round 3 explicitly retains the Hydrogen tools review seat for cards witho
 
 The shipped provider config and the pending benchmark inventory use the same `omniroute/deepseek-v4.1-flash` identity; the pending row explicitly records missing measurements. Historical fallthrough replay projects the legacy alias onto this registered identity.
 
-D-5966 reviews prefer agy Hydrogen high, agy Argon medium, DeepSeek flash and Beam
-free legs, then Sonnet high. Each agy model has an independent quota reset.
+Reviews (rule 3.50, D-6028) start on mimo-v2.6-pro, then mimo-v2.6-flash (both inline-only, so
+the card needs a diff_ref), then the D-5966 order: agy Hydrogen high, agy Argon medium, DeepSeek
+flash and Beam free legs, then Sonnet high. Each agy model has an independent quota reset.
 
 Review writer aliases (`codex`, `cx-gpt-6.1-sol`, `gpt`) share the registered
 writer-family resolver used by spawn admission and review seats. The preferred

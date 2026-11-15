@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from plangraph.planner.legs import DEFAULT_LEGS, REVIEW_ORDER
+from plangraph.planner.legs import (DEFAULT_LEGS, REVIEW_ORDER, REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH,
+                                    REVIEW_HYDROGEN, REVIEW_ARGON, REVIEW_BEAM)
 from plangraph.planner.routing import plan_spawn
 from plangraph.spawner.cli import main
 
@@ -162,6 +163,19 @@ def test_route_and_refusal(tmp_path, capsys):
     assert 'spawn by card' in capsys.readouterr().err
 
 
+def test_review_order_rule_350_mimo_pro_then_flash_then_326():
+    # D-6028: mimo-v2.6-pro first, mimo-v2.6-flash second, then the rule 3.26 order, Sonnet high last.
+    assert REVIEW_ORDER == ("mimo-v2.6-pro", "mimo-v2.6-flash", "agy-gemini-4-hydrogen-high",
+                            "agy-gemini-4-argon-medium", "console-deepseek-flash",
+                            "opencode-go-beam-free", "claude-sonnet-5-5-high")
+    plan = plan_spawn(CARD, role="review", writer_families=("openai",),
+                      leg_reader=lambda model, **kwargs: {"state": "available", "evidence": None})
+    # An OpenAI writer keeps the DeepSeek fallbacks ahead of the final Sonnet seat.
+    assert [leg.id for leg in plan.legs] == [*REVIEW_ORDER[:-1], "omniroute-deepseek-flash",
+                                             "opencode-go-deepseek-v4-flash", REVIEW_ORDER[-1]]
+    assert plan.legs[0].model == "mimo/mimo-v2.6-pro"
+
+
 def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
@@ -183,8 +197,8 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert reasons[FREE[0]].startswith("disabled: D-4196 ")
     assert reasons[FREE[1]].startswith("disabled: D-4196 ")
     assert reasons["omniroute-deepseek-flash"] == "banned_family"
-    assert [leg.id for leg in rev.legs] == [REVIEW_ORDER[0], REVIEW_ORDER[1], REVIEW_ORDER[3],
-                                                "cx-gpt-6-luna", "agy-gpt-oss-120b"]
+    assert [leg.id for leg in rev.legs] == [REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH, REVIEW_HYDROGEN,
+                                            REVIEW_ARGON, REVIEW_BEAM, "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert reasons["opencode-big-pickle"] == "off_family"
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
@@ -215,7 +229,7 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert ids == [*REVIEW_ORDER[:-1], "cx-gpt-6-luna", "agy-gpt-oss-120b",
                    "omniroute-deepseek-flash", "opencode-go-deepseek-v4-flash"]
     assert DISABLED_FREE.isdisjoint(ids)
-    assert ids.index("agy-gemini-4-hydrogen-high") == 0
+    assert ids.index(REVIEW_MIMO_PRO) == 0 and ids.index(REVIEW_HYDROGEN) == 2  # D-6028
 
 
 def test_route_sol_unavailable_keeps_tier_writer_order():
@@ -388,8 +402,8 @@ def test_main_policy_gpt_first_and_retained_routes():
                             policy=policy, leg_reader=clear)
         assert not {leg.family for leg in review.legs} & set(writers)
         assert not {leg.family for leg in review.review_seats} & set(writers)
-        # D-4196: the Zen deepseek leg is disabled, so mimo writers fall to the next family.
-        assert review.first_leg.id == "agy-gemini-4-hydrogen-high"
+        # D-6028: mimo-v2.6-pro leads; a mimo writer excludes its own family and falls to Hydrogen.
+        assert review.first_leg.id == (REVIEW_HYDROGEN if "mimo" in writers else REVIEW_MIMO_PRO)
         assert "deepseek" in {leg.family for leg in review.legs}
         assert "glm" not in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {
