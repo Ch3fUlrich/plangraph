@@ -141,7 +141,8 @@ fn disk_hygiene_denied_foreign_cwd_cannot_be_ignored() {
 #[cfg(unix)]
 fn shared_cap_evicts_old_build_variants_and_rechecks_live_cargo() {
     let tmp = tempfile::tempdir().unwrap();
-    let cache = tmp.path();
+    // Both the cache and its sibling lease belong to this fixture.
+    let cache = &tmp.path().join("cargo-target");
     let old = cache.join("debug/build/my-crate-1111111111111111");
     let new = cache.join("debug/build/my-crate-2222222222222222");
     let old_compile = cache.join("debug/build/my-crate-3333333333333333");

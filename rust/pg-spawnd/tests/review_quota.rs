@@ -27,7 +27,16 @@ fn review_quota_falls_through_without_waiting_and_names_served_model() {
         let bad = json!({"argv":["/bin/sh","-c",format!("printf '%s' '{quota}' >&2; {ending}")],"cwd":f.state.path(),"env":{},"prompt":"review","stdin":"review","warnings":null,"events":null});
         let good = json!({"argv":["/bin/sh","-c","printf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-sonnet-5-5\"}' '{\"type\":\"result\",\"is_error\":false,\"result\":\"VERDICT: PASS\"}'"],"cwd":f.state.path(),"env":{},"prompt":"review","stdin":"review","warnings":null,"events":null});
         std::fs::write(f.state.path().join("launch"), format!("#!/bin/sh\nrequest=$(cat)\ncase \"$request\" in *gemini-4-hydrogen*) printf '%s' '{bad}';; *unavailable*) exit 1;; *) printf '%s' '{good}';; esac\n").replace(&format!("'{bad}'"), &shell_quote(&bad.to_string())).replace(&format!("'{good}'"), &shell_quote(&good.to_string()))).unwrap();
-        let r = payload(f.call("spawn", json!({"prompt":"review","card":{"x":1},"role":"review","writer_families":["openai"],"wait_seconds":1.5,"no_fallthrough":no_fallthrough})));
+        let mut r = payload(f.call("spawn", json!({"prompt":"review","card":{"x":1},"role":"review","writer_families":["openai"],"wait_seconds":0,"no_fallthrough":no_fallthrough})));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !pg_worker_core::run::record::Status::parse(r["status"].as_str().unwrap())
+            .unwrap()
+            .is_terminal()
+        {
+            assert!(std::time::Instant::now() < deadline, "{r}");
+            std::thread::yield_now();
+            r = payload(f.call("status", json!({"run_id":r["run_id"]})));
+        }
         assert_eq!(
             r["status"],
             if no_fallthrough {

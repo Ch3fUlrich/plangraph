@@ -132,11 +132,9 @@ fn natural_exit_does_not_sample_cancel_during_drain() {
     let mut parser = super::super::blind_tests::Parser::default();
     let mut monitor = monitor();
     let mut channel = ChannelHealth::new(0, Some(1));
-    let start = Instant::now();
-    let mut cmd = Command::new("sh");
-    cmd.args(["-c", "setsid sh -c 'sleep 3' & exit 0"]);
-    let r = supervise_events(
-        cmd,
+    let fixture = DrainFixture::new();
+    let r = supervise_with_writer(
+        fixture.command(),
         &stall::Opts {
             timeout: Some(Duration::from_secs(5)),
             ..stall::Opts::default()
@@ -145,16 +143,88 @@ fn natural_exit_does_not_sample_cancel_during_drain() {
             parser: &mut parser,
             monitor: &mut monitor,
             channel: &mut channel,
-            cancelled: &|| start.elapsed() >= Duration::from_millis(500),
+            cancelled: &|| true,
             tree_sample: &Ctx::default,
             cpu: None,
             stdin: b"",
+        },
+        |pipe, input| {
+            fixture.wait_for_exit();
+            super::super::unix::stdin_writer(pipe, input)
         },
     )
     .unwrap();
     assert_eq!(r.run.code, Some(0));
     assert!(!r.run.cancelled);
     assert_eq!(super::super::unix::PROBES.with(|n| n.get()), 2);
+}
+
+// Establish an exited root and an escaped pipe holder before the event loop
+// starts. FIFO handshakes and waitid(WNOWAIT) avoid scheduler/clock assumptions
+// while leaving the root's status for the production try_wait to consume.
+struct DrainFixture {
+    root: tempfile::TempDir,
+    escaped: std::cell::Cell<libc::pid_t>,
+}
+impl DrainFixture {
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["escaped", "root", "hold"] {
+            let path =
+                std::ffi::CString::new(root.path().join(name).as_os_str().as_encoded_bytes())
+                    .unwrap();
+            // SAFETY: path is NUL-terminated and lives through mkfifo.
+            assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+        }
+        Self {
+            root,
+            escaped: std::cell::Cell::new(0),
+        }
+    }
+    fn command(&self) -> Command {
+        let mut cmd = Command::new("sh");
+        cmd.env("WATCH_DRAIN_FIXTURE", self.root.path()).args([
+            "-c",
+            r#"setsid sh -c 'echo $$ > "$WATCH_DRAIN_FIXTURE/escaped"; read release < "$WATCH_DRAIN_FIXTURE/hold"' &
+read escaped < "$WATCH_DRAIN_FIXTURE/escaped"
+echo "$$ $escaped" > "$WATCH_DRAIN_FIXTURE/root"
+exit 0"#,
+        ]);
+        cmd
+    }
+    fn wait_for_exit(&self) {
+        let pids = std::fs::read_to_string(self.root.path().join("root")).unwrap();
+        let pids: Vec<libc::pid_t> = pids
+            .split_whitespace()
+            .map(|p| p.parse().unwrap())
+            .collect();
+        assert_eq!(pids.len(), 2);
+        assert!(pids.iter().all(|pid| *pid > 1));
+        self.escaped.set(pids[1]);
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
+        // SAFETY: root is our direct child, info is writable, and WNOWAIT
+        // preserves its exit status for the supervisor.
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pids[0] as libc::id_t,
+                    info.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            },
+            0
+        );
+    }
+}
+impl Drop for DrainFixture {
+    fn drop(&mut self) {
+        if self.escaped.get() > 1 {
+            // SAFETY: the handshake identified our escaped child, which is
+            // blocked on the private FIFO until this cleanup.
+            unsafe { libc::kill(self.escaped.get(), libc::SIGKILL) };
+        }
+    }
 }
 
 #[test]
