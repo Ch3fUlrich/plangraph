@@ -42,6 +42,7 @@ pub mod health_family;
 pub mod health_rates;
 pub mod health_until;
 pub mod host_command;
+pub mod host_link;
 pub mod host_metrics;
 pub mod host_probe;
 pub mod hosts;
