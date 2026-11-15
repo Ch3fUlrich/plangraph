@@ -428,7 +428,11 @@ fn pre_push_prints_hook_head_and_refuses_day_old_missing_commits() {
             .unwrap()
     };
     let out = invoke();
-    let report = String::from_utf8(out.stderr).unwrap();
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert_eq!(out.status.code(), Some(1), "{report}");
     assert!(
         report.contains(&git(&hooks, &["rev-parse", "--short", "HEAD"])),
@@ -441,7 +445,7 @@ fn pre_push_prints_hook_head_and_refuses_day_old_missing_commits() {
     git(&hooks, &["merge", "--ff-only", "origin/main"]);
     let out = invoke();
     assert!(out.status.success(), "{:?}", out);
-    assert!(String::from_utf8(out.stderr)
+    assert!(String::from_utf8(out.stdout)
         .unwrap()
         .contains("hook checkout"));
 }

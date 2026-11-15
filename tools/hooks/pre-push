@@ -253,7 +253,7 @@ def hook_checkout_status():
         return result.stdout.decode("utf-8", "replace").strip() if result.returncode == 0 else ""
 
     head = checkout_git("rev-parse", "--short", "HEAD")
-    print(f"pre-push: hook checkout head={head or 'unavailable'}", file=sys.stderr)
+    print(f"pre-push: hook checkout head={head or 'unavailable'}", flush=True)
     # The hourly sync owns fetching. Only missing upstream commits older than
     # a day make the gate stale; an old HEAD alone does not.
     missing = checkout_git("log", "--format=%ct", "HEAD..refs/remotes/origin/main")
