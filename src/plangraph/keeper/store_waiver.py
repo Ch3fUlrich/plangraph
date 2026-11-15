@@ -241,8 +241,8 @@ class WaiverMixin:
                 raise Refused("conflict", "merged_on_default_changed")
             if (from_open or waiver) and self._merged_open_prs(fresh, decision_id, head, now) != prs:
                 raise Refused("conflict", "merged_pr_proofs_changed")
-            if waiver:
-                self._merged_seat_waiver(fresh, decision_id, waive_seats, prs, now)
+            if waiver and self._merged_seat_waiver(fresh, decision_id, waive_seats, prs, now) != waiver:
+                raise Refused("conflict", "merged_seat_waiver_changed")
             if backfill:
                 current = self._merged_backfill(fresh, decision_id, head, now, prs)
                 if current != witnessed:

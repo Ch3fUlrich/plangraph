@@ -254,3 +254,21 @@ def test_a_go_row_that_sorts_before_the_supplied_id_never_replaces_it(unseated_w
     assert result["state"] == "done"
     prs = unseated_w.store._evidence("demo:H")[-1]["ref"]["prs"]
     assert {p["head"]: p["decision_id"] for p in prs}[HEAD] == "D-5504"
+
+
+def test_a_go_row_edited_between_the_phases_refuses(unseated_w, monkeypatch):
+    world = unseated_w
+    heads = [HEAD, "f" * 40]
+    rows = [go_row("D-5504", HEAD), go_row("D-9001", "f" * 40)]
+    scan_world(world, monkeypatch, rows, heads)
+    original = world.store._write
+
+    def edited_write():
+        world.decision_path.write_text(world.decision_path.read_text().replace(
+            "2026-11-12", "2026-11-14"))
+        return original()
+
+    monkeypatch.setattr(world.store, "_write", edited_write)
+    with pytest.raises(Refused):
+        world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert world.store._item("demo:H")["state"] == "in_review"
