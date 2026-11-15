@@ -1,5 +1,40 @@
 use super::*;
 #[test]
+fn reconcile_leader_empty_ignores_reaped_proc_entries() {
+    let mut leader = Leader {
+        identity: Proc {
+            pid: std::process::id(),
+            start_time: None,
+            group: None,
+            pgid: Some(std::process::id()),
+        },
+        fd: std::fs::File::open("/proc/self/stat").unwrap().into(),
+    };
+    for errno in [libc::ENOENT, libc::ESRCH] {
+        let mut reads = 0;
+        let result = leader.empty_with(|_| {
+            reads += 1;
+            Err(io::Error::from_raw_os_error(errno))
+        });
+        assert!(reads > 0);
+        assert!(result.unwrap(), "errno={errno}");
+    }
+    // Disappearance must not hide unreadable or malformed process information.
+    let error = leader
+        .empty_with(|_| Err(io::Error::from_raw_os_error(libc::EACCES)))
+        .unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(libc::EACCES));
+    assert_eq!(
+        leader
+            .empty_with(|_| Ok("malformed".into()))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    let stat = format!("{} (leader) S 1 {}", std::process::id(), std::process::id());
+    assert!(!leader.empty_with(|_| Ok(stat.clone())).unwrap());
+}
+#[test]
 fn reconcile_missing_pgid_is_unknown_and_never_settles_max_s() {
     use crate::reconcile_watch::{Step, StopPolicy, Watch};
     use pg_worker_core::{
