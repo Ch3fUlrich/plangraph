@@ -527,3 +527,7 @@ warning and returns failure after checks, without interrupting or weakening them
 This is the cheap local projection of CI; hosted browser, Postgres and Windows
 runners remain CI responsibilities. A typical build host timing measurement is still
 required before claiming that host's five-minute done criterion.
+
+D-6054: OpenCode catalog integration tests use the shipped provider configuration
+and existing Python rendering helpers. Their inputs are listed in `RUST_INPUTS`
+so changes to catalog identities or rendering select the Rust CI suite.

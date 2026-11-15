@@ -42,6 +42,13 @@ RUST_INPUTS: tuple[str, ...] = (
     # D-6054: native/agy quota isolation regressions exercise these boundaries.
     "src/plangraph/planner/provider_stop.py",
     "src/plangraph/routing_support/liveness.py",
+    # D-6054: rendered OpenCode catalog integration-test inputs.
+    "src/plangraph/planner/legs.py",
+    "src/plangraph/routing_support/__init__.py",
+    "src/plangraph/routing_support/opencode_overlay.py",
+    "src/plangraph/routing_support/opencode_render.py",
+    "src/plangraph/routing_support/resolver.py",
+    "configuration/opencode/providers.json",
     ".github/workflows/**",
     "rust-toolchain.toml",
     ".docs-map",
