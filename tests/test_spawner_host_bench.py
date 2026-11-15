@@ -106,7 +106,7 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
     # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
     from plangraph.planner.legs import REVIEW_ORDER
-    assert [leg["id"] for leg in bare["legs"]] == list(REVIEW_ORDER[:-1])
+    assert [leg["id"] for leg in bare["legs"]] == list(REVIEW_ORDER[2:-1])
 
 
 
