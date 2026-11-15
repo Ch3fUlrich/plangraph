@@ -279,12 +279,15 @@ def pid_start(pid):
         return None
 
 
+MAIN_FF_STATUS_TIMEOUT = 120  # seconds; a stuck cargo build degrades to no status
+
+
 def main_ff_status(repo):
     """Read optional local update status through the Rust compatibility transport."""
     from .advance import _rust_mainff
 
     try:
-        result = _rust_mainff('status', str(repo))
+        result = _rust_mainff('status', str(repo), timeout=MAIN_FF_STATUS_TIMEOUT)
         return json.loads(result.stdout) if result.returncode == 0 else None
     except (OSError, ValueError, subprocess.SubprocessError):
         return None

@@ -266,3 +266,15 @@ def test_hosts_example_demonstrates_remote_ssh_target(tmp_path, monkeypatch):
     registry = json.loads((ROOT / 'docs/schemas/examples/hosts.example.json').read_text())
     assert any(h.get('ssh_target') for h in registry['hosts'] if h['transport'] == 'ssh')
     assert all('ssh_target' not in h for h in registry['hosts'] if h['transport'] == 'local')
+
+
+def test_main_ff_status_is_bounded_and_degrades_on_timeout(monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        raise subprocess.TimeoutExpired(cmd, kwargs['timeout'])
+
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+    assert drift.main_ff_status('/nonexistent/repo') is None
+    assert seen['timeout'] == drift.MAIN_FF_STATUS_TIMEOUT

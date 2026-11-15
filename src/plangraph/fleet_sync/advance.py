@@ -218,12 +218,12 @@ def _advance(registry, sha, hosts, go, dry_run, record, log, run):
     return 0
 
 
-def _rust_mainff(*args):
+def _rust_mainff(*args, timeout=None):
     """Compatibility transport; decisions and status reads are owned by Rust."""
     manifest = Path(__file__).resolve().parents[3] / 'rust/Cargo.toml'
     return subprocess.run(['cargo', 'run', '--quiet', '--locked', '--manifest-path',
         str(manifest), '-p', 'pg-mainff', '--', *args],
-        capture_output=True, text=True, check=False)
+        capture_output=True, text=True, check=False, timeout=timeout)
 
 
 def main_ff(repo, keeper_state, *, fetch=True, keeper_unit='plangraph-keeper.service'):
