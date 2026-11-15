@@ -434,6 +434,14 @@ def test_launch_refuses_unresolved_writer(request_data, writers):
         assert all(name in err for name in ('codex', 'gpt', 'deepseek', 'anthropic'))
 
 
+def test_launch_refuses_unknown_review_of(request_data):
+    request_data['writer_families'] = []
+    request_data['review_of'] = 'no-such-run'
+    code, out, err = invoke(request_data)
+    assert code == 2 and out == '', (out, err)
+    assert err.startswith('writer_family:') and 'unknown run id' in err
+
+
 def test_launch_accepts_registered_beam_reviewer(request_data, go_credential):
     request_data['writer_families'] = ['codex']
     request_data['leg'] = {'id': 'opencode-go-beam-free'}

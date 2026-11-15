@@ -6,3 +6,4 @@ launches, refusing missing or placeholder authors before launch.
 Keep accepted names visible through native refusal limits and resolve writer
 aliases before forwarding verdicts to the keeper.
 Native refusal lines now use the last non-empty adapter stderr line, so host banners no longer hide the accepted names.
+A launch whose review_of run is unknown is refused as writer_family instead of escaping unclassified.

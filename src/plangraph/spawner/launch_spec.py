@@ -111,10 +111,13 @@ def build(request: dict) -> dict:
         from plangraph.planner.seats import seat_family
         from plangraph.review.family import FamilyError, writer_headers, writer_key
         writers = list(request.get('writer_families') or [])
-        if request.get('review_of'):
-            source = service.result(request['review_of'])
-            writers.extend(source.get('given_writer_families') or [source.get('writer_family')])
         try:
+            if request.get('review_of'):
+                try:
+                    source = service.result(request['review_of'])
+                except ValueError as exc:  # unknown run id
+                    raise FamilyError(str(exc)) from None
+                writers.extend(source.get('given_writer_families') or [source.get('writer_family')])
             headers = writer_headers(writers)
             if seat_family(leg.family) in {writer_key(w) for w in writers}:
                 raise FamilyError('review seat is a writer family')
