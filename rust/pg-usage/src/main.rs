@@ -373,7 +373,7 @@ fn run() -> Result<Value> {
         let repository = String::from_utf8(repo.stdout)?;
         let search = format!("repo:{} is:pr is:merged {}", repository.trim(), search);
         let output = Command::new("gh")
-            .args(["api", "graphql", "--paginate", "--slurp"])
+            .args(["api", "graphql", "--paginate"])
             .args([
                 "-f",
                 &format!("query={query}"),
@@ -384,9 +384,10 @@ fn run() -> Result<Value> {
         if !output.status.success() {
             return Err("gh merged PR query failed".into());
         }
-        let pages: Value = serde_json::from_slice(&output.stdout)?;
         let mut rows = Vec::new();
-        for page in pages.as_array().ok_or("invalid gh pages")? {
+        // `gh --paginate` prints one JSON document per page, back to back.
+        for page in serde_json::Deserializer::from_slice(&output.stdout).into_iter::<Value>() {
+            let page = page?;
             if page["data"]["search"]["issueCount"]
                 .as_u64()
                 .is_none_or(|n| n > 1000)
