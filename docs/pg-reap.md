@@ -16,9 +16,10 @@ Test: `cargo test -p pg-reap` (hermetic boundary/protection/parser tests and sta
 ## Live merged-worktree sweep
 
 `pg-worktree-sweep --repo REPO --root WORKTREES --pins PINS.json` defaults to dry
-run. `--apply` removes only candidates approved by `pg_reap::classify` with the
-`merged-clean-24h` rule; the dirty backup rule is never applied. No second merge,
-commit-safety or age policy is implemented in the adapter. It refreshes origin,
+run. Repeat `--root` for each worktree root, including the state `runs` directory.
+`--apply` removes only clean merged candidates using the shared pg-reap protection
+and commit policy. `--idle-minutes` defaults to 60 and replaces the pure report's
+24-hour clean threshold; the dirty backup rule is never applied. It refreshes origin,
 collects `git worktree list --porcelain`, checks all commits against origin/main
 (including nested batch merge parents), verifies remote containment and clean
 status including ignored files, and measures idle time from the newest worktree
@@ -40,7 +41,9 @@ assuming a keeper schema or treating a stale snapshot as current authority.
 Main and clone paths, locked trees, active claims/runs, open PRs, process/unit
 working directories, duplicate branch checkouts, `plangraph-md-sync`, and keeper
 `live-*` paths survive. Symlinked trees are protected. Unmerged or unpushed commits
-survive regardless of age. Detached trees are conservatively protected.
+survive regardless of age. Detached trees use the same containment and protection checks. Run trees additionally
+require a readable terminal record (native statuses and verified legacy aliases
+are listed below); nonterminal and unknown statuses protect.
 
 Before any apply deletion, a private, synced
 `~/.local/state/plangraph/sweep/<timestamp>.tsv` records repo, path, branch, SHA and
@@ -48,22 +51,55 @@ PR. TSV escapes backslash/tab/CR/LF. Removal uses `git worktree remove` without
 force, followed by SHA-conditional local-ref deletion. The restore record remains
 if a later command fails. Per-tree errors protect/skip that tree and are printed.
 Restore with `git branch SHORT_BRANCH SHA` (strip `refs/heads/` from the stored
-branch), then `git worktree add PATH SHORT_BRANCH`.
+branch), then `git worktree add PATH SHORT_BRANCH`. For detached rows (branch
+`-`), restore with `git worktree add --detach PATH SHA`.
 
 `--delete-remote` additionally requires `--apply`, a MERGED PR matching the exact
 recorded SHA, and a remote SHA lease. The timer never passes it. A missing PR does
 not relax ancestry or push safety. `--apply --dry-run` is a refusal.
 
-The disk timer's oneshot service invokes this binary with `--daily --apply` after
-the disk check. A private completion marker limits removal attempts to once per
-24 hours; the other 15-minute invocations perform disk checks only. Install both
-binaries. Unavailable authorities produce protected rows; configure and inspect a
-dry run before enabling. Repository validation does not install timers or clean
-live host trees. Keep build/start scheduling quiescent during host maintenance;
-the separate spawner admission gate owns concurrent start prevention.
+The separate `pg-worktree-sweep.timer` invokes the sweep hourly; disk checks stay
+on their 15-minute timer. Install both sweep units and both binaries. See
+`deploy/systemd/disk-hygiene.env.example` for all four roots and pins. Set
+`PG_SWEEP_CLAIMS_READER="PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims"` with `PG_URL` and `PG_TOKEN_FILE`
+configured for an unscoped router token. This verb reads every project directly
+from keeper, refuses unknown/truncated open lanes and changing snapshots, and
+never falls back to a local copy. The reader setting is a trusted shell invocation.
+
+`merge_batch.py land` invokes `--apply --delete-remote` for exact
+`--target PATH:refs/heads/BRANCH:SHA` tuples taken from batch state and the matching
+local inventory. Skipped or moved parts are excluded. Explicit
+`--remote-target BRANCH:SHA` entries also clean branches without local trees and
+batch-closed PRs, after fresh claims/PR checks and origin/main containment. Each
+remote deletion writes and syncs a restore row and uses
+`--force-with-lease=refs/heads/BRANCH:SHA`; an advanced remote branch survives.
+Restore remote rows (path `-`) with `git push origin SHA:refs/heads/BRANCH`.
+Cleanup errors are printed without failing land. The hourly timer never deletes
+remote branches. Missing authorities protect. Configure and inspect a dry run
+before enabling. Repository validation does not install timers or clean live host
+trees. Keep build/start scheduling quiescent during host maintenance; the separate
+spawner admission gate owns concurrent start prevention.
+
+Run status authority includes the operator's native statuses: completed,
+failed, timed_out, cancelled, refused, stalled. Known legacy terminal aliases
+(timeout, dry_run, killed, succeeded, skipped, terminated_after_answer) use the
+same guards. Native `state/runs/<run>/worktree` and legacy
+`state/worktrees/attempt-*` roots are added automatically. A legacy tree must
+match checkout/cwd/run_worktree/worktree_attempts metadata in a terminal record;
+unmatched trees, unknown statuses and surviving processes protect.
+Missing optional roots are reported and skipped; other root errors abort safely.
+Detached PR protection enumerates every open PR (truncation protects), then matches
+its exact head SHA. Protected branch names survive both remote deletion modes.
+Every remote deletion also has a branch-only TSV row (path `-`); restore any
+remote with `git push origin SHA:refs/heads/BRANCH`.
 
 The reader's local metadata binding uses keeper `show.run_ids` and the real local
 spawner records, not an assumed extra keeper response field. Its `--state DIR`
 can select another local state root. A completed writer's paths remain claimed
 while its keeper item is in review. Unresolved active claims refuse the reader.
 Keeper `show` bypasses the ref-list cache for fresh open-lane reads.
+
+Empty path arguments (including unset systemd root variables) refuse the whole
+sweep rather than interpreting them as the current directory. The sweep exports
+its canonical `--state` as `PG_SWEEP_STATE` to the claims reader, so local run
+metadata follows the same state root. A reader's explicit `--state` overrides it.
