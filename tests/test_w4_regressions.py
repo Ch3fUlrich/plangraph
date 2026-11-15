@@ -131,17 +131,53 @@ def test_watchdog_timed_out_leg_records_its_attempt_row(tmp_path, monkeypatch):
     """Q15/M16: a watchdog stall/timeout ends the run AND records the attempt row
     with the leg id and the served model/family -- the launched leg must not be
     listed as 'skipped, run_terminated_before_leg'."""
+    from types import SimpleNamespace
+    from plangraph.planner import legs
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner import run_watchdog, run_watchdog_limits
+
+    leg = legs.Leg('watchdog-test', 'free', 'agy', 'watchdog-test-model',
+                   'test', ('128k',), 100000, False, roles=('implement',))
+    monkeypatch.setattr(legs, 'DEFAULT_LEGS', (leg,))
+    monkeypatch.setattr(legs, 'EXPLICIT_LEGS', ())
     monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', '0.3')
     monkeypatch.setenv('PLANGRAPH_SPAWN_WATCHDOG_INTERVAL', '0.05')
 
     async def factory(*args, **kwargs):
         return await asyncio.create_subprocess_exec(
-            sys.executable, '-c', 'import time; time.sleep(30)', **kwargs)
+            sys.executable, '-c', 'import threading; threading.Event().wait()', **kwargs)
 
     async def run():
         runner = SpawnerRunner(process_factory=factory, default_cwd=str(tmp_path))
         service = spawn_service(runner, tmp_path)
+        service._route = lambda *a, **kw: SpawnPlan((leg,), (), 'test', (), ())
+
+        async def prepare_prompt(prompt, *args, **kwargs):
+            # Prompt packaging has its own real asyncio deadline; this test
+            # covers the launched leg's watchdog, not packaging timeouts.
+            return prompt
+
+        monkeypatch.setattr(service, '_prepare_leg_prompt', prepare_prompt)
+        # Freeze only watchdog time through all preparation. Advance it only
+        # after _launch_leg has saved the real child's job id and PID, so host
+        # speed cannot turn this into a timeout of an unlaunched plan.
+        clock = SimpleNamespace(time=lambda: now[0])
+        now = [time.time()]
+        monkeypatch.setattr(run_watchdog_limits, 'time', clock)
+        monkeypatch.setattr(run_watchdog, 'time', clock)
+        save = service._save
+        launched = []
+
+        def save_launch(record):
+            save(record)
+            if record.get('job_id') and record.get('pid') and not launched:
+                launched.append(record['job_id'])
+                now[0] = runner.jobs[record['job_id']].start_time + 1
+
+        monkeypatch.setattr(service, '_save', save_launch)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
+        assert len(launched) == len(runner.jobs) == 1
+        assert [row['id'] for row in record['plan']['legs']] == [leg.id]
         assert record['status'] == 'timeout', record
         rows = [a for a in record['attempts'] if a.get('status') in ('stalled', 'timeout')]
         assert len(rows) == 1, record['attempts']
