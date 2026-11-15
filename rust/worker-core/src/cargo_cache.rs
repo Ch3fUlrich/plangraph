@@ -79,10 +79,25 @@ fn user_home(_: &str) -> io::Result<PathBuf> {
     Err(io::Error::other("named home expansion requires Unix"))
 }
 
-/// Nonblocking exclusive flock on <target>.plangraph-lock, also used by Python.
-/// Keep the returned file alive for the entire reclaim; never unlink the lock.
 #[cfg(unix)]
-pub(crate) fn try_exclusive_lease(target: &Path) -> io::Result<Option<File>> {
+pub(crate) struct ExclusiveLease(File);
+#[cfg(unix)]
+impl Drop for ExclusiveLease {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        // Closing alone leaves the flock held if a concurrent fork inherited
+        // this open file description before exec. End the reclaim lease now.
+        // SAFETY: self owns the descriptor and reclaim has finished.
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+#[cfg(not(unix))]
+pub(crate) type ExclusiveLease = File;
+
+/// Nonblocking exclusive flock on <target>.plangraph-lock, also used by Python.
+/// Keep the returned guard alive for the entire reclaim; never unlink the lock.
+#[cfg(unix)]
+pub(crate) fn try_exclusive_lease(target: &Path) -> io::Result<Option<ExclusiveLease>> {
     use std::os::fd::AsRawFd;
     let mut name = target
         .components()
@@ -104,7 +119,7 @@ pub(crate) fn try_exclusive_lease(target: &Path) -> io::Result<Option<File>> {
         )?;
     // SAFETY: lease owns a valid descriptor; flock does not retain pointers.
     if unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-        return Ok(Some(lease));
+        return Ok(Some(ExclusiveLease(lease)));
     }
     let error = io::Error::last_os_error();
     if error.kind() == io::ErrorKind::WouldBlock {
@@ -114,13 +129,27 @@ pub(crate) fn try_exclusive_lease(target: &Path) -> io::Result<Option<File>> {
     }
 }
 #[cfg(not(unix))]
-pub(crate) fn try_exclusive_lease(_: &Path) -> io::Result<Option<File>> {
+pub(crate) fn try_exclusive_lease(_: &Path) -> io::Result<Option<ExclusiveLease>> {
     Err(io::Error::other("disk hygiene requires a Unix host"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(unix)]
+    fn reclaim_releases_lease_even_with_an_inherited_descriptor() {
+        let parent = tempfile::tempdir().unwrap();
+        let cache = parent.path().join("target");
+        let lease = try_exclusive_lease(&cache).unwrap().unwrap();
+        // dup and fork share the same open file description. Model a concurrent
+        // spawn retaining it before exec closes its CLOEXEC descriptors.
+        let inherited = lease.0.try_clone().unwrap();
+        assert!(try_exclusive_lease(&cache).unwrap().is_none());
+        drop(lease);
+        assert!(try_exclusive_lease(&cache).unwrap().is_some());
+        drop(inherited);
+    }
     #[test]
     fn roots_match_host_ready_defaults_overrides_and_expanduser() {
         let home = Path::new("/srv/fixture-home");
