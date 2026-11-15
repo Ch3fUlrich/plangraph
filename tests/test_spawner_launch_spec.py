@@ -6,6 +6,7 @@ import time
 import pytest
 
 from plangraph.spawner import launch_spec as spec
+from go_credential_fake import go_credential  # noqa: F401
 
 
 @pytest.fixture
@@ -429,7 +430,7 @@ def test_launch_refuses_unresolved_writer(request_data, writers):
         assert all(name in err for name in ('codex', 'gpt', 'deepseek', 'anthropic'))
 
 
-def test_launch_accepts_registered_beam_reviewer(request_data):
+def test_launch_accepts_registered_beam_reviewer(request_data, go_credential):
     request_data['writer_families'] = ['codex']
     request_data['leg'] = {'id': 'opencode-go-beam-free'}
     code, out, err = invoke(request_data)
