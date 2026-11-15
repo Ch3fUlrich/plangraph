@@ -9,7 +9,7 @@ import pytest
 
 
 @pytest.mark.parametrize('mode', [
-    'green', 'missing', 'behind', 'unreachable', 'unreadable', 'unlisted', 'alias',
+    'green', 'low_disk', 'missing', 'behind', 'unreachable', 'unreadable', 'unlisted', 'alias',
     'src_int', 'src_bool', 'spawner_int', 'spawner_bool', 'session_int', 'ps_shape',
     'no_ps', 'empty_ps', 'ps_bad_json', 'ps_unreadable',
 ])
@@ -27,7 +27,9 @@ case "$script" in
       *) echo ok;;
     esac;;
   *meminfo*) echo 'MemAvailable: 8000000 kB';;
-  *"df -Pk"*) echo 'fake 9000000 0 9000000 0% /';;
+  *"df -Pk"*)
+    if [ "$MODE" = low_disk ]; then echo 'fake 9000000 0 4194304 0% /';
+    else echo 'fake 9000000 0 5242880 0% /'; fi;;
   git*) exec sh -c "$script";;
   *"doctor --json"*) echo '{"ok":true,"checks":[{"name":"keeper_whoami","status":"pass"}]}';;
   *"cli ps"*) echo '{"runs":[]}';;
@@ -88,6 +90,8 @@ esac
     if mode == 'green':
         assert all(r['ok'] and r['behind_main'] == 0 for r in rows)
         assert 'HOST-NOT-READY' not in result.stderr
+    elif mode == 'low_disk':
+        assert all(r['disk_free_gb'] == 4 and r['failures'] == ['disk: disk_low: free 4 GB'] for r in rows)
     elif mode == 'missing':
         assert 'HOST-NOT-READY host-a src_missing failed' in result.stderr
     elif mode == 'behind':

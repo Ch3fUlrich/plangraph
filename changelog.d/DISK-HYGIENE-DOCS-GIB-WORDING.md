@@ -1,0 +1,1 @@
+Correct the host-tools alarm default to 5368709120 bytes (5 GiB), and document legacy Rust/Python cache cleanup, the configured shared Cargo target, and its sibling lease file. Align the disk-hygiene changelog wording with the implemented alarm floor.

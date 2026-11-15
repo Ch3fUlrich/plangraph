@@ -120,8 +120,14 @@ def _policy_data(root):
     if not filename:
         return None
     base = Path(root or os.environ.get('PLANGRAPH_REPO_ROOT') or Path.cwd())
-    root = next((p for p in (base, *base.parents)
-                 if (p / '.git').exists()), base)
+    ceilings = {Path(p).resolve() for p in os.environ.get('GIT_CEILING_DIRECTORIES', '').split(os.pathsep) if p}
+    root = base
+    for candidate in (base, *base.parents):
+        if candidate.resolve() in ceilings:
+            break
+        if (candidate / '.git').exists():
+            root = candidate
+            break
     path = root / filename
     suffix = path.suffix.lower()
     if suffix != '.json' and tomllib is None:

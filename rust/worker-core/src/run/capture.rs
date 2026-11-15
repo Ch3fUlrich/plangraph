@@ -165,6 +165,20 @@ impl Capture {
         let error = s.log.as_mut().and_then(LiveLog::flush);
         s.event(error);
     }
+    /// Inspect an unterminated provider refusal without publishing partial
+    /// output to logs or changing the line buffering used for secret scrubbing.
+    pub fn review_quota_reason(&self) -> Option<String> {
+        let state = self.state.lock().unwrap();
+        let text = |index: usize| {
+            let input = &state.inputs[index];
+            state.scrubber.scrub(&format!(
+                "{}\n{}",
+                input.keeper.recent(RECENT),
+                input.pending
+            ))
+        };
+        super::review_quota::reason(&text(0), &text(1))
+    }
     pub fn snapshot(&self) -> Snapshot {
         let s = self.state.lock().unwrap();
         Snapshot {

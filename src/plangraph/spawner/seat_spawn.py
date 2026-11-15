@@ -15,14 +15,12 @@ from pathlib import Path
 
 from .seat_artifact import reserve_seat_families, seat_reasons, sync_seat, sync_seat_group
 
-
 def resources(service):
     from .overflow import available_memory_mb
     return 0, available_memory_mb()
 
-
 def admit(service, options, *, card=None, preview=False):
-    """Enforce RAM admission even without an overflow configuration."""
+    """Enforce disk and RAM admission even without overflow configuration."""
     if options.get('dry_run'):
         return None
     from . import overflow
@@ -37,24 +35,33 @@ def admit(service, options, *, card=None, preview=False):
     role = options.get('role', 'implement')
     registry = overflow.registry_caps()
     local, remote_first = overflow.placement_policy(registry, config)
-    if preview and not remote_first:
+    native = (card or {}).get('run_kind') == 'native-codex'
+    if preview and not remote_first and not native:
         return None
     role_mb, floor = overflow.local_limits(registry, role)
     _, memory = resources(service)
-    if not remote_first and not overflow.memory_refusal(memory, role_mb, floor):
-        return None
     repo = Path(options.get('cwd') or (card or {}).get('cwd') or
                 ((card or {}).get('diff_ref') or {}).get('repo') or
+                (card or {}).get('repo') or
                 getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
+    from .host_ready import local_disk_refusal
+    disk = local_disk_refusal(repo, service)
+    if not remote_first and not disk and not overflow.memory_refusal(memory, role_mb, floor):
+        if native: options['_placement'] = dict(host=local, reason='local room', free_mb=memory)
+        return None
     public = overflow.repos_public(config, repo, (card or {}).get('diff_ref'))
     benchmark_local = remote_first and options.get('benchmark') is not None
     if benchmark_local:
         public = False  # A local-only database makes every remote ineligible.
     rows = overflow.ready_records(config, role)
+    if native:
+        for row in rows.values():
+            if type(row.get('disk_free_gb')) is not int or row['disk_free_gb'] < 5:
+                row.setdefault('refusal', 'disk_low: need 5 GB free to start')
     if remote_first:
         rows = {name: row for name, row in rows.items()
                 if name != local and overflow.host_config(registry, name).get('id') != local}
-    health = overflow.local_health_refusal(config, memory) if remote_first else None
+    health = disk or (overflow.local_health_refusal(config, memory) if remote_first else None)
     flags = []
     for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope'):
         if options.get(key) is not None:
@@ -98,7 +105,8 @@ def admit(service, options, *, card=None, preview=False):
         except (OSError, ValueError, KeyError, TypeError) as exc:
             result, refusal = None, overflow.failure_reason(exc)
         if result is not None:
-            record = dict(result, host=name, overflow_reason=decision.reason, overflow_remote=True)
+            from .remote_ps import native_receipt
+            record = native_receipt(dict(result, host=name, overflow_reason=decision.reason, overflow_remote=True))
             record.setdefault('status', 'unknown')
             break
         rows[name]['refusal'] = refusal
@@ -134,9 +142,7 @@ def _refuse_oversized_diff(exc, leg):
             f'prompt_too_large: inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
             f'max_request_tokens {leg.max_request_tokens}') from None
 
-
 class SeatSpawnMixin:
-    """Needs ``_spawn``, ``_route``, ``_save``, ``save_refusal`` and ``state`` from the service."""
 
     _seat_reasons = staticmethod(seat_reasons)
     _sync_seat = staticmethod(sync_seat)
@@ -155,6 +161,12 @@ class SeatSpawnMixin:
             bound = inspect.signature(self._spawn).bind(*args, **kwargs)
             options = dict(bound.arguments)
             card = options.get('card')
+            if (card or {}).get('run_kind') == 'native-codex':
+                from .overflow import native_repo
+                native_repo(card)
+            from plangraph.retired_models import check_retired
+            check_retired(options)
+            check_retired(card)
             from .prompt_input import resolve_cwd
             cwd = await asyncio.to_thread(resolve_cwd, options.get('cwd'), card)
             if cwd is not None:
@@ -166,6 +178,9 @@ class SeatSpawnMixin:
             admitted = await asyncio.to_thread(self.admit_spawn, options, card=card)
             if admitted is not None:
                 return admitted
+            if (card or {}).get('run_kind') == 'native-codex':
+                from .overflow import native_spawn
+                return await native_spawn(self, card, options)
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief
                 from plangraph.settings import admit_fixer_threshold
@@ -219,7 +234,7 @@ class SeatSpawnMixin:
         if record.get('cwd') is not None:
             options.setdefault('cwd', record['cwd'])
         async def launch(prompt_record, **kwargs):
-            job = await self.runner.spawn(prompt_record=prompt_record, **kwargs)
+            job = await self.runner.spawn(prompt_record=prompt_record, chosen=chosen, **kwargs)
             self._running_records[job.job_id] = record
             process = self.runner._processes.get(job.job_id)
             owned = getattr(self.runner, '_owned', {}).get(job.job_id, {})
@@ -252,7 +267,7 @@ class SeatSpawnMixin:
                 or record.get('status') in ('cancelled', 'timeout', 'timed_out', 'stalled')
                 or getattr(job, 'survivors', ()) or record.get('reason') in
                 ('cancelled', 'timeout', 'timed_out', 'stalled', 'kill_incomplete', 'git_config_mutated', 'writer_no_changes')
-                or any(e.get('event') in ('watchdog_timeout', 'watchdog_stalled') for e in job.events))
+                or any(e.get('event') in ('watchdog_timeout', 'watchdog_stalled', 'disk_run_stopped') for e in job.events))
 
         def exhausted(job):
             if record.get('role') != 'review' or protected(job):

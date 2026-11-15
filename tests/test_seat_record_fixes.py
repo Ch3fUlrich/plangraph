@@ -198,7 +198,7 @@ def test_two_attempts_without_live_log_refused(tmp_path, capsys):
     seat = rec_dir(tmp_path, "run-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", tail=PASS_LOG,
                    attempts=[{"leg": FREE_LEG, "stdout_tail": "earlier leg"},
                              {"leg": FREE_LEG, "stdout_tail": PASS_LOG}])
-    assert sv.main(argv_for(seat)) == 2
+    assert sv.main(argv_for(seat), record_wait=0) == 2
     assert "stdout_tail accumulates every leg" in capsys.readouterr().err
 
 # F4: a single-attempt record may fall back to stdout_tail.

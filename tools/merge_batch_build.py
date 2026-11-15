@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import datetime
 import os
+import shlex
 import sys
 from pathlib import Path
 
 from merge_batch_plan import high_patterns, plan_batches, set_problems, stack_parents, stack_sorted
-from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, add_extra_paths,
+from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, refresh_diff,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
                               orphan_names, parse_prs, repo_info, save_state, short, state_dir, state_path,
                               worktrees)
@@ -24,8 +25,31 @@ def default_worktree(name):
     return main.parent / f"{main.name}-worktrees" / f"batch-{name}"
 
 
+def default_union(base):
+    """Root .gitattributes at the fetched base is the single ledger policy source.
+
+    Preserve quoted patterns when copying them into the batch attributes file.
+    Persist the result in state so crash recovery uses the same policy.
+    """
+    listed = git("ls-tree", "--name-only", base, "--", ".gitattributes").stdout
+    if not listed.strip():
+        return []
+    patterns = []
+    for line in git("show", f"{base}:.gitattributes").stdout.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        fields = shlex.split(line, comments=False, posix=False)
+        if not fields or fields[0].startswith("[attr]"):
+            continue
+        merge = next((a for a in reversed(fields[1:])
+                      if a in ("merge", "-merge", "!merge") or a.startswith("merge=")), None)
+        if merge == "merge=union":
+            patterns.append(fields[0])
+    return patterns
+
+
 def attrs_args(st):
-    """git -c args that merge the --union paths line by line (an append-only ledger such as
+    """git -c args for the saved .gitattributes defaults plus explicit --union paths (an append-only ledger such as
     CHANGELOG.md conflicts in every pair of PRs that each add a line at the same spot)."""
     if not st.get("union"):
         return []
@@ -214,7 +238,7 @@ def fetch_heads(name, base, order, infos, repo):
 def rule_problems(args, base, prs, heads):
     """Apply the plan rules (red CI, needs-update, HIGH apart from standard PRs, the caps) to the PRs of this
     build. They refuse it unless --force-set; then they are returned, to be logged in the state and the batch PR."""
-    add_extra_paths(base, prs, heads)  # the old paths of renames count for the HIGH tier
+    refresh_diff(base, prs, heads)  # use the same fetched diff metadata as plan
     problems = set_problems(plan_batches(prs, base, args.max_prs, args.max_lines, high_patterns(args.high_path)))
     if problems and not args.force_set:
         raise MergeBatchError("the PRs break the plan rules: " + "; ".join(problems) + " (merge_batch.py plan "
@@ -255,8 +279,10 @@ def cmd_build(args):
         raise
     path.parent.mkdir(parents=True, exist_ok=True)
     st = {"version": 1, "name": name, "repo": repo, "base": base, "branch": branch, "worktree": str(path.resolve()),
+          "base_head": git("rev-parse", f"{REMOTE}/{base}").stdout.strip(),
+          "plan": args.plan, "deviations": args.deviations,
           "status": "creating", "created": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-          "skip_conflicts": bool(args.skip_conflicts), "union": list(args.union), "pending": order,
+          "skip_conflicts": bool(args.skip_conflicts), "union": list(dict.fromkeys(default_union(f"{REMOTE}/{base}") + list(args.union))), "pending": order,
           "current": None, "merging": None, "merged": [], "skipped": [], "forced": forced, "head": None, "pr": None,
           "url": None, "prs": {str(n): {k: infos[n][k] for k in ("title", "head", "ref", "base")} for n in order}}
     save_state(st)  # before the worktree exists: a crash during `worktree add` leaves a state that abort cleans up

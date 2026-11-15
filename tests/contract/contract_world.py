@@ -60,14 +60,14 @@ class Plan:
 
 
 def make_plan(kp, n=1, chain=False, project="demo", who="router", goal=True,
-              evidence=("decision",), **fields):
+              evidence=None, **fields):
     """Create *n* lanes (optionally chained) plus a goal that depends on them."""
     tag = uid()
     items, lanes = [], []
     for i in range(n):
         item = {"project": project, "id": f"L{i}-{tag}", "kind": "lane",
                 "title": f"lane {i} {tag}", "description": "a lane",
-                "done_criteria": "criteria", "evidence_kinds": list(evidence),
+                "done_criteria": "criteria", "evidence_kinds": list(evidence if evidence is not None else ("decision",) if fields.get("review_tier") == "none" else ("any",)),
                 "depends_on": [f"L{i - 1}-{tag}"] if chain and i else []}
         item.update(fields)
         items.append(item)

@@ -16,7 +16,7 @@ def test_code_change_with_changelog_ok(test_repo):
     repo, base = test_repo
     commit_files(repo, {
         "src/app.py": "print('hello')\n",
-        "CHANGELOG.md": "## Unreleased\n- Added app\n",
+        "changelog.d/TEST.md": "## Unreleased\n- Added app\n",
     }, "add app and changelog")
     res = run_check(repo, base)
     assert res.returncode == 0
@@ -73,7 +73,7 @@ def test_docs_map_mapped_path_without_doc_before_enforce_date_warns_exit_0(test_
     base2 = git(repo, "rev-parse", "HEAD").stdout.strip()
     commit_files(repo, {
         "src/foo/bar.py": "x = 1\n",
-        "CHANGELOG.md": "## Unreleased\n- update foo\n",
+        "changelog.d/TEST.md": "## Unreleased\n- update foo\n",
     }, "update foo")
     res = run_check(repo, base2, "--today", "2026-11-01")
     assert res.returncode == 0
@@ -90,7 +90,7 @@ def test_docs_map_mapped_path_without_doc_after_enforce_date_fails(test_repo):
     base2 = git(repo, "rev-parse", "HEAD").stdout.strip()
     commit_files(repo, {
         "src/foo/bar.py": "x = 1\n",
-        "CHANGELOG.md": "## Unreleased\n- update foo\n",
+        "changelog.d/TEST.md": "## Unreleased\n- update foo\n",
     }, "update foo")
     res = run_check(repo, base2, "--today", "2026-11-08")
     assert res.returncode == 1
@@ -107,7 +107,7 @@ def test_docs_map_with_doc_ok(test_repo):
     commit_files(repo, {
         "src/foo/bar.py": "x = 1\n",
         "docs/FOO.md": "# Foo\n",
-        "CHANGELOG.md": "## Unreleased\n- update foo and doc\n",
+        "changelog.d/TEST.md": "## Unreleased\n- update foo and doc\n",
     }, "update foo and doc")
     res = run_check(repo, base2, "--today", "2026-11-08")
     assert res.returncode == 0
@@ -119,7 +119,7 @@ def test_malformed_docs_map_line_fails_with_file_line(test_repo):
     repo, base = test_repo
     commit_files(repo, {
         ".docs-map": "# enforce-after: 2026-11-08\nthis is a malformed rule\n",
-        "CHANGELOG.md": "## Unreleased\n- test\n",
+        "changelog.d/TEST.md": "## Unreleased\n- test\n",
     }, "malformed docs map")
     res = run_check(repo, base)
     assert res.returncode == 1
@@ -165,7 +165,7 @@ def test_workspace_docs_map_accepts_workspace_documentation(test_repo, path):
     commit_files(repo, {
         path: "# workspace dependency update\n",
         "CONTRIBUTING.md": "# Contributing\nWorkspace dependency update.\n",
-        "CHANGELOG.md": "## Unreleased\n- Update workspace dependencies.\n",
+        "changelog.d/TEST.md": "## Unreleased\n- Update workspace dependencies.\n",
     }, "update workspace and workspace documentation")
     result = run_check(repo, base, "--today", "2026-11-08")
     assert result.returncode == 0, result.stdout
@@ -182,7 +182,7 @@ def test_workspace_docs_map_requires_more_than_feature_documentation(test_repo, 
         path: "# workspace dependency update\n",
         "docs/repo-mirror.md": "# Mirror feature update\n",
         "docs/context-probes.md": "# Probe feature update\n",
-        "CHANGELOG.md": "## Unreleased\n- Update workspace dependencies.\n",
+        "changelog.d/TEST.md": "## Unreleased\n- Update workspace dependencies.\n",
     }, "update workspace with only feature documentation")
     result = run_check(repo, base, "--today", "2026-11-08")
     assert result.returncode == 1, result.stdout

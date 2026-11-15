@@ -1,9 +1,90 @@
 """Fail-closed and concurrency contracts for the router-only merged close."""
 from types import SimpleNamespace
 import pytest
+from plangraph.keeper.errors import Refused
 
 from test_keeper_close_merged import (HEAD, KEY, MERGE, _at_write_lock, _close,
                                       _counts, _refused, doors, unseated_w, w)
+
+
+@pytest.mark.parametrize("state", ["open", "claimed"])
+def test_active_merged_close_is_dry_run_until_applied(w, monkeypatch, state):
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    # Fold and SQL both see the fixture's historical active state.
+    w.conn.execute("UPDATE items SET state=? WHERE key=?", (state, KEY))
+    before = _counts(w)
+    result = w.store.close_merged(w.p("router"), KEY, "D-5504", ["google"], from_open=True)
+    assert result["state"] == state and result["would_close"] is True
+    assert _counts(w) == (before[0], before[1], before[2] + 1)
+    result = w.store.close_merged(w.p("router"), KEY, "D-5504", ["google"],
+                                  from_open=True, apply=True)
+    assert result["state"] == "done"
+    assert w.store._evidence(KEY)[-1]["ref"]["prs"] == [
+        {"pr": 1, "head": HEAD, "decision_id": "D-5504"}]
+    assert w.store.verify_integrity() == []
+
+
+def test_active_merged_without_go_refuses(w, monkeypatch):
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    w.conn.execute("UPDATE items SET state='open' WHERE key=?", (KEY,))
+    w.decision_path.write_text(f"| D-5504 | demo | HOLD {HEAD} |\n")
+    with pytest.raises(Refused, match="go_row_not_go"):
+        w.store.close_merged(w.p("router"), KEY, "D-5504", ["google"], from_open=True, apply=True)
+    assert w.store._item(KEY)["state"] == "open"
+
+
+def test_active_close_cli_tsv_reports_proposal_and_refusal(w, doors, monkeypatch):
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    w.conn.execute("UPDATE items SET state='open' WHERE key=?", (KEY,))
+    args = ("close-merged", KEY, "D-5504", "--from-open", "--family", "google")
+    code, out, err = doors.pg("router", *args)
+    assert code == 0, err
+    assert "key\tclass\treason" in out and f"{KEY}\tWOULD-CLOSE\t" in out
+    code, out, err = doors.pg("workerA", *args, "--apply")
+    assert code == 2 and "forbidden" in out
+    w.decision_path.write_text(f"| D-5504 | demo | HOLD {HEAD} |\n")
+    code, out, err = doors.pg("router", *args)
+    assert code == 2 and "go_row_not_go" in out
+
+
+@pytest.mark.parametrize("lanes", [None, [{"branch": "lane/pending"}]])
+def test_active_close_refuses_unknown_or_unmerged_lanes(w, monkeypatch, lanes):
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: lanes)
+    w.conn.execute("UPDATE items SET state='open' WHERE key=?", (KEY,))
+    with pytest.raises(Refused, match="unmerged_work_or_lanes_unknown"):
+        w.store.close_merged(w.p("router"), KEY, "D-5504", ["google"], from_open=True, apply=True)
+    assert w.store._item(KEY)["state"] == "open"
+
+
+@pytest.mark.parametrize("second_go", [True, False])
+def test_active_close_requires_go_for_every_merged_pr(w, monkeypatch, second_go):
+    from test_keeper_close_merged import MergedGit
+    other = "b" * 40
+
+    class Git(MergedGit):
+        def merge_commit_of(self, repo, sha, ref):
+            return (MERGE if sha == HEAD else "3" * 40, "fixture@example.invalid")
+
+        def _run(self, repo, args):
+            return SimpleNamespace(returncode=0, stdout=f"{'2' * 40} " +
+                                   (HEAD if args[-1] == MERGE else other))
+
+    w.store.ctx["git"] = Git()
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", lambda *a, **kw: [
+        {"sha": HEAD, "merge": {"pr": 1}}, {"sha": other, "merge": {"pr": 2}}])
+    w.conn.execute("UPDATE items SET state='open' WHERE key=?", (KEY,))
+    if second_go:
+        with w.decision_path.open("a") as handle:
+            handle.write(f"| D-5505 | demo | GO {other}; Item: {KEY} |\n")
+        assert w.store.close_merged(w.p("router"), KEY, "D-5504", ["google"],
+                                    from_open=True, apply=True)["state"] == "done"
+        assert len(w.store._evidence(KEY)[-1]["ref"]["prs"]) == 2
+    else:
+        with pytest.raises(Refused, match="merged_pr_go_missing"):
+            w.store.close_merged(w.p("router"), KEY, "D-5504", ["google"],
+                                 from_open=True, apply=True)
+        assert w.store._item(KEY)["state"] == "open"
 
 
 def test_unknown_key_refuses(w):
@@ -127,7 +208,7 @@ def test_unrelated_hex_in_decision_cell_cannot_bind_head(w):
 
 
 @pytest.mark.parametrize("body", [
-    {}, {"key": KEY}, {"key": KEY, "decision_id": "D-5504"},
+    {}, {"key": KEY},
     {"key": [], "decision_id": "D-5504", "families": ["google"]},
     {"key": KEY, "decision_id": {}, "families": ["google"]},
     {"key": KEY, "decision_id": "D-5504", "families": None},
@@ -135,7 +216,8 @@ def test_unrelated_hex_in_decision_cell_cannot_bind_head(w):
 def test_router_http_malformed_body_is_audited_refusal(w, doors, body):
     before = _counts(w)
     status, response = doors.http("router", "POST", "/v1/close_merged", body)
-    assert status == 400 and response["error"] == "validation"
+    assert status == 400
+    assert response["error"] == "validation"
     assert _counts(w) == (before[0], before[1], before[2] + 1)
     row = w.conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
     assert (row["action"], row["ok"], row["code"]) == ("close_merged", 0, "validation")
@@ -230,3 +312,16 @@ def test_real_git_merge_head_survives_later_trailer_commit(w, tmp_path, monkeypa
     w.decision_path.write_text(f"| D-5504 | demo | GO {head} |\n")
     assert _close(w)["state"] == "done"
     assert w.store._evidence(KEY)[-1]["ref"]["merged_head"] == head
+
+
+def test_router_http_well_formed_without_citations_is_audited_no_witness(w, doors):
+    before = _counts(w)
+    status, response = doors.http("router", "POST", "/v1/close_merged",
+                                  {"key": KEY, "decision_id": "D-5504"})
+    assert status == 400
+    assert response["error"] == "evidence_unverified"
+    assert "NO-WITNESS" in response["msg"]
+    assert _counts(w) == (before[0], before[1], before[2] + 1)
+    row = w.conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
+    assert (row["action"], row["ok"], row["code"]) == ("close_merged", 0, "evidence_unverified")
+    assert w.store._item(KEY)["state"] == "in_review"

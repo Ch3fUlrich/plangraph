@@ -41,12 +41,13 @@ def test_slices_inlined_in_order_with_labels(tree):
     card = dict(CARD, context=["b.py:2-3", {"path": "a.py", "start": 1, "end": 2}])
     out = _Seat(tree)._leg_prompt("do it", card, "implement", INLINE)
     assert out.startswith("do it") and "CONTEXT PACK" in out
+    assert context_pack.LANGUAGE_RULE in out
     assert out.index("b.py:2-3") < out.index("a.py:1-2")
     assert "```\nb2\nb3\n```" in out and "```\na1\na2\n```" in out and "omitted" not in out
 
 
 def test_cap_drops_and_names_overflow(tree, monkeypatch):
-    monkeypatch.setenv("PLANGRAPH_CONTEXT_PACK_MAX_CHARS", "130")
+    monkeypatch.setenv("PLANGRAPH_CONTEXT_PACK_MAX_CHARS", str(130 + len(context_pack.LANGUAGE_RULE) + 1))
     card = dict(CARD, context=["b.py:1-1", "a.py:1-10", "b.py:5-5"])
     out = _Seat(tree)._leg_prompt("p", card, "implement", INLINE)
     assert "b.py:1-1" in out and "```\nb5\n```" in out
@@ -86,7 +87,7 @@ def test_sliced_big_file_no_warning(tree, tmp_path, monkeypatch):
     svc = _service(tmp_path / "state", monkeypatch)
     svc.runner.default_cwd = str(tree)
     out = asyncio.run(svc.spawn(card=dict(CARD, context=["big.py:1-5"]), prompt="edit big.py", dry_run=True))
-    assert "warnings" not in out
+    assert "warnings" not in out, out.get("warnings")
 
 
 @pytest.mark.parametrize("path,why", [("a.token", "secret"), ("untracked.py", "not tracked")])

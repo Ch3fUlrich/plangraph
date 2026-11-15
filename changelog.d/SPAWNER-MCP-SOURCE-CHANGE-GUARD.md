@@ -1,0 +1,1 @@
+- Guard MCP real spawns against source-tree updates with a reconnect-required error and stale health, and eagerly load spawn dependencies to prevent mixed-version lazy imports.
