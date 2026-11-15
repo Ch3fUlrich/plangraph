@@ -2241,10 +2241,13 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "libc",
+ "regex",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "toml",
+ "ureq",
  "windows-sys 0.61.2",
 ]
 

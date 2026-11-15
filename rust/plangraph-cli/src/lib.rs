@@ -1,6 +1,7 @@
 pub mod atomic;
 pub mod base_fresh;
 pub mod batch_merge;
+pub mod ci_watch;
 pub mod env;
 pub mod feeder;
 pub mod paths;
