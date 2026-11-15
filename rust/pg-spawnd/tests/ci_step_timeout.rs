@@ -24,6 +24,53 @@ fn minutes(node: Option<&Yaml>) -> Option<i64> {
     node.and_then(Yaml::as_integer)
 }
 
+fn assert_pytest_steps_bounded() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/tests.yml");
+    let source = std::fs::read_to_string(path).unwrap();
+    let docs = Yaml::load_from_str(&source).unwrap();
+    let jobs = docs[0]
+        .as_mapping_get("jobs")
+        .unwrap()
+        .as_mapping()
+        .unwrap();
+    let mut seen = 0;
+    for (name, job) in jobs {
+        let name = name.as_str().unwrap();
+        let job_limit = minutes(job.as_mapping_get("timeout-minutes")).unwrap_or(360);
+        let steps = job.as_mapping_get("steps").and_then(Yaml::as_sequence);
+        for step in steps.into_iter().flatten() {
+            let with = step.as_mapping_get("with");
+            let script = format!(
+                "{}{}",
+                text(step.as_mapping_get("run")),
+                text(with.and_then(|with| with.as_mapping_get("command")))
+            );
+            if !(name.starts_with("pytest") || script.contains("pytest")) {
+                continue;
+            }
+            seen += 1;
+            let limit = minutes(step.as_mapping_get("timeout-minutes")).unwrap_or(0);
+            assert!(0 < limit && limit < job_limit, "{name}: {step:?}");
+            let bounded = text(step.as_mapping_get("uses")) == "./.github/actions/bounded-step";
+            if script.contains("pytest") {
+                assert!(bounded, "{name}: {step:?}");
+            }
+            if bounded {
+                let seconds = with.and_then(|with| with.as_mapping_get("seconds"));
+                let seconds = seconds
+                    .and_then(Yaml::as_integer)
+                    .or_else(|| text(seconds).parse().ok())
+                    .unwrap();
+                assert!(
+                    0 < seconds + 1 && seconds + 1 < limit * 60,
+                    "{name}: {step:?}"
+                );
+            }
+        }
+    }
+    assert!(seen >= 20, "{seen}");
+}
+
 #[test]
 fn every_pytest_step_has_a_timeout_below_its_job() {
     python(
