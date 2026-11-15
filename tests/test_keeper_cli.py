@@ -208,3 +208,77 @@ def test_cli_admin_init_add_principal_verify(tmp_path, monkeypatch, capsys):
                      "--projects", "demo", "--family", "teamA"]) == 0
     assert cli.main(["admin", "verify"]) == 0
     assert cli.main(["admin", "revoke", "l1x"]) == 0
+
+
+
+@pytest.mark.parametrize("record_kind", ["checkout", "run_worktree"])
+def test_sweep_claims_reads_real_keeper_run_metadata(live, tmp_path, monkeypatch, capsys, record_kind):
+    from plangraph.keeper import auth
+    from plangraph.keeper.evidence_git import GitAdapter
+    server, w, tokens, cfg, _ = live
+    repo = tmp_path / "git-repo"
+    repo.mkdir()
+    def git(*args, cwd=repo):
+        return subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=test@example.invalid", *args],
+                              cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+    git("init", "-qb", "main")
+    git("commit", "--allow-empty", "-qm", "initial")
+    writer = tmp_path / "writer"
+    git("worktree", "add", "-qb", "writer-topic", str(writer))
+    git("commit", "--allow-empty", "-qm", "work", cwd=writer)
+    git("merge", "--ff-only", "writer-topic")
+    w.store.ctx = {"git": GitAdapter({p: {"path": str(repo), "ref": "main"} for p in ("demo", "other")})}
+    assert run(tokens["l1main"], "claim", "demo:A") == 0
+    token = auth.add_principal(w.conn, "sweep-spawner", "spawner", [])
+    spawner = auth.authenticate(w.conn, token)
+    w.store.record_run(spawner, "demo:A", {"run_id": "writer-run", "phase": "started"})
+    state = tmp_path / "state"
+    record = state / "runs/writer-run/record.json"
+    record.parent.mkdir(parents=True)
+    record.write_text(json.dumps({"status": "completed", record_kind: str(writer) if record_kind == "checkout" else {"path": str(writer)}}))
+    assert run(tokens["l1main"], "evidence", "demo:A", "--kind", "decision", "--decision", "D-1") == 0
+    assert run(tokens["l1main"], "submit", "demo:A") == 0
+    capsys.readouterr()
+    # No item-name branch and an already merged commit: only the real run binding protects this path.
+    assert run(tokens["router"], "sweep-claims", "--state", str(state)) == 0
+    assert out_json(capsys) == {"paths": [str(writer)], "branches": []}
+    monkeypatch.setenv("PG_SWEEP_STATE", str(state))
+    assert run(tokens["router"], "sweep-claims") == 0
+    assert out_json(capsys) == {"paths": [str(writer)], "branches": []}
+    assert "claim_metadata" not in w.store.show(w.p("reader"), "demo:A")
+    assert w.store.show(w.p("reader"), "demo:A")["run_ids"] == ["writer-run"]
+    seed(w, [("CLAIMTWO", [])], project="other")
+    w.store.claim(w.p("l1other"), "other:CLAIMTWO")
+    second = tmp_path / "second"
+    git("worktree", "add", "-qb", "lane/claimtwo", str(second))
+    git("commit", "--allow-empty", "-qm", "unmerged", cwd=second)
+    # show must refresh open lanes even when a previous read populated its ten-second cache.
+    assert run(tokens["router"], "sweep-claims", "--state", str(state)) == 0
+    answer = out_json(capsys)
+    assert answer["paths"] == [str(writer)]
+    assert "lane/claimtwo" in answer["branches"]
+    for invalid in ("broken JSON", json.dumps({"status": "completed", "checkout": {"branch": "topic"}})):
+        record.write_text(invalid)
+        assert run(tokens["router"], "sweep-claims", "--state", str(state)) == 3
+        assert capsys.readouterr().out == ""
+    cfg.snapshot.write_text(json.dumps(w.store.snapshot(w.p("router"))))
+    server.shutdown()
+    server.server_close()
+    assert run(tokens["router"], "sweep-claims", "--state", str(state)) == 3
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("lanes", [None, [], ["lane/x"] * 5])
+def test_sweep_claims_incomplete_or_unreachable_never_uses_snapshot(capsys, lanes):
+    from plangraph.keeper import cli_verbs
+    class Reader:
+        def call(self, method, verb, params=None):
+            if verb == "whoami": return {"role": "router", "projects": []}
+            if verb == "snapshot": return {"head_seq": 1, "items": [{"key": "p:A", "state": "in_review"}]}
+            return {"key": "p:A", "state": "in_review", "work_exists": {"lanes": lanes}, "run_ids": []}
+    assert cli_verbs.cmd_sweep_claims(None, Reader()) == 3
+    assert capsys.readouterr().out == ""
+    class Down(Reader):
+        def call(self, *args): raise cli_verbs.Unreachable("offline")
+    assert cli_verbs.cmd_sweep_claims(None, Down()) == 3
+    assert capsys.readouterr().out == ""

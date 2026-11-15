@@ -166,15 +166,15 @@ class ContextMixin:
         return [item.get(name) for name in
                 ("title", "description", "done_criteria", "note")]
 
-    def _work(self, item, fetch):
+    def _work(self, item, fetch, fresh_lanes=False):
         gitad = self._adapter("git")
         return {"commits": src.plan_item_commits(gitad, item["project"], item["key"],
                                                  fetch=fetch),
-                "lanes": src.open_lanes(gitad, item["project"], item["key"])}
+                "lanes": src.open_lanes(gitad, item["project"], item["key"], fresh_lanes)}
 
     # ----------------------------------------------------------- context
     def _task_context(self, item, index, *, inputs=None, activity=None,
-                      git=True, fetch=False):
+                      git=True, fetch=False, fresh_lanes=False):
         key = item["key"]
         inputs = inputs or self._inputs(index)
         dependents_map, corrected = inputs["graph"]
@@ -205,7 +205,7 @@ class ContextMixin:
             "newer_decisions": newer,
             "last_activity": (activity.get(key) if activity is not None
                               else self._last_activity(key)),
-            "work_exists": (self._work(item, fetch) if git
+            "work_exists": (self._work(item, fetch, fresh_lanes) if git
                             else {"commits": None, "lanes": None}),
         }
         ctx["stale"] = self._stale_reason(item, ctx)

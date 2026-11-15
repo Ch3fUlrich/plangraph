@@ -64,6 +64,7 @@ HANDLERS = {
     "token": cli_token.cmd_token,
     "digest": cli_verbs.cmd_digest,
     "snapshot": cli_verbs.cmd_snapshot,
+    "sweep-claims": cli_verbs.cmd_sweep_claims,
     "whoami": cli_verbs.cmd_whoami,
     "render": cli_verbs.cmd_render,
 }
@@ -112,6 +113,7 @@ def _add_reads(sub):
     outbox.add_parser(sub, _p)
     cli_token.add_parser(sub, _p)
     _p(sub, "snapshot", help="the plan snapshot")
+    _p(sub, "sweep-claims", help="fresh all-project sweep protection JSON").add_argument("--state", help="local spawner state for keeper-linked run metadata")
     _p(sub, "whoami", help="the token's principal")
 
 
