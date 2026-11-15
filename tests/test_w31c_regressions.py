@@ -12,6 +12,9 @@ import pytest
 from plangraph.spawner import cli, resolver
 
 
+# Each case drains megabytes through the redactor; keep them on one worker so
+# concurrent copies do not exhaust the unchanged ten-second child deadline.
+@pytest.mark.xdist_group('supervisor_stderr_rotation')
 @pytest.mark.parametrize('installed', [True, False])
 @pytest.mark.parametrize('platform', ['native', 'win32'])
 def test_supervisor_path_and_bounded_stderr(monkeypatch, tmp_path, capsys, installed, platform):

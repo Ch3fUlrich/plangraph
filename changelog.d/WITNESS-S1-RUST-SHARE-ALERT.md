@@ -1,2 +1,3 @@
 - Report sustained low witnessed share per leg with a five-run minimum, human/JSON alerts, and full-UUID gateway session tags.
 - Revive against current main and exercise launch-tag collision protection from a Rust integration test.
+- Keep supervisor stderr stress cases on one test worker to preserve their deadlines under parallel affected-test runs.
