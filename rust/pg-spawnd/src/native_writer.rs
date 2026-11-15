@@ -10,6 +10,7 @@ pub(crate) trait Driver {
     fn save(&mut self, record: &Value) -> Result<(), String>;
 }
 pub(crate) fn run(driver: &mut impl Driver, mut record: Value, brief: &str) -> Value {
+    record["review_rounds"] = json!(0);
     let result = lifecycle(driver, &mut record, brief);
     let (mut exit, mut reason) = match result {
         Ok(code) => (code, None),
@@ -61,6 +62,7 @@ fn lifecycle(
         record["resumes"] = json!(attempt);
         driver.save(record).map_err(|e| (6, e))?;
         if let Some(review) = driver.review(&head).map_err(|e| (4, e))? {
+            record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(0) + 1);
             let accepts = review["verdict"] == "ACCEPT";
             record["review"] = review;
             if !accepts {

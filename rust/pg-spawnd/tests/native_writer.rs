@@ -67,6 +67,7 @@ else:
     subprocess.run(['git','add','writer.txt'], check=True)
     subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','writer'], check=True, stdout=subprocess.DEVNULL)
     print(json.dumps({'type':'thread.started','thread_id':'fixture-session'}))
+print('tokens used\n1,234')
 "#).unwrap();
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -138,5 +139,22 @@ asyncio.run(check())
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    let mut completed = 0;
+    for entry in fs::read_dir(dir.join("state/runs")).unwrap() {
+        let path = entry.unwrap().path().join("ledger.jsonl");
+        if !path.exists() {
+            continue;
+        }
+        let row: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        if row["exit_code"] == 0 {
+            completed += 1;
+            assert_eq!(row["tokens"], 2468); // Two CLI executions, each logs 1,234.
+            assert_eq!(row["changed_lines"], 1);
+            assert_eq!(row["review_rounds"], 1);
+            assert!(row["wall_minutes"].as_f64().unwrap() > 0.0);
+        }
+    }
+    assert_eq!(completed, 1);
     fs::remove_dir_all(dir).unwrap();
 }

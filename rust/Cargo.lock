@@ -2187,6 +2187,7 @@ dependencies = [
 name = "pg-spawnd"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "libc",
  "pg-worker-core",
  "regex",
