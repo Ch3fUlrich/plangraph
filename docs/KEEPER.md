@@ -634,7 +634,8 @@ reply separates startable `items`, `needs_reconcile` rows (with `reason`), and
 remote facts cannot be verified. Text and CLI print startable rows first, then
 separate, indented Needs reconcile, In progress and Unknown sections; only
 startable rows retain the top-level `key | ...` line format. `-n` caps only
-startable work.
+startable work. `ready --needs-reconcile` prints only dropped rows and their
+reconciliation reasons (also available as JSON); it requires the keeper.
 Untouched age and superseded-premise context remain informational, matching claim.
 Merged trailers, branch topology and open PR heads share a per-repository cached
 index (10 seconds), refreshed from origin. All candidate rows are checked;
@@ -647,6 +648,7 @@ if none was observed). Cached failures retain their warning and age; they are
 retried after 10 seconds. Independently verified decision/merge facts can still
 require reconciliation. Unconfigured or unavailable local adapters retain the
 existing best-effort behavior. Claim refreshes the index before enforcement;
-unknown facts never refuse a claim. Its force-stale override, audit and
+an unverified index refuses claim with `work index unverified` unless the caller
+uses the existing audited force-stale override. Its override, audit and
 authorization rules remain unchanged. Ready and claim share merge PR metadata
 computed from the refreshed target topology, even when local main lags origin.

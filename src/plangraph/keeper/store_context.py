@@ -330,9 +330,11 @@ class ContextMixin:
             raise Refused("bad_state", f"cannot read decisions file: {path}") from None
         ctx = self._task_context(item, index, inputs=inputs, git=False)
         gitad = self._adapter("git")
-        ctx["work_exists"] = src.indexed_work(
-            src.work_index(gitad, item["project"], fresh=True), item["key"])
+        work_index = src.work_index(gitad, item["project"], fresh=True)
+        ctx["work_exists"] = src.indexed_work(work_index, item["key"])
         facts = self._claim_staleness(ctx)
+        if work_index is not None and work_index.get("stale"):
+            facts.append("work index unverified: " + work_index["reason"])
         if not facts:
             return None
         if reason is None:
