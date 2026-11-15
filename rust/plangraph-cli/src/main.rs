@@ -6,6 +6,9 @@ fn main() {
 }
 fn run() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(code) = plangraph_cli::watchers::cli(&args) {
+        return code;
+    }
     if let [command, path] = args.as_slice() {
         if command == "batch-merge-check" {
             return match plangraph_cli::batch_merge::run(std::path::Path::new(path)) {
