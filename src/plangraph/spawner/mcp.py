@@ -164,6 +164,9 @@ class MCPSpawnerServer:
         self._session_run = session_run
         self._session_sleep = session_sleep
         self.service = spawn_service(self.runner, state=state)
+        # An explicitly supplied default-equivalent runner is still a live path.
+        from .git_guard import live_runner
+        self.service.fresh_tree = live_runner(self.runner)
 
     def _sessions(self):
         """Fresh Sessions bound to the service state root (SESSION-SPAWN-MCP)."""

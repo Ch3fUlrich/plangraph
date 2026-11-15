@@ -53,7 +53,7 @@ Source spans must start and end on line boundaries; invalid spans (even empty on
 Long hex (32+), then base64/url-safe blobs (40+, mixing letters and digits), run
 only on child output via Python's `redact_output`, and as part of Rust's `redact`.
 Python never runs these broad rules on prompts or record structures: SHAs and hashes
-must stay readable there, including run IDs, card hashes and prompt SHA-256 fields. Run records add immutable process-load `tree_sha` and `tree_branch` (or `detached`) captured once by a bounded Git read when the spawner code loads, independent of the job cwd and later checkout moves; record persistence performs no Git I/O; old records may omit them. A code path without its own `.git` marker records null identity and a warning, including installed packages within an enclosing project checkout. See [checkout auditing](fleet-sync.md#production-checkout-guard-and-audit).
+must stay readable there, including run IDs, card hashes and prompt SHA-256 fields. Python records use the selected run tree's `tree_sha` when handed off, otherwise immutable process-load `tree_sha` and `tree_branch` (or `detached`) captured once by a bounded Git read, independent of the job cwd and later checkout moves. Persistence performs no Git I/O; old records may omit identity. A code path without its own `.git` marker records null identity, a reason in `tree_absent`, and a warning, including installed packages within an enclosing project checkout. See [checkout auditing](fleet-sync.md#production-checkout-guard-and-audit).
 Stored stdout/stderr tails have already passed the output scrubber at collection.
 A tail therefore masks commit SHAs and long slash paths: take SHAs from git or the run record, never from a tail.
 
@@ -258,7 +258,7 @@ generic failures keep their stop rule; cancellation, safety refusals and watchdo
 terminals still stop immediately. Safety refusal attempts precede provider-stop classification without overwriting distinct terminal reasons; specific unavailable diagnostics outrank generic provider stops. Provider-stop responses pass through spawner redaction before being added to attempts, including safety refusals. OOM wrapper marker lines (including prefixed telemetry) are not failure reasons. A `plangraph_oom` envelope on stderr is recorded only as an event and removed from the captured stderr, so each failed attempt keeps its own reason and a later attempt's OOM line cannot overwrite it.
 Plain stdout, including text saying 429, is never provider evidence.
 
-### SHA-named run-tree primitive (SPAWNER-RUN-TREE-S1)
+### SHA-named run trees (SPAWNER-RUN-TREE-S1/S2)
 
 `git_guard.run_tree(state, repo)` attempts to fetch `origin/main`, then selects
 its verified commit SHA and uses the detached tree at `<state>/trees/<sha>`.
@@ -271,9 +271,21 @@ or records with survivors, trees with held creation locks or context leases, dir
 modified within seven days, and dirty trees. A missing/invalid `tree_sha` on a
 nonterminal or survivor record, or corrupt/unreadable records, disables reaping
 for that call. Only older, clean, unpinned trees with available locks and leases
-are removed. Windows selection does no reaping. Supervisor integration and
-run-record stamping are outside this primitive's slice.
+are removed with `.locks/<sha>`; waiters on removed lock inodes retry the current path.
+Windows selection does no reaping.
 Terminal means `runner.is_terminal`; `needs_input` and `orphaned` keep their trees.
+
+Live CLI/MCP supervisors import from that tree's `src/`, preserving job cwd; a bootstrap stamps records even on older main code without handoff kwargs. Seats and split writers inherit metadata before saving.
+A supplied default-equivalent `SpawnerRunner()` still uses fresh code; custom
+transports, dry runs and direct `--supervise` record process-load identity (or
+`tree_absent` with a reason). The lease has one release owner on cancellation and
+late failures; durable nonterminal records then protect the tree. The CLI keeps
+the existing empty `seats: []` JSON and exit status 1.
+
+Rust's default adapter `plangraph.spawner.launch_spec` imports from the selected tree and appends `run_tree` even with null child `events`.
+Rust copies valid `tree_sha`, `tree_path` and optional `tree_stale` into durable
+records, preserving validated SHA identity through event redaction. Legacy/custom
+adapters without valid provenance write null `tree_sha` and a `tree_absent` reason.
 
 ### Opt-in per-attempt worktrees (RUN-WORKTREE slice 1)
 

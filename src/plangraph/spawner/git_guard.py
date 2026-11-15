@@ -49,12 +49,20 @@ def read_code_identity(repo=CODE_TREE):
 CODE_IDENTITY = read_code_identity()
 
 
+def live_runner(runner):
+    """Default-equivalent runners use fresh code; injected transports stay local."""
+    from .runner import SpawnerRunner
+    from .proc_kill import oom_process_factory
+    return type(runner) is SpawnerRunner and runner.process_factory is oom_process_factory
+
+
 def annotate_tree(record):
     """Copy cached process provenance; persistence never starts a subprocess."""
     for key, value in CODE_IDENTITY.items():
         record.setdefault(key, value)
     if record['tree_sha'] is None:
         warning = 'spawner code checkout identity unavailable at process startup'
+        record.setdefault('tree_absent', warning)
         if warning not in record.setdefault('warnings', []):
             record['warnings'].append(warning)
 
@@ -68,32 +76,47 @@ class RunWorktreeDependencyNotMerged(SpawnRefused):
 @contextmanager
 def run_worktree_lock(root):
     """Host-wide creation lock; WORKTREE-REAPER's reserved name is exactly .lock."""
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with (root / '.lock').open('a+b') as lock:
-        if os.name == 'nt':
-            import msvcrt
-            if os.fstat(lock.fileno()).st_size == 0:
-                lock.write(b'0'); lock.flush()
-            lock.seek(0)
-            while True:
-                try:
-                    msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
-                    break
-                except OSError as exc:
-                    if exc.errno not in (13, 36):
-                        raise
-                    time.sleep(0.05)  # LK_LOCK retries for only ten seconds.
-        else:
-            import fcntl
-            fcntl.flock(lock, fcntl.LOCK_EX)
+    while True:
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
-            yield
-        finally:
+            lock = (root / '.lock').open('a+b')
+        except FileNotFoundError:
+            continue  # A SHA lock directory was reaped after mkdir.
+        with lock:
             if os.name == 'nt':
+                import msvcrt
+                if os.fstat(lock.fileno()).st_size == 0:
+                    lock.write(b'0'); lock.flush()
                 lock.seek(0)
-                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+                while True:
+                    try:
+                        msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+                        break
+                    except OSError as exc:
+                        if exc.errno not in (13, 36):
+                            raise
+                        time.sleep(0.05)  # LK_LOCK retries for only ten seconds.
             else:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+                import fcntl
+                fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                if os.name != 'nt' and not _current_lock(lock, root / '.lock'):
+                    continue  # A waiter must never use an unlinked lock inode.
+                yield
+                return
+            finally:
+                if os.name == 'nt':
+                    lock.seek(0)
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _current_lock(lock, path):
+    try:
+        return os.path.samestat(os.fstat(lock.fileno()), path.stat())
+    except FileNotFoundError:
+        return False
 
 
 @contextmanager
@@ -164,12 +187,15 @@ def run_tree(state, repo=None):
                     continue
                 # Never wait behind another SHA's slow creation or active cleanup.
                 import fcntl
-                with (root / '.locks' / old.name / '.lock').open('a+b') as lock:
+                lock_dir = root / '.locks' / old.name
+                with (lock_dir / '.lock').open('a+b') as lock:
                     try:
                         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     except BlockingIOError:
                         continue
-                    _cleanup_tree(old, root, git)
+                    if _current_lock(lock, lock_dir / '.lock') and _cleanup_tree(old, root, git):
+                        (lock_dir / '.lock').unlink()
+                        lock_dir.rmdir()
             except (OSError, subprocess.SubprocessError):
                 continue  # A dirty/unreadable candidate must not starve the others.
         yield dict(tree_sha=sha, tree_path=str(path), **({'tree_stale': stale} if stale else {}))
@@ -188,6 +214,102 @@ def _cleanup_tree(old, root, git):
             return
         git('worktree', 'remove', old)  # Never force-remove a dirty tree.
     lease_path.unlink(missing_ok=True)
+    return True
+
+
+async def fresh_spawn(service, options):
+    """Run freshly imported code in a child; one owner releases its tree lease."""
+    import asyncio
+    import json
+    import sys
+    from plangraph.routing_support import background_process_options
+    state = service.state.resolve()
+    context = service.code_tree(state)
+    acquiring = asyncio.create_task(asyncio.to_thread(context.__enter__))
+    tree, child, task = None, None, None
+    released = False
+    def release():
+        nonlocal released
+        if tree is not None and not released:
+            released = True
+            context.__exit__(None, None, None)
+    try:
+        try:
+            tree = await asyncio.shield(acquiring)
+        except asyncio.CancelledError:
+            tree = await acquiring  # A running Git thread cannot be cancelled.
+            raise
+        env = dict(os.environ, PYTHONPATH=str(Path(tree['tree_path']) / 'src'),
+                   PYTHONDONTWRITEBYTECODE='1')
+        # The selected main may predate the handoff contract. Install metadata
+        # before running its entry point, rather than passing it unknown kwargs.
+        bootstrap = '''import io, json, runpy, sys
+from plangraph.spawner import runner
+payload = json.loads(sys.stdin.readline())
+tree = payload.pop('_tree')
+admitted = payload.pop('_admitted', False)
+cwd = payload.pop('_cwd')
+factory = runner.spawn_service
+def service_with_tree(*args, **kwargs):
+    service = factory(*args, **kwargs)
+    service.fresh_tree = False
+    service._parent_admitted = admitted
+    service.runner.default_cwd = cwd
+    save = service._save
+    def save_tree(record):
+        for key, value in tree.items(): record.setdefault(key, value)
+        return save(record)
+    service._save = save_tree
+    return service
+runner.spawn_service = service_with_tree
+sys.stdin = io.StringIO(json.dumps(payload) + '\\n')
+sys.argv = ['plangraph.spawner.cli', '--supervise']
+runpy.run_module('plangraph.spawner.cli', run_name='__main__')
+'''
+        child = await asyncio.create_subprocess_exec(sys.executable, '-c', bootstrap,
+            cwd=tree['tree_path'], env=env,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            limit=4 * 1024 * 1024, **background_process_options(new_session=True, platform=os.name))
+        payload = {k: v for k, v in options.items() if k != 'wait_seconds'}
+        payload.update(state=str(state), _tree=tree, _admitted=True,
+                       _cwd=getattr(service.runner, 'default_cwd', os.getcwd()))
+        child.stdin.write((json.dumps(payload) + '\n').encode())
+        await child.stdin.drain()
+        child.stdin.close()
+        from .base_fresh import ADMISSION_TIMEOUT, spawn_runs
+        line = await asyncio.wait_for(child.stdout.readline(), ADMISSION_TIMEOUT + 5)
+        if not line:
+            raise RuntimeError('run_tree_worker_failed')
+        result = json.loads(line)
+        async def finish():
+            try:
+                await child.wait()
+            finally:
+                release()
+        task = asyncio.create_task(finish())
+        task.add_done_callback(lambda done: release())  # Also if cancelled before its first step.
+        for record in spawn_runs(result):
+            if 'run_id' in record:
+                service.tasks[record['run_id']] = task
+        wait = options.get('wait_seconds', 0)
+        if wait is None:
+            await asyncio.shield(task)
+        elif wait > 0:
+            try:
+                await asyncio.wait_for(asyncio.shield(task), wait)
+            except asyncio.TimeoutError:
+                pass
+        return service.result(result['run_id']) if 'run_id' in result else result
+    except BaseException:
+        try:
+            if child is not None and child.returncode is None:
+                child.kill()
+                await child.wait()
+        finally:
+            if task is not None:
+                await asyncio.gather(task, return_exceptions=True)
+            release()
+        raise
 
 
 def create(root, repo, lane_branch, continuation=False, *, finished_dependencies=()):

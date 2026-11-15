@@ -106,6 +106,7 @@ impl Runs {
             .into_iter()
             .map(Value::Object)
             .collect();
+        annotate_tree(&mut base, &events);
         crate::records::annotate_item(&mut base, &args["card"], &mut events);
         if !dry && crate::gitconfig_guard::writer_role(&role) {
             let dir = crate::gitconfig_guard::run_dir(state, &run_id)
@@ -175,6 +176,37 @@ impl Runs {
         wait(state, &run_id, wait_duration(args.get("wait_seconds")))
     }
 }
+fn annotate_tree(base: &mut Value, events: &[Value]) {
+    let tree = events
+        .iter()
+        .rev()
+        .find(|event| event["event"] == "run_tree");
+    let sha = tree.and_then(|event| event["tree_sha"].as_str());
+    if let Some(sha) = sha.filter(|sha| valid_tree_sha(sha)) {
+        base["tree_sha"] = json!(sha);
+        for key in ["tree_path", "tree_stale"] {
+            if let Some(value) = tree.and_then(|event| event.get(key)) {
+                base[key] = value.clone();
+            }
+        }
+    } else {
+        base["tree_sha"] = Value::Null;
+        base["tree_absent"] = json!(tree
+            .and_then(|event| event["tree_absent"].as_str())
+            .filter(|reason| !reason.trim().is_empty())
+            .unwrap_or(if tree.is_some() {
+                "launch adapter returned invalid tree identity"
+            } else {
+                "launch adapter did not report run_tree provenance"
+            }));
+    }
+}
+fn valid_tree_sha(sha: &str) -> bool {
+    matches!(sha.len(), 40 | 64)
+        && sha
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
 pub(crate) fn store_prompt(
     state: &Path,
     id: &str,
@@ -220,9 +252,38 @@ pub(crate) fn store_prompt(
     }
     if let Some(events) = &mut launch.events {
         for event in events {
+            let tree_sha = (event.get("event") == Some(&json!("run_tree")))
+                .then(|| event.get("tree_sha").and_then(Value::as_str))
+                .flatten()
+                .filter(|sha| valid_tree_sha(sha))
+                .map(str::to_owned);
+            let tree_path = tree_sha.as_deref().and_then(|sha| {
+                let path = Path::new(event.get("tree_path")?.as_str()?);
+                if path.file_name()?.to_str()? != sha {
+                    return None;
+                }
+                // Only the SHA-named final component is an identifier. Scrub
+                // the parent as usual rather than exempting arbitrary paths.
+                Some(
+                    Path::new(&pg_worker_core::redact::redact(
+                        &path.parent()?.to_string_lossy(),
+                    ))
+                    .join(sha)
+                    .to_string_lossy()
+                    .into_owned(),
+                )
+            });
             let clean = pg_worker_core::redact::redact(&Value::Object(event.clone()).to_string());
             *event = serde_json::from_str(&clean)
                 .map_err(|_| internal("could not redact launch event"))?;
+            // A validated identity is not a credential; never lose it to the
+            // generic long-hex scrubber used for unstructured event text.
+            if let Some(sha) = tree_sha {
+                event.insert("tree_sha".into(), json!(sha));
+            }
+            if let Some(path) = tree_path {
+                event.insert("tree_path".into(), json!(path));
+            }
         }
     }
     let path = pg_worker_core::run::record::run_dir(state, id)
@@ -381,6 +442,9 @@ mod record_tests;
 #[cfg(all(test, unix))]
 #[path = "runs_tests.rs"]
 mod tests;
+#[cfg(all(test, unix))]
+#[path = "runs_tree_tests.rs"]
+mod tree_tests;
 fn wait_duration(value: Option<&Value>) -> Duration {
     #[allow(clippy::manual_clamp)]
     let seconds = value

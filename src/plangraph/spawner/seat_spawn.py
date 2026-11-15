@@ -175,12 +175,17 @@ class SeatSpawnMixin:
             from plangraph.planner.routing import SpawnRefused
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
-            admitted = await asyncio.to_thread(self.admit_spawn, options, card=card)
+            parent_admitted = getattr(self, '_parent_admitted', False)
+            self._parent_admitted = False
+            admitted = None if parent_admitted else await asyncio.to_thread(self.admit_spawn, options, card=card)
             if admitted is not None:
                 return admitted
             if (card or {}).get('run_kind') == 'native-codex':
                 from .overflow import native_spawn
                 return await native_spawn(self, card, options)
+            if getattr(self, 'fresh_tree', False) and not options.get('dry_run'):
+                from .git_guard import fresh_spawn
+                return await fresh_spawn(self, options)
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief
                 from plangraph.settings import admit_fixer_threshold
