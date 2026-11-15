@@ -710,6 +710,17 @@ Historical records remain readable; the retired benchmark model row exists only
 for benchmark foreign keys and never appears in the model list.
 Native Codex writer placement and lifecycle: [run contract](native-codex-writer.md).
 
+Native agy CLI reviews (D-6054) use a disposable `git clone --shared` at the
+stamped HEAD with origin removed. Commands are pre-approved inside that checkout
+so headless plan mode can inspect callers and run bounded tests without a
+permission prompt. This is checkout isolation, not a command security sandbox.
+The original checkout remains the provenance source and is rechecked when the
+review ends. The clone lives through completion and quota fallthrough setup,
+then is removed. Empty or whitespace-only agy responses produce an explicit
+`VERDICT: FAIL` with available tool frames and stderr diagnostics; they never
+gain a served-model witness or count as a passing seat. No empty-output retry
+can replace the required repository-access review.
+
 Review hard walls default to 25 minutes and implement/fix to 90 minutes; progressing runs retain these prior budgets. Read-only git status/diff/log and GitHub run/status polling do not count as tool loops. Queue expiry preserves records owned by live or unobservable supervisors.
 
 Every emitted context pack includes this rule within its size cap: new code is Rust with Rust tests; no new Python or shell file; an allowlist line needs an operator D-id. The planner brief template carries the same rule (D-5912).

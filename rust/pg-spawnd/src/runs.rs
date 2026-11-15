@@ -78,6 +78,10 @@ impl Runs {
         if let Some(head) = review_head {
             base["head_sha"] = json!(head);
         }
+        let checkout = crate::cli_review::isolate(&mut launch, &leg, base["head_sha"].as_str())?;
+        if checkout.is_some() {
+            base["review_checkout"] = json!(launch.cwd);
+        }
         base.as_object_mut()
             .unwrap()
             .extend(admission.fields.as_object().unwrap().clone());
@@ -141,7 +145,12 @@ impl Runs {
                 stdin: launch.stdin.map(String::into_bytes),
                 base: base.as_object().unwrap().clone(),
                 events: events.clone(),
-                finish: Some(crate::review_retry::hook(args.clone(), leg, attempt_id)),
+                finish: Some(crate::review_retry::hook(
+                    args.clone(),
+                    leg,
+                    attempt_id,
+                    checkout,
+                )),
             };
             match self.supervisor.start(spec) {
                 Ok(()) => {}

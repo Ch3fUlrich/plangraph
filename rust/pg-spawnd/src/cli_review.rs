@@ -124,7 +124,7 @@ pub(crate) fn prepare(
             ]}})
             .to_string(),
         ]);
-        "Use read_file, list_dir, grep_search and find_by_name for repository access. Do not request command tools. "
+        "Inspect this disposable checkout using file tools and read-only commands; run only bounded tests. "
     } else {
         ""
     };
@@ -143,6 +143,10 @@ pub(crate) fn prepare(
     launch.prompt = Some(prompt);
     Ok(Some(head))
 }
+
+#[path = "cli_review_checkout.rs"]
+mod checkout;
+pub(crate) use checkout::isolate;
 
 fn read_log(record: &RunRecord) -> std::io::Result<String> {
     let path = record.path().with_file_name("live.log");
@@ -226,15 +230,28 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         .parent()
         .and_then(Path::parent)
         .and_then(Path::parent)
+        .map(Path::to_owned)
     else {
         return;
     };
-    let text = crate::review_artifacts::review_text(state, &value).unwrap_or_default();
+    let text = crate::review_artifacts::review_text(&state, &value).unwrap_or_default();
+    let unavailable = leg["harness"] == "agy" && text.starts_with("Agy review unavailable:");
+    if unavailable {
+        record.set("verdict", json!("fail"));
+        record.set("findings", json!(text));
+        if record.get("reason").is_none_or(Value::is_null) {
+            record.set("reason", json!("agy_review_no_output"));
+        }
+    }
     // Book provider errors through the existing store/parser, never answer prose.
-    if status != Status::Completed || text.is_empty() || text.contains("VERDICT: HALT") {
+    if unavailable
+        || status != Status::Completed
+        || text.is_empty()
+        || text.contains("VERDICT: HALT")
+    {
         if let Some(argv) = quota_args(record, leg) {
             if !matches!(
-                crate::adapter::Adapter(state).run(&argv, Duration::from_secs(10)),
+                crate::adapter::Adapter(&state).run(&argv, Duration::from_secs(10)),
                 Ok((0, _, _))
             ) {
                 record.set("quota_record_error", json!(true));
@@ -249,6 +266,12 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         return;
     };
     if clean_head(Path::new(cwd)).ok().as_deref() != Some(head) {
+        return;
+    }
+    if value["review_checkout"]
+        .as_str()
+        .is_some_and(|p| clean_head(Path::new(p)).ok().as_deref() != Some(head))
+    {
         return;
     }
     let mut model = leg["model"].as_str().unwrap().to_owned();
@@ -324,6 +347,9 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         json!({"head_sha":head,"finish_reason":"stop"}),
     );
 }
+#[cfg(test)]
+#[path = "cli_review_isolation_tests.rs"]
+mod isolation_tests;
 #[cfg(test)]
 #[path = "cli_review_tests.rs"]
 mod tests;
