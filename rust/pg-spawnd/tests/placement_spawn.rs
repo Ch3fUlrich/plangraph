@@ -17,6 +17,7 @@ fn missing_launch_program_writes_no_record() {
         message.starts_with("launch adapter could not start"),
         "{message}"
     );
+    assert!(message.contains("os error"), "{message}");
     let runs = f.state.path().join("runs");
     assert!(!runs.exists() || std::fs::read_dir(runs).unwrap().next().is_none());
 }
