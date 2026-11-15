@@ -99,3 +99,10 @@ as CI and the changelog/docs checker. A `Plan-Item`, `Writer`, `Hand-Edit`,
 `Changelog`, or `Gate-Edit` key outside that block refuses the commit and names
 its line in the cleaned message. Value validation still runs, so misplaced keys
 cannot hide malformed attribution or skip reasons.
+
+The Rust `push_size` integration test drives the installed Python pre-push hook
+from a separate temporary repository, including its preflight policy checks.
+It pins checker/baseline changes in one commit, new-branch pushes, committed
+rather than dirty content, non-HEAD refs, main's baseline/exemptions and scrub
+refusals. This is regression coverage for the existing hook, not a hook port.
+Its preflight and size-configuration inputs select Rust CI alongside the hook.

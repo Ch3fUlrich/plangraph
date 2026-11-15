@@ -210,7 +210,7 @@ def test_missing_preflight_refuses_only_main(tmp_path, monkeypatch, capsys, ref,
         f"{ref} {'1' * 40} {ref} {'0' * 40}\n"))
     monkeypatch.delenv('PREFLIGHT_SKIP', raising=False)
     monkeypatch.setitem(scope, 'git_out', lambda *a: str(tmp_path) if a[0] == 'rev-parse' else '')
-    monkeypatch.setitem(scope, 'file_size_gate', lambda: 0)
+    monkeypatch.setitem(scope, 'file_size_gate', lambda head, base: 0)
     monkeypatch.setitem(scope, 'commit_gate', lambda head: 0)
     monkeypatch.setitem(scope, 'base_commit', lambda *a: 'base')
     monkeypatch.setitem(scope, 'main_baselines', lambda *a: [])

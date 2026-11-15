@@ -203,6 +203,15 @@ files are not counted; a deliberate exemption goes in `.filesize-allow` with a r
 (today only `CHANGELOG.md`, an append-only ledger).
 The file-size gate refuses malformed Git batch headers with a single reason line.
 
+Pre-push checks each pushed commit's changed paths using the installed checker
+and `origin/main`'s baseline and exemptions (`--head SHA --push-base BASE`).
+This permits checker changes and baseline pruning together, while candidate
+checker or exemption changes cannot admit oversized files. Preflight carries
+the same range in `FILESIZE_PUSH_BASE`, restricted to policy subprocesses;
+scrub and changelog gates are unchanged. CI and direct local checks still scan
+the whole tree. After merging hook changes, update the shared hooks checkout
+to main so pushes use the merged checker and hook.
+
 New Python source outside tests needs a `path | reason (D-id)` line in
 `tools/new_code_allowlist.txt`, which `python3 tools/check_new_code_lang.py` reads; for
 example the keeper's host-sample store stays Python because the keeper is Python (D-5038).

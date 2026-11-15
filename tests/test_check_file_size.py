@@ -334,9 +334,13 @@ class GateHookTests(RepoFixture):
     checker on the pushing checkout and refuses the push on a violation."""
 
     def push(self):
-        self.git("commit", "-q", "-m", "fixture")
+        # The changed-path gate needs a genuine base before the staged file.
+        self.git("commit", "--allow-empty", "--only", "-qm", "base")
+        base = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("update-ref", "refs/remotes/origin/main", base)
+        self.git("commit", "-q", "-m",
+                 "fixture\n\nPlan-Item: plangraph:TEST\nWriter: codex/test")
         head = self.git("rev-parse", "HEAD").stdout.strip()
-        self.git("update-ref", "refs/remotes/origin/main", head)
         line = "refs/heads/lane %s refs/heads/lane %s\n" % (head, ZERO)
         return subprocess.run(
             [sys.executable, str(HOOK), "origin", "https://example.invalid/r.git"],
@@ -363,7 +367,7 @@ class GateHookTests(RepoFixture):
         self.assertEqual((ROOT / m.group(1) / "pre-push").resolve(),
                          HOOK.resolve())
         self.assertTrue(os.access(HOOK, os.X_OK), "pre-push not executable")
-        self.assertIn("file_size_gate()", HOOK.read_text(encoding="utf-8"))
+        self.assertIn("def file_size_gate(", HOOK.read_text(encoding="utf-8"))
 
 
 class RealTreeTests(unittest.TestCase):

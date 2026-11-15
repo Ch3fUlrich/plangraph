@@ -159,9 +159,10 @@ def scan_blob(rel, local_sha, cfg, find_shapes, hits, baselines=()):
                 hits.append(sc.Hit(rel, n, rule))
 
 
-def file_size_gate():
-    """tools/check_file_size.py on the pushing checkout: 0 clean, 1 refuse."""
-    r = subprocess.run([PYTHON, str(FILE_SIZE)], capture_output=True, text=True, timeout=60)
+def file_size_gate(head, base):
+    """Installed checker + main data, measuring only committed pushed changes."""
+    r = subprocess.run([PYTHON, str(FILE_SIZE), "--head", head, "--push-base", base],
+                       capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         sys.stderr.write(r.stdout + r.stderr)
         print("pre-push: file-size gate failed: push refused (split the file, "
@@ -287,8 +288,9 @@ def push_main():
     for _, local_sha, _, _ in refs:
         if commit_gate(local_sha):
             return 1
-    if file_size_gate():
-        return 1
+    for _, local_sha, _, remote_sha in refs:
+        if file_size_gate(local_sha, base_commit(remote_sha, local_sha)):
+            return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None
     remote = sys.argv[1] if len(sys.argv) > 1 else "origin"
@@ -353,7 +355,8 @@ def push_main():
             if os.environ.get("PREFLIGHT_FAST") == "1":
                 command.append("--fast")
             # Per-check deadlines govern, including the possible INFRA retry.
-            result = subprocess.run(command)
+            result = subprocess.run(command, env=dict(
+                os.environ, FILESIZE_PUSH_BASE=base_commit(remote_sha, local_sha)))
             if result.returncode:
                 return result.returncode
     elif os.environ.get("PREFLIGHT_SKIP") == "1":

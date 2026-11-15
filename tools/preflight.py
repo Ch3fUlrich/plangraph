@@ -233,6 +233,9 @@ def main(argv=None, root=None):
     policy_base = policy_baseline(root, args.base)
     policy_bases = dict(FILESIZE_REQUIRE_BASE=policy_base, NEWCODE_BASE=policy_base,
                         CHANGELOG_BASE=policy_base)
+    # Only policy subprocesses inherit the hook's changed-path size mode.
+    if os.environ.get("FILESIZE_PUSH_BASE"):
+        policy_bases["FILESIZE_PUSH_BASE"] = os.environ["FILESIZE_PUSH_BASE"]
     env = dict(os.environ, CARGO_BUILD_JOBS="4")
     cargo_bin = Path.home() / '.cargo/bin'
     if cargo_bin.is_dir():

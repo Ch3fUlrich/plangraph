@@ -37,6 +37,12 @@ Lines are counted ``splitlines()``-style, so a final line without a trailing
 newline still counts - a ``wc -l`` count would drop exactly the file whose
 author forgot the newline.
 
+Pre-push uses ``--head SHA --push-base BASE``: measure committed changed paths
+with origin/main's baseline and exemptions. This keeps the installed checker
+and main's data together when a branch changes its checker and baseline in
+one commit. Candidate exemptions cannot weaken this check. Whole-tree CI and
+ordinary local invocations keep the default behavior above.
+
 Exit: 0 clean (or updated), 1 violations or malformed config, 2 usage.
 """
 import argparse
@@ -102,13 +108,14 @@ def full_path(root, rel):
     return os.path.join(root, *rel.split("/"))
 
 
-def read_allow(path):
+def read_allow(path, text=None):
     """``(allowed, errors)`` - `path reason` per line; a reason is mandatory."""
     allowed, errors = set(), []
-    if not os.path.isfile(path):
-        return allowed, errors
-    with open(path, encoding="utf-8", errors="replace") as handle:
-        text = handle.read()
+    if text is None:
+        if not os.path.isfile(path):
+            return allowed, errors
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
     for number, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -307,12 +314,41 @@ def main(argv=None):
                          "lower counts - never raise, never add"
                           % BASELINE_NAME)
     ap.add_argument("--head", help="measure this revision instead of the checkout")
+    ap.add_argument("--push-base", default=os.environ.get("FILESIZE_PUSH_BASE"),
+                    help="check only paths changed since this revision, "
+                    "using origin/main's size configuration (requires --head)")
     args = ap.parse_args(argv)
+    if args.push_base and (not args.head or args.update_baseline):
+        ap.error("--push-base requires --head and forbids --update-baseline")
 
     root = git_toplevel()
-    allowed, allow_errors = read_allow(full_path(root, ALLOW_NAME))
-    counts, base_errors = read_baseline(full_path(root, BASELINE_NAME))
+    if args.push_base:
+        # Keep the installed checker and its data together. Candidate changes
+        # to either configuration file cannot grant themselves exemptions.
+        if git(root, "rev-parse", "--verify", "origin/main^{commit}").returncode:
+            raise SystemExit("check-file-size: origin/main unavailable")
+        configs = []
+        for name in (ALLOW_NAME, BASELINE_NAME):
+            entry = git(root, "ls-tree", "origin/main", "--", name)
+            if entry.returncode:
+                raise SystemExit("check-file-size: cannot read main configuration tree")
+            blob = git(root, "show", "origin/main:" + name) if entry.stdout else None
+            if blob is not None and blob.returncode:
+                raise SystemExit("check-file-size: cannot read main configuration blob")
+            configs.append(blob.stdout if blob is not None else "")
+        allowed, allow_errors = read_allow(ALLOW_NAME, configs[0])
+        counts, base_errors = parse_baseline(configs[1], "origin/main:" + BASELINE_NAME)
+    else:
+        allowed, allow_errors = read_allow(full_path(root, ALLOW_NAME))
+        counts, base_errors = read_baseline(full_path(root, BASELINE_NAME))
     measured, binaries = measure(root, allowed, args.head)
+    if args.push_base:
+        changed = git(root, "diff", "--no-renames", "--name-only", "-z",
+                      args.push_base, args.head, "--")
+        if changed.returncode:
+            raise SystemExit("check-file-size: cannot read pushed changes")
+        paths = set(changed.stdout.split("\0"))
+        measured = {path: count for path, count in measured.items() if path in paths}
     required = os.environ.get(REQUIRE_BASE_ENV, "")
     if required:
         base = git(root, "rev-parse", "--verify", "--quiet",
