@@ -143,4 +143,4 @@ The shipped provider config and the pending benchmark inventory use the same `om
 
 Reviews (rule 3.50, D-6028) start on mimo-v2.6-pro, then mimo-v2.6-flash (both inline-only, so
 the card needs a diff_ref), then the D-5966 order: agy Hydrogen high, agy Argon medium, DeepSeek
-flash and Beam free legs, then Sonnet high. Each agy model has an independent quota reset.
+flash and Beam free legs, then native Claude Sonnet high. Each agy model has an independent quota reset; the native Sonnet subscription uses its own quota key.

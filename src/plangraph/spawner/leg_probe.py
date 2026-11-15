@@ -12,6 +12,7 @@ import tempfile
 import time
 
 from plangraph.routing_support import leg_state
+from plangraph.routing_support.leg_state import leg_key as key
 from plangraph.routing_errors import ParameterRefused
 
 PROMPT = 'Create a file ok.txt containing the single word ok, then git add it and git commit -m probe. Do nothing else.'
@@ -129,15 +130,6 @@ def seconds(name, default, value=None, *, positive=False, parameter=None):
     return value
 
 
-def key(leg):
-    """One leg key for probe and quota bookkeeping (Q16/M8).
-    Prefix only bare agy models; provider-qualified models are their own keys.
-    Legacy rows without a harness keep their historical model-only keys.
-    """
-    return ('agy/' + leg.model if getattr(leg, 'harness', None) == 'agy' and '/' not in leg.model
-            else leg.model)
-
-
 def reset_iso(reset):
     """UTC ISO-8601 for a booked reset; 'unknown' when absent or unformattable.
 
@@ -153,10 +145,11 @@ def reset_iso(reset):
 
 
 def read_status(reader, model, **kw):
-    """Read a bare model under both keys: an agy leg books 'agy/<model>', others the bare model (Q16)."""
+    """Read legacy bare/agy keys, keeping the native Sonnet subscription separate."""
     from plangraph.routing_support.liveness import unavailable
+    from plangraph.planner.legs import REVIEW_SONNET
     state = reader(model, **kw)
-    return state if '/' in model or unavailable(state) else reader('agy/' + model, **kw)
+    return state if model == REVIEW_SONNET or '/' in model or unavailable(state) else reader('agy/' + model, **kw)
 
 
 class DispatchReader:

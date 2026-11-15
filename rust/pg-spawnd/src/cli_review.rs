@@ -204,6 +204,8 @@ fn quota_args(record: &RunRecord, leg: &Value) -> Option<Vec<String>> {
         "quota-result".into(),
         "--model".into(),
         leg["model"].as_str()?.into(),
+        "--harness".into(),
+        leg["harness"].as_str()?.into(),
         "--error".into(),
         errors.join("\n").chars().take(8192).collect(),
     ];
