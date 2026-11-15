@@ -1,14 +1,12 @@
 //! Timer-driven activity boundaries. Selection/admission/briefs are pure;
 //! spawn is an effectful activity behind `Launch` (including compensating release).
-// Runtime callers arrive in part 5; internal adapter tests run in this part.
-#[allow(dead_code)]
 mod adapters;
-#[allow(dead_code)]
 mod quota;
+mod runtime;
 mod selection;
-#[allow(dead_code)]
 mod sources;
 mod workflow;
+pub use runtime::run;
 pub use selection::{decode_task, pick, prepare_ready, validate_ready};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
