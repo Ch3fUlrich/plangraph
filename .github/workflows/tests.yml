@@ -102,7 +102,7 @@ jobs:
 
   pytest:
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         shard: ${{ fromJSON(vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '[0,1,2,3]' || '[0,1,2]') }}
     env:
@@ -236,7 +236,7 @@ jobs:
 
   pytest-postgres:
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         shard: [0, 1, 2]
     needs: select
@@ -374,11 +374,17 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: cargo check (windows-gnu)
         run: cargo check --target x86_64-pc-windows-gnu -p pg-worker-core -p pg-spawnd --all-targets
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
       - name: Build pg-jail helper
         run: cargo build -p pg-jail
       - name: cargo test
         run: |
           PG_JAIL_BIN="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}/debug/pg-jail" cargo test
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.14"}
+      - name: Native writer lifecycle (Python 3.14)
+        run: cargo test -p pg-spawnd --test native_writer
 
   rust-windows:
     needs: select

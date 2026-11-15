@@ -272,7 +272,9 @@ The `by` cell must contain the case-insensitive token `operator`, separated from
 other tokens by commas or plus signs. `Waives-seats:` lists exact, space-separated
 item keys. Optional `Cutoff:` in the decision cell replaces rule 3.37's cutoff
 for those keys only. It accepts an ISO UTC date or datetime (`Z` or `+00:00`),
-must occur once, and cannot be later than the waiver row's own date. Dates come
+must occur once, and cannot be later than the waiver row's own date. Malformed
+markers such as `Cutoff:2026-11-14` refuse as `historical_cutoff` instead of falling
+back to rule 3.37. Dates come
 from a `date` column or a unique `Date:` field in the decision cell; missing or
 ambiguous dates refuse. The GO date and merge timestamp must precede the cutoff.
 Without `Cutoff:`, rule 3.37 applies (default 2026-11-13 UTC). Auth/secrets risk
@@ -298,7 +300,7 @@ for `forgejo:` values), bind, and `default_lease` (7200), `lease_warn_s` (900), 
 ## CLI `pg`
 `pg ready [--project P] [--all] [-n 10]`, `show KEY`, `claim KEY [--lease 2h]`, `delegate KEY WORKER`, `heartbeat KEY`, `release KEY`,
 `evidence KEY --kind K --commit SHA | --run ID | --task N | --decision D-NNN`, `submit KEY`, `verdict KEY --pass|--changes "why"`,
-`waive KEY D-NNN`, `cancel KEY`, `priority KEY N`, `define …` (all new items, including decisions, require non-blank `Why:` and `How:` sections; missing sections report `missing_why_how`. MCP create and CLI define defer decision checks to storage, including `apply_ops`, after duplicate-key, conflict and locked refusals; legacy imports and existing-item edits remain exempt. `pg check` warns on open items without), `blocked`, `waves`, `critical`, `percent`, `alerts`, `digest`, `snapshot`, `whoami`,
+`waive KEY D-NNN`, `cancel KEY`, `priority KEY N` (integer 0–10: 10 most important, 0 optional; define, import, edit and batch writes refuse other values with `validation`), `define …` (all new items, including decisions, require non-blank `Why:` and `How:` sections; missing sections report `missing_why_how`. MCP create and CLI define defer decision checks to storage, including `apply_ops`, after duplicate-key, conflict and locked refusals; legacy imports and existing-item edits remain exempt. `pg check` warns on open items without), `blocked`, `waves`, `critical`, `percent`, `alerts`, `digest`, `snapshot`, `whoami`,
 `render --out F [--cdn]`, `audit-meta [--project P] [--stale-days N] [--skeleton DIR]`; admin (local, on the keeper host): `pg admin init|add-principal|revoke|verify|import DIR|export DIR`.
 Env `PG_URL`, `PG_TOKEN_FILE` (path of a mode-600 file; never pass a token on argv). Default output = the smallest useful text; `--json` for full.
 Exit codes: 0 ok, 2 refused (stderr `code: msg`), 3 unreachable (CLI then reads the local `plan.snapshot.json` read-only for read verbs and says so).
@@ -627,3 +629,43 @@ record bound to the merged head, with consistent attempt provenance. Auth/secret
 cards cannot use these low-trust seats; their existing two-seat gate remains.
 
 [Per-item checkpoint and status notes](checkpoints/). Add new notes there, one file per item, rather than appending here.
+
+`ready` uses the claim guard's merged-work and newer-decision checks. Its JSON
+reply separates startable `items`, `needs_reconcile` rows (with `reason`), and
+`in_progress` rows (with `prs`, the open PR numbers), and `unknown` rows when
+remote facts cannot be verified. Text and CLI print startable rows first, then
+separate, indented Needs reconcile, In progress and Unknown sections; only
+startable rows retain the top-level `key | ...` line format. `-n` caps only
+startable work. `ready --needs-reconcile` prints only dropped rows and their
+reconciliation reasons (also available as JSON); it requires the keeper.
+Untouched age and superseded-premise context remain informational, matching claim.
+Merged trailers, branch topology and open PR heads share a per-repository cached
+index (10 seconds), refreshed from origin. All candidate rows are checked;
+ready performs no per-item git/gh calls. Failed origin fetches never classify
+items from stale local facts. Failed PR-head fetches, missing head commits and
+unavailable PR inventories remain unknown. A single visible text WARNING line
+and the JSON `warnings` list report each affected project's stale index, reason
+and `age_seconds` since the last successful origin fetch (null / age unknown
+if none was observed). Cached failures retain their warning and age; they are
+retried after 10 seconds. Independently verified decision/merge facts can still
+require reconciliation. Unconfigured or unavailable local adapters retain the
+existing best-effort behavior. Claim refreshes the index before enforcement;
+an unverified index refuses claim with `work index unverified` unless the caller
+uses the existing audited force-stale override. Its override, audit and
+authorization rules remain unchanged. Ready and claim share merge PR metadata
+computed from the refreshed target topology, even when local main lags origin.
+
+`PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims` prints exactly `{"paths":[...],"branches":[...]}` for active
+claimed/in_review items across every project, using a fresh snapshot and each
+item's open lanes. Claim metadata paths are included when present. It requires
+an unscoped router token and refuses unavailable or truncated lane inventories,
+malformed metadata, filtered snapshots, or a snapshot changed during collection;
+there is no offline fallback. Hosts can set
+`PG_SWEEP_CLAIMS_READER="PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims"` directly; see [pg-reap](pg-reap.md).
+
+The sweep reader uses the real `show.run_ids` association written by `record_run`
+to read local `runs/<id>/record.json` checkout/cwd/run_worktree metadata, including
+completed writer runs whose item is still in review. `sweep-claims --state DIR`
+overrides the local state directory; otherwise `PG_SWEEP_STATE` from the sweep is used before the HOME default. Optional direct claim metadata is also
+accepted. An active claim with neither a resolved local path nor open lanes is
+incomplete and refuses cleanup. Unreadable existing local records also refuse.

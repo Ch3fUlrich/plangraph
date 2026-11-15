@@ -1,0 +1,1 @@
+- Sweep detached merged trees and terminal run worktrees across multiple roots after one idle hour; add fresh keeper claims, hourly cleanup and SHA-leased batch land cleanup.
