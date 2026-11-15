@@ -1,4 +1,4 @@
-use plangraph_cli::{env, setup};
+use plangraph_cli::{env, feeder, setup};
 use std::path::PathBuf;
 
 fn main() {
@@ -27,6 +27,9 @@ fn run() -> i32 {
             return 2;
         }
     };
+    if args.first().is_some_and(|s| s == "feed") {
+        return feeder::run(&home, &effective, &args[1..]);
+    }
     if args == ["env", "check"] {
         println!("environment checked {} keys", effective.len());
         return 0;
@@ -42,7 +45,7 @@ fn run() -> i32 {
         ["setup", "check"] => setup::Mode::Check,
         _ => {
             eprintln!(
-                "usage: plangraph setup apply [--dry-run] | setup check | env check | --version"
+                "usage: plangraph setup apply [--dry-run] | setup check | env check | feed --once [--dry-run] | --version"
             );
             return 2;
         }
