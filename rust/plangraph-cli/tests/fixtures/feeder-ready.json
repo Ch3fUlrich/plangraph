@@ -1,0 +1,105 @@
+{
+  "items": [
+    {
+      "key": "plangraph:LOW-OLD",
+      "title": "Older low priority",
+      "priority": 1,
+      "created_at": "2025-01-01T00:00:00Z",
+      "project": "plangraph",
+      "id": "LOW-OLD",
+      "kind": "lane",
+      "state": "open",
+      "claimed_by": null,
+      "epoch": 0,
+      "context": {
+        "newer_decisions": [],
+        "work_exists": {
+          "commits": [],
+          "lanes": []
+        },
+        "stale": null
+      }
+    },
+    {
+      "key": "plangraph:HIGH-NEW",
+      "priority": 9,
+      "created_at": "2026-02-01T00:00:00Z",
+      "project": "plangraph",
+      "id": "HIGH-NEW",
+      "kind": "lane",
+      "state": "open",
+      "claimed_by": null,
+      "epoch": 0,
+      "context": {
+        "newer_decisions": [],
+        "work_exists": {
+          "commits": [],
+          "lanes": []
+        },
+        "stale": null
+      }
+    },
+    {
+      "key": "plangraph:HIGH-OLD",
+      "priority": 9,
+      "created_at": "2026-01-01T00:00:00Z",
+      "project": "plangraph",
+      "id": "HIGH-OLD",
+      "kind": "lane",
+      "state": "open",
+      "claimed_by": null,
+      "epoch": 0,
+      "context": {
+        "newer_decisions": [],
+        "work_exists": {
+          "commits": [],
+          "lanes": []
+        },
+        "stale": null
+      }
+    },
+    {
+      "key": "plangraph:BUILD-CI-FIX",
+      "priority": 0,
+      "created_at": "2026-05-01T00:00:00Z",
+      "project": "plangraph",
+      "id": "BUILD-CI-FIX",
+      "kind": "lane",
+      "state": "open",
+      "claimed_by": null,
+      "epoch": 0,
+      "note": "ci_fix: true",
+      "context": {
+        "newer_decisions": [],
+        "work_exists": {
+          "commits": [],
+          "lanes": []
+        },
+        "stale": null
+      }
+    },
+    {
+      "key": "plangraph:PATCH-PR",
+      "priority": -1,
+      "created_at": "2026-06-01T00:00:00Z",
+      "title": "Repair task scheduling",
+      "description": "Why: queued writers leave idle gaps.\nHow: use deterministic selection.",
+      "done_criteria": "Writers start safely.",
+      "project": "plangraph",
+      "id": "PATCH-PR",
+      "kind": "lane",
+      "state": "open",
+      "claimed_by": null,
+      "epoch": 0,
+      "note": "files: [\"rust/plangraph-cli/src/feeder/\"]\npr_url: https://example.invalid/pulls/123",
+      "context": {
+        "newer_decisions": [],
+        "work_exists": {
+          "commits": [],
+          "lanes": []
+        },
+        "stale": null
+      }
+    }
+  ]
+}

@@ -20,10 +20,34 @@ fn directory(state: &Path, record: &Value) -> Result<PathBuf, EvidenceError> {
 pub(crate) fn review_text(state: &Path, record: &Value) -> Result<String, EvidenceError> {
     let dir = directory(state, record)?;
     let path = dir.join("live.log");
-    let diagnostic =
-        || Ok("Full rendered review unavailable or unsupported.\nVERDICT: HALT\n".into());
+    let agy = record["attempts"]
+        .as_array()
+        .and_then(|a| a.last())
+        .is_some_and(|a| a["leg"]["harness"] == "agy" && crate::cli_review::eligible(&a["leg"]))
+        && record["status"] != "dry_run";
+    let diagnostic = |details: &str| {
+        if agy {
+            let detail: String = details
+                .chars()
+                .rev()
+                .take(8192)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            let stderr: String = record["stderr_tail"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .take(8192)
+                .collect();
+            Ok(format!("Agy review unavailable: empty, failed or unsupported output.\nDiagnostics (untrusted): {}\nVERDICT: FAIL\nTEST_GAMING: yes\n", json!({"log":detail, "stderr":stderr})))
+        } else {
+            Ok("Full rendered review unavailable or unsupported.\nVERDICT: HALT\n".into())
+        }
+    };
     if record["live_log"].as_str().map(Path::new) != Some(path.as_path()) {
-        return diagnostic();
+        return diagnostic("");
     }
     regular(&path, false)?;
     let mut options = fs::OpenOptions::new();
@@ -35,20 +59,20 @@ pub(crate) fn review_text(state: &Path, record: &Value) -> Result<String, Eviden
     }
     let file = match options.open(path) {
         Ok(f) => f,
-        Err(_) => return diagnostic(),
+        Err(_) => return diagnostic(""),
     };
     if !file.metadata()?.is_file() || file.metadata()?.len() > 8 * 1024 * 1024 {
-        return diagnostic();
+        return diagnostic("");
     }
     let mut text = String::new();
     file.take(8 * 1024 * 1024 + 1).read_to_string(&mut text)?;
     if text.len() > 8 * 1024 * 1024 || !text.ends_with('\n') {
-        return diagnostic();
+        return diagnostic(&text);
     }
     let mut result = None;
     for line in text.lines() {
         let Ok(frame) = serde_json::from_str::<Value>(line) else {
-            return diagnostic();
+            return diagnostic(&text);
         };
         if frame["event"] == "result" {
             result = if frame["result"]["status"] == "SUCCESS" {
@@ -65,8 +89,8 @@ pub(crate) fn review_text(state: &Path, record: &Value) -> Result<String, Eviden
         }
     }
     match result {
-        Some(text) if !text.is_empty() => Ok(text),
-        _ => diagnostic(),
+        Some(text) if !text.is_empty() && (!agy || !text.trim().is_empty()) => Ok(text),
+        _ => diagnostic(&text),
     }
 }
 pub(crate) fn write_review_artifacts(

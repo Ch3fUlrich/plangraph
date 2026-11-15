@@ -50,7 +50,7 @@ pub use liveness::{FileSeatLocks, JobLiveness};
 pub use liveness::{GroupLiveness, GroupState, LockState, SeatLocks};
 #[cfg(target_os = "linux")]
 pub use liveness::{LinuxLiveness, ProcSeatLocks};
-pub use policy::{decide, effective_free_mb, Decision};
+pub use policy::{decide, effective_free_mb, writer_capacity, Decision};
 pub use promote::{
     aging_report, promote, release, take_promotion, AgingPolicy, AgingReport, Promotion, WaitReason,
 };

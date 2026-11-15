@@ -7,6 +7,11 @@ import sys
 
 def main():
     manifest = Path(__file__).resolve().parents[1] / "rust/Cargo.toml"
+    guard = subprocess.call([
+        "cargo", "run", "--quiet", "--locked", "--manifest-path", str(manifest),
+        "-p", "pg-policy", "--", "--test-sources", str(manifest.parent.parent)])
+    if guard:
+        return guard
     return subprocess.call([
         "cargo", "run", "--quiet", "--locked", "--manifest-path", str(manifest),
         "-p", "pg-policy", "--", *sys.argv[1:]])

@@ -1,5 +1,7 @@
 //! End-to-end Python admission -> Rust worker -> native CLI, without a model seat.
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -61,7 +63,7 @@ if 'hold marker' in prompt:
 if 'resume' in sys.argv:
     assert sys.argv[sys.argv.index('resume') + 1] == 'fixture-session'
     head = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
-    pathlib.Path('reviews', head[:8] + '-hydrogen.txt').write_text('VERDICT: ACCEPT\n')
+    pathlib.Path('reviews', head[:8] + '-hydrogen.txt').write_text('Reviewed writer.txt\nVERDICT: ACCEPT\n')
 else:
     pathlib.Path('writer.txt').write_text('written on selected host\n')
     subprocess.run(['git','add','writer.txt'], check=True)
@@ -72,7 +74,7 @@ else:
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let out = Command::new("python3").current_dir(&root).env("PYTHONPATH", root.join("src"))
         .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
-        .env("NATIVE_BINARY", env!("CARGO_BIN_EXE_pg-spawnd"))
+        .env("NATIVE_BINARY", binary::spawnd())
         .env("FIXTURE_DIR", &dir).env("FIXTURE_BASE", &base)
         .args(["-c", r#"
 import asyncio, json, os, pathlib

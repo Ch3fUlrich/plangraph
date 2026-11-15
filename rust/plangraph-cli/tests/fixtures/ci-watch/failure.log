@@ -1,0 +1,4 @@
+2026-11-15T00:00:00Z running tests
+2026-11-15T00:00:01Z test seat_pool::tests::broken ... FAILED
+2026-11-15T00:00:02Z thread 'seat_pool::tests::broken' panicked at src/seat_pool.rs:123
+2026-11-15T00:00:03Z assertion failed
