@@ -206,6 +206,13 @@ mod tests {
     use serde_json::json;
     use std::{fs, path::PathBuf};
 
+    // The trust check rejects group/other-writable files; a 0002 umask must not matter.
+    fn write_private(path: impl AsRef<std::path::Path>, data: impl AsRef<[u8]>) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(path.as_ref(), data).unwrap();
+        fs::set_permissions(path.as_ref(), fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
     struct Fixture {
         _dir: tempfile::TempDir,
         request: serde_json::Value,
@@ -220,7 +227,7 @@ mod tests {
             let review = dir.path().join("review.md");
             let head = "a".repeat(40);
             let text = format!("Review complete.\nHEAD: {head}\nVERDICT: ACCEPT\n");
-            fs::write(&review, &text).unwrap();
+            write_private(&review, &text);
             let events = vec![
                 json!({"type":"assistant", "sessionId":"session", "agentId":"seat",
                     "message":{"model":"claude-sonnet-5-5", "content":[
@@ -244,14 +251,13 @@ mod tests {
             PathBuf::from(self.request[key].as_str().unwrap())
         }
         fn save(&mut self) {
-            fs::write(
+            write_private(
                 self.path("transcript"),
                 self.events
                     .iter()
                     .map(|v| format!("{v}\n"))
                     .collect::<String>(),
-            )
-            .unwrap();
+            );
         }
     }
 
