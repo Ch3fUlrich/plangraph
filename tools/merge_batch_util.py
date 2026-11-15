@@ -197,7 +197,7 @@ def norm_pr(raw):
         "draft": bool(raw.get("isDraft")), "cross": bool(raw.get("isCrossRepository")),
         "labels": [lab["name"] for lab in raw.get("labels") or []],
         "files": [f["path"] for f in files], "truncated": (raw.get("changedFiles") or 0) > len(files),
-        "extra": [],  # paths git sees in the diff that gh's list lacks (add_extra_paths)
+        "extra": [],  # old rename paths from Git (refresh_diff)
         "lines": lines or sum(
             (f.get("additions") or 0) + (f.get("deletions") or 0) for f in files),
         "ci": ci_state(raw.get("statusCheckRollup")),
@@ -208,12 +208,13 @@ def fetch_pr(repo, number):
     return norm_pr(gh_json("pr", "view", str(number), "--repo", repo, "--json", PR_FIELDS))
 
 
-def add_extra_paths(base, prs, heads=None):
-    """Set ``pr["extra"]``: the paths git sees in the PR diff that gh's file list lacks, above all the old
-    path of a rename (gh names only the new one). ``git diff --name-only --no-renames`` of the head against
-    origin/<base> names both ends of a rename. ``heads`` maps PR number to an already fetched sha; without
-    it the PR heads are fetched here (objects only: no ref and no FETCH_HEAD is written). Fails closed: a
-    PR whose diff cannot be read stops the command instead of passing as free of HIGH paths."""
+def refresh_diff(base, prs, heads=None):
+    """Replace GitHub's stale/truncated diff metadata with the fetched Git diff.
+
+    Keep both rename paths for HIGH checks. Generated churn (Cargo.lock, generated/
+    trees and minified files) is reported separately but remains inside the cap.
+    ``heads`` is supplied by build after fetching and checking the PR head refs.
+    """
     prs = list(prs)
     if not prs:
         return
@@ -225,12 +226,45 @@ def add_extra_paths(base, prs, heads=None):
             raise MergeBatchError(f"cannot fetch the PR heads from {REMOTE} to read their paths: {exc} "
                                   f"(run it in a checkout whose {REMOTE} is the repo)") from None
         heads = {pr["number"]: pr["head"] for pr in prs}
+    by_ref = {}
+    for pr in sorted(prs, key=lambda pr: pr["number"]):
+        if not pr["cross"]:
+            by_ref.setdefault(pr["ref"], pr)
     for pr in prs:
         try:
-            out = git("diff", "--name-only", "--no-renames", "-z", f"{REMOTE}/{base}...{heads[pr['number']]}").stdout
+            diff = f"{REMOTE}/{base}...{heads[pr['number']]}"
+            paths = git("diff", "--name-only", "-z", diff).stdout
+            all_paths = git("diff", "--name-only", "--no-renames", "-z", diff).stdout
+            files = [path for path in paths.split("\0") if path]
+            def generated(path):
+                return (Path(path).name == "Cargo.lock" or "generated" in Path(path).parts
+                        or ".min." in Path(path).name)
+
+            def lines(comparison):
+                stat = git("diff", "--shortstat", comparison).stdout
+                # The first number is the file count; the others are added/deleted
+                # lines. Avoid matching translated insertion/deletion labels.
+                return sum(map(int, re.findall(r"\d+", stat)[1:]))
+
+            generated_files, generated_lines = set(), 0
+            records = iter(git("diff", "--numstat", "-z", diff).stdout.split("\0"))
+            for record in records:
+                if not record:
+                    continue
+                added, deleted, path = record.split("\t", 2)
+                paths = [path] if path else [next(records), next(records)]  # rename: old, new
+                if any(generated(path) for path in paths):
+                    generated_files.update(path for path in paths if generated(path))
+                    generated_lines += sum(int(n) for n in (added, deleted) if n != "-")
+            parent = by_ref.get(pr["base"])
+            # Display each diff against main, but count only this layer of a stack
+            # toward the batch cap, as with GitHub's per-PR sizes before refresh.
+            contribution = f"{heads[parent['number']]}...{heads[pr['number']]}" if parent else diff
+            pr.update(files=files, truncated=False, lines=lines(diff), batch_lines=lines(contribution),
+                      generated_lines=generated_lines, generated_files=sorted(generated_files),
+                      extra=sorted(set(all_paths.split("\0")) - set(files) - {""}))
         except MergeBatchError as exc:
-            raise MergeBatchError(f"cannot list the paths of PR #{pr['number']} ({short(pr['head'])}): {exc}") from None
-        pr["extra"] = sorted({path for path in out.split("\0") if path} - set(pr["files"]))
+            raise MergeBatchError(f"cannot read the diff of PR #{pr['number']} ({short(pr['head'])}): {exc}") from None
 
 
 def repo_info(repo=None):

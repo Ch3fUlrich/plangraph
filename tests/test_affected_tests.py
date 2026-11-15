@@ -56,6 +56,24 @@ def test_browser_tests_never_selected(tmp_path):
     assert selector().select_tests(tmp_path, ["src/pkg/core.py"])["tests"] == ["tests/test_api.py"]
 
 
+@pytest.mark.parametrize('statement', ['from pkg.cli import main', 'import pkg.cli'])
+def test_function_local_import_selects_caller(tmp_path, statement):
+    files = {'src/pkg/__init__.py': '', 'src/pkg/cli.py': 'def main(): pass',
+             'tests/test_caller.py': f'def test_cli():\n    {statement}\n',
+             'tests/test_other.py': 'def test_other(): pass'}
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    assert selector().select_tests(tmp_path, ['src/pkg/cli.py'])['tests'] == ['tests/test_caller.py']
+
+
+def test_spawner_cli_change_selects_w9_local_caller():
+    root = Path(__file__).resolve().parents[1]
+    plan = selector().select_tests(root, ['src/plangraph/spawner/cli.py'], local=True)
+    assert 'tests/test_w9_regressions.py' in plan['tests']
+
+
 def test_changed_files_includes_worktree_and_untracked(tmp_path):
     import subprocess
 

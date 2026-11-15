@@ -38,6 +38,7 @@ mod reconcile_watch;
 mod records;
 mod review_artifacts;
 mod review_retry;
+mod round_progress;
 mod runs;
 mod serve;
 mod serve_options;

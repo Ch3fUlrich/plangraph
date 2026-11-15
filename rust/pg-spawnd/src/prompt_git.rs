@@ -47,7 +47,7 @@ pub(crate) fn read_diff(
     )
 }
 
-fn collect_diff(
+pub(crate) fn collect_diff(
     child: std::process::Child,
     cap: usize,
     timeout: Duration,

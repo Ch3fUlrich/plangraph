@@ -727,4 +727,6 @@ maintenance. Fixture Git failures retain stderr; Windows fixture subprocesses
 use CREATE_NO_WINDOW. The cache-survival assertion also runs in a 50-iteration
 stress test. Windows CI and recorded reruns provide platform evidence.
 
+Native writer progress admission: [run contract](native-writer-progress-admission.md).
+
 [Per-item checkpoint and status notes](checkpoints/). Add new notes there, one file per item, rather than appending here.
