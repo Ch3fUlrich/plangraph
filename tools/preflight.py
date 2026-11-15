@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Blocking local CI policy, Rust and affected-test preflight."""
 import argparse
+import asyncio
 import importlib.util
 import json
 import os
@@ -42,21 +43,56 @@ class FailFamily(ValueError):
 
 
 def run_test_process(command, **kwargs):
-    """Bound the selector and its pytest workers as one process tree."""
+    """Kill the command's tree on timeout/interruption, including nested Linux sessions."""
     timeout = kwargs.pop('timeout')
+    tree = None
+    if sys.platform.startswith('linux'):
+        # Reuse checkout-local helpers without requiring an installed package.
+        spec = importlib.util.spec_from_file_location(
+            'preflight_proc_kill', Path(__file__).resolve().parents[1]
+            / 'src/plangraph/spawner/proc_kill.py')
+        tree = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tree)
     with subprocess.Popen(command, **kwargs, start_new_session=os.name == 'posix') as process:
+        ident = tree.root_identity(process.pid) if tree else None
         try:
-            stdout, _ = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            if os.name == 'posix':
-                os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate(timeout=timeout)
+        except BaseException:
+            if tree:
+                members = {}
+                try:
+                    os.killpg(process.pid, signal.SIGSTOP)
+                    # Freeze discovered sessions before rescanning: their children
+                    # must remain attached until every potential parent is stopped.
+                    while True:
+                        added = tree.snapshot(process.pid, ident).items() - members.items()
+                        if not added:
+                            break
+                        for pid, start in added:
+                            if tree.alive(pid, start):
+                                try:
+                                    os.kill(pid, signal.SIGSTOP)
+                                except ProcessLookupError:
+                                    pass
+                        members.update(added)
+                    asyncio.run(tree.finish(process.pid, ident, members))
+                finally:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            elif os.name == 'posix':
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             else:
                 subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
                                capture_output=True, timeout=CHECK_TIMEOUT)
                 process.kill()
             process.communicate()
-            raise exc
-        return subprocess.CompletedProcess(command, process.returncode, stdout)
+            raise
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 def run(command, cwd, env):

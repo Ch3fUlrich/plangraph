@@ -22,6 +22,11 @@ without a `[workspace]` table. Worker tests use `--lib --bins` to stay offline.
 
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
 affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
+`tools/merge_batch.py push` also waits without an overall deadline and forwards
+git and hook output to stderr while the hook enforces its per-step bounds.
+The shared subprocess runner kills the process group on a caller-supplied
+timeout or interruption, including nested worker sessions on Linux, then reaps
+git before reporting the failure.
 Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
 to skip affected tests. The existing pre-push hook runs preflight too; set
 `PREFLIGHT_FAST=1` for its fast mode or `PREFLIGHT_SKIP=1` to bypass only that hook

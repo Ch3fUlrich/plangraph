@@ -322,3 +322,84 @@ def test_union_defaults_come_from_fetched_base_not_callers_worktree(env, ledger)
     assert read(env, "policy")["union"] == [pattern, 'extra.txt']
     assert (wt_of(env, "policy") / ledger).read_text().splitlines() == [
         "- change 1", "- change 2", "- old"]
+
+
+@pytest.mark.parametrize("hook_rc", [0, 1])
+def test_push_waits_for_slow_hook_and_records_pr(env, tools_importable, monkeypatch, capfd, hook_rc):
+    import argparse
+    import merge_batch_land
+    import merge_batch_util
+
+    env.branch_pr(1, {"rust/demo/src/lib.rs": "pub fn demo() {}\n"})
+    assert env.run("build", "--name", "slow", "--prs", "1").returncode == 0
+    hook = env.repo / ".git/hooks/pre-push"
+    hook.write_text("#!/usr/bin/env python3\nimport time\n"
+                    "print('slow Rust check', flush=True)\ntime.sleep(0.2)\n"
+                    f"raise SystemExit({hook_rc})\n")
+    hook.chmod(0o755)
+    original = merge_batch_util.run
+
+    def short_default(argv, **kwargs):
+        if argv[:2] == ["git", "push"]:
+            kwargs.setdefault("timeout", 0.05)  # scale the old 600s deadline down
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(merge_batch_util, "run", short_default)
+    monkeypatch.chdir(env.repo)
+    for key, value in env.env.items():
+        monkeypatch.setenv(key, value)
+    if hook_rc:
+        with pytest.raises(merge_batch_util.MergeBatchError, match="failed"):
+            merge_batch_land.cmd_push(argparse.Namespace(name="slow", ci_run=None))
+        assert json.loads(env.state_file("slow").read_text())["status"] == "built"
+        assert not env.calls("pr", "create")
+        assert not env.git("for-each-ref", "refs/heads/batch/slow", cwd=env.origin)
+        assert "slow Rust check" in capfd.readouterr().err
+        return
+    assert merge_batch_land.cmd_push(argparse.Namespace(name="slow", ci_run=None)) == 0
+    state = json.loads(env.state_file("slow").read_text())
+    assert (state["status"], state["pr"]) == ("pushed", 100)
+    assert env.git("rev-parse", "refs/heads/batch/slow", cwd=env.origin) == state["head"]
+    assert "slow Rust check" in capfd.readouterr().err
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process-tree liveness check")
+@pytest.mark.parametrize("nested_preflight", [False, True])
+def test_push_timeout_kills_slow_hook_tree(env, tools_importable, monkeypatch, nested_preflight):
+    import os
+    import signal
+    import merge_batch_util
+    from plangraph.spawner.proc_kill import alive
+
+    env.branch_pr(1, {"rust/demo/src/lib.rs": "pub fn demo() {}\n"})
+    hook = env.repo / ".git/hooks/pre-push"
+    hook.write_text("#!/usr/bin/env python3\nimport os, signal\n"
+                    "child = os.fork()\n"
+                    f"with open({str(env.tmp / 'hook-pids')!r} + str(os.getpid()), 'w') as f: f.write(str(os.getpid()))\n"
+                    f"with open({str(env.tmp / 'hook-ready')!r}, 'wb', buffering=0) as f: f.write(b'x')\n"
+                    "signal.pause()\n")
+    if nested_preflight:
+        payload = hook.read_text()
+        hook.write_text("#!/usr/bin/env python3\nimport sys, subprocess\n"
+                        f"sys.path.insert(0, {tools_importable!r})\nimport preflight\n"
+                        f"preflight.run_test_process([sys.executable, '-c', {payload!r}], "
+                        "stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)\n")
+    hook.chmod(0o755)
+    for key, value in env.env.items():
+        monkeypatch.setenv(key, value)
+    try:
+        with env.hook_readiness(monkeypatch), pytest.raises(merge_batch_util.MergeBatchError, match="did not finish"):
+            merge_batch_util.run(["git", "push", "origin", "lane/p1:refs/heads/timeout"],
+                                 cwd=env.repo, timeout=0.3)
+        records = list(env.tmp.glob("hook-pids*"))
+        assert len(records) == 2, "hook and its child must both have started"
+        for record in records:
+            pid = int(record.read_text())
+            assert not alive(pid, None), f"hook process {pid} survived timeout"
+        assert not env.git("for-each-ref", "refs/heads/timeout", cwd=env.origin)
+    finally:
+        for record in env.tmp.glob("hook-pids*"):
+            try:
+                os.kill(int(record.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
