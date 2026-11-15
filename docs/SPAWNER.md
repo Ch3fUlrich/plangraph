@@ -705,6 +705,10 @@ Native Codex writer placement and lifecycle: [run contract](native-codex-writer.
 
 Review hard walls default to 25 minutes and implement/fix to 90 minutes; progressing runs retain these prior budgets. Read-only git status/diff/log and GitHub run/status polling do not count as tool loops. Queue expiry preserves records owned by live or unobservable supervisors.
 
+Every emitted context pack includes this rule within its size cap: new code is Rust with Rust
+tests; no new Python or shell file; an allowlist line needs an operator D-id.
+The planner brief template carries the same rule (D-5912).
+
 Seat-pool cleanup tests create their initial commit with Git plumbing in an
 isolated fixture environment, without signing, hooks, index updates or automatic
 maintenance. Fixture Git failures retain stderr; Windows fixture subprocesses
