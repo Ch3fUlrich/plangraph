@@ -232,7 +232,11 @@ def cmd_ready(args, session):
                                    "owner": owner, "mine": 1 if mine else None,
                                    "agent": 1 if agent else None},
                 lambda r: fmt.ready_text(r["items"], unblocks=r.get("unblocks"),
-                                         server_items=True), local)
+                                         server_items=True,
+                                         needs_reconcile=r.get("needs_reconcile"),
+                                         in_progress=r.get("in_progress"),
+                                         unknown=r.get("unknown"),
+                                         warnings=r.get("warnings")), local)
 
 
 def cmd_show(args, session):
