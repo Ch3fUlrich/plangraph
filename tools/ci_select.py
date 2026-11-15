@@ -58,6 +58,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "setup/manifest.toml",
     "setup/placement-rules.schema.toml",
     "src/plangraph/web/agents_schema.json",
+    "src/plangraph/config/prompt_transport_v1.json",
     "src/plangraph/spawner/**",
     "src/plangraph/keeper/__init__.py",
     "src/plangraph/keeper/auth.py",
