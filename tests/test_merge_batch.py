@@ -159,9 +159,7 @@ def test_plan_refuses_without_the_gate_file_even_with_high_paths(env, tmp_path):
     for path in (ROOT / "tools").glob("merge_batch*.py"):
         shutil.copy(path, copy)
     shutil.copy(ROOT / "tools/preflight.py", copy)
-    support = tmp_path / "src/plangraph/spawner"
-    support.mkdir(parents=True)
-    shutil.copy(ROOT / "src/plangraph/spawner/proc_kill.py", support)
+    shutil.copytree(ROOT / "src/plangraph", tmp_path / "src/plangraph", ignore=shutil.ignore_patterns("__pycache__"))
     env.branch_pr(1, {"docs/a.md": "a\n"})
     ok = env.run("plan", "--prs", "1", "--high-path", "docs/*")
     assert ok.returncode == 0 and "HIGH via docs/a.md" in ok.stdout
