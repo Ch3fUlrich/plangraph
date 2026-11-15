@@ -14,6 +14,9 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.spawner import git_guard
+from plangraph.routing_errors import SpawnRefused
+
+pytestmark = pytest.mark.real_base_fresh
 
 
 def git(repo, *args):
@@ -81,6 +84,40 @@ def test_live_run_keeps_a_new_run_selects_b(cached_tree):
         assert git(path, 'rev-parse', 'HEAD') == caller
         assert path.stat().st_mtime == 1
         assert git(repo, 'rev-parse', 'HEAD') == caller
+
+
+def test_cached_tree_behind_origin_after_selection_is_refused(cached_tree, monkeypatch):
+    from contextlib import contextmanager
+    origin, repo, state, cached = cached_tree
+    lock = git_guard.run_worktree_lock
+    @contextmanager
+    def advance_before_cache_lock(root):
+        if root == state / 'trees' / '.locks' / cached['tree_sha']:
+            advance(origin)
+            git(repo, 'fetch', 'origin')
+        with lock(root):
+            yield
+    monkeypatch.setattr(git_guard, 'run_worktree_lock', advance_before_cache_lock)
+    with pytest.raises(SpawnRefused, match='base_stale: behind=1'):
+        with git_guard.run_tree(state, repo):
+            pytest.fail('cached tree behind fetched origin/main was reused')
+    assert git(cached['tree_path'], 'rev-parse', 'HEAD') == cached['tree_sha']
+
+
+def test_current_cached_tree_reuses_admission_fetch(cached_tree, monkeypatch):
+    _, repo, state, cached = cached_tree
+    from plangraph.spawner.base_fresh import base_fresh
+    run = subprocess.run
+    fetches = []
+    def count_fetch(args, **kwargs):
+        if 'fetch' in args:
+            fetches.append(args)
+        return run(args, **kwargs)
+    monkeypatch.setattr(git_guard.subprocess, 'run', count_fetch)
+    assert base_fresh(repo, default='main')['ok']
+    with git_guard.run_tree(state, repo, fetch=False) as tree:
+        assert tree == cached
+    assert len(fetches) == 1
 
 
 @pytest.mark.parametrize('registered', [False, True, 'locked'], ids=['removed', 'unlocked', 'locked'])

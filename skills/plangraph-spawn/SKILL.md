@@ -23,3 +23,22 @@ card; inline-only legs (luna, mimo-pro) get that diff inlined by the spawner.
 Banned/off families and paused harnesses live in `planner/route_policy.json`.
 Only an actual provider transport response can mark a leg limited.
 An exceptional hand pick needs an audited override reason of at least ten characters.
+
+Waits that trigger a later action must use the Rust CLI's detached watcher service:
+`plangraph watcher-launch /absolute/job-dir NAME -- /absolute/command ARG...`.
+The command owns the entire wait and authorized continuation, including any pending
+push or merge; no continuation may exist only in a session child shell. Use a
+transient user service, never `systemd-run --scope`, `run_in_background`, or `&`.
+The launcher returns after service admission and refuses reuse of NAME. It saves
+`watchers/NAME/request.toml` before launch; the service writes `result.toml`
+atomically plus `stdout.log` and `stderr.log`. Use absolute executable paths and
+explicit command arguments/environment (the user manager does not inherit the
+session environment). If systemd admission fails, inspect `launch-error.txt` and
+the named unit; never silently fall back to a session child or replay a push.
+
+On every orchestrator start or replacement, run `plangraph resume-digest JOB`
+for each job directory named by the handoff. Read all completed results and logs,
+reconcile pending entries against their recorded systemd unit, and record any
+remaining action in the handoff before launching new work. The digest retains
+results across reads; `pending` means no result yet, not success or permission to
+relaunch. A stopped or failed service without a result requires investigation.

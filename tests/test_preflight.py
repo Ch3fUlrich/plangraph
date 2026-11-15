@@ -249,8 +249,8 @@ def test_words_and_tools_override(repo, monkeypatch):
     monkeypatch.setenv("PLANGRAPH_SCRUB_WORDS", str(repo / "private"))
     assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
     assert calls[0][0][1] == str(repo / "fake/split/scrub_check.py")
-    assert '--words' not in calls[0][0]
-    assert calls[1][0][-2:] == ["--words", str(repo / "private")]
+    assert calls[0][0][-2:] == ["--words", str(repo / "private")]
+    assert all('preflight_private_scrub.py' not in command for command, *_ in calls)
 
 
 def test_fail_fast(repo, monkeypatch, capsys):

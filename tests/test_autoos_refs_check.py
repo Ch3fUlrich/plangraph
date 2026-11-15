@@ -19,26 +19,26 @@ def test_fixture_home_hits(tmp_path: Path) -> None:
     fixture_home.mkdir()
     claude_dir = fixture_home / ".claude"
 
-    # 1. settings.json hook pointing at /home/x/code/AutoOS/tools/hooks/bash_guard.py
+    # 1. settings.json hook pointing at /synthetic-home/x/code/AutoOS/tools/hooks/bash_guard.py
     write(claude_dir / "settings.json",
           '{\n  "hooks": {\n    "PreToolUse": [\n'
-          '      {"command": "/home/x/code/AutoOS/tools/hooks/bash_guard.py"}\n'
+          '      {"command": "/synthetic-home/x/code/AutoOS/tools/hooks/bash_guard.py"}\n'
           "    ]\n  }\n}\n")
 
     # 2. symlinked skill into AutoOS
     skills_dir = claude_dir / "skills"
     skills_dir.mkdir(parents=True)
     skill_link = skills_dir / "autoos_skill"
-    skill_link.symlink_to("/home/x/code/AutoOS/skills/guard_skill")
+    skill_link.symlink_to("/synthetic-home/x/code/AutoOS/skills/guard_skill")
 
     # 3. systemd unit with AutoOS
     write(fixture_home / ".config" / "systemd" / "user" / "autoos.service",
           "[Unit]\nDescription=Test AutoOS Service\n\n"
-          "[Service]\nExecStart=/home/x/code/AutoOS/bin/daemon\n")
+          "[Service]\nExecStart=/synthetic-home/x/code/AutoOS/bin/daemon\n")
 
     # 4. secret-looking file containing 'AutoOS' that must not be opened
     secret_file = fixture_home / ".local" / "share" / "plangraph" / "secret_launch.json"
-    secret_content = "SUPER_SECRET_PAYLOAD_NEVER_PRINT_12345 /home/x/code/AutoOS/db"
+    secret_content = "SUPER_SECRET_PAYLOAD_NEVER_PRINT_12345 /synthetic-home/x/code/AutoOS/db"
     write(secret_file, secret_content)
 
     # Run check via CLI subprocess
@@ -53,9 +53,9 @@ def test_fixture_home_hits(tmp_path: Path) -> None:
     assert "SECRET-PATH" in out
 
     # Assert other targets are reported
-    assert "/home/x/code/AutoOS/tools/hooks/bash_guard.py" in out
-    assert "/home/x/code/AutoOS/skills/guard_skill" in out
-    assert "/home/x/code/AutoOS/bin/daemon" in out
+    assert "/synthetic-home/x/code/AutoOS/tools/hooks/bash_guard.py" in out
+    assert "/synthetic-home/x/code/AutoOS/skills/guard_skill" in out
+    assert "/synthetic-home/x/code/AutoOS/bin/daemon" in out
     # 'AutoOS' as a word is matched too (case-insensitive)
     assert "Description=Test AutoOS Service" in out
 
@@ -133,7 +133,7 @@ def test_tracked_repo_symlink(ar, tmp_path: Path) -> None:
     subprocess.run(["git", "-C", str(repo), "init"], check=True, capture_output=True)
 
     link_autoos = repo / "autoos_link"
-    link_autoos.symlink_to("/home/x/code/AutoOS/tools/helper.sh")
+    link_autoos.symlink_to("/synthetic-home/x/code/AutoOS/tools/helper.sh")
     link_clean = repo / "clean_link"
     link_clean.symlink_to("/usr/local/bin/helper.sh")
 
@@ -148,7 +148,7 @@ def test_tracked_repo_symlink(ar, tmp_path: Path) -> None:
     kind, path_str, detail = hits[0]
     assert kind == "repo-symlink"
     assert path_str == str(link_autoos)
-    assert detail == "/home/x/code/AutoOS/tools/helper.sh"
+    assert detail == "/synthetic-home/x/code/AutoOS/tools/helper.sh"
 
 
 @windows_skip
@@ -183,12 +183,12 @@ def test_instruction_files_scanned(ar, tmp_path: Path) -> None:
     opencode = home / ".config" / "opencode"
     opencode.mkdir(parents=True)
 
-    write(claude / "AGENTS.md", "Root: /home/x/code/AutoOS\n")
-    write(claude / "CLAUDE.md", "See /home/x/code/AutoOS/docs\n")
+    write(claude / "AGENTS.md", "Root: /synthetic-home/x/code/AutoOS\n")
+    write(claude / "CLAUDE.md", "See /synthetic-home/x/code/AutoOS/docs\n")
     write(claude / "notes.md", "unit autoos-litellm.service restarts\n")
     write(opencode / "CLAUDE.md", "%h/code/AutoOS\n")
     # Skill markdown is only reached by the skill walker, not the instruction walker.
-    write(claude / "skills" / "s1" / "SKILL.md", "/home/x/code/AutoOS/skills/x\n")
+    write(claude / "skills" / "s1" / "SKILL.md", "/synthetic-home/x/code/AutoOS/skills/x\n")
 
     hits = ar.scan_all(home)
     assert len(hits) == 5
@@ -203,7 +203,7 @@ def test_instruction_files_scanned(ar, tmp_path: Path) -> None:
 
 def test_has_autoos_case_insensitive(ar) -> None:
     for text in (
-        "/home/x/code/AutoOS/tools", "AUTOOS/x", "autoos-litellm.service",
+        "/synthetic-home/x/code/AutoOS/tools", "AUTOOS/x", "autoos-litellm.service",
         "x-autoos-litellm.timer", "%h/code/autoos", "/var/AutoOS/",
     ):
         assert ar.has_autoos(text), text
@@ -226,12 +226,12 @@ def test_redaction_on_matching_line(tmp_path: Path) -> None:
     home = tmp_path / "redact_home"
     claude = home / ".claude"
     write(claude / "settings.json",
-          '{"hooks": {"PreToolUse": [{"command": "/home/x/code/AutoOS/h.py", '
+          '{"hooks": {"PreToolUse": [{"command": "/synthetic-home/x/code/AutoOS/h.py", '
           '"token": "sk-'
           'live-SECRETVALUE1234", '
           '"authorization": "Bearer abc.def.GHIJK"}]}}\n')
     write(claude / "hooks" / "hook.sh",
-          "#!/bin/sh\nexec /home/x/code/AutoOS/bin/run sk-live-ZZZZ9999 "
+          "#!/bin/sh\nexec /synthetic-home/x/code/AutoOS/bin/run sk-live-ZZZZ9999 "
           + "A" * 400
           + "\n")
 
@@ -240,7 +240,7 @@ def test_redaction_on_matching_line(tmp_path: Path) -> None:
     out = proc.stdout
     assert_no_leak(("SECRETVALUE1234", "abc.def.GHIJK", "ZZZZ9999"), out)
     assert out.count("<redacted>") >= 3
-    assert "/home/x/code/AutoOS/h.py" in out
+    assert "/synthetic-home/x/code/AutoOS/h.py" in out
     for line in out.strip().splitlines():
         parts = line.split("\t")
         assert len(parts) == 3
@@ -250,9 +250,9 @@ def test_redaction_on_matching_line(tmp_path: Path) -> None:
 def test_backups_and_jobs_excluded(ar, tmp_path: Path) -> None:
     home = tmp_path / "excl_home"
     write(home / ".local" / "share" / "plangraph" / "backups" / "snap.json",
-          '{"cmd": "/home/x/code/AutoOS/bin"}\n')
+          '{"cmd": "/synthetic-home/x/code/AutoOS/bin"}\n')
     write(home / ".claude" / "jobs" / "j1" / ".mcp.json",
-          '{"server": "/home/x/code/AutoOS/srv"}\n')
+          '{"server": "/synthetic-home/x/code/AutoOS/srv"}\n')
 
     assert ar.scan_all(home) == []
 
@@ -293,7 +293,7 @@ def test_apikey_values_redacted(tmp_path: Path) -> None:
     secret_a = "AAAA" + "1111"
     secret_b = "CCCC" + "3333"
     write(home / ".claude" / "settings.json",
-          f'{{"cmd": "/home/x/code/AutoOS/run", "apikey": "{secret_a}", '
+          f'{{"cmd": "/synthetic-home/x/code/AutoOS/run", "apikey": "{secret_a}", '
           f'"OPENAI_API_KEY": "{secret_b}"}}\n')
     proc = run_cli("--home", str(home))
     assert proc.returncode == 1
@@ -305,7 +305,7 @@ def test_apikey_values_redacted(tmp_path: Path) -> None:
 def test_settings_local_json_scanned(ar, tmp_path: Path) -> None:
     home = tmp_path / "h"
     write(home / ".claude" / "settings.local.json",
-          '{"hooks": {"cmd": "/home/x/code/AutoOS/h.py"}}\n')
+          '{"hooks": {"cmd": "/synthetic-home/x/code/AutoOS/h.py"}}\n')
     hits = ar.scan_all(home)
     assert len(hits) == 1 and hits[0][0] == "claude-settings"
 
@@ -315,10 +315,10 @@ def test_systemd_dropins_and_wants(ar, tmp_path: Path) -> None:
     home = tmp_path / "h"
     user = home / ".config" / "systemd" / "user"
     write(user / "autoos.service.d" / "override.conf",
-          "[Service]\nExecStart=/home/x/code/AutoOS/bin/x\n")
+          "[Service]\nExecStart=/synthetic-home/x/code/AutoOS/bin/x\n")
     (user / "multi-user.target.wants").mkdir(parents=True)
     (user / "multi-user.target.wants" / "autoos.service").symlink_to(
-        "/home/x/code/AutoOS/units/autoos.service")
+        "/synthetic-home/x/code/AutoOS/units/autoos.service")
     hits = ar.scan_all(home)
     assert len(hits) == 2 and {h[0] for h in hits} == {"systemd"}
 
@@ -329,12 +329,12 @@ def test_symlinked_skill_dir_traversed(ar, tmp_path: Path) -> None:
     skills = home / ".claude" / "skills"
     skills.mkdir(parents=True)
     real = tmp_path / "real_skill"
-    write(real / "SKILL.md", "/home/x/code/AutoOS/skills/x\n")
+    write(real / "SKILL.md", "/synthetic-home/x/code/AutoOS/skills/x\n")
     (skills / "linked").symlink_to(real, target_is_directory=True)
     # A link cycle must not loop or duplicate hits (resolved dirs are seen once).
     (skills / "loop").symlink_to(skills, target_is_directory=True)
     hits = ar.scan_all(home)
-    assert len(hits) == 1 and hits[0][2] == "/home/x/code/AutoOS/skills/x"
+    assert len(hits) == 1 and hits[0][2] == "/synthetic-home/x/code/AutoOS/skills/x"
 
 
 def test_repo_symlink_regular_file_fallback(ar, tmp_path: Path) -> None:
@@ -343,7 +343,7 @@ def test_repo_symlink_regular_file_fallback(ar, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "-C", str(repo), "init"], check=True, capture_output=True)
-    write(repo / "link", "/home/x/code/AutoOS/tools/h.sh\n")
+    write(repo / "link", "/synthetic-home/x/code/AutoOS/tools/h.sh\n")
     blob = subprocess.run(
         ["git", "-C", str(repo), "hash-object", "-w", "link"],
         check=True, capture_output=True, text=True).stdout.strip()
@@ -353,12 +353,12 @@ def test_repo_symlink_regular_file_fallback(ar, tmp_path: Path) -> None:
         check=True, capture_output=True)
     hits = ar.scan_all(home, repo=repo)
     assert len(hits) == 1 and hits[0][1] == str(repo / "link")
-    assert "/home/x/code/AutoOS/tools/h.sh" in hits[0][2]
+    assert "/synthetic-home/x/code/AutoOS/tools/h.sh" in hits[0][2]
 
 
 def test_tabs_flattened_in_report(ar, tmp_path: Path) -> None:
     home = tmp_path / "h"
-    write(home / ".claude" / "CLAUDE.md", "/home/x/code/AutoOS/x\ttabbed\tline\r\n")
+    write(home / ".claude" / "CLAUDE.md", "/synthetic-home/x/code/AutoOS/x\ttabbed\tline\r\n")
     hits = ar.scan_all(home)
     assert len(hits) == 1
     assert "\t" not in hits[0][2] and "\r" not in hits[0][2]
@@ -369,6 +369,6 @@ def test_tabs_flattened_in_report(ar, tmp_path: Path) -> None:
 def test_secret_path_only_exits_3(ar, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     home = tmp_path / "h"
     write(home / ".local" / "share" / "plangraph" / "launch_token.json",
-          "/home/x/code/AutoOS/db\n")
+          "/synthetic-home/x/code/AutoOS/db\n")
     assert ar.main(["--home", str(home)]) == 3
     assert "SECRET-PATH" in capsys.readouterr().out

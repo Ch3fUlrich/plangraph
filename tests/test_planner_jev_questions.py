@@ -209,10 +209,10 @@ def test_routing_state_is_clipped_to_the_cap():
 def test_redact_removes_tokens_paths_urls_and_ips():
     secret = "sk-" + "a" * 40
     ip = ".".join(("10", "0", "0", "5"))
-    text = ("token " + secret + " at /home/x/y and C:\\Users\\x\\y "
+    text = ("token " + secret + " at /synthetic-home/x/y and C:\\Users\\x\\y "
             "and https://host.example/x and " + ip)
     out = jq.redact(text, 1000)
-    for leak in (secret, "/home/x/y", "C:\\Users\\x\\y", "host.example",
+    for leak in (secret, "/synthetic-home/x/y", "C:\\Users\\x\\y", "host.example",
                  ip):
         assert leak not in out
     assert "[redacted]" in out

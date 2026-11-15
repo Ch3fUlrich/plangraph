@@ -33,8 +33,22 @@ KNOWN_PREFIXES: tuple[str, ...] = (
 # Keep these before the docs-only shortcut; tests/test_ci_select_rust_inputs.py
 # scans Rust sources and rejects repository reads missing from this list.
 RUST_INPUTS: tuple[str, ...] = (
+    "src/plangraph/catalog_data.py",
+    "src/plangraph/routing_errors.py",
+    "deploy/feeder/**",
+    "deploy/systemd/pg-feeder.service",
     "src/plangraph/keeper/errors.py",
     "src/plangraph/planner/routing.py",
+    # D-6054: native/agy quota isolation regressions exercise these boundaries.
+    "src/plangraph/planner/provider_stop.py",
+    "src/plangraph/routing_support/liveness.py",
+    # D-6054: rendered OpenCode catalog integration-test inputs.
+    "src/plangraph/planner/legs.py",
+    "src/plangraph/routing_support/__init__.py",
+    "src/plangraph/routing_support/opencode_overlay.py",
+    "src/plangraph/routing_support/opencode_render.py",
+    "src/plangraph/routing_support/resolver.py",
+    "configuration/opencode/providers.json",
     ".github/workflows/**",
     "rust-toolchain.toml",
     ".docs-map",
@@ -54,6 +68,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "setup/manifest.toml",
     "setup/placement-rules.schema.toml",
     "src/plangraph/web/agents_schema.json",
+    "src/plangraph/config/prompt_transport_v1.json",
     "src/plangraph/spawner/**",
     "src/plangraph/keeper/__init__.py",
     "src/plangraph/keeper/auth.py",
@@ -87,6 +102,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "tools/new_code_allowlist.txt",
     "tools/probe_admission_policy_guard.py",
     "tools/seat_verdict.py",
+    "tools/preflight.py",
+    "tools/preflight_private_scrub.py",
 )
 
 

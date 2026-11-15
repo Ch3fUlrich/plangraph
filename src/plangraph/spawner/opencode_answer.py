@@ -46,29 +46,59 @@ def record_steps(job, stdout, stderr, env):
             or output_limit):
         # Probe the first child's isolated config on a copy; only the retry mutates its own env.
         job.events.append(dict(event='opencode_reasoning_exhausted',
-                               cap_available=cap_reasoning(dict(env), job.model_or_combo)))
+                               cap_available=cap_reasoning(dict(env), job.model_or_combo, thinking_off=True)))
 
 
-def cap_reasoning(env, model):
-    """MiMo's documented thinking-off control: a zero reasoning budget for this run only."""
+def cap_reasoning(env, model, *, refuse=False, thinking_off=False):
+    """Validate an existing MiMo entry, then cap this run; optionally retain the seat retry control.
+
+    Boolean probes never mutate on refusal. Launches request named SpawnRefused
+    reasons; neither path invents providers/models or changes unrelated entries.
+    """
     from .mimo_policy import ACCEPTED_MIMO_IDS
-    if model not in ACCEPTED_MIMO_IDS:
-        return False
+    from plangraph.catalog_data import SEED_MODELS
+    from plangraph.routing_errors import SpawnRefused
     try:
-        cfg = json.loads(env['OPENCODE_CONFIG_CONTENT'])
+        if model not in ACCEPTED_MIMO_IDS:
+            raise SpawnRefused('reasoning_output_limit: unsupported_mimo_model')
+        try:
+            cfg = json.loads(env.get('OPENCODE_CONFIG_CONTENT'))
+        except (ValueError, TypeError, RecursionError):
+            raise SpawnRefused('reasoning_output_limit: malformed_config') from None
+        if not isinstance(cfg, dict):
+            raise SpawnRefused('reasoning_output_limit: malformed_config')
         provider, key = model.split('/', 1)
-        block = cfg['providers'][provider]
-        entry = block['models'][key]
-        if (not isinstance(entry, dict) or
-                entry.get('package', block.get('package')) != '@opencode/ai/providers/openai-compatible'):
+        node = cfg
+        for name, label in (('providers', 'providers'), (provider, 'provider'),
+                            ('models', 'models'), (key, 'model')):
+            if name not in node:
+                raise SpawnRefused('reasoning_output_limit: missing_' + label)
+            node = node[name]
+            if not isinstance(node, dict):
+                raise SpawnRefused('reasoning_output_limit: malformed_' + label)
+        block, entry = cfg['providers'][provider], node
+        if entry.get('package', block.get('package')) != '@opencode/ai/providers/openai-compatible':
+            raise SpawnRefused('reasoning_output_limit: non_openai_compatible')
+        for owner in (block, entry):
+            for field in ('limit', 'body'):
+                if not isinstance(owner.get(field, {}), dict):
+                    raise SpawnRefused('reasoning_output_limit: malformed_' + field)
+        maximum = next((row.get('max_output_tokens') for row in SEED_MODELS
+                        if row.get('model_id') == model), None)
+        if type(maximum) is not int or maximum <= 0:
+            raise SpawnRefused('reasoning_output_limit: invalid_catalog_output')
+        if thinking_off and entry.get('body', {}).get('thinking') == {'type': 'disabled'}:
             return False
-        body = entry.setdefault('body', {})
-        if not isinstance(body, dict) or body.get('thinking') == {'type': 'disabled'}:
-            return False
-        body['thinking'] = {'type': 'disabled'}
+        entry.setdefault('limit', {})['output'] = maximum
+        if thinking_off:
+            entry.setdefault('body', {})['thinking'] = {'type': 'disabled'}
+        # Older harnesses also clamp model.limit.output by a process-wide default.
         env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
+        env['OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX'] = str(maximum)
         return True
-    except (KeyError, ValueError, TypeError, AttributeError):
+    except SpawnRefused:
+        if refuse:
+            raise
         return False
 
 

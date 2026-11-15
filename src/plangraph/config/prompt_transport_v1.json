@@ -17,8 +17,8 @@
     "windows_native_units": 32000, "windows_batch_units": 8000,
     "windows_environment_units": 32767
   },
-  "metadata": {"version": 1, "model_utf8_bytes": 256, "title_ascii_bytes": 22,
-    "title_pattern": "^plangraph-job-[0-9a-f]{8}$", "title_digest": "sha256"},
+  "metadata": {"version": 1, "model_utf8_bytes": 256, "title_ascii_bytes": 46,
+    "title_pattern": "^plangraph-job-[0-9a-f]{32}$", "title_digest": "sha256"},
   "status": {"version": 1, "nonce_bytes": 16, "record_bytes": 4096, "phase": "pre_exec"},
   "grammar": {"value_forms": ["separate", "equals"], "repetitions": "validate-each", "terminator": "--"},
   "flags": {

@@ -1,5 +1,7 @@
 //! Exercise reconciliation through the actual daemon startup path.
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 mod common;
 use common::{ChildGuard, TempDir};
 use std::{
@@ -80,7 +82,7 @@ fn reconcile_real_child_restart_locked_before_reclaim() {
         assert!(!old.child.wait().unwrap().success());
         let socket = tmp.path().join("socket");
         let start_daemon = || ChildGuard {
-            child: Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+            child: Command::new(binary::spawnd())
                 .args(["serve", "--state"])
                 .arg(&state)
                 .arg("--socket")
@@ -181,7 +183,7 @@ fn configured_reconcile_through_serve() {
             let state = tmp.path().join("state");
             std::fs::create_dir_all(state.join("runs/not-a-run-id")).unwrap();
             std::fs::write(state.join("runs/stray-artifact"), "ignored").unwrap();
-            let mut command = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"));
+            let mut command = Command::new(binary::spawnd());
             command
                 .arg("serve")
                 .arg("--socket")

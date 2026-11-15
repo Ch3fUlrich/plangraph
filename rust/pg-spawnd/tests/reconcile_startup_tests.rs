@@ -1,4 +1,6 @@
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 mod common;
 
 use common::{ChildGuard, TempDir};
@@ -14,7 +16,7 @@ fn serve_with_broken_inventory(value: &OsStr, refuses: bool) {
     std::fs::write(state.path().join("runs"), b"broken").unwrap();
     let socket = state.path().join("socket");
     let mut guard = ChildGuard {
-        child: Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+        child: Command::new(binary::spawnd())
             .args(["serve", "--no-scope", "--socket"])
             .arg(&socket)
             .arg("--state")

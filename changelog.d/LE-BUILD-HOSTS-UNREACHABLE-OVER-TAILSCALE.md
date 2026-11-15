@@ -1,0 +1,1 @@
+- **LE-BUILD-HOSTS-UNREACHABLE-OVER-TAILSCALE:** Add a Rust host-local Tailscale probe that persists outages and queues one routing alert after more than five minutes through the existing watchdog delivery bridge. Document Remote Control brief handoff and pushed-branch result retrieval. Host deployment, live peer-block evidence and ad hoc SSH waiter migration remain open.
