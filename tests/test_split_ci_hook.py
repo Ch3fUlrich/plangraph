@@ -23,6 +23,7 @@ def test_hook_preflight_keeps_policy_context(tmp_path, monkeypatch, result):
     monkeypatch.setenv('GIT_INDEX_FILE', 'caller-index')
     monkeypatch.setitem(scope, 'git_out', lambda *a: str(tmp_path) if a[0] == 'rev-parse' else '')
     monkeypatch.setitem(scope, 'file_size_gate', lambda: 0)
+    monkeypatch.setitem(scope, 'commit_gate', lambda head: 0)
     monkeypatch.setitem(scope, 'base_commit', lambda *a: 'base')
     monkeypatch.setitem(scope, 'affected_base_commit', lambda *a: 'affected-base')
     monkeypatch.setitem(scope, 'main_baselines', lambda *a: [])

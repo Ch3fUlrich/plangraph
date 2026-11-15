@@ -95,6 +95,13 @@ def _supervise():
 def _card(value):
     return json.loads(Path(value[1:]).read_text(encoding='utf-8') if value.startswith('@') else value)
 
+def _read_result(service, run_id):
+    """Local record read; asyncio.run only for a running remote native Codex run, so callers inside an event loop still work."""
+    from .service import remote_native_running
+    record = service.result(run_id)
+    return asyncio.run(service.refresh_result(run_id)) if remote_native_running(record) else record
+
+
 def main(argv=None):
     if (argv if argv is not None else sys.argv[1:]) == ['--supervise']:
         return _supervise()
@@ -206,7 +213,7 @@ def main(argv=None):
                 service.save_refusal(exc, args.role)
                 raise
             # Explicit model/leg overrides intentionally bypass routing, not admission.
-            if not args.model and not args.leg:
+            if not args.model and not args.leg and args.card.get('run_kind') != 'native-codex':
                 # service.route saves the refusal record itself (one record per route error).
                 service.route(args.card, args.role, args.writer_family, args.review_of, **options)
             if args.dry_run:
@@ -355,7 +362,7 @@ raise SystemExit(code)
                 while any(r.get('status') == 'running' for r in runs) and time.monotonic() < deadline:
                     time.sleep(min(.02, max(0, deadline - time.monotonic())))
                     for run in runs:
-                        if run.get('status') == 'running': run.update(service.result(run['run_id']))
+                        if run.get('status') == 'running': run.update(_read_result(service, run['run_id']))
         elif args.verb == 'ps':
             from .remote_ps import list_runs
             result = {'runs': list_runs(service.ps()['runs'])}
@@ -364,7 +371,7 @@ raise SystemExit(code)
         elif args.verb == 'wait':
             result = asyncio.run(service.wait(args.run_id, timeout=args.timeout))
         else:
-            result = service.result(args.run_id)
+            result = _read_result(service, args.run_id)
         if isinstance(result, dict):
             seen = set()
             for skipped in list(result.get('skipped', [])) + list(result.get('attempts', [])):

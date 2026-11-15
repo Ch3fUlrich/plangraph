@@ -11,6 +11,11 @@ async def cancel_recorded(service, run_id):
         # A finisher may already have published a newer record: never rewrite
         # an unchanged terminal snapshot.
         return record
+    if record.get('run_kind') == 'native-codex' and record.get('overflow_remote'):
+        from .remote_ps import native_result
+        record = await asyncio.to_thread(native_result, record, verb='cancel')
+        service._save(record)
+        return record
     survivors = list(record.get('survivors', []))
     if record.get('job_id') in service.runner.jobs:
         await service.runner.cancel(record['job_id'])

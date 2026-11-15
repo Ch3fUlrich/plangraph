@@ -388,6 +388,11 @@ Rust test builds, including nested admission checks and Python placement fixture
 
 Local worker preflight runs library and binary unit tests offline. CI runs the full worker suite, including Temporal-dependent integrations, through `ci-temporal`.
 
+The pre-push hook checks commit trailers on `origin/main..head` before scrub and
+preflight, including when `PREFLIGHT_SKIP=1`. It queries open PR heads and checks
+foreign merges when gh/network access is available; offline pushes still run the
+local trailer gate and explicitly report the skipped open-PR check.
+
 Review prompt builders use `src/plangraph/review/review_brief.md` through
 `plangraph.review.prompt.render_brief`. Supply item context explicitly (the judge
 CLI accepts `--context` JSON); missing fields remain visible as unavailable.

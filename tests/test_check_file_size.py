@@ -336,6 +336,7 @@ class GateHookTests(RepoFixture):
     def push(self):
         self.git("commit", "-q", "-m", "fixture")
         head = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("update-ref", "refs/remotes/origin/main", head)
         line = "refs/heads/lane %s refs/heads/lane %s\n" % (head, ZERO)
         return subprocess.run(
             [sys.executable, str(HOOK), "origin", "https://example.invalid/r.git"],

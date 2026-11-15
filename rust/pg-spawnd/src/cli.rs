@@ -126,6 +126,9 @@ pub(crate) fn execute(
     }
     let verb = first;
     let rest: Vec<String> = args.collect();
+    if verb.as_deref() == Some("native-writer") {
+        return crate::native_writer_host::execute(rest);
+    }
     if verb.as_deref() == Some("agents-view") {
         return crate::agent_view::execute(rest, out);
     }
