@@ -114,6 +114,13 @@ impl Driver for Host {
             command.args(["resume", id]);
         }
         command
+            .env(
+                "CARGO_TARGET_DIR",
+                pg_worker_core::cargo_cache::shared_cache_roots()
+                    .map_err(|e| e.to_string())?
+                    .remove(0),
+            )
+            .env("CARGO_INCREMENTAL", "0")
             .args([
                 "--json",
                 "-m",
