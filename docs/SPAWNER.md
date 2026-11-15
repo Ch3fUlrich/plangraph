@@ -101,16 +101,7 @@ adds `opencode_reasoning_exhausted`; later completed output is not retried.
 Display-text decoding also protects plain/mixed stdout answers; diagnostic-only JSON, including blank separator lines, is not answer text.
 The monitor's events reach `record.json` through either dispatch path.
 
-Every supported MiMo OpenCode launch uses shared `opencode_answer.cap_reasoning`
-to set its own `providers.mimo.models[model].limit.output` to the catalog's 131072
-combined reasoning/answer tokens, plus the per-child legacy output-max env. Model
-package overrides take precedence over the provider package; only the
-openai-compatible package is supported. Missing entries are never fabricated.
-Malformed config, limit/body objects, incompatible packages and invalid catalog
-caps refuse with named `reasoning_output_limit: ...` reasons before launch.
-Combos resolve before this gate; unknown MiMo IDs retain the named path refusal.
-Non-MiMo launches and the root config are unchanged. Structured usage counts
-survive record scrubbing only as nonnegative integers; token secrets stay masked.
+Every supported MiMo OpenCode launch uses shared `opencode_answer.cap_reasoning` to set its own `providers.mimo.models[model].limit.output` to the catalog's 131072 combined reasoning/answer tokens, plus the per-child legacy output-max env. Model package overrides take precedence over the provider package; only the openai-compatible package is supported. Missing entries are never fabricated. Malformed config, limit/body objects, incompatible packages and invalid catalog caps refuse with named `reasoning_output_limit: ...` reasons before launch. Combos resolve before this gate; unknown MiMo IDs retain the named path refusal. Non-MiMo launches and the root config are unchanged. Structured usage counts survive record scrubbing only as nonnegative integers; token secrets stay masked.
 For an OpenCode inline `review`, shared `SeatSpawnMixin._launch_leg` still retries
 once with the same prompt, model and harness, never unchanged. MiMo v2.6 Flash
 and Pro use model-local `body.thinking.type=disabled` (zero reasoning budget)
@@ -125,9 +116,7 @@ ends the run `failed` with terminal `reason: reasoning_output_limit`; no spare l
 or writer continuation runs. Cancellation, timeout and kill-incomplete still win.
 Terminal status, reason, attempts and events are saved at the shared launch boundary before either caller returns; routed exhaustion keeps normal failure witness metadata, and both callers finalize `ended` and release monitor registrations in `finally`.
 Normal output, nonzero-output truncation and non-review roles retain existing behavior except that base-service watchdog exits now retain one attempt row, matching routed dispatch; `terminal_record` adds no rows, retries do not duplicate watchdog rows, and cancellation rows are unchanged.
-Hermetic coverage is in `tests/test_spawner_review_tools_inline.py` and
-`tests/test_spawner_runner_answer.py`, with Rust cap contracts in
-`rust/pg-spawnd/tests/mimo_output_cap.rs`; live seats remain an after-merge operator check.
+Hermetic coverage is in `tests/test_spawner_review_tools_inline.py` and `tests/test_spawner_runner_answer.py`, with Rust cap contracts in `rust/pg-spawnd/tests/mimo_output_cap.rs`; live seats remain an after-merge operator check.
 
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:
