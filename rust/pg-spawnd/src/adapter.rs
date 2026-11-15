@@ -208,7 +208,9 @@ mod tests {
         std::env::set_var("PG_SPAWND_ADAPTER", &script);
         let result = Adapter(&dir).run(&[], Duration::from_secs(5));
         std::env::remove_var("PG_SPAWND_ADAPTER");
-        let Ok((code, _, line)) = result else { panic!("adapter failed") };
+        let Ok((code, _, line)) = result else {
+            panic!("adapter failed")
+        };
         assert_eq!((code, line.as_str()), (2, "refused: accepted names: codex"));
         std::fs::remove_dir_all(dir).unwrap();
     }
