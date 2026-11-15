@@ -41,6 +41,7 @@ struct Turn {
 }
 #[derive(Default)]
 struct Session {
+    name: String,
     role: String,
     turns: BTreeMap<String, Turn>,
     fork: bool,
@@ -88,6 +89,7 @@ fn role(name: &str) -> String {
 fn read(path: &Path, weights: &[f64; 4], malformed: &mut u64) -> Result<Session> {
     let mut session = Session {
         role: "unclassified".into(),
+        name: "other".into(),
         ..Session::default()
     };
     let mut pending = "work".to_string();
@@ -100,6 +102,15 @@ fn read(path: &Path, weights: &[f64; 4], malformed: &mut u64) -> Result<Session>
             session.fork |= v["forkContext"].as_bool() == Some(true);
             if let Some(name) = v["agentName"].as_str().or(v["customTitle"].as_str()) {
                 session.role = role(name);
+                // Only fleet-style names are printed; free-form titles are bucketed.
+                let s = stem(name);
+                let fleet = |c: char| c.is_ascii_alphanumeric() || c == '-';
+                session.name = if (1..=40).contains(&s.len()) && s.chars().all(fleet) {
+                    s
+                } else {
+                    "other"
+                }
+                .into();
             }
             let content = &v["message"]["content"];
             if kind == "user" || kind == "tool_result" {
@@ -208,12 +219,16 @@ fn census(
         ROLES.iter().map(|s| (s.to_string(), vec![])).collect();
     let mut malformed = 0;
     let mut inherited = 0;
+    let mut unclassified = BTreeMap::<String, u64>::new();
     for project in files(root)?.into_iter().filter(|p| p.is_dir()) {
         for path in files(&project)?
             .into_iter()
             .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
         {
             let parent = read(&path, weights, &mut malformed)?;
+            if parent.role == "unclassified" {
+                *unclassified.entry(parent.name.clone()).or_default() += 1;
+            }
             for turn in parent.turns.values() {
                 groups
                     .entry(parent.role.clone())
@@ -288,7 +303,7 @@ fn census(
     Ok(
         json!({"since": start.to_rfc3339(), "until": end.to_rfc3339(), "roles": roles,
         "merged_prs": merged, "merged_prs_per_day": daily, "malformed_lines": malformed,
-        "inherited_turns_excluded": inherited,
+        "inherited_turns_excluded": inherited, "unclassified_sessions": unclassified,
         "guard": {"minimum_merged_prs_per_day": 58, "consecutive_days": 3, "revert_required": revert},
         "denominator": "all repository PRs merged in the same UTC window; role costs include unmerged work",
         "visibility": "local transcripts only; weights are policy assumptions; fork inferred from shared parent message IDs or forkContext"}),

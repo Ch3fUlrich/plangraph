@@ -108,3 +108,35 @@ fn report(root: &Path, start: &str, merges: Value) -> Value {
     )
     .unwrap()
 }
+
+#[test]
+fn fleet_names_map_to_roles_and_unknowns_are_counted() {
+    let names = [
+        "plangraph-replan-12",
+        "routing-0042",
+        "workst-L1-build-3",
+        "plan-order-1",
+        "plan-order-2",
+        "x y!",
+    ];
+    let want = [
+        "replan",
+        "router",
+        "L1-build",
+        "unclassified",
+        "unclassified",
+        "unclassified",
+    ];
+    let temp = tempfile::tempdir().unwrap();
+    for (i, (name, want)) in names.iter().zip(want).enumerate() {
+        assert_eq!(role(name), want, "{name}");
+        let records = [json!({"type":"agent-name", "agentName":name}), turn("t")];
+        write(&temp.path().join(format!("p/{i}.jsonl")), &records);
+    }
+    let r = report(temp.path(), "2026-11-06", json!([]));
+    assert_eq!(
+        r["unclassified_sessions"],
+        json!({"plan-order": 2, "other": 1})
+    );
+    assert_eq!(r["roles"]["replan"]["turns"], 1);
+}
