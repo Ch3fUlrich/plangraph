@@ -39,7 +39,7 @@ fn keeper_hold(
     repo: &Path,
     state: &Path,
     target: &str,
-    _unit: &str,
+    unit: &str,
 ) -> Option<String> {
     let loaded = match probe::running(state, run, cfg!(windows)) {
         Ok(loaded) => loaded,
@@ -52,6 +52,13 @@ fn keeper_hold(
             ))
         }
     };
+    if loaded.is_none() {
+        return match probe::main_pid(run, unit) {
+            Ok(0) => None,
+            Ok(_) => Some(format!("HELD live keeper has no matching state; restart keeper to bootstrap and verify state path target {target}")),
+            Err(error) => Some(format!("HELD {error} target {target}")),
+        };
+    }
     let loaded = loaded?;
     match imports::changes(run, repo, &loaded, target) {
         Ok(paths) if paths.is_empty() => None,
@@ -128,6 +135,10 @@ fn update(
         return Ok((3, line));
     }
     if current != target {
+        // A keeper may publish fresh state while the first absence probe runs.
+        if let Some(line) = keeper_hold(run, repo, state, &target, unit) {
+            return Ok((3, line));
+        }
         imports::git(run, repo, &["merge", "--ff-only", &target])?;
     }
     Ok((

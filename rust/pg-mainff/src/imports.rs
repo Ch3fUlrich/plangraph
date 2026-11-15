@@ -163,6 +163,16 @@ pub fn changes(
     let old = paths(run, repo, loaded)?;
     let mut watched = closure(run, repo, loaded, None)?;
     watched.extend(closure(run, repo, target, Some(&old))?);
+    // Runtime reads outside the Python import graph.
+    watched.extend(
+        [
+            "src/plangraph/routing_support/catalog_schema.sql",
+            "src/plangraph/planner/route_policy.json",
+            "configuration/opencode/providers.json",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    );
     let diff = git(
         run,
         repo,
