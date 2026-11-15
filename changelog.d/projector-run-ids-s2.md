@@ -1,2 +1,3 @@
 - Projected history now establishes execution ownership before worker calls, fences delayed stale runs without blocking the live run, and alarms on retryable ownership conflicts.
 - Keep execution-owner, retry-alarm and stale-run regressions in the existing keeper/projector test modules for the Rust-only new-file policy.
+- Reject later timer/terminal ownership facts after invalid scheduled identity until a valid schedule recovers it; keep unrelated workflows free of Card identity alarms.

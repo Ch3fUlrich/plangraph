@@ -153,11 +153,12 @@ def project_history(history: dict, *, workflow_id: str, run_id: str) -> RunProje
     states: list[StateRec] = []
     issues: list[ShapeIssue] = []
     status, outcome, next_run_id = "running", None, None
-    attempt_no = 1
+    attempt_no: Optional[int] = 1
     scheduled_attempts = 0
 
     def emit(event_id: int, state: str, reason: Optional[str]) -> None:
-        if plan_key is None or (states and (states[-1].state, states[-1].attempt) == (state, attempt_no)):
+        if (plan_key is None or attempt_no is None
+                or (states and (states[-1].state, states[-1].attempt) == (state, attempt_no))):
             return
         states.append(StateRec(workflow_id, run_id, event_id, plan_key, state, reason, attempt_no))
 
@@ -174,8 +175,12 @@ def project_history(history: dict, *, workflow_id: str, run_id: str) -> RunProje
                 number = inp.get("attempt", inp.get("n", scheduled_attempts))
                 if ((inp.get("workflow_id", workflow_id), inp.get("run_id", run_id)) != (workflow_id, run_id)
                         or type(number) is not int or not 1 <= number <= 2**31 - 1):
-                    issues.append(ShapeIssue(workflow_id, run_id, str(attrs.get("activityId", "")),
-                                             "invalid attempt input execution identity or number"))
+                    # Later state facts cannot guess an owner after a rejected input.
+                    # A subsequent valid schedule supplies the identity again.
+                    attempt_no = None
+                    if card:
+                        issues.append(ShapeIssue(workflow_id, run_id, str(attrs.get("activityId", "")),
+                                                 "invalid attempt input execution identity or number"))
                     continue
                 attempt_no = number
                 acts[eid] = {"activity_id": str(attrs.get("activityId", "")), "attempt": 1,

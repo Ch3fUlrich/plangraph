@@ -301,3 +301,41 @@ def test_payload_decoding():
     assert decode_payload({"metadata": {}, "data": enc("1")}) is None
     assert decode_payload("proceed") is None
     assert decode_payload(None) is None
+
+
+@pytest.mark.parametrize("ending", ["TIMER_STARTED", "WORKFLOW_EXECUTION_COMPLETED",
+    "WORKFLOW_EXECUTION_FAILED", "WORKFLOW_EXECUTION_TIMED_OUT",
+    "WORKFLOW_EXECUTION_CANCELED", "WORKFLOW_EXECUTION_TERMINATED"])
+def test_invalid_identity_cannot_become_owner_through_later_state_facts(ending):
+    from test_keeper_exec_projector_path import event, history, payload
+    h = {"events": history("ok")["events"][:3]}
+    h["events"][1]["activityTaskScheduledEventAttributes"]["input"] = payload({"n": 0})
+    h["events"].append(event(4, ending, result=payload({"outcome": "parked"})))
+    p = project_history(h, workflow_id="card:demo:A", run_id="R2")
+    assert len(p.shape_issues) == 1
+    assert p.states == ()
+
+
+def test_valid_scheduled_identity_recovers_after_invalid_input():
+    from test_keeper_exec_projector_path import event, history, payload
+    h = {"events": history("ok")["events"][:3]}
+    h["events"][1]["activityTaskScheduledEventAttributes"]["input"] = payload({"n": 0})
+    h["events"].extend([
+        event(4, "ACTIVITY_TASK_SCHEDULED", activityId="attempt-2",
+              activityType={"name": "attempt"}, input=payload({"n": 2})),
+        event(5, "ACTIVITY_TASK_COMPLETED", scheduledEventId="4",
+              result=payload({"exit_class": "needs_input"})),
+    ])
+    p = project_history(h, workflow_id="card:demo:A", run_id="R2")
+    assert len(p.shape_issues) == 1
+    assert [(s.state, s.attempt) for s in p.states] == [("running", 2), ("needs_input", 2)]
+
+
+def test_unrelated_workflow_with_attempt_named_activity_has_no_identity_alarm():
+    from test_keeper_exec_projector_path import history, payload
+    h = history("ok")
+    h["events"][0]["workflowExecutionStartedEventAttributes"]["workflowType"]["name"] = "Other"
+    h["events"][1]["activityTaskScheduledEventAttributes"]["input"] = payload({"n": 0})
+    p = project_history(h, workflow_id="other:job", run_id="R2")
+    assert p.plan_key is None
+    assert p.shape_issues == ()

@@ -167,3 +167,5 @@ or PATH; skipped when missing) and runs real workflows. Migration test: upgrade 
 Worker activity types, lifecycle/gate/merge helpers and regression bodies are included
 from focused Rust source files. Workflow state, question/gate/park helpers and
 regressions use the same module namespaces; scheduled history semantics are unchanged.
+
+Invalid scheduled attempt identity suppresses later timer and terminal state facts until a valid attempt is scheduled, so those events cannot install a guessed execution owner. Identity shape alarms apply only to Card workflows.
