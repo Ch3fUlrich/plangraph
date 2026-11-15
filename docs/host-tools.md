@@ -92,3 +92,24 @@ No sync timer is installed or enabled by this change; deployment remains separat
 Systemd's optional-directory `!` marker is decoded; a missing optional directory
 cannot protect a checkout. User-manager `~` resolves to HOME; unresolved system
 manager homes fail closed. Unreadable unit protection also returns exit 1.
+
+For a dedicated orchestration checkout, add `--refresh-prs OWNER/REPO --notify
+/absolute/path/to/notifier` to a single explicit `--repo PATH` sync invocation.
+After each successful sync it sweeps all open `batch-ready` PRs, including drafts,
+so a main update refreshes their heads. Config-only inspection requires `--sync`.
+The existing sync protections still apply. Deployment must arrange invocation
+on main updates; this change does not install an event listener or timer.
+
+The same sweep is available as `pg-repo-sync refresh-prs --repo PATH --github
+OWNER/REPO --notify /absolute/path/to/notifier`. It fetches main once, validates
+listed PR heads against origin, and merges that main snapshot in disposable,
+detached worktrees. Origin and OWNER/REPO must identify the same repository.
+Forks are reported for operator handling. Git's checked-in merge attributes
+resolve union paths; other conflicts add `needs-update`, report their paths to
+the notifier's stdin, and never push. Each failed PR reports `ALERT #N ...` and
+makes the command exit 1 while other PRs are still processed. Successful changed
+heads use ordinary pushes with repository hooks active, triggering existing PR
+CI with the host's existing credentials. No-change sweeps do not push. The
+notifier is one executable, without shell evaluation; delivery failure exits 1.
+Git writes retain normal hook/runtime behavior, without the inspection helper's
+hook suppression or its query timeout. No credentials or Git config are changed.
