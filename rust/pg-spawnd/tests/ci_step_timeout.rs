@@ -1,4 +1,5 @@
 //! CI regressions execute the workflow's real bounded runner.
+use saphyr::{LoadableYamlNode, Yaml};
 use std::{path::Path, process::Command};
 
 fn python(source: &str) {
@@ -13,6 +14,14 @@ fn python(source: &str) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn text<'a>(node: Option<&'a Yaml<'a>>) -> &'a str {
+    node.and_then(Yaml::as_str).unwrap_or("")
+}
+
+fn minutes(node: Option<&Yaml>) -> Option<i64> {
+    node.and_then(Yaml::as_integer)
 }
 
 #[test]
