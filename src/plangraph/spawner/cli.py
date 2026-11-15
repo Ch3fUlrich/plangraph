@@ -117,6 +117,8 @@ def main(argv=None):
         p.add_argument('--writer-family', action='append', default=[])
         p.add_argument('--review-of')
         p.add_argument('--json', action='store_true')
+        if verb == 'route':
+            p.add_argument('--writer-snapshot', action='store_true', help=argparse.SUPPRESS)
         if verb == 'spawn':
             p.add_argument('prompt', nargs='?')
             p.add_argument('--prompt-file')
@@ -196,6 +198,17 @@ def main(argv=None):
             raise
         if args.verb == 'route':
             result = service.route(args.card, args.role, args.writer_family, args.review_of, **options).to_dict()
+            if args.writer_snapshot:
+                from plangraph.planner.legs import DEFAULT_LEGS
+                from plangraph.routing_support.resolver import get_catalog_models
+                writers = result if args.role == 'implement' else service._route(args.card, 'implement').to_dict()
+                served = {leg['id'] for leg in writers['legs']}
+                skipped = {row['leg']: row['reason'] for row in writers['skipped']}
+                scores = {row['id']: row.get('aa_intelligence') for row in get_catalog_models()}
+                result['work_mode_writer_legs'] = [dict(
+                    id=leg.id, aa_intelligence=scores.get(leg.model), served=leg.id in served,
+                    unavailable_reason=skipped.get(leg.id) if leg.id not in served else None)
+                    for leg in DEFAULT_LEGS if 'implement' in leg.roles]
         elif args.verb == 'spawn':
             if args.model is not None:
                 from plangraph.planner.routing import validate_model
