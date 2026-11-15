@@ -1,0 +1,1 @@
+Scope the Python session worktree-registration guard to its own temporary test root while keeping config-byte checks and detection of test-owned registration changes. Concurrent unrelated worktree moves and registrations disappearing during a scan no longer fail teardown.

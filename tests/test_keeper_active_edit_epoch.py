@@ -89,7 +89,7 @@ def test_tier_only_edit_does_not_bump_epoch(w):
     key_b = "demo:B"
     epoch_b = to_claimed(w, key_b)
     out_b = w.store.edit_definition(w.p("router"), key_b,
-                                    {"evidence_kinds": ["decision"]})
+                                    {"evidence_kinds": ["decision", "any"]})
     assert out_b == {"key": key_b}
     item_b = w.store._item(key_b)
     assert item_b["epoch"] == epoch_b

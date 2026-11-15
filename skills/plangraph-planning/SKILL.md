@@ -42,10 +42,22 @@ spawn (R-worker-06). The route table decides model selection, not this skill.
 Two plan-graph item kinds per layer: a **phase item** (kind `planning` or `work`) with child
 **task items**; both carry `layer`, `role`, `agent_id` and `state`.
 
+Keeper definitions store kind `lane`, `gate`, `goal`, `question`, `decision`,
+`operator_task` or `loop`; these stored kinds are separate from phase roles.
+For a decision-only done branch, declare `evidence_kinds: [decision]` and
+`review_tier: none` together. Only the router may make that declaration on create or edit. Creating or editing decision-only evidence with
+`standard` or `high` is refused; set tier `none` or require implementation evidence.
+A legacy item already declaring only `[decision]` can close on a verified exact
+`CLOSE <key>` decision row regardless of kind or tier. Ordinary lane items without
+that declaration retain the kind/tier refusal. Current-epoch evidence, origin/main
+proof, claimant authorization and operator-task restrictions still apply.
+
 ## 2. One agent, one task
 
 - Every task item is owned by **exactly one agent** for its whole life. No second agent edits that
-  task's files; no agent works on two tasks at once.
+  task's files; no agent works on two tasks at once. Exception: in the `batch` work mode
+  (unattended-orchestration Work modes, rule 3.41) one strong writer owns a brief of several
+  related tasks; each task still has that one owner and write sets stay disjoint between writers.
 - Planned file scopes are **disjoint** (enforced on cards as `write_set` overlap). If two tasks
   would touch the same file, merge them into one task (consolidation, not locking).
 - Implementers work in their own worktree/branch; the phase agent merges. No repo-wide git

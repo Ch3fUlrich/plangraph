@@ -26,6 +26,28 @@ fn seal_without_metadata_is_not_recorded() {
     assert!(!tmp.path().join("writer-lifecycle/run.receipt").exists());
 }
 
+fn fixture_git(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    let mut command = crate::git_test_support::command(root);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW: no shared console host.
+    }
+    let output = command
+        .args(["-c", "core.hooksPath=", "-c", "gc.auto=0"])
+        .args(args)
+        .output()
+        .map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        return Err(format!(
+            "fixture git {args:?}: {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(output.stdout)
+}
+
 pub(crate) struct Fixture {
     _dir: tempfile::TempDir,
     pub(crate) repo: RepoEntry,
@@ -35,6 +57,9 @@ pub(crate) struct Fixture {
 }
 impl Fixture {
     pub(crate) fn new() -> Self {
+        Self::with_config(&[])
+    }
+    pub(crate) fn with_config(config: &[(&str, &str)]) -> Self {
         let dir = tempfile::Builder::new()
             .prefix("cleanup-")
             .tempdir_in(std::env::current_dir().unwrap())
@@ -46,23 +71,18 @@ impl Fixture {
         for path in [&root, &trees, &state] {
             fs::create_dir(path).unwrap();
         }
-        git(&root, &["init"]).unwrap();
-        git(&root, &["remote", "add", "origin", "unused"]).unwrap();
-        git(
-            &root,
-            &[
-                "-c",
-                "user.name=Test",
-                "-c",
-                "user.email=test@example.org",
-                "commit",
-                "--allow-empty",
-                "-m",
-                "initial",
-            ],
+        fixture_git(&root, &["init"]).unwrap();
+        for (key, value) in config {
+            fixture_git(&root, &["config", key, value]).unwrap();
+        }
+        fixture_git(&root, &["remote", "add", "origin", "unused"]).unwrap();
+        // Plumbing avoids commit hooks, signing, index locks and auto-maintenance.
+        let tree = String::from_utf8(fixture_git(&root, &["write-tree"]).unwrap()).unwrap();
+        let sha = String::from_utf8(
+            fixture_git(&root, &["commit-tree", tree.trim(), "-m", "initial"]).unwrap(),
         )
         .unwrap();
-        let sha = String::from_utf8(git(&root, &["rev-parse", "HEAD"]).unwrap()).unwrap();
+        fixture_git(&root, &["update-ref", "HEAD", sha.trim()]).unwrap();
         let sha = sha.trim().to_string();
         let repo = RepoEntry {
             live_dir: None,
@@ -74,7 +94,7 @@ impl Fixture {
             import_roots: vec![],
             cache_env: Default::default(),
         };
-        git(
+        fixture_git(
             &root,
             &[
                 "worktree",
@@ -85,9 +105,10 @@ impl Fixture {
             ],
         )
         .unwrap();
-        let admin =
-            String::from_utf8(git(&checkout, &["rev-parse", "--absolute-git-dir"]).unwrap())
-                .unwrap();
+        let admin = String::from_utf8(
+            fixture_git(&checkout, &["rev-parse", "--absolute-git-dir"]).unwrap(),
+        )
+        .unwrap();
         fs::write(
             Path::new(admin.trim()).join("spawner-owned"),
             serde_json::to_vec(&(

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from keeper_util import World, seed, to_done
+from keeper_util import World, defn, seed, to_done
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.importer import export_yaml, load_dir
 
@@ -14,7 +14,9 @@ def _imported(tmp_path):
     """Import the fixtures into a fresh keeper DB; return (world, original)."""
     world = World(tmp_path)
     original = load_dir(FIX)
-    world.store.import_items(world.p("router"), original)
+    result = world.store.import_items(world.p("router"), original)
+    assert any("5 stored item(s)" in warning for warning in result["warnings"])
+    assert "description missing: brief will be empty" in result["warnings"]
     return world, original
 
 
@@ -147,3 +149,65 @@ def test_export_skips_terminal_states(tmp_path):
     keys = {item["key"] for item in again}
     assert "demo:A" not in keys       # done is never importable
     assert "demo:B" in keys
+
+
+@pytest.mark.parametrize("tier", ["standard", "high"])
+@pytest.mark.parametrize("state", ["open", "claimed", "in_review"])
+def test_stored_decision_only_import_round_trip(tmp_path, tier, state):
+    world = World(tmp_path)
+    try:
+        result = world.store.import_items(world.p("router"), [defn(
+            "LEGACY", kind="goal", review_tier=tier, state=state,
+            evidence_kinds=["decision"], description="Stored definition")])
+        assert any("1 stored item" in warning and "decision-only" in warning
+                   for warning in result["warnings"])
+        out = tmp_path / "export"
+        export_yaml(world.store, out)
+        items = load_dir(out)
+        assert items[0]["review_tier"] == tier
+        assert items[0]["state"] == state
+        assert items[0]["evidence_kinds"] == ["decision"]
+    finally:
+        world.close()
+    other_dir = tmp_path / "other"
+    other_dir.mkdir()
+    other = World(other_dir)
+    try:
+        other.store.import_items(other.p("router"), items)
+        export_yaml(other.store, tmp_path / "again")
+        assert load_dir(tmp_path / "again") == items
+        assert other.store.verify_integrity() == []
+    finally:
+        other.close()
+
+
+@pytest.mark.parametrize("fields", [{"note": "Legacy note"}, {"title": "Updated title"}])
+def test_unrelated_edit_of_stored_decision_only_item(tmp_path, fields):
+    world = World(tmp_path)
+    try:
+        world.store.import_items(world.p("router"), [defn(
+            "LEGACY", kind="goal", review_tier="high", evidence_kinds=["decision"])])
+        world.store.edit_definition(world.p("router"), "demo:LEGACY", fields)
+        for name, value in fields.items():
+            assert world.store._get_or_refuse("demo:LEGACY")[name] == value
+        for invalid in ({"review_tier": "high"}, {"evidence_kinds": ["decision"]}):
+            with pytest.raises(Refused, match="decision-only"):
+                world.store.edit_definition(world.p("router"), "demo:LEGACY", invalid)
+        world.store.edit_definition(world.p("router"), "demo:LEGACY", {"review_tier": "none"})
+        assert world.store._get_or_refuse("demo:LEGACY")["review_tier"] == "none"
+    finally:
+        world.close()
+
+
+@pytest.mark.parametrize("who", ["l1main", "workerA", "reader"])
+def test_stored_decision_only_import_still_requires_router(tmp_path, who):
+    world = World(tmp_path)
+    try:
+        principal = world.p(who)
+        with pytest.raises(Refused) as exc:
+            world.store.import_items(principal, [defn(
+                "LEGACY", kind="goal", review_tier="high", evidence_kinds=["decision"])])
+        assert exc.value.code == "forbidden"
+        assert world.store._item("demo:LEGACY") is None
+    finally:
+        world.close()

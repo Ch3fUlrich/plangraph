@@ -7,7 +7,7 @@ host-specific values.
 
     python tests/projector_record.py --out tests/fixtures/temporal
 
-Env: TEMPORAL_ADDRESS (default 127.0.0.1:17233), TEMPORAL_NAMESPACE (default "default").
+Env: TEMPORAL_ADDRESS (default 127.0.0.1:7233), TEMPORAL_NAMESPACE (default "default").
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.worker import Worker
 
 TASK_QUEUE = "proj-fixtures"
-DEFAULT_ADDRESS = "127.0.0.1:17233"
+DEFAULT_ADDRESS = "127.0.0.1:7233"
 WAIT_S = 45.0
 
 # (scenario file stem, workflow id, plan_key memo or None)

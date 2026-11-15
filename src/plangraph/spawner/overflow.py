@@ -10,7 +10,9 @@ from pathlib import Path
 import secrets
 import shlex
 import subprocess
+import sys
 import tempfile
+import time
 import uuid
 from typing import NamedTuple
 
@@ -18,8 +20,15 @@ from plangraph.keeper.credential_guard import mask
 from plangraph.fleet_sync.genconfig import config_dir
 from plangraph.routing_errors import ParameterRefused
 
-from . import cli
 from .private_io import atomic_write_private
+
+
+def __getattr__(name):
+    # Keep the compatibility attribute without loading the executable module on import.
+    if name == 'cli':
+        from importlib import import_module
+        return import_module('.cli', __package__)
+    raise AttributeError(name)
 
 
 class Decision(NamedTuple):
@@ -109,6 +118,13 @@ def memory_refusal(free_mb, reservation_mb, floor_mb):
     return f'memory: free {free_mb} MB, floor {floor_mb} MB, role {reservation_mb} MB'
 
 
+def memory_floor_record(memory, role_mb, floor, detail, role='implement'):
+    return dict(run_id='run-' + uuid.uuid4().hex, status='refused', role=role,
+                reason='host_memory_floor', overflow_reason=detail, exit_code=2,
+                mem_available_mb=memory, floor_mb=floor, role_mb=role_mb, ended=time.time(),
+                error=f'host_memory_floor: MemAvailable {memory} MB, floor {floor} MB, role {role_mb} MB; {detail}')
+
+
 def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
             remote_first=False, local_refusal=None, host_order=()):
     """Select from config-enriched readiness records; age is computed on read."""
@@ -130,6 +146,12 @@ def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
                 reason = 'failed readiness'
             elif row.get('fresh') is not True:
                 reason = 'stale readiness'
+            elif row.get('disk_free_gb') is not None and any(
+                    type(value) not in (int, float) or not 0 <= value < float('inf')
+                    for value in (row['disk_free_gb'], row.get('disk_floor_gb', 5))):
+                reason = 'malformed readiness'
+            elif row.get('disk_free_gb') is not None and row['disk_free_gb'] < row.get('disk_floor_gb', 5):
+                reason = f"disk_low: free {row['disk_free_gb']} GB"
             elif any(type(row.get(key)) is not int or row[key] < 0
                      for key in ('live_runs', 'mem_available_mb')):
                 reason = 'malformed readiness'
@@ -166,7 +188,7 @@ def ready_records(config, role='implement'):
             age = (datetime.now(timezone.utc) - stamp).total_seconds()
             if data['host'] != name:
                 raise ValueError('host mismatch')
-            row.update({key: data.get(key) for key in ('ok', 'live_runs', 'mem_available_mb')})
+            row.update({key: data.get(key) for key in ('ok', 'live_runs', 'mem_available_mb', 'disk_free_gb')})
             row['fresh'] = 0 <= age <= 600
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             row['refusal'] = 'missing or malformed readiness'
@@ -179,8 +201,9 @@ def ready_records(config, role='implement'):
     return records
 
 
-def local_resources():
-    runs = cli.SpawnService().ps()['runs']
+def local_resources(state=None):
+    from . import cli
+    runs = cli.SpawnService(state=state).ps()['runs']
     return sum(row.get('status') == 'running' for row in runs), available_memory_mb()
 
 
@@ -265,6 +288,8 @@ def remote_spawn(name, host, card, prompt, options):
     try:
         with tempfile.TemporaryDirectory() as local:
             rewritten = json.loads(json.dumps(card))
+            if rewritten.get('run_kind') == 'native-codex':
+                rewritten['repo'] = host['repo']
             diff = rewritten.get('diff_ref')
             if diff:
                 diff['repo'] = host['repo']
@@ -315,7 +340,69 @@ def remote_spawn(name, host, card, prompt, options):
             '; rmdir -- ' + q(directory))
 
 
+def native_repo(card):
+    repo = card.get('repo')
+    if not isinstance(repo, str) or not repo.strip() or not Path(repo).is_absolute():
+        raise ValueError('native-codex requires an absolute card.repo')
+    return Path(repo).resolve()
+
+
+async def native_spawn(self, card, options):
+    """Placement is already admitted; Rust owns the native writer lifecycle."""
+    import asyncio, time
+    from plangraph.fleet_snapshot import _projection_binary
+    from .private_io import atomic_write_private
+    import socket
+    if options.get('role', 'implement') != 'implement' or options.get('cwd'):
+        raise ValueError('native-codex requires implement role and a host-relative card.repo')
+    if options.get('dry_run'):
+        raise ValueError('native-codex dry-run is not supported')
+    record = dict(run_id='run-' + uuid.uuid4().hex, run_kind='native-codex',
+        host=(options.get('_placement') or {}).get('host') or os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname(),
+        status='running', started=time.time(), role='implement', writer_family='openai',
+        base_ref=card.get('base_ref'), repo=str(native_repo(card)))
+    from .item_key import annotate_item
+    annotate_item(record, card)
+    directory = self._path(record['run_id']).parent
+    self._save(record)
+    request = dict(record=record, card=card, prompt=options.get('prompt', ''), record_path=str(self._path(record['run_id'])))
+    atomic_write_private(directory / 'native-request.json', json.dumps(request))
+    try:
+        process = await asyncio.create_subprocess_exec(_projection_binary(), 'native-writer',
+            str(directory / 'native-request.json'), stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE, start_new_session=True)
+    except (OSError, RuntimeError):
+        record.update(status='failed', exit_code=6, reason='native worker launch failed', ended=time.time())
+        self._save(record)
+        return record
+    from .proc_kill import root_identity
+    identity = root_identity(process.pid)
+    async def finish():
+        try:
+            _, error = await process.communicate()
+            final = self.result(record['run_id'])
+            if final.get('status') == 'running':
+                final.update(status='failed', exit_code=process.returncode or 6,
+                             reason=error.decode(errors='replace')[-4096:], ended=time.time())
+            self._save(final)
+        except asyncio.CancelledError:
+            survivors = await self.runner.kill_recorded(process.pid, identity)
+            await process.wait()
+            record.update(self.result(record['run_id']))
+            record.update(status='failed' if survivors else 'cancelled', exit_code=130, ended=time.time())
+            if survivors: record.update(reason='kill_incomplete', survivors=survivors)
+            self._save(record)
+            raise
+    self.tasks[record['run_id']] = asyncio.create_task(finish())
+    if options.get('wait_seconds') is None:
+        await self.tasks[record['run_id']]
+    elif options.get('wait_seconds', 0) > 0:
+        await asyncio.wait([self.tasks[record['run_id']]], timeout=options['wait_seconds'])
+    return self.result(record['run_id'])
+
+
 def main(argv=None):
+    from . import cli
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('verb', choices=['spawn'])
     parser.add_argument('--repo', required=True)
@@ -323,7 +410,10 @@ def main(argv=None):
     parser.add_argument('--prompt', required=True)
     parser.add_argument('--role', default='implement')
     parser.add_argument('--cwd')
+    parser.add_argument('--state', help='invoking spawn state directory (local only; defaults to the service state)')
     args, options = parser.parse_known_args(argv)
+    local = [*(['--state', args.state] if args.state is not None else []),
+             'spawn', '--card', '@' + args.card]
     if args.cwd is not None:
         options.extend(['--cwd', args.cwd])
     if args.role != 'implement':
@@ -335,15 +425,21 @@ def main(argv=None):
         except (OSError, ValueError):
             config = {}
         if placement_policy(registry_caps(), config)[1]:
-            return cli.main(['spawn', '--card', '@' + args.card,
-                             Path(args.prompt).read_text(), *options])
+            return cli.main([*local, Path(args.prompt).read_text(), *options])
         role_mb, floor_mb = local_limits(registry_caps(), args.role)
-        _, memory = local_resources()
-        if decide(memory, role_mb, floor_mb, {}, False).reason == 'local room':
-            return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
-        card = json.loads(Path(args.card).read_text())
+        _, memory = local_resources(args.state) if args.state is not None else local_resources()
+        from .host_ready import local_disk_refusal
+        try:
+            card = json.loads(Path(args.card).read_text())
+        except (OSError, ValueError):
+            card = None  # Local CLI owns malformed input diagnostics.
         from .prompt_input import resolve_cwd
         cwd = resolve_cwd(args.cwd, card)
+        disk = local_disk_refusal(cwd or args.repo, cli.SpawnService(state=args.state))
+        if decide(memory, role_mb, floor_mb, {}, False, local_refusal=disk).reason == 'local room':
+            return cli.main([*local, Path(args.prompt).read_text(), *options])
+        if card is None:
+            card = json.loads(Path(args.card).read_text())
         repo = Path(cwd or args.repo).resolve()
         diff = card.get('diff_ref')
         public = repos_public(config, repo, diff)
@@ -353,14 +449,21 @@ def main(argv=None):
         records = ready_records(config, args.role)
         attempts = 0
         while True:
-            decision = decide(memory, role_mb, floor_mb, records, public)
-            if decision.host is None:
-                print(json.dumps({'overflow_reason': decision.reason}))
-                return 5
-            if attempts == 2:
-                print(json.dumps({'overflow_reason': 'queue: ' + '; '.join(
-                    name + ': ' + row.get('refusal', 'retry limit') for name, row in sorted(records.items()))}))
-                return 5
+            decision = decide(memory, role_mb, floor_mb, records, public, local_refusal=disk)
+            if decision.host is None or attempts == 2:
+                detail = decision.reason if decision.host is None else 'refused: retry limit'
+                detail = detail.replace('; queue:', '; refused:')
+                refusals = [f'{name}: {row["refusal"]}' for name, row in sorted(records.items())
+                            if row.get('refusal')]
+                reported = detail.replace('; refused: ', '; ').removeprefix('refused: ').split('; ')
+                detail = '; '.join([detail, *(reason for reason in refusals if reason not in reported)])
+                record = memory_floor_record(memory, role_mb, floor_mb, detail, args.role)
+                if not memory_refusal(memory, role_mb, floor_mb):
+                    record.update(reason=detail, error=detail)
+                cli.SpawnService(state=args.state)._save(record)
+                print(json.dumps(record))
+                print(record['error'], file=sys.stderr)
+                return 2
             name = decision.host
             attempts += 1
             try:
@@ -376,7 +479,7 @@ def main(argv=None):
                 return 0
             records[name]['refusal'] = refusal
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        print('overflow input or resource check failed', file=__import__('sys').stderr)
+        print('overflow input or resource check failed', file=sys.stderr)
         return 1
 
 

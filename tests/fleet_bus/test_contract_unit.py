@@ -130,7 +130,9 @@ def test_evicted_cursor_never_replays_ring(c):
 
 def test_nonce_and_ring_storage_are_bounded(c):
     state = fleet_state(c)
-    for n in range(c.NONCE_CAP):
+    state.seen.update((f'prior-{n}', NOW) for n in range(c.NONCE_CAP - c.RING_CAP - 1))
+    for n in range(c.RING_CAP + 1):
+        # Exercise actual ring eviction and nonce insertion at the production cap.
         # Distinct senders avoid the unrelated per-sender rate gate.
         send(c, state, post(**{"from": f"sender-{n}", "kid": f"k-{n // (c.NONCE_CAP // 32)}", "nonce": f"n-{n}", "msg_id": f"m-{n}"}))
     assert len(state.seen) <= c.NONCE_CAP
@@ -256,8 +258,7 @@ def test_read_response_and_delivery_cursor(c):
 
 def test_global_window_shared_by_keys_and_default_senders(c):
     state = fleet_state(c)
-    for n in range(c.NONCE_CAP - 1):
-        send(c, state, post(**{"from": f"identity-{n}", "nonce": str(n), "ts": NOW + 10}))
+    state.seen.update((str(n), NOW + 10) for n in range(c.NONCE_CAP - 1))
     send(c, state, post(kid="other", nonce="other", ts=NOW + 20))
     before = state.seen.copy()
     with pytest.raises(c.BusError) as err:
@@ -316,3 +317,15 @@ def test_read_validated_result_is_only_page_input(c):
     assert accepted == ("reader", 1, 0)
     with patch.object(c, "parse_limit", side_effect=AssertionError("late validation")), patch.object(c, "check_cursor", side_effect=AssertionError("late validation")):
         assert len(c.read_records(state, accepted)["records"]) == 1
+
+
+def test_capacity_cases_bound_authenticated_setup(c, monkeypatch):
+    original, count = send, [0]
+    def bounded(*args, **kwargs):
+        count[0] += 1
+        assert count[0] <= c.RING_CAP + 4, 'capacity setup needlessly replays the entire nonce window'
+        return original(*args, **kwargs)
+    monkeypatch.setitem(globals(), 'send', bounded)
+    test_global_window_shared_by_keys_and_default_senders(c)
+    count[0] = 0
+    test_nonce_and_ring_storage_are_bounded(c)

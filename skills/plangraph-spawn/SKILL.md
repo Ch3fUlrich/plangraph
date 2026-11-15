@@ -3,6 +3,11 @@ name: plangraph-spawn
 description: Dispatch per-host agents using plangraph cards.
 ---
 
+Brief order: use the versioned `src/plangraph/review/{writer,review}_brief.md`
+templates via `plangraph.review.prompt.render_brief`. Keep role, rules, Rust language
+line, gates and commit trailer format first; put item context and task data last.
+A byte-identical fixed prefix lets the prompt cache reuse it across items.
+
 Spawn by card via plangraph-spawn (`python3 tools/plangraph-spawn.py ... spawn --card ...`), never hand-pick a model.
 Use `python -m plangraph.spawner.cli route --card @card.json --role implement`.
 Then use `spawn --card @card.json --role implement "task prompt"`.

@@ -1,5 +1,6 @@
 """Ownership and output disclosure regression probes for Dell CI."""
 import json
+import sys
 import subprocess
 import os
 from pathlib import Path
@@ -154,7 +155,7 @@ def test_isolated_script_quotes_paths_and_preserves_command(tmp_path, monkeypatc
     assert shlex.split(bundle)[2] == str(source)
     invocation = script.splitlines()[-1]
     # Evaluate the generated shell quoting without launching a sandbox.
-    capture = 'capture() { python3 -c \'import json,sys; print(json.dumps(sys.argv[1:]))\' "$@"; }; '
+    capture = 'capture() { ' + shlex.quote(sys.executable) + ' -c \'import json,sys; print(json.dumps(sys.argv[1:]))\' "$@"; }; '
     monkeypatch.setenv('scratch', str(job))
     monkeypatch.setenv('toolchain', str(tmp_path / 'rust space'))
     monkeypatch.setenv('cargo_bin', '/usr/bin')
@@ -361,12 +362,13 @@ raise SystemExit(0)
         command = 'set -eu\npython3 -c ' + shlex.quote(probe) + '\n' + 'python3 -c ' + shlex.quote(pg_probe) + '''
 command -v temporal
 temporal --version
-temporal server start-dev --headless --ip 127.0.0.1 --port 17233 --http-port 18233 --metrics-port 19233 >/scratch/temporal.log 2>&1 &
+port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+temporal server start-dev --headless --ip 127.0.0.1 --port "$port" >/scratch/temporal.log 2>&1 &
 server=$!
 trap 'kill "$server"' EXIT
 ready=0
 for i in $(seq 1 50); do
-    if temporal operator cluster health --address 127.0.0.1:17233; then ready=1; break; fi
+    if temporal operator cluster health --address "127.0.0.1:$port"; then ready=1; break; fi
     sleep 0.2
 done
 test "$ready" = 1

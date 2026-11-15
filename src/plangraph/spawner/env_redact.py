@@ -164,7 +164,7 @@ class OutputLines:
         except Exception:
             return '[autoos:redaction failed; output withheld]\n'
 
-IDENTIFIER_KEYS = frozenset({'run_id', 'job_id', 'id', 'head_sha', 'branch', 'idempotency_key'})
+IDENTIFIER_KEYS = frozenset({'run_id', 'job_id', 'id', 'head_sha', 'branch', 'tree_sha', 'tree_branch', 'idempotency_key'})
 
 #: Credit/auth refusals (D-3605 a): the leg is as unusable as a rate-limited one.
 #: No bare HTTP 401/402/403 alternative: a run that merely prints those codes
@@ -173,7 +173,7 @@ CREDIT_AUTH_MARKER = re.compile(
     r'credits? (?:exhausted|depleted|exceeded|ran out)|out of credits|insufficient (?:credits?|balance|quota)'
     r'|payment required|unauthori[sz]ed|authentication (?:failed|error|required)|invalid api key', re.I)
 _QUOTA_MARKER = re.compile(
-    r'quota reached|quota exceeded|quota threshold|exhausted their quota|rate limit|resets in'
+    r'quota reached|quota exceeded|quota exhausted|quota refusal|quota threshold|exhausted their quota|rate limit|resets in'
     r'|too many requests|\bHTTP 429\b|' + CREDIT_AUTH_MARKER.pattern, re.I)
 #: D-3685: OmniRoute appends "(reset after N)" to its quota line. The suffix is
 #: not quota evidence on its own: a line merely starting with it never marks a
@@ -181,7 +181,7 @@ _QUOTA_MARKER = re.compile(
 #: next to a quota/rate-limit name.
 _RESET_AFTER = re.compile(r'\(reset after \d', re.I)
 # Gateway (omniroute) and agy refusal lines are quota evidence by shape alone (no "Error:" prefix, no marker word).
-_GATEWAY = re.compile(r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:RESOURCE_EXHAUSTED \(code \d{3}\):|quota policy filtered \d+ account'
+_GATEWAY = re.compile(r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:RESOURCE_EXHAUSTED(?: \(code \d{3}\):|:|$)|quota policy filtered \d+ account'
                       r'|All \S+ accounts reached configured quota)', re.I)
 _ERROR_SHAPED = re.compile(r'\s*(?:error:|HTTP \d{3}:)|' + _GATEWAY.pattern, re.I)
 _USAGE_LIMIT = re.compile(

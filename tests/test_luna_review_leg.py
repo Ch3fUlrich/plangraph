@@ -48,7 +48,7 @@ def test_luna_excluded_for_gpt_written_prs():
 def test_luna_eligible_for_other_written_prs():
     # luna is inline-only (SPAWNER-REGISTRY-ROUTE): routable once the card names the diff.
     card = dict(CARD, diff_ref={"repo": "/srv/repo", "base": "a1", "head": "b2"})
-    plan = plan_spawn(card, role="review", writer_families=("mimo",))
+    plan = plan_spawn(card, role="review", writer_families=("mimo",), legs=tuple(list(DEFAULT_LEGS)))
     assert LUNA in [leg.id for leg in plan.legs]
     assert not any(s["leg"] == LUNA for s in plan.skipped)
 

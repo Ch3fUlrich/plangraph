@@ -10,7 +10,7 @@ def provider_exhausted(skipped):
     reasons = [s['reason'] for s in skipped]
     states = {'limited', 'down', 'expired'}
     policy = {'banned_family', 'off_family', 'paused_harness', 'excluded_family',
-              'inline_only_needs_diff', 'no_verdict_seat', 'explicit_only'}
+              'inline_only_needs_diff', 'no_verdict_seat', 'explicit_only', 'review_route_excluded'}
     return any(r in states for r in reasons) and all(
         r in states | policy or r.startswith('disabled:') for r in reasons)
 

@@ -1,0 +1,1 @@
+- **PHASE-LINE-GREEN-1 part 8:** Pin the derived transitive route/spawn import closure to startup source, including lazy imports, and reject malformed launch arguments without internal RPC errors.

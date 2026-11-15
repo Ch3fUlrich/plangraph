@@ -38,7 +38,7 @@ def _seed(w, *, kind="operator_task", tier="high"):
     gives it ``operator=True``/``wait='task'``); the goal is needed because
     ``views.validate`` refuses work that cannot reach one.
     """
-    items = [defn("A", [], kind=kind, evidence_kinds=["decision"],
+    items = [defn("A", [], kind=kind, evidence_kinds=["decision"] if tier == "none" else ["any"],
                   review_tier=tier)]
     if kind != "goal":
         items.append(defn("GOAL", ["A"], kind="goal"))

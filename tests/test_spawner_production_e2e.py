@@ -591,7 +591,7 @@ class ProductionGatewayChildRunner(SpawnerRunner):
         gateway: bool = True,
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
-        client: str | None = None, watchdog=None, live_log=None, prompt_record=None,
+        client: str | None = None, watchdog=None, live_log=None, prompt_record=None, chosen=None,
     ) -> JobInfo:
         if dry_run:
             return await super().spawn(
@@ -606,7 +606,7 @@ class ProductionGatewayChildRunner(SpawnerRunner):
                 gateway=gateway,
                 gateway_online=gateway_online,
                 wait_seconds=wait_seconds,
-                prompt_record=prompt_record,
+                prompt_record=prompt_record, chosen=chosen,
             )
 
         from plangraph.spawner.runner import redact

@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs" / "skills" / "rule-disposition.md"
-CARD_RE = re.compile(r"role card: (planner|orchestrator|worker)")
+CARD_RE = re.compile(r"role card: (planner|orchestrator|worker|batch)")
 REF_RE = re.compile(r"^(\S+\.py)::(test_\w+)$")
 
 
@@ -28,15 +28,15 @@ def _gaps():
     return set(re.findall(r"\bR-[a-z]+-\d+\b", section))
 
 
-def test_table_has_74_unique_ids():
+def test_table_has_86_unique_ids():
     ids = [row[0] for row in _rows()]
-    assert len(ids) == 74
-    assert len(set(ids)) == 74
+    assert len(ids) == 86
+    assert len(set(ids)) == 86
 
 
 def test_disposition_counts():
     counts = Counter(row[1] for row in _rows())
-    assert counts == {"delete": 28, "code": 22, "card": 24}
+    assert counts == {"delete": 28, "code": 22, "card": 36}
 
 
 def test_every_row_has_a_why():

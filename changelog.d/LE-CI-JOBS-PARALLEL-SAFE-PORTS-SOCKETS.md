@@ -1,0 +1,1 @@
+- **LE-CI-JOBS-PARALLEL-SAFE-PORTS-SOCKETS:** Run Temporal CI commands with free ports, private temporary logs, bounded startup retries, and automatic child cleanup on Linux and Windows; isolate socket tests and contract latency artifacts for concurrent runners.
