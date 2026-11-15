@@ -142,7 +142,9 @@ def rust_commands(root, base, head, env=None):
         data = tomllib.loads(manifest.read_text())
         owner = manifest.parent.relative_to(root).as_posix()
         if members is not None and manifest.parent not in members:
-            if "workspace" not in data or "package" not in data:
+            # Excluded packages can stand alone without a [workspace] table.
+            # Address their owning manifest, never a package in rust/.
+            if "package" not in data:
                 continue
             standalone[owner] = manifest
         elif "package" in data:
