@@ -178,3 +178,10 @@ user unit absent. See the state contract for the verified launch inventory.
 
 The `main-ff --repo CHECKOUT --keeper-state STATE` command holds clean main
 updates when existing keeper imports change; unreadable state holds, Git failures refuse.
+
+The revived `main-ff` command delegates update decisions, loaded-state checks,
+Git operations, locking, and private status publication to `pg-mainff` (Rust).
+It uses the committed Python AST to follow literal imports, including lazy and
+relative imports and literal `import_module`/`__import__` calls; no checkout code
+is executed to discover the dependency closure. Cargo and the repository's pinned
+Rust toolchain must be installed for the Python compatibility command.

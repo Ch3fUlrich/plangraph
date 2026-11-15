@@ -8,5 +8,6 @@ serde_json = "1"
 libc = "0.2"
 shlex = "1"
 
-[dev-dependencies]
+rustpython-parser = "0.4"
+rustpython-ast = { version = "0.4", features = ["visitor"] }
 tempfile = "3"

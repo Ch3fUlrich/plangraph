@@ -30,8 +30,18 @@ def main(argv=None):
     check = commands.choices['check-checkout']
     check.add_argument('--default-branch')
     commands.choices['install-audit'].add_argument('--apply', action='store_true')
+    ff = commands.add_parser('main-ff')
+    ff.add_argument('--repo', required=True)
+    ff.add_argument('--keeper-state', required=True)
+    ff.add_argument('--keeper-unit', default='plangraph-keeper.service')
+    ff.add_argument('--no-fetch', action='store_true')
     args = parser.parse_args(argv)
     try:
+        if args.command == 'main-ff':
+            code, line = advance.main_ff(args.repo, args.keeper_state,
+                fetch=not args.no_fetch, keeper_unit=args.keeper_unit)
+            print(line)
+            return code
         if args.command == 'check-checkout':
             send = drift.alert_sender()
             def notify(line):
