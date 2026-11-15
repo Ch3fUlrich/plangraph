@@ -234,7 +234,7 @@ def real_sandbox(tmp_path):
     return run
 
 @pytest.mark.parametrize("attack", ["other-job", "checkout", "ssh", "docker", "env", "proc"])
-def test_real_sandbox_denies_host_access(tmp_path, real_sandbox, attack, monkeypatch, request):
+def test_real_sandbox_denies_host_access(tmp_path, real_sandbox, attack, monkeypatch, request, short_socket_dir):
     other = tmp_path / "other-job"
     other.mkdir()
     host = Path(__file__).resolve().parents[1]
@@ -245,7 +245,7 @@ def test_real_sandbox_denies_host_access(tmp_path, real_sandbox, attack, monkeyp
     ssh.mkdir()
     (ssh / 'canary').write_text('private-key-canary')
     docker = socket.socket(socket.AF_UNIX)
-    docker_path = tmp_path / 'docker.sock'
+    docker_path = short_socket_dir / 'docker.sock'
     docker.bind(str(docker_path))
     docker.listen()
     # Prove that the target exists and accepts host connections before probing.
