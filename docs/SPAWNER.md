@@ -260,11 +260,11 @@ Plain stdout, including text saying 429, is never provider evidence.
 
 ### SHA-named run-tree primitive (SPAWNER-RUN-TREE-S1)
 
-`git_guard.run_tree(state, repo)` attempts to fetch `origin/main`, then selects
-its verified commit SHA and uses the detached tree at `<state>/trees/<sha>`.
-If fetching fails or times out, it uses the verified tracking ref, not cache
-directory mtimes. It creates the tree when its directory is missing, including
-when Git still has a stale registration for that path, even if locked (double `--force`).
+`git_guard.run_tree(state, repo)` attempts to fetch `origin/main`, selects its verified SHA, and uses the detached tree at `<state>/trees/<sha>`.
+If fetching fails or times out, it uses the verified tracking ref, not cache directory mtimes.
+It creates missing trees, including stale Git registrations even if locked (double `--force`).
+Under the SHA's creation lock, the shared ancestry checker checks the selected base against fetched `origin/main` without another fetch, refusing `base_stale` if a parallel admission advanced the ref while selection waited.
+An admission that already fetched this repository can use `run_tree(state, repo, fetch=False)`. This check leaves local `main` and live cached trees untouched.
 
 POSIX reaping keeps the selected tree, trees named by nonterminal run records
 or records with survivors, trees with held creation locks or context leases, directories
