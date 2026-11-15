@@ -113,9 +113,18 @@ impl Host {
         cmd
     }
     fn commit(&self) -> Result<(), String> {
-        // A linked worktree is essential: its gitdir lives outside the writable root.
-        // Use the chosen filesystem, never the real repository's refs or metadata.
-        let scratch = tempfile::tempdir_in(&self.repo).map_err(|e| e.to_string())?;
+        // A linked worktree is essential: its gitdir is not inside the checkout.
+        // The scratch lives beside the worktree (same filesystem, never inside it, so a
+        // killed probe cannot leave files a later `git add -A` would commit) and the
+        // sandbox cwd is the scratch root, so both gitdir and checkout are writable roots.
+        let parent = self
+            .repo
+            .parent()
+            .ok_or("worktree has no parent directory")?;
+        let scratch = tempfile::Builder::new()
+            .prefix(".pg-readiness-")
+            .tempdir_in(parent)
+            .map_err(|e| e.to_string())?;
         let source = scratch.path().join("source");
         let work = scratch.path().join("work");
         output(Command::new("git").args(["init", "--quiet"]).arg(&source))?;
@@ -131,12 +140,21 @@ impl Host {
                 .arg(&work),
         )?;
         // Identity is isolated to the child, not persisted in git config.
-        let mut cmd = self.sandbox_command(&work, "git", &[]);
+        let work_arg = work.to_string_lossy();
+        let mut cmd = self.sandbox_command(
+            scratch.path(),
+            "git",
+            &[
+                "-C",
+                &work_arg,
+                "commit",
+                "--allow-empty",
+                "-m",
+                "readiness probe",
+            ],
+        );
         identity(&mut cmd);
-        output(
-            cmd.current_dir(&work)
-                .args(["commit", "--allow-empty", "-m", "readiness probe"]),
-        )?;
+        output(&mut cmd)?;
         let count = output(
             Command::new("git")
                 .current_dir(&work)
