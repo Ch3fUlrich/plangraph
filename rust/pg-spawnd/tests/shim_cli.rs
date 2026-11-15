@@ -224,9 +224,7 @@ fn shim_on_missing_socket_exits_two() {
 fn shim_on_unreachable_socket_exits_two() {
     let tmp = TempDir::new();
     let socket = tmp.path().join("stale.sock");
-    {
-        let _stale = std::os::unix::net::UnixListener::bind(&socket).expect("bind stale");
-    }
+    drop(common::bind_stale_socket(&socket));
     let output = common::output(std::process::Command::new(bin()).args([
         OsStr::new("shim"),
         OsStr::new("--socket"),
