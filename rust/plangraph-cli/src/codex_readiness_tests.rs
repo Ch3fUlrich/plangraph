@@ -87,3 +87,20 @@ fn read_only_mode_skips_the_commit_point_but_writable_modes_probe_it() {
     host.mode = "workspace-write".into();
     assert!(host.check("commit").is_err());
 }
+#[test]
+fn workspace_write_commit_passes_in_the_real_sandbox_when_it_can_start() {
+    // Under the crate dir, not /tmp, which the sandbox always allows to write.
+    let parent = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let repo = parent.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let mut host = Host {
+        repo,
+        mode: "workspace-write".into(),
+    };
+    if host.check("sandbox").is_err() {
+        eprintln!("skipped: sandbox cannot start on this host");
+        return;
+    }
+    host.commit().unwrap();
+    assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 1);
+}
