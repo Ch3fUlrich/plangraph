@@ -364,4 +364,29 @@ class VerbsMixin:
                 " AND epoch=?",
                 (self._iso(now), key, fresh["state"], fresh["epoch"]))
             self._row_guard(cursor, key, fresh["state"], fresh["epoch"])
+            # Frozen gates retain their history. Live gates no longer wait for
+            # abandoned work; ordinary work dependencies keep their meaning.
+            gates = self.conn.execute(
+                "SELECT i.key,i.state,i.epoch FROM edges e JOIN items i ON i.key=e.src"
+                " WHERE e.dst=? AND i.kind IN ('gate','goal')"
+                " AND i.state NOT IN ('done','cancelled') ORDER BY i.key",
+                (key,)).fetchall()
+            for gate in gates:
+                active = gate["state"] in ("claimed", "in_review")
+                payload = {"fields": ["depends_on"],
+                           "dropped_cancelled_dependency": key}
+                if active:
+                    payload.update({"while": gate["state"],
+                                    "new_epoch": gate["epoch"] + 1})
+                self.conn.execute("DELETE FROM edges WHERE src=? AND dst=?",
+                                  (gate["key"], key))
+                cursor = self.conn.execute(
+                    "UPDATE items SET updated_at=?,epoch=epoch+?,round=round+?"
+                    " WHERE key=? AND state=? AND epoch=?",
+                    (self._iso(now), int(active), int(active), gate["key"],
+                     gate["state"], gate["epoch"]))
+                self._row_guard(cursor, gate["key"], gate["state"], gate["epoch"])
+                self._append(principal, gate["key"], "item_defined", payload, now)
+            self._validate_change(self._all_items(), before, affected={key},
+                                  allow_new={"depends_on_cancelled"})
         return {"key": key, "state": "cancelled"}

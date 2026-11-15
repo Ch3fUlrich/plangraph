@@ -438,3 +438,12 @@ def answers(items, project=None):
     rows.sort(key=lambda r: r["key"])
     rows.sort(key=lambda r: r["done_at"] or "", reverse=True)
     return rows
+
+
+def cancelled_gate_dependencies(items):
+    """Gate/goal edges to abandoned work, including legacy frozen gates."""
+    cancelled = {item["key"] for item in items
+                 if item.get("state") == "cancelled"}
+    return sorted((item["key"], dep) for item in items
+                  if item.get("kind") in ("gate", "goal")
+                  for dep in _deps(item) if dep in cancelled)

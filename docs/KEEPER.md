@@ -627,3 +627,22 @@ record bound to the merged head, with consistent attempt provenance. Auth/secret
 cards cannot use these low-trust seats; their existing two-seat gate remains.
 
 [Per-item checkpoint and status notes](checkpoints/). Add new notes there, one file per item, rather than appending here.
+
+### Cancelled dependencies and new children
+
+Cancelling an item removes its incoming `depends_on` edges from live gates and
+goals in the same transaction, recording an `item_defined` event on each gate
+with `dropped_cancelled_dependency`. Claimed/in-review gates advance epoch and
+round so old evidence and verdicts cannot survive the dependency change.
+Ordinary work dependencies and frozen done/cancelled gates keep their history.
+A cancellation that would orphan live work rolls back; re-home that work first.
+
+`define` / `create_items` report `refused` entries for new children whose `under`
+gate still holds a cancelled dependency (for example, legacy data), while
+creating the independent valid items. Each entry names the child, gate,
+cancelled dependencies, and the `remove_dep` recovery. CLI text and JSON expose
+these refusals and exit 2. Other validation failures still refuse atomically;
+`apply_ops` always retains its atomic refusal behavior.
+
+`kp check` prints `CANCELLED-GATE-DEP <gate> -> <dependency>` for gates and goals,
+including frozen ones. JSON exposes `cancelled_gate_deps`; `--strict` exits 1.

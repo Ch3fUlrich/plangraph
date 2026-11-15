@@ -262,3 +262,118 @@ def test_priority_stays_router_only_and_only_depends_on_edges_exist(w):
     assert {rel for _, _, rel in _edges(w)} == {"depends_on"}
     assert w.store._item("demo:GOAL")["priority"] == 5
     assert verify_integrity(w.conn) == []
+
+
+def test_cancel_drops_gate_edges_and_records_drop(w):
+    w.store.create_items(w.p("router"), [
+        defn("GATE", ["X"], kind="gate", under="GOAL"),
+        defn("WORK", ["X"], under="GOAL")])
+    w.store.cancel(w.p("router"), "demo:X", "superseded")
+    assert w.store._item("demo:GATE")["depends_on"] == []
+    assert w.store._item("demo:GOAL")["depends_on"] == ["demo:GATE", "demo:WORK"]
+    assert w.store._item("demo:WORK")["depends_on"] == ["demo:X"]
+    event = w.conn.execute(
+        "SELECT payload FROM events WHERE key='demo:GATE'"
+        " AND type='item_defined' ORDER BY seq DESC LIMIT 1").fetchone()
+    assert json.loads(event[0])["dropped_cancelled_dependency"] == "demo:X"
+    assert w.store.create_items(w.p("router"), [
+        defn("NEXT", under="GATE")])["created"] == ["demo:NEXT"]
+    assert w.store.verify_integrity() == []
+
+
+def test_define_refuses_only_item_under_gate_with_cancelled_dep(w):
+    # Model legacy data without relying on cancel's new edge cleanup.
+    w.conn.execute("UPDATE items SET state='cancelled' WHERE key='demo:X'")
+    out = w.store.create_items(w.p("router"), [
+        defn("REFUSED", under="GOAL"),
+        defn("CREATED", project="other", under="OG")])
+    assert out["created"] == ["other:CREATED"]
+    assert w.store._item("demo:REFUSED") is None
+    refusal, = out["refused"]
+    assert refusal["key"] == "demo:REFUSED"
+    assert refusal["code"] == "depends_on_cancelled"
+    assert "demo:GOAL" in refusal["message"] and "demo:X" in refusal["message"]
+    assert "remove_dep" in refusal["message"]
+
+
+def test_cancel_gate_cleanup_invalidates_active_epoch(w):
+    from keeper_util import to_claimed
+    w.store.create_items(w.p("router"), [
+        defn("GATE", kind="gate", under="GOAL")])
+    epoch = to_claimed(w, "demo:GATE")
+    w.store.edit_definition(w.p("router"), "demo:GATE", {"depends_on": ["demo:X"]})
+    before = w.store._item("demo:GATE")
+    assert before["epoch"] > epoch
+    w.store.cancel(w.p("router"), "demo:X", "abandoned")
+    after = w.store._item("demo:GATE")
+    assert after["depends_on"] == []
+    assert after["epoch"] == before["epoch"] + 1
+    assert after["round"] == before["round"] + 1
+    assert w.store.verify_integrity() == []
+
+
+@pytest.mark.parametrize("json_mode", [False, True])
+def test_define_file_reports_partial_refusal(w, tmp_path, capsys, json_mode):
+    from types import SimpleNamespace
+    from plangraph.keeper.cli_output_verbs import cmd_define
+
+    w.conn.execute("UPDATE items SET state='cancelled' WHERE key='demo:X'")
+    path = tmp_path / "definitions.json"
+    path.write_text(json.dumps({"items": [
+        defn("REFUSED", under="GOAL", description="Why: needed\nHow: implement"),
+        defn("CREATED", project="other", under="OG",
+             description="Why: needed\nHow: implement")]}))
+
+    class Session:
+        def call(self, method, verb, *, body):
+            assert (method, verb) == ("POST", "create_items")
+            return w.store.create_items(w.p("router"), body["items"])
+
+    session = Session()
+    session.json_mode = json_mode
+    assert cmd_define(SimpleNamespace(file=str(path), edit=False), session) == 2
+    out = capsys.readouterr().out
+    assert w.store._item("other:CREATED") is not None
+    assert w.store._item("demo:REFUSED") is None
+    if json_mode:
+        assert json.loads(out)["refused"][0]["key"] == "demo:REFUSED"
+    else:
+        assert "created 1 items" in out
+        assert "refused demo:REFUSED: depends_on_cancelled:" in out
+        assert "demo:X" in out and "remove_dep" in out
+
+
+def test_cancel_cleanup_is_atomic_with_batch_failure(w):
+    before = _snapshot(w)
+    with pytest.raises(Refused):
+        w.store.apply_ops(w.p("router"), [
+            {"op": "cancel", "key": "demo:X"},
+            {"op": "remove_dep", "key": "demo:NOT-THERE", "dep": "demo:X"}])
+    assert _snapshot(w) == before
+    assert w.store._item("demo:X")["state"] == "open"
+    assert w.store.verify_integrity() == []
+
+
+def test_all_cancelled_gate_refusals_create_nothing_and_batch_stays_atomic(w):
+    w.conn.execute("UPDATE items SET state='cancelled' WHERE key='demo:X'")
+    before = _snapshot(w)
+    out = w.store.create_items(w.p("router"), [defn("REFUSED", under="GOAL")])
+    assert out["created"] == [] and len(out["refused"]) == 1
+    assert _snapshot(w) == before
+    with pytest.raises(Refused) as exc:
+        w.store.apply_ops(w.p("router"), [{"op": "create", "item": [
+            defn("CREATED", project="other", under="OG"),
+            defn("REFUSED", under="GOAL")]}])
+    assert "depends_on_cancelled" in exc.value.msg
+    assert _snapshot(w) == before
+
+
+def test_cancel_cannot_orphan_live_work_by_dropping_gate_edge(w):
+    w.store.create_items(w.p("router"), [
+        defn("CHILD"), defn("GATE", ["CHILD"], kind="gate", under="GOAL")])
+    before = _snapshot(w)
+    with pytest.raises(Refused) as exc:
+        w.store.cancel(w.p("router"), "demo:GATE", "abandoned")
+    assert "unreachable_goal" in exc.value.msg
+    assert _snapshot(w) == before
+    assert w.store.verify_integrity() == []
