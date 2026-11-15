@@ -2,7 +2,7 @@ use super::*;
 use pg_worker_core::run::record::new_run_id;
 use std::process::Command;
 
-fn git_ok(dir: &Path, args: &[&str]) {
+pub(super) fn git_ok(dir: &Path, args: &[&str]) {
     assert!(Command::new("git")
         .current_dir(dir)
         .args(args)
@@ -64,6 +64,16 @@ fn precondition_binds_exact_stamped_head_and_rejects_dirty_tree() {
         Some(head)
     );
     assert!(launch.argv.iter().any(|s| s == "--settings"));
+    assert!(launch
+        .prompt
+        .as_deref()
+        .unwrap()
+        .contains("Do not run background commands"));
+    assert!(launch
+        .prompt
+        .as_deref()
+        .unwrap()
+        .contains("at least one reviewed path"));
     assert!(!launch.argv.iter().any(|s| s.contains("command(*)")));
     let wrong = json!({"card":{"head_sha":"wrong"}});
     assert!(prepare(
@@ -114,7 +124,7 @@ fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
     .ok()
     .unwrap();
     let log = record.path().with_file_name("live.log");
-    let answer = "No findings.\nVERDICT: PASS\nTEST_GAMING: no\n";
+    let answer = "No findings in src/lib.rs:1.\nVERDICT: PASS\nTEST_GAMING: no\n";
     std::fs::write(
         &log,
         format!(
@@ -131,7 +141,7 @@ fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
     assert_eq!(value["witness_kind"], "cli_reported");
     assert_eq!(value["completion"]["head_sha"], head);
     assert_eq!(value["verdict"], "pass");
-    assert_eq!(value["findings"], "No findings.");
+    assert_eq!(value["findings"], "No findings in src/lib.rs:1.");
     assert_eq!(value["attempts"][0]["witness_kind"], "cli_reported");
     record.save().unwrap();
     // Keeper imports fcntl and is POSIX-only; record/provenance assertions run everywhere.

@@ -83,12 +83,12 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
     } else {
         leg
     };
-    let frame = json!({"event":"result", "result":{"status":"SUCCESS", "response":"No findings.\nVERDICT: PASS\nTEST_GAMING: no\n"}});
+    let frame = json!({"event":"result", "result":{"status":"SUCCESS", "response":"No findings in src/lib.rs:1.\nVERDICT: PASS\nTEST_GAMING: no\n"}});
     let frame = if sonnet {
         format!(
             "{}\n{}",
             json!({"type":"system", "subtype":"init", "model":"claude-sonnet-5-5-high"}),
-            json!({"type":"result", "is_error":false, "result":"No findings.\nVERDICT: PASS\nTEST_GAMING: no\n"})
+            json!({"type":"result", "is_error":false, "result":"No findings in src/lib.rs:1.\nVERDICT: PASS\nTEST_GAMING: no\n"})
         )
     } else {
         frame.to_string()

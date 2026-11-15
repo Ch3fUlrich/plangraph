@@ -82,6 +82,13 @@ impl Runs {
         if checkout.is_some() {
             base["review_checkout"] = json!(launch.cwd);
         }
+        if role == "review" {
+            base["review_base"] = args["card"]["diff_ref"]
+                .get("base_sha")
+                .or_else(|| args["card"]["diff_ref"].get("base"))
+                .cloned()
+                .unwrap_or(Value::Null);
+        }
         base.as_object_mut()
             .unwrap()
             .extend(admission.fields.as_object().unwrap().clone());

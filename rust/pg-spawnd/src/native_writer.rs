@@ -63,7 +63,11 @@ fn lifecycle(
         driver.save(record).map_err(|e| (6, e))?;
         if let Some(review) = driver.review(&head).map_err(|e| (4, e))? {
             let accepts = review["verdict"] == "ACCEPT";
+            let weak = review["status"] == "no_verdict";
             record["review"] = review;
+            if weak {
+                return Err((4, "weak_verdict".into()));
+            }
             if !accepts {
                 return Ok(3);
             }

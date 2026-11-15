@@ -191,7 +191,12 @@ impl Driver for Host {
         self.git(&["rev-parse", "HEAD"])
     }
     fn review(&mut self, head: &str) -> Result<Option<Value>, String> {
-        find_review(&self.reviews, head)
+        let paths = crate::review_citation::diff_paths(
+            &self.cwd,
+            Some(&format!("refs/plangraph/native/{}/base", self.run_id)),
+            head,
+        );
+        find_review(&self.reviews, head, &paths)
     }
     fn gates(&mut self) -> Result<(), String> {
         self.git(&["diff", "--exit-code", "HEAD", "--"])?;
@@ -220,7 +225,11 @@ impl Driver for Host {
             .map_err(|e| e.to_string())
     }
 }
-pub(crate) fn find_review(directory: &Path, head: &str) -> Result<Option<Value>, String> {
+pub(crate) fn find_review(
+    directory: &Path,
+    head: &str,
+    paths: &[String],
+) -> Result<Option<Value>, String> {
     if head.len() < 8 {
         return Err("invalid final head".into());
     }
@@ -249,9 +258,14 @@ pub(crate) fn find_review(directory: &Path, head: &str) -> Result<Option<Value>,
                 "VERDICT: REQUEST_CHANGES" | "VERDICT: REJECT" => "REQUEST_CHANGES",
                 _ => continue,
             };
+            let weak = verdict == "ACCEPT" && !crate::review_citation::names_file(&text, paths);
             matches.push((
                 meta.modified().map_err(|e| e.to_string())?,
-                json!({"path":path,"text":text,"verdict":verdict,"head":head}),
+                if weak {
+                    json!({"path":path,"text":text,"verdict":"no_verdict","status":"no_verdict","reason":"weak_verdict","head":head})
+                } else {
+                    json!({"path":path,"text":text,"verdict":verdict,"head":head})
+                },
             ));
         }
     }
