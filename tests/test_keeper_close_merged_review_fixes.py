@@ -53,7 +53,7 @@ def test_completion_finish_cannot_be_masked(unseated_w, tmp_path, finish):
 
 
 @pytest.mark.parametrize("risk", ["auth", "secrets"])
-def test_waiver_records_overridden_seat_rule(unseated_w, monkeypatch, risk):
+def test_waiver_refuses_credential_lane_seat_override(unseated_w, monkeypatch, risk):
     """Auth/secrets seat rules cannot be overridden or recorded as waived."""
     world = unseated_w
     historical_waiver_fixture(world, monkeypatch)

@@ -15,8 +15,10 @@ against a strict character set before they reach a git argument.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
 import threading
 import time
 
@@ -102,6 +104,156 @@ def _split(key):
     return (project or None), bare
 
 
+def work_index(git, project, *, fresh=False):
+    """One cached origin-refreshed snapshot; no item-dependent subprocesses.
+
+    Read all commit trailers and topology together, including hosted open PR
+    heads. Unknown inputs remain unknown, as in the claim guard.
+    """
+    repo, ref = _repo_ref(git, project)
+    if repo is None:
+        return None
+    cache = getattr(git, "_context_work_index", {})
+    cache_key = (repo, ref)
+    hit = cache.get(cache_key)
+    if not fresh and hit and time.monotonic() - hit[0] < _REFS_TTL:
+        return hit[1]
+    problems = []
+    verified_at = (hit[1].get("verified_at") if hit else None)
+    prs = None
+    origin = _ok(git, repo, ["remote", "get-url", "origin"]) or ""
+    # Always observe this fetch's result, including for remote-tracking refs.
+    if origin:
+        if _ok(git, repo, ["fetch", "--no-tags", "origin"]) is None:
+            problems.append("origin fetch failed or timed out")
+        else:
+            verified_at = time.time()
+        branch = ref.removeprefix("refs/heads/").removeprefix("refs/remotes/")
+        remote_ref = "refs/remotes/origin/" + branch.removeprefix("origin/")
+        if _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", remote_ref]):
+            ref = remote_ref
+        else:
+            problems.append("origin target ref unavailable")
+    origin_stale = bool(problems)
+    from urllib.parse import urlsplit
+    if (origin.startswith("git" + "@" + "github.com:")
+            or urlsplit(origin.strip()).hostname == "github.com"):
+        try:
+            proc = subprocess.run(
+                ["gh", "pr", "list", "--state", "open", "--limit", "10000",
+                 "--json", "number,headRefOid,headRefName"], cwd=repo,
+                capture_output=True, text=True, timeout=30, check=False)
+            value = json.loads(proc.stdout) if proc.returncode == 0 else None
+            if isinstance(value, list) and len(value) < 10000 and all(
+                    isinstance(p, dict) and type(p.get("number")) is int
+                    and p["number"] > 0 and valid_commit_ref(p.get("headRefOid"))
+                    for p in value):
+                prs = value
+                if prs:
+                    if _ok(git, repo, ["fetch", "--no-tags", "origin", *[
+                            f"+refs/pull/{p['number']}/head:refs/keeper/pull/{p['number']}/head"
+                            for p in prs]]) is None:
+                        prs = None
+                        problems.append("PR head fetch failed or timed out")
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+        if prs is None and not problems:
+            problems.append("open PR inventory unavailable")
+    refs_out = _ok(git, repo, ["for-each-ref", "--format=%(refname) %(objectname)"])
+    target = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", ref])
+    out = _ok(git, repo, ["log", "--all", "--no-show-signature",
+                         "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%(trailers:key=Plan-Item,valueonly,separator=%x1e)%x1d"])
+    if refs_out is None or target is None or out is None:
+        if not origin:
+            return None
+        origin_stale = True
+        problems.append("repository index unavailable")
+    records = {}
+    for record in (out or "").split("\x1d"):
+        fields = record.strip("\n").split("\x1f")
+        if len(fields) == 5 and valid_commit_ref(fields[0]):
+            sha, parents, date, subject, trailers = fields
+            records[sha] = (parents.split(), {"sha": sha, "date": date,
+                            "subject": subject}, trailers.split("\x1e"))
+
+    def ancestors(head):
+        seen, todo = set(), [head]
+        while todo:
+            sha = todo.pop()
+            if sha in seen:
+                continue
+            seen.add(sha)
+            todo.extend(records.get(sha, ([],))[0])
+        return seen
+
+    if prs is not None and any(p["headRefOid"] not in records for p in prs):
+        prs = None
+        problems.append("PR head commit unavailable")
+    merged = ancestors((target or "").strip())
+    # Annotate introducing merges once from the same refreshed target topology.
+    chain, cursor = [], (target or "").strip()
+    while cursor in records:
+        chain.append(cursor)
+        parents = records[cursor][0]
+        cursor = parents[0] if parents else None
+    seen = set()
+    for landing in reversed(chain):
+        parents, commit, _ = records[landing]
+        todo, introduced = [landing], []
+        while todo:
+            sha = todo.pop()
+            if sha in seen:
+                continue
+            seen.add(sha)
+            introduced.append(sha)
+            todo.extend(records.get(sha, ([],))[0])
+        if len(parents) > 1:
+            match = _PR_RE.search(commit["subject"])
+            merge = {"sha": landing, "subject": commit["subject"],
+                     "pr": int(match.group(1)) if match else None}
+            for sha in introduced:
+                if sha != landing and sha in records:
+                    records[sha][1]["merge"] = merge
+    commits, pulls = {}, {}
+    for sha, (_, commit, names) in records.items():
+        if sha in merged:
+            for name in names:
+                commits.setdefault(name.strip(), []).append(commit)
+    for pr in prs or []:
+        for sha in ancestors(pr["headRefOid"]) - merged:
+            for name in records.get(sha, ([], {}, []))[2]:
+                pulls.setdefault(name.strip(), []).append(pr["number"])
+    branches = []
+    for line in (refs_out or "").splitlines():
+        name, sha = line.split(" ", 1)
+        if name.startswith(("refs/heads/", "refs/remotes/")) and sha not in merged:
+            branches.append(name.removeprefix("refs/heads/").removeprefix("refs/remotes/"))
+    result = {"commits": commits, "prs": pulls if prs is not None else None,
+              "branches": branches, "order": {sha: i for i, sha in enumerate(records)},
+              "stale": bool(problems), "origin_stale": origin_stale,
+              "reason": "; ".join(problems),
+              "verified_at": verified_at}
+    cache[cache_key] = (time.monotonic(), result)
+    git._context_work_index = cache
+    return result
+
+
+def indexed_work(index, key):
+    """Resolve full/bare trailers and lane names without I/O."""
+    if index is None or index.get("origin_stale"):
+        return {"commits": None, "lanes": None, "prs": None}
+    _, bare = _split(key)
+    names = (key, bare) if key != bare else (key,)
+    commits = {c["sha"]: c for name in names
+               for c in index["commits"].get(name, [])}
+    prs = index["prs"]
+    ordered = sorted(commits.values(), key=lambda c: index.get("order", {}).get(c["sha"], 0))
+    return {"commits": ordered[:COMMIT_LIMIT],
+            "lanes": [b for b in index["branches"] if bare.lower() in b.lower()],
+            "prs": sorted({p for name in names for p in prs.get(name, [])})
+            if prs is not None else None}
+
+
 def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
     """Commits on the default ref with a ``Plan-Item: <key>`` trailer, newest first.
 
@@ -184,7 +336,7 @@ _REFS = {}
 _REFS_TTL = 10.0
 
 
-def _refs(git, repo):
+def _refs(git, repo, fresh=False):
     """``(branch names, remote names)`` of *repo*, reused for ``_REFS_TTL`` s.
 
     One listing serves every row of a ``ready``.  ``None`` = unknown: git
@@ -193,7 +345,7 @@ def _refs(git, repo):
     now = time.monotonic()
     with _REFS_LOCK:
         hit = _REFS.get(repo)
-        if hit is not None and now - hit[0] < _REFS_TTL:
+        if not fresh and hit is not None and now - hit[0] < _REFS_TTL:
             return hit[1]
     out = _ok(git, repo, ["for-each-ref", f"--count={_REF_COUNT}",
                           "--format=%(refname:short)", "refs/heads", "refs/remotes"])
@@ -209,7 +361,7 @@ def _refs(git, repo):
     return snapshot
 
 
-def open_lanes(git, project, key):
+def open_lanes(git, project, key, fresh=False):
     """Branches whose name carries the item id and that are not on the ref.
 
     ``None`` when unknown (no repo, git failure).  Local and remote copies of
@@ -220,7 +372,7 @@ def open_lanes(git, project, key):
     _, bare = _split(key)
     if repo is None or not bare:
         return None
-    snapshot = _refs(git, repo)
+    snapshot = _refs(git, repo, fresh)
     if snapshot is None:
         return None
     names, remotes = snapshot

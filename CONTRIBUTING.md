@@ -77,7 +77,17 @@ refreshes an existing run only on the same head; a new head clears it.
 reviews, CI and the final PLAN block. It refuses absent/stale ACCEPT evidence,
 non-green or missing CI, and workflow edits whose touching commits lack a
 `Gate-Edit: D-<id>` trailer, including edits introduced by merge resolution. The batch key is explicit; part Plan-Items do not
-stand in for the batch's PLAN key.
+stand in for the batch's PLAN key. After land reports included parts as merged,
+cleanup invokes `pg-worktree-sweep --apply --delete-remote` with exact saved
+SHAs, worktree paths and branches; moved/skipped parts are excluded. Configure
+`PG_PINS` and `PG_SWEEP_CLAIMS_READER="PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims"`; authority failures
+protect host state and cleanup errors never fail land. See [pg-reap](docs/pg-reap.md)
+for idle thresholds, run records, restore TSVs and remote SHA leases.
+
+Every writer commit fixing keeper items needs one `Plan-Item` trailer per fixed
+key, including subitems of a larger item. `ci_commit_gate.py check --base BASE
+--head HEAD --item-text PART.txt` warns for uncovered keys; GitHub CI reads the
+matching PR event automatically. See [the commit gate](docs/ci-gate.md).
 
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
@@ -429,6 +439,12 @@ Python files already in flight are individually listed in
 `tools/new_code_allowlist.txt` with reason `D-5847 in-flight`.
 
 Local preflight tests compare the branch against origin/main, follow shared asset consumers, and refuse full-suite fallback. CI retains the full-suite selection path.
+
+Local affected selection always includes the subprocess UTF-8 AST check and the
+file-size, new-code language, and changelog/docs policy tests, even for docs-only
+changes. Explicit `--within` restrictions still apply. CI-FAST-PATH fail fast
+applies to stages, not sibling pytest shards: both pytest matrices finish all
+shards, and any failing shard still fails `ci-gate`.
 
 The standalone fresh-base admission carry is listed as D-5848 in
 `tools/new_code_allowlist.txt` until the spawner Rust port.
