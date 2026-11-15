@@ -121,6 +121,8 @@ INLINE_DIFF_HARNESSES = frozenset({'opencode'})
 
 def _needs_inline_diff(leg, card):
     return (getattr(leg, 'tool_mode', 'tools') == 'inline-only'
+            or (getattr(leg, 'harness', None) == 'claude'
+                and getattr(leg, 'tool_mode', 'tools') == 'prompt-only')
             or (getattr(leg, 'harness', None) in INLINE_DIFF_HARNESSES
                 and card.get('diff_ref') is not None))
 
@@ -340,16 +342,21 @@ class SeatSpawnMixin:
         ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
         ``document_review`` allows explicit ``--leg`` document reviews and dry-run planning; live routed
         inline-only review legs need the card's diff and refuse without ``diff_ref`` (r3).
-        OpenCode tools-mode reviews inline a diff when supplied, but also support non-diff reviews."""
+        OpenCode tools-mode reviews inline a diff when supplied, but also support non-diff reviews.
+        Claude prompt-only reviews always require a diff, including explicit document requests."""
         if getattr(leg, 'tool_mode', 'tools') == 'inline-only':
             from . import context_pack
             prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
         if role == 'review' and _needs_inline_diff(leg, card):
             from .inline_diff import InlineDiffError, inline_diff_prompt
+            toolless = (getattr(leg, 'harness', None) == 'claude'
+                        and getattr(leg, 'tool_mode', 'tools') == 'prompt-only')
             try:
                 prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
-                                            allow_document=document_review, timeout=diff_timeout)
+                                            allow_document=document_review and not toolless, timeout=diff_timeout)
             except InlineDiffError as exc:
+                if toolless:
+                    raise InlineDiffError('no_diff_for_toolless_seat: ' + str(exc)) from None
                 _refuse_oversized_diff(exc, leg)
                 raise
         return prompt

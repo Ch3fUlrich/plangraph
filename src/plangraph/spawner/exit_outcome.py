@@ -319,20 +319,23 @@ def terminal_reason(record, job=None):
     if record.get('status') in ('failed', 'refused'):
         diagnostic = '\n'.join(record.get(key) or '' for key in ('error', 'stderr', 'stderr_tail'))
         diagnostic += '\n' + (getattr(job, 'stderr', '') or '')
-        for named in ('prompt_too_large', 'stdin_prompt_flag_missing'):
+        for named in ('no_diff_for_toolless_seat', 'prompt_too_large', 'stdin_prompt_flag_missing'):
             if named + ':' in diagnostic:
                 record['reason'] = named
                 return
-    if (record.get('role') == 'review' and record.get('status') == 'completed'
-            and record.get('exit_code') in (None, 0)):
+    if record.get('role') == 'review' and record.get('status') in ('completed', 'failed'):
         from plangraph.review.verdict import judge
         # Base dispatch has no job here: use only the final attempt, never the
         # combined stdout tail (an earlier leg's verdict cannot bless this one).
         attempts = [a for a in record.get('attempts') or () if a.get('status') != 'skipped']
         text = job.stdout if job is not None else (attempts[-1].get('stdout_tail', '') if attempts else '')
         if judge(text, getattr(job, 'response_finish_reason', None)).verdict is None:
-            record.update(status='failed', reason='no_verdict')
-            return
+            if '<parameter_missing>' in text:
+                record.update(status='failed', reason='parameter_missing')
+                return
+            if record.get('status') == 'completed' and record.get('exit_code') in (None, 0):
+                record.update(status='failed', reason='no_verdict')
+                return
     ended_ok = record.get('exit_code') in (None, 0) and record.get('status') in ('completed', 'dry_run')
     if reason in ('harness_limit', 'tool_call_only'):
         if ended_ok:

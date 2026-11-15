@@ -12,6 +12,7 @@ from plangraph.planner.routing import SpawnPlan
 from plangraph.spawner.claude_stream import last_stop_reason
 from plangraph.spawner.exit_outcome import fallthrough_reason
 from plangraph.spawner.runner import SpawnerRunner, spawn_service
+from registry_route_util import _repo
 
 
 def stream(shape, stop='refusal'):
@@ -86,6 +87,7 @@ def test_no_booking_even_for_limit_text():
     pytest.param('opencode', 'tools', id='opencode'),
 ])
 def test_route_is_terminal_only_for_claude(tmp_path, monkeypatch, harness, tool_mode):
+    repo, base, head = _repo(tmp_path)
     lines, _ = stream('partial')
     calls, notifications = [], []
     async def run():
@@ -103,7 +105,8 @@ def test_route_is_terminal_only_for_claude(tmp_path, monkeypatch, harness, tool_
         async def continuation(*a):
             assert harness != 'claude', 'continued refused writer'
         monkeypatch.setattr(service, '_continue_writer', continuation)
-        return await service.spawn(card={'estimate_tokens': 1000}, prompt='review', role='review',
+        return await service.spawn(card={'estimate_tokens': 1000,
+            'diff_ref': {'repo': str(repo), 'base': base, 'head': head}}, prompt='review', role='review',
                                    writer_families=('mimo',), wait_seconds=None)
     monkeypatch.setattr('shutil.which', lambda name, **k: name)
     if harness == 'opencode':

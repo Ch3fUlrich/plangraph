@@ -19,6 +19,7 @@ from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import SpawnPlan
 from plangraph.spawner import claude_stream
 from plangraph.spawner.runner import SpawnerRunner, spawn_service
+from registry_route_util import _repo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import seat_verdict as sv  # noqa: E402
@@ -137,6 +138,7 @@ def fake_claude(tmp_path, lines, exit_code=0):
 
 def run_review(tmp_path, monkeypatch, lines, exit_code=0):
     """Drive the production dispatch path for the claude Haiku leg and return (record, run dir)."""
+    repo, base, head = _repo(tmp_path)
     # Stream rendering must not depend on RAM used by concurrent native builds.
     monkeypatch.setattr('plangraph.spawner.seat_spawn.resources', lambda service: (0, 16000))
     binary = tmp_path / "bin"
@@ -152,7 +154,8 @@ def run_review(tmp_path, monkeypatch, lines, exit_code=0):
         runner = SpawnerRunner(process_factory=fake_claude(tmp_path, lines, exit_code), default_cwd=str(tmp_path))
         service = spawn_service(runner, tmp_path / "state")
         monkeypatch.setattr(service, "_route", lambda *a, **k: SpawnPlan((leg,), (), "test", (), ()))
-        record = await service.spawn(card={"estimate_tokens": 1000}, prompt="review this", role="review",
+        record = await service.spawn(card={"estimate_tokens": 1000,
+            "diff_ref": {"repo": str(repo), "base": base, "head": head}}, prompt="review this", role="review",
                                      writer_families=("mimo",), wait_seconds=None)
         return record, service._path(record["run_id"]).parent
     return asyncio.run(run())
