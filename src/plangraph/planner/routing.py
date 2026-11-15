@@ -259,7 +259,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     Account/combo scope comes from the card and is never a wildcard.
     """
     native_review = role == "review" and legs is DEFAULT_LEGS
-    from .legs import REVIEW_ORDER, REVIEW_FALLBACK_LEGS
+    from .legs import REVIEW_ORDER, REVIEW_FALLBACK_LEGS, REVIEW_HYDROGEN, REVIEW_ARGON, REVIEW_SONNET
     if native_review:
         legs = (*legs, *REVIEW_FALLBACK_LEGS)
     check_route_targets(card, legs)
@@ -344,9 +344,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     states = {l.id: _leg_status(l) for l in candidates}
     quota_states = {"agy:" + model: (states[leg_id] if leg_id in states else
         reader("agy:" + model, now=now, account=card.get("account"), combo=card.get("combo")))
-        for model, leg_id in (("gemini-4-hydrogen", REVIEW_ORDER[0]),
-                             ("gemini-4-argon", REVIEW_ORDER[1]),
-                             ("claude-sonnet-5-5", REVIEW_ORDER[-1]))}
+        for model, leg_id in (("gemini-4-hydrogen", REVIEW_HYDROGEN),
+                             ("gemini-4-argon", REVIEW_ARGON),
+                             ("claude-sonnet-5-5", REVIEW_SONNET))}
     limited = {key for key, state in states.items() if unavailable(state)}
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
                        "evidence": {"kind": "leg_disabled", "reason": l.disabled}}

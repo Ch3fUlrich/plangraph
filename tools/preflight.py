@@ -283,6 +283,7 @@ def main(argv=None, root=None):
                     commands = rust_commands(root, args.base, args.head, env)
                 family_env = policy_env if family == "policy" else env
                 if family == 'rust':
+                    print(f"rust CARGO_TARGET_DIR: {env.get('CARGO_TARGET_DIR', root / 'rust/target')}", flush=True)
                     family_env = {key: value for key, value in env.items()
                                   if not key.upper().startswith('GIT_')}
                 if family == "tests" and commands:
