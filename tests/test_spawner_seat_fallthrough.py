@@ -297,6 +297,7 @@ def launch_leg_case(tmp_path):
 
     async def spawn(**options):
         job = jobs[len(calls)]
+        job.session_id = 'ses_fixture'
         calls.append(options)
         return job
 
@@ -304,8 +305,8 @@ def launch_leg_case(tmp_path):
     return seat, record, chosen, jobs, calls
 
 
-@pytest.mark.parametrize('max_s,deadline', [(40, 150), (None, None)])
-def test_reasoning_retry_uses_absolute_deadline(launch_leg_case, monkeypatch, max_s, deadline):
+@pytest.mark.parametrize('max_s,deadline,retry_max_s', [(40, 150, 40), (None, None, 120)])
+def test_reasoning_retry_uses_absolute_deadline(launch_leg_case, monkeypatch, max_s, deadline, retry_max_s):
     seat, record, chosen, jobs, calls = launch_leg_case
     monkeypatch.setattr('time.time', lambda: 110)
     jobs[1].events = []
@@ -314,8 +315,11 @@ def test_reasoning_retry_uses_absolute_deadline(launch_leg_case, monkeypatch, ma
         limits['deadline'] = deadline
     asyncio.run(seat._launch_leg(record, chosen, prompt_record=None, watchdog=limits))
     assert len(calls) == 2
-    assert calls[1]['watchdog']['max_s'] == max_s
+    assert calls[1]['watchdog']['max_s'] == retry_max_s
     assert calls[1]['watchdog'].get('deadline') == deadline
+    assert calls[1]['review_session'] is calls[0]['review_session']
+    assert calls[1]['review_session'].id == 'ses_fixture'
+    assert calls[1]['review_session'].deadline == deadline
 
 
 def test_review_without_numeric_cap_has_no_deadline(monkeypatch):
