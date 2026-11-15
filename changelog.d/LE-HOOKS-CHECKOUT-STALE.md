@@ -8,3 +8,5 @@
 - Pre-push identifies its own checkout HEAD and refuses when locally fetched
   origin/main has missing mainline commits older than a day, with a sync repair
   command. Old cached tips are refreshed before checking; refresh failures refuse.
+- Isolate the preflight-context regression test from checkout freshness so both
+  preflight exit statuses still verify base arguments and caller policy context.

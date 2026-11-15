@@ -17,6 +17,8 @@ def test_hook_preflight_keeps_policy_context(tmp_path, monkeypatch, result):
     (tools / 'preflight.py').touch()
     hook = runpy.run_path(str(HOOK))
     scope = hook['push_main'].__globals__
+    # Checkout freshness has its own coverage; isolate preflight delegation.
+    monkeypatch.setitem(scope, 'hook_checkout_status', lambda: 0)
     monkeypatch.setattr(sys, 'stdin', io.StringIO(
         f"refs/heads/topic {'1' * 40} refs/heads/topic {'0' * 40}\n"))
     monkeypatch.delenv('PREFLIGHT_SKIP', raising=False)
