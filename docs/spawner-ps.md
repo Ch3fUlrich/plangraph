@@ -9,7 +9,8 @@ Keep this file private and outside the repository. Names are public display
 labels; targets are SSH destinations and are redacted from diagnostics.
 Each POSIX host needs `python3` and plangraph available to its SSH shell.
 Windows entries use `win_src`, for example `C:/source space/plangraph/src`;
-the command normalizes path separators for cmd.exe and runs
+the command normalizes path separators for cmd.exe, groups the source guard
+so an existing directory reaches Python, and runs
 `python -m plangraph.spawner.remote_ps` with that PYTHONPATH.
 Queries run concurrently with a three-second subprocess timeout per attempt and
 no interactive authentication. SSH exit 255 (including connect timeout) gets one

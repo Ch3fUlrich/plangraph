@@ -29,7 +29,7 @@ def test_windows_native_command(tmp_path, monkeypatch, win_src):
     def run(argv, **kwargs):
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                         '--', 'target',
-                        f'if not exist "{win_src}\\" exit /b 44 & '
+                        f'(if not exist "{win_src}\\" exit /b 44) & '
                         f'set "PYTHONPATH={win_src}"&& python -m plangraph.spawner.remote_ps']
         assert kwargs['stdin'] == subprocess.DEVNULL
         assert kwargs['stdout'] == subprocess.PIPE
@@ -73,7 +73,7 @@ def test_ws_build_exact_windows_ssh_command(monkeypatch):
     def ssh(argv, **kwargs):
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                         '--', 'ws-build',
-                        'if not exist "C:\\source space\\plangraph\\src\\" exit /b 44 & '
+                        '(if not exist "C:\\source space\\plangraph\\src\\" exit /b 44) & '
                         'set "PYTHONPATH=C:\\source space\\plangraph\\src"&& '
                         'python -m plangraph.spawner.remote_ps']
         return original([sys.executable, '-c', 'print(\'{"runs": []}\')'], **kwargs)

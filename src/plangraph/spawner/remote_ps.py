@@ -77,6 +77,7 @@ def host_command(host, *, query=False):
     if 'win_src' in host:
         command = source_check(host)
         if query:
+            command = f'({command})'
             src = host['win_src'].replace('/', '\\')
             command += (f' & set "PYTHONPATH={src}"&& '
                         'python -m plangraph.spawner.remote_ps')
