@@ -6,6 +6,8 @@ mod adapters;
 #[allow(dead_code)]
 mod quota;
 mod selection;
+#[allow(dead_code)]
+mod sources;
 mod workflow;
 pub use selection::{decode_task, pick, prepare_ready, validate_ready};
 use serde::{Deserialize, Serialize};

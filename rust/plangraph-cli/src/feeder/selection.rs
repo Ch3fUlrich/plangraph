@@ -208,9 +208,7 @@ pub fn pick(ready: &Value, runs: &[Run], _policy: &Policy) -> Option<Task> {
             && !reconcile(i)
             && i.state.as_deref().is_none_or(|s| s == "open")
             && !runs.iter().any(|r| r.active() && r.item_key == i.key)
-            && !runs
-                .iter()
-                .any(|r| r.writer() && (r.item_key.is_empty() || overlap(i, r)))
+            && !runs.iter().any(|r| r.writer() && overlap(i, r))
     });
     items.sort_by(|a, b| {
         class(a)
