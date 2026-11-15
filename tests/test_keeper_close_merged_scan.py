@@ -243,17 +243,28 @@ def test_client_timeout_after_a_committed_close_reads_back_and_exits_zero(capsys
     assert session.calls[0] == ("POST", "close_merged", SLOW_TIMEOUT) and SLOW_TIMEOUT >= 120
 
 
+def test_from_open_apply_timeout_after_a_committed_close_reads_back_and_exits_zero(capsys):
+    from plangraph.keeper.cli_output_verbs import cmd_close_merged
+    args = close_args()
+    args.from_open = args.apply = True
+    session = FakeSession("done")
+    assert cmd_close_merged(args, session) == 0
+    assert "demo:H\tCLOSED\t" in capsys.readouterr().out
+    assert [c[0] for c in session.calls] == ["POST", "GET"]
+
+
 def test_client_timeout_without_a_commit_exits_non_zero(capsys):
     from plangraph.keeper.cli_output_verbs import cmd_close_merged
     assert cmd_close_merged(close_args(), FakeSession("in_review")) == 3
     assert "keeper unreachable" in capsys.readouterr().err
 
 
-def test_a_go_row_that_sorts_before_the_supplied_id_never_replaces_it(unseated_w, monkeypatch):
-    result = two_head_close(unseated_w, monkeypatch, [go_row("D-4000", HEAD), go_row("D-9001", "f" * 40)])
-    assert result["state"] == "done"
-    prs = unseated_w.store._evidence("demo:H")[-1]["ref"]["prs"]
-    assert {p["head"]: p["decision_id"] for p in prs}[HEAD] == "D-5504"
+def test_an_earlier_dated_row_never_replaces_a_later_undated_supplied_id(unseated_w, monkeypatch):
+    world = unseated_w
+    scan_world(world, monkeypatch, [undated_row("D-1000", HEAD), go_row("D-999", HEAD)], [HEAD])
+    with pytest.raises(Refused, match="operator_seat_waiver_go_date_ineligible"):
+        world.store.close_merged(world.p("router"), "demo:H", "D-1000", waive_seats="D-6000")
+    assert world.store._item("demo:H")["state"] == "in_review"
 
 
 def test_a_go_row_edited_between_the_phases_refuses(unseated_w, monkeypatch):
@@ -274,16 +285,14 @@ def test_a_go_row_edited_between_the_phases_refuses(unseated_w, monkeypatch):
     assert world.store._item("demo:H")["state"] == "in_review"
 
 
-def test_a_later_go_row_replaces_across_digit_widths(unseated_w, monkeypatch):
+def test_a_later_dated_row_replaces_an_undated_supplied_id_across_digit_widths(unseated_w, monkeypatch):
     world = unseated_w
-    heads = [HEAD, "f" * 40]
-    # D-999 holds the second head; D-1000 is the later row and must replace it.
-    rows = [go_row("D-5504", HEAD), go_row("D-999", "f" * 40, date="2026-11-11"),
-            go_row("D-1000", "f" * 40, date="2026-11-12")]
-    scan_world(world, monkeypatch, rows, heads)
-    world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    # D-1000 sorts before D-999 as text, so it meets the preset holder D-999 first.
+    scan_world(world, monkeypatch, [undated_row("D-999", HEAD), go_row("D-1000", HEAD)], [HEAD])
+    result = world.store.close_merged(world.p("router"), "demo:H", "D-999", waive_seats="D-6000")
+    assert result["state"] == "done"
     prs = world.store._evidence("demo:H")[-1]["ref"]["prs"]
-    assert {p["head"]: p["decision_id"] for p in prs}["f" * 40] == "D-1000"
+    assert [p["decision_id"] for p in prs] == ["D-1000"]
 
 
 def test_overlapping_snapshots_on_two_threads_do_not_share_text(tmp_path):

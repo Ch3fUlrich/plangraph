@@ -79,7 +79,7 @@ The PR number may be backticked or followed by punctuation (for example,
 The latter requires exactly one full-length GO-HEAD binding; later review
 narrative is not a verdict. A negated or quoted leading GO never authorizes;
 the head must uniquely match an actual merged PR head.
-If the CLI times out (120 s) on a plain `close-merged`, it reads the item back:
+If the CLI times out (120 s) on `close-merged` (also `--from-open --apply`), it reads the item back:
 state `done` prints a note and exits 0, any other state exits 3 (unreachable).
 
 Standard needs at least one known cross-writer-family seat; high needs at
