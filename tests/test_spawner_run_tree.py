@@ -422,7 +422,7 @@ def test_all_python_entry_records_have_tree_sha_or_reason(tmp_path, monkeypatch,
     assert not cli.live_runner(mcp.SpawnerRunner())
 
 
-@pytest.mark.parametrize('entry', ['cli', 'mcp'])
+@pytest.mark.parametrize('entry', ['cli', 'cli-wait', 'mcp'])
 def test_live_spawn_survives_parent_exit_with_selected_tree_and_supervisor_evidence(trees, monkeypatch, entry, request):
     import inspect, time
     from plangraph.spawner import cli, proc_kill
@@ -467,8 +467,8 @@ if __name__ == '__main__': raise SystemExit(main(sys.argv[1:]))
 from plangraph.spawner import cli
 from plangraph.spawner.seat_spawn import SeatSpawnMixin
 SeatSpawnMixin.admit_spawn = lambda *a, **k: None
-if sys.argv[1] == 'cli':
-    raise SystemExit(cli.main(['--state', sys.argv[2], 'spawn', '--card', '{"estimate_tokens":100}', '--cwd', sys.argv[3], '--role', 'review', '--writer-family', 'openai', '--leg', 'cx-gpt-6.1-sol-xhigh', '--override-reason', 'fixture', 'Review fixture']))
+if sys.argv[1].startswith('cli'):
+    raise SystemExit(cli.main(['--state', sys.argv[2], 'spawn', '--wait', '0.02' if sys.argv[1] == 'cli-wait' else '0', '--card', '{"estimate_tokens":100}', '--cwd', sys.argv[3], '--role', 'review', '--writer-family', 'openai', '--leg', 'cx-gpt-6.1-sol-xhigh', '--override-reason', 'fixture', 'Review fixture']))
 from plangraph.spawner.mcp import MCPSpawnerServer
 from plangraph.spawner.runner import SpawnerRunner
 server = MCPSpawnerServer(SpawnerRunner(default_cwd=sys.argv[3]), state=sys.argv[2])

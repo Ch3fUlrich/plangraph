@@ -237,9 +237,12 @@ def main(argv=None):
                   and args.card.get('run_kind') != 'native-codex'):
                 service.fresh_tree = True
                 async def fresh():
-                    result = await service.spawn(**payload, wait_seconds=args.wait)
-                    for task in set(service.tasks.values()):
-                        if not task.done(): task.cancel()
+                    result = await admitted_spawn(service, payload)
+                    if args.wait > 0 and service.tasks:
+                        await asyncio.wait(set(service.tasks.values()), timeout=args.wait)
+                        for run in spawn_runs(result):
+                            if 'run_id' in run: run.update(service.result(run['run_id']))
+                    for task in set(service.tasks.values()): task.cancel()
                     await asyncio.gather(*service.tasks.values(), return_exceptions=True)
                     return result
                 result = asyncio.run(fresh())

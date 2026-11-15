@@ -22,8 +22,6 @@ def live_runner(runner):
     from .git_guard import CODE_TREE
     return (type(runner) is SpawnerRunner and runner.process_factory is oom_process_factory
             and bool(os.environ.get('PLANGRAPH_SPAWNER_REPO') or (CODE_TREE / '.git').exists()))
-
-
 async def fresh_spawn(service, options):
     """Hand off to a durable Popen supervisor; detach once the admission reply arrives."""
     import subprocess, sys
@@ -150,7 +148,6 @@ raise SystemExit(code)
     finally:
         if child is not None:
             child.stdout.close()
-
 
 def resources(service):
     from .overflow import available_memory_mb
