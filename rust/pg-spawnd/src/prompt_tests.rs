@@ -166,12 +166,25 @@ fn generated_writer_checklist_is_answered_and_forwarded_to_reviewer() {
         "HIGH: Python Rust contract mismatch\nVERDICT: REQUEST_CHANGES\n",
     )
     .unwrap();
-    std::fs::File::open(&old)
+    // Windows requires a write handle for set_times; read-only File::open fails.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&old)
         .unwrap()
         .set_times(std::fs::FileTimes::new().set_modified(
             std::time::SystemTime::now() - std::time::Duration::from_secs(31 * 86400),
         ))
         .unwrap();
+    assert!(
+        old.metadata()
+            .unwrap()
+            .modified()
+            .unwrap()
+            .elapsed()
+            .unwrap()
+            .as_secs()
+            > 30 * 86400
+    );
     let mut writer = launch("item body");
     let mut args =
         json!({"card":{"done_criteria":"Review blocks missing answers", "review_dir":dir.path()}});
