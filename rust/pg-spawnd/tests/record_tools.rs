@@ -1,4 +1,6 @@
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 mod common;
 use common::{ChildGuard, McpClient, TempDir};
 use serde_json::{json, Value};
@@ -12,7 +14,7 @@ fn write(state: &TempDir, id: &str, value: Value) {
 fn start(state: &TempDir) -> (ChildGuard, McpClient) {
     let socket = state.path().join("socket");
     let guard = ChildGuard::spawn(
-        env!("CARGO_BIN_EXE_pg-spawnd"),
+        binary::spawnd(),
         &[
             OsStr::new("serve"),
             OsStr::new("--socket"),
