@@ -117,7 +117,10 @@ fn sweep_cli_dry_run_then_apply_saves_restore_and_keeps_remote() {
         run_with_authority(
             &Options {
                 repo: &f.repo,
-                root: &f.root,
+                roots: std::slice::from_ref(&f.root),
+                targets: &[],
+                remote_targets: &[],
+                idle_minutes: 60,
                 state: &f.state,
                 pins: &f.state.join("pins.json"),
                 claims_reader: None,
@@ -185,7 +188,10 @@ fn sweep_apply_restore_failure_prevents_removal_and_remote_requires_merged_pr() 
         let f = Fixture::new();
         let opts = Options {
             repo: &f.repo,
-            root: &f.root,
+            roots: std::slice::from_ref(&f.root),
+            targets: &[],
+            remote_targets: &[],
+            idle_minutes: 60,
             state: &f.state,
             pins: &f.state.join("pins.json"),
             claims_reader: None,
