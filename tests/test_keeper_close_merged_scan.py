@@ -137,3 +137,30 @@ def test_item_650_merges_behind_main_closes(unseated_w, monkeypatch, tmp_path):
     result = world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
     assert result["state"] == "done"
     assert [p["head"] for p in world.store._evidence("demo:H")[-1]["ref"]["prs"]] == [head]
+
+
+def undated_row(did, head):
+    return f"| {did} | demo | GO #{did[2:]} demo:H; GO-HEAD {head} | ROUTER |\n"
+
+
+def two_head_close(world, monkeypatch, second_rows):
+    heads = [HEAD, "f" * 40]
+    scan_world(world, monkeypatch, [go_row("D-5504", HEAD), *second_rows], heads)
+    return world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+
+
+def test_dated_go_row_wins_over_an_older_undated_one(unseated_w, monkeypatch):
+    result = two_head_close(unseated_w, monkeypatch, [
+        undated_row("D-4000", "f" * 40), go_row("D-9001", "f" * 40)])
+    assert result["state"] == "done"
+    prs = unseated_w.store._evidence("demo:H")[-1]["ref"]["prs"]
+    assert {p["head"]: p["decision_id"] for p in prs} == {HEAD: "D-5504", "f" * 40: "D-9001"}
+
+
+@pytest.mark.parametrize("rows,date", [
+    ([undated_row("D-4000", "f" * 40)], None),
+    ([undated_row("D-4000", "f" * 40), go_row("D-9001", "f" * 40, date="2026-11-13")], "2026-11-13")])
+def test_undated_or_late_go_rows_still_refuse(unseated_w, monkeypatch, rows, date):
+    with pytest.raises(Refused, match="operator_seat_waiver_go_date_ineligible"):
+        two_head_close(unseated_w, monkeypatch, rows)
+    assert unseated_w.store._item("demo:H")["state"] == "in_review"

@@ -268,11 +268,26 @@ class RunsMixin:
             raise Refused("evidence_unverified", "merged_pr_go_missing")
         return sorted(proofs.values(), key=lambda p: (p["pr"], p["head"]))
 
+    @staticmethod
+    def _go_row_dated(decisions, did):
+        try:
+            return _decision_date(decisions.fields(did)) is not None
+        except Exception:  # noqa: BLE001 - an unreadable date never counts as dated
+            return False
+
     def _merged_scan_go_rows(self, item, proofs, now):
-        """Give every merged head the first accepted GO row of this item (one document read)."""
+        """Give every merged head an accepted GO row of this item (one document read).
+
+        Per head the first accepted row in sorted id order wins unless it is
+        undated and a later accepted row carries a date: the seat waiver
+        compares that date with its cutoff, and an old undated row can never
+        be edited into a dated one.
+        """
         decisions = self._ctx(item, now).decisions
+        dated = {h: self._go_row_dated(decisions, p["decision_id"])
+                 for h, p in proofs.items() if "decision_id" in p}
         for did in sorted(decisions.decisions()):
-            if all("decision_id" in p for p in proofs.values()):
+            if all(dated.get(h) for h in proofs):
                 break
             if not self._merged_go_scope_matches(did, item, now, decisions=decisions):
                 continue
@@ -280,8 +295,12 @@ class RunsMixin:
                 other_head, _ = self._merged_go_proof(item, did, now, all_work=True)
             except Refused:
                 continue
-            if other_head in proofs:
-                proofs[other_head].setdefault("decision_id", did)
+            if other_head not in proofs or dated.get(other_head):
+                continue
+            row_dated = self._go_row_dated(decisions, did)
+            if "decision_id" not in proofs[other_head] or row_dated:
+                proofs[other_head]["decision_id"] = did
+                dated[other_head] = row_dated
 
     def _record_merged_seats(self, principal, item, decision_id, seats, now):
         """Mirror a verified historical seat bundle while holding the close lock."""
