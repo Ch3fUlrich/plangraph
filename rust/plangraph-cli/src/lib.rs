@@ -4,6 +4,8 @@ pub mod batch_merge;
 pub mod ci_watch;
 pub mod env;
 pub mod feeder;
+mod fast_check_packages;
+pub mod fast_checks;
 pub mod paths;
 pub mod setup;
 pub mod watchers;

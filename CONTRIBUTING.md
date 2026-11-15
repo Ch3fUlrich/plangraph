@@ -506,3 +506,24 @@ or synthetic paths instead of literal `/home/<user>` paths, including fixtures.
 Run it alone with `cargo run --manifest-path rust/Cargo.toml -p pg-policy --
 --test-sources .`; `python3 tools/check_new_code_lang.py` runs it in fast checks
 and CI. No allowlist is provided.
+
+## Fast local CI (D-6054)
+
+Run `cargo run --manifest-path rust/Cargo.toml -p plangraph-cli -- fast-checks`
+from a checkout. Use `--base <revision>` to override `origin/main`, or
+`--plan --files <paths...>` to inspect fixture selection without executing checks.
+The command delegates job selection to `tools/ci_select.py`, includes committed,
+tracked local and untracked changes, and prints CI job booleans before its steps.
+It runs the four always-required tree guards, commit and whitespace gates,
+affected Python tests with the existing full-suite refusal, and fmt/clippy/tests
+for touched Rust crates and local reverse dependencies in their own workspaces.
+The Rust test environment guard runs even when Python files were untouched,
+checking that Rust-launched Python snippets have no pytest dependencies. Changed Rust
+inputs with CRLF fail early with a normalization diagnostic. Worker tests use
+the existing CI Temporal wrapper and require the Temporal CLI and protobuf tools.
+Use a warm `CARGO_TARGET_DIR`; the profile does not install dependencies.
+Each step and the total report wall seconds; exceeding 300 seconds emits a
+warning and returns failure after checks, without interrupting or weakening them.
+This is the cheap local projection of CI; hosted browser, Postgres and Windows
+runners remain CI responsibilities. A typical build host timing measurement is still
+required before claiming that host's five-minute done criterion.
