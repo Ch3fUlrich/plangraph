@@ -33,6 +33,8 @@ KNOWN_PREFIXES: tuple[str, ...] = (
 # Keep these before the docs-only shortcut; tests/test_ci_select_rust_inputs.py
 # scans Rust sources and rejects repository reads missing from this list.
 RUST_INPUTS: tuple[str, ...] = (
+    "src/plangraph/catalog_data.py",
+    "src/plangraph/routing_errors.py",
     "src/plangraph/keeper/errors.py",
     "src/plangraph/planner/routing.py",
     ".github/workflows/**",
