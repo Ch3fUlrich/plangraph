@@ -103,7 +103,7 @@ def test_unsharded_collection_check_rejects_empty_suite(tmp_path, job):
             (tmp_path / 'tools/affected_tests.py').write_text(
                 'import sys\nassert sys.argv[1:] == ["--base", "base-sha"]\n'
                 f'print({json.dumps(plan)!r})\n')
-            command = step['run'].replace('${{ github.event_name }}', event)
+            command = step['run'].replace('${{ github.event_name }}', event).replace('${{ needs.select.outputs.full }}', 'false')
             env = dict(os.environ, RUNNER_TEMP=str(tmp_path), BASE_SHA='base-sha')
             result = subprocess.run(['bash', '-e', '-c', command], cwd=tmp_path,
                                     env=env, capture_output=True, text=True)
@@ -131,7 +131,7 @@ def test_unsharded_collection_check_rejects_empty_suite(tmp_path, job):
         assert '--within ' + within + ' --run --collect-only' in step['run']
         assert '--collect-only ' + within in step['run']
         assert step['run'].split('if [', 1)[0].strip() in run
-    command = step['run'].replace('${{ github.event_name }}', 'push')
+    command = step['run'].replace('${{ github.event_name }}', 'push').replace('${{ needs.select.outputs.full }}', 'true')
     env = dict(os.environ, PYTEST_SHARD='0/3', RUNNER_TEMP=str(tmp_path))
     result = subprocess.run(['bash', '-e', '-c', command], cwd=tmp_path, env=env,
                             capture_output=True, text=True)
@@ -211,6 +211,7 @@ def test_missing_preflight_refuses_only_main(tmp_path, monkeypatch, capsys, ref,
     monkeypatch.delenv('PREFLIGHT_SKIP', raising=False)
     monkeypatch.setitem(scope, 'git_out', lambda *a: str(tmp_path) if a[0] == 'rev-parse' else '')
     monkeypatch.setitem(scope, 'file_size_gate', lambda: 0)
+    monkeypatch.setitem(scope, 'commit_gate', lambda head: 0)
     monkeypatch.setitem(scope, 'base_commit', lambda *a: 'base')
     monkeypatch.setitem(scope, 'main_baselines', lambda *a: [])
     monkeypatch.setitem(scope, 'changelog_docs_warn', lambda *a: None)

@@ -75,7 +75,7 @@ def commit_file(repo, rel, text):
     p.write_text(text)
     git(repo, "add", "-A")
     git(repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
-        "commit", "-qm", "change")
+        "commit", "-qm", "change\n\nPlan-Item: plangraph:TEST\nWriter: codex/test")
     return git(repo, "rev-parse", "HEAD").strip()
 
 
@@ -88,7 +88,7 @@ def commit_symlink(repo, rel, target):
     os.symlink(target, p)
     git(repo, "add", "-A")
     git(repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
-        "commit", "-qm", "relink")
+        "commit", "-qm", "relink\n\nPlan-Item: plangraph:TEST\nWriter: codex/test")
     return git(repo, "rev-parse", "HEAD").strip()
 
 
@@ -120,7 +120,7 @@ def repo(tmp_path):
     git(r, "config", "user.name", "t")
     git(r, "config", "user.email", "t@example.invalid")
     base = commit_file(r, "app/clean.py", "x = 1\n")
-    return r, base
+    git(r, "update-ref", "refs/remotes/origin/main", base); return r, base
 
 
 def push_line(ref, sha, remote_sha):

@@ -18,6 +18,7 @@ SUITES: tuple[str, ...] = (
     "rust",
     "rust-worker",
     "rust-spike",
+    "browser",
 )
 
 KNOWN_PREFIXES: tuple[str, ...] = (
@@ -32,6 +33,7 @@ KNOWN_PREFIXES: tuple[str, ...] = (
 # Keep these before the docs-only shortcut; tests/test_ci_select_rust_inputs.py
 # scans Rust sources and rejects repository reads missing from this list.
 RUST_INPUTS: tuple[str, ...] = (
+    ".github/workflows/**",
     "rust-toolchain.toml",
     ".docs-map",
     "docs/schemas/**",
@@ -47,13 +49,26 @@ RUST_INPUTS: tuple[str, ...] = (
     "deploy/systemd/plangraph-agents-view.timer",
     "setup/placement-rules.schema.toml",
     "src/plangraph/web/agents_schema.json",
+    "src/plangraph/spawner/**",
+    "src/plangraph/keeper/evidence_spawner.py",
+    "src/plangraph/routing_support/leg_state.py",
     "tests/fixtures/doctor_sources.json",
     "tests/fixtures/keeper_mcp_replies.json",
     "tests/fixtures/keeper_mcp_tools.json",
     "tests/fixtures/redact_parity.json",
     "tests/fixtures/writer_docs_map.json",
     "tests/hooks/parity_payloads.json",
+    "tools/changelog_fold.py",
     "tools/check_changelog_docs.py",
+    "tools/check_file_size.py",
+    "tools/check_new_code_lang.py",
+    "tools/ci_select.py",
+    "tools/ci_commit_gate.py",
+    "tools/merge_batch_util.py",
+    "tools/gate_wiring_check.py",
+    "tools/split/**",
+    "tools/hooks/pre-push",
+    "tools/merge_batch_land.py",
     "tools/dell_ci_jobs.py",
     "tools/new_code_allowlist.txt",
     "tools/probe_admission_policy_guard.py",
@@ -123,6 +138,8 @@ def select(paths: list[str]) -> dict[str, bool]:
     res["full"] = False
 
     for p in norm_paths:
+        if p.startswith(("src/plangraph/web/", "tests/browser/", "vendor/")) or p in ("tests/conftest.py", "pyproject.toml", "src/plangraph/render.py"):
+            res["browser"] = True
         if any(fnmatchcase(p, pattern) for pattern in RUST_INPUTS):
             res["rust"] = True
         if p.startswith("skills/") and p.endswith(".md"):
@@ -165,8 +182,9 @@ def gate(needs: dict) -> list[str]:
         outputs = {}
 
     problems: list[str] = []
-    for suite in ALWAYS + SUITES:
-        selected = suite in ALWAYS or outputs.get(suite) != "false"
+    for suite in ALWAYS + SUITES + ("rust-windows",):
+        selection = "rust" if suite == "rust-windows" else suite
+        selected = outputs.get("full") == "true" or suite in ALWAYS or outputs.get(selection) != "false"
         if not selected:
             continue
 

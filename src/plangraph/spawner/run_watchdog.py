@@ -209,7 +209,7 @@ class LiveLog:
 async def collect(runner, job_id, proc):
     from .runner import redact
     from .reap import cancel_and_close
-    from .env_redact import early_refusal, redact_env_values, OutputLines
+    from .env_redact import early_refusal, harness_limit_line, redact_env_values, OutputLines
     job = runner.jobs[job_id]
     env = runner._child_envs.get(job_id, os.environ)
     limits = getattr(job, '_watchdog_limits', None) or thresholds()
@@ -249,14 +249,16 @@ async def collect(runner, job_id, proc):
                     loop_found.set()
                 if is_activity(line):
                     active = True
-                    if seen['n'] < REFUSAL_MAX_LINES and seen['r'] < REFUSAL_MAX_FRAMES:   # F1: banner/spinner frames may precede the refusal
+                    if getattr(job, 'role', None) == 'review' or (seen['n'] < REFUSAL_MAX_LINES and seen['r'] < REFUSAL_MAX_FRAMES):   # F1: banner/spinner frames may precede the refusal
                         candidates.append(line)
                     seen['n' if line.endswith('\n') else 'r'] += 1   # F1: '\r'-alone spinner frames eat the frame cap, never the 40-line budget
             # F3: check the unterminated tail too; a refusal line printed
             # without a trailing newline while the child hangs must be seen.
-            if pending and seen['n'] < REFUSAL_MAX_LINES and seen['r'] < REFUSAL_MAX_FRAMES:
+            if pending and (getattr(job, 'role', None) == 'review' or (seen['n'] < REFUSAL_MAX_LINES and seen['r'] < REFUSAL_MAX_FRAMES)):
                 candidates.append(pending)   # tail is a candidate only, never counted
-            found = candidates and not refused.is_set() and time.time() - job.start_time < REFUSAL_WINDOW_S and early_refusal(''.join(candidates))
+            found = candidates and not refused.is_set() and (getattr(job, 'role', None) == 'review' or time.time() - job.start_time < REFUSAL_WINDOW_S) and early_refusal(''.join(candidates))
+            if not found and getattr(job, 'role', None) == 'review':
+                found = harness_limit_line(1, ''.join(candidates) if name == 'stdout' else '', ''.join(candidates) if name == 'stderr' else '')
             if found or active:   # F2: a refusal is booked only after a quiet period; later activity cancels it
                 (gate.candidate(found, time.time()) if found else gate.activity(time.time()))
             gate.scan_late(lines, time.time())   # REMOVE-AT-R10 (D-3769)
